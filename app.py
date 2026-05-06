@@ -842,6 +842,164 @@ if page == "🏠 My Portfolio":
                     if act["weight"] > 15:
                         _check("⚠️", f"Position is {act['weight']:.0f}% of portfolio — above 15% threshold. Size alone justifies trimming.")
 
+                # ── Evidence & Sources — verify every data point ─────────
+                st.markdown("---")
+                st.markdown(
+                    "**Evidence & Sources — Double-Check Before Acting**  \n"
+                    "<span style='font-size:0.8em;color:#666'>"
+                    "AI can make mistakes. Every data point below links to its original source "
+                    "so you can verify independently before making any decision.</span>",
+                    unsafe_allow_html=True,
+                )
+
+                src_col1, src_col2 = st.columns(2)
+
+                with src_col1:
+                    # Negative/neutral news headlines that drove sentiment score
+                    all_headlines = r_data.get("headlines", [])
+                    neg_heads = [h for h in all_headlines if h["label"] in ("Negative", "Neutral")]
+                    pos_heads = [h for h in all_headlines if h["label"] == "Positive"]
+                    if all_headlines:
+                        st.markdown(
+                            f"📰 **News Sentiment · {s_score:.0f}/100** "
+                            f"<span style='font-size:0.75em;color:#666'>"
+                            f"({len(neg_heads)} negative · {len(pos_heads)} positive of {len(all_headlines)} headlines)</span>",
+                            unsafe_allow_html=True,
+                        )
+                        for h in all_headlines[:6]:
+                            clr  = "#ff4444" if h["label"] == "Negative" else (
+                                   "#00C851" if h["label"] == "Positive" else "#888")
+                            arrow = "▼" if h["label"] == "Negative" else (
+                                    "▲" if h["label"] == "Positive" else "–")
+                            headline_short = h["headline"][:78] + ("…" if len(h["headline"]) > 78 else "")
+                            url = h.get("url", "")
+                            link_part = (
+                                f"<a href='{url}' target='_blank' "
+                                f"style='color:#ccc;text-decoration:none'>{headline_short}</a>"
+                                if url else f"<span style='color:#ccc'>{headline_short}</span>"
+                            )
+                            source_tag = (
+                                f" <a href='{url}' target='_blank' "
+                                f"style='color:#4a9eff;font-size:0.7em'>[source ↗]</a>"
+                                if url else
+                                " <span style='color:#555;font-size:0.7em'>[no link — verify on Yahoo Finance]</span>"
+                            )
+                            st.markdown(
+                                f"<div style='margin-bottom:4px;font-size:0.8em'>"
+                                f"<span style='color:{clr}'>{arrow} {h['score']:+.2f}</span> "
+                                f"{link_part}{source_tag}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(
+                            f"[All {ticker} news on Yahoo Finance ↗](https://finance.yahoo.com/quote/{ticker}/news/)",
+                        )
+                    else:
+                        st.caption("No news headlines available for this ticker.")
+
+                    # Bearish fundamental signals with values and source
+                    f_sigs_all = r_data.get("f_signals", {})
+                    bearish_f = {
+                        k: v for k, v in f_sigs_all.items()
+                        if any(w in v.lower() for w in
+                               ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
+                    }
+                    if f_sigs_all:
+                        st.markdown(f"📊 **Fundamentals · {f_score:.0f}/100** — raw values from Yahoo Finance")
+                        for k, v in f_sigs_all.items():
+                            is_bad = any(w in v.lower() for w in
+                                        ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
+                            clr = "#ff4444" if is_bad else "#00C851"
+                            icon_f = "❌" if is_bad else "✅"
+                            st.markdown(
+                                f"<div style='font-size:0.8em;margin-bottom:3px'>"
+                                f"{icon_f} <span style='color:{clr}'><b>{k}</b>: {v}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(
+                            f"Verify: "
+                            f"[Yahoo Financials ↗](https://finance.yahoo.com/quote/{ticker}/financials/) · "
+                            f"[Yahoo Statistics ↗](https://finance.yahoo.com/quote/{ticker}/key-statistics/) · "
+                            f"[SEC Filings ↗](https://www.sec.gov/cgi-bin/browse-edgar?"
+                            f"action=getcompany&company={ticker}&type=10-K)"
+                        )
+
+                with src_col2:
+                    # Bearish technical signals with chart links
+                    if t_sigs:
+                        st.markdown(f"📈 **Technical Signals · {t_score:.0f}/100**")
+                        for k, v in t_sigs.items():
+                            is_bear = "bearish" in v.lower()
+                            is_bull = "bullish" in v.lower()
+                            clr = "#ff4444" if is_bear else ("#00C851" if is_bull else "#888")
+                            icon_t = "❌" if is_bear else ("✅" if is_bull else "–")
+                            st.markdown(
+                                f"<div style='font-size:0.8em;margin-bottom:3px'>"
+                                f"{icon_t} <span style='color:{clr}'><b>{k}</b>: {v}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(
+                            f"Verify chart: "
+                            f"[TradingView ↗](https://www.tradingview.com/chart/?symbol={ticker}) · "
+                            f"[Finviz Chart ↗](https://finviz.com/quote.ashx?t={ticker}) · "
+                            f"[Yahoo Chart ↗](https://finance.yahoo.com/chart/{ticker})"
+                        )
+
+                    # Analyst actions — firm names, grade changes, with source link
+                    st.markdown(f"👔 **Analyst Actions (last 90 days)**")
+                    if rev and rev.get("latest"):
+                        net_r = rev.get("net", 0)
+                        st.markdown(
+                            f"<span style='font-size:0.8em;color:#888'>"
+                            f"↑ {rev.get('upgrades_90d',0)} upgrades · "
+                            f"↓ {rev.get('downgrades_90d',0)} downgrades · "
+                            f"→ {rev.get('maintained_90d',0)} maintained</span>",
+                            unsafe_allow_html=True,
+                        )
+                        for analyst_act in rev["latest"]:
+                            atype = analyst_act.get("action", "").lower()
+                            aclr  = "#ff4444" if atype == "down" else (
+                                    "#00C851" if atype in ["up", "init"] else "#888")
+                            arr   = "↓" if atype == "down" else ("↑" if atype in ["up", "init"] else "→")
+                            from_g = analyst_act.get("from_grade", "")
+                            to_g   = analyst_act.get("to_grade", "")
+                            grade_str = (
+                                f"{from_g} → {to_g}" if from_g and to_g else
+                                f"→ {to_g}" if to_g else
+                                f"({atype})"
+                            )
+                            firm = analyst_act.get("firm", "Unknown")
+                            st.markdown(
+                                f"<div style='font-size:0.82em;margin-bottom:3px'>"
+                                f"<span style='color:{aclr};font-weight:bold'>{arr} {firm}</span>"
+                                f"<span style='color:#aaa'> · {grade_str}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown(
+                            f"Verify: "
+                            f"[Yahoo Analyst Ratings ↗](https://finance.yahoo.com/quote/{ticker}/analysis/) · "
+                            f"[MarketBeat ↗](https://www.marketbeat.com/stocks/NASDAQ/{ticker}/analyst-ratings/)"
+                        )
+                    else:
+                        st.caption(
+                            "Analyst action history not available via Yahoo Finance for this ticker.  \n"
+                            f"[Check manually on Yahoo Finance ↗](https://finance.yahoo.com/quote/{ticker}/analysis/)"
+                        )
+
+                    # Verification footer — all primary sources in one row
+                    st.markdown(
+                        f"<div style='margin-top:10px;padding:8px 10px;background:#111;"
+                        f"border-radius:6px;font-size:0.76em;color:#555'>"
+                        f"📌 <b style='color:#777'>All sources for {ticker}:</b><br>"
+                        f"<a href='https://finance.yahoo.com/quote/{ticker}' target='_blank' style='color:#4a9eff'>Yahoo Finance</a> · "
+                        f"<a href='https://finviz.com/quote.ashx?t={ticker}' target='_blank' style='color:#4a9eff'>Finviz</a> · "
+                        f"<a href='https://www.tradingview.com/chart/?symbol={ticker}' target='_blank' style='color:#4a9eff'>TradingView</a> · "
+                        f"<a href='https://finance.yahoo.com/quote/{ticker}/financials/' target='_blank' style='color:#4a9eff'>Financials</a> · "
+                        f"<a href='https://finance.yahoo.com/quote/{ticker}/analysis/' target='_blank' style='color:#4a9eff'>Analyst Ratings</a> · "
+                        f"<a href='https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=10-K' target='_blank' style='color:#4a9eff'>SEC 10-K</a>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
                 # ── Suggested action ──────────────────────────────────────
                 st.markdown("---")
                 st.markdown("**Suggested Action**")
