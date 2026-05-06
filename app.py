@@ -311,7 +311,9 @@ if page == "🏠 My Portfolio":
     st.subheader("Position Detail & Protective Stops")
     st.caption(
         "Stop ratchets up automatically as gains grow — "
-        "breakeven guard at +10%, protects 10% at +25%, 25% at +50%, 40% at +75%."
+        "breakeven guard at +10%, protects 10% at +25%, 25% at +50%, 40% at +75%.  \n"
+        "**Score** = Technical 45% + Fundamental 40% + Sentiment 15% (composite). "
+        "Scanner uses momentum-only scoring — see drill-down for full breakdown."
     )
 
     def _pnl_color(val):
@@ -367,10 +369,34 @@ if page == "🏠 My Portfolio":
         ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
 
         d1, d2, d3, d4 = st.columns(4)
-        d1.metric("P&L",       f"${ps_row['P&L ($)']:,.0f}", f"{ps_row['P&L (%)']:+.1f}%")
-        d2.metric("Stop Loss", f"${ps_row['Stop']:.2f}",    ps_row['Stop Type'])
+        d1.metric("P&L",         f"${ps_row['P&L ($)']:,.0f}", f"{ps_row['P&L (%)']:+.1f}%")
+        d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'])
         d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%")
-        d4.metric("Score",     f"{r['total']:.0f}/100",      r['rec']['label'])
+        d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'])
+
+        # Score breakdown row
+        sb1, sb2, sb3 = st.columns(3)
+        t_contrib  = round(r['t_score'] * 0.45, 1)
+        f_contrib  = round(r['f_score'] * 0.40, 1)
+        s_contrib  = round(r['s_score'] * 0.15, 1)
+        sb1.metric("Technical",    f"{r['t_score']:.0f}/100",
+                   f"+{t_contrib} pts (45%)",
+                   help="RSI · MACD · Bollinger Bands · MA trend · Volume")
+        sb2.metric("Fundamental",  f"{r['f_score']:.0f}/100",
+                   f"+{f_contrib} pts (40%)",
+                   help="Forward P/E · Revenue & Earnings growth · Margins · Debt/Equity")
+        sb3.metric("Sentiment",    f"{r['s_score']:.0f}/100",
+                   f"+{s_contrib} pts (15%)",
+                   help="VADER analysis of latest news headlines from Yahoo Finance")
+
+        # Source links
+        st.markdown(
+            f"**Sources:** "
+            f"[📊 Yahoo Finance](https://finance.yahoo.com/quote/{sel}) · "
+            f"[📈 Finviz Chart](https://finviz.com/quote.ashx?t={sel}) · "
+            f"[📰 SEC Filings](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={sel}&type=10-K) · "
+            f"[🔍 Latest News](https://finance.yahoo.com/quote/{sel}/news/)"
+        )
 
         if targets:
             st.markdown(
@@ -409,6 +435,15 @@ if page == "🏠 My Portfolio":
 elif page == "🔍 Market Scanner":
     st.title("🔍 Market Scanner")
     st.caption("Scans 60+ stocks across 12 sectors to surface trending opportunities.")
+    st.info(
+        "**How to read this:** The scanner uses a **Momentum Score** (RSI + Trend + 1M/3M price momentum). "
+        "It is a fast filter, not a buy signal. A high momentum score means the stock is moving — "
+        "**not** that fundamentals or sentiment support the move.  \n"
+        "For any ticker that catches your eye, run a full analysis on the **Stock Analysis** page, "
+        "which adds Fundamental (40%) and Sentiment (15%) data to form a composite score. "
+        "A stock can score 85 on momentum and 52 composite — both numbers are correct; they answer different questions.",
+        icon="ℹ️",
+    )
 
     sc1, sc2 = st.columns([3, 1])
     with sc1:
@@ -514,14 +549,30 @@ elif page == "🔍 Market Scanner":
                 return "color:#ff4444"
             return ""
 
+        # Rename Score → Momentum Score for display clarity
+        scan_display = filtered.rename(columns={"Score": "Momentum Score"}).copy()
+
+        # Flag tickers already held in portfolio
+        held_tickers_set = {
+            str(r.get("Ticker", "")).strip().upper()
+            for _, r in st.session_state.holdings_df.iterrows()
+        }
+        overlap = [t for t in filtered["Ticker"] if t in held_tickers_set]
+        if overlap:
+            st.warning(
+                f"**{', '.join(overlap)}** appear in both your portfolio and these scan results.  \n"
+                "Their momentum score here may differ from the composite score in your portfolio — "
+                "check the full analysis before adding more exposure."
+            )
+
         styled = (
-            filtered.style
+            scan_display.style
             .map(_scan_sig_color, subset=["Signal"])
             .map(_mom_color, subset=["1M Momentum", "3M Momentum"])
-            .map(_score_color, subset=["Score"])
+            .map(_score_color, subset=["Momentum Score"])
             .format({
                 "Price": "${:.2f}",
-                "Score": "{:.0f}",
+                "Momentum Score": "{:.0f}",
                 "RSI": "{:.1f}",
                 "1M Momentum": "{:+.1f}%",
                 "3M Momentum": "{:+.1f}%",
@@ -679,9 +730,20 @@ elif page == "📈 Stock Analysis":
                 f"<div style='padding:10px;border-radius:8px;background:{rec['color']}18;"
                 f"border-left:5px solid {rec['color']};margin-bottom:10px'>"
                 f"<b style='font-size:1.1em;color:{rec['color']}'>{rec['icon']} {rec['label']} "
-                f"· {r['total']}/100</b><br>{rec['rationale']}"
+                f"· {r['total']}/100</b>"
+                f"<span style='color:#888;font-size:0.85em'> "
+                f"(Technical {r['t_score']:.0f} × 45% + Fundamental {r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
+                f"</span><br>{rec['rationale']}"
                 + (f"<br><small>📍 {r['upside']}</small>" if r["upside"] else "")
                 + "</div>", unsafe_allow_html=True,
+            )
+
+            # Source links
+            st.markdown(
+                f"[📊 Yahoo Finance](https://finance.yahoo.com/quote/{ticker}) · "
+                f"[📈 Finviz](https://finviz.com/quote.ashx?t={ticker}) · "
+                f"[📰 SEC Filings](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=10-K) · "
+                f"[🔍 News](https://finance.yahoo.com/quote/{ticker}/news/)"
             )
 
             plan_tab, chart_tab, risk_tab, deep_tab = st.tabs(
@@ -944,14 +1006,22 @@ elif page == "📈 Stock Analysis":
                             st.markdown(f"- **{label}**: {v:.2f}")
                 with dd3:
                     st.markdown(f"**Sentiment — {r['s_score']:.0f}/100**")
+                    st.caption("Source: Yahoo Finance news · VADER compound score (−1 bearish → +1 bullish)")
                     for h in r["headlines"][:6]:
                         clr = "#00b300" if h["label"] == "Positive" else (
                               "#ff4444" if h["label"] == "Negative" else "#888")
                         lbl = "▲" if h["label"] == "Positive" else (
                               "▼" if h["label"] == "Negative" else "–")
+                        headline_text = h["headline"][:90] + ("…" if len(h["headline"]) > 90 else "")
+                        url = h.get("url", "")
+                        linked = (
+                            f"<a href='{url}' target='_blank' "
+                            f"style='color:#ccc;text-decoration:none'>{headline_text}</a>"
+                            if url else headline_text
+                        )
                         st.markdown(
                             f"<small style='color:{clr}'>{lbl} {h['score']:+.2f}</small> "
-                            f"{h['headline'][:85]}…",
+                            f"<small>{linked}</small>",
                             unsafe_allow_html=True,
                         )
 
