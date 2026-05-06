@@ -686,12 +686,224 @@ if page == "🏠 My Portfolio":
     )
     st.dataframe(styled, use_container_width=True)
 
-    # Rebalancing actions
+    # Rebalancing actions — rich evidence cards
     actions = rebalance_actions(port_df)
     if actions:
         st.subheader("💡 Advisor Recommendations")
-        for a in actions:
-            st.info(a)
+        st.caption(
+            "Each recommendation shows exactly what triggered it, the score breakdown, "
+            "and a pre-evaluated decision checklist — so you decide, not an algorithm."
+        )
+        for act in actions:
+            ticker  = act["ticker"]
+            urgency = act["urgency"]
+            r_data  = held_data.get(ticker, {})
+            fin     = r_data.get("financials", {})
+            rev     = r_data.get("revisions", {})
+            earn    = r_data.get("earnings")
+            t_score = r_data.get("t_score")
+            f_score = r_data.get("f_score")
+            s_score = r_data.get("s_score")
+            t_sigs  = r_data.get("t_signals", {})
+
+            urgency_badge = {"high": "🔴 HIGH", "medium": "🟡 MEDIUM", "low": "🟢 LOW"}.get(urgency, "")
+            icon = {"review": "📉", "trim": "✂️", "add": "➕"}.get(act["type"], "💡")
+
+            with st.expander(
+                f"{icon} **{ticker}** — {act['title']}  ·  {urgency_badge}",
+                expanded=(urgency == "high"),
+            ):
+                # ── Trigger ──────────────────────────────────────────────
+                st.markdown(
+                    f"<div style='padding:8px 12px;background:#1a1a1a;border-radius:6px;"
+                    f"border-left:4px solid #ffbb33;margin-bottom:10px'>"
+                    f"<span style='font-size:0.78em;color:#888'>WHAT TRIGGERED THIS</span><br>"
+                    f"<span style='color:#eee'>{act['trigger']}</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+                ev_col, check_col = st.columns([1, 1])
+
+                # ── Evidence panel ────────────────────────────────────────
+                with ev_col:
+                    st.markdown("**Score Breakdown — What's Driving It**")
+                    if t_score is not None:
+                        for dim, sc, weight, tip_key in [
+                            ("Technical",    t_score, "45%", "RSI"),
+                            ("Fundamental",  f_score, "40%", "FCF Yield"),
+                            ("Sentiment",    s_score, "15%", ""),
+                        ]:
+                            clr  = "#00C851" if sc >= 60 else ("#ffbb33" if sc >= 44 else "#ff4444")
+                            icon_s = "✅" if sc >= 60 else ("⚠️" if sc >= 44 else "❌")
+                            bar_w = int(sc)
+                            st.markdown(
+                                f"<div style='margin-bottom:5px'>"
+                                f"<span style='font-size:0.8em;color:#aaa'>{icon_s} {dim} ({weight})</span>"
+                                f"<span style='float:right;font-size:0.8em;font-weight:bold;color:{clr}'>{sc:.0f}/100</span>"
+                                f"<div style='height:5px;background:#222;border-radius:3px;margin-top:2px'>"
+                                f"<div style='width:{bar_w}%;height:5px;background:{clr};border-radius:3px'></div>"
+                                f"</div></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        # Primary driver diagnosis
+                        if t_score is not None and f_score is not None:
+                            gap_tf = t_score - f_score
+                            if gap_tf < -15:
+                                driver = "🔴 **Fundamental deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
+                            elif gap_tf > 15:
+                                driver = "🟡 **Technical weakness only** — fundamentals remain solid. Likely a timing/momentum signal; the ratchet stop may handle it."
+                            else:
+                                driver = "⚠️ **Both Technical and Fundamental signals are weak** — broader caution warranted."
+                            st.info(driver)
+
+                    # Specific bearish signals from t_signals
+                    bearish_sigs = {k: v for k, v in t_sigs.items() if "bearish" in v.lower()}
+                    if bearish_sigs:
+                        st.markdown("**Specific Bearish Technical Signals:**")
+                        for k, v in bearish_sigs.items():
+                            st.markdown(f"<small style='color:#ff8800'>▼ **{k}**: {v}</small>", unsafe_allow_html=True)
+
+                # ── Decision checklist ────────────────────────────────────
+                with check_col:
+                    st.markdown("**Decision Checklist**")
+
+                    def _check(emoji, text, color="#ccc"):
+                        st.markdown(
+                            f"<div style='margin-bottom:5px;font-size:0.85em'>"
+                            f"{emoji} <span style='color:{color}'>{text}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # Stop status
+                    gap = act["gap"]
+                    stop = act["stop"]
+                    stop_type = act["stop_type"]
+                    if gap < 4:
+                        _check("🔴", f"Stop at ${stop:.2f} — only {gap:.1f}% away. Market may decide for you.", "#ff4444")
+                    elif gap < 8:
+                        _check("🟡", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Monitor closely.", "#ffbb33")
+                    else:
+                        _check("✅", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Not in immediate danger.", "#00C851")
+
+                    # Earnings proximity
+                    earn_flag = False
+                    if earn:
+                        try:
+                            days_to_earn = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
+                            if 0 <= days_to_earn <= 14:
+                                _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
+                                earn_flag = True
+                            elif days_to_earn <= 30:
+                                _check("🟡", f"Earnings in {days_to_earn}d ({earn}) — consider reducing before report.", "#ffbb33")
+                                earn_flag = True
+                            else:
+                                _check("✅", f"Next earnings: {days_to_earn}d away — no immediate catalyst pressure.")
+                        except Exception:
+                            pass
+
+                    # Analyst revisions
+                    if rev:
+                        net_rev = rev.get("net", 0)
+                        ups = rev.get("upgrades_90d", 0)
+                        dns = rev.get("downgrades_90d", 0)
+                        if net_rev > 0:
+                            _check("✅", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — institutional conviction intact.", "#00C851")
+                        elif net_rev < 0:
+                            _check("🔴", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — estimates being cut. Higher urgency.", "#ff4444")
+                        else:
+                            _check("🟡", f"Analyst revisions: neutral (90d).")
+
+                    # Short interest
+                    short_pct = fin.get("short_pct_float")
+                    if short_pct is not None:
+                        if short_pct > 15:
+                            _check("⚠️", f"Short interest {short_pct:.1f}% — elevated bearish positioning. Confirms the sell signal.")
+                        else:
+                            _check("✅", f"Short interest {short_pct:.1f}% — not heavily shorted. Bears haven't piled in.")
+
+                    # Institutional ownership
+                    inst = fin.get("held_pct_institutions")
+                    if inst is not None:
+                        if inst > 60:
+                            _check("✅", f"Institutional ownership {inst:.0f}% — smart money still holding.")
+                        elif inst < 30:
+                            _check("⚠️", f"Low institutional ownership {inst:.0f}% — limited institutional support.")
+
+                    # FCF / fundamentals quality
+                    fcf_y = fin.get("fcf_yield")
+                    if fcf_y is not None:
+                        if fcf_y >= 3:
+                            _check("✅", f"FCF Yield {fcf_y:.1f}% — business generating real cash. Fundamentals back the hold.")
+                        elif fcf_y < 0:
+                            _check("🔴", f"FCF Yield {fcf_y:.1f}% — company burning cash. Adds urgency to the sell signal.", "#ff4444")
+
+                    # Position sizing
+                    if act["weight"] > 15:
+                        _check("⚠️", f"Position is {act['weight']:.0f}% of portfolio — above 15% threshold. Size alone justifies trimming.")
+
+                # ── Suggested action ──────────────────────────────────────
+                st.markdown("---")
+                st.markdown("**Suggested Action**")
+                if act["type"] == "review":
+                    half = act["half_shares"]
+                    half_val = half * act["price"]
+                    full_val = act["shares"] * act["price"]
+                    if f_score is not None and t_score is not None:
+                        if f_score < 44:
+                            action_text = (
+                                f"**Fundamental-driven weakness — act with urgency.**  \n"
+                                f"Sell **{half} shares** (~${half_val:,.0f}) at market now to bank the "
+                                f"{act['pnl']:.0f}% gain on half the position.  \n"
+                                f"Hold remaining {act['shares'] - half} shares with stop at "
+                                f"**${act['stop']:.2f}** ({act['stop_type']}).  \n"
+                                f"Revisit full exit if stop is breached or next earnings disappoint."
+                            )
+                        else:
+                            action_text = (
+                                f"**Technical-only weakness — fundamentals are intact.**  \n"
+                                f"Option A (conservative): Let the ratchet stop at **${act['stop']:.2f}** "
+                                f"do the work — it already locks in a portion of your gain.  \n"
+                                f"Option B (active): Sell **{half} shares** (~${half_val:,.0f}) to reduce "
+                                f"exposure, trail remainder with the existing stop.  \n"
+                                f"Do NOT sell all {act['shares']} shares on a technical signal alone "
+                                f"when fundamentals are solid."
+                            )
+                            if earn_flag:
+                                action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
+                    else:
+                        action_text = (
+                            f"Sell **{half} shares** (~${half_val:,.0f}) to bank gain on half the position.  \n"
+                            f"Hold remainder with stop at **${act['stop']:.2f}**."
+                        )
+                    st.markdown(action_text)
+
+                elif act["type"] == "trim":
+                    ts = act["trim_shares"]
+                    tv = act["trim_val"]
+                    action_text = (
+                        f"Sell **{ts} shares** (~${tv:,.0f}) to reduce from "
+                        f"{act['weight']:.0f}% → ~15% portfolio weight.  \n"
+                        f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
+                        f"the core position. Reinvest the proceeds in underweighted high-conviction names."
+                    )
+                    st.markdown(action_text)
+
+                elif act["type"] == "add":
+                    action_text = (
+                        f"Score is **{act['score']:.0f}/100** ({act['signal']}) but weight is only "
+                        f"{act['weight']:.1f}%.  \n"
+                        f"Consider building toward **8–10% weight** — buy in 2–3 tranches to average in "
+                        f"rather than deploying all at once.  \n"
+                        f"First tranche: target 4–5% weight. Only add second tranche if price holds above "
+                        f"stop at **${act['stop']:.2f}**."
+                    )
+                    st.markdown(action_text)
+
+                st.caption(
+                    "⚠️ This analysis is algorithmic — not personal financial advice. "
+                    "Validate against your own research and risk tolerance before acting."
+                )
     else:
         st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
 

@@ -178,33 +178,93 @@ def alerts(portfolio_df: pd.DataFrame) -> list[dict]:
     return result
 
 
-def rebalance_actions(portfolio_df: pd.DataFrame) -> list[str]:
+def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
+    """
+    Returns structured recommendation dicts instead of plain strings.
+    Each dict carries the trigger condition and all data needed for the
+    evidence panel in app.py (which also injects score breakdowns from held_data).
+    """
     actions = []
     if portfolio_df.empty:
         return actions
     for _, row in portfolio_df.iterrows():
-        w = row["Weight (%)"]
-        pnl = row["P&L (%)"]
+        w      = row["Weight (%)"]
+        pnl    = row["P&L (%)"]
         ticker = row["Ticker"]
-        price = row["Price"]
+        price  = row["Price"]
         shares = row["Shares"]
         signal = row["Signal"]
+        score  = row["Score"]
+        stop   = row["Stop"]
+        gap    = row["Gap to Stop (%)"]
+        mval   = row["Market Value"]
+        avg_cost = row["Avg Cost"]
 
         if w > 18 and pnl > 20:
-            trim_val = row["Market Value"] * (w - 15) / 100
+            trim_val    = mval * (w - 15) / 100
             trim_shares = max(1, int(trim_val / price))
-            actions.append(
-                f"**Trim {ticker}**: Sell ~{trim_shares} shares (${trim_val:,.0f}) — "
-                f"reduce from {w:.0f}% → ~15% weight while locking in {pnl:.0f}% gain"
-            )
-        if "Strong Buy" in signal and w < 5 and row["Score"] > 70:
-            actions.append(
-                f"**Add to {ticker}**: Strong conviction ({row['Score']:.0f}/100) but "
-                f"only {w:.1f}% of portfolio — consider building to 8–10%"
-            )
+            actions.append({
+                "type":    "trim",
+                "urgency": "medium",
+                "ticker":  ticker,
+                "title":   "Oversized Position with Strong Gain",
+                "trigger": f"Weight {w:.0f}% exceeds 18% threshold with +{pnl:.0f}% profit",
+                "trim_shares": trim_shares,
+                "trim_val":    trim_val,
+                "weight":  w,
+                "pnl":     pnl,
+                "price":   price,
+                "shares":  shares,
+                "stop":    stop,
+                "stop_type": row["Stop Type"],
+                "gap":     gap,
+                "score":   score,
+                "signal":  signal,
+                "mval":    mval,
+                "avg_cost": avg_cost,
+            })
+
+        if "Strong Buy" in signal and w < 5 and score > 70:
+            add_val = mval * (8 - w) / 100  # rough cost to reach 8% weight
+            actions.append({
+                "type":    "add",
+                "urgency": "low",
+                "ticker":  ticker,
+                "title":   "High-Conviction Position Undersized",
+                "trigger": f"Strong Buy signal ({score:.0f}/100) but only {w:.1f}% of portfolio",
+                "weight":  w,
+                "pnl":     pnl,
+                "price":   price,
+                "shares":  shares,
+                "stop":    stop,
+                "stop_type": row["Stop Type"],
+                "gap":     gap,
+                "score":   score,
+                "signal":  signal,
+                "mval":    mval,
+                "avg_cost": avg_cost,
+            })
+
         if "Sell" in signal and pnl > 0:
-            actions.append(
-                f"**Review {ticker}**: Bearish signal with {pnl:.1f}% gain — "
-                "sell half now and trail the rest with stop"
-            )
+            urgency = "high" if (score < 30 or gap < 5) else "medium"
+            half_shares = max(1, shares // 2)
+            actions.append({
+                "type":       "review",
+                "urgency":    urgency,
+                "ticker":     ticker,
+                "title":      "Bearish Signal on Profitable Position",
+                "trigger":    f"Composite score {score:.0f}/100 ({signal.split()[-1]}) while position is +{pnl:.1f}% profitable",
+                "half_shares": half_shares,
+                "weight":     w,
+                "pnl":        pnl,
+                "price":      price,
+                "shares":     shares,
+                "stop":       stop,
+                "stop_type":  row["Stop Type"],
+                "gap":        gap,
+                "score":      score,
+                "signal":     signal,
+                "mval":       mval,
+                "avg_cost":   avg_cost,
+            })
     return actions
