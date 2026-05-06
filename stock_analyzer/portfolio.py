@@ -1,4 +1,16 @@
+import math
 import pandas as pd
+
+
+def _safe_float(val, default: float = 0.0) -> float:
+    """Convert val to float, returning default for None/NaN/empty-string."""
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return default if math.isnan(f) else f
+    except (TypeError, ValueError):
+        return default
 
 
 TICKER_SECTORS = {
@@ -60,9 +72,9 @@ def build_portfolio_df(
     """
     rows = []
     for h in holdings:
-        ticker = str(h.get("Ticker", h.get("ticker", ""))).strip().upper()
-        shares = float(h.get("Shares", h.get("shares", 0)))
-        avg_cost = float(h.get("Avg Cost ($)", h.get("avg_cost", 0)))
+        ticker = str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper()
+        shares = _safe_float(h.get("Shares", h.get("shares")))
+        avg_cost = _safe_float(h.get("Avg Cost ($)", h.get("avg_cost")))
         if not ticker or shares <= 0 or avg_cost <= 0:
             continue
         r = loaded_data.get(ticker)
