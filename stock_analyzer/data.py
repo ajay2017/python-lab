@@ -224,3 +224,48 @@ def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
     # Tier-1 sources first; within same tier, newest first
     items.sort(key=lambda x: (x["tier"], -x["ts"]))
     return items[:max_items]
+
+
+def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
+    """
+    Build curated news from already-fetched load_all() results — zero extra API calls.
+    data_by_ticker: {ticker: load_all_result_dict, ...}  (each must have "news_raw" key)
+    """
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    _va = SentimentIntensityAnalyzer()
+
+    seen: set[str] = set()
+    items: list[dict] = []
+
+    for ticker, r in data_by_ticker.items():
+        for item in (r.get("news_raw") or [])[:8]:
+            title = (item.get("title") or "").strip()
+            if not title:
+                continue
+            key = title.lower()[:70]
+            if key in seen:
+                continue
+            seen.add(key)
+
+            publisher = item.get("publisher", "Unknown")
+            pub_l = publisher.lower()
+            tier = (1 if any(p in pub_l for p in _TIER1) else
+                    2 if any(p in pub_l for p in _TIER2) else 3)
+
+            compound = _va.polarity_scores(title)["compound"]
+            label = ("Positive" if compound >= 0.05 else
+                     "Negative" if compound <= -0.05 else "Neutral")
+
+            items.append({
+                "ticker":    ticker,
+                "title":     title,
+                "url":       item.get("link", ""),
+                "publisher": publisher,
+                "ts":        item.get("providerPublishTime", 0),
+                "compound":  round(compound, 2),
+                "label":     label,
+                "tier":      tier,
+            })
+
+    items.sort(key=lambda x: (x["tier"], -x["ts"]))
+    return items[:max_items]

@@ -8,7 +8,7 @@ from datetime import datetime, date
 import html as _html
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
-    fetch_spy, fetch_live_prices, market_status, fetch_curated_news,
+    fetch_spy, fetch_live_prices, market_status, curate_news_items,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -41,9 +41,6 @@ def _time_ago(ts: int) -> str:
     return f"{delta // 86400}d"
 
 
-@st.cache_data(ttl=900)
-def _load_sidebar_news(tickers: tuple) -> list[dict]:
-    return fetch_curated_news(list(tickers))
 
 
 # ── Password gate ─────────────────────────────────────────────────────────────
@@ -110,20 +107,13 @@ with st.sidebar:
 
     # ── Curated news feed ─────────────────────────────────────────────────
     st.divider()
-    _news_tickers = tuple(dict.fromkeys(
-        [str(r.get("Ticker", "")).strip().upper()
-         for _, r in st.session_state.holdings_df.iterrows()
-         if str(r.get("Ticker", "")).strip()]
-        + [t for t in st.session_state.get("watchlist", []) if t]
-    ))
     st.markdown(
         "<span style='font-size:0.85em;font-weight:600;color:#ccc'>📰 CURATED NEWS</span>"
-        "<span style='font-size:0.75em;color:#555'> · vetted sources · 15m cache</span>",
+        "<span style='font-size:0.75em;color:#555'> · vetted sources</span>",
         unsafe_allow_html=True,
     )
-    if _news_tickers:
-        _news_items = _load_sidebar_news(_news_tickers)
-        if _news_items:
+    _news_items = st.session_state.get("_sidebar_news", [])
+    if _news_items:
             for _ni in _news_items[:10]:
                 _clr  = "#00b300" if _ni["label"] == "Positive" else (
                         "#ff4444" if _ni["label"] == "Negative" else "#666")
@@ -152,10 +142,8 @@ with st.sidebar:
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-        else:
-            st.caption("No news available.")
     else:
-        st.caption("Add holdings to see relevant news.")
+        st.caption("Load portfolio or analysis to see news.")
 
     st.divider()
     portfolio_value = st.number_input(
@@ -200,7 +188,7 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "s_score": s_score, "avg_sent": avg_sent, "headlines": headlines,
         "total": total, "rec": rec, "financials": financials,
         "current_price": price, "upside": upside,
-        "atr": atr_val, "stop": stop,
+        "atr": atr_val, "stop": stop, "news_raw": bundle["news"],
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
@@ -247,6 +235,9 @@ if page == "🏠 My Portfolio":
                 held_data[t] = load_all(t)
             except Exception as e:
                 st.warning(f"Could not load {t}: {e}")
+
+    if held_data:
+        st.session_state["_sidebar_news"] = curate_news_items(held_data)
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
     @st.fragment(run_every=60)
@@ -727,6 +718,8 @@ elif page == "📈 Stock Analysis":
     if not results:
         st.error("No data loaded.")
         st.stop()
+
+    st.session_state["_sidebar_news"] = curate_news_items(results)
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
