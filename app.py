@@ -28,6 +28,7 @@ from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors
 from stock_analyzer.macro import (
     RATE_SENSITIVITY, REGIME_FAVORED, detect_macro_regime, portfolio_macro_exposure,
 )
+from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternatives, tier_label
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 
@@ -1183,6 +1184,168 @@ if page == "🏠 My Portfolio":
                     st.success(
                         f"✅ **Your portfolio is well-positioned for {regime['label']}** — "
                         f"{_nt} of {len(expo_df)} positions are in macro-favored sectors."
+                    )
+
+    # ── Expander 5: Universe Score Ranking ───────────────────────────────────
+    with st.expander("🏆 Universe Score Ranking", expanded=False):
+        st.caption(
+            "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
+            "Shows whether you're holding the best names in each sector or just familiar ones. "
+            "Goldman uses universe-relative ranking to identify rotation candidates."
+        )
+
+        if st.button("🔍 Scan full universe & rank my holdings", key="_rank_scan_btn"):
+            with st.spinner("Scanning universe (~80 tickers)…"):
+                try:
+                    _full_scan = scan_sectors(list(SECTOR_UNIVERSE.keys()))
+                    st.session_state["_rank_scan_df"] = _full_scan
+                except Exception as _e:
+                    st.error(f"Scan failed: {_e}")
+                    st.session_state["_rank_scan_df"] = pd.DataFrame()
+
+        if st.session_state.get("_rank_scan_df") is not None and not st.session_state["_rank_scan_df"].empty:
+            _scan_df  = st.session_state["_rank_scan_df"]
+            _rank_df  = rank_holdings_in_universe(port_df, _scan_df)
+
+            if _rank_df.empty:
+                st.info("Could not match any holdings to the scanned universe.")
+            else:
+                _total     = int(_rank_df["of"].iloc[0])
+                _in_univ   = _rank_df["Universe Rank"].notna().sum()
+                _top_q     = int((_rank_df["Percentile"] >= 75).sum())
+                _bot_q     = int((_rank_df["Percentile"] <= 25).sum())
+
+                _rk1, _rk2, _rk3, _rk4 = st.columns(4)
+                _rk1.metric("Universe size",    _total,    help="Tickers scanned")
+                _rk2.metric("Holdings ranked",  _in_univ,  help="Holdings found in universe")
+                _rk3.metric("Top quartile",     _top_q,    help="Percentile ≥ 75")
+                _rk4.metric("Bottom quartile",  _bot_q,    help="Percentile ≤ 25 — rotation candidates")
+
+                # Percentile bar chart
+                _rk_valid = _rank_df.dropna(subset=["Percentile"]).sort_values("Percentile", ascending=False)
+                _pct_colors = [
+                    tier_label(p)[1] for p in _rk_valid["Percentile"]
+                ]
+                pct_fig = go.Figure(go.Bar(
+                    x=_rk_valid["Ticker"],
+                    y=_rk_valid["Percentile"],
+                    marker_color=_pct_colors,
+                    text=[f"#{int(r)}" for r in _rk_valid["Universe Rank"]],
+                    textposition="outside",
+                    customdata=list(zip(
+                        _rk_valid["Universe Rank"],
+                        _rk_valid["of"],
+                        _rk_valid["Scanner Score"],
+                        _rk_valid["Tier"],
+                    )),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        "Rank: #%{customdata[0]} of %{customdata[1]}<br>"
+                        "Percentile: %{y:.0f}th<br>"
+                        "Scanner Score: %{customdata[2]:.0f}/100<br>"
+                        "Tier: %{customdata[3]}"
+                        "<extra></extra>"
+                    ),
+                ))
+                pct_fig.add_hline(y=75, line_dash="dash", line_color="#4CAF50",
+                                  annotation_text="Top quartile", annotation_position="right")
+                pct_fig.add_hline(y=25, line_dash="dash", line_color="#ff8800",
+                                  annotation_text="Bottom quartile", annotation_position="right")
+                pct_fig.update_layout(
+                    title=f"Holdings — Universe Percentile Rank (out of {_total} tickers)",
+                    template="plotly_dark", height=300,
+                    yaxis_title="Percentile", yaxis_range=[0, 110],
+                    margin=dict(l=0, r=60, t=40, b=0),
+                )
+                st.plotly_chart(pct_fig, use_container_width=True)
+
+                # Styled ranking table
+                def _tier_col(val):
+                    s = str(val)
+                    if "Top Decile"     in s: return "color:#00C851;font-weight:bold"
+                    if "Top Quartile"   in s: return "color:#4CAF50"
+                    if "Bottom Decile"  in s: return "color:#ff4444;font-weight:bold"
+                    if "Bottom Quartile"in s: return "color:#ff8800"
+                    if "Below Median"   in s: return "color:#ffbb33"
+                    return "color:#aaaaaa"
+
+                def _pct_col(val):
+                    if isinstance(val, float):
+                        if val >= 75: return "color:#4CAF50;font-weight:bold"
+                        if val <= 25: return "color:#ff8800"
+                    return ""
+
+                _disp = _rank_df[[
+                    "Ticker", "Sector", "Universe Rank", "of", "Percentile",
+                    "Tier", "Scanner Score", "Composite Score", "Sector Rank",
+                ]].copy()
+                _styled_rank = (
+                    _disp.style
+                    .map(_tier_col, subset=["Tier"])
+                    .map(_pct_col,  subset=["Percentile"])
+                    .format({
+                        "Percentile":      "{:.0f}th",
+                        "Scanner Score":   "{:.0f}",
+                        "Composite Score": "{:.0f}",
+                    }, na_rep="—")
+                )
+                st.dataframe(_styled_rank, use_container_width=True)
+                st.caption(
+                    "**Scanner Score** = momentum-only (consistent across all 80 tickers).  "
+                    "**Composite Score** = technical + fundamental + sentiment (your holdings only).  "
+                    "**Sector Rank** = position within its scanner sector grouping."
+                )
+
+                # Rotation candidates with alternatives
+                _bot_rows = _rank_df[_rank_df["Percentile"].notna() & (_rank_df["Percentile"] <= 25)]
+                if not _bot_rows.empty:
+                    st.markdown("### 🔄 Rotation Candidates")
+                    st.caption(
+                        "These holdings rank in the bottom quartile of the universe. "
+                        "Goldman would review for rotation into higher-ranked names in the same sector."
+                    )
+                    for _, brow in _bot_rows.iterrows():
+                        alts = sector_alternatives(
+                            brow["Ticker"], str(brow["_scanner_sector"]), _scan_df, n=3
+                        )
+                        with st.container(border=True):
+                            _bc1, _bc2 = st.columns([3, 1])
+                            with _bc1:
+                                st.markdown(
+                                    f"🔴 **{brow['Ticker']}** — ranked "
+                                    f"#{int(brow['Universe Rank'])} of {int(brow['of'])} "
+                                    f"({brow['Percentile']:.0f}th percentile · {brow['Tier']})"
+                                )
+                                st.caption(
+                                    f"Scanner score: {brow['Scanner Score']:.0f}/100 · "
+                                    f"Sector rank: {brow['Sector Rank']} · "
+                                    f"Composite: {brow['Composite Score']:.0f}/100"
+                                )
+                            with _bc2:
+                                st.metric("Sector rank", brow["Sector Rank"])
+                            if alts:
+                                st.markdown("**Higher-ranked alternatives in same sector:**")
+                                _ac = st.columns(len(alts))
+                                for _col, alt in zip(_ac, alts):
+                                    au = universe.get(alt["ticker"]) if (universe := {r["Ticker"]: r for _, r in _scan_df.iterrows()}) else None
+                                    _alt_rank = int(au["Rank"]) if au is not None else "—"
+                                    _alt_pct  = round((int(brow["of"]) - int(_alt_rank) + 1) / int(brow["of"]) * 100, 0) if isinstance(_alt_rank, int) else "—"
+                                    _col.markdown(
+                                        f"**{alt['ticker']}**  \n"
+                                        f"Score: {alt['score']:.0f}/100  \n"
+                                        f"Rank: #{_alt_rank}  \n"
+                                        f"Pct: {_alt_pct}th  \n"
+                                        f"{alt['signal']}"
+                                    )
+
+                # Top performer callout
+                _top_rows = _rank_df[_rank_df["Percentile"].notna() & (_rank_df["Percentile"] >= 90)]
+                if not _top_rows.empty:
+                    _best_r = _top_rows.loc[_top_rows["Percentile"].idxmax()]
+                    st.success(
+                        f"✅ **{_best_r['Ticker']}** ranks #{int(_best_r['Universe Rank'])} of {int(_best_r['of'])} "
+                        f"({_best_r['Percentile']:.0f}th percentile — {_best_r['Tier']}) — "
+                        f"top-decile momentum score across the full universe. High-conviction hold."
                     )
 
     # Position table with protective stops
