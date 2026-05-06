@@ -2073,8 +2073,8 @@ elif page == "📒 Trade Journal":
                 f"border-left:4px solid {pnl_clr};margin:6px 0'>"
                 f"<span style='font-size:0.8em;color:#888'>REALIZED P&L PREVIEW</span><br>"
                 f"<span style='font-size:1.1em;font-weight:bold;color:{pnl_clr}'>"
-                f"{'%+.2f' % pnl_preview if pnl_preview else '—'} "
-                f"({'%+.1f' % pnl_pct_preview}% per share · "
+                f"{f'${pnl_preview:+,.2f}' if pnl_preview is not None else '—'} "
+                f"({pnl_pct_preview:+.1f}% per share · "
                 f"{shares_val:.0f} shares × ${price_val:.2f} − ${cost_basis_val:.2f})</span></div>",
                 unsafe_allow_html=True,
             )
@@ -2133,7 +2133,7 @@ elif page == "📒 Trade Journal":
                                 st.success(
                                     f"✅ Sold {shares_val:.0f} shares of {ticker_input}. "
                                     f"Holdings updated: {current_shares:.0f} → {new_shares:.0f} shares. "
-                                    f"Realized P&L: **{'%+,.2f' % realized_pnl if realized_pnl else '—'}**"
+                                    f"Realized P&L: **{f'${realized_pnl:+,.2f}' if realized_pnl is not None else '—'}**"
                                 )
                             db.save_holdings(h_df)
                             st.session_state.holdings_df = h_df
