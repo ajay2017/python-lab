@@ -66,7 +66,44 @@ def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
                     earnings = str(dates[0])[:10]
         except Exception:
             pass
-        return {"history": hist, "info": info, "news": news, "earnings": earnings}
+
+        revisions = {}
+        try:
+            upg = t.upgrades_downgrades
+            if upg is not None and not upg.empty:
+                upg = upg.copy()
+                try:
+                    upg.index = pd.to_datetime(upg.index, utc=True)
+                    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=90)
+                    recent = upg[upg.index >= cutoff]
+                except Exception:
+                    recent = upg.head(20)
+                actions = recent["Action"].str.lower() if not recent.empty else pd.Series([], dtype=str)
+                ups   = int(actions.isin(["up", "init"]).sum())
+                downs = int((actions == "down").sum())
+                maint = int(actions.isin(["main", "reit"]).sum())
+                revisions = {
+                    "upgrades_90d":   ups,
+                    "downgrades_90d": downs,
+                    "maintained_90d": maint,
+                    "net":            ups - downs,
+                    "latest": [
+                        {
+                            "firm":       str(row.get("Firm", "")),
+                            "to_grade":   str(row.get("ToGrade", "")),
+                            "from_grade": str(row.get("FromGrade", "")),
+                            "action":     str(row.get("Action", "")),
+                        }
+                        for _, row in upg.head(5).iterrows()
+                    ],
+                }
+        except Exception:
+            pass
+
+        return {
+            "history": hist, "info": info, "news": news,
+            "earnings": earnings, "revisions": revisions,
+        }
 
     return _retry(_fetch)
 
@@ -137,21 +174,46 @@ def fetch_spy(period: str = "6mo") -> pd.DataFrame:
 
 def fetch_financials_from_info(info: dict) -> dict:
     """Extract financials from a pre-fetched .info dict — no extra API call."""
+    fcf = info.get("freeCashflow")
+    mkt_cap = info.get("marketCap")
+    fcf_yield = round(fcf / mkt_cap * 100, 2) if fcf and mkt_cap and mkt_cap > 0 else None
+
+    short_pct = info.get("shortPercentOfFloat")
+
     return {
-        "pe_ratio": info.get("trailingPE"),
-        "forward_pe": info.get("forwardPE"),
-        "eps": info.get("trailingEps"),
-        "revenue_growth": info.get("revenueGrowth"),
-        "earnings_growth": info.get("earningsGrowth"),
-        "profit_margins": info.get("profitMargins"),
-        "debt_to_equity": info.get("debtToEquity"),
+        # Core valuation
+        "pe_ratio":         info.get("trailingPE"),
+        "forward_pe":       info.get("forwardPE"),
+        "eps":              info.get("trailingEps"),
+        "market_cap":       mkt_cap,
+        # Cash flow (primary institutional metric)
+        "free_cashflow":    fcf,
+        "fcf_yield":        fcf_yield,
+        # Growth & quality
+        "revenue_growth":   info.get("revenueGrowth"),
+        "earnings_growth":  info.get("earningsGrowth"),
+        "profit_margins":   info.get("profitMargins"),
         "return_on_equity": info.get("returnOnEquity"),
-        "current_ratio": info.get("currentRatio"),
-        "market_cap": info.get("marketCap"),
-        "52_week_high": info.get("fiftyTwoWeekHigh"),
-        "52_week_low": info.get("fiftyTwoWeekLow"),
-        "analyst_target": info.get("targetMeanPrice"),
-        "recommendation": info.get("recommendationMean"),
+        "current_ratio":    info.get("currentRatio"),
+        # Balance sheet
+        "debt_to_equity":   info.get("debtToEquity"),
+        # Price targets
+        "52_week_high":     info.get("fiftyTwoWeekHigh"),
+        "52_week_low":      info.get("fiftyTwoWeekLow"),
+        "analyst_target":   info.get("targetMeanPrice"),
+        "target_high":      info.get("targetHighPrice"),
+        "target_low":       info.get("targetLowPrice"),
+        "target_median":    info.get("targetMedianPrice"),
+        # Analyst consensus
+        "recommendation":           info.get("recommendationMean"),
+        "num_analyst_opinions":     info.get("numberOfAnalystOpinions"),
+        # Smart money signals
+        "short_pct_float":          round(short_pct * 100, 1) if short_pct else None,
+        "short_ratio":              info.get("shortRatio"),
+        "held_pct_institutions":    round(info.get("heldPercentInstitutions", 0) * 100, 1)
+                                    if info.get("heldPercentInstitutions") else None,
+        "held_pct_insiders":        round(info.get("heldPercentInsiders", 0) * 100, 1)
+                                    if info.get("heldPercentInsiders") else None,
     }
 
 

@@ -44,6 +44,266 @@ def _time_ago(ts: int) -> str:
     return f"{delta // 86400}d"
 
 
+# ── Glossary tooltips ─────────────────────────────────────────────────────────
+_TIPS = {
+    "P/E Ratio": (
+        "Price ÷ trailing 12-month earnings per share.\n\n"
+        "• < 15 → Value territory\n• 15–25 → Fair value\n• > 40 → Growth premium\n\n"
+        "⚠️ Can be distorted by one-time items. Always pair with FCF Yield.\n\n"
+        "Learn more: investopedia.com/terms/p/price-earningsratio.asp"
+    ),
+    "Forward P/E": (
+        "Price ÷ next-year estimated earnings. More useful than trailing P/E "
+        "for growth stocks because it reflects where the business is going, "
+        "not where it's been.\n\n"
+        "A falling Forward P/E (earnings growing faster than price) is bullish.\n\n"
+        "Learn more: investopedia.com/terms/f/forwardpe.asp"
+    ),
+    "FCF Yield": (
+        "Free Cash Flow ÷ Market Cap × 100.\n\n"
+        "The primary valuation metric used by Goldman Sachs and most top-tier "
+        "analysts — harder to manipulate than P/E because cash in the bank "
+        "is real.\n\n"
+        "• > 5% → Excellent: strong real-cash generation\n"
+        "• 3–5% → Good value\n"
+        "• 1–3% → Modest / fairly priced\n"
+        "• < 1% → Expensive or cash-light model\n"
+        "• Negative → Company is burning cash\n\n"
+        "Learn more: investopedia.com/terms/f/freecashflowyield.asp"
+    ),
+    "EPS": (
+        "Earnings Per Share — net profit divided by shares outstanding.\n\n"
+        "Watch the *trend*: rising EPS quarter over quarter is more important "
+        "than the absolute number. Negative EPS = the company is losing money.\n\n"
+        "Learn more: investopedia.com/terms/e/eps.asp"
+    ),
+    "Revenue Growth": (
+        "Year-over-year change in total revenue.\n\n"
+        "• > 20% → High growth\n• 10–20% → Healthy\n"
+        "• 0–10% → Slow\n• Negative → Declining business\n\n"
+        "Growth stocks command premium P/E multiples only if revenue "
+        "growth is accelerating, not decelerating.\n\n"
+        "Learn more: investopedia.com/terms/r/revenue.asp"
+    ),
+    "Earnings Growth": (
+        "Year-over-year change in net income / EPS.\n\n"
+        "One of the strongest single alpha factors in institutional investing: "
+        "stocks with upward earnings revisions consistently outperform.\n\n"
+        "• Accelerating growth → multiple expansion\n"
+        "• Decelerating growth → multiple compression, even if still positive\n\n"
+        "Learn more: investopedia.com/terms/e/earningsgrowth.asp"
+    ),
+    "Profit Margin": (
+        "Net income ÷ revenue. Shows how much of each dollar of sales "
+        "becomes profit.\n\n"
+        "• > 25% → Exceptional (software, luxury goods)\n"
+        "• 15–25% → Strong\n• 5–15% → Normal for most industries\n"
+        "• < 5% → Thin — vulnerable to cost shocks\n\n"
+        "Margins expanding quarter-over-quarter = operating leverage kicking in.\n\n"
+        "Learn more: investopedia.com/terms/p/profitmargin.asp"
+    ),
+    "Debt/Equity": (
+        "Total debt ÷ shareholder equity (expressed as %).\n\n"
+        "Measures financial risk / leverage.\n\n"
+        "• < 30% → Conservative, very safe\n"
+        "• 30–80% → Manageable\n"
+        "• 80–150% → Elevated — watch interest coverage\n"
+        "• > 150% → High leverage — vulnerable to rate rises\n\n"
+        "Context matters: utilities and banks run high D/E by design; "
+        "tech companies should have low D/E.\n\n"
+        "Learn more: investopedia.com/terms/d/debtequityratio.asp"
+    ),
+    "ROE": (
+        "Return on Equity — net income ÷ shareholders' equity.\n\n"
+        "Warren Buffett's favourite metric. Shows how efficiently management "
+        "uses investors' capital to generate profit.\n\n"
+        "• > 20% → Excellent\n• 10–20% → Good\n• < 10% → Below average\n\n"
+        "Learn more: investopedia.com/terms/r/returnonequity.asp"
+    ),
+    "Short Interest": (
+        "% of the float (publicly tradeable shares) that is currently sold short "
+        "by investors betting the stock will fall.\n\n"
+        "• < 5% → Normal, minimal bearish pressure\n"
+        "• 5–15% → Elevated — meaningful bearish conviction\n"
+        "• > 15% → Very high — either a strong bear thesis OR a short-squeeze setup\n"
+        "• > 25% → Extreme — GameStop/AMC territory\n\n"
+        "High short interest + improving fundamentals = explosive squeeze potential.\n\n"
+        "Learn more: investopedia.com/terms/s/shortinterest.asp"
+    ),
+    "Days to Cover": (
+        "Short interest ÷ average daily volume.\n\n"
+        "How many trading days it would take all short sellers to buy back "
+        "their borrowed shares at current volume.\n\n"
+        "• < 3 days → Easy to cover, low squeeze risk\n"
+        "• 3–7 days → Moderate squeeze potential\n"
+        "• > 7 days → High squeeze potential — a positive catalyst could trigger a cascade\n\n"
+        "Learn more: investopedia.com/terms/d/daystocover.asp"
+    ),
+    "Institutional Ownership": (
+        "% of shares held by hedge funds, mutual funds, pension funds, "
+        "and other institutional investors.\n\n"
+        "• > 70% → Heavily institutionalised — large-cap blue chip validation\n"
+        "• 40–70% → Normal for mid/large cap\n"
+        "• < 20% → Low institutional interest — either undiscovered early-stage "
+        "OR institutions have deliberately avoided it (red flag)\n\n"
+        "Rising institutional ownership = 'smart money' is accumulating.\n\n"
+        "Learn more: investopedia.com/terms/i/institutionalinvestor.asp"
+    ),
+    "Insider Ownership": (
+        "% of shares held by company executives and directors.\n\n"
+        "High insider ownership aligns management incentives with shareholders. "
+        "Insider *buying* in the open market is one of the strongest fundamental "
+        "signals — they only buy if they believe the stock is undervalued.\n\n"
+        "Insider *selling* is noise (tax, diversification). Insider *buying* is signal.\n\n"
+        "Learn more: investopedia.com/terms/i/insidertrading.asp"
+    ),
+    "Analyst Revisions": (
+        "Net count of analyst upgrades minus downgrades over the last 90 days.\n\n"
+        "Earnings revision momentum is one of the most reliable alpha factors "
+        "in quantitative investing: stocks where analysts are raising estimates "
+        "consistently outperform those where estimates are being cut.\n\n"
+        "• Positive net → Analysts getting more bullish → tailwind\n"
+        "• Negative net → Analysts losing conviction → headwind\n\n"
+        "Learn more: investopedia.com/terms/e/earningsrevision.asp"
+    ),
+    "Analyst Consensus": (
+        "Average analyst recommendation on a scale of 1–5.\n\n"
+        "• 1.0–1.5 → Strong Buy consensus\n"
+        "• 1.5–2.5 → Buy consensus\n"
+        "• 2.5–3.5 → Hold consensus\n"
+        "• 3.5–4.5 → Sell consensus\n"
+        "• 4.5–5.0 → Strong Sell consensus\n\n"
+        "Used with caution — analysts at the firms doing banking relationships "
+        "are structurally biased toward Buy ratings."
+    ),
+    "Sharpe Ratio": (
+        "Return above the risk-free rate ÷ standard deviation of returns.\n\n"
+        "Answers: 'How much return am I getting per unit of risk taken?'\n\n"
+        "• > 1.5 → Excellent risk-adjusted performance\n"
+        "• 1.0–1.5 → Good\n• 0.5–1.0 → Acceptable\n"
+        "• < 0.5 → Poor — you're not being compensated for the risk\n"
+        "• Negative → Worse than holding cash\n\n"
+        "Learn more: investopedia.com/terms/s/sharperatio.asp"
+    ),
+    "Sortino Ratio": (
+        "Like the Sharpe Ratio but only penalises *downside* volatility "
+        "(upside volatility is not a risk — it's a reward).\n\n"
+        "• > 2.0 → Excellent\n• 1.0–2.0 → Good\n• < 1.0 → Weak\n\n"
+        "Preferred by professional risk managers over Sharpe because "
+        "investors only care about losing money, not about upside swings.\n\n"
+        "Learn more: investopedia.com/terms/s/sortinoratio.asp"
+    ),
+    "Max Drawdown": (
+        "The worst peak-to-trough decline in the selected period.\n\n"
+        "If a stock went from $100 → $60 → $80, the max drawdown is −40%.\n\n"
+        "Professional portfolio managers use this to assess 'pain tolerance': "
+        "could you hold through this without panic-selling?\n\n"
+        "• > −20% → Significant drawdown, high volatility\n"
+        "• −10% to −20% → Normal for growth stocks\n"
+        "• < −10% → Relatively stable\n\n"
+        "Learn more: investopedia.com/terms/m/maximum-drawdown-mdd.asp"
+    ),
+    "VaR": (
+        "Value at Risk (95% confidence) — the daily loss you should NOT "
+        "expect to exceed on 95% of trading days.\n\n"
+        "If VaR = −2.5%, it means on a normal day you won't lose more than 2.5%. "
+        "But on the worst 5% of days, losses can be larger.\n\n"
+        "Limitations: VaR understates risk during market crises (fat-tail events). "
+        "That's why professionals also look at CVaR (Expected Shortfall).\n\n"
+        "Learn more: investopedia.com/terms/v/var.asp"
+    ),
+    "Beta": (
+        "Measures a stock's volatility relative to the S&P 500.\n\n"
+        "• Beta = 1.0 → Moves exactly with the market\n"
+        "• Beta = 1.5 → 50% more volatile than the market\n"
+        "• Beta = 0.5 → Half the market volatility\n"
+        "• Beta < 0 → Moves opposite to the market (rare)\n\n"
+        "High-beta stocks amplify both gains and losses. "
+        "In bull markets, β > 1 outperforms. In bear markets, it destroys capital.\n\n"
+        "Learn more: investopedia.com/terms/b/beta.asp"
+    ),
+    "RSI": (
+        "Relative Strength Index (14-period).\n\n"
+        "Momentum oscillator measuring the speed and magnitude of recent price moves.\n\n"
+        "• > 70 → Overbought — potential pullback ahead\n"
+        "• 50–70 → Bullish momentum territory\n"
+        "• 30–50 → Neutral to mildly bearish\n"
+        "• < 30 → Oversold — potential bounce\n\n"
+        "RSI divergence (price making new highs but RSI declining) is a "
+        "leading warning signal used by professional chartists.\n\n"
+        "Learn more: investopedia.com/terms/r/rsi.asp"
+    ),
+    "MACD": (
+        "Moving Average Convergence Divergence.\n\n"
+        "Trend-following momentum indicator. The MACD line is the difference "
+        "between the 12-day and 26-day exponential moving averages.\n\n"
+        "• MACD above signal line → Bullish\n"
+        "• MACD below signal line → Bearish\n"
+        "• Histogram rising → Momentum strengthening\n"
+        "• Histogram falling → Momentum weakening\n\n"
+        "Learn more: investopedia.com/terms/m/macd.asp"
+    ),
+    "ATR Stop": (
+        "Average True Range stop loss — a volatility-adjusted exit level.\n\n"
+        "ATR measures the average daily price range. The stop is set at "
+        "Price − (2 × ATR), placing it outside normal day-to-day noise.\n\n"
+        "This means stops on volatile stocks are wider (they need room to breathe) "
+        "and tighter on stable stocks. Professional traders never use arbitrary "
+        "percentage stops — ATR-based stops respect the stock's actual behaviour.\n\n"
+        "Learn more: investopedia.com/terms/a/atr.asp"
+    ),
+    "R:R Ratio": (
+        "Risk-to-Reward Ratio — potential profit ÷ potential loss on the trade.\n\n"
+        "• 1:1 → Break-even math. Avoid unless win rate > 60%.\n"
+        "• 2:1 → Minimum professional standard\n"
+        "• 3:1 → Good — you can be wrong half the time and still profit\n"
+        "• > 4:1 → Excellent asymmetric setup\n\n"
+        "At Goldman Sachs, conviction trades typically require R:R ≥ 2.5:1 to "
+        "justify the position versus other opportunities.\n\n"
+        "Learn more: investopedia.com/terms/r/riskrewardratio.asp"
+    ),
+    "Position Sizing": (
+        "How many dollars and shares to buy based on your risk tolerance.\n\n"
+        "Formula used here (professional standard):\n"
+        "Shares = (Portfolio × Risk%) ÷ (Price − Stop)\n\n"
+        "Risk% = 1.5% means you're willing to lose 1.5% of your total portfolio "
+        "if the trade hits the stop. This is the 'moderate risk' professional standard.\n\n"
+        "Never risk more than 2% per trade. A 5-trade losing streak at 2%/trade "
+        "= 10% portfolio drawdown — survivable. At 5%/trade = 25% — catastrophic.\n\n"
+        "Learn more: investopedia.com/terms/p/positionsizing.asp"
+    ),
+    "Ratchet Stop": (
+        "A stop loss that automatically moves up as your gains accumulate, "
+        "locking in profits while letting winners run.\n\n"
+        "This app's ratchet levels:\n"
+        "• +10% gain → Stop moves to breakeven (you can't lose money)\n"
+        "• +25% gain → Stop floors at +10% (protect 10% gain)\n"
+        "• +50% gain → Stop floors at +25% (protect 25% gain)\n"
+        "• +75% gain → Stop floors at +40% (protect 40% gain)\n\n"
+        "Professional traders call this 'trailing stop' or 'profit ratchet'. "
+        "It solves the hardest problem in investing: letting winners run while "
+        "never giving back all your gains."
+    ),
+    "Composite Score": (
+        "Weighted composite signal combining three analytical dimensions:\n\n"
+        "• Technical (45%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
+        "• Fundamental (40%): Forward P/E, FCF Yield, Revenue & Earnings Growth, "
+        "Margins, Debt/Equity\n"
+        "• Sentiment (15%): VADER analysis of latest news headlines\n\n"
+        "Score thresholds:\n"
+        "• ≥ 72 → Strong Buy\n• 58–72 → Buy\n"
+        "• 44–58 → Hold\n• 30–44 → Sell\n• < 30 → Strong Sell\n\n"
+        "Note: The Scanner uses momentum-only scoring (no fundamentals). "
+        "A stock can score 85 on momentum and 52 composite — both are correct."
+    ),
+}
+
+
+def _tip(key: str) -> str:
+    """Return tooltip text for st.metric(help=...) and st.column_config help=."""
+    return _TIPS.get(key, "")
+
+
 def _fill_news_slot(slot, items: list) -> None:
     """Render curated news items into a sidebar container slot."""
     with slot:
@@ -200,6 +460,7 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
+        "revisions": bundle.get("revisions", {}),
     }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -385,8 +646,8 @@ if page == "🏠 My Portfolio":
     # Position table with protective stops
     st.subheader("Position Detail & Protective Stops")
     st.caption(
-        "Stop ratchets up automatically as gains grow — "
-        "breakeven guard at +10%, protects 10% at +25%, 25% at +50%, 40% at +75%.  \n"
+        "Hover the ℹ️ icon on any column header below for a plain-English explanation.  \n"
+        "**Ratchet stop** moves up automatically as gains grow — locks in profits while letting winners run.  \n"
         "**Score** = Technical 45% + Fundamental 40% + Sentiment 15% (composite). "
         "Scanner uses momentum-only scoring — see drill-down for full breakdown."
     )
@@ -445,24 +706,61 @@ if page == "🏠 My Portfolio":
 
         d1, d2, d3, d4 = st.columns(4)
         d1.metric("P&L",         f"${ps_row['P&L ($)']:,.0f}", f"{ps_row['P&L (%)']:+.1f}%")
-        d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'])
-        d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%")
-        d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'])
+        d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'],
+                  help=_tip("ATR Stop"))
+        d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%",
+                  help=_tip("Ratchet Stop"))
+        d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'],
+                  help=_tip("Composite Score"))
 
         # Score breakdown row
         sb1, sb2, sb3 = st.columns(3)
         t_contrib  = round(r['t_score'] * 0.45, 1)
         f_contrib  = round(r['f_score'] * 0.40, 1)
         s_contrib  = round(r['s_score'] * 0.15, 1)
-        sb1.metric("Technical",    f"{r['t_score']:.0f}/100",
-                   f"+{t_contrib} pts (45%)",
-                   help="RSI · MACD · Bollinger Bands · MA trend · Volume")
-        sb2.metric("Fundamental",  f"{r['f_score']:.0f}/100",
-                   f"+{f_contrib} pts (40%)",
-                   help="Forward P/E · Revenue & Earnings growth · Margins · Debt/Equity")
-        sb3.metric("Sentiment",    f"{r['s_score']:.0f}/100",
-                   f"+{s_contrib} pts (15%)",
+        sb1.metric("Technical",   f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (45%)",
+                   help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
+                        + _tip("RSI"))
+        sb2.metric("Fundamental", f"{r['f_score']:.0f}/100", f"+{f_contrib} pts (40%)",
+                   help="Forward P/E · FCF Yield · Revenue & Earnings growth · Margins · Debt/Equity\n\n"
+                        + _tip("FCF Yield"))
+        sb3.metric("Sentiment",   f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (15%)",
                    help="VADER analysis of latest news headlines from Yahoo Finance")
+
+        # Smart Money panel
+        fin = r["financials"]
+        rev = r.get("revisions", {})
+        _sm_items = []
+
+        short_pct = fin.get("short_pct_float")
+        if short_pct is not None:
+            short_clr = "#ff4444" if short_pct > 15 else ("#ffbb33" if short_pct > 7 else "#00C851")
+            _sm_items.append(("Short Interest", f"{short_pct:.1f}% of float", short_clr, _tip("Short Interest")))
+        short_ratio = fin.get("short_ratio")
+        if short_ratio:
+            _sm_items.append(("Days to Cover", f"{short_ratio:.1f}d", "#aaa", _tip("Days to Cover")))
+        inst = fin.get("held_pct_institutions")
+        if inst is not None:
+            inst_clr = "#00C851" if inst > 60 else ("#ffbb33" if inst > 30 else "#ff4444")
+            _sm_items.append(("Institutional", f"{inst:.0f}%", inst_clr, _tip("Institutional Ownership")))
+        insider = fin.get("held_pct_insiders")
+        if insider is not None:
+            _sm_items.append(("Insider Held", f"{insider:.1f}%", "#aaa", _tip("Insider Ownership")))
+        fcf_y = fin.get("fcf_yield")
+        if fcf_y is not None:
+            fcf_clr = "#00C851" if fcf_y >= 4 else ("#ffbb33" if fcf_y >= 1 else "#ff4444")
+            _sm_items.append(("FCF Yield", f"{fcf_y:.1f}%", fcf_clr, _tip("FCF Yield")))
+        if rev:
+            net = rev.get("net", 0)
+            rev_lbl = f"+{net} upgrades" if net > 0 else (f"{net} downgrades" if net < 0 else "neutral")
+            rev_clr = "#00C851" if net > 0 else ("#ff4444" if net < 0 else "#888")
+            _sm_items.append(("Revisions 90d", rev_lbl, rev_clr, _tip("Analyst Revisions")))
+
+        if _sm_items:
+            st.markdown("**Smart Money Signals**")
+            _sm_cols = st.columns(len(_sm_items))
+            for _col, (_label, _val, _clr, _help) in zip(_sm_cols, _sm_items):
+                _col.metric(_label, _val, help=_help)
 
         # Source links
         st.markdown(
@@ -814,7 +1112,10 @@ elif page == "📈 Stock Analysis":
                 f"<b style='font-size:1.1em;color:{rec['color']}'>{rec['icon']} {rec['label']} "
                 f"· {r['total']}/100</b>"
                 f"<span style='color:#888;font-size:0.85em'> "
-                f"(Technical {r['t_score']:.0f} × 45% + Fundamental {r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
+                f"(<abbr title='{_tip('RSI').split(chr(10))[0]}' style='cursor:help'>Technical</abbr> "
+                f"{r['t_score']:.0f} × 45% + "
+                f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Fundamental</abbr> "
+                f"{r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
                 f"</span><br>{rec['rationale']}"
                 + (f"<br><small>📍 {r['upside']}</small>" if r["upside"] else "")
                 + "</div>", unsafe_allow_html=True,
@@ -840,19 +1141,23 @@ elif page == "📈 Stock Analysis":
                           f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
                 c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
                           delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
-                          delta_color="inverse")
+                          delta_color="inverse", help=_tip("ATR Stop"))
                 rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
-                c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A")
+                c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
+                          help=_tip("R:R Ratio"))
 
                 if ps:
                     st.markdown("#### Position Sizing")
                     p1, p2, p3, p4 = st.columns(4)
-                    p1.metric("Shares", f"{ps['shares']:,}")
+                    p1.metric("Shares", f"{ps['shares']:,}", help=_tip("Position Sizing"))
                     p2.metric("Investment",  f"${ps['total_cost']:,.0f}",
-                              f"{ps['portfolio_pct']:.1f}% of portfolio")
+                              f"{ps['portfolio_pct']:.1f}% of portfolio",
+                              help=_tip("Position Sizing"))
                     p3.metric("Max Risk", f"${ps['actual_risk']:,.0f}",
-                              f"{ps['risk_pct_actual']:.2f}%", delta_color="inverse")
-                    p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}")
+                              f"{ps['risk_pct_actual']:.2f}%", delta_color="inverse",
+                              help="Maximum dollar loss if stop is hit. Should not exceed 1.5–2% of portfolio.")
+                    p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}",
+                              help="Dollar distance from entry to stop per share.")
 
                 if targets:
                     st.markdown("#### Price Scenarios")
@@ -998,16 +1303,12 @@ elif page == "📈 Stock Analysis":
             # ── Risk ──────────────────────────────────────────────────────
             with risk_tab:
                 r1, r2, r3, r4, r5 = st.columns(5)
-                r1.metric("Sharpe",       f"{rm['sharpe']:.2f}",
-                          help=">1.0 = good risk-adjusted return")
-                r2.metric("Sortino",      f"{rm['sortino']:.2f}",
-                          help=">1.5 = strong downside-adjusted return")
-                r3.metric("Max Drawdown", f"{rm['max_drawdown']:.1f}%",
-                          help="Worst peak-to-trough in selected period")
-                r4.metric("VaR (95%)",    f"{rm['var_95']:.2f}%",
-                          help="Daily loss not exceeded 95% of the time")
+                r1.metric("Sharpe",       f"{rm['sharpe']:.2f}",  help=_tip("Sharpe Ratio"))
+                r2.metric("Sortino",      f"{rm['sortino']:.2f}", help=_tip("Sortino Ratio"))
+                r3.metric("Max Drawdown", f"{rm['max_drawdown']:.1f}%", help=_tip("Max Drawdown"))
+                r4.metric("VaR (95%)",    f"{rm['var_95']:.2f}%", help=_tip("VaR"))
                 r5.metric("Beta vs S&P",  f"{rm['beta']:.2f}" if rm["beta"] else "N/A",
-                          help="1.0 = market-aligned. >1.3 = high sensitivity")
+                          help=_tip("Beta"))
 
                 def _norm(key, val):
                     if val is None: return 0.5
@@ -1058,43 +1359,79 @@ elif page == "📈 Stock Analysis":
 
             # ── Deep Dive ─────────────────────────────────────────────────
             with deep_tab:
-                dd1, dd2, dd3 = st.columns(3)
+                dd1, dd2, dd3, dd4 = st.columns(4)
                 with dd1:
                     st.markdown(f"**Technical — {r['t_score']}/100**")
+                    st.caption("RSI · MACD · MA · Bollinger · Volume")
                     for k, v in r["t_signals"].items():
                         clr = "#00C851" if "bullish" in v.lower() else (
                               "#ff4444" if "bearish" in v.lower() else "#aaa")
+                        tip_key = {"RSI": "RSI", "MACD": "MACD"}.get(k, "")
+                        label_md = (
+                            f"<abbr title='{_tip(tip_key).split(chr(10))[0]}' "
+                            f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
+                            if tip_key else f"<b>{k}</b>"
+                        )
                         st.markdown(
-                            f"<small style='color:{clr}'>●</small> **{k}**: {v}",
+                            f"<small style='color:{clr}'>●</small> {label_md}: "
+                            f"<span style='color:#ccc'>{v}</span>",
                             unsafe_allow_html=True,
                         )
                 with dd2:
                     st.markdown(f"**Fundamental — {r['f_score']}/100**")
+                    st.caption("Valuation · Growth · Quality · Cash Flow")
                     for k, v in r["f_signals"].items():
                         clr = "#00C851" if any(w in v.lower() for w in
                               ["strong","excellent","good","healthy","under"]) else (
                               "#ff4444" if any(w in v.lower() for w in
-                              ["declin","contract","high lev","expensive","loss"]) else "#aaa")
+                              ["declin","contract","high lev","expensive","loss","burn"]) else "#aaa")
+                        tip_map = {
+                            "Forward P/E": "Forward P/E", "FCF Yield": "FCF Yield",
+                            "Revenue Growth": "Revenue Growth", "Earnings Growth": "Earnings Growth",
+                            "Profit Margin": "Profit Margin", "Debt/Equity": "Debt/Equity",
+                        }
+                        tip_key = tip_map.get(k, "")
+                        label_md = (
+                            f"<abbr title='{_tip(tip_key).split(chr(10))[0]}' "
+                            f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
+                            if tip_key else f"<b>{k}</b>"
+                        )
                         st.markdown(
-                            f"<small style='color:{clr}'>●</small> **{k}**: {v}",
+                            f"<small style='color:{clr}'>●</small> {label_md}: "
+                            f"<span style='color:#ccc'>{v}</span>",
                             unsafe_allow_html=True,
                         )
                     fin = r["financials"]
                     st.markdown("---")
-                    for label, key in [("Trailing P/E", "pe_ratio"), ("Forward P/E", "forward_pe"),
-                                       ("EPS (TTM)", "eps"), ("Current Ratio", "current_ratio")]:
+                    raw_metrics = [
+                        ("Trailing P/E", "pe_ratio",    _tip("P/E Ratio")),
+                        ("Forward P/E",  "forward_pe",  _tip("Forward P/E")),
+                        ("FCF Yield",    "fcf_yield",   _tip("FCF Yield")),
+                        ("EPS (TTM)",    "eps",         _tip("EPS")),
+                        ("Current Ratio","current_ratio", "Current assets ÷ current liabilities. >1.5 = healthy liquidity."),
+                        ("ROE",          "return_on_equity", _tip("ROE")),
+                    ]
+                    for label, key, tip_txt in raw_metrics:
                         v = fin.get(key)
-                        if v:
-                            st.markdown(f"- **{label}**: {v:.2f}")
+                        if v is None:
+                            continue
+                        suffix = "%" if key == "fcf_yield" else ""
+                        fmt = f"{v:.1f}{suffix}" if key == "fcf_yield" else f"{v:.2f}"
+                        st.markdown(
+                            f"<small><abbr title='{tip_txt.split(chr(10))[0]}' "
+                            f"style='cursor:help;border-bottom:1px dotted #555'>**{label}**</abbr>: "
+                            f"{fmt}</small>",
+                            unsafe_allow_html=True,
+                        )
                 with dd3:
                     st.markdown(f"**Sentiment — {r['s_score']:.0f}/100**")
-                    st.caption("Source: Yahoo Finance news · VADER compound score (−1 bearish → +1 bullish)")
+                    st.caption("VADER · Yahoo Finance news · −1 bearish → +1 bullish")
                     for h in r["headlines"][:6]:
                         clr = "#00b300" if h["label"] == "Positive" else (
                               "#ff4444" if h["label"] == "Negative" else "#888")
                         lbl = "▲" if h["label"] == "Positive" else (
                               "▼" if h["label"] == "Negative" else "–")
-                        headline_text = h["headline"][:90] + ("…" if len(h["headline"]) > 90 else "")
+                        headline_text = h["headline"][:75] + ("…" if len(h["headline"]) > 75 else "")
                         url = h.get("url", "")
                         linked = (
                             f"<a href='{url}' target='_blank' "
@@ -1106,6 +1443,92 @@ elif page == "📈 Stock Analysis":
                             f"<small>{linked}</small>",
                             unsafe_allow_html=True,
                         )
+                with dd4:
+                    st.markdown("**Smart Money Signals**")
+                    st.caption("Ownership · Shorts · Analyst revisions")
+                    fin = r["financials"]
+                    rev = r.get("revisions", {})
+
+                    def _sm_row(label, value, color, tip_text):
+                        st.markdown(
+                            f"<div style='margin-bottom:6px;padding:5px 8px;"
+                            f"background:#161616;border-radius:5px;"
+                            f"border-left:3px solid {color}'>"
+                            f"<span style='font-size:0.72em;color:#666'>"
+                            f"<abbr title='{tip_text.split(chr(10))[0]}' "
+                            f"style='cursor:help;border-bottom:1px dotted #555'>{label}</abbr>"
+                            f"</span><br>"
+                            f"<span style='font-size:0.95em;font-weight:bold;color:{color}'>"
+                            f"{value}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    short_pct = fin.get("short_pct_float")
+                    if short_pct is not None:
+                        clr = "#ff4444" if short_pct > 15 else ("#ffbb33" if short_pct > 7 else "#00C851")
+                        badge = " 🔥" if short_pct > 15 else ""
+                        _sm_row("Short Interest % Float", f"{short_pct:.1f}%{badge}", clr, _tip("Short Interest"))
+
+                    short_ratio = fin.get("short_ratio")
+                    if short_ratio:
+                        clr = "#ff4444" if short_ratio > 7 else ("#ffbb33" if short_ratio > 3 else "#00C851")
+                        _sm_row("Days to Cover", f"{short_ratio:.1f} days", clr, _tip("Days to Cover"))
+
+                    inst = fin.get("held_pct_institutions")
+                    if inst is not None:
+                        clr = "#00C851" if inst > 60 else ("#ffbb33" if inst > 30 else "#aaa")
+                        _sm_row("Institutional Ownership", f"{inst:.0f}%", clr, _tip("Institutional Ownership"))
+
+                    insider = fin.get("held_pct_insiders")
+                    if insider is not None:
+                        clr = "#00C851" if insider > 10 else "#aaa"
+                        _sm_row("Insider Ownership", f"{insider:.1f}%", clr, _tip("Insider Ownership"))
+
+                    fcf_y = fin.get("fcf_yield")
+                    if fcf_y is not None:
+                        clr = "#00C851" if fcf_y >= 4 else ("#ffbb33" if fcf_y >= 1 else "#ff4444")
+                        _sm_row("FCF Yield", f"{fcf_y:.1f}%", clr, _tip("FCF Yield"))
+
+                    n_analysts = fin.get("num_analyst_opinions")
+                    cons = fin.get("recommendation")
+                    if cons is not None:
+                        cons_label = (
+                            "Strong Buy" if cons <= 1.5 else
+                            "Buy"        if cons <= 2.5 else
+                            "Hold"       if cons <= 3.5 else
+                            "Sell"       if cons <= 4.5 else "Strong Sell"
+                        )
+                        cons_clr = (
+                            "#00C851" if cons <= 2.0 else
+                            "#00b300" if cons <= 2.5 else
+                            "#ffbb33" if cons <= 3.5 else "#ff4444"
+                        )
+                        n_str = f" ({n_analysts} analysts)" if n_analysts else ""
+                        _sm_row(f"Analyst Consensus{n_str}", f"{cons_label} ({cons:.1f})", cons_clr, _tip("Analyst Consensus"))
+
+                    if rev:
+                        net = rev.get("net", 0)
+                        ups = rev.get("upgrades_90d", 0)
+                        dns = rev.get("downgrades_90d", 0)
+                        rev_clr = "#00C851" if net > 0 else ("#ff4444" if net < 0 else "#888")
+                        rev_lbl = f"↑{ups} upgrades / ↓{dns} downgrades (90d)"
+                        _sm_row("Analyst Revisions", rev_lbl, rev_clr, _tip("Analyst Revisions"))
+                        if rev.get("latest"):
+                            st.markdown("<small style='color:#555'>Recent actions:</small>", unsafe_allow_html=True)
+                            for action in rev["latest"][:3]:
+                                act_lbl = action.get("action", "").lower()
+                                act_clr = ("#00C851" if act_lbl in ["up", "init"] else
+                                           "#ff4444" if act_lbl == "down" else "#888")
+                                from_g = action.get("from_grade", "")
+                                to_g = action.get("to_grade", "")
+                                arrow = f" {from_g} → {to_g}" if from_g and to_g else (f" → {to_g}" if to_g else "")
+                                st.markdown(
+                                    f"<small style='color:{act_clr}'>● {action.get('firm','')}"
+                                    f"{arrow} ({act_lbl})</small>",
+                                    unsafe_allow_html=True,
+                                )
+                    else:
+                        st.caption("Revision data not available for this ticker.")
 
     # Correlation matrix
     if len(results) >= 2:

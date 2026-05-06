@@ -102,6 +102,27 @@ def fundamental_score(financials: dict) -> tuple[float, dict]:
             points += 2
             signals["Debt/Equity"] = f"{de:.0f}% — High leverage"
 
+    # FCF Yield — the primary valuation metric used by Goldman Sachs / institutional analysts
+    # (harder to manipulate than P/E since it measures actual cash generation)
+    fcf_yield = financials.get("fcf_yield")
+    if fcf_yield is not None:
+        max_points += 20
+        if fcf_yield >= 5:
+            points += 20
+            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Excellent cash generation"
+        elif fcf_yield >= 3:
+            points += 15
+            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Good"
+        elif fcf_yield >= 1:
+            points += 8
+            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Modest"
+        elif fcf_yield >= 0:
+            points += 3
+            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Low"
+        else:
+            points += 0
+            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Negative FCF (cash burn)"
+
     score = (points / max_points * 100) if max_points > 0 else 50
     return round(score, 1), signals
 
