@@ -9,6 +9,7 @@ import html as _html
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_live_prices, market_status, curate_news_items,
+    fetch_price_history,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -21,7 +22,7 @@ from stock_analyzer.targets import (
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
-    TICKER_SECTORS,
+    holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
@@ -865,6 +866,145 @@ if page == "🏠 My Portfolio":
                                         st.caption(f"Revisions: {rev_label}")
                                 except Exception:
                                     scol.warning(f"Could not load {cand}")
+
+    # ── Expander 3: Relative Strength vs Sector ──────────────────────────────
+    h_rets = holding_returns(held_data)
+    with st.expander("📈 Relative Strength vs Sector", expanded=False):
+        if not h_rets:
+            st.info("Need at least 1 holding with price history to compute relative strength.")
+        else:
+            st.caption(
+                "Each holding's 6-month return vs its sector ETF benchmark. "
+                "**Outperforming** = genuine stock-specific alpha, not just riding the sector tide. "
+                "**Underperforming** = the sector rallied but this position lagged — a Goldman rotation flag."
+            )
+
+            # Holding returns bar chart (instant — uses existing price data)
+            _rs_ord = port_df[port_df["Ticker"].isin(h_rets)]["Ticker"].tolist()
+            _rs_vals = [h_rets[t] for t in _rs_ord]
+            ret_fig = go.Figure(go.Bar(
+                x=_rs_ord, y=_rs_vals,
+                marker_color=["#00C851" if v >= 0 else "#ff4444" for v in _rs_vals],
+                text=[f"{v:+.1f}%" for v in _rs_vals],
+                textposition="outside",
+            ))
+            ret_fig.update_layout(
+                title="6-Month Holding Returns",
+                template="plotly_dark", height=280,
+                yaxis_title="Return (%)", yaxis_zeroline=True,
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(ret_fig, use_container_width=True)
+
+            # ETF benchmarks — gated behind button to avoid extra API calls on load
+            if st.button("📊 Load sector ETF benchmarks", key="_rs_load_btn"):
+                _unique_etfs = list({SECTOR_ETF.get(row["Sector"], "SPY")
+                                     for _, row in port_df.iterrows()})
+                _etf_rets = {}
+                for _etf in _unique_etfs:
+                    try:
+                        with st.spinner(f"Loading {_etf}…"):
+                            _hist = fetch_price_history(_etf, period="6mo")
+                        if not _hist.empty and "Close" in _hist.columns:
+                            _cl = _hist["Close"].dropna()
+                            if len(_cl) >= 5:
+                                _etf_rets[_etf] = round(float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1)
+                    except Exception:
+                        pass
+                st.session_state["_rs_etf_rets"] = _etf_rets
+
+            if st.session_state.get("_rs_etf_rets"):
+                etf_rets_cached = st.session_state["_rs_etf_rets"]
+                rs_df = relative_strength_table(port_df, h_rets, etf_rets_cached)
+                if not rs_df.empty and rs_df["Alpha (%)"].notna().any():
+                    n_out   = int((rs_df["Alpha (%)"] >= 5).sum())
+                    n_under = int((rs_df["Alpha (%)"] <= -5).sum())
+                    n_line  = int(((rs_df["Alpha (%)"] > -5) & (rs_df["Alpha (%)"] < 5)).sum())
+
+                    _rm1, _rm2, _rm3 = st.columns(3)
+                    _rm1.metric("Outperforming", n_out,   help="Alpha ≥ +5% vs sector ETF")
+                    _rm2.metric("In Line",        n_line,  help="Alpha between -5% and +5%")
+                    _rm3.metric("Underperforming", n_under, help="Alpha ≤ -5% vs sector ETF")
+
+                    # Alpha bar chart
+                    _rs_sorted = rs_df.dropna(subset=["Alpha (%)"]).sort_values("Alpha (%)", ascending=False)
+                    _alpha_colors = [
+                        "#00C851" if a >= 5 else "#ff4444" if a <= -5 else "#888888"
+                        for a in _rs_sorted["Alpha (%)"]
+                    ]
+                    alpha_fig = go.Figure(go.Bar(
+                        x=_rs_sorted["Ticker"],
+                        y=_rs_sorted["Alpha (%)"],
+                        marker_color=_alpha_colors,
+                        text=[f"{a:+.1f}%" for a in _rs_sorted["Alpha (%)"]],
+                        textposition="outside",
+                        customdata=list(zip(
+                            _rs_sorted["ETF"],
+                            _rs_sorted["6mo Return (%)"],
+                            _rs_sorted["ETF Return (%)"],
+                        )),
+                        hovertemplate=(
+                            "<b>%{x}</b><br>"
+                            "Alpha: %{y:+.1f}%<br>"
+                            "Holding 6mo: %{customdata[1]:+.1f}%<br>"
+                            "Benchmark (%{customdata[0]}): %{customdata[2]:+.1f}%"
+                            "<extra></extra>"
+                        ),
+                    ))
+                    alpha_fig.add_hline(y=0, line_color="white", line_dash="dot", line_width=1)
+                    alpha_fig.update_layout(
+                        title="Alpha vs Sector ETF",
+                        template="plotly_dark", height=300,
+                        yaxis_title="Alpha (%)",
+                        margin=dict(l=0, r=0, t=40, b=0),
+                    )
+                    st.plotly_chart(alpha_fig, use_container_width=True)
+                    st.caption(
+                        "🟢 Green = outperforming sector (genuine alpha)  |  "
+                        "⬜ Gray = in line with sector  |  "
+                        "🔴 Red = lagging sector (riding the tide or underperforming)"
+                    )
+
+                    # Styled table
+                    def _alpha_col(val):
+                        if isinstance(val, float):
+                            if val >= 5:  return "color:#00C851;font-weight:bold"
+                            if val <= -5: return "color:#ff4444"
+                        return ""
+
+                    def _status_col(val):
+                        s = str(val)
+                        if "Outperforming" in s: return "color:#00C851;font-weight:bold"
+                        if "Underperforming" in s: return "color:#ff4444"
+                        return "color:#888888"
+
+                    _rs_disp = rs_df[["Ticker", "Sector", "6mo Return (%)", "ETF", "ETF Return (%)", "Alpha (%)", "Status"]]
+                    _fmt = {"6mo Return (%)": "{:+.1f}%", "ETF Return (%)": "{:+.1f}%", "Alpha (%)": "{:+.1f}%"}
+                    _styled_rs = (
+                        _rs_disp.style
+                        .map(_alpha_col,  subset=["Alpha (%)"])
+                        .map(_status_col, subset=["Status"])
+                        .format(_fmt, na_rep="—")
+                    )
+                    st.dataframe(_styled_rs, use_container_width=True)
+
+                    # Goldman-style insight callouts
+                    _valid = rs_df.dropna(subset=["Alpha (%)"])
+                    if n_under > 0:
+                        _worst = _valid.loc[_valid["Alpha (%)"].idxmin()]
+                        st.warning(
+                            f"⚠️ **{_worst['Ticker']}** is lagging its sector ETF ({_worst['ETF']}) "
+                            f"by **{abs(_worst['Alpha (%)']):+.1f}%** over 6 months — "
+                            f"the sector rallied but this position did not keep pace. "
+                            f"Goldman would flag this for rotation review."
+                        )
+                    if n_out > 0:
+                        _best = _valid.loc[_valid["Alpha (%)"].idxmax()]
+                        st.success(
+                            f"✅ **{_best['Ticker']}** is generating genuine alpha: "
+                            f"**{_best['Alpha (%)']:+.1f}%** above its sector ETF ({_best['ETF']}) — "
+                            f"stock-specific strength, not just a sector tailwind."
+                        )
 
     # Position table with protective stops
     st.subheader("Position Detail & Protective Stops")

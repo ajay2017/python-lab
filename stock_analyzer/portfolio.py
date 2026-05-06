@@ -271,6 +271,80 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
     return actions
 
 
+# ── Relative Strength vs Sector ───────────────────────────────────────────────
+
+# Maps each sector to the most widely used sector ETF benchmark
+SECTOR_ETF = {
+    "Semiconductors":  "SOXX",
+    "Consumer Tech":   "XLY",
+    "Healthcare":      "XLV",
+    "Energy":          "XLE",
+    "Defense":         "ITA",
+    "Financials":      "XLF",
+    "Clean Energy":    "ICLN",
+    "Cybersecurity":   "CIBR",
+    "AI & Cloud":      "IGV",
+    "AI & Data":       "IGV",
+    "EV & Auto":       "DRIV",
+    "Enterprise Tech": "IGV",
+    "Other":           "SPY",
+}
+
+
+def holding_returns(held_data: dict) -> dict[str, float]:
+    """6-month total return (%) for each ticker, derived from existing price history."""
+    result = {}
+    for ticker, data in held_data.items():
+        hist = data.get("df") if data.get("df") is not None else data.get("history")
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            continue
+        closes = hist["Close"].dropna()
+        if len(closes) < 5:
+            continue
+        ret = (closes.iloc[-1] / closes.iloc[0] - 1) * 100
+        result[ticker] = round(float(ret), 1)
+    return result
+
+
+def relative_strength_table(
+    port_df: pd.DataFrame,
+    h_rets: dict[str, float],
+    etf_rets: dict[str, float],
+) -> pd.DataFrame:
+    """
+    Build per-holding relative strength vs sector ETF.
+    Returns DataFrame with Ticker, Sector, ETF, holding/ETF returns, alpha, and status.
+    """
+    rows = []
+    for _, row in port_df.iterrows():
+        ticker = row["Ticker"]
+        sector = row["Sector"]
+        etf    = SECTOR_ETF.get(sector, "SPY")
+        h_ret  = h_rets.get(ticker)
+        e_ret  = etf_rets.get(etf)
+        if h_ret is None:
+            continue
+        alpha = round(h_ret - e_ret, 1) if e_ret is not None else None
+        if alpha is None:
+            status = "—"
+        elif alpha >= 5:
+            status = "Outperforming ↑"
+        elif alpha <= -5:
+            status = "Underperforming ↓"
+        else:
+            status = "In Line ↔"
+        rows.append({
+            "Ticker":        ticker,
+            "Sector":        sector,
+            "ETF":           etf,
+            "6mo Return (%)": h_ret,
+            "ETF Return (%)": e_ret,
+            "Alpha (%)":     alpha,
+            "Status":        status,
+        })
+    return pd.DataFrame(rows)
+
+
 # ── Correlation & Diversification ─────────────────────────────────────────────
 
 def correlation_matrix(held_data: dict) -> pd.DataFrame:
