@@ -159,3 +159,68 @@ def fetch_financials(ticker: str) -> dict:
     """Fetch financials by ticker — prefer fetch_ticker_bundle for batch loads."""
     info = _retry(lambda: yf.Ticker(ticker).info or {})
     return fetch_financials_from_info(info)
+
+
+# ── Curated news ──────────────────────────────────────────────────────────────
+
+_TIER1 = frozenset([
+    "reuters", "associated press", "ap", "wall street journal", "wsj",
+    "financial times", "bloomberg", "cnbc", "barron's", "barrons",
+])
+_TIER2 = frozenset([
+    "marketwatch", "yahoo finance", "seeking alpha", "zacks", "benzinga",
+    "the motley fool", "motley fool", "forbes", "business insider",
+    "investing.com", "thestreet", "nasdaq",
+])
+
+
+def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
+    """
+    Aggregate and curate news across a set of tickers.
+    Deduplicates by headline, scores sentiment with VADER, and
+    ranks tier-1 sources (Reuters, Bloomberg, WSJ …) above the rest.
+    Returns items sorted by (source tier, recency).
+    """
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    _va = SentimentIntensityAnalyzer()
+
+    seen: set[str] = set()
+    items: list[dict] = []
+
+    for ticker in tickers:
+        try:
+            news = _retry(lambda t=ticker: yf.Ticker(t).news or [])
+            for item in (news or [])[:8]:
+                title = (item.get("title") or "").strip()
+                if not title:
+                    continue
+                key = title.lower()[:70]
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                publisher = item.get("publisher", "Unknown")
+                pub_l = publisher.lower()
+                tier = (1 if any(p in pub_l for p in _TIER1) else
+                        2 if any(p in pub_l for p in _TIER2) else 3)
+
+                compound = _va.polarity_scores(title)["compound"]
+                label = ("Positive" if compound >= 0.05 else
+                         "Negative" if compound <= -0.05 else "Neutral")
+
+                items.append({
+                    "ticker":    ticker,
+                    "title":     title,
+                    "url":       item.get("link", ""),
+                    "publisher": publisher,
+                    "ts":        item.get("providerPublishTime", 0),
+                    "compound":  round(compound, 2),
+                    "label":     label,
+                    "tier":      tier,
+                })
+        except Exception:
+            continue
+
+    # Tier-1 sources first; within same tier, newest first
+    items.sort(key=lambda x: (x["tier"], -x["ts"]))
+    return items[:max_items]

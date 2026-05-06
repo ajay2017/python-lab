@@ -7,7 +7,7 @@ from datetime import datetime, date
 
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
-    fetch_spy, fetch_live_prices, market_status,
+    fetch_spy, fetch_live_prices, market_status, fetch_curated_news,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -27,6 +27,22 @@ from stock_analyzer import db
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
 MODERATE_RISK_PCT = 0.015
+
+
+def _time_ago(ts: int) -> str:
+    if not ts:
+        return ""
+    delta = int((datetime.now() - datetime.fromtimestamp(ts)).total_seconds())
+    if delta < 3600:
+        return f"{max(delta // 60, 1)}m"
+    if delta < 86400:
+        return f"{delta // 3600}h"
+    return f"{delta // 86400}d"
+
+
+@st.cache_data(ttl=900)
+def _load_sidebar_news(tickers: tuple) -> list[dict]:
+    return fetch_curated_news(list(tickers))
 
 
 # ── Password gate ─────────────────────────────────────────────────────────────
@@ -90,6 +106,54 @@ with st.sidebar:
         st.caption(f"Last refresh: {refresh_ago}s ago")
     else:
         st.caption(f"Last refresh: {refresh_ago // 60}m {refresh_ago % 60}s ago")
+
+    # ── Curated news feed ─────────────────────────────────────────────────
+    st.divider()
+    _news_tickers = tuple(dict.fromkeys(
+        [str(r.get("Ticker", "")).strip().upper()
+         for _, r in st.session_state.holdings_df.iterrows()
+         if str(r.get("Ticker", "")).strip()]
+        + [t for t in st.session_state.get("watchlist", []) if t]
+    ))
+    st.markdown(
+        "<span style='font-size:0.85em;font-weight:600;color:#ccc'>📰 CURATED NEWS</span>"
+        "<span style='font-size:0.75em;color:#555'> · vetted sources · 15m cache</span>",
+        unsafe_allow_html=True,
+    )
+    if _news_tickers:
+        _news_items = _load_sidebar_news(_news_tickers)
+        if _news_items:
+            for _ni in _news_items[:10]:
+                _clr  = "#00b300" if _ni["label"] == "Positive" else (
+                        "#ff4444" if _ni["label"] == "Negative" else "#666")
+                _icon = "▲" if _ni["label"] == "Positive" else (
+                        "▼" if _ni["label"] == "Negative" else "–")
+                _badge = "✅ " if _ni["tier"] == 1 else ""
+                _pub   = _ni["publisher"][:18]
+                _ago   = _time_ago(_ni["ts"])
+                _head  = _ni["title"][:72] + ("…" if len(_ni["title"]) > 72 else "")
+                _url   = _ni["url"]
+                _link  = (
+                    f"<a href='{_url}' target='_blank' "
+                    f"style='color:#bbb;text-decoration:none;line-height:1.3'>{_head}</a>"
+                    if _url else f"<span style='color:#bbb'>{_head}</span>"
+                )
+                st.markdown(
+                    f"<div style='margin-bottom:7px;padding:5px 7px;"
+                    f"border-left:3px solid {_clr};"
+                    f"border-radius:0 4px 4px 0;background:#161616'>"
+                    f"<div style='font-size:0.72em;color:#666;margin-bottom:2px'>"
+                    f"<span style='color:{_clr};font-weight:bold'>{_icon}</span> "
+                    f"<b style='color:#999'>{_ni['ticker']}</b> · "
+                    f"{_badge}{_pub} · {_ago}</div>"
+                    f"<div style='font-size:0.78em'>{_link}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No news available.")
+    else:
+        st.caption("Add holdings to see relevant news.")
 
     st.divider()
     portfolio_value = st.number_input(
