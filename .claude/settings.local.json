@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import yfinance as yf; t = yf.Ticker\\('AMD'\\); df = t.history\\(period='1mo'\\); print\\(df.tail\\(2\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from stock_analyzer.data import fetch_live_prices, market_status; print\\(market_status\\(\\)\\); print\\(fetch_live_prices\\(['AVGO','AAPL']\\)\\)\")",
+      "Bash(python -c \"from supabase import create_client; print\\('supabase OK'\\)\")"
+    ]
+  }
+}
