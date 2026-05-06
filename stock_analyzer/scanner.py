@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+from stock_analyzer.indicators import sma, rsi as calc_rsi
 
 SECTOR_UNIVERSE = {
     "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "SNOW"],
@@ -25,14 +25,14 @@ def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
         if len(close) < 30:
             return None
 
-        rsi_s = ta.rsi(close, length=14)
-        sma20_s = ta.sma(close, length=20)
-        sma50_s = ta.sma(close, length=50)
+        rsi_s   = calc_rsi(close, 14)
+        sma20_s = sma(close, 20)
+        sma50_s = sma(close, 50)
 
         price = float(close.iloc[-1])
-        rsi = float(rsi_s.iloc[-1]) if rsi_s is not None and not rsi_s.empty else 50.0
-        sma20 = float(sma20_s.iloc[-1]) if sma20_s is not None and not sma20_s.empty else price
-        sma50 = float(sma50_s.iloc[-1]) if sma50_s is not None and not sma50_s.empty else price
+        rsi   = float(rsi_s.dropna().iloc[-1])   if not rsi_s.dropna().empty   else 50.0
+        sma20 = float(sma20_s.dropna().iloc[-1]) if not sma20_s.dropna().empty else price
+        sma50 = float(sma50_s.dropna().iloc[-1]) if not sma50_s.dropna().empty else price
 
         mom_1m = (price / float(close.iloc[-21]) - 1) * 100 if len(close) > 21 else 0.0
         mom_3m = (price / float(close.iloc[-63]) - 1) * 100 if len(close) > 63 else 0.0

@@ -1,13 +1,13 @@
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+from stock_analyzer.indicators import atr as _atr_series
 
 
 def _atr_value(df: pd.DataFrame, length: int = 14) -> float:
-    atr = ta.atr(df["High"], df["Low"], df["Close"], length=length)
-    if atr is None or atr.dropna().empty:
+    s = _atr_series(df["High"], df["Low"], df["Close"], length).dropna()
+    if s.empty:
         return float((df["High"] - df["Low"]).tail(length).mean())
-    return float(atr.dropna().iloc[-1])
+    return float(s.iloc[-1])
 
 
 def atr_stop_loss(df: pd.DataFrame, multiplier: float = 2.0) -> tuple[float, float]:
