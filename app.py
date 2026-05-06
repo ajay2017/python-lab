@@ -332,7 +332,7 @@ if page == "🏠 My Portfolio":
         if "Sell" in s:       return "color:#ff4444"
         return ""
 
-    display_cols = ["Ticker", "Shares", "Price", "P&L ($)", "P&L (%)",
+    display_cols = ["Ticker", "Shares", "Avg Cost", "Price", "P&L ($)", "P&L (%)",
                     "Weight (%)", "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
     styled = (
         port_df[display_cols].style
@@ -340,7 +340,8 @@ if page == "🏠 My Portfolio":
         .map(_stop_color, subset=["Stop Type"])
         .map(_sig_color, subset=["Signal"])
         .format({
-            "Price": "${:.2f}", "P&L ($)": "${:,.0f}", "P&L (%)": "{:+.1f}%",
+            "Avg Cost": "${:.2f}", "Price": "${:.2f}",
+            "P&L ($)": "${:,.0f}", "P&L (%)": "{:+.1f}%",
             "Weight (%)": "{:.1f}%", "Stop": "${:.2f}",
             "Gap to Stop (%)": "{:.1f}%", "Score": "{:.0f}",
         })
