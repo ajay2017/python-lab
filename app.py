@@ -182,34 +182,43 @@ if page == "🏠 My Portfolio":
             except Exception as e:
                 st.warning(f"Could not load {t}: {e}")
 
-    # ── Live price strip (always fresh — not cached) ──────────────────────
-    live = fetch_live_prices(held_tickers)
-    if live:
-        mkt_now = market_status()
+    # ── Live price strip — fragment auto-refreshes every 60 s ────────────
+    @st.fragment(run_every=60)
+    def _price_strip(tickers: list[str]):
+        mkt = market_status()
+        live = fetch_live_prices(tickers)
+        st.session_state["_live_prices"] = live   # share with P&L table
+        if not live:
+            return
         price_cols = st.columns(len(live))
-        for col, (ticker, lp) in zip(price_cols, live.items()):
-            chg = lp["change_pct"]
+        for col, (t, lp) in zip(price_cols, live.items()):
+            chg   = lp["change_pct"]
             arrow = "▲" if chg >= 0 else "▼"
             clr   = "#00C851" if chg >= 0 else "#ff4444"
             col.markdown(
                 f"<div style='text-align:center;padding:6px 2px;"
                 f"border:1px solid #333;border-radius:6px'>"
-                f"<b>{ticker}</b><br>"
+                f"<b>{t}</b><br>"
                 f"<span style='font-size:1.1em'>${lp['price']:.2f}</span><br>"
                 f"<span style='color:{clr};font-size:0.85em'>"
                 f"{arrow} {chg:+.2f}%</span></div>",
                 unsafe_allow_html=True,
             )
+        refresh_note = (
+            "🔄 auto-refreshes every 60s"
+            if mkt["is_open"] else "market closed · showing last close"
+        )
         st.caption(
-            f"Prices sourced from **Yahoo Finance** · "
-            f"As of **{list(live.values())[0]['fetched_at']}** · "
-            f"{mkt_now['label']} · "
-            f"{'Real-time intraday' if mkt_now['is_open'] else 'Last session close'}"
+            f"Prices: **Yahoo Finance** · "
+            f"{list(live.values())[0]['fetched_at']} · "
+            f"{mkt['label']} · {refresh_note}"
         )
         st.divider()
 
+    _price_strip(held_tickers)
+
     # Merge live prices into held_data so P&L uses the freshest price
-    for ticker, lp in live.items():
+    for ticker, lp in st.session_state.get("_live_prices", {}).items():
         if ticker in held_data:
             held_data[ticker]["current_price"] = lp["price"]
 
