@@ -1,11 +1,11 @@
 """
-Persistence layer — reads/writes holdings and watchlist to Supabase.
+Persistence layer — reads/writes holdings, watchlist, and trades to Supabase.
 
-IMPORTANT: Run this SQL once in the Supabase SQL Editor to disable RLS
-(required for the anon key to read/write without policy configuration):
+IMPORTANT: Run this SQL once in the Supabase SQL Editor to disable RLS:
 
     ALTER TABLE holdings  DISABLE ROW LEVEL SECURITY;
     ALTER TABLE watchlist DISABLE ROW LEVEL SECURITY;
+    ALTER TABLE trades    DISABLE ROW LEVEL SECURITY;
 
 Table schema (run once if tables don't exist):
 
@@ -21,6 +21,19 @@ Table schema (run once if tables don't exist):
         id       bigint primary key generated always as identity,
         ticker   text not null unique,
         added_at timestamptz default now()
+    );
+
+    create table if not exists trades (
+        id           bigint primary key generated always as identity,
+        ticker       text    not null,
+        action       text    not null,
+        shares       numeric not null check (shares > 0),
+        price        numeric not null check (price > 0),
+        cost_basis   numeric,
+        realized_pnl numeric,
+        notes        text,
+        trigger_type text default 'MANUAL',
+        traded_at    timestamptz default now()
     );
 """
 
@@ -118,6 +131,47 @@ def load_watchlist() -> list[str]:
         except Exception as e:
             st.warning(f"Watchlist read error: {e}")
     return list(_DEFAULT_WATCHLIST)
+
+
+# ── Trades ───────────────────────────────────────────────────────────────────
+
+_TRADE_COLS = ["id", "ticker", "action", "shares", "price",
+               "cost_basis", "realized_pnl", "notes", "trigger_type", "traded_at"]
+
+
+def load_trades() -> pd.DataFrame:
+    empty = pd.DataFrame(columns=_TRADE_COLS)
+    if has_db():
+        try:
+            rows = (
+                _client().table("trades")
+                .select("*")
+                .order("traded_at", desc=True)
+                .execute().data
+            )
+            return pd.DataFrame(rows) if rows else empty
+        except Exception as e:
+            err = str(e)
+            if "row-level security" in err.lower() or "42501" in err:
+                st.error(
+                    "⛔ Supabase RLS is blocking trades table. "
+                    "Run `ALTER TABLE trades DISABLE ROW LEVEL SECURITY;` "
+                    "in your Supabase SQL Editor."
+                )
+            else:
+                st.error(f"⛔ Trades read error: {err}")
+    return empty
+
+
+def save_trade(record: dict) -> bool:
+    if not has_db():
+        return False
+    try:
+        _client().table("trades").insert(record).execute()
+        return True
+    except Exception as e:
+        st.error(f"⛔ Failed to save trade: {e}")
+        return False
 
 
 def save_watchlist(tickers: list[str]) -> bool:

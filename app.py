@@ -23,6 +23,7 @@ from stock_analyzer.portfolio import (
     TICKER_SECTORS,
 )
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors
+from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
@@ -369,9 +370,12 @@ if "scanner_results" not in st.session_state:
     st.session_state.scanner_results = None
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
+if "nav_page" not in st.session_state:
+    st.session_state.nav_page = "🏠 My Portfolio"
 if not st.session_state.get("db_loaded"):
     st.session_state.holdings_df = db.load_holdings()
     st.session_state.watchlist   = db.load_watchlist()
+    st.session_state.trades_df   = db.load_trades()
     st.session_state.db_loaded   = True
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -379,7 +383,8 @@ with st.sidebar:
     st.header("📊 Portfolio Manager")
     page = st.radio(
         "Navigate",
-        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis"],
+        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📒 Trade Journal"],
+        key="nav_page",
         label_visibility="collapsed",
     )
     st.divider()
@@ -1058,10 +1063,34 @@ if page == "🏠 My Portfolio":
                     )
                     st.markdown(action_text)
 
-                st.caption(
-                    "⚠️ This analysis is algorithmic — not personal financial advice. "
-                    "Validate against your own research and risk tolerance before acting."
-                )
+                # ── Quick log button ──────────────────────────────────────
+                st.markdown("---")
+                log_col, note_col = st.columns([1, 2])
+                with log_col:
+                    _default_shares = (
+                        act.get("half_shares", act.get("trim_shares", act.get("shares", 1)))
+                    )
+                    _default_action = "SELL" if act["type"] in ("review", "trim") else "BUY"
+                    if st.button(
+                        f"📝 Log trade for {ticker}",
+                        key=f"log_btn_{ticker}_{act['type']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["_prefill_trade"] = {
+                            "ticker":  ticker,
+                            "action":  _default_action,
+                            "shares":  _default_shares,
+                            "price":   act["price"],
+                            "trigger": "RECOMMENDATION",
+                            "notes":   f"Based on advisor recommendation: {act['title']}",
+                        }
+                        st.session_state.nav_page = "📒 Trade Journal"
+                        st.rerun()
+                with note_col:
+                    st.caption(
+                        "⚠️ Algorithmic analysis — not personal financial advice. "
+                        "Verify all data at the sources above before acting."
+                    )
     else:
         st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
 
@@ -1952,6 +1981,304 @@ elif page == "📈 Stock Analysis":
         st.download_button(
             "⬇️ Download Brief", data=brief,
             file_name=f"brief_{date.today()}.md", mime="text/markdown",
+        )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE 4 — TRADE JOURNAL
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "📒 Trade Journal":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("📒 Trade Journal")
+    st.caption(
+        "Log every buy and sell here. Realized P&L is calculated automatically. "
+        "Holdings update instantly when you record a sell."
+    )
+
+    if not db.has_db():
+        st.warning(
+            "🟡 **No Supabase connection** — trades will only last for this session.  \n"
+            "Add your Supabase credentials in `.streamlit/secrets.toml` to persist trades permanently."
+        )
+
+    # ── Pre-fill from recommendation card ────────────────────────────────────
+    prefill = st.session_state.pop("_prefill_trade", {})
+
+    # ── Log a Trade form ──────────────────────────────────────────────────────
+    with st.expander("➕ Log a Trade", expanded=bool(prefill)):
+        held_tickers = [
+            str(r.get("Ticker", "")).strip().upper()
+            for _, r in st.session_state.holdings_df.iterrows()
+            if str(r.get("Ticker", "")).strip()
+        ]
+
+        f_col1, f_col2, f_col3 = st.columns(3)
+        with f_col1:
+            action = st.radio(
+                "Action", ["SELL", "BUY"], horizontal=True,
+                index=0 if prefill.get("action", "SELL") == "SELL" else 1,
+            )
+        with f_col2:
+            ticker_input = st.text_input(
+                "Ticker", value=prefill.get("ticker", ""),
+                placeholder="e.g. NET",
+            ).strip().upper()
+        with f_col3:
+            trigger_type = st.selectbox(
+                "Reason",
+                ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"],
+                index=["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"].index(
+                    prefill.get("trigger", "MANUAL")
+                ),
+            )
+
+        f_col4, f_col5, f_col6 = st.columns(3)
+        with f_col4:
+            shares_val = st.number_input(
+                "Shares", min_value=0.001, value=float(prefill.get("shares", 1)),
+                step=1.0, format="%.3f",
+            )
+        with f_col5:
+            price_val = st.number_input(
+                "Price per share ($)", min_value=0.01,
+                value=float(prefill.get("price", 0.01)), step=0.01, format="%.2f",
+            )
+        with f_col6:
+            # Auto-look up cost basis for SELL trades
+            cost_basis_default = 0.01
+            if action == "SELL" and ticker_input:
+                match = st.session_state.holdings_df[
+                    st.session_state.holdings_df["Ticker"] == ticker_input
+                ]
+                if not match.empty:
+                    cost_basis_default = float(match.iloc[0]["Avg Cost ($)"])
+            cost_basis_val = st.number_input(
+                "Cost Basis / share ($)" + (" — auto-filled from holdings" if cost_basis_default > 0.01 else ""),
+                min_value=0.01, value=max(0.01, cost_basis_default),
+                step=0.01, format="%.2f",
+                help="Your average purchase price per share. Auto-filled for positions in your portfolio.",
+            )
+
+        notes_val = st.text_input(
+            "Notes (optional)", value=prefill.get("notes", ""),
+            placeholder="e.g. Partial profit on bearish signal",
+        )
+
+        # Preview P&L before saving
+        if action == "SELL" and shares_val > 0 and price_val > 0 and cost_basis_val > 0:
+            pnl_preview = compute_realized_pnl(shares_val, price_val, cost_basis_val)
+            pnl_clr = "#00C851" if pnl_preview and pnl_preview >= 0 else "#ff4444"
+            pnl_pct_preview = (price_val - cost_basis_val) / cost_basis_val * 100 if cost_basis_val else 0
+            st.markdown(
+                f"<div style='padding:8px 12px;background:#1a1a1a;border-radius:6px;"
+                f"border-left:4px solid {pnl_clr};margin:6px 0'>"
+                f"<span style='font-size:0.8em;color:#888'>REALIZED P&L PREVIEW</span><br>"
+                f"<span style='font-size:1.1em;font-weight:bold;color:{pnl_clr}'>"
+                f"{'%+.2f' % pnl_preview if pnl_preview else '—'} "
+                f"({'%+.1f' % pnl_pct_preview}% per share · "
+                f"{shares_val:.0f} shares × ${price_val:.2f} − ${cost_basis_val:.2f})</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        submitted = st.button("✅ Record Trade", type="primary")
+        if submitted:
+            if not ticker_input:
+                st.error("Enter a ticker symbol.")
+            elif shares_val <= 0:
+                st.error("Shares must be greater than 0.")
+            elif price_val <= 0:
+                st.error("Price must be greater than 0.")
+            else:
+                realized_pnl = (
+                    compute_realized_pnl(shares_val, price_val, cost_basis_val)
+                    if action == "SELL" else None
+                )
+                record = {
+                    "ticker":       ticker_input,
+                    "action":       action,
+                    "shares":       shares_val,
+                    "price":        price_val,
+                    "cost_basis":   cost_basis_val if action == "SELL" else None,
+                    "realized_pnl": realized_pnl,
+                    "notes":        notes_val or None,
+                    "trigger_type": trigger_type,
+                }
+                saved = db.save_trade(record)
+                if saved or not db.has_db():
+                    # In-session fallback if no DB
+                    if not db.has_db():
+                        import pandas as _pd
+                        new_row = _pd.DataFrame([{**record, "id": None, "traded_at": datetime.now().isoformat()}])
+                        st.session_state.trades_df = _pd.concat(
+                            [new_row, st.session_state.trades_df], ignore_index=True
+                        )
+                    else:
+                        st.session_state.trades_df = db.load_trades()
+
+                    # Auto-update holdings for SELL trades
+                    if action == "SELL":
+                        h_df = st.session_state.holdings_df.copy()
+                        mask = h_df["Ticker"] == ticker_input
+                        if mask.any():
+                            idx = h_df[mask].index[0]
+                            current_shares = float(h_df.at[idx, "Shares"])
+                            new_shares = current_shares - shares_val
+                            if new_shares <= 0:
+                                h_df = h_df.drop(idx).reset_index(drop=True)
+                                st.success(
+                                    f"✅ Trade recorded. **{ticker_input}** fully exited "
+                                    f"— position removed from portfolio."
+                                )
+                            else:
+                                h_df.at[idx, "Shares"] = int(new_shares) if new_shares == int(new_shares) else new_shares
+                                st.success(
+                                    f"✅ Sold {shares_val:.0f} shares of {ticker_input}. "
+                                    f"Holdings updated: {current_shares:.0f} → {new_shares:.0f} shares. "
+                                    f"Realized P&L: **{'%+,.2f' % realized_pnl if realized_pnl else '—'}**"
+                                )
+                            db.save_holdings(h_df)
+                            st.session_state.holdings_df = h_df
+                            st.session_state.db_loaded = False
+                        else:
+                            st.success(
+                                f"✅ Trade recorded for {ticker_input} "
+                                f"(ticker not in current holdings — manual entry)."
+                            )
+                    else:
+                        st.success(f"✅ BUY of {shares_val:.0f} × {ticker_input} @ ${price_val:.2f} recorded.")
+                    st.rerun()
+
+    # ── Performance Dashboard ─────────────────────────────────────────────────
+    trades_df = st.session_state.get("trades_df", db.load_trades())
+    stats = performance_stats(trades_df)
+
+    if stats["total_trades"] > 0:
+        st.subheader("📊 Performance Dashboard")
+        pm1, pm2, pm3, pm4, pm5 = st.columns(5)
+        pnl_total = stats["total_realized_pnl"]
+        pm1.metric("Realized P&L",  f"${pnl_total:+,.2f}",
+                   help="Total profit/loss from all closed (SELL) trades.")
+        pm2.metric("Win Rate",      f"{stats['win_rate']:.0f}%",
+                   f"{stats['wins']}W / {stats['losses']}L",
+                   help="% of sell trades that were profitable.")
+        pm3.metric("Avg Winner",    f"${stats['avg_winner']:+,.0f}",
+                   help="Average profit on winning trades.")
+        pm4.metric("Avg Loser",     f"${stats['avg_loser']:+,.0f}",
+                   help="Average loss on losing trades.")
+        pm5.metric("Trades Logged", stats["total_trades"],
+                   f"{stats['sell_trades']} sells · {stats['buy_trades']} buys")
+
+        # Expectancy — the pro metric
+        if stats["wins"] + stats["losses"] > 0:
+            expectancy = (
+                stats["win_rate"] / 100 * stats["avg_winner"]
+                + (1 - stats["win_rate"] / 100) * stats["avg_loser"]
+            )
+            exp_clr = "#00C851" if expectancy > 0 else "#ff4444"
+            st.markdown(
+                f"<div style='padding:8px 14px;background:#161616;border-radius:6px;"
+                f"border-left:4px solid {exp_clr};margin:8px 0'>"
+                f"<span style='font-size:0.8em;color:#888'>TRADE EXPECTANCY</span> "
+                f"<span style='color:{exp_clr};font-weight:bold;font-size:1.05em'>"
+                f"${expectancy:+,.2f} per trade</span>"
+                f"<span style='font-size:0.78em;color:#666'> · "
+                f"Positive = your strategy makes money on average across wins and losses</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        # P&L by ticker chart
+        if stats["realized_by_ticker"]:
+            import plotly.graph_objects as _go
+            by_t = stats["realized_by_ticker"]
+            tickers_sorted = sorted(by_t.keys(), key=lambda x: by_t[x], reverse=True)
+            vals = [by_t[t] for t in tickers_sorted]
+            colors = ["#00C851" if v >= 0 else "#ff4444" for v in vals]
+            pnl_bar = _go.Figure(_go.Bar(
+                x=tickers_sorted, y=vals,
+                marker_color=colors,
+                text=[f"${v:+,.0f}" for v in vals],
+                textposition="outside",
+            ))
+            pnl_bar.update_layout(
+                title="Realized P&L by Ticker",
+                template="plotly_dark", height=260,
+                yaxis_title="Realized P&L ($)",
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(pnl_bar, use_container_width=True)
+
+        # Best / worst trades
+        if stats["best_trade"] or stats["worst_trade"]:
+            bw1, bw2 = st.columns(2)
+            if stats["best_trade"]:
+                bt = stats["best_trade"]
+                bw1.success(
+                    f"🏆 **Best trade**: {bt['ticker']} — "
+                    f"sold {bt['shares']:.0f} shares @ ${bt['price']:.2f} · "
+                    f"**+${bt['realized_pnl']:,.2f}**"
+                )
+            if stats["worst_trade"]:
+                wt = stats["worst_trade"]
+                bw2.error(
+                    f"📉 **Worst trade**: {wt['ticker']} — "
+                    f"sold {wt['shares']:.0f} shares @ ${wt['price']:.2f} · "
+                    f"**${wt['realized_pnl']:,.2f}**"
+                )
+
+    # ── Trade History table ───────────────────────────────────────────────────
+    st.subheader("📋 Trade History")
+    if trades_df.empty:
+        st.info("No trades recorded yet. Use the form above to log your first trade.")
+    else:
+        display_df = trades_df.copy()
+        # Format columns for display
+        for col in ["shares", "price", "cost_basis", "realized_pnl"]:
+            if col in display_df.columns:
+                display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
+        if "traded_at" in display_df.columns:
+            display_df["traded_at"] = pd.to_datetime(
+                display_df["traded_at"], errors="coerce"
+            ).dt.strftime("%Y-%m-%d %H:%M")
+
+        show_cols = [c for c in
+                     ["traded_at", "ticker", "action", "shares", "price",
+                      "cost_basis", "realized_pnl", "trigger_type", "notes"]
+                     if c in display_df.columns]
+
+        def _pnl_clr(val):
+            if pd.isna(val) or val == "": return ""
+            try:
+                return "color:#00C851;font-weight:bold" if float(val) >= 0 else "color:#ff4444"
+            except Exception:
+                return ""
+
+        def _act_clr(val):
+            return "color:#ff6b35" if str(val) == "SELL" else "color:#4a9eff"
+
+        styled_trades = (
+            display_df[show_cols].style
+            .map(_act_clr, subset=["action"])
+            .map(_pnl_clr, subset=["realized_pnl"] if "realized_pnl" in show_cols else [])
+            .format({
+                "shares":       "{:.0f}",
+                "price":        "${:.2f}",
+                "cost_basis":   lambda v: f"${v:.2f}" if pd.notna(v) else "—",
+                "realized_pnl": lambda v: f"${v:+,.2f}" if pd.notna(v) else "—",
+            }, na_rep="—")
+        )
+        st.dataframe(styled_trades, use_container_width=True)
+
+    if not db.has_db():
+        st.info(
+            "💡 **Supabase not connected** — trades above are session-only and will be lost on refresh.  \n"
+            "Run the SQL in `stock_analyzer/db.py` to create the `trades` table, "
+            "then add your credentials to `.streamlit/secrets.toml`."
+        )
+    else:
+        st.markdown(
+            "<div style='font-size:0.78em;color:#444;margin-top:6px'>"
+            "📌 To create the trades table in Supabase, run the SQL in "
+            "<code>stock_analyzer/db.py</code> → Supabase SQL Editor → New Query</div>",
+            unsafe_allow_html=True,
         )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
