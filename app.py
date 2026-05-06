@@ -70,7 +70,7 @@ if "scanner_results" not in st.session_state:
     st.session_state.scanner_results = None
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
-if "db_loaded" not in st.session_state:
+if not st.session_state.get("db_loaded"):
     st.session_state.holdings_df = db.load_holdings()
     st.session_state.watchlist   = db.load_watchlist()
     st.session_state.db_loaded   = True
@@ -215,11 +215,10 @@ if page == "🏠 My Portfolio":
             key="holdings_editor",
         )
         if st.button("Save Holdings", type="primary"):
-            st.session_state.holdings_df = edited
             if db.save_holdings(edited):
-                label = "✅ Saved to Supabase — persists across sessions." if db.has_db() \
-                        else "✅ Saved for this session (configure Supabase to persist)."
-                st.success(label)
+                st.session_state.holdings_df = edited
+                st.session_state.db_loaded = False  # force re-load from DB on next run
+                st.success("✅ Saved to Supabase — will persist across sessions.")
             st.rerun()
 
     # Load data for all held tickers

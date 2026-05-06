@@ -1,38 +1,32 @@
 """
 Persistence layer — reads/writes holdings and watchlist to Supabase.
 
-Supabase setup (run once in the SQL Editor at supabase.com):
+IMPORTANT: Run this SQL once in the Supabase SQL Editor to disable RLS
+(required for the anon key to read/write without policy configuration):
 
-    create table holdings (
-        id    bigint primary key generated always as identity,
-        ticker    text    not null,
-        shares    numeric not null check (shares > 0),
-        avg_cost  numeric not null check (avg_cost > 0),
+    ALTER TABLE holdings  DISABLE ROW LEVEL SECURITY;
+    ALTER TABLE watchlist DISABLE ROW LEVEL SECURITY;
+
+Table schema (run once if tables don't exist):
+
+    create table if not exists holdings (
+        id         bigint primary key generated always as identity,
+        ticker     text    not null,
+        shares     numeric not null check (shares > 0),
+        avg_cost   numeric not null check (avg_cost > 0),
         updated_at timestamptz default now()
     );
 
-    create table watchlist (
-        id    bigint primary key generated always as identity,
-        ticker text not null unique,
+    create table if not exists watchlist (
+        id       bigint primary key generated always as identity,
+        ticker   text not null unique,
         added_at timestamptz default now()
     );
-
-When Supabase is not configured the module falls back to Streamlit session
-state so the app still works fully in local development.
 """
 
 import streamlit as st
 import pandas as pd
 
-_DEFAULT_HOLDINGS = [
-    {"Ticker": "AVGO", "Shares": 10, "Avg Cost ($)": 180.0},
-    {"Ticker": "AAPL", "Shares": 20, "Avg Cost ($)": 165.0},
-    {"Ticker": "TSLA", "Shares": 15, "Avg Cost ($)": 220.0},
-    {"Ticker": "CRWD", "Shares": 8,  "Avg Cost ($)": 300.0},
-    {"Ticker": "DELL", "Shares": 25, "Avg Cost ($)": 85.0},
-    {"Ticker": "PLTR", "Shares": 50, "Avg Cost ($)": 25.0},
-    {"Ticker": "NET",  "Shares": 20, "Avg Cost ($)": 90.0},
-]
 _DEFAULT_WATCHLIST = ["NVDA", "AMD", "INTC", "MU"]
 
 
@@ -66,39 +60,51 @@ def load_holdings() -> pd.DataFrame:
                 df["Shares"] = df["Shares"].astype(int)
                 df["Avg Cost ($)"] = df["Avg Cost ($)"].astype(float)
                 return df
+            # Table is empty — return empty frame so user starts fresh
+            return pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost ($)"])
         except Exception as e:
-            st.warning(f"DB read error: {e} — using session cache")
-    # Fallback: session state
-    return st.session_state.get(
-        "_holdings_fallback",
-        pd.DataFrame(_DEFAULT_HOLDINGS),
-    )
+            err = str(e)
+            if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
+                st.error(
+                    "⛔ Supabase RLS is blocking reads. "
+                    "Run `ALTER TABLE holdings DISABLE ROW LEVEL SECURITY;` "
+                    "in your Supabase SQL Editor, then refresh."
+                )
+            else:
+                st.error(f"⛔ DB read error: {err}")
+    # No DB configured — return empty frame
+    return pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost ($)"])
 
 
 def save_holdings(df: pd.DataFrame) -> bool:
-    """Persist the holdings DataFrame. Returns True on success."""
-    # Always keep session fallback in sync
-    st.session_state["_holdings_fallback"] = df.copy()
-
+    """Persist the holdings DataFrame to Supabase. Returns True on success."""
     if not has_db():
-        return True
+        return False
 
     try:
         client = _client()
-        # Full replace: delete all rows then re-insert
-        client.table("holdings").delete().gte("id", 0).execute()
+        # Delete all existing rows then re-insert
+        client.table("holdings").delete().neq("ticker", "").execute()
         records = []
         for _, row in df.iterrows():
-            ticker = str(row.get("Ticker", "")).strip().upper()
-            shares = float(row.get("Shares", 0))
-            avg_cost = float(row.get("Avg Cost ($)", 0))
+            ticker   = str(row.get("Ticker", "")).strip().upper()
+            shares   = float(row.get("Shares", 0) or 0)
+            avg_cost = float(row.get("Avg Cost ($)", 0) or 0)
             if ticker and shares > 0 and avg_cost > 0:
                 records.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
         if records:
             client.table("holdings").insert(records).execute()
         return True
     except Exception as e:
-        st.error(f"Failed to save holdings: {e}")
+        err = str(e)
+        if "row-level security" in err.lower() or "42501" in err:
+            st.error(
+                "⛔ Supabase RLS is blocking writes. "
+                "Run `ALTER TABLE holdings DISABLE ROW LEVEL SECURITY;` "
+                "in your Supabase SQL Editor."
+            )
+        else:
+            st.error(f"⛔ Failed to save holdings: {err}")
         return False
 
 
@@ -108,28 +114,24 @@ def load_watchlist() -> list[str]:
     if has_db():
         try:
             rows = _client().table("watchlist").select("ticker").execute().data
-            if rows:
-                return [r["ticker"] for r in rows]
-        except Exception:
-            pass
-    return st.session_state.get("_watchlist_fallback", list(_DEFAULT_WATCHLIST))
+            return [r["ticker"] for r in rows] if rows else []
+        except Exception as e:
+            st.warning(f"Watchlist read error: {e}")
+    return list(_DEFAULT_WATCHLIST)
 
 
 def save_watchlist(tickers: list[str]) -> bool:
     tickers = [t.strip().upper() for t in tickers if t.strip()]
-    st.session_state["_watchlist_fallback"] = tickers
-
     if not has_db():
-        return True
-
+        return False
     try:
         client = _client()
-        client.table("watchlist").delete().gte("id", 0).execute()
+        client.table("watchlist").delete().neq("ticker", "").execute()
         if tickers:
             client.table("watchlist").insert(
                 [{"ticker": t} for t in tickers]
             ).execute()
         return True
     except Exception as e:
-        st.error(f"Failed to save watchlist: {e}")
+        st.error(f"⛔ Failed to save watchlist: {e}")
         return False
