@@ -596,72 +596,133 @@ if page == "🏠 My Portfolio":
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
 
-    # Summary metrics
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Portfolio Value",   f"${total_val:,.0f}")
-    m2.metric("Total P&L",         f"${total_pnl:,.0f}", f"{total_pnl_pct:+.1f}%",
-              delta_color="normal")
-    m3.metric("Positions",         len(port_df))
-    m4.metric("Avg Conviction",    f"{avg_score:.0f}/100")
-    winners = (port_df["P&L (%)"] > 0).sum()
-    m5.metric("Win Rate",          f"{winners}/{len(port_df)} positions")
-
-    st.divider()
-
-    # Alerts
+    # ── Pre-compute all analytics (before tabs so all tabs can access) ────────
     alert_list = alerts(port_df)
-    if alert_list:
-        with st.expander(f"🚨 {len(alert_list)} Alert(s) — click to review", expanded=True):
-            for a in alert_list:
-                if a["level"] == "danger":
-                    st.error(a["msg"])
-                elif a["level"] == "warning":
-                    st.warning(a["msg"])
-                else:
-                    st.info(a["msg"])
+    n_danger   = sum(1 for a in alert_list if a["level"] == "danger")
+    n_warning  = sum(1 for a in alert_list if a["level"] == "warning")
 
-    # Charts row
-    ch1, ch2 = st.columns([1, 1])
+    actions = rebalance_actions(port_df)
 
-    with ch1:
-        # Allocation pie
-        pie = go.Figure(go.Pie(
-            labels=port_df["Ticker"],
-            values=port_df["Market Value"],
-            hole=0.45,
-            textinfo="label+percent",
-            marker=dict(
-                colors=["#00C851","#4a9eff","#ffbb33","#ff6b35","#aa00ff","#00bcd4","#ff4081"],
-            ),
-        ))
-        pie.update_layout(
-            title="Portfolio Allocation", template="plotly_dark",
-            height=320, margin=dict(l=0, r=0, t=40, b=0),
-            showlegend=False,
-        )
-        st.plotly_chart(pie, use_container_width=True)
+    try:
+        corr_df      = correlation_matrix(held_data)
+        _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
+        div          = diversification_score(corr_df, _weights_map)
+        div_score    = div["score"]
+        avg_corr     = div["avg_correlation"]
+        risk_pairs   = div["risk_pairs"]
+        _div_label   = ("Well Diversified" if div_score >= 42
+                        else "Moderate" if div_score >= 30 else "High Correlation Risk")
+    except Exception:
+        corr_df    = pd.DataFrame()
+        div        = {"score": None, "avg_correlation": None, "risk_pairs": []}
+        div_score  = avg_corr = None
+        risk_pairs = []
+        _div_label = "Unavailable"
 
-    with ch2:
-        # P&L bar
-        colors = ["#00C851" if v >= 0 else "#ff4444" for v in port_df["P&L ($)"]]
-        pnl_fig = go.Figure(go.Bar(
-            x=port_df["Ticker"], y=port_df["P&L ($)"],
-            marker_color=colors,
-            text=[f"${v:,.0f}<br>{p:+.1f}%" for v, p in
-                  zip(port_df["P&L ($)"], port_df["P&L (%)"])],
-            textposition="outside",
-        ))
-        pnl_fig.update_layout(
-            title="P&L by Position", template="plotly_dark",
-            height=320, yaxis_title="P&L ($)",
-            margin=dict(l=0, r=0, t=40, b=0),
-        )
-        st.plotly_chart(pnl_fig, use_container_width=True)
+    try:
+        div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
+    except Exception:
+        div_recs = []
 
-    # Sector exposure
-    sector_df = sector_exposure(port_df)
-    if not sector_df.empty:
-        with st.expander("🏭 Sector Exposure", expanded=False):
+    h_rets = holding_returns(held_data)
+
+    best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
+    worst_row = port_df.loc[port_df["P&L (%)"].idxmin()]
+    winners   = int((port_df["P&L (%)"] > 0).sum())
+
+    if n_danger > 0 or (div_score is not None and div_score < 30):
+        _rag_label, _rag_color = "Action Required", "#ff4444"
+    elif n_warning > 0 or (div_score is not None and div_score < 42):
+        _rag_label, _rag_color = "Monitor", "#ffbb33"
+    else:
+        _rag_label, _rag_color = "All Clear", "#00C851"
+
+    # ── Portfolio Command Center ───────────────────────────────────────────────
+    st.markdown(
+        f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
+        f"padding:14px 20px;margin-bottom:4px'>"
+        f"<div style='display:flex;align-items:center;gap:10px'>"
+        f"<span style='font-size:1.2em;font-weight:700;color:#f9fafb'>Portfolio Command Center</span>"
+        f"<span style='background:{_rag_color};color:#000;padding:2px 10px;"
+        f"border-radius:20px;font-size:0.7em;font-weight:800;letter-spacing:0.05em'>"
+        f"{_rag_label}</span>"
+        f"<span style='margin-left:auto;color:#6b7280;font-size:0.75em'>"
+        f"{len(port_df)} positions · {datetime.now().strftime('%b %d, %Y')}</span>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    _c1, _c2, _c3, _c4, _c5, _c6, _c7 = st.columns(7)
+    _c1.metric("Portfolio Value",  f"${total_val:,.0f}")
+    _c2.metric("Total P&L",        f"${total_pnl:,.0f}", f"{total_pnl_pct:+.1f}%", delta_color="normal")
+    _c3.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
+               help=f"{n_danger} danger · {n_warning} warning — check Alerts & Actions tab")
+    _c4.metric("Avg Conviction",   f"{avg_score:.0f}/100")
+    _c5.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
+               _div_label, delta_color="off")
+    _c6.metric(f"Best: {best_row['Ticker']}",
+               f"{best_row['P&L (%)']:+.1f}%", f"${best_row['P&L ($)']:,.0f}", delta_color="normal")
+    _c7.metric(f"Worst: {worst_row['Ticker']}",
+               f"{worst_row['P&L (%)']:+.1f}%", f"${worst_row['P&L ($)']:,.0f}", delta_color="normal")
+
+    st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+    # ── Navigation tabs ───────────────────────────────────────────────────────
+    tab_ov, tab_act, tab_risk, tab_rs, tab_macro, tab_rank = st.tabs([
+        "📊 Overview",
+        f"⚠️ Alerts & Actions{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
+        "🔗 Risk Analysis",
+        "📈 Relative Strength",
+        "🌐 Macro",
+        "🏆 Rankings",
+    ])
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — OVERVIEW
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_ov:
+        # Charts row
+        ch1, ch2 = st.columns([1, 1])
+
+        with ch1:
+            # Allocation pie
+            pie = go.Figure(go.Pie(
+                labels=port_df["Ticker"],
+                values=port_df["Market Value"],
+                hole=0.45,
+                textinfo="label+percent",
+                marker=dict(
+                    colors=["#00C851","#4a9eff","#ffbb33","#ff6b35","#aa00ff","#00bcd4","#ff4081"],
+                ),
+            ))
+            pie.update_layout(
+                title="Portfolio Allocation", template="plotly_dark",
+                height=320, margin=dict(l=0, r=0, t=40, b=0),
+                showlegend=False,
+            )
+            st.plotly_chart(pie, use_container_width=True)
+
+        with ch2:
+            # P&L bar
+            colors = ["#00C851" if v >= 0 else "#ff4444" for v in port_df["P&L ($)"]]
+            pnl_fig = go.Figure(go.Bar(
+                x=port_df["Ticker"], y=port_df["P&L ($)"],
+                marker_color=colors,
+                text=[f"${v:,.0f}<br>{p:+.1f}%" for v, p in
+                      zip(port_df["P&L ($)"], port_df["P&L (%)"])],
+                textposition="outside",
+            ))
+            pnl_fig.update_layout(
+                title="P&L by Position", template="plotly_dark",
+                height=320, yaxis_title="P&L ($)",
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(pnl_fig, use_container_width=True)
+
+        # Sector exposure — inline (no extra expander needed inside tab)
+        sector_df = sector_exposure(port_df)
+        if not sector_df.empty:
+            st.subheader("Sector Exposure")
             sec_fig = go.Figure(go.Bar(
                 x=sector_df["Sector"], y=sector_df["Pct"],
                 marker_color="#4a9eff",
@@ -677,99 +738,581 @@ if page == "🏠 My Portfolio":
             )
             st.plotly_chart(sec_fig, use_container_width=True)
 
-    # ── Pre-compute correlation data (shared by both expanders) ──────────────
-    try:
-        corr_df = correlation_matrix(held_data)
-        _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
-        div = diversification_score(corr_df, _weights_map)
-        div_score  = div["score"]
-        avg_corr   = div["avg_correlation"]
-        risk_pairs = div["risk_pairs"]
-        if div_score >= 42:
-            _div_label = "Well Diversified"
-        elif div_score >= 30:
-            _div_label = "Moderate"
-        else:
-            _div_label = "High Correlation Risk"
-    except Exception:
-        corr_df = pd.DataFrame()
-        div = {"score": None, "avg_correlation": None, "risk_pairs": []}
-        div_score, avg_corr, risk_pairs = None, None, []
-        _div_label = "Unavailable"
-
-    try:
-        div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
-    except Exception:
-        div_recs = []
-
-    # ── Expander 1: Correlation & Diversification ─────────────────────────────
-    _corr_title = (
-        f"🔗 Correlation & Diversification — Score: {div_score:.0f}/100 ({_div_label})"
-        if div_score is not None else "🔗 Correlation & Diversification"
-    )
-    _corr_has_risk = len(risk_pairs) > 0 or (div_score is not None and div_score < 38)
-    with st.expander(_corr_title, expanded=_corr_has_risk):
-        if corr_df.empty:
-            st.info("Need at least 2 holdings with price history to compute correlations.")
-        else:
-            dc1, dc2, dc3 = st.columns(3)
-            dc1.metric("Diversification Score", f"{div_score:.0f}/100",
-                       help=_tip("Diversification Score"))
-            dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
-                       help=_tip("Portfolio Correlation"))
-            dc3.metric("High-Correlation Pairs", len(risk_pairs),
-                       help="Pairs with correlation ≥ 0.65")
-            st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
-
-            if risk_pairs:
-                st.markdown("**Correlated pairs — reduce diversification benefit:**")
-                for rp in risk_pairs:
-                    msg = (f"**{rp['t1']} × {rp['t2']}** — {rp['corr']:.2f} correlation. "
-                           "These positions move together.")
-                    if rp["level"] == "danger":
-                        st.error(f"🔴 {msg}")
-                    else:
-                        st.warning(f"🟡 {msg}")
-            else:
-                st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
-
-            tickers_list = corr_df.index.tolist()
-            z_vals = corr_df.values.tolist()
-            z_text = [[f"{v:.2f}" for v in row] for row in corr_df.values]
-            hm = go.Figure(go.Heatmap(
-                z=z_vals, x=tickers_list, y=tickers_list,
-                text=z_text, texttemplate="%{text}", textfont=dict(size=11),
-                colorscale=[[0.0, "#00C851"], [0.5, "#1e1e2e"], [1.0, "#ff4444"]],
-                zmin=-1, zmax=1, showscale=True,
-                colorbar=dict(title="Corr", tickvals=[-1, -0.5, 0, 0.5, 1],
-                              ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"], len=0.8),
-            ))
-            hm.update_layout(
-                template="plotly_dark",
-                height=max(300, 65 * len(tickers_list)),
-                margin=dict(l=0, r=0, t=10, b=0),
-                xaxis=dict(side="bottom", tickangle=-30),
-            )
-            st.plotly_chart(hm, use_container_width=True)
-            st.caption(
-                "🟢 Green = low/negative correlation (genuine diversification)  |  "
-                "⬛ Dark = near-zero (independent)  |  "
-                "🔴 Red = high correlation (positions move together).  "
-                "Diagonal is always +1.0."
-            )
-
-    # ── Expander 2: Diversification Advisor ───────────────────────────────────
-    _n_reduce = len([r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")])
-    _n_add    = len([r for r in div_recs if r["type"] == "ADD"])
-    _adv_title = (
-        f"📋 Diversification Advisor — {_n_reduce} reduce · {_n_add} add suggestions"
-        if div_recs else "📋 Diversification Advisor"
-    )
-    with st.expander(_adv_title, expanded=bool(div_recs)):
+        # Position table
+        st.subheader("Position Detail & Protective Stops")
         st.caption(
-            "Data-driven recommendations based on your sector weights, "
-            "pairwise correlations, and analyst signals."
+            "Hover the ℹ️ icon on any column header below for a plain-English explanation.  \n"
+            "**Ratchet stop** moves up automatically as gains grow — locks in profits while letting winners run.  \n"
+            "**Score** = Technical 45% + Fundamental 40% + Sentiment 15% (composite). "
+            "Scanner uses momentum-only scoring — see drill-down for full breakdown."
         )
+
+        def _pnl_color(val):
+            if isinstance(val, (int, float)):
+                return "color:#00C851;font-weight:bold" if val > 0 else "color:#ff4444"
+            return ""
+
+        def _stop_color(val):
+            if isinstance(val, str):
+                if "Protect" in val: return "color:#00C851"
+                if "Breakeven" in val: return "color:#ffbb33"
+            return ""
+
+        def _sig_color(val):
+            s = str(val)
+            if "Strong Buy" in s: return "background:#00C85122;color:#00C851"
+            if "Buy" in s:        return "color:#00b300"
+            if "Sell" in s:       return "color:#ff4444"
+            return ""
+
+        display_cols = ["Ticker", "Shares", "Avg Cost", "Price", "P&L ($)", "P&L (%)",
+                        "Weight (%)", "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
+        styled = (
+            port_df[display_cols].style
+            .map(_pnl_color, subset=["P&L ($)", "P&L (%)"])
+            .map(_stop_color, subset=["Stop Type"])
+            .map(_sig_color, subset=["Signal"])
+            .format({
+                "Avg Cost": "${:.2f}", "Price": "${:.2f}",
+                "P&L ($)": "${:,.0f}", "P&L (%)": "{:+.1f}%",
+                "Weight (%)": "{:.1f}%", "Stop": "${:.2f}",
+                "Gap to Stop (%)": "{:.1f}%", "Score": "{:.0f}",
+            })
+        )
+        st.dataframe(styled, use_container_width=True)
+
+        # Per-position drill-down
+        st.subheader("Position Drill-Down")
+        sel = st.selectbox("Select position to drill down", port_df["Ticker"].tolist())
+        if sel and sel in held_data:
+            r = held_data[sel]
+            price = r["current_price"]
+            targets = r["targets"]
+            ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
+
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("P&L",         f"${ps_row['P&L ($)']:,.0f}", f"{ps_row['P&L (%)']:+.1f}%")
+            d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'],
+                      help=_tip("ATR Stop"))
+            d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%",
+                      help=_tip("Ratchet Stop"))
+            d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'],
+                      help=_tip("Composite Score"))
+
+            # Score breakdown row
+            sb1, sb2, sb3 = st.columns(3)
+            t_contrib  = round(r['t_score'] * 0.45, 1)
+            f_contrib  = round(r['f_score'] * 0.40, 1)
+            s_contrib  = round(r['s_score'] * 0.15, 1)
+            sb1.metric("Technical",   f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (45%)",
+                       help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
+                            + _tip("RSI"))
+            sb2.metric("Fundamental", f"{r['f_score']:.0f}/100", f"+{f_contrib} pts (40%)",
+                       help="Forward P/E · FCF Yield · Revenue & Earnings growth · Margins · Debt/Equity\n\n"
+                            + _tip("FCF Yield"))
+            sb3.metric("Sentiment",   f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (15%)",
+                       help="VADER analysis of latest news headlines from Yahoo Finance")
+
+            # Smart Money panel
+            fin = r["financials"]
+            rev = r.get("revisions", {})
+            _sm_items = []
+
+            short_pct = fin.get("short_pct_float")
+            if short_pct is not None:
+                short_clr = "#ff4444" if short_pct > 15 else ("#ffbb33" if short_pct > 7 else "#00C851")
+                _sm_items.append(("Short Interest", f"{short_pct:.1f}% of float", short_clr, _tip("Short Interest")))
+            short_ratio = fin.get("short_ratio")
+            if short_ratio:
+                _sm_items.append(("Days to Cover", f"{short_ratio:.1f}d", "#aaa", _tip("Days to Cover")))
+            inst = fin.get("held_pct_institutions")
+            if inst is not None:
+                inst_clr = "#00C851" if inst > 60 else ("#ffbb33" if inst > 30 else "#ff4444")
+                _sm_items.append(("Institutional", f"{inst:.0f}%", inst_clr, _tip("Institutional Ownership")))
+            insider = fin.get("held_pct_insiders")
+            if insider is not None:
+                _sm_items.append(("Insider Held", f"{insider:.1f}%", "#aaa", _tip("Insider Ownership")))
+            fcf_y = fin.get("fcf_yield")
+            if fcf_y is not None:
+                fcf_clr = "#00C851" if fcf_y >= 4 else ("#ffbb33" if fcf_y >= 1 else "#ff4444")
+                _sm_items.append(("FCF Yield", f"{fcf_y:.1f}%", fcf_clr, _tip("FCF Yield")))
+            if rev:
+                net = rev.get("net", 0)
+                rev_lbl = f"+{net} upgrades" if net > 0 else (f"{net} downgrades" if net < 0 else "neutral")
+                rev_clr = "#00C851" if net > 0 else ("#ff4444" if net < 0 else "#888")
+                _sm_items.append(("Revisions 90d", rev_lbl, rev_clr, _tip("Analyst Revisions")))
+
+            if _sm_items:
+                st.markdown("**Smart Money Signals**")
+                _sm_cols = st.columns(len(_sm_items))
+                for _col, (_label, _val, _clr, _help) in zip(_sm_cols, _sm_items):
+                    _col.metric(_label, _val, help=_help)
+
+            # Source links
+            st.markdown(
+                f"**Sources:** "
+                f"[📊 Yahoo Finance](https://finance.yahoo.com/quote/{sel}) · "
+                f"[📈 Finviz Chart](https://finviz.com/quote.ashx?t={sel}) · "
+                f"[📰 SEC Filings](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={sel}&type=10-K) · "
+                f"[🔍 Latest News](https://finance.yahoo.com/quote/{sel}/news/)"
+            )
+
+            if targets:
+                st.markdown(
+                    f"**Scenarios** · Bear `${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)` · "
+                    f"Base `${targets['base']:.2f} ({targets['base_pct']:+.1f}%)` · "
+                    f"Bull `${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%)`"
+                )
+
+            # Mini price chart with stop line
+            df = r["df"]
+            mini = go.Figure()
+            mini.add_trace(go.Scatter(
+                x=df.index, y=df["Close"], name="Price",
+                line=dict(color="#4a9eff", width=2), fill="tozeroy",
+                fillcolor="rgba(74,158,255,0.08)",
+            ))
+            if r["stop"]:
+                mini.add_hline(y=r["stop"], line_dash="dashdot", line_color="#ff6600",
+                               annotation_text=f"Stop ${r['stop']:.2f}",
+                               annotation_position="right")
+            if targets:
+                mini.add_hline(y=targets["base"], line_dash="dash", line_color="#00C851",
+                               annotation_text=f"Target ${targets['base']:.2f}",
+                               annotation_position="right")
+            mini.update_layout(
+                height=240, template="plotly_dark", showlegend=False,
+                xaxis_rangeslider_visible=False,
+                margin=dict(l=0, r=80, t=10, b=0),
+            )
+            st.plotly_chart(mini, use_container_width=True)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — ALERTS & ACTIONS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_act:
+        # Alerts — flat (no expander inside tab)
+        if not alert_list:
+            st.success("✅ No active alerts — portfolio is within normal parameters.")
+        else:
+            st.subheader(f"🚨 {len(alert_list)} Active Alert(s)")
+            for a in alert_list:
+                if a["level"] == "danger":
+                    st.error(a["msg"])
+                elif a["level"] == "warning":
+                    st.warning(a["msg"])
+                else:
+                    st.info(a["msg"])
+
+        st.divider()
+
+        # Rebalancing advisor cards — flat (no extra expander)
+        if actions:
+            st.subheader("💡 Rebalancing Recommendations")
+            st.caption(
+                "Each recommendation shows exactly what triggered it, the score breakdown, "
+                "and a pre-evaluated decision checklist — so you decide, not an algorithm."
+            )
+            for act in actions:
+                ticker  = act["ticker"]
+                urgency = act["urgency"]
+                r_data  = held_data.get(ticker, {})
+                fin     = r_data.get("financials", {})
+                rev     = r_data.get("revisions", {})
+                earn    = r_data.get("earnings")
+                t_score = r_data.get("t_score")
+                f_score = r_data.get("f_score")
+                s_score = r_data.get("s_score")
+                t_sigs  = r_data.get("t_signals", {})
+
+                urgency_badge = {"high": "🔴 HIGH", "medium": "🟡 MEDIUM", "low": "🟢 LOW"}.get(urgency, "")
+                icon = {"review": "📉", "trim": "✂️", "add": "➕"}.get(act["type"], "💡")
+
+                with st.expander(
+                    f"{icon} **{ticker}** — {act['title']}  ·  {urgency_badge}",
+                    expanded=(urgency == "high"),
+                ):
+                    # ── Trigger ──────────────────────────────────────────────
+                    st.markdown(
+                        f"<div style='padding:8px 12px;background:#1a1a1a;border-radius:6px;"
+                        f"border-left:4px solid #ffbb33;margin-bottom:10px'>"
+                        f"<span style='font-size:0.78em;color:#888'>WHAT TRIGGERED THIS</span><br>"
+                        f"<span style='color:#eee'>{act['trigger']}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    ev_col, check_col = st.columns([1, 1])
+
+                    # ── Evidence panel ────────────────────────────────────────
+                    with ev_col:
+                        st.markdown("**Score Breakdown — What's Driving It**")
+                        if t_score is not None:
+                            for dim, sc, weight, tip_key in [
+                                ("Technical",    t_score, "45%", "RSI"),
+                                ("Fundamental",  f_score, "40%", "FCF Yield"),
+                                ("Sentiment",    s_score, "15%", ""),
+                            ]:
+                                clr  = "#00C851" if sc >= 60 else ("#ffbb33" if sc >= 44 else "#ff4444")
+                                icon_s = "✅" if sc >= 60 else ("⚠️" if sc >= 44 else "❌")
+                                bar_w = int(sc)
+                                st.markdown(
+                                    f"<div style='margin-bottom:5px'>"
+                                    f"<span style='font-size:0.8em;color:#aaa'>{icon_s} {dim} ({weight})</span>"
+                                    f"<span style='float:right;font-size:0.8em;font-weight:bold;color:{clr}'>{sc:.0f}/100</span>"
+                                    f"<div style='height:5px;background:#222;border-radius:3px;margin-top:2px'>"
+                                    f"<div style='width:{bar_w}%;height:5px;background:{clr};border-radius:3px'></div>"
+                                    f"</div></div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                            # Primary driver diagnosis
+                            if t_score is not None and f_score is not None:
+                                gap_tf = t_score - f_score
+                                if gap_tf < -15:
+                                    driver = "🔴 **Fundamental deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
+                                elif gap_tf > 15:
+                                    driver = "🟡 **Technical weakness only** — fundamentals remain solid. Likely a timing/momentum signal; the ratchet stop may handle it."
+                                else:
+                                    driver = "⚠️ **Both Technical and Fundamental signals are weak** — broader caution warranted."
+                                st.info(driver)
+
+                        # Specific bearish signals from t_signals
+                        bearish_sigs = {k: v for k, v in t_sigs.items() if "bearish" in v.lower()}
+                        if bearish_sigs:
+                            st.markdown("**Specific Bearish Technical Signals:**")
+                            for k, v in bearish_sigs.items():
+                                st.markdown(f"<small style='color:#ff8800'>▼ **{k}**: {v}</small>", unsafe_allow_html=True)
+
+                    # ── Decision checklist ────────────────────────────────────
+                    with check_col:
+                        st.markdown("**Decision Checklist**")
+
+                        def _check(emoji, text, color="#ccc"):
+                            st.markdown(
+                                f"<div style='margin-bottom:5px;font-size:0.85em'>"
+                                f"{emoji} <span style='color:{color}'>{text}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        # Stop status
+                        gap = act["gap"]
+                        stop = act["stop"]
+                        stop_type = act["stop_type"]
+                        if gap < 4:
+                            _check("🔴", f"Stop at ${stop:.2f} — only {gap:.1f}% away. Market may decide for you.", "#ff4444")
+                        elif gap < 8:
+                            _check("🟡", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Monitor closely.", "#ffbb33")
+                        else:
+                            _check("✅", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Not in immediate danger.", "#00C851")
+
+                        # Earnings proximity
+                        earn_flag = False
+                        if earn:
+                            try:
+                                days_to_earn = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
+                                if 0 <= days_to_earn <= 14:
+                                    _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
+                                    earn_flag = True
+                                elif days_to_earn <= 30:
+                                    _check("🟡", f"Earnings in {days_to_earn}d ({earn}) — consider reducing before report.", "#ffbb33")
+                                    earn_flag = True
+                                else:
+                                    _check("✅", f"Next earnings: {days_to_earn}d away — no immediate catalyst pressure.")
+                            except Exception:
+                                pass
+
+                        # Analyst revisions
+                        if rev:
+                            net_rev = rev.get("net", 0)
+                            ups = rev.get("upgrades_90d", 0)
+                            dns = rev.get("downgrades_90d", 0)
+                            if net_rev > 0:
+                                _check("✅", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — institutional conviction intact.", "#00C851")
+                            elif net_rev < 0:
+                                _check("🔴", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — estimates being cut. Higher urgency.", "#ff4444")
+                            else:
+                                _check("🟡", f"Analyst revisions: neutral (90d).")
+
+                        # Short interest
+                        short_pct = fin.get("short_pct_float")
+                        if short_pct is not None:
+                            if short_pct > 15:
+                                _check("⚠️", f"Short interest {short_pct:.1f}% — elevated bearish positioning. Confirms the sell signal.")
+                            else:
+                                _check("✅", f"Short interest {short_pct:.1f}% — not heavily shorted. Bears haven't piled in.")
+
+                        # Institutional ownership
+                        inst = fin.get("held_pct_institutions")
+                        if inst is not None:
+                            if inst > 60:
+                                _check("✅", f"Institutional ownership {inst:.0f}% — smart money still holding.")
+                            elif inst < 30:
+                                _check("⚠️", f"Low institutional ownership {inst:.0f}% — limited institutional support.")
+
+                        # FCF / fundamentals quality
+                        fcf_y = fin.get("fcf_yield")
+                        if fcf_y is not None:
+                            if fcf_y >= 3:
+                                _check("✅", f"FCF Yield {fcf_y:.1f}% — business generating real cash. Fundamentals back the hold.")
+                            elif fcf_y < 0:
+                                _check("🔴", f"FCF Yield {fcf_y:.1f}% — company burning cash. Adds urgency to the sell signal.", "#ff4444")
+
+                        # Position sizing
+                        if act["weight"] > 15:
+                            _check("⚠️", f"Position is {act['weight']:.0f}% of portfolio — above 15% threshold. Size alone justifies trimming.")
+
+                    # ── Evidence & Sources — verify every data point ─────────
+                    st.markdown("---")
+                    st.markdown(
+                        "**Evidence & Sources — Double-Check Before Acting**  \n"
+                        "<span style='font-size:0.8em;color:#666'>"
+                        "AI can make mistakes. Every data point below links to its original source "
+                        "so you can verify independently before making any decision.</span>",
+                        unsafe_allow_html=True,
+                    )
+
+                    src_col1, src_col2 = st.columns(2)
+
+                    with src_col1:
+                        # Negative/neutral news headlines that drove sentiment score
+                        all_headlines = r_data.get("headlines", [])
+                        neg_heads = [h for h in all_headlines if h["label"] in ("Negative", "Neutral")]
+                        pos_heads = [h for h in all_headlines if h["label"] == "Positive"]
+                        if all_headlines:
+                            st.markdown(
+                                f"📰 **News Sentiment · {s_score:.0f}/100** "
+                                f"<span style='font-size:0.75em;color:#666'>"
+                                f"({len(neg_heads)} negative · {len(pos_heads)} positive of {len(all_headlines)} headlines)</span>",
+                                unsafe_allow_html=True,
+                            )
+                            for h in all_headlines[:6]:
+                                clr  = "#ff4444" if h["label"] == "Negative" else (
+                                       "#00C851" if h["label"] == "Positive" else "#888")
+                                arrow = "▼" if h["label"] == "Negative" else (
+                                        "▲" if h["label"] == "Positive" else "–")
+                                headline_short = h["headline"][:78] + ("…" if len(h["headline"]) > 78 else "")
+                                url = h.get("url", "")
+                                link_part = (
+                                    f"<a href='{url}' target='_blank' "
+                                    f"style='color:#ccc;text-decoration:none'>{headline_short}</a>"
+                                    if url else f"<span style='color:#ccc'>{headline_short}</span>"
+                                )
+                                source_tag = (
+                                    f" <a href='{url}' target='_blank' "
+                                    f"style='color:#4a9eff;font-size:0.7em'>[source ↗]</a>"
+                                    if url else
+                                    " <span style='color:#555;font-size:0.7em'>[no link — verify on Yahoo Finance]</span>"
+                                )
+                                st.markdown(
+                                    f"<div style='margin-bottom:4px;font-size:0.8em'>"
+                                    f"<span style='color:{clr}'>{arrow} {h['score']:+.2f}</span> "
+                                    f"{link_part}{source_tag}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                            st.markdown(
+                                f"[All {ticker} news on Yahoo Finance ↗](https://finance.yahoo.com/quote/{ticker}/news/)",
+                            )
+                        else:
+                            st.caption("No news headlines available for this ticker.")
+
+                        # Bearish fundamental signals with values and source
+                        f_sigs_all = r_data.get("f_signals", {})
+                        bearish_f = {
+                            k: v for k, v in f_sigs_all.items()
+                            if any(w in v.lower() for w in
+                                   ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
+                        }
+                        if f_sigs_all:
+                            st.markdown(f"📊 **Fundamentals · {f_score:.0f}/100** — raw values from Yahoo Finance")
+                            for k, v in f_sigs_all.items():
+                                is_bad = any(w in v.lower() for w in
+                                            ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
+                                clr = "#ff4444" if is_bad else "#00C851"
+                                icon_f = "❌" if is_bad else "✅"
+                                st.markdown(
+                                    f"<div style='font-size:0.8em;margin-bottom:3px'>"
+                                    f"{icon_f} <span style='color:{clr}'><b>{k}</b>: {v}</span></div>",
+                                    unsafe_allow_html=True,
+                                )
+                            st.markdown(
+                                f"Verify: "
+                                f"[Yahoo Financials ↗](https://finance.yahoo.com/quote/{ticker}/financials/) · "
+                                f"[Yahoo Statistics ↗](https://finance.yahoo.com/quote/{ticker}/key-statistics/) · "
+                                f"[SEC Filings ↗](https://www.sec.gov/cgi-bin/browse-edgar?"
+                                f"action=getcompany&company={ticker}&type=10-K)"
+                            )
+
+                    with src_col2:
+                        # Bearish technical signals with chart links
+                        if t_sigs:
+                            st.markdown(f"📈 **Technical Signals · {t_score:.0f}/100**")
+                            for k, v in t_sigs.items():
+                                is_bear = "bearish" in v.lower()
+                                is_bull = "bullish" in v.lower()
+                                clr = "#ff4444" if is_bear else ("#00C851" if is_bull else "#888")
+                                icon_t = "❌" if is_bear else ("✅" if is_bull else "–")
+                                st.markdown(
+                                    f"<div style='font-size:0.8em;margin-bottom:3px'>"
+                                    f"{icon_t} <span style='color:{clr}'><b>{k}</b>: {v}</span></div>",
+                                    unsafe_allow_html=True,
+                                )
+                            st.markdown(
+                                f"Verify chart: "
+                                f"[TradingView ↗](https://www.tradingview.com/chart/?symbol={ticker}) · "
+                                f"[Finviz Chart ↗](https://finviz.com/quote.ashx?t={ticker}) · "
+                                f"[Yahoo Chart ↗](https://finance.yahoo.com/chart/{ticker})"
+                            )
+
+                        # Analyst actions — firm names, grade changes, with source link
+                        st.markdown(f"👔 **Analyst Actions (last 90 days)**")
+                        if rev and rev.get("latest"):
+                            net_r = rev.get("net", 0)
+                            st.markdown(
+                                f"<span style='font-size:0.8em;color:#888'>"
+                                f"↑ {rev.get('upgrades_90d',0)} upgrades · "
+                                f"↓ {rev.get('downgrades_90d',0)} downgrades · "
+                                f"→ {rev.get('maintained_90d',0)} maintained</span>",
+                                unsafe_allow_html=True,
+                            )
+                            for analyst_act in rev["latest"]:
+                                atype = analyst_act.get("action", "").lower()
+                                aclr  = "#ff4444" if atype == "down" else (
+                                        "#00C851" if atype in ["up", "init"] else "#888")
+                                arr   = "↓" if atype == "down" else ("↑" if atype in ["up", "init"] else "→")
+                                from_g = analyst_act.get("from_grade", "")
+                                to_g   = analyst_act.get("to_grade", "")
+                                grade_str = (
+                                    f"{from_g} → {to_g}" if from_g and to_g else
+                                    f"→ {to_g}" if to_g else
+                                    f"({atype})"
+                                )
+                                firm = analyst_act.get("firm", "Unknown")
+                                st.markdown(
+                                    f"<div style='font-size:0.82em;margin-bottom:3px'>"
+                                    f"<span style='color:{aclr};font-weight:bold'>{arr} {firm}</span>"
+                                    f"<span style='color:#aaa'> · {grade_str}</span></div>",
+                                    unsafe_allow_html=True,
+                                )
+                            st.markdown(
+                                f"Verify: "
+                                f"[Yahoo Analyst Ratings ↗](https://finance.yahoo.com/quote/{ticker}/analysis/) · "
+                                f"[MarketBeat ↗](https://www.marketbeat.com/stocks/NASDAQ/{ticker}/analyst-ratings/)"
+                            )
+                        else:
+                            st.caption(
+                                "Analyst action history not available via Yahoo Finance for this ticker.  \n"
+                                f"[Check manually on Yahoo Finance ↗](https://finance.yahoo.com/quote/{ticker}/analysis/)"
+                            )
+
+                        # Verification footer — all primary sources in one row
+                        st.markdown(
+                            f"<div style='margin-top:10px;padding:8px 10px;background:#111;"
+                            f"border-radius:6px;font-size:0.76em;color:#555'>"
+                            f"📌 <b style='color:#777'>All sources for {ticker}:</b><br>"
+                            f"<a href='https://finance.yahoo.com/quote/{ticker}' target='_blank' style='color:#4a9eff'>Yahoo Finance</a> · "
+                            f"<a href='https://finviz.com/quote.ashx?t={ticker}' target='_blank' style='color:#4a9eff'>Finviz</a> · "
+                            f"<a href='https://www.tradingview.com/chart/?symbol={ticker}' target='_blank' style='color:#4a9eff'>TradingView</a> · "
+                            f"<a href='https://finance.yahoo.com/quote/{ticker}/financials/' target='_blank' style='color:#4a9eff'>Financials</a> · "
+                            f"<a href='https://finance.yahoo.com/quote/{ticker}/analysis/' target='_blank' style='color:#4a9eff'>Analyst Ratings</a> · "
+                            f"<a href='https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=10-K' target='_blank' style='color:#4a9eff'>SEC 10-K</a>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # ── Suggested action ──────────────────────────────────────
+                    st.markdown("---")
+                    st.markdown("**Suggested Action**")
+                    if act["type"] == "review":
+                        half = act["half_shares"]
+                        half_val = half * act["price"]
+                        full_val = act["shares"] * act["price"]
+                        if f_score is not None and t_score is not None:
+                            if f_score < 44:
+                                action_text = (
+                                    f"**Fundamental-driven weakness — act with urgency.**  \n"
+                                    f"Sell **{half} shares** (~${half_val:,.0f}) at market now to bank the "
+                                    f"{act['pnl']:.0f}% gain on half the position.  \n"
+                                    f"Hold remaining {act['shares'] - half} shares with stop at "
+                                    f"**${act['stop']:.2f}** ({act['stop_type']}).  \n"
+                                    f"Revisit full exit if stop is breached or next earnings disappoint."
+                                )
+                            else:
+                                action_text = (
+                                    f"**Technical-only weakness — fundamentals are intact.**  \n"
+                                    f"Option A (conservative): Let the ratchet stop at **${act['stop']:.2f}** "
+                                    f"do the work — it already locks in a portion of your gain.  \n"
+                                    f"Option B (active): Sell **{half} shares** (~${half_val:,.0f}) to reduce "
+                                    f"exposure, trail remainder with the existing stop.  \n"
+                                    f"Do NOT sell all {act['shares']} shares on a technical signal alone "
+                                    f"when fundamentals are solid."
+                                )
+                                if earn_flag:
+                                    action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
+                        else:
+                            action_text = (
+                                f"Sell **{half} shares** (~${half_val:,.0f}) to bank gain on half the position.  \n"
+                                f"Hold remainder with stop at **${act['stop']:.2f}**."
+                            )
+                        st.markdown(action_text)
+
+                    elif act["type"] == "trim":
+                        ts = act["trim_shares"]
+                        tv = act["trim_val"]
+                        action_text = (
+                            f"Sell **{ts} shares** (~${tv:,.0f}) to reduce from "
+                            f"{act['weight']:.0f}% → ~15% portfolio weight.  \n"
+                            f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
+                            f"the core position. Reinvest the proceeds in underweighted high-conviction names."
+                        )
+                        st.markdown(action_text)
+
+                    elif act["type"] == "add":
+                        action_text = (
+                            f"Score is **{act['score']:.0f}/100** ({act['signal']}) but weight is only "
+                            f"{act['weight']:.1f}%.  \n"
+                            f"Consider building toward **8–10% weight** — buy in 2–3 tranches to average in "
+                            f"rather than deploying all at once.  \n"
+                            f"First tranche: target 4–5% weight. Only add second tranche if price holds above "
+                            f"stop at **${act['stop']:.2f}**."
+                        )
+                        st.markdown(action_text)
+
+                    # ── Quick log button ──────────────────────────────────────
+                    st.markdown("---")
+                    log_col, note_col = st.columns([1, 2])
+                    with log_col:
+                        _default_shares = (
+                            act.get("half_shares", act.get("trim_shares", act.get("shares", 1)))
+                        )
+                        _default_action = "SELL" if act["type"] in ("review", "trim") else "BUY"
+                        if st.button(
+                            f"📝 Log trade for {ticker}",
+                            key=f"log_btn_{ticker}_{act['type']}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_prefill_trade"] = {
+                                "ticker":  ticker,
+                                "action":  _default_action,
+                                "shares":  _default_shares,
+                                "price":   act["price"],
+                                "trigger": "RECOMMENDATION",
+                                "notes":   f"Based on advisor recommendation: {act['title']}",
+                            }
+                            st.session_state.nav_page = "📒 Trade Journal"
+                            st.rerun()
+                    with note_col:
+                        st.caption(
+                            "⚠️ Algorithmic analysis — not personal financial advice. "
+                            "Verify all data at the sources above before acting."
+                        )
+        else:
+            st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
+
+        st.divider()
+
+        # Diversification advisor — flat
+        st.subheader("📋 Diversification Advisor")
+        st.caption("Data-driven recommendations based on your sector weights, pairwise correlations, and analyst signals.")
         if not div_recs:
             st.success("✅ No major diversification gaps — your portfolio is well balanced.")
         else:
@@ -871,9 +1414,63 @@ if page == "🏠 My Portfolio":
                                 except Exception:
                                     scol.warning(f"Could not load {cand}")
 
-    # ── Expander 3: Relative Strength vs Sector ──────────────────────────────
-    h_rets = holding_returns(held_data)
-    with st.expander("📈 Relative Strength vs Sector", expanded=False):
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 3 — RISK ANALYSIS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_risk:
+        if corr_df.empty:
+            st.info("Need at least 2 holdings with price history to compute correlations.")
+        else:
+            dc1, dc2, dc3 = st.columns(3)
+            dc1.metric("Diversification Score", f"{div_score:.0f}/100",
+                       help=_tip("Diversification Score"))
+            dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
+                       help=_tip("Portfolio Correlation"))
+            dc3.metric("High-Correlation Pairs", len(risk_pairs),
+                       help="Pairs with correlation ≥ 0.65")
+            st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
+
+            if risk_pairs:
+                st.markdown("**Correlated pairs — reduce diversification benefit:**")
+                for rp in risk_pairs:
+                    msg = (f"**{rp['t1']} × {rp['t2']}** — {rp['corr']:.2f} correlation. "
+                           "These positions move together.")
+                    if rp["level"] == "danger":
+                        st.error(f"🔴 {msg}")
+                    else:
+                        st.warning(f"🟡 {msg}")
+            else:
+                st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
+
+            tickers_list = corr_df.index.tolist()
+            z_vals = corr_df.values.tolist()
+            z_text = [[f"{v:.2f}" for v in row] for row in corr_df.values]
+            hm = go.Figure(go.Heatmap(
+                z=z_vals, x=tickers_list, y=tickers_list,
+                text=z_text, texttemplate="%{text}", textfont=dict(size=11),
+                colorscale=[[0.0, "#00C851"], [0.5, "#1e1e2e"], [1.0, "#ff4444"]],
+                zmin=-1, zmax=1, showscale=True,
+                colorbar=dict(title="Corr", tickvals=[-1, -0.5, 0, 0.5, 1],
+                              ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"], len=0.8),
+            ))
+            hm.update_layout(
+                template="plotly_dark",
+                height=max(300, 65 * len(tickers_list)),
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(side="bottom", tickangle=-30),
+            )
+            st.plotly_chart(hm, use_container_width=True)
+            st.caption(
+                "🟢 Green = low/negative correlation (genuine diversification)  |  "
+                "⬛ Dark = near-zero (independent)  |  "
+                "🔴 Red = high correlation (positions move together).  "
+                "Diagonal is always +1.0."
+            )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — RELATIVE STRENGTH
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_rs:
         if not h_rets:
             st.info("Need at least 1 holding with price history to compute relative strength.")
         else:
@@ -1010,8 +1607,10 @@ if page == "🏠 My Portfolio":
                             f"stock-specific strength, not just a sector tailwind."
                         )
 
-    # ── Expander 4: Macro & Rate Sensitivity ─────────────────────────────────
-    with st.expander("🌐 Macro & Rate Sensitivity", expanded=False):
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 5 — MACRO
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_macro:
         st.caption(
             "Detects the current macro regime (rising/falling rates, risk-on/off) from live ETF proxies "
             "and shows which holdings are in the tailwind or headwind. "
@@ -1186,8 +1785,10 @@ if page == "🏠 My Portfolio":
                         f"{_nt} of {len(expo_df)} positions are in macro-favored sectors."
                     )
 
-    # ── Expander 5: Universe Score Ranking ───────────────────────────────────
-    with st.expander("🏆 Universe Score Ranking", expanded=False):
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 6 — RANKINGS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_rank:
         st.caption(
             "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
             "Shows whether you're holding the best names in each sector or just familiar ones. "
@@ -1347,558 +1948,6 @@ if page == "🏠 My Portfolio":
                         f"({_best_r['Percentile']:.0f}th percentile — {_best_r['Tier']}) — "
                         f"top-decile momentum score across the full universe. High-conviction hold."
                     )
-
-    # Position table with protective stops
-    st.subheader("Position Detail & Protective Stops")
-    st.caption(
-        "Hover the ℹ️ icon on any column header below for a plain-English explanation.  \n"
-        "**Ratchet stop** moves up automatically as gains grow — locks in profits while letting winners run.  \n"
-        "**Score** = Technical 45% + Fundamental 40% + Sentiment 15% (composite). "
-        "Scanner uses momentum-only scoring — see drill-down for full breakdown."
-    )
-
-    def _pnl_color(val):
-        if isinstance(val, (int, float)):
-            return "color:#00C851;font-weight:bold" if val > 0 else "color:#ff4444"
-        return ""
-
-    def _stop_color(val):
-        if isinstance(val, str):
-            if "Protect" in val: return "color:#00C851"
-            if "Breakeven" in val: return "color:#ffbb33"
-        return ""
-
-    def _sig_color(val):
-        s = str(val)
-        if "Strong Buy" in s: return "background:#00C85122;color:#00C851"
-        if "Buy" in s:        return "color:#00b300"
-        if "Sell" in s:       return "color:#ff4444"
-        return ""
-
-    display_cols = ["Ticker", "Shares", "Avg Cost", "Price", "P&L ($)", "P&L (%)",
-                    "Weight (%)", "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
-    styled = (
-        port_df[display_cols].style
-        .map(_pnl_color, subset=["P&L ($)", "P&L (%)"])
-        .map(_stop_color, subset=["Stop Type"])
-        .map(_sig_color, subset=["Signal"])
-        .format({
-            "Avg Cost": "${:.2f}", "Price": "${:.2f}",
-            "P&L ($)": "${:,.0f}", "P&L (%)": "{:+.1f}%",
-            "Weight (%)": "{:.1f}%", "Stop": "${:.2f}",
-            "Gap to Stop (%)": "{:.1f}%", "Score": "{:.0f}",
-        })
-    )
-    st.dataframe(styled, use_container_width=True)
-
-    # Rebalancing actions — rich evidence cards
-    actions = rebalance_actions(port_df)
-    if actions:
-        st.subheader("💡 Advisor Recommendations")
-        st.caption(
-            "Each recommendation shows exactly what triggered it, the score breakdown, "
-            "and a pre-evaluated decision checklist — so you decide, not an algorithm."
-        )
-        for act in actions:
-            ticker  = act["ticker"]
-            urgency = act["urgency"]
-            r_data  = held_data.get(ticker, {})
-            fin     = r_data.get("financials", {})
-            rev     = r_data.get("revisions", {})
-            earn    = r_data.get("earnings")
-            t_score = r_data.get("t_score")
-            f_score = r_data.get("f_score")
-            s_score = r_data.get("s_score")
-            t_sigs  = r_data.get("t_signals", {})
-
-            urgency_badge = {"high": "🔴 HIGH", "medium": "🟡 MEDIUM", "low": "🟢 LOW"}.get(urgency, "")
-            icon = {"review": "📉", "trim": "✂️", "add": "➕"}.get(act["type"], "💡")
-
-            with st.expander(
-                f"{icon} **{ticker}** — {act['title']}  ·  {urgency_badge}",
-                expanded=(urgency == "high"),
-            ):
-                # ── Trigger ──────────────────────────────────────────────
-                st.markdown(
-                    f"<div style='padding:8px 12px;background:#1a1a1a;border-radius:6px;"
-                    f"border-left:4px solid #ffbb33;margin-bottom:10px'>"
-                    f"<span style='font-size:0.78em;color:#888'>WHAT TRIGGERED THIS</span><br>"
-                    f"<span style='color:#eee'>{act['trigger']}</span></div>",
-                    unsafe_allow_html=True,
-                )
-
-                ev_col, check_col = st.columns([1, 1])
-
-                # ── Evidence panel ────────────────────────────────────────
-                with ev_col:
-                    st.markdown("**Score Breakdown — What's Driving It**")
-                    if t_score is not None:
-                        for dim, sc, weight, tip_key in [
-                            ("Technical",    t_score, "45%", "RSI"),
-                            ("Fundamental",  f_score, "40%", "FCF Yield"),
-                            ("Sentiment",    s_score, "15%", ""),
-                        ]:
-                            clr  = "#00C851" if sc >= 60 else ("#ffbb33" if sc >= 44 else "#ff4444")
-                            icon_s = "✅" if sc >= 60 else ("⚠️" if sc >= 44 else "❌")
-                            bar_w = int(sc)
-                            st.markdown(
-                                f"<div style='margin-bottom:5px'>"
-                                f"<span style='font-size:0.8em;color:#aaa'>{icon_s} {dim} ({weight})</span>"
-                                f"<span style='float:right;font-size:0.8em;font-weight:bold;color:{clr}'>{sc:.0f}/100</span>"
-                                f"<div style='height:5px;background:#222;border-radius:3px;margin-top:2px'>"
-                                f"<div style='width:{bar_w}%;height:5px;background:{clr};border-radius:3px'></div>"
-                                f"</div></div>",
-                                unsafe_allow_html=True,
-                            )
-
-                        # Primary driver diagnosis
-                        if t_score is not None and f_score is not None:
-                            gap_tf = t_score - f_score
-                            if gap_tf < -15:
-                                driver = "🔴 **Fundamental deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
-                            elif gap_tf > 15:
-                                driver = "🟡 **Technical weakness only** — fundamentals remain solid. Likely a timing/momentum signal; the ratchet stop may handle it."
-                            else:
-                                driver = "⚠️ **Both Technical and Fundamental signals are weak** — broader caution warranted."
-                            st.info(driver)
-
-                    # Specific bearish signals from t_signals
-                    bearish_sigs = {k: v for k, v in t_sigs.items() if "bearish" in v.lower()}
-                    if bearish_sigs:
-                        st.markdown("**Specific Bearish Technical Signals:**")
-                        for k, v in bearish_sigs.items():
-                            st.markdown(f"<small style='color:#ff8800'>▼ **{k}**: {v}</small>", unsafe_allow_html=True)
-
-                # ── Decision checklist ────────────────────────────────────
-                with check_col:
-                    st.markdown("**Decision Checklist**")
-
-                    def _check(emoji, text, color="#ccc"):
-                        st.markdown(
-                            f"<div style='margin-bottom:5px;font-size:0.85em'>"
-                            f"{emoji} <span style='color:{color}'>{text}</span></div>",
-                            unsafe_allow_html=True,
-                        )
-
-                    # Stop status
-                    gap = act["gap"]
-                    stop = act["stop"]
-                    stop_type = act["stop_type"]
-                    if gap < 4:
-                        _check("🔴", f"Stop at ${stop:.2f} — only {gap:.1f}% away. Market may decide for you.", "#ff4444")
-                    elif gap < 8:
-                        _check("🟡", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Monitor closely.", "#ffbb33")
-                    else:
-                        _check("✅", f"Stop at ${stop:.2f} ({stop_type}) — {gap:.1f}% buffer. Not in immediate danger.", "#00C851")
-
-                    # Earnings proximity
-                    earn_flag = False
-                    if earn:
-                        try:
-                            days_to_earn = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
-                            if 0 <= days_to_earn <= 14:
-                                _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
-                                earn_flag = True
-                            elif days_to_earn <= 30:
-                                _check("🟡", f"Earnings in {days_to_earn}d ({earn}) — consider reducing before report.", "#ffbb33")
-                                earn_flag = True
-                            else:
-                                _check("✅", f"Next earnings: {days_to_earn}d away — no immediate catalyst pressure.")
-                        except Exception:
-                            pass
-
-                    # Analyst revisions
-                    if rev:
-                        net_rev = rev.get("net", 0)
-                        ups = rev.get("upgrades_90d", 0)
-                        dns = rev.get("downgrades_90d", 0)
-                        if net_rev > 0:
-                            _check("✅", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — institutional conviction intact.", "#00C851")
-                        elif net_rev < 0:
-                            _check("🔴", f"Analysts: ↑{ups} upgrades vs ↓{dns} downgrades (90d) — estimates being cut. Higher urgency.", "#ff4444")
-                        else:
-                            _check("🟡", f"Analyst revisions: neutral (90d).")
-
-                    # Short interest
-                    short_pct = fin.get("short_pct_float")
-                    if short_pct is not None:
-                        if short_pct > 15:
-                            _check("⚠️", f"Short interest {short_pct:.1f}% — elevated bearish positioning. Confirms the sell signal.")
-                        else:
-                            _check("✅", f"Short interest {short_pct:.1f}% — not heavily shorted. Bears haven't piled in.")
-
-                    # Institutional ownership
-                    inst = fin.get("held_pct_institutions")
-                    if inst is not None:
-                        if inst > 60:
-                            _check("✅", f"Institutional ownership {inst:.0f}% — smart money still holding.")
-                        elif inst < 30:
-                            _check("⚠️", f"Low institutional ownership {inst:.0f}% — limited institutional support.")
-
-                    # FCF / fundamentals quality
-                    fcf_y = fin.get("fcf_yield")
-                    if fcf_y is not None:
-                        if fcf_y >= 3:
-                            _check("✅", f"FCF Yield {fcf_y:.1f}% — business generating real cash. Fundamentals back the hold.")
-                        elif fcf_y < 0:
-                            _check("🔴", f"FCF Yield {fcf_y:.1f}% — company burning cash. Adds urgency to the sell signal.", "#ff4444")
-
-                    # Position sizing
-                    if act["weight"] > 15:
-                        _check("⚠️", f"Position is {act['weight']:.0f}% of portfolio — above 15% threshold. Size alone justifies trimming.")
-
-                # ── Evidence & Sources — verify every data point ─────────
-                st.markdown("---")
-                st.markdown(
-                    "**Evidence & Sources — Double-Check Before Acting**  \n"
-                    "<span style='font-size:0.8em;color:#666'>"
-                    "AI can make mistakes. Every data point below links to its original source "
-                    "so you can verify independently before making any decision.</span>",
-                    unsafe_allow_html=True,
-                )
-
-                src_col1, src_col2 = st.columns(2)
-
-                with src_col1:
-                    # Negative/neutral news headlines that drove sentiment score
-                    all_headlines = r_data.get("headlines", [])
-                    neg_heads = [h for h in all_headlines if h["label"] in ("Negative", "Neutral")]
-                    pos_heads = [h for h in all_headlines if h["label"] == "Positive"]
-                    if all_headlines:
-                        st.markdown(
-                            f"📰 **News Sentiment · {s_score:.0f}/100** "
-                            f"<span style='font-size:0.75em;color:#666'>"
-                            f"({len(neg_heads)} negative · {len(pos_heads)} positive of {len(all_headlines)} headlines)</span>",
-                            unsafe_allow_html=True,
-                        )
-                        for h in all_headlines[:6]:
-                            clr  = "#ff4444" if h["label"] == "Negative" else (
-                                   "#00C851" if h["label"] == "Positive" else "#888")
-                            arrow = "▼" if h["label"] == "Negative" else (
-                                    "▲" if h["label"] == "Positive" else "–")
-                            headline_short = h["headline"][:78] + ("…" if len(h["headline"]) > 78 else "")
-                            url = h.get("url", "")
-                            link_part = (
-                                f"<a href='{url}' target='_blank' "
-                                f"style='color:#ccc;text-decoration:none'>{headline_short}</a>"
-                                if url else f"<span style='color:#ccc'>{headline_short}</span>"
-                            )
-                            source_tag = (
-                                f" <a href='{url}' target='_blank' "
-                                f"style='color:#4a9eff;font-size:0.7em'>[source ↗]</a>"
-                                if url else
-                                " <span style='color:#555;font-size:0.7em'>[no link — verify on Yahoo Finance]</span>"
-                            )
-                            st.markdown(
-                                f"<div style='margin-bottom:4px;font-size:0.8em'>"
-                                f"<span style='color:{clr}'>{arrow} {h['score']:+.2f}</span> "
-                                f"{link_part}{source_tag}</div>",
-                                unsafe_allow_html=True,
-                            )
-                        st.markdown(
-                            f"[All {ticker} news on Yahoo Finance ↗](https://finance.yahoo.com/quote/{ticker}/news/)",
-                        )
-                    else:
-                        st.caption("No news headlines available for this ticker.")
-
-                    # Bearish fundamental signals with values and source
-                    f_sigs_all = r_data.get("f_signals", {})
-                    bearish_f = {
-                        k: v for k, v in f_sigs_all.items()
-                        if any(w in v.lower() for w in
-                               ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
-                    }
-                    if f_sigs_all:
-                        st.markdown(f"📊 **Fundamentals · {f_score:.0f}/100** — raw values from Yahoo Finance")
-                        for k, v in f_sigs_all.items():
-                            is_bad = any(w in v.lower() for w in
-                                        ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
-                            clr = "#ff4444" if is_bad else "#00C851"
-                            icon_f = "❌" if is_bad else "✅"
-                            st.markdown(
-                                f"<div style='font-size:0.8em;margin-bottom:3px'>"
-                                f"{icon_f} <span style='color:{clr}'><b>{k}</b>: {v}</span></div>",
-                                unsafe_allow_html=True,
-                            )
-                        st.markdown(
-                            f"Verify: "
-                            f"[Yahoo Financials ↗](https://finance.yahoo.com/quote/{ticker}/financials/) · "
-                            f"[Yahoo Statistics ↗](https://finance.yahoo.com/quote/{ticker}/key-statistics/) · "
-                            f"[SEC Filings ↗](https://www.sec.gov/cgi-bin/browse-edgar?"
-                            f"action=getcompany&company={ticker}&type=10-K)"
-                        )
-
-                with src_col2:
-                    # Bearish technical signals with chart links
-                    if t_sigs:
-                        st.markdown(f"📈 **Technical Signals · {t_score:.0f}/100**")
-                        for k, v in t_sigs.items():
-                            is_bear = "bearish" in v.lower()
-                            is_bull = "bullish" in v.lower()
-                            clr = "#ff4444" if is_bear else ("#00C851" if is_bull else "#888")
-                            icon_t = "❌" if is_bear else ("✅" if is_bull else "–")
-                            st.markdown(
-                                f"<div style='font-size:0.8em;margin-bottom:3px'>"
-                                f"{icon_t} <span style='color:{clr}'><b>{k}</b>: {v}</span></div>",
-                                unsafe_allow_html=True,
-                            )
-                        st.markdown(
-                            f"Verify chart: "
-                            f"[TradingView ↗](https://www.tradingview.com/chart/?symbol={ticker}) · "
-                            f"[Finviz Chart ↗](https://finviz.com/quote.ashx?t={ticker}) · "
-                            f"[Yahoo Chart ↗](https://finance.yahoo.com/chart/{ticker})"
-                        )
-
-                    # Analyst actions — firm names, grade changes, with source link
-                    st.markdown(f"👔 **Analyst Actions (last 90 days)**")
-                    if rev and rev.get("latest"):
-                        net_r = rev.get("net", 0)
-                        st.markdown(
-                            f"<span style='font-size:0.8em;color:#888'>"
-                            f"↑ {rev.get('upgrades_90d',0)} upgrades · "
-                            f"↓ {rev.get('downgrades_90d',0)} downgrades · "
-                            f"→ {rev.get('maintained_90d',0)} maintained</span>",
-                            unsafe_allow_html=True,
-                        )
-                        for analyst_act in rev["latest"]:
-                            atype = analyst_act.get("action", "").lower()
-                            aclr  = "#ff4444" if atype == "down" else (
-                                    "#00C851" if atype in ["up", "init"] else "#888")
-                            arr   = "↓" if atype == "down" else ("↑" if atype in ["up", "init"] else "→")
-                            from_g = analyst_act.get("from_grade", "")
-                            to_g   = analyst_act.get("to_grade", "")
-                            grade_str = (
-                                f"{from_g} → {to_g}" if from_g and to_g else
-                                f"→ {to_g}" if to_g else
-                                f"({atype})"
-                            )
-                            firm = analyst_act.get("firm", "Unknown")
-                            st.markdown(
-                                f"<div style='font-size:0.82em;margin-bottom:3px'>"
-                                f"<span style='color:{aclr};font-weight:bold'>{arr} {firm}</span>"
-                                f"<span style='color:#aaa'> · {grade_str}</span></div>",
-                                unsafe_allow_html=True,
-                            )
-                        st.markdown(
-                            f"Verify: "
-                            f"[Yahoo Analyst Ratings ↗](https://finance.yahoo.com/quote/{ticker}/analysis/) · "
-                            f"[MarketBeat ↗](https://www.marketbeat.com/stocks/NASDAQ/{ticker}/analyst-ratings/)"
-                        )
-                    else:
-                        st.caption(
-                            "Analyst action history not available via Yahoo Finance for this ticker.  \n"
-                            f"[Check manually on Yahoo Finance ↗](https://finance.yahoo.com/quote/{ticker}/analysis/)"
-                        )
-
-                    # Verification footer — all primary sources in one row
-                    st.markdown(
-                        f"<div style='margin-top:10px;padding:8px 10px;background:#111;"
-                        f"border-radius:6px;font-size:0.76em;color:#555'>"
-                        f"📌 <b style='color:#777'>All sources for {ticker}:</b><br>"
-                        f"<a href='https://finance.yahoo.com/quote/{ticker}' target='_blank' style='color:#4a9eff'>Yahoo Finance</a> · "
-                        f"<a href='https://finviz.com/quote.ashx?t={ticker}' target='_blank' style='color:#4a9eff'>Finviz</a> · "
-                        f"<a href='https://www.tradingview.com/chart/?symbol={ticker}' target='_blank' style='color:#4a9eff'>TradingView</a> · "
-                        f"<a href='https://finance.yahoo.com/quote/{ticker}/financials/' target='_blank' style='color:#4a9eff'>Financials</a> · "
-                        f"<a href='https://finance.yahoo.com/quote/{ticker}/analysis/' target='_blank' style='color:#4a9eff'>Analyst Ratings</a> · "
-                        f"<a href='https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=10-K' target='_blank' style='color:#4a9eff'>SEC 10-K</a>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                # ── Suggested action ──────────────────────────────────────
-                st.markdown("---")
-                st.markdown("**Suggested Action**")
-                if act["type"] == "review":
-                    half = act["half_shares"]
-                    half_val = half * act["price"]
-                    full_val = act["shares"] * act["price"]
-                    if f_score is not None and t_score is not None:
-                        if f_score < 44:
-                            action_text = (
-                                f"**Fundamental-driven weakness — act with urgency.**  \n"
-                                f"Sell **{half} shares** (~${half_val:,.0f}) at market now to bank the "
-                                f"{act['pnl']:.0f}% gain on half the position.  \n"
-                                f"Hold remaining {act['shares'] - half} shares with stop at "
-                                f"**${act['stop']:.2f}** ({act['stop_type']}).  \n"
-                                f"Revisit full exit if stop is breached or next earnings disappoint."
-                            )
-                        else:
-                            action_text = (
-                                f"**Technical-only weakness — fundamentals are intact.**  \n"
-                                f"Option A (conservative): Let the ratchet stop at **${act['stop']:.2f}** "
-                                f"do the work — it already locks in a portion of your gain.  \n"
-                                f"Option B (active): Sell **{half} shares** (~${half_val:,.0f}) to reduce "
-                                f"exposure, trail remainder with the existing stop.  \n"
-                                f"Do NOT sell all {act['shares']} shares on a technical signal alone "
-                                f"when fundamentals are solid."
-                            )
-                            if earn_flag:
-                                action_text += f"  \n⚠️ Earnings proximity tips toward Option B — reduce before the report."
-                    else:
-                        action_text = (
-                            f"Sell **{half} shares** (~${half_val:,.0f}) to bank gain on half the position.  \n"
-                            f"Hold remainder with stop at **${act['stop']:.2f}**."
-                        )
-                    st.markdown(action_text)
-
-                elif act["type"] == "trim":
-                    ts = act["trim_shares"]
-                    tv = act["trim_val"]
-                    action_text = (
-                        f"Sell **{ts} shares** (~${tv:,.0f}) to reduce from "
-                        f"{act['weight']:.0f}% → ~15% portfolio weight.  \n"
-                        f"This locks in a portion of the {act['pnl']:.0f}% gain while keeping "
-                        f"the core position. Reinvest the proceeds in underweighted high-conviction names."
-                    )
-                    st.markdown(action_text)
-
-                elif act["type"] == "add":
-                    action_text = (
-                        f"Score is **{act['score']:.0f}/100** ({act['signal']}) but weight is only "
-                        f"{act['weight']:.1f}%.  \n"
-                        f"Consider building toward **8–10% weight** — buy in 2–3 tranches to average in "
-                        f"rather than deploying all at once.  \n"
-                        f"First tranche: target 4–5% weight. Only add second tranche if price holds above "
-                        f"stop at **${act['stop']:.2f}**."
-                    )
-                    st.markdown(action_text)
-
-                # ── Quick log button ──────────────────────────────────────
-                st.markdown("---")
-                log_col, note_col = st.columns([1, 2])
-                with log_col:
-                    _default_shares = (
-                        act.get("half_shares", act.get("trim_shares", act.get("shares", 1)))
-                    )
-                    _default_action = "SELL" if act["type"] in ("review", "trim") else "BUY"
-                    if st.button(
-                        f"📝 Log trade for {ticker}",
-                        key=f"log_btn_{ticker}_{act['type']}",
-                        use_container_width=True,
-                    ):
-                        st.session_state["_prefill_trade"] = {
-                            "ticker":  ticker,
-                            "action":  _default_action,
-                            "shares":  _default_shares,
-                            "price":   act["price"],
-                            "trigger": "RECOMMENDATION",
-                            "notes":   f"Based on advisor recommendation: {act['title']}",
-                        }
-                        st.session_state.nav_page = "📒 Trade Journal"
-                        st.rerun()
-                with note_col:
-                    st.caption(
-                        "⚠️ Algorithmic analysis — not personal financial advice. "
-                        "Verify all data at the sources above before acting."
-                    )
-    else:
-        st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
-
-    # Per-position drill-down
-    st.subheader("Position Drill-Down")
-    sel = st.selectbox("Select position to drill down", port_df["Ticker"].tolist())
-    if sel and sel in held_data:
-        r = held_data[sel]
-        price = r["current_price"]
-        targets = r["targets"]
-        ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
-
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("P&L",         f"${ps_row['P&L ($)']:,.0f}", f"{ps_row['P&L (%)']:+.1f}%")
-        d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'],
-                  help=_tip("ATR Stop"))
-        d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%",
-                  help=_tip("Ratchet Stop"))
-        d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'],
-                  help=_tip("Composite Score"))
-
-        # Score breakdown row
-        sb1, sb2, sb3 = st.columns(3)
-        t_contrib  = round(r['t_score'] * 0.45, 1)
-        f_contrib  = round(r['f_score'] * 0.40, 1)
-        s_contrib  = round(r['s_score'] * 0.15, 1)
-        sb1.metric("Technical",   f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (45%)",
-                   help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
-                        + _tip("RSI"))
-        sb2.metric("Fundamental", f"{r['f_score']:.0f}/100", f"+{f_contrib} pts (40%)",
-                   help="Forward P/E · FCF Yield · Revenue & Earnings growth · Margins · Debt/Equity\n\n"
-                        + _tip("FCF Yield"))
-        sb3.metric("Sentiment",   f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (15%)",
-                   help="VADER analysis of latest news headlines from Yahoo Finance")
-
-        # Smart Money panel
-        fin = r["financials"]
-        rev = r.get("revisions", {})
-        _sm_items = []
-
-        short_pct = fin.get("short_pct_float")
-        if short_pct is not None:
-            short_clr = "#ff4444" if short_pct > 15 else ("#ffbb33" if short_pct > 7 else "#00C851")
-            _sm_items.append(("Short Interest", f"{short_pct:.1f}% of float", short_clr, _tip("Short Interest")))
-        short_ratio = fin.get("short_ratio")
-        if short_ratio:
-            _sm_items.append(("Days to Cover", f"{short_ratio:.1f}d", "#aaa", _tip("Days to Cover")))
-        inst = fin.get("held_pct_institutions")
-        if inst is not None:
-            inst_clr = "#00C851" if inst > 60 else ("#ffbb33" if inst > 30 else "#ff4444")
-            _sm_items.append(("Institutional", f"{inst:.0f}%", inst_clr, _tip("Institutional Ownership")))
-        insider = fin.get("held_pct_insiders")
-        if insider is not None:
-            _sm_items.append(("Insider Held", f"{insider:.1f}%", "#aaa", _tip("Insider Ownership")))
-        fcf_y = fin.get("fcf_yield")
-        if fcf_y is not None:
-            fcf_clr = "#00C851" if fcf_y >= 4 else ("#ffbb33" if fcf_y >= 1 else "#ff4444")
-            _sm_items.append(("FCF Yield", f"{fcf_y:.1f}%", fcf_clr, _tip("FCF Yield")))
-        if rev:
-            net = rev.get("net", 0)
-            rev_lbl = f"+{net} upgrades" if net > 0 else (f"{net} downgrades" if net < 0 else "neutral")
-            rev_clr = "#00C851" if net > 0 else ("#ff4444" if net < 0 else "#888")
-            _sm_items.append(("Revisions 90d", rev_lbl, rev_clr, _tip("Analyst Revisions")))
-
-        if _sm_items:
-            st.markdown("**Smart Money Signals**")
-            _sm_cols = st.columns(len(_sm_items))
-            for _col, (_label, _val, _clr, _help) in zip(_sm_cols, _sm_items):
-                _col.metric(_label, _val, help=_help)
-
-        # Source links
-        st.markdown(
-            f"**Sources:** "
-            f"[📊 Yahoo Finance](https://finance.yahoo.com/quote/{sel}) · "
-            f"[📈 Finviz Chart](https://finviz.com/quote.ashx?t={sel}) · "
-            f"[📰 SEC Filings](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={sel}&type=10-K) · "
-            f"[🔍 Latest News](https://finance.yahoo.com/quote/{sel}/news/)"
-        )
-
-        if targets:
-            st.markdown(
-                f"**Scenarios** · Bear `${targets['bear']:.2f} ({targets['bear_pct']:+.1f}%)` · "
-                f"Base `${targets['base']:.2f} ({targets['base_pct']:+.1f}%)` · "
-                f"Bull `${targets['bull']:.2f} ({targets['bull_pct']:+.1f}%)`"
-            )
-
-        # Mini price chart with stop line
-        df = r["df"]
-        mini = go.Figure()
-        mini.add_trace(go.Scatter(
-            x=df.index, y=df["Close"], name="Price",
-            line=dict(color="#4a9eff", width=2), fill="tozeroy",
-            fillcolor="rgba(74,158,255,0.08)",
-        ))
-        if r["stop"]:
-            mini.add_hline(y=r["stop"], line_dash="dashdot", line_color="#ff6600",
-                           annotation_text=f"Stop ${r['stop']:.2f}",
-                           annotation_position="right")
-        if targets:
-            mini.add_hline(y=targets["base"], line_dash="dash", line_color="#00C851",
-                           annotation_text=f"Target ${targets['base']:.2f}",
-                           annotation_position="right")
-        mini.update_layout(
-            height=240, template="plotly_dark", showlegend=False,
-            xaxis_rangeslider_visible=False,
-            margin=dict(l=0, r=80, t=10, b=0),
-        )
-        st.plotly_chart(mini, use_container_width=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
