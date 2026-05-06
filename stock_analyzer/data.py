@@ -358,5 +358,6 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
                 "tier":      tier,
             })
 
-    items.sort(key=lambda x: (x["tier"], -x["ts"]))
+    # Sort by recency first; within the same 30-minute window, prefer higher-tier sources
+    items.sort(key=lambda x: (-(x["ts"] // 1800), x["tier"]))
     return items[:max_items]
