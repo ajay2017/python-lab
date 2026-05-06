@@ -19,11 +19,18 @@ def analyze_news(news_items: list[dict]) -> tuple[float, list[dict]]:
         compound = vs["compound"]
         scores.append(compound)
         label = _sentiment_label(compound)
+        content = item.get("content") or {}
+        url = (
+            item.get("link") or
+            content.get("canonicalUrl", {}).get("url") or
+            content.get("clickThroughUrl", {}).get("url") or
+            ""
+        )
         results.append({
             "headline": title,
             "score": compound,
             "label": label,
-            "url": item.get("link", ""),
+            "url": url,
         })
 
     avg = sum(scores) / len(scores) if scores else 0.0

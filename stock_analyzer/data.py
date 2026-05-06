@@ -191,7 +191,7 @@ def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
         try:
             news = _retry(lambda t=ticker: yf.Ticker(t).news or [])
             for item in (news or [])[:8]:
-                title = (item.get("title") or "").strip()
+                title, publisher, url, ts = _parse_news_item(item)
                 if not title:
                     continue
                 key = title.lower()[:70]
@@ -199,7 +199,6 @@ def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
                     continue
                 seen.add(key)
 
-                publisher = item.get("publisher", "Unknown")
                 pub_l = publisher.lower()
                 tier = (1 if any(p in pub_l for p in _TIER1) else
                         2 if any(p in pub_l for p in _TIER2) else 3)
@@ -211,9 +210,9 @@ def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
                 items.append({
                     "ticker":    ticker,
                     "title":     title,
-                    "url":       item.get("link", ""),
+                    "url":       url,
                     "publisher": publisher,
-                    "ts":        item.get("providerPublishTime", 0),
+                    "ts":        ts,
                     "compound":  round(compound, 2),
                     "label":     label,
                     "tier":      tier,
@@ -224,6 +223,37 @@ def fetch_curated_news(tickers: list[str], max_items: int = 20) -> list[dict]:
     # Tier-1 sources first; within same tier, newest first
     items.sort(key=lambda x: (x["tier"], -x["ts"]))
     return items[:max_items]
+
+
+def _parse_news_item(item: dict) -> tuple[str, str, str, int]:
+    """
+    Extract (title, publisher, url, unix_ts) from a yfinance news item.
+    Handles both the old flat structure (yfinance <1.3) and the new nested
+    content structure (yfinance 1.3.x: item["content"]["title"], etc.).
+    """
+    content = item.get("content") or {}
+    title = (item.get("title") or content.get("title") or "").strip()
+    publisher = (
+        item.get("publisher") or
+        content.get("provider", {}).get("displayName") or
+        "Unknown"
+    )
+    url = (
+        item.get("link") or
+        content.get("canonicalUrl", {}).get("url") or
+        content.get("clickThroughUrl", {}).get("url") or
+        ""
+    )
+    ts = item.get("providerPublishTime") or 0
+    if not ts:
+        pub_date = content.get("pubDate") or ""
+        if pub_date:
+            try:
+                dt = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
+                ts = int(dt.timestamp())
+            except Exception:
+                ts = 0
+    return title, publisher, url, ts
 
 
 def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
@@ -239,7 +269,7 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
 
     for ticker, r in data_by_ticker.items():
         for item in (r.get("news_raw") or [])[:8]:
-            title = (item.get("title") or "").strip()
+            title, publisher, url, ts = _parse_news_item(item)
             if not title:
                 continue
             key = title.lower()[:70]
@@ -247,7 +277,6 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
                 continue
             seen.add(key)
 
-            publisher = item.get("publisher", "Unknown")
             pub_l = publisher.lower()
             tier = (1 if any(p in pub_l for p in _TIER1) else
                     2 if any(p in pub_l for p in _TIER2) else 3)
@@ -259,9 +288,9 @@ def curate_news_items(data_by_ticker: dict, max_items: int = 20) -> list[dict]:
             items.append({
                 "ticker":    ticker,
                 "title":     title,
-                "url":       item.get("link", ""),
+                "url":       url,
                 "publisher": publisher,
-                "ts":        item.get("providerPublishTime", 0),
+                "ts":        ts,
                 "compound":  round(compound, 2),
                 "label":     label,
                 "tier":      tier,
