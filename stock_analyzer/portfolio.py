@@ -328,3 +328,145 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
         "avg_correlation": round(avg_corr, 3),
         "risk_pairs": sorted(risk_pairs, key=lambda x: -x["corr"]),
     }
+
+
+# ── Diversification Advisor ────────────────────────────────────────────────────
+
+# Candidate tickers per sector for ADD recommendations
+_SECTOR_CANDIDATES = {
+    "Healthcare":    ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
+    "Energy":        ["XOM", "CVX", "COP", "OXY"],
+    "Defense":       ["LMT", "RTX", "NOC", "GD"],
+    "Financials":    ["JPM", "V", "MA", "GS"],
+    "Clean Energy":  ["NEE", "ENPH", "FSLR", "BEP"],
+    "Consumer Tech": ["AAPL", "AMZN", "NFLX", "SHOP"],
+    "AI & Cloud":    ["MSFT", "GOOGL", "META", "CRM"],
+    "AI & Data":     ["PLTR", "SNOW", "MDB", "IONQ"],
+    "Cybersecurity": ["CRWD", "PANW", "NET", "ZS", "FTNT"],
+    "Semiconductors":["NVDA", "AVGO", "AMD", "MU", "QCOM"],
+}
+
+# How correlated each sector is to a typical tech-heavy portfolio (lower = better diversifier)
+_SECTOR_PROFILES = {
+    "Healthcare":    {"corr": 0.15, "why": "counter-cyclical, FDA/drug-cycle driven — moves independently of tech"},
+    "Energy":        {"corr": 0.10, "why": "oil-price and geopolitics driven — near-zero correlation to semiconductors"},
+    "Defense":       {"corr": 0.12, "why": "government budget driven — orthogonal to rate-sensitive tech growth stocks"},
+    "Financials":    {"corr": 0.35, "why": "benefits when rates rise — inverse to your growth-tech book"},
+    "Clean Energy":  {"corr": 0.28, "why": "policy/subsidy driven — moderate diversification from pure tech"},
+    "Consumer Tech": {"corr": 0.58, "why": "still tech but consumer-facing — partial diversification"},
+    "AI & Cloud":    {"corr": 0.72, "why": "highly correlated to existing tech — limited diversification benefit"},
+    "AI & Data":     {"corr": 0.68, "why": "correlated to AI/semiconductor cycle — limited benefit if already tech-heavy"},
+}
+
+# Sectors that genuinely diversify a tech-heavy portfolio, in priority order
+_DIVERSIFYING_SECTORS = ["Healthcare", "Energy", "Defense", "Financials", "Clean Energy"]
+
+
+def diversification_recommendations(
+    port_df: pd.DataFrame,
+    corr_df: pd.DataFrame,
+    div_result: dict,
+    portfolio_value: float = 50_000.0,
+) -> list[dict]:
+    """
+    Returns structured REDUCE, PAIR_RISK, and ADD recommendation dicts.
+    Each dict carries all data needed to render an advisor card in app.py.
+    """
+    recs = []
+    if port_df.empty:
+        return recs
+
+    held_tickers = set(port_df["Ticker"].tolist())
+    sec_exp = sector_exposure(port_df)
+    sector_pcts = dict(zip(sec_exp["Sector"], sec_exp["Pct"]))
+
+    # ── REDUCE: overweight sectors ────────────────────────────────────────────
+    for sector, pct in sector_pcts.items():
+        if pct > 20:
+            target_pct = 15.0
+            reduce_pct = round(pct - target_pct, 1)
+            sector_rows = port_df[port_df["Sector"] == sector].sort_values("Score")
+            weakest = [
+                {
+                    "ticker":  row["Ticker"],
+                    "score":   round(row["Score"], 0),
+                    "signal":  row["Signal"],
+                    "pnl_pct": row["P&L (%)"],
+                    "weight":  row["Weight (%)"],
+                }
+                for _, row in sector_rows.head(2).iterrows()
+            ]
+            recs.append({
+                "type":            "REDUCE",
+                "urgency":         "high" if pct > 30 else "medium",
+                "sector":          sector,
+                "current_pct":     round(pct, 1),
+                "target_pct":      target_pct,
+                "reduce_pct":      reduce_pct,
+                "reduce_dollars":  round(portfolio_value * reduce_pct / 100),
+                "weakest_tickers": weakest,
+                "reason": (
+                    f"**{sector}** is {pct:.0f}% of your portfolio — above the 20% sector cap. "
+                    f"Intra-sector correlation means these names move together on the same macro catalyst."
+                ),
+            })
+
+    # ── PAIR_RISK: highly correlated pairs ────────────────────────────────────
+    for rp in div_result.get("risk_pairs", []):
+        if rp["level"] != "danger":
+            continue
+        t1, t2 = rp["t1"], rp["t2"]
+        r1 = port_df[port_df["Ticker"] == t1]
+        r2 = port_df[port_df["Ticker"] == t2]
+        if r1.empty or r2.empty:
+            continue
+        s1, s2 = float(r1["Score"].iloc[0]), float(r2["Score"].iloc[0])
+        weaker   = t1 if s1 <= s2 else t2
+        stronger = t2 if s1 <= s2 else t1
+        wr = port_df[port_df["Ticker"] == weaker].iloc[0]
+        recs.append({
+            "type":          "PAIR_RISK",
+            "urgency":       "high",
+            "t1": t1, "t2": t2,
+            "corr":          rp["corr"],
+            "weaker":        weaker,
+            "stronger":      stronger,
+            "weaker_score":  round(min(s1, s2), 0),
+            "weaker_weight": round(wr["Weight (%)"], 1),
+            "weaker_pnl":    round(wr["P&L (%)"], 1),
+            "reason": (
+                f"**{t1}** and **{t2}** have {rp['corr']:.2f} correlation — "
+                f"they move almost in lockstep. Holding both gives the risk of two positions "
+                f"but the diversification of one."
+            ),
+        })
+
+    # ── ADD: underweight diversifying sectors ────────────────────────────────
+    for sector in _DIVERSIFYING_SECTORS:
+        current_pct = sector_pcts.get(sector, 0.0)
+        if current_pct >= 8.0:
+            continue
+        candidates = [t for t in _SECTOR_CANDIDATES.get(sector, []) if t not in held_tickers][:3]
+        if not candidates:
+            continue
+        profile    = _SECTOR_PROFILES.get(sector, {"corr": 0.30, "why": ""})
+        target_pct = 10.0
+        gap_pct    = round(target_pct - current_pct, 1)
+        recs.append({
+            "type":         "ADD",
+            "urgency":      "medium" if current_pct > 0 else "low",
+            "sector":       sector,
+            "current_pct":  round(current_pct, 1),
+            "target_pct":   target_pct,
+            "gap_pct":      gap_pct,
+            "add_dollars":  round(portfolio_value * gap_pct / 100),
+            "corr_to_tech": profile["corr"],
+            "why":          profile["why"],
+            "candidates":   candidates,
+            "reason": (
+                f"**{sector}** exposure is only {current_pct:.0f}% — "
+                f"this sector is {profile['why']}."
+            ),
+        })
+
+    return recs

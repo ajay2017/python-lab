@@ -20,7 +20,8 @@ from stock_analyzer.targets import (
 )
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
-    correlation_matrix, diversification_score, TICKER_SECTORS,
+    correlation_matrix, diversification_score, diversification_recommendations,
+    TICKER_SECTORS,
 )
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
@@ -739,6 +740,151 @@ if page == "🏠 My Portfolio":
             )
     except Exception as _ce:
         st.warning(f"Correlation analysis unavailable: {_ce}")
+
+    # ── Diversification Advisor ────────────────────────────────────────────────
+    st.subheader("📋 Diversification Advisor")
+    st.caption(
+        "Data-driven recommendations to reduce concentration risk and improve "
+        "portfolio diversification — based on your current sector weights, "
+        "pairwise correlations, and analyst signals."
+    )
+
+    try:
+        corr_df_adv = correlation_matrix(held_data)
+        div_adv = diversification_score(
+            corr_df_adv,
+            dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df_adv.empty else None
+        )
+        div_recs = diversification_recommendations(
+            port_df, corr_df_adv, div_adv, portfolio_value
+        )
+
+        if not div_recs:
+            st.success("✅ No major diversification gaps found — your portfolio is well balanced.")
+        else:
+            reduce_recs = [r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")]
+            add_recs    = [r for r in div_recs if r["type"] == "ADD"]
+
+            # ── REDUCE / REBALANCE ─────────────────────────────────────────────
+            if reduce_recs:
+                st.markdown("### 🔻 Reduce / Rebalance")
+                for rec in reduce_recs:
+                    urgency_color = "#ff4444" if rec["urgency"] == "high" else "#ffbb33"
+                    if rec["type"] == "REDUCE":
+                        with st.container(border=True):
+                            rc1, rc2 = st.columns([3, 1])
+                            with rc1:
+                                st.markdown(
+                                    f"<span style='color:{urgency_color};font-weight:bold'>"
+                                    f"{'🔴' if rec['urgency']=='high' else '🟡'} "
+                                    f"{rec['sector']} — {rec['current_pct']}% → {rec['target_pct']}% target"
+                                    f"</span>",
+                                    unsafe_allow_html=True,
+                                )
+                                st.caption(rec["reason"])
+                            with rc2:
+                                st.metric(
+                                    "Reduce by",
+                                    f"${rec['reduce_dollars']:,.0f}",
+                                    f"-{rec['reduce_pct']:.1f}%",
+                                    delta_color="inverse",
+                                )
+                            if rec["weakest_tickers"]:
+                                st.markdown("**Trim candidates** *(lowest conviction first)*:")
+                                cols = st.columns(len(rec["weakest_tickers"]))
+                                for col, wt in zip(cols, rec["weakest_tickers"]):
+                                    sig_clean = wt["signal"].split()[-1] if wt["signal"] else "—"
+                                    col.markdown(
+                                        f"**{wt['ticker']}**  \n"
+                                        f"Score: {wt['score']:.0f}/100  \n"
+                                        f"Signal: {sig_clean}  \n"
+                                        f"P&L: {wt['pnl_pct']:+.1f}%  \n"
+                                        f"Weight: {wt['weight']:.1f}%"
+                                    )
+
+                    elif rec["type"] == "PAIR_RISK":
+                        with st.container(border=True):
+                            st.markdown(
+                                f"🔴 **Correlated pair: {rec['t1']} × {rec['t2']}** "
+                                f"— {rec['corr']:.2f} correlation",
+                            )
+                            st.caption(rec["reason"])
+                            st.markdown(
+                                f"Consider trimming **{rec['weaker']}** "
+                                f"(score {rec['weaker_score']:.0f}/100 · "
+                                f"{rec['weaker_weight']:.1f}% weight · "
+                                f"P&L {rec['weaker_pnl']:+.1f}%) "
+                                f"and keeping **{rec['stronger']}**."
+                            )
+
+            # ── ADD FOR DIVERSIFICATION ────────────────────────────────────────
+            if add_recs:
+                st.markdown("### ➕ Add for Diversification")
+                for rec in add_recs:
+                    with st.container(border=True):
+                        ac1, ac2 = st.columns([3, 1])
+                        with ac1:
+                            st.markdown(
+                                f"🟢 **Add {rec['sector']}** — "
+                                f"currently {rec['current_pct']:.0f}% → target {rec['target_pct']:.0f}%"
+                            )
+                            st.caption(rec["reason"])
+                            st.markdown(
+                                f"Avg correlation to your existing book: "
+                                f"**{rec['corr_to_tech']:.2f}** — lower = genuine diversification"
+                            )
+                        with ac2:
+                            st.metric(
+                                "Suggested add",
+                                f"${rec['add_dollars']:,.0f}",
+                                f"+{rec['gap_pct']:.1f}%",
+                                delta_color="normal",
+                            )
+
+                        st.markdown(f"**Top candidates:** {' · '.join(rec['candidates'])}")
+
+                        btn_key = f"_div_analyze_{rec['sector'].replace(' ', '_')}"
+                        if st.button(
+                            f"📊 Load live scores for {', '.join(rec['candidates'][:2])}",
+                            key=btn_key,
+                        ):
+                            st.session_state[f"_div_scores_{rec['sector']}"] = True
+
+                        if st.session_state.get(f"_div_scores_{rec['sector']}"):
+                            score_cols = st.columns(len(rec["candidates"][:2]))
+                            for scol, cand in zip(score_cols, rec["candidates"][:2]):
+                                try:
+                                    with st.spinner(f"Loading {cand}…"):
+                                        cd = load_all(cand)
+                                    rev = cd.get("revisions", {})
+                                    net_rev = rev.get("net", 0)
+                                    rev_label = (
+                                        f"↑{net_rev} analyst upgrades"  if net_rev > 0 else
+                                        f"↓{abs(net_rev)} downgrades"   if net_rev < 0 else
+                                        "No recent revisions"
+                                    )
+                                    fin = cd.get("financials", {})
+                                    pe  = fin.get("forward_pe")
+                                    fcf = fin.get("fcf_yield")
+                                    with scol:
+                                        st.metric(
+                                            cand,
+                                            f"{cd['total']:.0f}/100",
+                                            cd["rec"]["label"],
+                                        )
+                                        st.caption(
+                                            f"Fwd P/E: {pe:.1f}" if pe else "Fwd P/E: N/A"
+                                        )
+                                        st.caption(
+                                            f"FCF Yield: {fcf:.1f}%" if fcf else "FCF Yield: N/A"
+                                        )
+                                        st.caption(f"Revisions (90d): {rev_label}")
+                                except Exception:
+                                    scol.warning(f"Could not load {cand}")
+
+    except Exception as _de:
+        st.warning(f"Advisor unavailable: {_de}")
+
     st.divider()
 
     # Position table with protective stops
