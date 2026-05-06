@@ -20,7 +20,7 @@ from stock_analyzer.targets import (
 )
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
-    TICKER_SECTORS,
+    correlation_matrix, diversification_score, TICKER_SECTORS,
 )
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
@@ -296,6 +296,29 @@ _TIPS = {
         "• 44–58 → Hold\n• 30–44 → Sell\n• < 30 → Strong Sell\n\n"
         "Note: The Scanner uses momentum-only scoring (no fundamentals). "
         "A stock can score 85 on momentum and 52 composite — both are correct."
+    ),
+    "Diversification Score": (
+        "Score 0–100 measuring how independently your portfolio positions move.\n\n"
+        "Calibrated for equity portfolios (pure-equity correlations are always positive):\n"
+        "• ≥ 42 → Well Diversified (avg correlation ≤ 0.16 — positions move quite independently)\n"
+        "• 30–42 → Moderate (avg correlation 0.16–0.40 — normal for thematic/sector portfolios)\n"
+        "• < 30 → High Correlation Risk (avg correlation > 0.40 — positions cluster together)\n\n"
+        "A portfolio of 8 semiconductor stocks will score much lower than a 3-stock "
+        "portfolio spanning tech, healthcare, and energy — even though the larger one "
+        "looks more diversified.\n\n"
+        "Goldman Sachs risk teams target average pairwise correlation below 0.40 "
+        "(score ~30) for diversified equity portfolios."
+    ),
+    "Portfolio Correlation": (
+        "Weighted average pairwise correlation between all your holdings.\n\n"
+        "Correlation = how closely two stocks move together day-to-day.\n\n"
+        "• < 0.30 → Well diversified — losses in one position rarely spread to others\n"
+        "• 0.30–0.60 → Moderate — typical for sector-focused or thematic portfolios\n"
+        "• > 0.60 → High — limited diversification benefit; you're essentially making "
+        "one concentrated bet\n\n"
+        "⚠️ During market crises correlations spike toward 1.0 — assets that appear "
+        "uncorrelated in normal markets often crash together. "
+        "This is why professionals also hold bonds, gold, or inverse positions as hedges."
     ),
 }
 
@@ -647,6 +670,76 @@ if page == "🏠 My Portfolio":
                 margin=dict(l=0, r=0, t=10, b=0),
             )
             st.plotly_chart(sec_fig, use_container_width=True)
+
+    # ── Correlation & Diversification ────────────────────────────────────────
+    st.divider()
+    st.subheader("🔗 Correlation & Diversification")
+    try:
+        corr_df = correlation_matrix(held_data)
+        if corr_df.empty:
+            st.info("Need at least 2 holdings with price history to compute correlations.")
+        else:
+            weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
+            div        = diversification_score(corr_df, weights_map)
+            div_score  = div["score"]
+            avg_corr   = div["avg_correlation"]
+            risk_pairs = div["risk_pairs"]
+
+            if div_score >= 42:
+                score_label = "Well Diversified"
+            elif div_score >= 30:
+                score_label = "Moderate"
+            else:
+                score_label = "High Correlation Risk"
+
+            dc1, dc2, dc3 = st.columns(3)
+            dc1.metric("Diversification Score", f"{div_score:.0f}/100",
+                       help=_tip("Diversification Score"))
+            dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
+                       help=_tip("Portfolio Correlation"))
+            dc3.metric("High-Correlation Pairs", len(risk_pairs),
+                       help="Pairs with correlation ≥ 0.65")
+            st.caption(f"Classification: **{score_label}** — based on weighted avg pairwise 6-month return correlation")
+
+            if risk_pairs:
+                st.markdown("**Correlated pairs — reduce diversification benefit:**")
+                for rp in risk_pairs:
+                    msg = (f"**{rp['t1']} × {rp['t2']}** — {rp['corr']:.2f} correlation. "
+                           "These positions move together.")
+                    if rp["level"] == "danger":
+                        st.error(f"🔴 {msg}")
+                    else:
+                        st.warning(f"🟡 {msg}")
+            else:
+                st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
+
+            tickers_list = corr_df.index.tolist()
+            z_vals = corr_df.values.tolist()
+            z_text = [[f"{v:.2f}" for v in row] for row in corr_df.values]
+            hm = go.Figure(go.Heatmap(
+                z=z_vals, x=tickers_list, y=tickers_list,
+                text=z_text, texttemplate="%{text}", textfont=dict(size=11),
+                colorscale=[[0.0, "#00C851"], [0.5, "#1e1e2e"], [1.0, "#ff4444"]],
+                zmin=-1, zmax=1, showscale=True,
+                colorbar=dict(title="Corr", tickvals=[-1, -0.5, 0, 0.5, 1],
+                              ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"], len=0.8),
+            ))
+            hm.update_layout(
+                template="plotly_dark",
+                height=max(300, 65 * len(tickers_list)),
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(side="bottom", tickangle=-30),
+            )
+            st.plotly_chart(hm, use_container_width=True)
+            st.caption(
+                "🟢 Green = low/negative correlation (genuine diversification)  |  "
+                "⬛ Dark = near-zero (independent)  |  "
+                "🔴 Red = high correlation (positions move together).  "
+                "Diagonal is always +1.0."
+            )
+    except Exception as _ce:
+        st.warning(f"Correlation analysis unavailable: {_ce}")
+    st.divider()
 
     # Position table with protective stops
     st.subheader("Position Detail & Protective Stops")

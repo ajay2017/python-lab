@@ -1,5 +1,6 @@
 import math
 import pandas as pd
+import numpy as np
 
 
 def _safe_float(val, default: float = 0.0) -> float:
@@ -268,3 +269,62 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
                 "avg_cost":   avg_cost,
             })
     return actions
+
+
+# ── Correlation & Diversification ─────────────────────────────────────────────
+
+def correlation_matrix(held_data: dict) -> pd.DataFrame:
+    """Build a daily-return correlation matrix from held_data price histories."""
+    series = {}
+    for ticker, data in held_data.items():
+        hist = data.get("df") if data.get("df") is not None else data.get("history")
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            series[ticker] = hist["Close"]
+    if len(series) < 2:
+        return pd.DataFrame()
+    prices = pd.DataFrame(series).dropna()
+    returns = prices.pct_change().dropna()
+    return returns.corr().round(3)
+
+
+def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) -> dict:
+    """
+    Score 0–100: 100 = fully uncorrelated, 0 = all positions move in lockstep.
+    weights: {ticker: weight_pct} — equal-weight assumed when None.
+    Returns score, avg_correlation, and a list of risk pair dicts.
+    """
+    empty = {"score": None, "avg_correlation": None, "risk_pairs": []}
+    if corr_df.empty or len(corr_df) < 2:
+        return empty
+
+    tickers = corr_df.index.tolist()
+    w = {t: float((weights or {}).get(t, 1.0)) for t in tickers}
+    total_w = sum(w.values()) or 1.0
+
+    weighted_sum = 0.0
+    weight_sum = 0.0
+    risk_pairs = []
+
+    for i, t1 in enumerate(tickers):
+        for j, t2 in enumerate(tickers):
+            if i >= j:
+                continue
+            c = float(corr_df.loc[t1, t2])
+            if np.isnan(c):
+                continue
+            pair_w = (w[t1] / total_w) * (w[t2] / total_w)
+            weighted_sum += c * pair_w
+            weight_sum += pair_w
+            if c >= 0.80:
+                risk_pairs.append({"t1": t1, "t2": t2, "corr": round(c, 2), "level": "danger"})
+            elif c >= 0.65:
+                risk_pairs.append({"t1": t1, "t2": t2, "corr": round(c, 2), "level": "warning"})
+
+    avg_corr = weighted_sum / weight_sum if weight_sum else 0.0
+    score = round((1 - avg_corr) / 2 * 100, 1)
+
+    return {
+        "score": score,
+        "avg_correlation": round(avg_corr, 3),
+        "risk_pairs": sorted(risk_pairs, key=lambda x: -x["corr"]),
+    }
