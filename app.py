@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, date
 
+import html as _html
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_live_prices, market_status, fetch_curated_news,
@@ -131,7 +132,8 @@ with st.sidebar:
                 _badge = "✅ " if _ni["tier"] == 1 else ""
                 _pub   = _ni["publisher"][:18]
                 _ago   = _time_ago(_ni["ts"])
-                _head  = _ni["title"][:72] + ("…" if len(_ni["title"]) > 72 else "")
+                _raw   = _ni["title"]
+                _head  = _html.escape(_raw[:72] + ("…" if len(_raw) > 72 else ""))
                 _url   = _ni["url"]
                 _link  = (
                     f"<a href='{_url}' target='_blank' "
