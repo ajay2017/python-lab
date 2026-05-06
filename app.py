@@ -33,12 +33,51 @@ MODERATE_RISK_PCT = 0.015
 def _time_ago(ts: int) -> str:
     if not ts:
         return ""
-    delta = int((datetime.now() - datetime.fromtimestamp(ts)).total_seconds())
+    try:
+        delta = int((datetime.now() - datetime.fromtimestamp(ts)).total_seconds())
+    except Exception:
+        return ""
     if delta < 3600:
         return f"{max(delta // 60, 1)}m"
     if delta < 86400:
         return f"{delta // 3600}h"
     return f"{delta // 86400}d"
+
+
+def _fill_news_slot(slot, items: list) -> None:
+    """Render curated news items into a sidebar container slot."""
+    with slot:
+        if not items:
+            st.caption("No news found for current holdings.")
+            return
+        for _ni in items[:10]:
+            _clr  = "#00b300" if _ni["label"] == "Positive" else (
+                    "#ff4444" if _ni["label"] == "Negative" else "#666")
+            _icon = "▲" if _ni["label"] == "Positive" else (
+                    "▼" if _ni["label"] == "Negative" else "–")
+            _badge = "✅ " if _ni["tier"] == 1 else ""
+            _pub   = _ni["publisher"][:18]
+            _ago   = _time_ago(_ni["ts"])
+            _raw   = _ni["title"]
+            _head  = _html.escape(_raw[:72] + ("…" if len(_raw) > 72 else ""))
+            _url   = _ni["url"]
+            _link  = (
+                f"<a href='{_url}' target='_blank' "
+                f"style='color:#bbb;text-decoration:none;line-height:1.3'>{_head}</a>"
+                if _url else f"<span style='color:#bbb'>{_head}</span>"
+            )
+            st.markdown(
+                f"<div style='margin-bottom:7px;padding:5px 7px;"
+                f"border-left:3px solid {_clr};"
+                f"border-radius:0 4px 4px 0;background:#161616'>"
+                f"<div style='font-size:0.72em;color:#666;margin-bottom:2px'>"
+                f"<span style='color:{_clr};font-weight:bold'>{_icon}</span> "
+                f"<b style='color:#999'>{_ni['ticker']}</b> · "
+                f"{_badge}{_pub} · {_ago}</div>"
+                f"<div style='font-size:0.78em'>{_link}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 
@@ -105,45 +144,14 @@ with st.sidebar:
     else:
         st.caption(f"Last refresh: {refresh_ago // 60}m {refresh_ago % 60}s ago")
 
-    # ── Curated news feed ─────────────────────────────────────────────────
+    # ── Curated news feed — filled after page data loads ─────────────────
     st.divider()
     st.markdown(
         "<span style='font-size:0.85em;font-weight:600;color:#ccc'>📰 CURATED NEWS</span>"
         "<span style='font-size:0.75em;color:#555'> · vetted sources</span>",
         unsafe_allow_html=True,
     )
-    _news_items = st.session_state.get("_sidebar_news", [])
-    if _news_items:
-            for _ni in _news_items[:10]:
-                _clr  = "#00b300" if _ni["label"] == "Positive" else (
-                        "#ff4444" if _ni["label"] == "Negative" else "#666")
-                _icon = "▲" if _ni["label"] == "Positive" else (
-                        "▼" if _ni["label"] == "Negative" else "–")
-                _badge = "✅ " if _ni["tier"] == 1 else ""
-                _pub   = _ni["publisher"][:18]
-                _ago   = _time_ago(_ni["ts"])
-                _raw   = _ni["title"]
-                _head  = _html.escape(_raw[:72] + ("…" if len(_raw) > 72 else ""))
-                _url   = _ni["url"]
-                _link  = (
-                    f"<a href='{_url}' target='_blank' "
-                    f"style='color:#bbb;text-decoration:none;line-height:1.3'>{_head}</a>"
-                    if _url else f"<span style='color:#bbb'>{_head}</span>"
-                )
-                st.markdown(
-                    f"<div style='margin-bottom:7px;padding:5px 7px;"
-                    f"border-left:3px solid {_clr};"
-                    f"border-radius:0 4px 4px 0;background:#161616'>"
-                    f"<div style='font-size:0.72em;color:#666;margin-bottom:2px'>"
-                    f"<span style='color:{_clr};font-weight:bold'>{_icon}</span> "
-                    f"<b style='color:#999'>{_ni['ticker']}</b> · "
-                    f"{_badge}{_pub} · {_ago}</div>"
-                    f"<div style='font-size:0.78em'>{_link}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-    else:
-        st.caption("Load portfolio or analysis to see news.")
+    _news_slot = st.container()   # placeholder — filled by page code below
 
     st.divider()
     portfolio_value = st.number_input(
@@ -236,7 +244,9 @@ if page == "🏠 My Portfolio":
                 st.warning(f"Could not load {t}: {e}")
 
     if held_data:
-        st.session_state["_sidebar_news"] = curate_news_items(held_data)
+        _news = curate_news_items(held_data)
+        st.session_state["_sidebar_news"] = _news
+        _fill_news_slot(_news_slot, _news)
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
     @st.fragment(run_every=60)
@@ -498,6 +508,9 @@ if page == "🏠 My Portfolio":
 # PAGE 2 — MARKET SCANNER
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🔍 Market Scanner":
+    # Show cached news from last portfolio/analysis visit
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+
     st.title("🔍 Market Scanner")
     st.caption("Scans 60+ stocks across 12 sectors to surface trending opportunities.")
     st.info(
@@ -718,7 +731,9 @@ elif page == "📈 Stock Analysis":
         st.error("No data loaded.")
         st.stop()
 
-    st.session_state["_sidebar_news"] = curate_news_items(results)
+    _news = curate_news_items(results)
+    st.session_state["_sidebar_news"] = _news
+    _fill_news_slot(_news_slot, _news)
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
