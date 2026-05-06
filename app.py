@@ -672,27 +672,41 @@ if page == "🏠 My Portfolio":
             )
             st.plotly_chart(sec_fig, use_container_width=True)
 
-    # ── Correlation & Diversification ────────────────────────────────────────
-    st.divider()
-    st.subheader("🔗 Correlation & Diversification")
+    # ── Pre-compute correlation data (shared by both expanders) ──────────────
     try:
         corr_df = correlation_matrix(held_data)
+        _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
+        div = diversification_score(corr_df, _weights_map)
+        div_score  = div["score"]
+        avg_corr   = div["avg_correlation"]
+        risk_pairs = div["risk_pairs"]
+        if div_score >= 42:
+            _div_label = "Well Diversified"
+        elif div_score >= 30:
+            _div_label = "Moderate"
+        else:
+            _div_label = "High Correlation Risk"
+    except Exception:
+        corr_df = pd.DataFrame()
+        div = {"score": None, "avg_correlation": None, "risk_pairs": []}
+        div_score, avg_corr, risk_pairs = None, None, []
+        _div_label = "Unavailable"
+
+    try:
+        div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
+    except Exception:
+        div_recs = []
+
+    # ── Expander 1: Correlation & Diversification ─────────────────────────────
+    _corr_title = (
+        f"🔗 Correlation & Diversification — Score: {div_score:.0f}/100 ({_div_label})"
+        if div_score is not None else "🔗 Correlation & Diversification"
+    )
+    _corr_has_risk = len(risk_pairs) > 0 or (div_score is not None and div_score < 38)
+    with st.expander(_corr_title, expanded=_corr_has_risk):
         if corr_df.empty:
             st.info("Need at least 2 holdings with price history to compute correlations.")
         else:
-            weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
-            div        = diversification_score(corr_df, weights_map)
-            div_score  = div["score"]
-            avg_corr   = div["avg_correlation"]
-            risk_pairs = div["risk_pairs"]
-
-            if div_score >= 42:
-                score_label = "Well Diversified"
-            elif div_score >= 30:
-                score_label = "Moderate"
-            else:
-                score_label = "High Correlation Risk"
-
             dc1, dc2, dc3 = st.columns(3)
             dc1.metric("Diversification Score", f"{div_score:.0f}/100",
                        help=_tip("Diversification Score"))
@@ -700,7 +714,7 @@ if page == "🏠 My Portfolio":
                        help=_tip("Portfolio Correlation"))
             dc3.metric("High-Correlation Pairs", len(risk_pairs),
                        help="Pairs with correlation ≥ 0.65")
-            st.caption(f"Classification: **{score_label}** — based on weighted avg pairwise 6-month return correlation")
+            st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
 
             if risk_pairs:
                 st.markdown("**Correlated pairs — reduce diversification benefit:**")
@@ -738,34 +752,25 @@ if page == "🏠 My Portfolio":
                 "🔴 Red = high correlation (positions move together).  "
                 "Diagonal is always +1.0."
             )
-    except Exception as _ce:
-        st.warning(f"Correlation analysis unavailable: {_ce}")
 
-    # ── Diversification Advisor ────────────────────────────────────────────────
-    st.subheader("📋 Diversification Advisor")
-    st.caption(
-        "Data-driven recommendations to reduce concentration risk and improve "
-        "portfolio diversification — based on your current sector weights, "
-        "pairwise correlations, and analyst signals."
+    # ── Expander 2: Diversification Advisor ───────────────────────────────────
+    _n_reduce = len([r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")])
+    _n_add    = len([r for r in div_recs if r["type"] == "ADD"])
+    _adv_title = (
+        f"📋 Diversification Advisor — {_n_reduce} reduce · {_n_add} add suggestions"
+        if div_recs else "📋 Diversification Advisor"
     )
-
-    try:
-        corr_df_adv = correlation_matrix(held_data)
-        div_adv = diversification_score(
-            corr_df_adv,
-            dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df_adv.empty else None
+    with st.expander(_adv_title, expanded=bool(div_recs)):
+        st.caption(
+            "Data-driven recommendations based on your sector weights, "
+            "pairwise correlations, and analyst signals."
         )
-        div_recs = diversification_recommendations(
-            port_df, corr_df_adv, div_adv, portfolio_value
-        )
-
         if not div_recs:
-            st.success("✅ No major diversification gaps found — your portfolio is well balanced.")
+            st.success("✅ No major diversification gaps — your portfolio is well balanced.")
         else:
             reduce_recs = [r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")]
             add_recs    = [r for r in div_recs if r["type"] == "ADD"]
 
-            # ── REDUCE / REBALANCE ─────────────────────────────────────────────
             if reduce_recs:
                 st.markdown("### 🔻 Reduce / Rebalance")
                 for rec in reduce_recs:
@@ -783,12 +788,8 @@ if page == "🏠 My Portfolio":
                                 )
                                 st.caption(rec["reason"])
                             with rc2:
-                                st.metric(
-                                    "Reduce by",
-                                    f"${rec['reduce_dollars']:,.0f}",
-                                    f"-{rec['reduce_pct']:.1f}%",
-                                    delta_color="inverse",
-                                )
+                                st.metric("Reduce by", f"${rec['reduce_dollars']:,.0f}",
+                                          f"-{rec['reduce_pct']:.1f}%", delta_color="inverse")
                             if rec["weakest_tickers"]:
                                 st.markdown("**Trim candidates** *(lowest conviction first)*:")
                                 cols = st.columns(len(rec["weakest_tickers"]))
@@ -801,12 +802,11 @@ if page == "🏠 My Portfolio":
                                         f"P&L: {wt['pnl_pct']:+.1f}%  \n"
                                         f"Weight: {wt['weight']:.1f}%"
                                     )
-
                     elif rec["type"] == "PAIR_RISK":
                         with st.container(border=True):
                             st.markdown(
                                 f"🔴 **Correlated pair: {rec['t1']} × {rec['t2']}** "
-                                f"— {rec['corr']:.2f} correlation",
+                                f"— {rec['corr']:.2f} correlation"
                             )
                             st.caption(rec["reason"])
                             st.markdown(
@@ -817,7 +817,6 @@ if page == "🏠 My Portfolio":
                                 f"and keeping **{rec['stronger']}**."
                             )
 
-            # ── ADD FOR DIVERSIFICATION ────────────────────────────────────────
             if add_recs:
                 st.markdown("### ➕ Add for Diversification")
                 for rec in add_recs:
@@ -834,58 +833,38 @@ if page == "🏠 My Portfolio":
                                 f"**{rec['corr_to_tech']:.2f}** — lower = genuine diversification"
                             )
                         with ac2:
-                            st.metric(
-                                "Suggested add",
-                                f"${rec['add_dollars']:,.0f}",
-                                f"+{rec['gap_pct']:.1f}%",
-                                delta_color="normal",
-                            )
-
+                            st.metric("Suggested add", f"${rec['add_dollars']:,.0f}",
+                                      f"+{rec['gap_pct']:.1f}%", delta_color="normal")
                         st.markdown(f"**Top candidates:** {' · '.join(rec['candidates'])}")
-
                         btn_key = f"_div_analyze_{rec['sector'].replace(' ', '_')}"
                         if st.button(
                             f"📊 Load live scores for {', '.join(rec['candidates'][:2])}",
                             key=btn_key,
                         ):
                             st.session_state[f"_div_scores_{rec['sector']}"] = True
-
                         if st.session_state.get(f"_div_scores_{rec['sector']}"):
                             score_cols = st.columns(len(rec["candidates"][:2]))
                             for scol, cand in zip(score_cols, rec["candidates"][:2]):
                                 try:
                                     with st.spinner(f"Loading {cand}…"):
                                         cd = load_all(cand)
-                                    rev = cd.get("revisions", {})
+                                    rev     = cd.get("revisions", {})
                                     net_rev = rev.get("net", 0)
                                     rev_label = (
-                                        f"↑{net_rev} analyst upgrades"  if net_rev > 0 else
-                                        f"↓{abs(net_rev)} downgrades"   if net_rev < 0 else
+                                        f"↑{net_rev} upgrades (90d)"  if net_rev > 0 else
+                                        f"↓{abs(net_rev)} downgrades (90d)" if net_rev < 0 else
                                         "No recent revisions"
                                     )
                                     fin = cd.get("financials", {})
                                     pe  = fin.get("forward_pe")
                                     fcf = fin.get("fcf_yield")
                                     with scol:
-                                        st.metric(
-                                            cand,
-                                            f"{cd['total']:.0f}/100",
-                                            cd["rec"]["label"],
-                                        )
-                                        st.caption(
-                                            f"Fwd P/E: {pe:.1f}" if pe else "Fwd P/E: N/A"
-                                        )
-                                        st.caption(
-                                            f"FCF Yield: {fcf:.1f}%" if fcf else "FCF Yield: N/A"
-                                        )
-                                        st.caption(f"Revisions (90d): {rev_label}")
+                                        st.metric(cand, f"{cd['total']:.0f}/100", cd["rec"]["label"])
+                                        st.caption(f"Fwd P/E: {pe:.1f}" if pe else "Fwd P/E: N/A")
+                                        st.caption(f"FCF Yield: {fcf:.1f}%" if fcf else "FCF Yield: N/A")
+                                        st.caption(f"Revisions: {rev_label}")
                                 except Exception:
                                     scol.warning(f"Could not load {cand}")
-
-    except Exception as _de:
-        st.warning(f"Advisor unavailable: {_de}")
-
-    st.divider()
 
     # Position table with protective stops
     st.subheader("Position Detail & Protective Stops")
