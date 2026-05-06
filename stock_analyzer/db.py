@@ -174,6 +174,17 @@ def save_trade(record: dict) -> bool:
         return False
 
 
+def delete_trade(trade_id: int) -> bool:
+    if not has_db():
+        return False
+    try:
+        _client().table("trades").delete().eq("id", int(trade_id)).execute()
+        return True
+    except Exception as e:
+        st.error(f"⛔ Failed to delete trade: {e}")
+        return False
+
+
 def save_watchlist(tickers: list[str]) -> bool:
     tickers = [t.strip().upper() for t in tickers if t.strip()]
     if not has_db():

@@ -2004,82 +2004,73 @@ elif page == "📒 Trade Journal":
     prefill = st.session_state.pop("_prefill_trade", {})
 
     # ── Log a Trade form ──────────────────────────────────────────────────────
-    with st.expander("➕ Log a Trade", expanded=bool(prefill)):
-        held_tickers = [
-            str(r.get("Ticker", "")).strip().upper()
-            for _, r in st.session_state.holdings_df.iterrows()
-            if str(r.get("Ticker", "")).strip()
+    # Pre-compute cost basis hint before entering the form so the default is
+    # available as a widget value (form widgets don't update reactively).
+    _prefill_ticker  = prefill.get("ticker", "").strip().upper()
+    _prefill_action  = prefill.get("action", "SELL")
+    _cost_basis_hint = 0.01
+    _cost_hint_label = "Cost Basis / share ($)"
+    if _prefill_action == "SELL" and _prefill_ticker:
+        _cb_match = st.session_state.holdings_df[
+            st.session_state.holdings_df["Ticker"] == _prefill_ticker
         ]
+        if not _cb_match.empty:
+            _cost_basis_hint = float(_cb_match.iloc[0]["Avg Cost ($)"])
+            _cost_hint_label = f"Cost Basis / share ($) — auto-filled from holdings (${_cost_basis_hint:.2f})"
 
-        f_col1, f_col2, f_col3 = st.columns(3)
-        with f_col1:
-            action = st.radio(
-                "Action", ["SELL", "BUY"], horizontal=True,
-                index=0 if prefill.get("action", "SELL") == "SELL" else 1,
-            )
-        with f_col2:
-            ticker_input = st.text_input(
-                "Ticker", value=prefill.get("ticker", ""),
-                placeholder="e.g. NET",
-            ).strip().upper()
-        with f_col3:
-            trigger_type = st.selectbox(
-                "Reason",
-                ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"],
-                index=["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"].index(
-                    prefill.get("trigger", "MANUAL")
-                ),
-            )
+    with st.expander("➕ Log a Trade", expanded=bool(prefill)):
+        # st.form guarantees exactly one submission per button click,
+        # preventing the duplicate-entry glitch caused by page reruns.
+        with st.form("log_trade_form", clear_on_submit=True):
+            f_col1, f_col2, f_col3 = st.columns(3)
+            with f_col1:
+                action = st.radio(
+                    "Action", ["SELL", "BUY"], horizontal=True,
+                    index=0 if _prefill_action == "SELL" else 1,
+                )
+            with f_col2:
+                ticker_input = st.text_input(
+                    "Ticker", value=_prefill_ticker, placeholder="e.g. NET",
+                ).strip().upper()
+            with f_col3:
+                trigger_type = st.selectbox(
+                    "Reason",
+                    ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"],
+                    index=["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"].index(
+                        prefill.get("trigger", "MANUAL")
+                    ),
+                )
 
-        f_col4, f_col5, f_col6 = st.columns(3)
-        with f_col4:
-            shares_val = st.number_input(
-                "Shares", min_value=0.001, value=float(prefill.get("shares", 1)),
-                step=1.0, format="%.3f",
-            )
-        with f_col5:
-            price_val = st.number_input(
-                "Price per share ($)", min_value=0.01,
-                value=float(prefill.get("price", 0.01)), step=0.01, format="%.2f",
-            )
-        with f_col6:
-            # Auto-look up cost basis for SELL trades
-            cost_basis_default = 0.01
-            if action == "SELL" and ticker_input:
-                match = st.session_state.holdings_df[
-                    st.session_state.holdings_df["Ticker"] == ticker_input
-                ]
-                if not match.empty:
-                    cost_basis_default = float(match.iloc[0]["Avg Cost ($)"])
-            cost_basis_val = st.number_input(
-                "Cost Basis / share ($)" + (" — auto-filled from holdings" if cost_basis_default > 0.01 else ""),
-                min_value=0.01, value=max(0.01, cost_basis_default),
-                step=0.01, format="%.2f",
-                help="Your average purchase price per share. Auto-filled for positions in your portfolio.",
-            )
+            f_col4, f_col5, f_col6 = st.columns(3)
+            with f_col4:
+                shares_val = st.number_input(
+                    "Shares", min_value=0.001,
+                    value=float(prefill.get("shares", 1)),
+                    step=1.0, format="%.3f",
+                )
+            with f_col5:
+                price_val = st.number_input(
+                    "Price per share ($)", min_value=0.01,
+                    value=float(prefill.get("price", 0.01)),
+                    step=0.01, format="%.2f",
+                )
+            with f_col6:
+                cost_basis_val = st.number_input(
+                    _cost_hint_label,
+                    min_value=0.01, value=max(0.01, _cost_basis_hint),
+                    step=0.01, format="%.2f",
+                    help="Your average purchase price per share. "
+                         "Auto-filled when the ticker matches a current holding.",
+                )
 
-        notes_val = st.text_input(
-            "Notes (optional)", value=prefill.get("notes", ""),
-            placeholder="e.g. Partial profit on bearish signal",
-        )
-
-        # Preview P&L before saving
-        if action == "SELL" and shares_val > 0 and price_val > 0 and cost_basis_val > 0:
-            pnl_preview = compute_realized_pnl(shares_val, price_val, cost_basis_val)
-            pnl_clr = "#00C851" if pnl_preview and pnl_preview >= 0 else "#ff4444"
-            pnl_pct_preview = (price_val - cost_basis_val) / cost_basis_val * 100 if cost_basis_val else 0
-            st.markdown(
-                f"<div style='padding:8px 12px;background:#1a1a1a;border-radius:6px;"
-                f"border-left:4px solid {pnl_clr};margin:6px 0'>"
-                f"<span style='font-size:0.8em;color:#888'>REALIZED P&L PREVIEW</span><br>"
-                f"<span style='font-size:1.1em;font-weight:bold;color:{pnl_clr}'>"
-                f"{f'${pnl_preview:+,.2f}' if pnl_preview is not None else '—'} "
-                f"({pnl_pct_preview:+.1f}% per share · "
-                f"{shares_val:.0f} shares × ${price_val:.2f} − ${cost_basis_val:.2f})</span></div>",
-                unsafe_allow_html=True,
+            notes_val = st.text_input(
+                "Notes (optional)", value=prefill.get("notes", ""),
+                placeholder="e.g. Partial profit on bearish signal",
             )
 
-        submitted = st.button("✅ Record Trade", type="primary")
+            submitted = st.form_submit_button("✅ Record Trade", type="primary")
+
+        # Process submission outside the form block
         if submitted:
             if not ticker_input:
                 st.error("Enter a ticker symbol.")
@@ -2104,17 +2095,14 @@ elif page == "📒 Trade Journal":
                 }
                 saved = db.save_trade(record)
                 if saved or not db.has_db():
-                    # In-session fallback if no DB
                     if not db.has_db():
-                        import pandas as _pd
-                        new_row = _pd.DataFrame([{**record, "id": None, "traded_at": datetime.now().isoformat()}])
-                        st.session_state.trades_df = _pd.concat(
+                        new_row = pd.DataFrame([{**record, "id": None, "traded_at": datetime.now().isoformat()}])
+                        st.session_state.trades_df = pd.concat(
                             [new_row, st.session_state.trades_df], ignore_index=True
                         )
                     else:
                         st.session_state.trades_df = db.load_trades()
 
-                    # Auto-update holdings for SELL trades
                     if action == "SELL":
                         h_df = st.session_state.holdings_df.copy()
                         mask = h_df["Ticker"] == ticker_input
@@ -2125,26 +2113,32 @@ elif page == "📒 Trade Journal":
                             if new_shares <= 0:
                                 h_df = h_df.drop(idx).reset_index(drop=True)
                                 st.success(
-                                    f"✅ Trade recorded. **{ticker_input}** fully exited "
-                                    f"— position removed from portfolio."
+                                    f"✅ **{ticker_input}** fully exited — position removed from portfolio."
                                 )
                             else:
-                                h_df.at[idx, "Shares"] = int(new_shares) if new_shares == int(new_shares) else new_shares
+                                h_df.at[idx, "Shares"] = (
+                                    int(new_shares) if new_shares == int(new_shares) else new_shares
+                                )
+                                pnl_str = f"${realized_pnl:+,.2f}" if realized_pnl is not None else "—"
+                                pnl_pct = (price_val - cost_basis_val) / cost_basis_val * 100 if cost_basis_val else 0
                                 st.success(
-                                    f"✅ Sold {shares_val:.0f} shares of {ticker_input}. "
-                                    f"Holdings updated: {current_shares:.0f} → {new_shares:.0f} shares. "
-                                    f"Realized P&L: **{f'${realized_pnl:+,.2f}' if realized_pnl is not None else '—'}**"
+                                    f"✅ Sold **{shares_val:.0f} shares of {ticker_input}** "
+                                    f"@ ${price_val:.2f}  ·  "
+                                    f"Holdings: {current_shares:.0f} → {new_shares:.0f} shares  ·  "
+                                    f"Realized P&L: **{pnl_str}** ({pnl_pct:+.1f}%)"
                                 )
                             db.save_holdings(h_df)
                             st.session_state.holdings_df = h_df
                             st.session_state.db_loaded = False
                         else:
                             st.success(
-                                f"✅ Trade recorded for {ticker_input} "
-                                f"(ticker not in current holdings — manual entry)."
+                                f"✅ SELL recorded for **{ticker_input}** "
+                                f"(not in current holdings — logged as historical trade)."
                             )
                     else:
-                        st.success(f"✅ BUY of {shares_val:.0f} × {ticker_input} @ ${price_val:.2f} recorded.")
+                        st.success(
+                            f"✅ BUY recorded: **{shares_val:.0f} × {ticker_input}** @ ${price_val:.2f}"
+                        )
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
@@ -2226,11 +2220,11 @@ elif page == "📒 Trade Journal":
 
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")
+    st.caption("Check the **Delete?** box on any row then click 'Delete Selected' to remove duplicates or mistakes.")
     if trades_df.empty:
         st.info("No trades recorded yet. Use the form above to log your first trade.")
     else:
         display_df = trades_df.copy()
-        # Format columns for display
         for col in ["shares", "price", "cost_basis", "realized_pnl"]:
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
@@ -2239,33 +2233,51 @@ elif page == "📒 Trade Journal":
                 display_df["traded_at"], errors="coerce"
             ).dt.strftime("%Y-%m-%d %H:%M")
 
-        show_cols = [c for c in
+        # Add delete checkbox column
+        display_df.insert(0, "Delete?", False)
+
+        show_cols = ["Delete?"] + [c for c in
                      ["traded_at", "ticker", "action", "shares", "price",
                       "cost_basis", "realized_pnl", "trigger_type", "notes"]
                      if c in display_df.columns]
 
-        def _pnl_clr(val):
-            if pd.isna(val) or val == "": return ""
-            try:
-                return "color:#00C851;font-weight:bold" if float(val) >= 0 else "color:#ff4444"
-            except Exception:
-                return ""
-
-        def _act_clr(val):
-            return "color:#ff6b35" if str(val) == "SELL" else "color:#4a9eff"
-
-        styled_trades = (
-            display_df[show_cols].style
-            .map(_act_clr, subset=["action"])
-            .map(_pnl_clr, subset=["realized_pnl"] if "realized_pnl" in show_cols else [])
-            .format({
-                "shares":       "{:.0f}",
-                "price":        "${:.2f}",
-                "cost_basis":   lambda v: f"${v:.2f}" if pd.notna(v) else "—",
-                "realized_pnl": lambda v: f"${v:+,.2f}" if pd.notna(v) else "—",
-            }, na_rep="—")
+        edited_trades = st.data_editor(
+            display_df[show_cols],
+            column_config={
+                "Delete?":      st.column_config.CheckboxColumn("Delete?", default=False),
+                "traded_at":    st.column_config.TextColumn("Date / Time"),
+                "ticker":       st.column_config.TextColumn("Ticker"),
+                "action":       st.column_config.TextColumn("Action"),
+                "shares":       st.column_config.NumberColumn("Shares", format="%.0f"),
+                "price":        st.column_config.NumberColumn("Price ($)", format="$%.2f"),
+                "cost_basis":   st.column_config.NumberColumn("Cost Basis ($)", format="$%.2f"),
+                "realized_pnl": st.column_config.NumberColumn("Realized P&L ($)", format="$%+,.2f"),
+                "trigger_type": st.column_config.TextColumn("Reason"),
+                "notes":        st.column_config.TextColumn("Notes"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="trade_history_editor",
         )
-        st.dataframe(styled_trades, use_container_width=True)
+
+        rows_to_delete = edited_trades[edited_trades["Delete?"] == True]
+        if not rows_to_delete.empty:
+            n = len(rows_to_delete)
+            if st.button(
+                f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
+                type="secondary",
+            ):
+                ids_to_delete = trades_df.iloc[rows_to_delete.index]["id"].tolist()
+                failed = 0
+                for tid in ids_to_delete:
+                    if not db.delete_trade(tid):
+                        failed += 1
+                if failed == 0:
+                    st.success(f"✅ Deleted {n} trade{'s' if n > 1 else ''}.")
+                else:
+                    st.warning(f"Deleted {n - failed} of {n}. {failed} failed — check logs.")
+                st.session_state.trades_df = db.load_trades()
+                st.rerun()
 
     if not db.has_db():
         st.info(
