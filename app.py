@@ -6,9 +6,8 @@ from plotly.subplots import make_subplots
 from datetime import datetime, date
 
 from stock_analyzer.data import (
-    DEFAULT_TICKERS, fetch_price_history, fetch_financials,
-    fetch_news, fetch_spy, fetch_earnings_date,
-    fetch_live_prices, market_status,
+    DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
+    fetch_spy, fetch_live_prices, market_status,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -106,15 +105,15 @@ with st.sidebar:
     st.caption("Prices: Yahoo Finance · Not financial advice")
 
 # ── Shared data loader ────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=1800)
 def load_all(ticker: str, period: str = "6mo") -> dict:
-    df = fetch_price_history(ticker, period)
-    df = compute_indicators(df)
+    # One yf.Ticker session covers history + info + news + earnings (was 4 separate calls)
+    bundle = fetch_ticker_bundle(ticker, period)
+    df = compute_indicators(bundle["history"])
     t_score, t_signals = technical_score(df)
-    financials = fetch_financials(ticker)
+    financials = fetch_financials_from_info(bundle["info"])
     f_score, f_signals = fundamental_score(financials)
-    news = fetch_news(ticker)
-    avg_sent, headlines = analyze_news(news)
+    avg_sent, headlines = analyze_news(bundle["news"])
     s_score = sentiment_score_0_100(avg_sent)
     total = combined_score(t_score, f_score, s_score)
     rec = recommendation(total)
@@ -128,7 +127,6 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         risk_metrics = compute_all_risk(df, spy_df)
     except Exception:
         risk_metrics = compute_all_risk(df, None)
-    earnings = fetch_earnings_date(ticker)
     upside = upside_potential(price, financials) if price else None
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
@@ -139,7 +137,7 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "atr": atr_val, "stop": stop,
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "targets": targets, "sr": sr,
-        "risk_metrics": risk_metrics, "earnings": earnings,
+        "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
     }
 
 # ═════════════════════════════════════════════════════════════════════════════
