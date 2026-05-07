@@ -523,6 +523,39 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "revisions": bundle.get("revisions", {}),
     }
 
+# ── Sector ETF multi-period returns (for heatmap) ────────────────────────────
+@st.cache_data(ttl=3600)
+def _fetch_sector_returns() -> pd.DataFrame:
+    """Batch-download all sector ETFs, compute 1W/1M/3M/6M returns."""
+    import yfinance as yf
+    from stock_analyzer.data import _retry
+    unique_etfs = list(dict.fromkeys(SECTOR_ETF.values()))
+    try:
+        raw = _retry(
+            yf.download, unique_etfs,
+            period="6mo", auto_adjust=True, progress=False, threads=True,
+        )
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+        close = close.dropna(how="all")
+        periods = {"1W": 5, "1M": 21, "3M": 63, "6M": 126}
+        rows = []
+        for etf in unique_etfs:
+            try:
+                col = (close[etf] if etf in close.columns else close.iloc[:, 0]).dropna()
+                if len(col) < 2:
+                    continue
+                row = {"ETF": etf}
+                for label, n in periods.items():
+                    idx = min(n, len(col) - 1)
+                    row[label] = round((float(col.iloc[-1]) / float(col.iloc[-idx - 1]) - 1) * 100, 2)
+                rows.append(row)
+            except Exception:
+                continue
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Market index strip — shown on every page ─────────────────────────────────
 @st.fragment(run_every=60)
 def _index_strip():
@@ -762,7 +795,7 @@ if page == "🏠 My Portfolio":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_rank, tab_brief = st.tabs([
+    tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
         "📊 Overview",
         "📈 Performance",
         "📅 Earnings",
@@ -771,6 +804,7 @@ if page == "🏠 My Portfolio":
         "🔗 Risk Analysis",
         "📈 Relative Strength",
         "🌐 Macro",
+        "🔥 Sector Rotation",
         "🏆 Rankings",
         "🤖 AI Brief",
     ])
@@ -2391,7 +2425,147 @@ if page == "🏠 My Portfolio":
                     )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 6 — RANKINGS
+    # TAB 6 — SECTOR ROTATION HEATMAP
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_heat:
+        st.caption(
+            "Multi-period return heatmap for every sector ETF. "
+            "Green = outperforming, red = underperforming. "
+            "Your portfolio's sector exposure is shown in the last column — "
+            "use this to spot where money is rotating and whether you're positioned correctly."
+        )
+
+        if st.button("🔥 Load Sector Heatmap", key="_heat_btn", type="primary"):
+            st.session_state["_sector_rets"] = _fetch_sector_returns()
+
+        _sr_df = st.session_state.get("_sector_rets")
+
+        if _sr_df is not None and not _sr_df.empty:
+            # Reverse map: ETF → sector name(s) — use first match
+            _etf_to_sector = {}
+            for sec, etf in SECTOR_ETF.items():
+                if etf not in _etf_to_sector:
+                    _etf_to_sector[etf] = sec
+
+            # Portfolio sector exposure
+            _sec_exp = sector_exposure(port_df)   # {sector: weight%}
+
+            # Build display table
+            _periods = ["1W", "1M", "3M", "6M"]
+            _heat_rows = []
+            for _, row in _sr_df.iterrows():
+                etf     = row["ETF"]
+                sector  = _etf_to_sector.get(etf, etf)
+                exp_pct = _sec_exp.get(sector, 0.0)
+                _heat_rows.append({
+                    "Sector":     sector,
+                    "ETF":        etf,
+                    "1W %":       row.get("1W"),
+                    "1M %":       row.get("1M"),
+                    "3M %":       row.get("3M"),
+                    "6M %":       row.get("6M"),
+                    "My Exposure": round(exp_pct, 1),
+                })
+            _heat_df = pd.DataFrame(_heat_rows).sort_values("3M %", ascending=False).reset_index(drop=True)
+
+            # KPI strip
+            _best_sec  = _heat_df.loc[_heat_df["3M %"].idxmax()]
+            _worst_sec = _heat_df.loc[_heat_df["3M %"].idxmin()]
+            _my_sectors = _heat_df[_heat_df["My Exposure"] > 0].sort_values("My Exposure", ascending=False)
+            _top_exp    = _my_sectors.iloc[0] if not _my_sectors.empty else None
+
+            _hk1, _hk2, _hk3, _hk4 = st.columns(4)
+            _hk1.metric("Best Sector (3M)",  _best_sec["Sector"],  f"{_best_sec['3M %']:+.1f}%",  delta_color="normal")
+            _hk2.metric("Worst Sector (3M)", _worst_sec["Sector"], f"{_worst_sec['3M %']:+.1f}%", delta_color="inverse")
+            _hk3.metric(
+                "Your Top Exposure",
+                _top_exp["Sector"] if _top_exp is not None else "—",
+                f"{_top_exp['My Exposure']:.1f}% weight · {_top_exp['3M %']:+.1f}% (3M)" if _top_exp is not None else "",
+                delta_color="off",
+            )
+            _positive_3m = int((_heat_df["3M %"] > 0).sum())
+            _hk4.metric("Sectors in Green (3M)", f"{_positive_3m}/{len(_heat_df)}")
+
+            # ── Heatmap ───────────────────────────────────────────────────────
+            _z      = _heat_df[["1W %", "1M %", "3M %", "6M %"]].values.tolist()
+            _y_lbls = [
+                f"{r['Sector']}  {'●' if r['My Exposure'] > 0 else ''}"
+                for _, r in _heat_df.iterrows()
+            ]
+            _text   = [
+                [f"{v:+.1f}%" if v is not None else "—" for v in row]
+                for row in _z
+            ]
+
+            _hmap = go.Figure(go.Heatmap(
+                z=_z,
+                x=["1 Week", "1 Month", "3 Month", "6 Month"],
+                y=_y_lbls,
+                text=_text,
+                texttemplate="%{text}",
+                textfont=dict(size=12, color="white"),
+                colorscale=[
+                    [0.0,  "#8b0000"],
+                    [0.3,  "#cc3333"],
+                    [0.45, "#996633"],
+                    [0.5,  "#444444"],
+                    [0.55, "#336633"],
+                    [0.7,  "#00aa44"],
+                    [1.0,  "#006622"],
+                ],
+                zmid=0,
+                colorbar=dict(
+                    title="Return %",
+                    ticksuffix="%",
+                    thickness=14,
+                    len=0.8,
+                ),
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Period: %{x}<br>"
+                    "Return: %{text}<extra></extra>"
+                ),
+            ))
+            _hmap.update_layout(
+                template="plotly_dark",
+                height=max(280, len(_heat_df) * 38 + 80),
+                margin=dict(l=0, r=0, t=20, b=0),
+                xaxis=dict(side="top"),
+                yaxis=dict(autorange="reversed"),
+                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+            )
+            st.plotly_chart(_hmap, use_container_width=True)
+            st.caption("● = you hold this sector  |  Sorted by 3M return (strongest at top)")
+
+            # ── Exposure vs momentum table ────────────────────────────────────
+            st.markdown("#### Your Exposure vs Sector Momentum")
+            _exp_tbl = _heat_df[_heat_df["My Exposure"] > 0].copy()
+            if not _exp_tbl.empty:
+                _exp_tbl["Alignment"] = _exp_tbl.apply(
+                    lambda r: (
+                        "✅ In momentum"   if r["My Exposure"] >= 5 and r["3M %"] > 2 else
+                        "⚠️ Heavy in laggard" if r["My Exposure"] >= 10 and r["3M %"] < 0 else
+                        "🟡 Monitor"       if r["3M %"] < 0 else
+                        "🟢 Aligned"
+                    ), axis=1,
+                )
+                st.dataframe(
+                    _exp_tbl[["Sector", "ETF", "1W %", "1M %", "3M %", "6M %", "My Exposure", "Alignment"]],
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("None of your holdings map to a tracked sector ETF.")
+
+            st.caption(
+                "Sector ETFs: SOXX (Semis) · IGV (AI/Cloud/Tech) · XLV (Healthcare) · "
+                "XLE (Energy) · XLF (Financials) · ITA (Defense) · XLY (Consumer) · "
+                "CIBR (Cybersecurity) · ICLN (Clean Energy) · DRIV (EV).  "
+                "Data cached 1 hour."
+            )
+        elif _sr_df is None:
+            st.info("Click **Load Sector Heatmap** to fetch live sector ETF performance.")
+
+    # TAB 7 — RANKINGS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_rank:
         st.caption(
