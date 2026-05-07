@@ -532,20 +532,22 @@ def _index_strip():
     tiles = ""
     for idx in indices:
         up         = idx["change_pct"] >= 0
-        bg         = "rgba(0,200,81,0.08)"  if up else "rgba(255,68,68,0.08)"
-        border     = "#00C851"              if up else "#ff4444"
-        val_clr    = "#00C851"              if up else "#ff4444"
+        bg         = "rgba(0,180,70,0.10)"   if up else "rgba(220,38,38,0.10)"
+        border     = "#00a040"               if up else "#cc2222"
+        lbl_clr    = "#555"
+        price_clr  = "#111"
+        val_clr    = "#006b2a"               if up else "#aa1111"
         arrow      = "▲" if up else "▼"
         sign       = "+" if up else ""
         price_str  = f"{idx['price']:,.2f}"
-        change_str = f"{arrow} {sign}{idx['change_pct']:.2f}%  {sign}{abs(idx['change']):.2f} pts"
+        change_str = f"{arrow} {sign}{idx['change_pct']:.2f}%  ({sign}{abs(idx['change']):.0f} pts)"
         tiles += (
             f"<div style='flex:1;background:{bg};"
             f"border:1px solid {border};border-left:3px solid {border};"
             f"border-radius:6px;padding:6px 14px 7px;text-align:center;line-height:1.35'>"
-            f"<div style='font-size:0.62em;color:#999;font-weight:700;"
+            f"<div style='font-size:0.62em;color:{lbl_clr};font-weight:700;"
             f"letter-spacing:0.09em;text-transform:uppercase;margin-bottom:1px'>{idx['short']}</div>"
-            f"<div style='font-size:1.05em;font-weight:700;color:#e8e8e8'>{price_str}</div>"
+            f"<div style='font-size:1.05em;font-weight:700;color:{price_clr}'>{price_str}</div>"
             f"<div style='font-size:0.72em;font-weight:600;color:{val_clr};margin-top:1px'>{change_str}</div>"
             f"</div>"
         )
