@@ -16,6 +16,7 @@ from stock_analyzer.fundamentals import fundamental_score, upside_potential
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics
+from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -791,6 +792,14 @@ if page == "🏠 My Portfolio":
         _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk)
     except Exception:
         _port_risk = {}
+
+    # Risk Advisor recommendations — generated from portfolio risk metrics
+    try:
+        _risk_advisor_recs = build_risk_advisor_recommendations(
+            port_df, held_data, _port_risk, h_rets, total_val
+        )
+    except Exception:
+        _risk_advisor_recs = []
 
     best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
     worst_row = port_df.loc[port_df["P&L (%)"].idxmin()]
@@ -2305,6 +2314,122 @@ if page == "🏠 My Portfolio":
                 "🔴 Red = high correlation (positions move together).  "
                 "Diagonal is always +1.0."
             )
+
+        # ── Risk Action Plan ──────────────────────────────────────────────────
+        if _risk_advisor_recs:
+            st.divider()
+            st.markdown("### 📋 Risk Action Plan")
+            st.caption(
+                "Synthesises your 7 portfolio risk metrics into ranked, evidence-backed actions. "
+                "Each card shows the problem with dollar impact, which specific tickers are driving it, "
+                "an exact recommendation, and the Goldman Sachs perspective behind it."
+            )
+
+            _n_high = sum(1 for r in _risk_advisor_recs if r["priority"] == "HIGH")
+            _n_med  = sum(1 for r in _risk_advisor_recs if r["priority"] == "MEDIUM")
+            _n_ok   = sum(1 for r in _risk_advisor_recs if r["priority"] == "OK")
+
+            _rac1, _rac2, _rac3 = st.columns(3)
+            _rac1.metric("🔴 Action Required", _n_high, help="Requires attention this week")
+            _rac2.metric("🟡 Monitor",          _n_med,  help="Review before next rebalance")
+            _rac3.metric("✅ Well Managed",      _n_ok,   help="No action needed — reinforce the discipline")
+
+            st.markdown("")
+
+            # Sort: HIGH → MEDIUM → OK
+            _priority_order = {"HIGH": 0, "MEDIUM": 1, "OK": 2}
+            _sorted_recs = sorted(
+                _risk_advisor_recs,
+                key=lambda x: _priority_order.get(x["priority"], 3),
+            )
+
+            for _rec in _sorted_recs:
+                _pri   = _rec["priority"]
+                _rtype = _rec["type"]
+
+                # ── OK cards — compact, collapsed ────────────────────────────
+                if _pri == "OK":
+                    with st.expander(f"✅  {_rec['title']}", expanded=False):
+                        st.caption(_rec["goldman_lens"])
+                    continue
+
+                # ── HIGH / MEDIUM action cards ────────────────────────────────
+                _icon        = "🔴" if _pri == "HIGH" else "🟡"
+                _border_clr  = "#ff4444" if _pri == "HIGH" else "#ffbb33"
+                _expand      = _pri == "HIGH"
+
+                with st.expander(
+                    f"{_icon} **{_pri}** · {_rec['title']}",
+                    expanded=_expand,
+                ):
+                    # Problem banner
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#1a1a1a;border-radius:6px;"
+                        f"border-left:4px solid {_border_clr};margin-bottom:14px'>"
+                        f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>The Problem</span><br>"
+                        f"<span style='color:#eee'>{_rec['problem']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    _left, _right = st.columns([1, 1])
+
+                    # Left — root cause + offending tickers
+                    with _left:
+                        st.markdown("**Root Cause**")
+                        if _rec.get("root_cause"):
+                            st.markdown(
+                                f"<div style='color:#bbb;font-size:0.88em;margin-bottom:8px'>"
+                                f"{_rec['root_cause']}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        if _rec.get("root_tickers"):
+                            for _rt in _rec["root_tickers"]:
+                                # Colour the value badge per metric type
+                                if _rtype == "beta":
+                                    _vc = "#ff4444" if _rt["value"] > 1.4 else "#ffbb33"
+                                elif _rtype == "sharpe":
+                                    _vc = "#ff4444" if _rt["value"] < 0.3 else "#ffbb33"
+                                elif _rtype in ("volatility", "drawdown"):
+                                    _vc = "#ff4444"
+                                else:
+                                    _vc = "#ffbb33"
+                                st.markdown(
+                                    f"<div style='background:#111;border-radius:4px;"
+                                    f"padding:6px 10px;margin-top:4px;font-size:0.82em'>"
+                                    f"<b style='color:#fff'>{_rt['ticker']}</b>&nbsp;&nbsp;"
+                                    f"<span style='color:{_vc}'>{_rt['label']}</span>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                    # Right — recommendation + expected outcome
+                    with _right:
+                        st.markdown(
+                            f"<div style='padding:10px 14px;background:#0d2137;border-radius:6px;"
+                            f"border-left:4px solid #4a9eff;margin-bottom:10px'>"
+                            f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>Recommendation</span><br>"
+                            f"<span style='color:#eee;font-size:0.9em'>{_rec['recommendation']}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if _rec.get("expected_outcome"):
+                            st.markdown(
+                                f"<div style='padding:10px 14px;background:#0d1a0d;border-radius:6px;"
+                                f"border-left:4px solid #00C851'>"
+                                f"<span style='font-size:0.72em;color:#00C851;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>Expected Outcome</span><br>"
+                                f"<span style='color:#ccc;font-size:0.88em'>{_rec['expected_outcome']}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    # Goldman Lens — full width
+                    if _rec.get("goldman_lens"):
+                        st.markdown("")
+                        st.info(f"**Goldman Lens** · {_rec['goldman_lens']}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 4 — RELATIVE STRENGTH
