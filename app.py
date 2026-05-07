@@ -694,6 +694,16 @@ if page == "🏠 My Portfolio":
     total_pnl   = port_df["P&L ($)"].sum()
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
+
+    # Today's P&L — (live price − prev close) × shares for each position
+    _lp_map = st.session_state.get("_live_prices", {})
+    _today_pnl = sum(
+        (_lp_map[r["Ticker"]]["price"] - _lp_map[r["Ticker"]]["prev_close"]) * r["Shares"]
+        for _, r in port_df.iterrows()
+        if r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("prev_close", 0) > 0
+    )
+    _today_pnl_pct = _today_pnl / total_val * 100 if total_val else 0
+    _today_loaded  = bool(_lp_map)
     portfolio_value = total_val                        # drive risk calc from live holdings
     st.session_state["_portfolio_value"] = total_val  # update sidebar display
 
@@ -779,17 +789,27 @@ if page == "🏠 My Portfolio":
         unsafe_allow_html=True,
     )
 
-    _c1, _c2, _c3, _c4, _c5, _c6, _c7 = st.columns(7)
+    _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8 = st.columns(8)
     _c1.metric("Portfolio Value",  f"${total_val:,.0f}")
     _c2.metric("Total P&L",        f"${total_pnl:,.0f}", f"{total_pnl_pct:+.1f}%", delta_color="normal")
-    _c3.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
+    if _today_loaded:
+        _c3.metric(
+            "Today's P&L",
+            f"${_today_pnl:+,.0f}",
+            f"{_today_pnl_pct:+.2f}%",
+            delta_color="normal" if _today_pnl >= 0 else "inverse",
+            help="Intraday gain/loss vs yesterday's close · updates every 60s",
+        )
+    else:
+        _c3.metric("Today's P&L", "Updating…", help="Loads with the live price strip")
+    _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
                help=f"{n_danger} danger · {n_warning} warning — check Alerts & Actions tab")
-    _c4.metric("Avg Conviction",   f"{avg_score:.0f}/100")
-    _c5.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
+    _c5.metric("Avg Conviction",   f"{avg_score:.0f}/100")
+    _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
                _div_label, delta_color="off")
-    _c6.metric(f"Best: {best_row['Ticker']}",
+    _c7.metric(f"Best: {best_row['Ticker']}",
                f"{best_row['P&L (%)']:+.1f}%", f"${best_row['P&L ($)']:,.0f}", delta_color="normal")
-    _c7.metric(f"Worst: {worst_row['Ticker']}",
+    _c8.metric(f"Worst: {worst_row['Ticker']}",
                f"{worst_row['P&L (%)']:+.1f}%", f"${worst_row['P&L ($)']:,.0f}", delta_color="normal")
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
