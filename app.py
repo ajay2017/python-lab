@@ -1166,10 +1166,17 @@ if page == "🏠 My Portfolio":
                 return "#00C851"
 
             _earn_fig = go.Figure()
-            # Reference line — today
-            _earn_fig.add_vline(
-                x=str(_today), line_dash="dash", line_color="#555",
-                annotation_text="Today", annotation_position="top left",
+            # Reference line — today (add_vline annotation_position breaks on string axes)
+            _earn_fig.add_shape(
+                type="line",
+                x0=str(_today), x1=str(_today),
+                y0=0, y1=1, yref="paper",
+                line=dict(dash="dash", color="#555", width=1.5),
+            )
+            _earn_fig.add_annotation(
+                x=str(_today), y=1.04, yref="paper",
+                text="Today", showarrow=False,
+                xanchor="left", font=dict(size=11, color="#888"),
             )
             for _r in _upcoming:
                 _clr = _earn_color(_r["Days Until"])
