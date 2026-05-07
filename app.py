@@ -1078,7 +1078,10 @@ if page == "🏠 My Portfolio":
                     margin=dict(l=0, r=0, t=12, b=0),
                     legend=dict(
                         orientation="h", yanchor="bottom", y=1.0,
-                        xanchor="left", x=0, font=dict(size=12),
+                        xanchor="left", x=0,
+                        font=dict(size=12, color="#e8e8e8"),
+                        bgcolor="rgba(13,17,23,0.85)",
+                        bordercolor="#444", borderwidth=1,
                     ),
                     hovermode="x unified",
                     yaxis=dict(ticksuffix="%", gridcolor="#1f2937",
