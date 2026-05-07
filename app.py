@@ -762,9 +762,10 @@ if page == "🏠 My Portfolio":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    tab_ov, tab_perf, tab_act, tab_risk, tab_rs, tab_macro, tab_rank, tab_brief = st.tabs([
+    tab_ov, tab_perf, tab_earn, tab_act, tab_risk, tab_rs, tab_macro, tab_rank, tab_brief = st.tabs([
         "📊 Overview",
         "📈 Performance",
+        "📅 Earnings",
         f"⚠️ Alerts & Actions{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
         "🔗 Risk Analysis",
         "📈 Relative Strength",
@@ -1101,7 +1102,162 @@ if page == "🏠 My Portfolio":
             st.warning(f"Performance chart unavailable: {_e}")
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 3 — ALERTS & ACTIONS
+    # TAB 3 — EARNINGS CALENDAR
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_earn:
+        st.caption(
+            "Upcoming earnings dates for all holdings. "
+            "Earnings are high-volatility events — positions within 7 days warrant extra attention. "
+            "Dates sourced from Yahoo Finance; confirm with the company's IR page before trading."
+        )
+
+        # Build earnings rows from already-loaded held_data
+        _today = datetime.now().date()
+        _earn_rows = []
+        for _, _pr in port_df.iterrows():
+            _t   = _pr["Ticker"]
+            _d   = held_data.get(_t, {}).get("earnings")
+            _inf = held_data.get(_t, {}).get("info", {}) or {}
+            _name = _inf.get("shortName") or _inf.get("longName") or _t
+            _fwd_eps  = _inf.get("forwardEps")
+            _trail_eps = _inf.get("trailingEps")
+            _rev_growth = _inf.get("revenueGrowth")
+            try:
+                _edate = datetime.strptime(_d, "%Y-%m-%d").date() if _d else None
+            except Exception:
+                _edate = None
+            _days = (_edate - _today).days if _edate else None
+            _earn_rows.append({
+                "Ticker":       _t,
+                "Company":      _name,
+                "Earnings Date": _edate,
+                "Days Until":   _days,
+                "Fwd EPS Est":  _fwd_eps,
+                "Trail EPS":    _trail_eps,
+                "Rev Growth":   _rev_growth,
+                "Weight (%)":   _pr["Weight (%)"],
+                "P&L (%)":      _pr["P&L (%)"],
+                "Signal":       _pr["Signal"],
+            })
+
+        _earn_rows.sort(key=lambda x: (
+            x["Days Until"] if x["Days Until"] is not None else 9999
+        ))
+
+        # KPI strip
+        _with_date  = [r for r in _earn_rows if r["Days Until"] is not None]
+        _in_7d      = [r for r in _with_date  if 0 <= r["Days Until"] <= 7]
+        _in_30d     = [r for r in _with_date  if 0 <= r["Days Until"] <= 30]
+        _no_date    = [r for r in _earn_rows  if r["Days Until"] is None]
+        _past       = [r for r in _with_date  if r["Days Until"] < 0]
+
+        _ek1, _ek2, _ek3, _ek4 = st.columns(4)
+        _ek1.metric("Within 7 days",  len(_in_7d),  help="Earnings in the next week — highest risk")
+        _ek2.metric("Within 30 days", len(_in_30d), help="Earnings in the next month")
+        _ek3.metric("No date found",  len(_no_date),help="yfinance returned no upcoming date")
+        _ek4.metric("Recently passed",len(_past),   help="Earnings date already passed in the data")
+
+        # Timeline chart
+        _upcoming = [r for r in _earn_rows if r["Days Until"] is not None and r["Days Until"] >= 0]
+        if _upcoming:
+            def _earn_color(days):
+                if days <= 7:  return "#ff4444"
+                if days <= 14: return "#ffbb33"
+                return "#00C851"
+
+            _earn_fig = go.Figure()
+            # Reference line — today
+            _earn_fig.add_vline(
+                x=str(_today), line_dash="dash", line_color="#555",
+                annotation_text="Today", annotation_position="top left",
+            )
+            for _r in _upcoming:
+                _clr = _earn_color(_r["Days Until"])
+                _earn_fig.add_trace(go.Scatter(
+                    x=[str(_r["Earnings Date"])],
+                    y=[_r["Ticker"]],
+                    mode="markers+text",
+                    marker=dict(size=18, color=_clr, symbol="diamond",
+                                line=dict(color="#fff", width=1.5)),
+                    text=[f"  {_r['Days Until']}d"],
+                    textposition="middle right",
+                    textfont=dict(size=11, color=_clr),
+                    name=_r["Ticker"],
+                    hovertemplate=(
+                        f"<b>{_r['Ticker']}</b><br>"
+                        f"{_r['Company']}<br>"
+                        f"Date: {_r['Earnings Date']}<br>"
+                        f"Days away: {_r['Days Until']}<br>"
+                        f"Fwd EPS: {'${:.2f}'.format(_r['Fwd EPS Est']) if _r['Fwd EPS Est'] else 'n/a'}<br>"
+                        f"Weight: {_r['Weight (%)']:.1f}%<br>"
+                        f"P&L: {_r['P&L (%)']:+.1f}%"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
+                ))
+            _earn_fig.update_layout(
+                template="plotly_dark", height=max(220, len(_upcoming) * 44 + 60),
+                margin=dict(l=0, r=60, t=30, b=0),
+                xaxis=dict(title="", gridcolor="#1f2937", tickformat="%b %d"),
+                yaxis=dict(title="", gridcolor="#1f2937", autorange="reversed"),
+                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                hovermode="closest",
+            )
+            st.plotly_chart(_earn_fig, use_container_width=True)
+        else:
+            st.info("No upcoming earnings dates found for current holdings.")
+
+        # Detail table
+        st.markdown("#### Earnings Detail")
+        if _earn_rows:
+            _disp_earn = []
+            for _r in _earn_rows:
+                _days_str = (
+                    f"{_r['Days Until']}d" if _r["Days Until"] is not None and _r["Days Until"] >= 0
+                    else ("Passed" if (_r["Days Until"] is not None and _r["Days Until"] < 0) else "—")
+                )
+                _urgency = (
+                    "🔴 Imminent"  if _r["Days Until"] is not None and 0 <= _r["Days Until"] <= 7
+                    else "🟡 Soon"  if _r["Days Until"] is not None and 0 <= _r["Days Until"] <= 14
+                    else "🟢 Ahead" if _r["Days Until"] is not None and _r["Days Until"] > 14
+                    else "⚫ Passed" if (_r["Days Until"] is not None and _r["Days Until"] < 0)
+                    else "— Unknown"
+                )
+                _disp_earn.append({
+                    "Ticker":        _r["Ticker"],
+                    "Company":       _r["Company"][:28],
+                    "Date":          str(_r["Earnings Date"]) if _r["Earnings Date"] else "—",
+                    "Days Away":     _days_str,
+                    "Urgency":       _urgency,
+                    "Fwd EPS":       f"${_r['Fwd EPS Est']:.2f}" if _r["Fwd EPS Est"] else "—",
+                    "Trail EPS":     f"${_r['Trail EPS']:.2f}"   if _r["Trail EPS"]   else "—",
+                    "Rev Growth":    f"{_r['Rev Growth']*100:.1f}%" if _r["Rev Growth"] else "—",
+                    "Weight (%)":    f"{_r['Weight (%)']:.1f}%",
+                    "P&L (%)":       f"{_r['P&L (%)']:+.1f}%",
+                    "Signal":        _r["Signal"],
+                })
+            _earn_df = pd.DataFrame(_disp_earn)
+
+            def _earn_row_style(row):
+                urgency = row.get("Urgency", "")
+                if "Imminent" in urgency:
+                    return ["background-color: rgba(255,68,68,0.12)"] * len(row)
+                if "Soon"     in urgency:
+                    return ["background-color: rgba(255,187,51,0.10)"] * len(row)
+                return [""] * len(row)
+
+            st.dataframe(
+                _earn_df.style.apply(_earn_row_style, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "🔴 Imminent = ≤7 days · 🟡 Soon = 8–14 days · 🟢 Ahead = >14 days  |  "
+                "Fwd EPS = analyst consensus estimate for next quarter · "
+                "Earnings dates from Yahoo Finance — verify before acting."
+            )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — ALERTS & ACTIONS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_act:
         # ── Active Alerts — grouped by category ──────────────────────────────
