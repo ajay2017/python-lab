@@ -18,6 +18,7 @@ from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
+from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -1547,6 +1548,163 @@ if page == "🏠 My Portfolio":
                 "Fwd EPS = analyst consensus estimate for next quarter · "
                 "Earnings dates from Yahoo Finance — verify before acting."
             )
+
+        # ── Pre-Earnings Playbook ─────────────────────────────────────────────
+        try:
+            _playbook = build_earnings_playbook(port_df, held_data)
+        except Exception:
+            _playbook = []
+
+        if _playbook:
+            st.divider()
+            st.markdown("#### 📋 Pre-Earnings Playbook")
+            st.caption(
+                "Structured action plan for each position with earnings in the next 30 days. "
+                "Covers analyst expectations, position risk vs estimated volatility, "
+                "a specific pre-earnings action, and what to monitor during the report."
+            )
+
+            # KPI summary strip
+            _pb_imminent = sum(1 for p in _playbook if p["urgency"] == "IMMINENT")
+            _pb_soon     = sum(1 for p in _playbook if p["urgency"] == "SOON")
+            _pb_exit     = sum(1 for p in _playbook if p["action"] == "EXIT")
+            _pb_reduce   = sum(1 for p in _playbook if p["action"] == "REDUCE")
+            _pb_k1, _pb_k2, _pb_k3, _pb_k4 = st.columns(4)
+            _pb_k1.metric("Earnings in 30d",  len(_playbook))
+            _pb_k2.metric("🔴 Imminent (≤7d)", _pb_imminent)
+            _pb_k3.metric("EXIT signals",      _pb_exit,
+                          delta="Action required" if _pb_exit else None,
+                          delta_color="inverse" if _pb_exit else "off")
+            _pb_k4.metric("REDUCE signals",    _pb_reduce,
+                          delta="Trim before report" if _pb_reduce else None,
+                          delta_color="inverse" if _pb_reduce else "off")
+
+            st.markdown("")
+
+            for _pb in _playbook:
+                _action   = _pb["action"]
+                _priority = _pb["priority"]
+                _urgency  = _pb["urgency"]
+                _urg_icon = {"IMMINENT": "🔴", "SOON": "🟡", "AHEAD": "🟢"}.get(_urgency, "📅")
+                _act_icon = {
+                    "EXIT":       "🚨",
+                    "REDUCE":     "✂️",
+                    "MONITOR":    "👁️",
+                    "HOLD_OR_ADD": "💪",
+                    "HOLD":       "✅",
+                }.get(_action, "📌")
+                _bclr = {
+                    "HIGH":   "#ff4444",
+                    "MEDIUM": "#ffbb33",
+                    "OK":     "#00C851",
+                }.get(_priority, "#888")
+                _expand = _priority in ("HIGH", "MEDIUM") or _urgency == "IMMINENT"
+
+                _earn_dt_str = _pb["earnings_date"].strftime("%b %d") if _pb["earnings_date"] else "—"
+
+                with st.expander(
+                    f"{_act_icon} **{_action}** · {_pb['ticker']} — {_pb['company']}  "
+                    f"| {_urg_icon} {_earn_dt_str} ({_pb['days_until']}d)  "
+                    f"| Est. move ±{_pb['est_move']:.0f}%",
+                    expanded=_expand,
+                ):
+                    # Metrics strip
+                    _pb_mc = st.columns(5)
+                    _pb_mc[0].metric("Weight",       f"{_pb['weight']:.1f}%")
+                    _pb_mc[1].metric("Market Value",  f"${_pb['market_value']:,.0f}")
+                    _pb_mc[2].metric("P&L",           f"{_pb['pnl_pct']:+.1f}%")
+                    _pb_mc[3].metric("Est. Move",     f"±{_pb['est_move']:.0f}%")
+                    _pb_mc[4].metric("Earnings Risk",
+                        f"±${_pb['earn_risk']:,.0f}",
+                        delta="Stop at risk" if _pb["stop_at_risk"] else None,
+                        delta_color="inverse" if _pb["stop_at_risk"] else "off",
+                    )
+
+                    # Analyst expectations
+                    st.markdown("")
+                    _pb_al, _pb_ar = st.columns([1, 1])
+                    with _pb_al:
+                        st.markdown("**Analyst Expectations**")
+                        _ae_lines = []
+                        if _pb["fwd_eps"] is not None:
+                            _ae_lines.append(f"- **Fwd EPS:** ${_pb['fwd_eps']:.2f}")
+                        if _pb["trail_eps"] is not None:
+                            _ae_lines.append(f"- **Trail EPS:** ${_pb['trail_eps']:.2f}")
+                        if _pb["fwd_pe"] is not None:
+                            _ae_lines.append(f"- **Fwd P/E:** {_pb['fwd_pe']:.1f}×")
+                        if _pb["rev_growth"] is not None:
+                            _ae_lines.append(f"- **Rev Growth:** {_pb['rev_growth']*100:.1f}%")
+                        if _pb["earn_growth"] is not None:
+                            _ae_lines.append(f"- **Earn Growth:** {_pb['earn_growth']*100:.1f}%")
+                        if _ae_lines:
+                            st.markdown("\n".join(_ae_lines))
+                        else:
+                            st.caption("No analyst estimate data available.")
+
+                        # Analyst revisions
+                        st.markdown("")
+                        _rev_color = "#00C851" if _pb["net_rev"] > 0 else ("#ff4444" if _pb["net_rev"] < 0 else "#888")
+                        st.markdown(
+                            f"<div style='font-size:0.88em;color:#bbb'>"
+                            f"Analyst revisions (90d): "
+                            f"<span style='color:{_rev_color};font-weight:700'>{_pb['net_rev']:+d} net</span>"
+                            f"  ({_pb['ups_90']} ↑ / {_pb['dns_90']} ↓)"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if _pb["latest_rev"]:
+                            for _rv in _pb["latest_rev"]:
+                                _rv_dir = str(_rv.get("direction", ""))
+                                _rv_firm = str(_rv.get("firm", ""))
+                                _rv_icon = "⬆️" if _rv_dir == "up" else ("⬇️" if _rv_dir == "down" else "➡️")
+                                st.markdown(
+                                    f"<div style='font-size:0.8em;color:#999;margin-left:8px'>"
+                                    f"{_rv_icon} {_rv_firm}</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                    with _pb_ar:
+                        # Stop vs estimated move
+                        _stop_label = f"{_pb['stop_type']}: ${_pb['stop_price']:.2f}" if _pb["stop_price"] else "No stop set"
+                        _gap_color  = "#ff4444" if _pb["stop_at_risk"] else "#00C851"
+                        st.markdown(
+                            f"<div style='padding:10px 14px;background:#1a1a1a;"
+                            f"border-radius:6px;border-left:4px solid {_gap_color};margin-bottom:10px'>"
+                            f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>Stop vs Earnings Vol</span><br>"
+                            f"<span style='color:#eee;font-size:0.88em'>"
+                            f"{_stop_label} · Gap: <b style='color:{_gap_color}'>{_pb['gap_to_stop']:.1f}%</b> "
+                            f"vs Est. move <b>±{_pb['est_move']:.0f}%</b>"
+                            f"{'  ⚠️ Stop may not protect against overnight gap' if _pb['stop_at_risk'] else ''}"
+                            f"</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(f"**Composite Score:** {_pb['score']:.0f}/100 · **Signal:** {_pb['signal']}")
+
+                    # Action recommendation
+                    st.markdown(
+                        f"<div style='padding:12px 16px;background:#0d1117;"
+                        f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
+                        f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>"
+                        f"{_act_icon} Pre-Earnings Action: {_action}</span><br>"
+                        f"<span style='color:#eee;font-size:0.9em'>{_pb['detail']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    # What to watch during the report
+                    if _pb.get("watch_for"):
+                        st.markdown("**What to Watch During the Report**")
+                        _wf_cols = st.columns(2)
+                        for _wi, _witem in enumerate(_pb["watch_for"]):
+                            _wf_cols[_wi % 2].markdown(f"- {_witem}")
+
+                    # Goldman Lens
+                    if _pb.get("goldman_lens"):
+                        st.markdown("")
+                        st.info(f"**Goldman Lens** · {_pb['goldman_lens']}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 4 — P&L ATTRIBUTION WATERFALL
