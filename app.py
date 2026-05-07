@@ -8,8 +8,8 @@ from datetime import datetime, date
 import html as _html
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
-    fetch_spy, fetch_live_prices, market_status, curate_news_items,
-    fetch_price_history,
+    fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
+    curate_news_items, fetch_price_history,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -521,6 +521,39 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
         "revisions": bundle.get("revisions", {}),
     }
+
+# ── Market index strip — shown on every page ─────────────────────────────────
+@st.fragment(run_every=60)
+def _index_strip():
+    indices = fetch_market_indices()
+    if not indices:
+        return
+    cols = st.columns(len(indices))
+    for col, idx in zip(cols, indices):
+        up      = idx["change_pct"] >= 0
+        bg      = "rgba(0,200,81,0.10)"  if up else "rgba(255,68,68,0.10)"
+        border  = "#00C851"              if up else "#ff4444"
+        val_clr = "#00C851"              if up else "#ff4444"
+        sign    = "▲ +" if up else "▼ "
+        price_str  = f"{idx['price']:,.2f}"
+        change_str = f"{sign}{abs(idx['change']):.2f} ({abs(idx['change_pct']):.2f}%)"
+        col.markdown(
+            f"<div style='background:{bg};border:1px solid {border};"
+            f"border-top:3px solid {border};border-radius:8px;"
+            f"padding:12px 16px;text-align:center'>"
+            f"<div style='font-size:0.7em;color:#aaa;font-weight:700;"
+            f"letter-spacing:0.09em;text-transform:uppercase'>{idx['short']}</div>"
+            f"<div style='font-size:0.75em;color:#777;margin-bottom:4px'>{idx['full']}</div>"
+            f"<div style='font-size:1.35em;font-weight:700;color:#fff'>{price_str}</div>"
+            f"<div style='font-size:0.82em;font-weight:600;color:{val_clr};margin-top:3px'>"
+            f"{change_str}</div>"
+            f"<div style='font-size:0.65em;color:#555;margin-top:4px'>{idx['fetched_at']}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+_index_strip()
+st.divider()
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO

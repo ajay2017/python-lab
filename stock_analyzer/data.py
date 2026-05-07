@@ -108,6 +108,48 @@ def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
     return _retry(_fetch)
 
 
+_INDICES = [
+    ("^DJI",  "DOW",     "Dow Jones"),
+    ("^GSPC", "S&P 500", "S&P 500"),
+    ("^IXIC", "NASDAQ",  "Nasdaq Comp"),
+]
+
+
+def fetch_market_indices() -> list[dict]:
+    """Fetch DOW, S&P 500 and NASDAQ last price + daily change."""
+    results = []
+    try:
+        tickers = [t for t, _, _ in _INDICES]
+        raw = _retry(
+            yf.download, tickers,
+            period="2d", auto_adjust=True, progress=False, threads=True,
+        )
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+        for ticker, short, full in _INDICES:
+            try:
+                col = close[ticker] if ticker in close.columns else close.iloc[:, 0]
+                col = col.dropna()
+                if len(col) < 1:
+                    continue
+                price  = float(col.iloc[-1])
+                prev   = float(col.iloc[-2]) if len(col) >= 2 else price
+                change = price - prev
+                change_pct = change / prev * 100 if prev else 0.0
+                results.append({
+                    "short":      short,
+                    "full":       full,
+                    "price":      price,
+                    "change":     change,
+                    "change_pct": round(change_pct, 2),
+                    "fetched_at": datetime.now(_ET).strftime("%H:%M ET"),
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return results
+
+
 def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
     """
     Lightweight batch fetch of current prices only — bypasses the full history load.
