@@ -762,7 +762,7 @@ if page == "🏠 My Portfolio":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    tab_ov, tab_perf, tab_act, tab_risk, tab_rs, tab_macro, tab_rank = st.tabs([
+    tab_ov, tab_perf, tab_act, tab_risk, tab_rs, tab_macro, tab_rank, tab_brief = st.tabs([
         "📊 Overview",
         "📈 Performance",
         f"⚠️ Alerts & Actions{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
@@ -770,6 +770,7 @@ if page == "🏠 My Portfolio":
         "📈 Relative Strength",
         "🌐 Macro",
         "🏆 Rankings",
+        "🤖 AI Brief",
     ])
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -2259,6 +2260,149 @@ if page == "🏠 My Portfolio":
                         f"({_best_r['Percentile']:.0f}th percentile — {_best_r['Tier']}) — "
                         f"top-decile momentum score across the full universe. High-conviction hold."
                     )
+
+
+    # TAB 7 — AI MONITORING BRIEF
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_brief:
+        import os
+        try:
+            import anthropic as _anthropic
+            _anthro_key = (
+                st.secrets.get("anthropic", {}).get("api_key")
+                or os.environ.get("ANTHROPIC_API_KEY")
+                or ""
+            )
+        except Exception:
+            _anthro_key = ""
+
+        st.markdown("### 🤖 AI Monitoring Brief")
+        st.caption(
+            "Generates a concise Goldman Sachs-style morning brief using Claude AI. "
+            "Synthesises your portfolio positions, live alerts, recent news, and market context "
+            "into actionable insights. Cached until you refresh."
+        )
+
+        if not _anthro_key or _anthro_key.startswith("sk-ant-your"):
+            st.warning(
+                "**Anthropic API key not configured.**  \n"
+                "Add your key to `.streamlit/secrets.toml` under `[anthropic] api_key = \"sk-ant-...\"` "
+                "or set the `ANTHROPIC_API_KEY` environment variable.  \n"
+                "Get a key at [console.anthropic.com](https://console.anthropic.com)",
+                icon="🔑",
+            )
+        else:
+            _brief_cached = st.session_state.get("_ai_brief")
+            _brief_ts     = st.session_state.get("_ai_brief_ts", "")
+
+            _br1, _br2 = st.columns([6, 2])
+            with _br1:
+                if _brief_ts:
+                    st.caption(f"Generated: {_brief_ts}")
+            with _br2:
+                _gen_btn = st.button(
+                    "🔄 Refresh Brief" if _brief_cached else "✨ Generate Brief",
+                    key="_gen_brief_btn",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+            if _gen_btn or (_brief_cached is None):
+                # Build context string for Claude
+                _ctx_lines = [
+                    f"Date: {datetime.now().strftime('%A, %B %d, %Y %H:%M ET')}",
+                    f"Portfolio Value: ${total_val:,.0f}  |  Total P&L: ${total_pnl:,.0f} ({total_pnl_pct:+.1f}%)",
+                    f"Avg Conviction Score: {avg_score:.0f}/100  |  Diversification: {div_score:.0f}/100 ({_div_label})",
+                    "",
+                    "## HOLDINGS",
+                ]
+                for _, _pr in port_df.iterrows():
+                    _gap  = _pr.get("Gap to Stop (%)", "—")
+                    _gap_s = f"{_gap:.1f}%" if isinstance(_gap, float) else str(_gap)
+                    _ctx_lines.append(
+                        f"  {_pr['Ticker']:6s} | Weight {_pr['Weight (%)']:.1f}% | "
+                        f"P&L {_pr['P&L (%)']:+.1f}% (${_pr['P&L ($)']:,.0f}) | "
+                        f"Signal: {_pr['Signal']} | Score: {_pr['Score']:.0f}/100 | "
+                        f"Gap to Stop: {_gap_s}"
+                    )
+
+                _ctx_lines += ["", "## ACTIVE ALERTS"]
+                if alert_list:
+                    for _al in alert_list[:12]:
+                        import re as _re
+                        _ctx_lines.append(f"  [{_al['level'].upper()}] {_re.sub(r'[*_`]', '', _al['msg'])}")
+                else:
+                    _ctx_lines.append("  No active alerts.")
+
+                # Market indices
+                _live_idx = fetch_market_indices()
+                _ctx_lines += ["", "## MARKET INDICES (today)"]
+                for _ix in _live_idx:
+                    _sign = "+" if _ix["change_pct"] >= 0 else ""
+                    _ctx_lines.append(
+                        f"  {_ix['short']:8s} {_ix['price']:,.2f}  "
+                        f"({_sign}{_ix['change_pct']:.2f}%)"
+                    )
+
+                # Top news
+                _news_ctx = st.session_state.get("_sidebar_news") or []
+                if _news_ctx:
+                    _ctx_lines += ["", "## TOP NEWS (recent headlines, sentiment)"]
+                    for _ni in _news_ctx[:8]:
+                        _ctx_lines.append(
+                            f"  [{_ni['ticker']}] {_ni['label']:8s} | {_ni['title'][:100]}"
+                        )
+
+                _full_ctx = "\n".join(_ctx_lines)
+
+                _system_prompt = (
+                    "You are a senior portfolio analyst at Goldman Sachs. "
+                    "Write a concise, professional morning monitoring brief for a portfolio manager. "
+                    "Be specific: name tickers, cite numbers. Use a structured format with short sections. "
+                    "Tone: confident, analytical, no fluff. Maximum 450 words. "
+                    "End with 3 concrete action items ranked by urgency."
+                )
+                _user_prompt = (
+                    f"Generate a morning monitoring brief for this portfolio:\n\n{_full_ctx}\n\n"
+                    "Structure your response as:\n"
+                    "**EXECUTIVE SUMMARY** (2-3 sentences)\n"
+                    "**MARKET CONTEXT** (1-2 sentences on indices)\n"
+                    "**PORTFOLIO HIGHLIGHTS** (top movers, key risks)\n"
+                    "**RISK FLAGS** (from the alerts — what needs attention)\n"
+                    "**KEY NEWS CATALYSTS** (material news affecting holdings)\n"
+                    "**ACTION ITEMS** (3 prioritised, specific actions)\n"
+                )
+
+                with st.spinner("Generating brief with Claude AI…"):
+                    try:
+                        _client = _anthropic.Anthropic(api_key=_anthro_key)
+                        _resp = _client.messages.create(
+                            model="claude-haiku-4-5-20251001",
+                            max_tokens=700,
+                            system=_system_prompt,
+                            messages=[{"role": "user", "content": _user_prompt}],
+                        )
+                        _brief_text = _resp.content[0].text
+                        st.session_state["_ai_brief"]    = _brief_text
+                        st.session_state["_ai_brief_ts"] = datetime.now().strftime("%b %d %Y %H:%M ET")
+                        _brief_cached = _brief_text
+                        _brief_ts     = st.session_state["_ai_brief_ts"]
+                    except Exception as _e:
+                        st.error(f"Brief generation failed: {_e}")
+                        _brief_cached = None
+
+            if _brief_cached:
+                st.markdown(
+                    f"<div style='background:#0d1117;border:1px solid #1f2937;border-radius:10px;"
+                    f"padding:20px 24px;margin-top:6px;line-height:1.65'>"
+                    f"{_brief_cached.replace(chr(10), '<br>')}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    f"Model: claude-haiku-4-5 · Generated {_brief_ts} · "
+                    "Based on live data at generation time — refresh for latest."
+                )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
