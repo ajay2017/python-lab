@@ -2507,48 +2507,47 @@ if page == "🏠 My Portfolio":
             "(below current price) for each holding. Alerts fire the next time you load the page."
         )
 
-        # Initialise or update the alerts store when holdings change
+        # Initialise alerts store
         _pa_store = st.session_state.setdefault("_price_alerts", {})
         for _t in port_df["Ticker"]:
             _pa_store.setdefault(_t, {"target": 0.0, "floor": 0.0})
 
-        _pa_rows = []
+        # Seed number-input session state from store on first load only
+        for _t in port_df["Ticker"]:
+            if f"_pa_tgt_{_t}" not in st.session_state:
+                st.session_state[f"_pa_tgt_{_t}"] = float(_pa_store[_t].get("target") or 0.0)
+            if f"_pa_flr_{_t}" not in st.session_state:
+                st.session_state[f"_pa_flr_{_t}"] = float(_pa_store[_t].get("floor") or 0.0)
+
+        # Header row
+        _hc = st.columns([2, 2, 2, 2])
+        _hc[0].markdown("**Ticker**")
+        _hc[1].markdown("**Current price**")
+        _hc[2].markdown("**Take-Profit ($)** — alert when price ≥ this")
+        _hc[3].markdown("**Floor Alert ($)** — alert when price ≤ this")
+
         for _, _pr in port_df.iterrows():
-            _t   = _pr["Ticker"]
-            _pa  = _pa_store[_t]
-            _pa_rows.append({
-                "Ticker":            _t,
-                "Current ($)":       round(_pr["Price"], 2),
-                "Take-Profit ($)":   _pa.get("target") or 0.0,
-                "Floor Alert ($)":   _pa.get("floor")  or 0.0,
-            })
-        _pa_df = pd.DataFrame(_pa_rows)
-        _pa_edited = st.data_editor(
-            _pa_df,
-            column_config={
-                "Ticker":          st.column_config.TextColumn("Ticker", disabled=True),
-                "Current ($)":     st.column_config.NumberColumn("Current ($)", disabled=True, format="$%.2f"),
-                "Take-Profit ($)": st.column_config.NumberColumn("Take-Profit ($)", min_value=0.0, format="$%.2f",
-                                    help="Alert when price rises above this level"),
-                "Floor Alert ($)": st.column_config.NumberColumn("Floor Alert ($)", min_value=0.0, format="$%.2f",
-                                    help="Alert when price drops below this level"),
-            },
-            use_container_width=True,
-            hide_index=True,
-            key="_pa_editor",
-        )
+            _t = _pr["Ticker"]
+            _c1, _c2, _c3, _c4 = st.columns([2, 2, 2, 2])
+            _c1.markdown(f"**{_t}**")
+            _c2.markdown(f"${_pr['Price']:.2f}")
+            _c3.number_input(
+                "take-profit", key=f"_pa_tgt_{_t}",
+                min_value=0.0, step=1.0, format="%.2f",
+                label_visibility="collapsed",
+            )
+            _c4.number_input(
+                "floor alert", key=f"_pa_flr_{_t}",
+                min_value=0.0, step=1.0, format="%.2f",
+                label_visibility="collapsed",
+            )
+
         if st.button("💾 Save price alerts", key="_pa_save"):
-            # Read directly from the editor's session-state diff (more reliable than
-            # the return value, which can be stale when a button triggers the re-run).
-            _editor_state = st.session_state.get("_pa_editor") or {}
-            _edited_rows  = _editor_state.get("edited_rows") or {}
-            for _idx, _edits in _edited_rows.items():
-                _t = _pa_df.iloc[int(_idx)]["Ticker"]
-                if "Take-Profit ($)" in _edits:
-                    _pa_store[_t]["target"] = float(_edits["Take-Profit ($)"]) or 0.0
-                if "Floor Alert ($)" in _edits:
-                    _pa_store[_t]["floor"]  = float(_edits["Floor Alert ($)"]) or 0.0
-            st.session_state.pop("_pa_editor", None)  # clear stale diffs so table re-renders clean
+            for _t in port_df["Ticker"]:
+                _pa_store[_t] = {
+                    "target": float(st.session_state.get(f"_pa_tgt_{_t}") or 0.0),
+                    "floor":  float(st.session_state.get(f"_pa_flr_{_t}") or 0.0),
+                }
             st.session_state["_pa_saved_ok"] = True
             st.rerun()
 
