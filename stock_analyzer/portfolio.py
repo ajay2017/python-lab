@@ -129,42 +129,53 @@ def sector_exposure(portfolio_df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def alerts(portfolio_df: pd.DataFrame) -> list[dict]:
-    """Returns list of {level, message} dicts. Levels: danger, warning, info."""
+def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[dict]:
+    """
+    Returns list of alert dicts with keys: level, msg, category.
+    Levels: danger, warning, info.
+    Categories: stop, signal, concentration, earnings, revisions.
+    """
+    from datetime import date as _date, datetime as _datetime
+
     result = []
     if portfolio_df.empty:
         return result
 
     for _, row in portfolio_df.iterrows():
-        w = row["Weight (%)"]
-        gap = row["Gap to Stop (%)"]
-        pnl = row["P&L (%)"]
+        w      = row["Weight (%)"]
+        gap    = row["Gap to Stop (%)"]
+        pnl    = row["P&L (%)"]
         signal = row["Signal"]
         ticker = row["Ticker"]
 
+        # Stop proximity
         if gap < 3:
             result.append({
-                "level": "danger",
-                "msg": f"🔴 **{ticker}** is within {gap:.1f}% of stop loss ${row['Stop']:.2f} — review immediately",
+                "level": "danger", "category": "stop",
+                "msg": f"🔴 **{ticker}** is within {gap:.1f}% of stop ${row['Stop']:.2f} — review immediately",
             })
         elif gap < 7:
             result.append({
-                "level": "warning",
+                "level": "warning", "category": "stop",
                 "msg": f"🟡 **{ticker}** is {gap:.1f}% above stop ${row['Stop']:.2f} — monitor closely",
             })
+
+        # Concentration
         if w > 20:
             result.append({
-                "level": "warning",
+                "level": "warning", "category": "concentration",
                 "msg": f"⚠️ **{ticker}** is {w:.1f}% of portfolio — above 20% concentration threshold",
             })
+
+        # Bearish signal on profitable or losing position
         if "Sell" in signal and pnl > 15:
             result.append({
-                "level": "warning",
+                "level": "warning", "category": "signal",
                 "msg": f"📉 **{ticker}** signal turned bearish with {pnl:.1f}% gain — consider taking partial profits",
             })
         if "Sell" in signal and pnl < -8:
             result.append({
-                "level": "danger",
+                "level": "danger", "category": "signal",
                 "msg": f"⛔ **{ticker}** bearish signal with {pnl:.1f}% loss — stop at ${row['Stop']:.2f}",
             })
 
@@ -173,9 +184,60 @@ def alerts(portfolio_df: pd.DataFrame) -> list[dict]:
     for _, row in sector_exp.iterrows():
         if row["Pct"] > 40:
             result.append({
-                "level": "warning",
+                "level": "warning", "category": "concentration",
                 "msg": f"🏭 **{row['Sector']}** represents {row['Pct']:.0f}% of portfolio — high sector concentration",
             })
+
+    # ── Data-driven alerts (require held_data) ────────────────────────────────
+    if held_data:
+        today = _date.today()
+        for _, row in portfolio_df.iterrows():
+            ticker = row["Ticker"]
+            r      = held_data.get(ticker, {})
+
+            # Earnings proximity
+            earn = r.get("earnings")
+            if earn:
+                try:
+                    days = (_datetime.strptime(earn, "%Y-%m-%d").date() - today).days
+                    if 0 <= days <= 3:
+                        result.append({
+                            "level": "danger", "category": "earnings",
+                            "msg": (
+                                f"📅 **{ticker}** earnings in **{days} day{'s' if days != 1 else ''}** ({earn}) "
+                                f"— decide your position size before the report"
+                            ),
+                        })
+                    elif 4 <= days <= 7:
+                        result.append({
+                            "level": "warning", "category": "earnings",
+                            "msg": f"📅 **{ticker}** reports earnings in {days} days ({earn}) — review ahead of report",
+                        })
+                except Exception:
+                    pass
+
+            # Analyst revision spike
+            rev = r.get("revisions", {})
+            dns = rev.get("downgrades_90d", 0)
+            ups = rev.get("upgrades_90d", 0)
+            net = rev.get("net", 0)
+            if dns >= 3 and net <= -2:
+                result.append({
+                    "level": "danger", "category": "revisions",
+                    "msg": (
+                        f"📉 **{ticker}** has {dns} analyst downgrades vs {ups} upgrades in 90 days "
+                        f"(net {net}) — institutional conviction fading"
+                    ),
+                })
+            elif dns >= 2 and net < 0:
+                result.append({
+                    "level": "warning", "category": "revisions",
+                    "msg": (
+                        f"⚠️ **{ticker}** has {dns} downgrades vs {ups} upgrades in 90 days "
+                        f"— monitor for further deterioration"
+                    ),
+                })
+
     return result
 
 

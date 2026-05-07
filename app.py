@@ -597,7 +597,33 @@ if page == "🏠 My Portfolio":
     avg_score   = port_df["Score"].mean()
 
     # ── Pre-compute all analytics (before tabs so all tabs can access) ────────
-    alert_list = alerts(port_df)
+    # Signal change detection (session-state baseline)
+    _curr_signals = dict(zip(port_df["Ticker"], port_df["Signal"]))
+    _prev_signals = st.session_state.get("_prev_signals", {})
+    _signal_changes = []
+    for _t, _sig in _curr_signals.items():
+        _prev = _prev_signals.get(_t)
+        if _prev and _prev != _sig:
+            _bearish = ("Sell", "Avoid", "Weak")
+            _bullish = ("Strong Buy", "Buy")
+            _degraded = any(w in _sig for w in _bearish) and any(w in _prev for w in _bullish)
+            _improved = any(w in _sig for w in _bullish) and any(w in _prev for w in _bearish)
+            _signal_changes.append({
+                "ticker": _t, "from": _prev, "to": _sig,
+                "degraded": _degraded, "improved": _improved,
+            })
+    st.session_state["_prev_signals"] = _curr_signals
+
+    alert_list = alerts(port_df, held_data)
+    # Append signal-change alerts
+    for _sc in _signal_changes:
+        _icon = "📉" if _sc["degraded"] else "📈" if _sc["improved"] else "↔️"
+        _lvl  = "warning" if _sc["degraded"] else "info"
+        alert_list.append({
+            "level": _lvl, "category": "signal_change",
+            "msg": f"{_icon} **{_sc['ticker']}** signal changed: {_sc['from']} → **{_sc['to']}** since last check",
+        })
+
     n_danger   = sum(1 for a in alert_list if a["level"] == "danger")
     n_warning  = sum(1 for a in alert_list if a["level"] == "warning")
 
@@ -891,18 +917,117 @@ if page == "🏠 My Portfolio":
     # TAB 2 — ALERTS & ACTIONS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_act:
-        # Alerts — flat (no expander inside tab)
+        # ── Active Alerts — grouped by category ──────────────────────────────
+        _danger_alerts  = [a for a in alert_list if a["level"] == "danger"]
+        _warning_alerts = [a for a in alert_list if a["level"] == "warning"]
+        _info_alerts    = [a for a in alert_list if a["level"] == "info"]
+
         if not alert_list:
             st.success("✅ No active alerts — portfolio is within normal parameters.")
         else:
-            st.subheader(f"🚨 {len(alert_list)} Active Alert(s)")
+            # Category labels for grouping
+            _CAT_LABELS = {
+                "stop":         "🛑 Stop Loss",
+                "signal":       "📊 Signal",
+                "concentration":"🏭 Concentration",
+                "earnings":     "📅 Earnings",
+                "revisions":    "📉 Analyst Revisions",
+                "signal_change":"🔄 Signal Changes",
+            }
+
+            _al1, _al2, _al3 = st.columns(3)
+            _al1.metric("🔴 Danger",  len(_danger_alerts),  help="Require immediate attention")
+            _al2.metric("🟡 Warning", len(_warning_alerts), help="Monitor closely")
+            _al3.metric("ℹ️ Info",    len(_info_alerts),    help="Noteworthy changes")
+            st.markdown("")
+
+            # Group and render by category priority
+            _cat_order = ["stop", "earnings", "signal", "revisions", "concentration", "signal_change"]
+            _rendered  = set()
+            for _cat in _cat_order:
+                _cat_items = [a for a in alert_list if a.get("category") == _cat]
+                if not _cat_items:
+                    continue
+                st.markdown(f"**{_CAT_LABELS.get(_cat, _cat)}**")
+                for a in _cat_items:
+                    _rendered.add(id(a))
+                    if a["level"] == "danger":
+                        st.error(a["msg"])
+                    elif a["level"] == "warning":
+                        st.warning(a["msg"])
+                    else:
+                        st.info(a["msg"])
+            # Fallback: any alerts without a recognised category
             for a in alert_list:
-                if a["level"] == "danger":
-                    st.error(a["msg"])
-                elif a["level"] == "warning":
-                    st.warning(a["msg"])
-                else:
-                    st.info(a["msg"])
+                if id(a) not in _rendered:
+                    if a["level"] == "danger":   st.error(a["msg"])
+                    elif a["level"] == "warning": st.warning(a["msg"])
+                    else:                         st.info(a["msg"])
+
+        # ── Custom Price Alerts ───────────────────────────────────────────────
+        st.divider()
+        st.subheader("🎯 Custom Price Alerts")
+        st.caption(
+            "Set a **take-profit target** (above current price) and/or a **floor alert** "
+            "(below current price) for each holding. Alerts fire the next time you load the page."
+        )
+
+        # Initialise or update the alerts store when holdings change
+        _pa_store = st.session_state.setdefault("_price_alerts", {})
+        for _t in port_df["Ticker"]:
+            _pa_store.setdefault(_t, {"target": 0.0, "floor": 0.0})
+
+        _pa_rows = []
+        for _, _pr in port_df.iterrows():
+            _t   = _pr["Ticker"]
+            _pa  = _pa_store[_t]
+            _pa_rows.append({
+                "Ticker":            _t,
+                "Current ($)":       round(_pr["Price"], 2),
+                "Take-Profit ($)":   _pa.get("target") or 0.0,
+                "Floor Alert ($)":   _pa.get("floor")  or 0.0,
+            })
+        _pa_df = pd.DataFrame(_pa_rows)
+        _pa_edited = st.data_editor(
+            _pa_df,
+            column_config={
+                "Ticker":          st.column_config.TextColumn("Ticker", disabled=True),
+                "Current ($)":     st.column_config.NumberColumn("Current ($)", disabled=True, format="$%.2f"),
+                "Take-Profit ($)": st.column_config.NumberColumn("Take-Profit ($)", min_value=0.0, format="$%.2f",
+                                    help="Alert when price rises above this level"),
+                "Floor Alert ($)": st.column_config.NumberColumn("Floor Alert ($)", min_value=0.0, format="$%.2f",
+                                    help="Alert when price drops below this level"),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="_pa_editor",
+        )
+        if st.button("💾 Save price alerts", key="_pa_save"):
+            for _, _row in _pa_edited.iterrows():
+                _t = _row["Ticker"]
+                _pa_store[_t] = {
+                    "target": float(_row["Take-Profit ($)"]) or 0.0,
+                    "floor":  float(_row["Floor Alert ($)"]) or 0.0,
+                }
+            st.success("✅ Price alerts saved — active on next page load.")
+
+        # Check triggers and surface them
+        _pa_fired = []
+        for _, _pr in port_df.iterrows():
+            _t    = _pr["Ticker"]
+            _px   = _pr["Price"]
+            _pa   = _pa_store.get(_t, {})
+            _tgt  = _pa.get("target") or 0.0
+            _flr  = _pa.get("floor")  or 0.0
+            if _tgt > 0 and _px >= _tgt:
+                _pa_fired.append(("warning", f"🎯 **{_t}** hit take-profit target **${_tgt:.2f}** (current ${_px:.2f}) — consider locking in gains"))
+            if _flr > 0 and _px <= _flr:
+                _pa_fired.append(("danger",  f"🚨 **{_t}** breached floor alert **${_flr:.2f}** (current ${_px:.2f}) — review position now"))
+        if _pa_fired:
+            st.markdown("**🔔 Price Alert Triggers:**")
+            for _lvl, _msg in _pa_fired:
+                if _lvl == "danger":   st.error(_msg)
+                else:                  st.warning(_msg)
 
         st.divider()
 
