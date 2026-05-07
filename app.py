@@ -17,6 +17,7 @@ from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
+from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -1193,6 +1194,197 @@ if page == "🏠 My Portfolio":
                 st.info("No price history available to build the chart.")
         except Exception as _e:
             st.warning(f"Performance chart unavailable: {_e}")
+
+        # ── Performance Diagnostics ───────────────────────────────────────────
+        st.divider()
+        st.markdown("### 📊 Performance Diagnostics")
+        st.caption(
+            "Breaks down portfolio performance into per-position alpha vs SPY and vs the sector ETF benchmark. "
+            "Distinguishes genuine stock-picking skill from sector-driven returns — "
+            "and identifies exactly which positions are generating vs destroying alpha."
+        )
+
+        try:
+            # Build sector ETF returns dict from cached data
+            _sect_df = _fetch_sector_returns()
+            _sect_rets_dict: dict = {}
+            if not _sect_df.empty:
+                for _, _sr in _sect_df.iterrows():
+                    _sect_rets_dict[str(_sr["ETF"])] = {
+                        "1W": _sr.get("1W"), "1M": _sr.get("1M"),
+                        "3M": _sr.get("3M"), "6M": _sr.get("6M"),
+                    }
+
+            _attr_df = compute_attribution(
+                port_df, held_data, fetch_spy("6mo"),
+                _n_days, _sect_rets_dict, _perf_period,
+            )
+
+            if _attr_df.empty:
+                st.info("Not enough price history to compute attribution for the selected period.")
+            else:
+                _perf_recs = build_perf_recommendations(_attr_df, total_val, _perf_period)
+
+                # ── Summary KPIs ──────────────────────────────────────────────
+                _net_alpha_dollar = float(_attr_df["Dollar Alpha ($)"].sum())
+                _n_generators = int((_attr_df["Category"] == "Alpha Generator").sum())
+                _n_riders     = int((_attr_df["Category"] == "Sector Rider").sum())
+                _n_destroyers = int((_attr_df["Category"] == "Alpha Destroyer").sum())
+                _n_total      = len(_attr_df)
+                _skill_pct    = int((_attr_df["Alpha vs SPY (%)"] > 0).sum() / _n_total * 100) if _n_total else 0
+
+                _dp1, _dp2, _dp3, _dp4 = st.columns(4)
+                _dp1.metric(
+                    f"Net Alpha vs SPY ({_perf_period})",
+                    f"${_net_alpha_dollar:+,.0f}",
+                    "Outperforming" if _net_alpha_dollar >= 0 else "Underperforming",
+                    delta_color="normal" if _net_alpha_dollar >= 0 else "inverse",
+                    help=f"Total extra $ earned (or lost) vs holding SPY at identical weights over {_perf_period}",
+                )
+                _dp2.metric("Alpha Generators",  _n_generators,
+                            "beating SPY ≥ 5%", delta_color="off")
+                _dp3.metric("Alpha Destroyers",  _n_destroyers,
+                            "lagging SPY ≥ 5%", delta_color="off")
+                _dp4.metric(
+                    "Skill Ratio",
+                    f"{_skill_pct}%",
+                    f"{int(_skill_pct / 100 * _n_total)}/{_n_total} positions beating SPY",
+                    delta_color="off",
+                    help="% of positions generating positive alpha vs S&P 500",
+                )
+
+                # ── Alpha attribution chart ───────────────────────────────────
+                _asc = _attr_df.sort_values("Alpha vs SPY (%)", ascending=True)
+                _bar_clrs = [
+                    "#00C851" if v >= 5 else "#ff4444" if v <= -5 else "#888888"
+                    for v in _asc["Alpha vs SPY (%)"]
+                ]
+                _hover = [
+                    f"<b>{r['Ticker']}</b><br>"
+                    f"Return: {r['Holding Ret (%)']:+.1f}%<br>"
+                    f"SPY: {r['SPY Ret (%)']:+.1f}%<br>"
+                    f"Alpha vs SPY: {r['Alpha vs SPY (%)']:+.1f}%<br>"
+                    f"vs {r['ETF']}: "
+                    + (f"{r['Alpha vs Sector (%)']:+.1f}%" if r['Alpha vs Sector (%)'] is not None else "—")
+                    + f"<br>Category: {r['Category']}<br>$ Alpha: ${r['Dollar Alpha ($)']:+,.0f}"
+                    for _, r in _asc.iterrows()
+                ]
+                _attr_fig = go.Figure(go.Bar(
+                    x=list(_asc["Alpha vs SPY (%)"]),
+                    y=list(_asc["Ticker"]),
+                    orientation="h",
+                    marker_color=_bar_clrs,
+                    text=[f"{v:+.1f}%" for v in _asc["Alpha vs SPY (%)"]],
+                    textposition="outside",
+                    customdata=_hover,
+                    hovertemplate="%{customdata}<extra></extra>",
+                ))
+                _attr_fig.add_vline(x=0,   line_color="#555",      line_width=1)
+                _attr_fig.add_vline(x=5,   line_dash="dash",
+                                    line_color="rgba(0,200,81,0.4)",  line_width=1)
+                _attr_fig.add_vline(x=-5,  line_dash="dash",
+                                    line_color="rgba(255,68,68,0.4)", line_width=1)
+                _attr_fig.update_layout(
+                    title=f"Alpha vs S&P 500 by Position — {_perf_period}",
+                    template="plotly_dark",
+                    height=max(220, len(_asc) * 44 + 60),
+                    margin=dict(l=0, r=90, t=40, b=0),
+                    xaxis=dict(ticksuffix="%", gridcolor="#1f2937",
+                               zeroline=False, title="Alpha vs SPY (%)"),
+                    yaxis=dict(gridcolor="#1f2937"),
+                    plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                    showlegend=False,
+                )
+                st.plotly_chart(_attr_fig, use_container_width=True)
+                st.caption(
+                    "🟢 Green = outperforming SPY ≥ 5% (alpha generator)  |  "
+                    "⬛ Gray = within ±5% of SPY  |  "
+                    "🔴 Red = lagging SPY ≥ 5% (alpha destroyer)  |  "
+                    "Dashed lines = ±5% thresholds  |  Hover for full breakdown vs sector ETF"
+                )
+
+                # ── Position Diagnostics cards ────────────────────────────────
+                if _perf_recs:
+                    st.divider()
+                    st.markdown("#### 🎯 Position Diagnostics & Actions")
+
+                    for _prec in _perf_recs:
+                        _pri   = _prec["priority"]
+                        _ptype = _prec["type"]
+                        _icon  = {"OK": "✅", "MONITOR": "⚠️",
+                                  "HIGH": "🔴", "MEDIUM": "🟡"}.get(_pri, "📌")
+                        _bclr  = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33",
+                                  "MONITOR": "#ffbb33", "OK": "#00C851"}.get(_pri, "#888")
+                        _expand = _pri in ("HIGH", "MEDIUM")
+
+                        with st.expander(
+                            f"{_icon} **{_pri}** · {_prec['title']}",
+                            expanded=_expand,
+                        ):
+                            # Metrics mini-strip
+                            if _prec.get("metrics"):
+                                _mc = st.columns(len(_prec["metrics"]))
+                                for _mcol, (_mlbl, _mval_s) in zip(_mc, _prec["metrics"].items()):
+                                    _mcol.metric(_mlbl, _mval_s)
+
+                            # Problem banner (action cards only)
+                            if _prec.get("problem"):
+                                st.markdown(
+                                    f"<div style='padding:10px 14px;background:#1a1a1a;"
+                                    f"border-radius:6px;border-left:4px solid {_bclr};"
+                                    f"margin:10px 0'>"
+                                    f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                    f"letter-spacing:0.09em;text-transform:uppercase'>"
+                                    f"The Problem</span><br>"
+                                    f"<span style='color:#eee'>{_prec['problem']}</span>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                            _col_l, _col_r = st.columns([1, 1])
+
+                            with _col_l:
+                                if _prec.get("root_cause"):
+                                    st.markdown("**Thesis Status**")
+                                    st.markdown(
+                                        f"<div style='color:#bbb;font-size:0.88em'>"
+                                        f"{_prec['root_cause']}</div>",
+                                        unsafe_allow_html=True,
+                                    )
+
+                            with _col_r:
+                                if _prec.get("recommendation"):
+                                    st.markdown(
+                                        f"<div style='padding:10px 14px;background:#0d2137;"
+                                        f"border-radius:6px;border-left:4px solid #4a9eff;"
+                                        f"margin-bottom:10px'>"
+                                        f"<span style='font-size:0.72em;color:#4a9eff;"
+                                        f"font-weight:700;letter-spacing:0.09em;"
+                                        f"text-transform:uppercase'>Recommendation</span><br>"
+                                        f"<span style='color:#eee;font-size:0.9em'>"
+                                        f"{_prec['recommendation']}</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True,
+                                    )
+                                if _prec.get("expected_outcome"):
+                                    st.markdown(
+                                        f"<div style='padding:10px 14px;background:#0d1a0d;"
+                                        f"border-radius:6px;border-left:4px solid #00C851'>"
+                                        f"<span style='font-size:0.72em;color:#00C851;"
+                                        f"font-weight:700;letter-spacing:0.09em;"
+                                        f"text-transform:uppercase'>Expected Outcome</span><br>"
+                                        f"<span style='color:#ccc;font-size:0.88em'>"
+                                        f"{_prec['expected_outcome']}</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True,
+                                    )
+
+                            if _prec.get("goldman_lens"):
+                                st.markdown("")
+                                st.info(f"**Goldman Lens** · {_prec['goldman_lens']}")
+
+        except Exception as _de:
+            st.warning(f"Performance Diagnostics unavailable: {_de}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 3 — EARNINGS CALENDAR
