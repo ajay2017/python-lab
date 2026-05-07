@@ -828,7 +828,7 @@ if page == "🏠 My Portfolio":
     _pa_fired_cc = []
     for _, _ccpr in port_df.iterrows():
         _cct  = _ccpr["Ticker"]
-        _ccpx = _f(_ccpr.get("Price"))
+        _ccpx = float(_ccpr.get("Price") or 0)
         _ccpa = _pa_store_cc.get(_cct, {})
         _cctgt = _ccpa.get("target") or 0.0
         _ccflr = _ccpa.get("floor")  or 0.0
@@ -2594,7 +2594,7 @@ if page == "🏠 My Portfolio":
         _pa_fired = []
         for _, _pr in port_df.iterrows():
             _t    = _pr["Ticker"]
-            _px   = _f(_pr.get("Price"))
+            _px   = float(_pr.get("Price") or 0)
             _pa   = _pa_store.get(_t, {})
             _tgt  = _pa.get("target") or 0.0
             _flr  = _pa.get("floor")  or 0.0
