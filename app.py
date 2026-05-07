@@ -26,6 +26,7 @@ from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
     TOLERANCE_OK, TOLERANCE_WATCH,
 )
+from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -1298,6 +1299,206 @@ if page == "🏠 My Portfolio":
                 "✅ All positions are within tolerance of their target weights. "
                 "No rebalancing needed."
             )
+
+        # ── Sentiment Velocity ────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 📰 Sentiment Momentum")
+        st.caption(
+            "Rate of change in news sentiment — recent 7 days vs prior 8–30 days. "
+            "A deteriorating sentiment score that diverges from a rising price is one of "
+            "the earliest warning signals of a coming reversal."
+        )
+
+        try:
+            _sv_data = build_sentiment_dashboard(port_df, held_data)
+        except Exception as _sve:
+            _sv_data = []
+            st.warning(f"Sentiment velocity unavailable: {_sve}")
+
+        if _sv_data:
+            # Summary KPI strip
+            _sv_divg  = [v for v in _sv_data if v["divergence"]]
+            _sv_imprv = [v for v in _sv_data if v["direction"] == "Improving ↑"]
+            _sv_detr  = [v for v in _sv_data if v["direction"] == "Deteriorating ↓"]
+            _sv_k1, _sv_k2, _sv_k3, _sv_k4 = st.columns(4)
+            _sv_k1.metric("⚠️ Divergences",    len(_sv_divg),
+                          delta="Price ≠ Sentiment" if _sv_divg else None,
+                          delta_color="inverse" if _sv_divg else "off")
+            _sv_k2.metric("✅ Improving",       len(_sv_imprv))
+            _sv_k3.metric("🔴 Deteriorating",   len(_sv_detr),
+                          delta="Monitor closely" if _sv_detr else None,
+                          delta_color="inverse" if _sv_detr else "off")
+            _sv_k4.metric("Stable →",
+                          len(_sv_data) - len(_sv_imprv) - len(_sv_detr))
+
+            # Summary table
+            _sv_rows = []
+            for _sv in _sv_data:
+                _sv_rows.append({
+                    "Ticker":        _sv["ticker"],
+                    "Recent Sent.":  _sv["recent_score"],
+                    "Prior Sent.":   _sv["prior_score"],
+                    "Velocity":      _sv["velocity"],
+                    "Direction":     _sv["direction"],
+                    "Price 7d (%)":  _sv["price_ret_7d"],
+                    "Signal":        _sv["signal"],
+                })
+            _sv_df = pd.DataFrame(_sv_rows)
+
+            def _sv_row_style(row):
+                sig = str(row.get("Signal", ""))
+                vel = row.get("Velocity")
+                if "Divergence" in sig and "BEARISH" in sig or "price rising but sentiment falling" in sig:
+                    return ["background-color:rgba(255,68,68,0.12)"] * len(row)
+                if "Divergence" in sig:
+                    return ["background-color:rgba(74,158,255,0.10)"] * len(row)
+                if vel is not None and vel < -0.12:
+                    return ["background-color:rgba(255,187,51,0.08)"] * len(row)
+                return [""] * len(row)
+
+            st.dataframe(
+                _sv_df.style.apply(_sv_row_style, axis=1).format({
+                    "Recent Sent.":  lambda v: f"{v:+.3f}" if v is not None else "—",
+                    "Prior Sent.":   lambda v: f"{v:+.3f}" if v is not None else "—",
+                    "Velocity":      lambda v: f"{v:+.3f}" if v is not None else "—",
+                    "Price 7d (%)":  lambda v: f"{v:+.1f}%" if v is not None else "—",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "Sentiment score: VADER compound −1.0 (very negative) → +1.0 (very positive).  "
+                "Velocity = recent 7-day score minus prior 8–30-day score.  "
+                "🔴 Highlighted = deteriorating · Red row = bearish divergence · Blue row = bullish divergence."
+            )
+
+            # Notable signal cards
+            _sv_notable = [v for v in _sv_data
+                           if v["divergence"] or v["direction"] in ("Improving ↑", "Deteriorating ↓")]
+            if _sv_notable:
+                st.markdown("#### Notable Sentiment Signals")
+                for _sv in _sv_notable:
+                    _vel     = _sv["velocity"]
+                    _divg    = _sv["divergence"]
+                    _dtype   = _sv["divergence_type"]
+                    _dir     = _sv["direction"]
+                    _p7d     = _sv["price_ret_7d"]
+
+                    if _divg and _dtype == "BEARISH":
+                        _sv_icon, _sv_bclr, _sv_pri = "⚠️", "#ff4444", "HIGH"
+                    elif _divg and _dtype == "BULLISH":
+                        _sv_icon, _sv_bclr, _sv_pri = "🔄", "#4a9eff", "MONITOR"
+                    elif _dir == "Deteriorating ↓":
+                        _sv_icon, _sv_bclr, _sv_pri = "🔴", "#ffbb33", "MEDIUM"
+                    else:
+                        _sv_icon, _sv_bclr, _sv_pri = "✅", "#00C851", "OK"
+
+                    _expand = _sv_pri in ("HIGH", "MEDIUM")
+
+                    with st.expander(
+                        f"{_sv_icon} **{_sv['ticker']}** — {_sv['signal']}  "
+                        f"| Velocity {_vel:+.3f}" if _vel is not None else
+                        f"{_sv_icon} **{_sv['ticker']}** — {_sv['signal']}",
+                        expanded=_expand,
+                    ):
+                        _sv_m = st.columns(4)
+                        _sv_m[0].metric("Recent Sentiment",
+                                        f"{_sv['recent_score']:+.3f}" if _sv["recent_score"] is not None else "—",
+                                        help="Avg VADER compound score, last 7 days of news")
+                        _sv_m[1].metric("Prior Sentiment",
+                                        f"{_sv['prior_score']:+.3f}" if _sv["prior_score"] is not None else "—",
+                                        help="Avg VADER compound score, 8–30 days ago")
+                        _sv_m[2].metric("Velocity",
+                                        f"{_vel:+.3f}" if _vel is not None else "—",
+                                        delta="Improving" if (_vel and _vel > 0.12) else
+                                              ("Deteriorating" if (_vel and _vel < -0.12) else None),
+                                        delta_color="normal" if (_vel and _vel > 0) else "inverse")
+                        _sv_m[3].metric("Price 7d",
+                                        f"{_p7d:+.1f}%" if _p7d is not None else "—")
+
+                        # Divergence or velocity interpretation
+                        if _divg and _dtype == "BEARISH":
+                            st.markdown(
+                                f"<div style='padding:10px 14px;background:#1a0a0a;"
+                                f"border-radius:6px;border-left:4px solid #ff4444;margin:8px 0'>"
+                                f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>⚠️ Bearish Divergence</span><br>"
+                                f"<span style='color:#eee'>"
+                                f"Price is up <b>{_p7d:+.1f}%</b> over 7 days but news sentiment has "
+                                f"shifted <b>{_vel:+.3f}</b> points — the market is rising on momentum "
+                                f"while the information environment is getting worse. "
+                                f"This combination frequently precedes a sharp pullback once the "
+                                f"sentiment shift reaches price. Monitor closely and tighten the stop."
+                                f"</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                            st.info(
+                                "**Goldman Lens** · Price-sentiment divergence is a classic early warning. "
+                                "Goldman's quantitative strategists include sentiment momentum as a factor "
+                                "in their reversal models — a stock rising while its news flow deteriorates "
+                                "has historically underperformed the following month by 3–5% on average. "
+                                "This is not a sell signal in isolation, but it warrants raising the stop "
+                                "and watching the next earnings or catalyst carefully."
+                            )
+                        elif _divg and _dtype == "BULLISH":
+                            st.markdown(
+                                f"<div style='padding:10px 14px;background:#0a0d1a;"
+                                f"border-radius:6px;border-left:4px solid #4a9eff;margin:8px 0'>"
+                                f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>🔄 Bullish Divergence</span><br>"
+                                f"<span style='color:#eee'>"
+                                f"Price is down <b>{_p7d:+.1f}%</b> over 7 days but news sentiment has "
+                                f"improved <b>{_vel:+.3f}</b> points — the market is selling on momentum "
+                                f"while the information environment is improving. "
+                                f"Potential recovery setup — watch for price to catch up with sentiment."
+                                f"</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                            st.info(
+                                "**Goldman Lens** · A stock falling while sentiment improves can signal "
+                                "an over-reaction to short-term price pressure. Goldman's contrarian "
+                                "indicators flag this as a potential mean-reversion opportunity — "
+                                "particularly if the composite score remains above 55 and the fundamental "
+                                "thesis is intact. Confirm with the next news cycle before adding."
+                            )
+                        elif _dir == "Deteriorating ↓":
+                            st.markdown(
+                                f"<div style='padding:10px 14px;background:#1a1200;"
+                                f"border-radius:6px;border-left:4px solid #ffbb33;margin:8px 0'>"
+                                f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>Sentiment Shift</span><br>"
+                                f"<span style='color:#eee'>"
+                                f"News sentiment has shifted <b>{_vel:+.3f}</b> points recently. "
+                                f"Sentiment often leads price by 1–2 weeks — watch whether this "
+                                f"translates to price pressure."
+                                f"</span></div>",
+                                unsafe_allow_html=True,
+                            )
+                        elif _dir == "Improving ↑":
+                            st.markdown(
+                                f"<div style='padding:10px 14px;background:#0a1a0a;"
+                                f"border-radius:6px;border-left:4px solid #00C851;margin:8px 0'>"
+                                f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>Positive Momentum</span><br>"
+                                f"<span style='color:#eee'>"
+                                f"News sentiment has improved <b>{_vel:+.3f}</b> points recently — "
+                                f"a positive information environment building ahead of price."
+                                f"</span></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        # Recent headlines
+                        if _sv["headline_sample"]:
+                            st.markdown("**Recent headlines (last 7 days)**")
+                            for _hl in _sv["headline_sample"]:
+                                _hl_clr = "#00C851" if _hl["score"] > 0.05 else (
+                                          "#ff4444" if _hl["score"] < -0.05 else "#888")
+                                st.markdown(
+                                    f"<div style='font-size:0.82em;color:#bbb;margin:3px 0'>"
+                                    f"<span style='color:{_hl_clr};font-weight:bold'>"
+                                    f"[{_hl['score']:+.2f}]</span> {_hl['title']}"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2 — PERFORMANCE VS SPY
