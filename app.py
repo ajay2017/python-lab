@@ -19,6 +19,7 @@ from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
+from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -489,7 +490,7 @@ with st.sidebar:
     st.header("📊 Portfolio Manager")
     page = st.radio(
         "Navigate",
-        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📒 Trade Journal"],
+        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -4346,7 +4347,265 @@ elif page == "📈 Stock Analysis":
         )
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PAGE 4 — TRADE JOURNAL
+# PAGE 4 — WATCHLIST ANALYSIS
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "📋 Watchlist":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("📋 Watchlist Analysis")
+    st.caption(
+        "Your opportunity pipeline. Each stock on the watchlist is analysed for buy readiness — "
+        "when to open, when to wait, and when the thesis has broken. "
+        "A Goldman PM doesn't just track watchlist tickers; they actively manage them."
+    )
+
+    # ── Sidebar: manage watchlist ─────────────────────────────────────────────
+    with st.sidebar:
+        st.divider()
+        st.markdown("**Manage Watchlist**")
+        _wl_add = st.text_input("Add ticker", "", key="_wl_add_input",
+                                placeholder="e.g. NVDA")
+        if _wl_add:
+            _t = _wl_add.strip().upper()
+            if _t and _t not in st.session_state.watchlist:
+                st.session_state.watchlist.append(_t)
+                db.save_watchlist(st.session_state.watchlist)
+                st.success(f"Added {_t}")
+                st.rerun()
+        if st.session_state.watchlist:
+            _wl_remove = st.multiselect(
+                "Remove from watchlist",
+                options=st.session_state.watchlist,
+                key="_wl_remove_sel",
+            )
+            if _wl_remove and st.button("🗑️ Remove selected", key="_wl_remove_btn"):
+                for _rt in _wl_remove:
+                    if _rt in st.session_state.watchlist:
+                        st.session_state.watchlist.remove(_rt)
+                db.save_watchlist(st.session_state.watchlist)
+                st.success(f"Removed {len(_wl_remove)} ticker(s).")
+                st.rerun()
+
+    _wl = st.session_state.watchlist
+    if not _wl:
+        st.info(
+            "Your watchlist is empty. "
+            "Add tickers using the sidebar, or use the Rankings tab on the My Portfolio page "
+            "to scan the universe and add candidates."
+        )
+        st.stop()
+
+    # ── Load data for all watchlist tickers ───────────────────────────────────
+    _wl_data: dict = {}
+    with st.spinner(f"Loading analysis for {len(_wl)} watchlist ticker(s)…"):
+        for _wt in _wl:
+            try:
+                _wl_data[_wt] = load_all(_wt, "6mo")
+            except Exception as _we:
+                _wl_data[_wt] = None
+
+    # ── Build recommendations ─────────────────────────────────────────────────
+    _wl_recs: list[dict] = []
+    for _wt, _wd in _wl_data.items():
+        if _wd is None:
+            continue
+        try:
+            _wl_recs.append(build_watchlist_recommendation(_wt, _wd))
+        except Exception:
+            pass
+
+    if not _wl_recs:
+        st.warning("Could not generate analysis for any watchlist ticker. Check your connection.")
+        st.stop()
+
+    # Sort: REMOVE (HIGH) → HOLD_OFF_EARNINGS (MEDIUM) → ENTER_NOW → NEAR_ENTRY → WAIT_ENTRY → WAIT_CATALYST
+    _wl_sort = {"REMOVE": 0, "HOLD_OFF_EARNINGS": 1, "ENTER_NOW": 2,
+                "NEAR_ENTRY": 3, "WAIT_ENTRY": 4, "WAIT_CATALYST": 5}
+    _wl_recs.sort(key=lambda x: _wl_sort.get(x["action"], 6))
+
+    # ── KPI summary strip ─────────────────────────────────────────────────────
+    _wl_enter  = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")
+    _wl_near   = sum(1 for r in _wl_recs if r["action"] == "NEAR_ENTRY")
+    _wl_remove = sum(1 for r in _wl_recs if r["action"] == "REMOVE")
+    _wl_k1, _wl_k2, _wl_k3, _wl_k4 = st.columns(4)
+    _wl_k1.metric("Watchlist size", len(_wl_recs))
+    _wl_k2.metric("✅ Enter Now",    _wl_enter,
+                  delta="Actionable" if _wl_enter else None,
+                  delta_color="normal" if _wl_enter else "off")
+    _wl_k3.metric("🟡 Near Entry",   _wl_near)
+    _wl_k4.metric("🔴 Remove",       _wl_remove,
+                  delta="Thesis broken" if _wl_remove else None,
+                  delta_color="inverse" if _wl_remove else "off")
+
+    st.markdown("")
+
+    # ── Per-ticker cards ──────────────────────────────────────────────────────
+    for _wr in _wl_recs:
+        _action   = _wr["action"]
+        _priority = _wr["priority"]
+        _a_icon   = {
+            "ENTER_NOW":         "✅",
+            "NEAR_ENTRY":        "🎯",
+            "WAIT_ENTRY":        "⏳",
+            "WAIT_CATALYST":     "👁️",
+            "HOLD_OFF_EARNINGS": "⚠️",
+            "REMOVE":            "🔴",
+        }.get(_action, "📌")
+        _bclr = {
+            "HIGH":    "#ff4444",
+            "MEDIUM":  "#ffbb33",
+            "OK":      "#00C851",
+            "MONITOR": "#4a9eff",
+        }.get(_priority, "#888")
+        _expand = _action in ("ENTER_NOW", "REMOVE", "HOLD_OFF_EARNINGS")
+
+        _price    = _wr["price"]
+        _entry_lo = _wr["entry_lo"]
+        _entry_hi = _wr["entry_hi"]
+        _stop     = _wr["stop"]
+        _rr       = _wr["rr"]
+        _earn_d   = _wr["earn_days"]
+        _ticker   = _wr["ticker"]
+
+        # Position sizing for this watchlist candidate
+        _pv_now = st.session_state.get("_portfolio_value") or 50_000
+        _wl_ps = None
+        if _price and _stop and _price > _stop and _pv_now > 0:
+            try:
+                _wl_ps = position_sizing(_pv_now, MODERATE_RISK_PCT, _price, _stop)
+            except Exception:
+                pass
+
+        with st.expander(
+            f"{_a_icon} **{_action.replace('_', ' ')}** · {_ticker}  "
+            f"| Score {_wr['score']:.0f}/100 · {_wr['signal']}  "
+            f"| Readiness {_wr['readiness_pct']}%",
+            expanded=_expand,
+        ):
+            # Metrics strip
+            _wm = st.columns(5)
+            _wm[0].metric("Price",      f"${_price:.2f}" if _price else "—")
+            _wm[1].metric(
+                "Entry Zone",
+                f"${_entry_lo:.2f}–${_entry_hi:.2f}" if _entry_lo else "—",
+            )
+            _wm[2].metric("ATR Stop",   f"${_stop:.2f}" if _stop else "—",
+                          delta=f"-{(_price - _stop) / _price * 100:.1f}% gap"
+                          if _price and _stop else None,
+                          delta_color="off")
+            _wm[3].metric("R:R",
+                          f"{_rr:.1f}:1" if _rr else "—",
+                          delta="≥2:1 ✓" if _rr and _rr >= 2.0 else ("< 2:1" if _rr else None),
+                          delta_color="normal" if (_rr and _rr >= 2.0) else "inverse")
+            _wm[4].metric("Earnings",
+                          f"{_earn_d}d" if _earn_d is not None and _earn_d >= 0 else "—",
+                          delta="⚠️ Imminent" if _earn_d is not None and 0 <= _earn_d <= 7 else None,
+                          delta_color="inverse" if (_earn_d is not None and 0 <= _earn_d <= 7) else "off")
+
+            # Summary banner
+            st.markdown(
+                f"<div style='padding:10px 14px;background:#1a1a1a;"
+                f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
+                f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                f"letter-spacing:0.09em;text-transform:uppercase'>Buy Readiness Assessment</span><br>"
+                f"<span style='color:#eee'>{_wr['summary']}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Conditions + Position Sizing
+            _wl_cl, _wl_cr = st.columns([1, 1])
+
+            with _wl_cl:
+                if _wr["conditions_met"]:
+                    st.markdown("**✅ Conditions met**")
+                    for _cm in _wr["conditions_met"]:
+                        st.markdown(
+                            f"<div style='font-size:0.85em;color:#00C851;margin-left:6px'>"
+                            f"✓ {_cm}</div>",
+                            unsafe_allow_html=True,
+                        )
+                if _wr["conditions_missing"]:
+                    st.markdown("**⏳ Conditions pending**")
+                    for _cp in _wr["conditions_missing"]:
+                        st.markdown(
+                            f"<div style='font-size:0.85em;color:#ffbb33;margin-left:6px'>"
+                            f"○ {_cp}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            with _wl_cr:
+                # Position sizing panel
+                if _wl_ps:
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#0d2137;"
+                        f"border-radius:6px;border-left:4px solid #4a9eff'>"
+                        f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Position Sizing</span><br>"
+                        f"<span style='color:#eee;font-size:0.88em'>"
+                        f"<b>{_wl_ps['shares']:,} shares</b> @ ${_price:.2f} = "
+                        f"<b>${_wl_ps['total_cost']:,.0f}</b> "
+                        f"({_wl_ps['portfolio_pct']:.1f}% of portfolio)<br>"
+                        f"Risk: ${_wl_ps['actual_risk']:,.0f} "
+                        f"({_wl_ps['risk_pct_actual']:.2f}% of portfolio) "
+                        f"at stop ${_stop:.2f}"
+                        f"</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif _price:
+                    st.caption("Position sizing unavailable — stop price too close to entry or not set.")
+
+            # Detail recommendation
+            st.markdown(
+                f"<div style='padding:12px 16px;background:#0d1117;"
+                f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
+                f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
+                f"letter-spacing:0.09em;text-transform:uppercase'>"
+                f"{_a_icon} Action: {_action.replace('_', ' ')}</span><br>"
+                f"<span style='color:#eee;font-size:0.9em'>{_wr['detail']}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Goldman Lens
+            if _wr.get("goldman_lens"):
+                st.markdown("")
+                st.info(f"**Goldman Lens** · {_wr['goldman_lens']}")
+
+            # Quick action: add to Trade Journal as planned trade
+            st.markdown("")
+            _qa_col1, _qa_col2 = st.columns([1, 3])
+            with _qa_col1:
+                if _action == "ENTER_NOW" and st.button(
+                    "📒 Log planned trade", key=f"_wl_log_{_ticker}"
+                ):
+                    _new_trade = {
+                        "ticker": _ticker,
+                        "action": "BUY",
+                        "date": str(date.today()),
+                        "shares": _wl_ps["shares"] if _wl_ps else 0,
+                        "price": round(_entry_hi, 2) if _entry_hi else round(_price, 2),
+                        "stop": round(_stop, 2) if _stop else 0.0,
+                        "target": 0.0,
+                        "trigger": "WATCHLIST_ENTRY",
+                        "notes": f"Watchlist entry — score {_wr['score']:.0f}/100",
+                    }
+                    st.session_state["_prefill_trade"] = _new_trade
+                    st.session_state.nav_page = "📒 Trade Journal"
+                    st.rerun()
+            with _qa_col2:
+                if _action == "REMOVE" and st.button(
+                    "🗑️ Remove from watchlist", key=f"_wl_del_{_ticker}"
+                ):
+                    if _ticker in st.session_state.watchlist:
+                        st.session_state.watchlist.remove(_ticker)
+                        db.save_watchlist(st.session_state.watchlist)
+                        st.success(f"{_ticker} removed.")
+                        st.rerun()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE 5 — TRADE JOURNAL
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "📒 Trade Journal":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
