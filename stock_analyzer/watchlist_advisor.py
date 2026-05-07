@@ -50,7 +50,7 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
 
     Keys: ticker, action, priority, score, signal, price, entry_lo, entry_hi,
           stop, rr, earn_days, ps, title, readiness_pct, summary, detail,
-          conditions_met, conditions_missing, goldman_lens
+          conditions_met, conditions_missing, institutional_lens
     """
     score       = _f(data.get("total"))
     rec_label   = str((data.get("rec") or {}).get("label", ""))
@@ -108,8 +108,8 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 f"Score {score:.0f}/100 — below the 44 threshold for any buy consideration",
                 f"Signal: {rec_label} — active bearish signal",
             ],
-            goldman_lens=(
-                "Goldman's framework for watchlist management: a stock on your watchlist is a "
+            institutional_lens=(
+                "Institutional framework for watchlist management: a stock on your watchlist is a "
                 "'thesis in progress.' When the composite signal turns bearish, the thesis has failed. "
                 "Keeping a broken-thesis stock on the watchlist introduces cognitive bias — "
                 "you start hoping for recovery rather than waiting for a genuine setup. "
@@ -146,10 +146,10 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 f"Earnings in {earn_days}d — binary risk makes entry timing poor",
                 "Wait for post-earnings price action to establish new entry zone",
             ],
-            goldman_lens=(
+            institutional_lens=(
                 "Opening a new position into an earnings event is paying for uncertainty twice — "
                 "you haven't validated the thesis yet, and you're immediately facing a binary outcome. "
-                "Goldman's PM approach: 'New positions get established after confirmation, not before binary events.' "
+                "Institutional PM approach: 'New positions get established after confirmation, not before binary events.' "
                 "If the report is strong, you'll have a clear thesis and better information. "
                 "If it's weak, you'll have avoided a potentially significant loss on a brand-new position. "
                 "Patience here is not timidity — it's precision."
@@ -184,11 +184,11 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 f"No imminent earnings risk" if not earn_soon else "",
             ],
             conditions_missing=[],
-            goldman_lens=(
+            institutional_lens=(
                 "The hardest discipline in investing is not the analysis — it's the execution. "
                 "When a watchlist stock finally hits its entry zone with a confirmed thesis, "
                 "the tendency is to hesitate: 'Maybe I should wait a bit longer.' "
-                "Goldman's traders call this 'entry paralysis' — it's the flip side of chasing. "
+                "Professional traders call this 'entry paralysis' — it's the flip side of chasing. "
                 "You did the work by building the watchlist. The setup you planned for is here. "
                 "Execute the plan. Adjust the stop as the position matures."
             ),
@@ -224,9 +224,9 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 f"Price {abs(pct_above):.1f}% above entry zone — wait for pullback or set limit",
                 (f"R:R {rr:.1f}:1 — currently below 2:1 target at this price" if rr and rr < 2.0 else ""),
             ],
-            goldman_lens=(
+            institutional_lens=(
                 "Entry discipline is where most retail investors give back the edge their analysis creates. "
-                "Goldman's trading desk rule: if a stock has moved more than 5% above its technical entry zone, "
+                "Professional trading desks rule: if a stock has moved more than 5% above its technical entry zone, "
                 "the position size is cut by 50% OR you wait for the pullback. "
                 "The reason: buying 8% above your planned entry means your stop is now 8% further from breakeven "
                 "and your R:R may no longer justify the trade. "
@@ -265,8 +265,8 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 f"Price {dist_str} — entry R:R no longer optimal",
                 "Set a price alert at the entry zone; revisit on pullback",
             ],
-            goldman_lens=(
-                "The watchlist is where patience creates alpha. Goldman's PMs explicitly separate "
+            institutional_lens=(
+                "The watchlist is where patience creates alpha. Institutional PMs explicitly separate "
                 "'I like this stock' from 'I like this stock AT THIS PRICE.' "
                 "A stock with a great thesis trading 15% above your entry zone is not a buy — "
                 "it's a stock to buy when it corrects back to your level. "
@@ -303,9 +303,9 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
             f"Signal {rec_label} — needs Buy or Strong Buy",
             "No specific catalyst confirmed yet",
         ],
-        goldman_lens=(
+        institutional_lens=(
             "A 'monitoring' position on the watchlist is intentional capital preservation. "
-            "Goldman's approach: the watchlist is not just a holding area — it's an active "
+            "Institutional approach: the watchlist is not just a holding area — it's an active "
             "queue of theses at various stages of validation. "
             "A score below 65 means the market hasn't yet confirmed your thesis. "
             "Deploying capital before confirmation is speculation; waiting for confirmation is investing. "
@@ -319,7 +319,7 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
 def _card(
     ticker, action, score, signal, price, entry_lo, entry_hi,
     stop, rr, earn_days, title, summary, detail,
-    conditions_met, conditions_missing, goldman_lens,
+    conditions_met, conditions_missing, institutional_lens,
 ) -> dict:
     priority = _ACTION_PRIORITY.get(action, "MONITOR")
 
@@ -356,5 +356,5 @@ def _card(
         "detail":             detail,
         "conditions_met":     [c for c in conditions_met if c],
         "conditions_missing": [c for c in conditions_missing if c],
-        "goldman_lens":       goldman_lens,
+        "institutional_lens":       institutional_lens,
     }

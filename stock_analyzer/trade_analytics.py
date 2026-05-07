@@ -7,7 +7,7 @@ Turns raw trade history into PM-level self-awareness:
 - Monthly P&L trend (is your edge improving or decaying?)
 - Hold time estimation (matched BUY→SELL pairs)
 - Loss discipline score (are you cutting losses fast or holding losers?)
-- Behavioral insights with Goldman-style coaching cards
+- Behavioral insights with Institutional-style coaching cards
 """
 
 import pandas as pd
@@ -200,7 +200,7 @@ def build_behavioral_insights(
 ) -> list[dict]:
     """
     Returns a list of behavioral insight cards, each with:
-    priority (HIGH/MEDIUM/OK), title, observation, implication, action, goldman_lens
+    priority (HIGH/MEDIUM/OK), title, observation, implication, action, institutional_lens
     """
     insights = []
 
@@ -227,9 +227,9 @@ def build_behavioral_insights(
                     "(2) hold winners longer — if a trade is up, raise the stop but don't exit just because "
                     "it's profitable. Let the trend work."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "The Kelly Criterion shows that positive expectancy requires either high win rate "
-                    "OR high win/loss ratio. Goldman's PMs target a minimum 2:1 win/loss ratio — "
+                    "OR high win/loss ratio. Institutional PMs target a minimum 2:1 win/loss ratio — "
                     "meaning they systematically let winners run and cut losers at a fixed risk point. "
                     "The math is unforgiving: a 50% win rate with 1:1 ratio produces zero edge "
                     "before transaction costs. The discipline is asymmetry — not being right more often, "
@@ -256,9 +256,9 @@ def build_behavioral_insights(
                     "The temptation when the strategy is working is to take profits earlier — resist it. "
                     "The large wins are what makes the math work."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "A win/loss ratio above 2.5 with a win rate above 55% is exceptional. "
-                    "Goldman's quant desks show that most institutional strategies cluster around 50% win rate "
+                    "Quantitative research desks show that most institutional strategies cluster around 50% win rate "
                     "with a 2:1 ratio — achieving both simultaneously is what separates top quartile PMs. "
                     "Document what you're doing right now. Don't optimise it to death."
                 ),
@@ -288,8 +288,8 @@ def build_behavioral_insights(
                     "Simultaneously, when a winner hits +15%, raise the trailing stop to lock in "
                     "50% of the gain — but don't sell. Let the stop do the work."
                 ),
-                "goldman_lens": (
-                    "Kahneman and Tversky identified this in 1979 — Goldman's behavioral finance team "
+                "institutional_lens": (
+                    "Kahneman and Tversky identified this in 1979 — Behavioral finance research "
                     "has spent decades trying to engineer it out of their PMs. "
                     "The solution is systematic, not motivational: pre-commit to a maximum hold time for losers "
                     "BEFORE you enter the trade. Write it in the trade notes. "
@@ -314,8 +314,8 @@ def build_behavioral_insights(
                     "Maintain this discipline. When the market gets volatile and a winner pulls back, "
                     "resist the urge to exit early. Use trailing stops instead of emotional exits."
                 ),
-                "goldman_lens": (
-                    "Goldman's PM coaching focuses almost entirely on eliminating the disposition effect. "
+                "institutional_lens": (
+                    "Institutional PM coaching focuses almost entirely on eliminating the disposition effect. "
                     "The fact that you're cutting losses faster than you exit winners means "
                     "you've already solved the hardest behavioral problem in investing. "
                     "Protect this edge — it's rarer than most investors think."
@@ -351,8 +351,8 @@ def build_behavioral_insights(
                     "are they overtrading, poor timing, or a broken signal? "
                     "Consider pausing that trigger type until you understand the pattern."
                 ),
-                "goldman_lens": (
-                    "Goldman's PM performance review process explicitly breaks down returns by decision type. "
+                "institutional_lens": (
+                    "Institutional PM performance review process explicitly breaks down returns by decision type. "
                     "A systematic strategy can produce positive overall returns while hiding a broken "
                     "sub-strategy that's slowly eroding performance. "
                     "The discipline is to measure each trigger independently — then lean harder into "
@@ -380,9 +380,9 @@ def build_behavioral_insights(
                     "Scale up confidence in the process. "
                     "When you have a valid setup, trust the signal rather than second-guessing."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "A strategy that produces positive expectancy across multiple entry triggers "
-                    "is rare and valuable. Goldman's quant teams call this 'robustness' — "
+                    "is rare and valuable. Quantitative research teams call this 'robustness' — "
                     "the returns don't depend on a single parameter or condition. "
                     "Protect it by not over-fitting: resist the urge to optimise triggers further. "
                     "The diversification of edge sources is part of what makes it work."
@@ -417,8 +417,8 @@ def build_behavioral_insights(
                     "Are you taking more trades? One of those three will be the cause. "
                     "Consider reducing position sizes by 30–40% until you identify and fix the pattern."
                 ),
-                "goldman_lens": (
-                    "Goldman's PM review process uses a 'drawdown trigger' — if rolling 3-month "
+                "institutional_lens": (
+                    "Institutional PM review process uses a 'drawdown trigger' — if rolling 3-month "
                     "performance is below the prior-period average by more than 40%, the PM enters "
                     "a mandatory risk review. This is not a punishment; it's a systematic response "
                     "to evidence that something has changed. The worst thing to do in a drawdown is "
@@ -447,8 +447,8 @@ def build_behavioral_insights(
                     "Set a mental benchmark: 'If performance reverts to the prior average, "
                     "that's normal — not a failure.'"
                 ),
-                "goldman_lens": (
-                    "Goldman's PM behavioral research shows that overconfidence peaks exactly "
+                "institutional_lens": (
+                    "Institutional PM behavioral research shows that overconfidence peaks exactly "
                     "at the top of a performance run — PMs increase size and risk just as "
                     "conditions start to revert. The antidote is systematic, not motivational: "
                     "pre-commit to keeping position sizes constant for at least 2 months after "
@@ -476,9 +476,9 @@ def build_behavioral_insights(
                     "Set hard stops on every new trade before entry. "
                     "If a position hits the stop, exit immediately — no waiting for recovery."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "A profit factor below 1.0 is the quantitative definition of a broken strategy. "
-                    "Goldman's risk committee would flag any strategy with profit factor under 1.2 "
+                    "Institutional risk committee would flag any strategy with profit factor under 1.2 "
                     "for mandatory review — under 1.0 would trigger an immediate size reduction. "
                     "The path back is not through bigger wins; it's through smaller, more disciplined losses."
                 ),
@@ -500,8 +500,8 @@ def build_behavioral_insights(
                     "is to start holding losers longer (hoping for recovery) or cutting winners "
                     "too early (fear of giving back gains)."
                 ),
-                "goldman_lens": (
-                    "Goldman's quant teams target a minimum profit factor of 1.5 for any live strategy. "
+                "institutional_lens": (
+                    "Quantitative research teams target a minimum profit factor of 1.5 for any live strategy. "
                     "At 2.0+, the strategy has enough cushion to survive adverse market regimes. "
                     "The discipline is keeping it there: one emotional override of a stop "
                     "can degrade a month of good discipline."

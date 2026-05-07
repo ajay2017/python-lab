@@ -3,7 +3,7 @@ Portfolio Rebalancing Advisor.
 
 Computes drift between current and target weights, ranks positions by
 rebalancing urgency, and generates specific trim/add actions with dollar
-and share amounts, priority ordering, and Goldman-style context on
+and share amounts, priority ordering, and Institutional-style context on
 when and how to rebalance.
 """
 
@@ -94,7 +94,7 @@ def build_rebalance_plan(
 ) -> dict:
     """
     Generates trim and add action lists with specific share counts,
-    urgency ordering, and Goldman-style rationale.
+    urgency ordering, and Institutional-style rationale.
 
     Returns dict with:
       trims: list of action dicts (overweight positions)
@@ -179,8 +179,8 @@ def build_rebalance_plan(
                     "Keep the core position — just cap the binary event risk from concentration."
                 )
 
-            goldman = (
-                "Goldman's position sizing rule: no single name above 15% of portfolio, "
+            inst_lens = (
+                "Institutional position sizing rule: no single name above 15% of portfolio,"
                 "regardless of conviction — and even high-conviction names should be "
                 "trimmed back to target when they outrun it by 5pp or more. "
                 "The reason is not that you're wrong; it's that a concentrated winner "
@@ -203,7 +203,7 @@ def build_rebalance_plan(
                 "status":        status,
                 "rationale":     rationale,
                 "action_detail": action_detail,
-                "goldman":       goldman,
+                "institutional_lens":       inst_lens,
             })
 
         else:  # underweight → ADD
@@ -241,9 +241,9 @@ def build_rebalance_plan(
                     "Only add if the fundamental thesis remains intact."
                 )
 
-            goldman = (
-                "Underweight rebalancing in high-conviction names is one of the highest-return "
-                "uses of portfolio cash. Goldman's research shows that systematic rebalancing "
+            inst_lens = (
+                "Underweight rebalancing in high-conviction names is one of the highest-return"
+                "uses of portfolio cash. Research shows that systematic rebalancing "
                 "— buying underweight winners and trimming overweight laggards — adds "
                 "approximately 0.5–1.0% annually versus a drift portfolio, purely from "
                 "the discipline of maintaining target allocations. "
@@ -265,7 +265,7 @@ def build_rebalance_plan(
                 "status":        status,
                 "rationale":     rationale,
                 "action_detail": action_detail,
-                "goldman":       goldman,
+                "institutional_lens":       inst_lens,
             })
 
     trims.sort(key=lambda x: x["urgency"], reverse=True)

@@ -1,10 +1,10 @@
 """
-Goldman Sachs-style Risk Advisor.
+Institutional-style Risk Advisor.
 
 Reads 7 portfolio-level risk metrics plus per-stock risk data and produces
 ranked, evidence-backed action recommendations — each with a problem
 statement, root-cause tickers, a specific actionable step, a quantified
-expected outcome, and a Goldman Lens teaching moment.
+expected outcome, and a Institutional Lens teaching moment.
 """
 
 import numpy as np
@@ -51,7 +51,7 @@ def build_risk_advisor_recommendations(
       root_tickers    : [{"ticker", "value", "weight", "label"}]
       recommendation  : specific, actionable advice
       expected_outcome: quantified result if recommendation is followed
-      goldman_lens    : teaching moment / professional context
+      institutional_lens    : teaching moment / professional context
     """
     if not port_risk or port_df.empty:
         return []
@@ -153,8 +153,8 @@ def build_risk_advisor_recommendations(
                     "Defensive additions typically bring portfolio Beta from the current "
                     f"{beta:.2f} to {beta - excess * 0.6:.2f} with a single 10% position change."
                 ),
-                "goldman_lens": (
-                    "Goldman Sachs risk teams impose a hard Beta ceiling of 1.4 for managed equity accounts, "
+                "institutional_lens": (
+                    "Institutional risk teams impose a hard Beta ceiling of 1.4 for managed equity accounts, "
                     "dropping to 1.2 during 'risk-off' macro regimes. Above 1.4, the asymmetry turns against you: "
                     "high-beta stocks fall faster during corrections than they rise during rallies on a "
                     "risk-adjusted basis. The PM's job is not to eliminate beta — it's to ensure you are "
@@ -169,8 +169,8 @@ def build_risk_advisor_recommendations(
                 "problem": "", "root_cause": "", "root_tickers": [],
                 "recommendation": "No beta action required.",
                 "expected_outcome": "",
-                "goldman_lens": (
-                    f"Portfolio Beta of {beta:.2f} sits within Goldman's 0.8–1.2 target range. "
+                "institutional_lens": (
+                    f"Portfolio Beta of {beta:.2f} sits within Institutional 0.8–1.2 target range. "
                     "Watch for beta drift: as winners grow to a larger portfolio weight, beta creeps upward "
                     "without any new purchases. Re-check after significant P&L moves."
                 ),
@@ -231,8 +231,8 @@ def build_risk_advisor_recommendations(
                 "by 0.15–0.30. A Sharpe above 1.0 means every unit of risk taken earns more "
                 "than the market index — the definition of genuine alpha generation."
             ),
-            "goldman_lens": (
-                "Goldman's GS Compass framework evaluates every position by its marginal Sharpe contribution. "
+            "institutional_lens": (
+                "Professional PM frameworks evaluates every position by its marginal Sharpe contribution. "
                 "A stock with a 5% gain but 40% individual volatility is destroying portfolio Sharpe "
                 "if SPY returned 6% at 15% vol. "
                 "'Return per unit of risk' — not absolute return — is the correct measure of "
@@ -247,7 +247,7 @@ def build_risk_advisor_recommendations(
             "problem": "", "root_cause": "", "root_tickers": [],
             "recommendation": "No Sharpe action required.",
             "expected_outcome": "",
-            "goldman_lens": (
+            "institutional_lens": (
                 f"Sharpe of {sharpe:.2f} is strong — you're generating meaningful return per unit of risk. "
                 "Protect it by avoiding low-quality, high-volatility additions that would dilute it. "
                 "Every new position you add should improve or at minimum preserve portfolio Sharpe."
@@ -312,11 +312,11 @@ def build_risk_advisor_recommendations(
                 f"from ${daily_1sd:,.0f} to ~${daily_1sd * 0.85:,.0f} — "
                 "meaningful improvement in day-to-day portfolio stability."
             ),
-            "goldman_lens": (
+            "institutional_lens": (
                 "High volatility is not inherently bad — it must be compensated by proportionally higher "
                 "Sharpe. When Sharpe is below 1.0 AND volatility is above 25%, you have the worst "
                 "combination: significant risk without adequate reward. "
-                "Goldman's structured equity desks always pair volatility with Sharpe analysis. "
+                "Institutional equity desks always pair volatility with Sharpe analysis. "
                 "Volatility in isolation is noise; Sharpe-adjusted volatility is signal."
             ),
         })
@@ -374,8 +374,8 @@ def build_risk_advisor_recommendations(
                 "while only marginally increasing stop-out frequency. "
                 "The goal is never to avoid losses entirely — it's to make losses shallow and recoverable."
             ),
-            "goldman_lens": (
-                "Goldman private wealth uses a 15% portfolio drawdown as a mandatory review checkpoint — "
+            "institutional_lens": (
+                "Institutional wealth management uses a 15% portfolio drawdown as a mandatory review checkpoint — "
                 "not an automatic stop, but a structured re-evaluation of every position thesis. "
                 "The key diagnostic: is this drawdown caused by (a) broad market conditions — ride it out "
                 "with stops in place — or (b) fundamental deterioration specific to these holdings — "
@@ -391,7 +391,7 @@ def build_risk_advisor_recommendations(
             "problem": "", "root_cause": "", "root_tickers": [],
             "recommendation": "No drawdown action required.",
             "expected_outcome": "",
-            "goldman_lens": (
+            "institutional_lens": (
                 f"A {max_dd:.0f}% max drawdown is modest for an equity portfolio. "
                 "The ratchet stop system is working — gains are being protected as they accumulate. "
                 "Keep monitoring: drawdown tends to deepen quickly when market conditions shift."
@@ -437,11 +437,11 @@ def build_risk_advisor_recommendations(
                     f"to ~${cvar_dollar * 0.93:,.0f}. Adding a 5% uncorrelated sector position "
                     "typically narrows the CVaR/VaR ratio by 0.2–0.3× by smoothing the tails."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "VaR tells you about normal bad days. CVaR tells you about disaster scenarios. "
                     "The 2008 financial crisis and March 2020 COVID crash were CVaR events — "
                     "portfolios that looked 'safe' on VaR lost 40–60% because nobody measured CVaR. "
-                    "Goldman's risk desks use CVaR as the primary stress metric precisely because "
+                    "Institutional risk desks use CVaR as the primary stress metric precisely because "
                     "it captures what happens when correlations spike to 1.0 and diversification "
                     "disappears exactly when you need it most."
                 ),

@@ -134,7 +134,7 @@ def _recommend(
     est_move: float,
 ) -> tuple[str, str, str, str]:
     """
-    Returns (action, priority, detail, goldman_lens).
+    Returns (action, priority, detail, institutional_lens).
     Actions: EXIT | REDUCE | MONITOR | HOLD | HOLD_OR_ADD
     """
     # ── EXIT ─────────────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ def _recommend(
             (
                 "The cardinal rule in earnings management: never hold through a report when your "
                 "composite signal is already bearish. You are paying for uncertainty you can't price. "
-                "Goldman PMs call this 'event risk on a broken thesis' — the worst combination. "
+                "Institutional PMs call this 'event risk on a broken thesis' — the worst combination. "
                 "A position can always be re-entered; a gap-down loss with a negative signal attached is very hard to recover from psychologically."
             ),
         )
@@ -174,7 +174,7 @@ def _recommend(
                 "Keep the core position for the upside scenario — just cap the binary risk."
             ),
             (
-                "Goldman's position sizing rule for binary events: no single position above 15% of "
+                "Institutional position sizing rule for binary events: no single position above 15% of "
                 "portfolio going into an earnings report, regardless of conviction. "
                 "The reason is not that you're wrong — it's that earnings are inherently uncertain "
                 "even with perfect fundamental analysis. Managing size IS the risk management. "
@@ -198,7 +198,7 @@ def _recommend(
             (
                 "A low composite score heading into earnings means both your technical and fundamental "
                 "signals are warning you — then you're adding a binary event on top. "
-                "Goldman's PM framework: each risk layer (fundamental weakness + binary event) independently "
+                "Institutional PM framework: each risk layer (fundamental weakness + binary event) independently "
                 "justifies reducing size. Both together mandate action. "
                 "Position size is the only risk control you have complete authority over."
             ),
@@ -222,7 +222,7 @@ def _recommend(
                 "Earnings revision momentum is one of the most reliable alpha factors in institutional investing. "
                 "When analysts are cutting estimates heading into a report, it's usually because they have "
                 "channel checks, supplier data, or management conversations that signal trouble. "
-                "Goldman's quant teams show that stocks with negative pre-earnings revisions miss consensus "
+                "Quantitative research teams show that stocks with negative pre-earnings revisions miss consensus "
                 "at twice the rate of those with positive revisions. Reduce before the report; re-evaluate after."
             ),
         )
@@ -243,7 +243,7 @@ def _recommend(
             (
                 "Stops are daily risk management tools — they don't protect against overnight gaps. "
                 "When earnings day volatility is larger than your gap to stop, the stop becomes theoretical. "
-                "Goldman's trading desk uses a simple rule: if estimated earnings move > gap to stop, "
+                "Professional trading desks uses a simple rule: if estimated earnings move > gap to stop, "
                 "treat the position as 'manual stop' — be at your terminal for the pre-market move "
                 "and exit if the thesis is broken, at whatever price is available."
             ),
@@ -266,7 +266,7 @@ def _recommend(
                 "'Earnings revision momentum' is one of the most robust alpha factors in quantitative "
                 "investing — stocks with rising analyst estimates consistently outperform those with "
                 "falling estimates. When you have both a strong composite score AND rising estimates "
-                "heading into a report, Goldman's guidance is to hold and potentially lean in. "
+                "heading into a report, Institutional guidance is to hold and potentially lean in. "
                 "The risk is real but the setup is genuinely positive."
             ),
         )
@@ -284,7 +284,7 @@ def _recommend(
         (
             "Earnings reports are thesis checkpoints, not just price catalysts. "
             "The number that matters most is almost never the EPS — it's the guidance. "
-            "Goldman's analysts always ask: 'Did management raise, maintain, or cut guidance?' "
+            "Institutional analysts always ask: 'Did management raise, maintain, or cut guidance?' "
             "A beat with cut guidance is a sell. A miss with raised guidance is often a hold or buy. "
             "Listen for management tone, not just the headline numbers."
         ),
@@ -358,7 +358,7 @@ def build_earnings_playbook(
             else "AHEAD"
         )
 
-        action, priority, detail, goldman = _recommend(
+        action, priority, detail, inst_lens = _recommend(
             days_until, score, weight, pnl_pct,
             gap, net_rev, signal, shares, mval, est_move,
         )
@@ -399,7 +399,7 @@ def build_earnings_playbook(
             "action":        action,
             "priority":      priority,
             "detail":        detail,
-            "goldman_lens":  goldman,
+            "institutional_lens":  inst_lens,
             "watch_for":     watch,
         })
 

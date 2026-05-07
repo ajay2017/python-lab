@@ -81,7 +81,7 @@ _TIPS = {
     ),
     "FCF Yield": (
         "Free Cash Flow ÷ Market Cap × 100.\n\n"
-        "The primary valuation metric used by Goldman Sachs and most top-tier "
+        "The primary valuation metric used by Institutional and most top-tier "
         "analysts — harder to manipulate than P/E because cash in the bank "
         "is real.\n\n"
         "• > 5% → Excellent: strong real-cash generation\n"
@@ -278,7 +278,7 @@ _TIPS = {
         "• 2:1 → Minimum professional standard\n"
         "• 3:1 → Good — you can be wrong half the time and still profit\n"
         "• > 4:1 → Excellent asymmetric setup\n\n"
-        "At Goldman Sachs, conviction trades typically require R:R ≥ 2.5:1 to "
+        "At Institutional, conviction trades typically require R:R ≥ 2.5:1 to "
         "justify the position versus other opportunities.\n\n"
         "Learn more: investopedia.com/terms/r/riskrewardratio.asp"
     ),
@@ -325,7 +325,7 @@ _TIPS = {
         "A portfolio of 8 semiconductor stocks will score much lower than a 3-stock "
         "portfolio spanning tech, healthcare, and energy — even though the larger one "
         "looks more diversified.\n\n"
-        "Goldman Sachs risk teams target average pairwise correlation below 0.40 "
+        "Institutional risk teams target average pairwise correlation below 0.40 "
         "(score ~30) for diversified equity portfolios."
     ),
     "Portfolio Correlation": (
@@ -346,7 +346,7 @@ _TIPS = {
         "• 1.2–1.5 → Aggressive — amplifies both gains and losses\n"
         "• > 1.5 → High leverage equivalent — requires active management\n\n"
         "A tech-heavy portfolio typically has Beta 1.3–1.8. "
-        "Goldman's risk teams target portfolio Beta ≤ 1.2 for managed accounts."
+        "Institutional risk teams target portfolio Beta ≤ 1.2 for managed accounts."
     ),
     "Portfolio Volatility": (
         "Annualized standard deviation of daily portfolio returns.\n\n"
@@ -1259,7 +1259,7 @@ if page == "🏠 My Portfolio":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    st.info(f"**Goldman Lens** · {_tr['goldman']}")
+                    st.info(f"**Institutional Lens** · {_tr['institutional_lens']}")
 
         # Add recommendations
         if _rb_plan["adds"]:
@@ -1295,7 +1295,7 @@ if page == "🏠 My Portfolio":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    st.info(f"**Goldman Lens** · {_ad['goldman']}")
+                    st.info(f"**Institutional Lens** · {_ad['institutional_lens']}")
 
         # In-tolerance positions
         if _rb_plan["ok"]:
@@ -1440,8 +1440,8 @@ if page == "🏠 My Portfolio":
                                 unsafe_allow_html=True,
                             )
                             st.info(
-                                "**Goldman Lens** · Price-sentiment divergence is a classic early warning. "
-                                "Goldman's quantitative strategists include sentiment momentum as a factor "
+                                "**Institutional Lens** · Price-sentiment divergence is a classic early warning. "
+                                "Quantitative strategists include sentiment momentum as a factor "
                                 "in their reversal models — a stock rising while its news flow deteriorates "
                                 "has historically underperformed the following month by 3–5% on average. "
                                 "This is not a sell signal in isolation, but it warrants raising the stop "
@@ -1462,8 +1462,8 @@ if page == "🏠 My Portfolio":
                                 unsafe_allow_html=True,
                             )
                             st.info(
-                                "**Goldman Lens** · A stock falling while sentiment improves can signal "
-                                "an over-reaction to short-term price pressure. Goldman's contrarian "
+                                "**Institutional Lens** · A stock falling while sentiment improves can signal "
+                                "an over-reaction to short-term price pressure. Institutional contrarian "
                                 "indicators flag this as a potential mean-reversion opportunity — "
                                 "particularly if the composite score remains above 55 and the fundamental "
                                 "thesis is intact. Confirm with the next news cycle before adding."
@@ -1643,9 +1643,9 @@ if page == "🏠 My Portfolio":
                             unsafe_allow_html=True,
                         )
                         st.info(
-                            "**Goldman Lens** · Tax loss harvesting is one of the highest-certainty "
+                            "**Institutional Lens** · Tax loss harvesting is one of the highest-certainty "
                             "alpha sources available — it doesn't require predicting the market. "
-                            "Goldman's tax-aware strategies harvest losses systematically throughout "
+                            "Tax-aware institutional strategies harvest losses systematically throughout "
                             "the year, not just in December. The key discipline: replace the sold "
                             "position with a correlated but not identical ETF or name to maintain "
                             "market exposure while the 30-day wash sale window passes."
@@ -1679,8 +1679,8 @@ if page == "🏠 My Portfolio":
                             unsafe_allow_html=True,
                         )
                         st.info(
-                            "**Goldman Lens** · The LTCG threshold is one of the most valuable "
-                            "and underused tools in portfolio management. Goldman's PMs always flag "
+                            "**Institutional Lens** · The LTCG threshold is one of the most valuable "
+                            "and underused tools in portfolio management. Institutional PMs always flag "
                             "positions within 60 days of the 1-year mark — selling before the "
                             f"threshold costs {(_stcg_r - _ltcg_r)*100:.0f} percentage points of "
                             "extra tax with zero investment rationale. "
@@ -2000,9 +2000,9 @@ if page == "🏠 My Portfolio":
                                         unsafe_allow_html=True,
                                     )
 
-                            if _prec.get("goldman_lens"):
+                            if _prec.get("institutional_lens"):
                                 st.markdown("")
-                                st.info(f"**Goldman Lens** · {_prec['goldman_lens']}")
+                                st.info(f"**Institutional Lens** · {_prec['institutional_lens']}")
 
         except Exception as _de:
             st.warning(f"Performance Diagnostics unavailable: {_de}")
@@ -2321,10 +2321,10 @@ if page == "🏠 My Portfolio":
                         for _wi, _witem in enumerate(_pb["watch_for"]):
                             _wf_cols[_wi % 2].markdown(f"- {_witem}")
 
-                    # Goldman Lens
-                    if _pb.get("goldman_lens"):
+                    # Institutional Lens
+                    if _pb.get("institutional_lens"):
                         st.markdown("")
-                        st.info(f"**Goldman Lens** · {_pb['goldman_lens']}")
+                        st.info(f"**Institutional Lens** · {_pb['institutional_lens']}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 4 — P&L ATTRIBUTION WATERFALL
@@ -3300,7 +3300,7 @@ if page == "🏠 My Portfolio":
             st.caption(
                 "Synthesises your 7 portfolio risk metrics into ranked, evidence-backed actions. "
                 "Each card shows the problem with dollar impact, which specific tickers are driving it, "
-                "an exact recommendation, and the Goldman Sachs perspective behind it."
+                "an exact recommendation, and the institutional perspective behind it."
             )
 
             _n_high = sum(1 for r in _risk_advisor_recs if r["priority"] == "HIGH")
@@ -3328,7 +3328,7 @@ if page == "🏠 My Portfolio":
                 # ── OK cards — compact, collapsed ────────────────────────────
                 if _pri == "OK":
                     with st.expander(f"✅  {_rec['title']}", expanded=False):
-                        st.caption(_rec["goldman_lens"])
+                        st.caption(_rec["institutional_lens"])
                     continue
 
                 # ── HIGH / MEDIUM action cards ────────────────────────────────
@@ -3404,10 +3404,10 @@ if page == "🏠 My Portfolio":
                                 unsafe_allow_html=True,
                             )
 
-                    # Goldman Lens — full width
-                    if _rec.get("goldman_lens"):
+                    # Institutional Lens — full width
+                    if _rec.get("institutional_lens"):
                         st.markdown("")
-                        st.info(f"**Goldman Lens** · {_rec['goldman_lens']}")
+                        st.info(f"**Institutional Lens** · {_rec['institutional_lens']}")
 
         # ── Stress Testing ────────────────────────────────────────────────────
         st.divider()
@@ -3619,7 +3619,7 @@ if page == "🏠 My Portfolio":
             st.caption(
                 "Each holding's 6-month return vs its sector ETF benchmark. "
                 "**Outperforming** = genuine stock-specific alpha, not just riding the sector tide. "
-                "**Underperforming** = the sector rallied but this position lagged — a Goldman rotation flag."
+                "**Underperforming** = the sector rallied but this position lagged — a Institutional rotation flag."
             )
 
             # Holding returns bar chart (instant — uses existing price data)
@@ -3731,7 +3731,7 @@ if page == "🏠 My Portfolio":
                     )
                     st.dataframe(_styled_rs, use_container_width=True)
 
-                    # Goldman-style insight callouts
+                    # Institutional-style insight callouts
                     _valid = rs_df.dropna(subset=["Alpha (%)"])
                     if n_under > 0:
                         _worst = _valid.loc[_valid["Alpha (%)"].idxmin()]
@@ -3739,7 +3739,7 @@ if page == "🏠 My Portfolio":
                             f"⚠️ **{_worst['Ticker']}** is lagging its sector ETF ({_worst['ETF']}) "
                             f"by **{abs(_worst['Alpha (%)']):+.1f}%** over 6 months — "
                             f"the sector rallied but this position did not keep pace. "
-                            f"Goldman would flag this for rotation review."
+                            f"Best practice would flag this for rotation review."
                         )
                     if n_out > 0:
                         _best = _valid.loc[_valid["Alpha (%)"].idxmax()]
@@ -3756,7 +3756,7 @@ if page == "🏠 My Portfolio":
         st.caption(
             "Detects the current macro regime (rising/falling rates, risk-on/off) from live ETF proxies "
             "and shows which holdings are in the tailwind or headwind. "
-            "Goldman Sachs uses macro regime overlays to tilt sector weights 3–5% above/below benchmark."
+            "Institutional practice uses macro regime overlays to tilt sector weights 3–5% above/below benchmark."
         )
 
         if st.button("📡 Load macro signals (TLT · SPY · VIX)", key="_macro_load_btn"):
@@ -3918,7 +3918,7 @@ if page == "🏠 My Portfolio":
                     st.warning(
                         f"⚠️ **{_headwind_weight:.0f}% of your portfolio is in macro headwind sectors** "
                         f"({', '.join(_heads)}) given the *{regime['label']}* environment. "
-                        f"Goldman would recommend trimming these and rotating to "
+                        f"Best practice would recommend trimming these and rotating to "
                         f"{', '.join(_fav['overweight'][:2]) if _fav['overweight'] else 'defensive sectors'}."
                     )
                 elif _nt > _nh:
@@ -4090,7 +4090,7 @@ if page == "🏠 My Portfolio":
         st.caption(
             "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
             "Shows whether you're holding the best names in each sector or just familiar ones. "
-            "Goldman uses universe-relative ranking to identify rotation candidates."
+            "Institutional uses universe-relative ranking to identify rotation candidates."
         )
 
         if st.button("🔍 Scan full universe & rank my holdings", key="_rank_scan_btn"):
@@ -4201,7 +4201,7 @@ if page == "🏠 My Portfolio":
                     st.markdown("### 🔄 Rotation Candidates")
                     st.caption(
                         "These holdings rank in the bottom quartile of the universe. "
-                        "Goldman would review for rotation into higher-ranked names in the same sector."
+                        "Best practice would review for rotation into higher-ranked names in the same sector."
                     )
                     for _, brow in _bot_rows.iterrows():
                         alts = sector_alternatives(
@@ -4264,7 +4264,7 @@ if page == "🏠 My Portfolio":
 
         st.markdown("### 🤖 AI Monitoring Brief")
         st.caption(
-            "Generates a concise Goldman Sachs-style morning brief using Claude AI. "
+            "Generates a concise Institutional-style morning brief using Claude AI. "
             "Synthesises your portfolio positions, live alerts, recent news, and market context "
             "into actionable insights. Cached until you refresh."
         )
@@ -4342,7 +4342,7 @@ if page == "🏠 My Portfolio":
                 _full_ctx = "\n".join(_ctx_lines)
 
                 _system_prompt = (
-                    "You are a senior portfolio analyst at Goldman Sachs. "
+                    "You are a senior portfolio analyst at Institutional. "
                     "Write a concise, professional morning monitoring brief for a portfolio manager. "
                     "Be specific: name tickers, cite numbers. Use a structured format with short sections. "
                     "Tone: confident, analytical, no fluff. Maximum 450 words. "
@@ -5182,7 +5182,7 @@ elif page == "📋 Watchlist":
     st.caption(
         "Your opportunity pipeline. Each stock on the watchlist is analysed for buy readiness — "
         "when to open, when to wait, and when the thesis has broken. "
-        "A Goldman PM doesn't just track watchlist tickers; they actively manage them."
+        "A Institutional PM doesn't just track watchlist tickers; they actively manage them."
     )
 
     # ── Sidebar: manage watchlist ─────────────────────────────────────────────
@@ -5394,10 +5394,10 @@ elif page == "📋 Watchlist":
                 unsafe_allow_html=True,
             )
 
-            # Goldman Lens
-            if _wr.get("goldman_lens"):
+            # Institutional Lens
+            if _wr.get("institutional_lens"):
                 st.markdown("")
-                st.info(f"**Goldman Lens** · {_wr['goldman_lens']}")
+                st.info(f"**Institutional Lens** · {_wr['institutional_lens']}")
 
             # Quick action: add to Trade Journal as planned trade
             st.markdown("")
@@ -5739,7 +5739,7 @@ elif page == "📒 Trade Journal":
             st.subheader("🧠 Behavioral Analytics")
             st.caption(
                 "Deeper analysis of your trading patterns. "
-                "Goldman PMs review these metrics monthly to identify behavioral drift — "
+                "Institutional PMs review these metrics monthly to identify behavioral drift — "
                 "the subtle habits that silently erode performance."
             )
 
@@ -5925,9 +5925,9 @@ elif page == "📒 Trade Journal":
                                 unsafe_allow_html=True,
                             )
 
-                        if _ins.get("goldman_lens"):
+                        if _ins.get("institutional_lens"):
                             st.markdown("")
-                            st.info(f"**Goldman Lens** · {_ins['goldman_lens']}")
+                            st.info(f"**Institutional Lens** · {_ins['institutional_lens']}")
 
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")

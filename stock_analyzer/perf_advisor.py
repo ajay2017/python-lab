@@ -3,7 +3,7 @@ Performance attribution and diagnostics advisor.
 
 Computes per-position alpha vs SPY and sector ETF for a selected period,
 categorises each holding, then generates prioritised action recommendations
-with dollar impact, thesis status, and Goldman Sachs context.
+with dollar impact, thesis status, and institutional context.
 """
 
 import pandas as pd
@@ -130,7 +130,7 @@ def build_perf_recommendations(
     """
     Returns ranked recommendation dicts from the attribution DataFrame.
     Each dict: priority, type, ticker, title, metrics, problem,
-               root_cause, recommendation, expected_outcome, goldman_lens
+               root_cause, recommendation, expected_outcome, institutional_lens
     """
     if attr_df.empty:
         return []
@@ -184,9 +184,9 @@ def build_perf_recommendations(
                     f"${abs(dollar_alpha):,.0f} of outperformance generated vs holding SPY at this weight over {period_label}. "
                     "Holding genuine alpha generators through their run is the primary driver of long-term outperformance."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "Idiosyncratic alpha — outperformance above the sector ETF — is the rarest result in a portfolio. "
-                    "Goldman's factor teams distinguish three return layers: market beta (free, get it from SPY), "
+                    "Factor research teams distinguish three return layers: market beta (free, get it from SPY), "
                     "sector beta (cheap, get it from an ETF), and stock-specific alpha (what you research and earn). "
                     f"{ticker} is delivering on all three. "
                     "The discipline is in recognising this and letting it run — not taking profits too early out of anxiety."
@@ -226,12 +226,12 @@ def build_perf_recommendations(
                     f"Monitor {etf} momentum. If the sector ETF starts lagging SPY, "
                     "this position will typically be the first to feel the rotation."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "Confusing beta return with alpha is the most common performance attribution mistake. "
                     f"A stock that gained {h_ret:.0f}% when its sector gained "
                     + (f"{sect_ret_v:.0f}% " if sect_ret_v is not None else "similarly ")
                     + "generated minimal idiosyncratic alpha. "
-                    "Goldman's PMs are ruthless about this distinction: sector returns are 'free' — "
+                    "Institutional PMs are ruthless about this distinction: sector returns are 'free' — "
                     "you can get them cheaper from an ETF. Stock-specific alpha is what you're paid to generate. "
                     "If you can't articulate why this stock outperformed its sector, "
                     "the honest answer is that it didn't."
@@ -275,7 +275,7 @@ def build_perf_recommendations(
                 action = (
                     f"Exit or reduce to a minimum position. "
                     f"Rotating into {etf} maintains {sector} exposure while stopping the alpha bleed. "
-                    "Goldman rotation rule: when a position underperforms its sector by more than 15% "
+                    "Institutional rotation rule: when a position underperforms its sector by more than 15% "
                     "AND has a score below 44, the thesis is statistically broken."
                 )
 
@@ -303,11 +303,11 @@ def build_perf_recommendations(
                     f"Rotating into {etf} would have generated approximately ${opp_cost:,.0f} more over {period_label} "
                     "while maintaining the same sector exposure — with lower single-stock risk."
                 ),
-                "goldman_lens": (
+                "institutional_lens": (
                     "The opportunity cost question is the most powerful forcing function in portfolio management: "
                     f"'What would I have made holding {etf} instead of {ticker}?' "
                     f"The answer is ${opp_cost:,.0f} more, with less work and less single-stock risk. "
-                    "Goldman's PM review process explicitly quantifies opportunity cost every quarter, "
+                    "Institutional PM review process explicitly quantifies opportunity cost every quarter, "
                     "not to trigger automatic selling, but to force a conscious decision: "
                     "'I am choosing to hold this underperformer. Here is my specific thesis for recovery.' "
                     "Without that explicit thesis, holding becomes hope. Hope is not a strategy."

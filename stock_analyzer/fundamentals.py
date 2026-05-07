@@ -102,7 +102,7 @@ def fundamental_score(financials: dict) -> tuple[float, dict]:
             points += 2
             signals["Debt/Equity"] = f"{de:.0f}% — High leverage"
 
-    # FCF Yield — the primary valuation metric used by Goldman Sachs / institutional analysts
+    # FCF Yield — the primary valuation metric used by Institutional / institutional analysts
     # (harder to manipulate than P/E since it measures actual cash generation)
     fcf_yield = financials.get("fcf_yield")
     if fcf_yield is not None:
