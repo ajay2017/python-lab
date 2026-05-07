@@ -409,6 +409,36 @@ if not st.session_state.get("db_loaded"):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
+    # ── Portfolio value banner — always at the very top ──────────────────
+    _pv = st.session_state.get("_portfolio_value", 0)
+    if _pv > 0:
+        _risk_val = _pv * MODERATE_RISK_PCT
+        _pv_label    = f"${_pv:,.0f}"
+        _risk_label  = f"${_risk_val:,.0f}"
+        st.markdown(
+            f"<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
+            f"margin-bottom:12px;color:#fff'>"
+            f"<div style='font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
+            f"text-transform:uppercase;opacity:0.8;margin-bottom:4px'>Portfolio Value</div>"
+            f"<div style='font-size:1.5em;font-weight:700;line-height:1.1'>{_pv_label}</div>"
+            f"<div style='font-size:0.74em;margin-top:6px;opacity:0.9'>"
+            f"Risk/trade: <b>{_risk_label}</b>&nbsp;"
+            f"<span style='opacity:0.65'>· 1.5% moderate</span></div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
+            "margin-bottom:12px;color:#fff'>"
+            "<div style='font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
+            "text-transform:uppercase;opacity:0.8;margin-bottom:4px'>Portfolio Value</div>"
+            "<div style='font-size:1.1em;font-weight:600;opacity:0.65'>Loading…</div>"
+            "<div style='font-size:0.74em;margin-top:6px;opacity:0.5'>Open My Portfolio tab</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
     st.header("📊 Portfolio Manager")
     page = st.radio(
         "Navigate",
@@ -447,14 +477,6 @@ with st.sidebar:
     )
     _news_slot = st.container()   # placeholder — filled by page code below
 
-    st.divider()
-    _pv = st.session_state.get("_portfolio_value", 0)
-    if _pv > 0:
-        st.metric("Portfolio Value", f"${_pv:,.0f}",
-                  help="Auto-calculated from current holdings × live prices")
-        st.caption(f"Risk/trade: **${_pv * MODERATE_RISK_PCT:,.0f}** (1.5% · Moderate)")
-    else:
-        st.caption("Portfolio value loads with holdings")
     portfolio_value = _pv if _pv > 0 else 50_000
     st.divider()
     if db.has_db():
