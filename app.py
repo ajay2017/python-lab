@@ -775,6 +775,115 @@ if page == "🏠 My Portfolio":
     # TAB 1 — OVERVIEW
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_ov:
+
+        # ── Portfolio vs SPY performance chart ───────────────────────────────
+        _pc1, _pc2 = st.columns([3, 1])
+        _pc1.markdown("**Portfolio Performance vs S&P 500**")
+        _perf_period = _pc2.radio(
+            "Period", ["1M", "3M", "6M"], horizontal=True,
+            index=1, key="_perf_period", label_visibility="collapsed",
+        )
+        _period_days = {"1M": 21, "3M": 63, "6M": 126}
+        _n_days = _period_days[_perf_period]
+
+        try:
+            _spy_hist  = fetch_spy("6mo")
+            _spy_close = _spy_hist["Close"]
+            if _spy_close.index.tz is not None:
+                _spy_close.index = _spy_close.index.tz_localize(None)
+
+            # Gather holding close series
+            _closes = {}
+            for _, _row in port_df.iterrows():
+                _t = _row["Ticker"]
+                if _t in held_data and not held_data[_t]["df"].empty:
+                    _c = held_data[_t]["df"]["Close"].copy()
+                    if _c.index.tz is not None:
+                        _c.index = _c.index.tz_localize(None)
+                    _closes[_t] = _c
+
+            if _closes:
+                # Common dates across all series
+                _common = _spy_close.index
+                for _s in _closes.values():
+                    _common = _common.intersection(_s.index)
+                _common = sorted(_common)[-_n_days:]
+
+                # Weighted portfolio cumulative return (%)
+                _weights_s = port_df.set_index("Ticker")["Weight (%)"] / 100
+                _port_ret  = pd.Series(0.0, index=_common)
+                _total_w   = 0.0
+                for _t, _c in _closes.items():
+                    _w = float(_weights_s.get(_t, 0))
+                    if _w <= 0:
+                        continue
+                    _aligned = _c.reindex(_common).ffill().bfill()
+                    if _aligned.empty or _aligned.iloc[0] == 0:
+                        continue
+                    _port_ret += (_aligned / _aligned.iloc[0] - 1) * 100 * _w
+                    _total_w  += _w
+                if _total_w > 0:
+                    _port_ret = _port_ret / _total_w
+
+                # SPY cumulative return (%)
+                _spy_s   = _spy_close.reindex(_common).ffill().bfill()
+                _spy_ret = (_spy_s / _spy_s.iloc[0] - 1) * 100
+
+                _port_final = float(_port_ret.iloc[-1])
+                _spy_final  = float(_spy_ret.iloc[-1])
+                _alpha      = _port_final - _spy_final
+                _beating    = _alpha >= 0
+                _port_clr   = "#00C851" if _beating else "#ff6b6b"
+                _fill_clr   = "rgba(0,200,81,0.08)" if _beating else "rgba(255,100,100,0.08)"
+                _alpha_sign = "+" if _beating else ""
+
+                _perf_fig = go.Figure()
+                _perf_fig.add_trace(go.Scatter(
+                    x=list(_common), y=list(_spy_ret),
+                    name="S&P 500",
+                    line=dict(color="#888888", width=1.5, dash="dot"),
+                    hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>S&P 500</extra>",
+                ))
+                _perf_fig.add_trace(go.Scatter(
+                    x=list(_common), y=list(_port_ret),
+                    name="My Portfolio",
+                    line=dict(color=_port_clr, width=2.5),
+                    fill="tonexty", fillcolor=_fill_clr,
+                    hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>Portfolio</extra>",
+                ))
+                _perf_fig.update_layout(
+                    template="plotly_dark",
+                    height=260,
+                    margin=dict(l=0, r=0, t=8, b=0),
+                    legend=dict(
+                        orientation="h", yanchor="bottom", y=1.0,
+                        xanchor="left", x=0, font=dict(size=11),
+                    ),
+                    hovermode="x unified",
+                    yaxis=dict(ticksuffix="%", gridcolor="#1f2937", zeroline=True,
+                               zerolinecolor="#333"),
+                    xaxis=dict(gridcolor="#1f2937"),
+                    plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                    annotations=[dict(
+                        x=0.99, y=0.97, xref="paper", yref="paper",
+                        text=(f"Alpha vs SPY: <b>{_alpha_sign}{_alpha:.1f}%</b>"
+                              f"  |  Portfolio: <b>{_port_final:+.1f}%</b>"
+                              f"  |  SPY: <b>{_spy_final:+.1f}%</b>"),
+                        showarrow=False, xanchor="right", yanchor="top",
+                        font=dict(color=_port_clr, size=11),
+                        bgcolor="rgba(13,17,23,0.85)",
+                        bordercolor=_port_clr, borderwidth=1, borderpad=4,
+                    )],
+                )
+                st.plotly_chart(_perf_fig, use_container_width=True)
+                st.caption(
+                    "Based on current portfolio weights applied to historical prices. "
+                    "Assumes constant weights throughout the period."
+                )
+        except Exception as _e:
+            st.caption(f"Performance chart unavailable: {_e}")
+
+        st.divider()
         # Charts row
         ch1, ch2 = st.columns([1, 1])
 
