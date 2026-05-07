@@ -233,7 +233,7 @@ def _recommend(
             "MONITOR",
             "MEDIUM",
             (
-                f"Your stop at ${_f(None):.2f} is **{gap_to_stop:.1f}% below current price** "
+                f"Your stop is **{gap_to_stop:.1f}% below current price** "
                 f"while the estimated earnings move is ±{est_move:.0f}%. "
                 "A negative surprise could gap through the stop in a single session — stops don't protect "
                 "against overnight gaps. "

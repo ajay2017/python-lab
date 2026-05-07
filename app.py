@@ -1119,30 +1119,37 @@ if page == "🏠 My Portfolio":
                 "Edit the **Target (%)** column. Targets don't need to sum to exactly 100% — "
                 "the drift calculation is per-position vs your stated target."
             )
-            _edit_rows = []
             _eq = equal_weights(port_df)
             _saved_targets = st.session_state.get("_rb_custom_targets", {})
+
+            # Seed number-input session state from saved targets on first load
             for _, _rrow in port_df.iterrows():
                 _t = _rrow["Ticker"]
-                _edit_rows.append({
-                    "Ticker":     _t,
-                    "Sector":     _rrow["Sector"],
-                    "Current (%)": round(_f(_rrow.get("Weight (%)")), 1),
-                    "Target (%)":  round(_saved_targets.get(_t, _eq.get(_t, round(100/_n_pos, 1))), 1),
-                })
-            _target_df_edit = pd.DataFrame(_edit_rows)
-            _edited_targets = st.data_editor(
-                _target_df_edit,
-                column_config={
-                    "Ticker":      st.column_config.TextColumn("Ticker", disabled=True),
-                    "Sector":      st.column_config.TextColumn("Sector", disabled=True),
-                    "Current (%)": st.column_config.NumberColumn("Current (%)", disabled=True, format="%.1f%%"),
-                    "Target (%)":  st.column_config.NumberColumn("Target (%)", min_value=0.0,
-                                                                   max_value=100.0, step=0.5, format="%.1f%%"),
-                },
-                hide_index=True, use_container_width=True, key="_rb_target_editor",
-            )
-            _target_weights = dict(zip(_edited_targets["Ticker"], _edited_targets["Target (%)"]))
+                _default = round(_saved_targets.get(_t, _eq.get(_t, round(100 / _n_pos, 1))), 1)
+                if f"_rb_tgt_{_t}" not in st.session_state:
+                    st.session_state[f"_rb_tgt_{_t}"] = _default
+
+            # Header
+            _rh1, _rh2, _rh3, _rh4 = st.columns([2, 2, 2, 2])
+            _rh1.markdown("**Ticker**"); _rh2.markdown("**Sector**")
+            _rh3.markdown("**Current (%)**"); _rh4.markdown("**Target (%)**")
+
+            for _, _rrow in port_df.iterrows():
+                _t = _rrow["Ticker"]
+                _rc1, _rc2, _rc3, _rc4 = st.columns([2, 2, 2, 2])
+                _rc1.markdown(f"**{_t}**")
+                _rc2.markdown(str(_rrow.get("Sector", "")))
+                _rc3.markdown(f"{round(_f(_rrow.get('Weight (%)')), 1):.1f}%")
+                _rc4.number_input(
+                    "target", key=f"_rb_tgt_{_t}",
+                    min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
+                    label_visibility="collapsed",
+                )
+
+            _target_weights = {
+                _t: float(st.session_state.get(f"_rb_tgt_{_t}", _eq.get(_t, round(100 / _n_pos, 1))))
+                for _t in port_df["Ticker"]
+            }
             st.session_state["_rb_custom_targets"] = _target_weights
 
         # Compute drift
