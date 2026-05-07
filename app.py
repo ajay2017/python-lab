@@ -22,6 +22,10 @@ from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, run_all_scenarios
+from stock_analyzer.rebalancer import (
+    equal_weights, compute_drift, build_rebalance_plan,
+    TOLERANCE_OK, TOLERANCE_WATCH,
+)
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -1087,6 +1091,213 @@ if page == "🏠 My Portfolio":
                 margin=dict(l=0, r=80, t=10, b=0),
             )
             st.plotly_chart(mini, use_container_width=True)
+
+        # ── Rebalancing Advisor ───────────────────────────────────────────────
+        st.divider()
+        st.markdown("### ⚖️ Rebalancing Advisor")
+        st.caption(
+            "Shows how far each position has drifted from its target weight. "
+            "Set targets manually or use equal weight as the baseline. "
+            "Tolerance: ±2% = OK  ·  2–5% = Watch  ·  >5% = Action needed."
+        )
+
+        # Target weight mode
+        _rb_mode = st.radio(
+            "Target weight method",
+            ["Equal Weight", "Custom Targets"],
+            horizontal=True, key="_rb_mode",
+        )
+
+        _n_pos = len(port_df)
+        if _rb_mode == "Equal Weight":
+            _target_weights = equal_weights(port_df)
+        else:
+            # Editable target weights table
+            st.caption(
+                "Edit the **Target (%)** column. Targets don't need to sum to exactly 100% — "
+                "the drift calculation is per-position vs your stated target."
+            )
+            _edit_rows = []
+            _eq = equal_weights(port_df)
+            _saved_targets = st.session_state.get("_rb_custom_targets", {})
+            for _, _rrow in port_df.iterrows():
+                _t = _rrow["Ticker"]
+                _edit_rows.append({
+                    "Ticker":     _t,
+                    "Sector":     _rrow["Sector"],
+                    "Current (%)": round(_f(_rrow.get("Weight (%)")), 1),
+                    "Target (%)":  round(_saved_targets.get(_t, _eq.get(_t, round(100/_n_pos, 1))), 1),
+                })
+            _target_df_edit = pd.DataFrame(_edit_rows)
+            _edited_targets = st.data_editor(
+                _target_df_edit,
+                column_config={
+                    "Ticker":      st.column_config.TextColumn("Ticker", disabled=True),
+                    "Sector":      st.column_config.TextColumn("Sector", disabled=True),
+                    "Current (%)": st.column_config.NumberColumn("Current (%)", disabled=True, format="%.1f%%"),
+                    "Target (%)":  st.column_config.NumberColumn("Target (%)", min_value=0.0,
+                                                                   max_value=100.0, step=0.5, format="%.1f%%"),
+                },
+                hide_index=True, use_container_width=True, key="_rb_target_editor",
+            )
+            _target_weights = dict(zip(_edited_targets["Ticker"], _edited_targets["Target (%)"]))
+            st.session_state["_rb_custom_targets"] = _target_weights
+
+        # Compute drift
+        _drift_df = compute_drift(port_df, _target_weights, total_val)
+        _rb_plan  = build_rebalance_plan(_drift_df, total_val)
+
+        # KPI summary
+        _rb_k1, _rb_k2, _rb_k3, _rb_k4 = st.columns(4)
+        _n_trim  = len(_rb_plan["trims"])
+        _n_add   = len(_rb_plan["adds"])
+        _n_ok    = len(_rb_plan["ok"]) + sum(1 for _, r in _drift_df.iterrows() if r["Status"] == "WATCH")
+        _rb_k1.metric("Trim needed",    _n_trim,
+                      delta="Action required" if _n_trim else None,
+                      delta_color="inverse" if _n_trim else "off")
+        _rb_k2.metric("Add needed",     _n_add)
+        _rb_k3.metric("In tolerance",   _n_ok)
+        _rb_k4.metric("Portfolio moved", f"{_rb_plan['rebalance_pct']:.1f}%",
+                      help="% of portfolio value touched if all actions executed")
+
+        # Drift bar chart
+        if not _drift_df.empty:
+            import plotly.graph_objects as _go_rb
+            _dc = ["#ff4444" if d > TOLERANCE_WATCH else
+                   ("#ffbb33" if d > TOLERANCE_OK else
+                   ("#4a9eff" if d < -TOLERANCE_OK else "#888888"))
+                   for d in _drift_df["Drift (pp)"]]
+            _rb_fig = _go_rb.Figure(_go_rb.Bar(
+                x=_drift_df["Ticker"],
+                y=_drift_df["Drift (pp)"],
+                marker_color=_dc,
+                text=[f"{d:+.1f}pp" for d in _drift_df["Drift (pp)"]],
+                textposition="outside",
+                customdata=list(zip(
+                    _drift_df["Current (%)"],
+                    _drift_df["Target (%)"],
+                    _drift_df["Drift Value ($)"],
+                    _drift_df["Status"],
+                )),
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    "Current: %{customdata[0]:.1f}%<br>"
+                    "Target: %{customdata[1]:.1f}%<br>"
+                    "Drift: %{y:+.1f}pp<br>"
+                    "$ Drift: $%{customdata[2]:+,.0f}<br>"
+                    "Status: %{customdata[3]}"
+                    "<extra></extra>"
+                ),
+            ))
+            _rb_fig.add_hline(y=TOLERANCE_OK,    line_dash="dash", line_color="#888",
+                              annotation_text=f"+{TOLERANCE_OK:.0f}pp tolerance",
+                              annotation_position="right")
+            _rb_fig.add_hline(y=-TOLERANCE_OK,   line_dash="dash", line_color="#888",
+                              annotation_position="right")
+            _rb_fig.add_hline(y=TOLERANCE_WATCH,  line_dash="dot", line_color="#ffbb33",
+                              annotation_text=f"+{TOLERANCE_WATCH:.0f}pp action",
+                              annotation_position="right")
+            _rb_fig.add_hline(y=-TOLERANCE_WATCH, line_dash="dot", line_color="#4a9eff",
+                              annotation_position="right")
+            _rb_fig.update_layout(
+                title="Weight Drift vs Target (pp = percentage points)",
+                template="plotly_dark", height=300,
+                yaxis_title="Drift (pp)",
+                margin=dict(l=0, r=100, t=40, b=0),
+            )
+            st.plotly_chart(_rb_fig, use_container_width=True)
+            st.caption(
+                "🔴 Red = overweight >5pp (trim)  ·  "
+                "🟡 Amber = overweight 2–5pp (watch)  ·  "
+                "🔵 Blue = underweight >2pp (consider adding)  ·  "
+                "⬛ Gray = within ±2pp tolerance"
+            )
+
+        # Trim recommendations
+        if _rb_plan["trims"]:
+            st.markdown("#### ✂️ Trim Actions (Overweight)")
+            for _tr in _rb_plan["trims"]:
+                _tr_pri  = "HIGH" if (_tr["urgency"] >= 40 or _tr["status"] == "TRIM") else "MEDIUM"
+                _tr_icon = "🔴" if _tr_pri == "HIGH" else "🟡"
+                _tr_bclr = "#ff4444" if _tr_pri == "HIGH" else "#ffbb33"
+                _tr_exp  = _tr["urgency"] >= 40
+
+                with st.expander(
+                    f"{_tr_icon} **{_tr['ticker']}** — trim {_tr['drift_pp']:+.1f}pp  "
+                    f"| sell ~{_tr['shares_delta']:,} shares ≈ ${_tr['drift_val']:,.0f}",
+                    expanded=_tr_exp,
+                ):
+                    _tr_m = st.columns(4)
+                    _tr_m[0].metric("Current Weight",  f"{_tr['current_pct']:.1f}%")
+                    _tr_m[1].metric("Target Weight",   f"{_tr['target_pct']:.1f}%")
+                    _tr_m[2].metric("Drift",           f"{_tr['drift_pp']:+.1f}pp",
+                                    delta_color="inverse")
+                    _tr_m[3].metric("$ to Trim",       f"${_tr['drift_val']:,.0f}")
+
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#1a1a1a;"
+                        f"border-radius:6px;border-left:4px solid {_tr_bclr};margin:8px 0'>"
+                        f"<span style='color:#eee'>{_tr['rationale']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#0d2137;"
+                        f"border-radius:6px;border-left:4px solid #4a9eff;margin:6px 0'>"
+                        f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Action</span><br>"
+                        f"<span style='color:#eee;font-size:0.9em'>{_tr['action_detail']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.info(f"**Goldman Lens** · {_tr['goldman']}")
+
+        # Add recommendations
+        if _rb_plan["adds"]:
+            st.markdown("#### ➕ Add Actions (Underweight)")
+            for _ad in _rb_plan["adds"]:
+                _ad_exp  = _ad["urgency"] >= 40
+                _ad_icon = "💪" if _ad["score"] >= 65 else "👁️"
+
+                with st.expander(
+                    f"{_ad_icon} **{_ad['ticker']}** — add {_ad['drift_pp']:+.1f}pp  "
+                    f"| buy ~{_ad['shares_delta']:,} shares ≈ ${_ad['drift_val']:,.0f}",
+                    expanded=_ad_exp,
+                ):
+                    _ad_m = st.columns(4)
+                    _ad_m[0].metric("Current Weight",  f"{_ad['current_pct']:.1f}%")
+                    _ad_m[1].metric("Target Weight",   f"{_ad['target_pct']:.1f}%")
+                    _ad_m[2].metric("Drift",           f"{_ad['drift_pp']:+.1f}pp")
+                    _ad_m[3].metric("$ to Add",        f"${_ad['drift_val']:,.0f}")
+
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#1a1a1a;"
+                        f"border-radius:6px;border-left:4px solid #4a9eff;margin:8px 0'>"
+                        f"<span style='color:#eee'>{_ad['rationale']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#0d2137;"
+                        f"border-radius:6px;border-left:4px solid #4a9eff;margin:6px 0'>"
+                        f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Action</span><br>"
+                        f"<span style='color:#eee;font-size:0.9em'>{_ad['action_detail']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.info(f"**Goldman Lens** · {_ad['goldman']}")
+
+        # In-tolerance positions
+        if _rb_plan["ok"]:
+            with st.expander(f"✅ {len(_rb_plan['ok'])} position(s) within tolerance", expanded=False):
+                st.caption(", ".join(_rb_plan["ok"]) + " — no action needed.")
+
+        if not _rb_plan["trims"] and not _rb_plan["adds"]:
+            st.success(
+                "✅ All positions are within tolerance of their target weights. "
+                "No rebalancing needed."
+            )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2 — PERFORMANCE VS SPY
