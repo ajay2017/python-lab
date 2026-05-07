@@ -15,7 +15,7 @@ from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk
+from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -326,6 +326,49 @@ _TIPS = {
         "⚠️ During market crises correlations spike toward 1.0 — assets that appear "
         "uncorrelated in normal markets often crash together. "
         "This is why professionals also hold bonds, gold, or inverse positions as hedges."
+    ),
+    "Portfolio Beta": (
+        "How much your entire portfolio moves relative to the S&P 500.\n\n"
+        "• < 0.8 → Defensive — portfolio moves less than the market\n"
+        "• 0.8–1.2 → Market-like — roughly tracking the index\n"
+        "• 1.2–1.5 → Aggressive — amplifies both gains and losses\n"
+        "• > 1.5 → High leverage equivalent — requires active management\n\n"
+        "A tech-heavy portfolio typically has Beta 1.3–1.8. "
+        "Goldman's risk teams target portfolio Beta ≤ 1.2 for managed accounts."
+    ),
+    "Portfolio Volatility": (
+        "Annualized standard deviation of daily portfolio returns.\n\n"
+        "• < 15% → Low — institutional-grade stability\n"
+        "• 15–20% → Moderate — similar to a diversified equity fund\n"
+        "• 20–30% → Elevated — tech/growth tilt creates meaningful swings\n"
+        "• > 30% → High — expect large intraday and weekly moves\n\n"
+        "S&P 500 long-run average volatility is ~15%. Most tech portfolios run 20–35%."
+    ),
+    "Portfolio VaR": (
+        "Value at Risk (95% confidence) — the daily loss your portfolio "
+        "should NOT exceed on 95% of trading days.\n\n"
+        "Example: VaR = −1.8% on a $100,000 portfolio → you expect to lose "
+        "no more than $1,800 on a normal day.\n\n"
+        "On the worst 5% of days, losses will exceed this number. "
+        "VaR understates tail risk in crises — see CVaR for the full picture."
+    ),
+    "Portfolio CVaR": (
+        "Conditional VaR (Expected Shortfall) — the average loss on the "
+        "worst 5% of trading days.\n\n"
+        "CVaR is always worse than VaR. The gap between them shows how fat the tail is:\n\n"
+        "• CVaR ≈ 1.2× VaR → losses are contained even on crash days\n"
+        "• CVaR ≈ 2.0× VaR → fat-tail risk, extreme days are severe\n\n"
+        "Professional risk managers use CVaR as the primary stress metric — "
+        "it tells you what you actually lose when things go wrong."
+    ),
+    "Portfolio Max Drawdown": (
+        "The worst peak-to-trough decline in portfolio value over the 6-month window.\n\n"
+        "Answers: 'What's the worst I've been down at any point?'\n\n"
+        "• 0% to −10% → Modest — good risk control or benign market\n"
+        "• −10% to −20% → Normal for a growth-tilted equity portfolio\n"
+        "• −20% to −30% → Significant — test of conviction\n"
+        "• < −30% → Severe — review position sizing and stop discipline\n\n"
+        "Recovery math is asymmetric: a −30% drawdown requires +43% just to break even."
     ),
 }
 
@@ -741,6 +784,13 @@ if page == "🏠 My Portfolio":
         div_recs = []
 
     h_rets = holding_returns(held_data)
+
+    # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
+    try:
+        _spy_for_risk = fetch_spy("6mo")
+        _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk)
+    except Exception:
+        _port_risk = {}
 
     best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
     worst_row = port_df.loc[port_df["P&L (%)"].idxmin()]
@@ -2056,6 +2106,157 @@ if page == "🏠 My Portfolio":
     # TAB 3 — RISK ANALYSIS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_risk:
+        # ── Portfolio Risk Dashboard ──────────────────────────────────────────
+        if _port_risk:
+            st.markdown("### Portfolio Risk Dashboard")
+            st.caption(
+                "All metrics derived from 6-month weighted daily portfolio returns. "
+                "Risk-free rate: 4.5% (approximate 3-month T-bill). "
+                "Weights are current allocation — not time-weighted."
+            )
+
+            _pr   = _port_risk
+            _beta = _pr.get("beta")
+            _vol  = _pr.get("ann_volatility")
+            _sh   = _pr.get("sharpe")
+            _so   = _pr.get("sortino")
+            _var  = _pr.get("var_95_pct")
+            _cvar = _pr.get("cvar_95_pct")
+            _mdd  = _pr.get("max_drawdown")
+
+            _rm1, _rm2, _rm3, _rm4, _rm5, _rm6, _rm7 = st.columns(7)
+
+            # Beta
+            if _beta is not None:
+                _beta_lbl = "High ↑" if _beta > 1.2 else ("Low ↓" if _beta < 0.8 else "Market-like")
+                _rm1.metric("Portfolio Beta", f"{_beta:.2f}", _beta_lbl,
+                            delta_color="inverse" if _beta > 1.4 else "off",
+                            help=_tip("Portfolio Beta"))
+            else:
+                _rm1.metric("Portfolio Beta", "—", help=_tip("Portfolio Beta"))
+
+            # Annualised Volatility
+            _vol_lbl = (
+                "Low"      if (_vol or 0) < 15 else
+                "Moderate" if (_vol or 0) < 20 else
+                "Elevated" if (_vol or 0) < 30 else "High"
+            )
+            _rm2.metric("Ann. Volatility", f"{_vol:.1f}%" if _vol is not None else "—",
+                        _vol_lbl, delta_color="off",
+                        help=_tip("Portfolio Volatility"))
+
+            # Sharpe
+            if _sh is not None:
+                _sh_lbl = (
+                    "Excellent" if _sh >= 1.5 else
+                    "Good"      if _sh >= 1.0 else
+                    "Acceptable" if _sh >= 0.5 else "Weak"
+                )
+                _rm3.metric("Sharpe Ratio", f"{_sh:.2f}", _sh_lbl,
+                            delta_color="normal" if _sh >= 1.0 else "inverse",
+                            help=_tip("Sharpe Ratio"))
+            else:
+                _rm3.metric("Sharpe Ratio", "—", help=_tip("Sharpe Ratio"))
+
+            # Sortino
+            if _so is not None:
+                _so_lbl = (
+                    "Excellent" if _so >= 2.0 else
+                    "Good"      if _so >= 1.0 else "Weak"
+                )
+                _rm4.metric("Sortino Ratio", f"{_so:.2f}", _so_lbl,
+                            delta_color="normal" if _so >= 1.0 else "inverse",
+                            help=_tip("Sortino Ratio"))
+            else:
+                _rm4.metric("Sortino Ratio", "—", help=_tip("Sortino Ratio"))
+
+            # VaR 95% (daily)
+            if _var is not None:
+                _var_dollar = abs(_var / 100 * total_val)
+                _rm5.metric("Daily VaR 95%", f"{_var:.2f}%",
+                            f"≈ ${_var_dollar:,.0f} / day",
+                            delta_color="off", help=_tip("Portfolio VaR"))
+            else:
+                _rm5.metric("Daily VaR 95%", "—", help=_tip("Portfolio VaR"))
+
+            # CVaR / Expected Shortfall
+            if _cvar is not None:
+                _cvar_dollar = abs(_cvar / 100 * total_val)
+                _rm6.metric("CVaR (Tail Risk)", f"{_cvar:.2f}%",
+                            f"≈ ${_cvar_dollar:,.0f} avg bad day",
+                            delta_color="off", help=_tip("Portfolio CVaR"))
+            else:
+                _rm6.metric("CVaR (Tail Risk)", "—", help=_tip("Portfolio CVaR"))
+
+            # Max Drawdown
+            if _mdd is not None:
+                _mdd_lbl = (
+                    "Modest"      if _mdd > -10 else
+                    "Normal"      if _mdd > -20 else
+                    "Significant" if _mdd > -30 else "Severe"
+                )
+                _rm7.metric("Max Drawdown", f"{_mdd:.1f}%", _mdd_lbl,
+                            delta_color="off", help=_tip("Portfolio Max Drawdown"))
+            else:
+                _rm7.metric("Max Drawdown", "—", help=_tip("Portfolio Max Drawdown"))
+
+            # Interpretation banner
+            _risk_flags = []
+            if _beta is not None and _beta > 1.4:
+                _risk_flags.append(f"Beta {_beta:.2f} — portfolio moves {_beta:.1f}× the market in both directions")
+            if _vol is not None and _vol > 25:
+                _risk_flags.append(f"Volatility {_vol:.0f}% annualised — expect ±{_vol/16:.1f}% daily swings on average")
+            if _sh is not None and _sh < 0.5:
+                _risk_flags.append(f"Sharpe {_sh:.2f} — poor risk-adjusted return; the risk taken is not being rewarded")
+            if _mdd is not None and _mdd < -20:
+                _risk_flags.append(f"Drawdown {_mdd:.0f}% — portfolio spent time significantly below its high-water mark")
+
+            if _risk_flags:
+                st.warning("⚠️ **Risk flags:** " + "  ·  ".join(_risk_flags))
+            else:
+                st.success(
+                    "✅ Portfolio risk metrics are within acceptable parameters "
+                    "for a growth-tilted equity portfolio."
+                )
+
+            # Drawdown chart
+            _dd_series = _pr.get("drawdown_series")
+            if _dd_series is not None and len(_dd_series) > 1:
+                _current_dd = float(_dd_series.iloc[-1])
+                _dd_fig = go.Figure()
+                _dd_fig.add_trace(go.Scatter(
+                    x=list(_dd_series.index),
+                    y=list(_dd_series),
+                    fill="tozeroy",
+                    fillcolor="rgba(255,68,68,0.15)",
+                    line=dict(color="#ff4444", width=1.5),
+                    name="Drawdown",
+                    hovertemplate="%{x|%b %d}: %{y:.2f}%<extra>Portfolio Drawdown</extra>",
+                ))
+                _dd_fig.add_hline(y=0,   line_color="#555", line_width=1)
+                _dd_fig.add_hline(y=-10, line_dash="dash", line_color="#ffbb33", line_width=1,
+                                  annotation_text="−10%", annotation_position="right")
+                _dd_fig.add_hline(y=-20, line_dash="dash", line_color="#ff4444",  line_width=1,
+                                  annotation_text="−20%", annotation_position="right")
+                _dd_fig.update_layout(
+                    title="Portfolio Drawdown — 6 Months",
+                    template="plotly_dark", height=280,
+                    margin=dict(l=0, r=60, t=40, b=0),
+                    yaxis=dict(ticksuffix="%", gridcolor="#1f2937", zeroline=False),
+                    xaxis=dict(gridcolor="#1f2937"),
+                    plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                    showlegend=False,
+                )
+                st.plotly_chart(_dd_fig, use_container_width=True)
+                st.caption(
+                    "Drawdown = portfolio decline from its most recent peak (high-water mark). "
+                    "Red fill = periods below prior high. "
+                    f"Current drawdown from peak: **{_current_dd:.1f}%**"
+                )
+
+            st.divider()
+
+        # ── Diversification & Correlation ─────────────────────────────────────
         if corr_df.empty:
             st.info("Need at least 2 holdings with price history to compute correlations.")
         else:

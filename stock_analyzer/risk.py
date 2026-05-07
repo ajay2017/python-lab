@@ -93,3 +93,102 @@ def compute_all_risk(df: pd.DataFrame, spy_df: pd.DataFrame | None = None) -> di
         "var_95": var_95_daily(df),
         "beta": beta_vs_market(df, spy_df) if spy_df is not None else None,
     }
+
+
+def compute_portfolio_risk_metrics(
+    port_df: pd.DataFrame,
+    held_data: dict,
+    spy_df: pd.DataFrame | None = None,
+    risk_free_annual: float = 0.045,
+) -> dict:
+    """
+    Portfolio-level risk metrics from weighted daily returns.
+    Returns Beta, Ann. Volatility, Sharpe, Sortino, VaR 95%, CVaR, Max Drawdown,
+    plus drawdown_series and cum_returns Series for charting.
+    Returns empty dict if insufficient data.
+    """
+    series: dict[str, pd.Series] = {}
+    for ticker, data in held_data.items():
+        hist = data.get("df") if data.get("df") is not None else data.get("history")
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            closes = hist["Close"].dropna().copy()
+            if closes.index.tz is not None:
+                closes.index = closes.index.tz_localize(None)
+            if len(closes) >= 10:
+                series[ticker] = closes
+
+    if not series:
+        return {}
+
+    prices = pd.DataFrame(series).ffill().dropna()
+    if len(prices) < 10:
+        return {}
+
+    daily_returns = prices.pct_change().dropna()
+
+    weights: dict[str, float] = {}
+    for _, row in port_df.iterrows():
+        t = row["Ticker"]
+        if t in daily_returns.columns:
+            weights[t] = float(row["Weight (%)"]) / 100.0
+
+    if not weights:
+        return {}
+
+    total_w = sum(weights.values())
+    if total_w == 0:
+        return {}
+    weights = {t: w / total_w for t, w in weights.items()}
+
+    port_returns = pd.Series(0.0, index=daily_returns.index)
+    for t, w in weights.items():
+        port_returns += daily_returns[t] * w
+
+    std_ret = port_returns.std()
+    rf_daily = risk_free_annual / 252
+    excess = port_returns - rf_daily
+
+    sharpe = round(float((excess.mean() / std_ret) * np.sqrt(252)), 2) if std_ret > 0 else 0.0
+
+    downside_std = port_returns[port_returns < rf_daily].std()
+    sortino = (
+        round(float((excess.mean() / downside_std) * np.sqrt(252)), 2)
+        if (downside_std and not np.isnan(downside_std) and downside_std > 0)
+        else 0.0
+    )
+
+    ann_vol = round(float(std_ret * np.sqrt(252) * 100), 1)
+
+    var_pct = round(float(np.percentile(port_returns, 5) * 100), 2)
+    threshold = np.percentile(port_returns, 5)
+    bad_days = port_returns[port_returns <= threshold]
+    cvar_pct = round(float(bad_days.mean() * 100), 2) if len(bad_days) > 0 else var_pct
+
+    cum_ret = (1 + port_returns).cumprod()
+    rolling_max = cum_ret.cummax()
+    drawdown_series = (cum_ret - rolling_max) / rolling_max * 100
+    max_dd = round(float(drawdown_series.min()), 1)
+
+    beta = None
+    if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+        spy_ret = spy_df["Close"].pct_change().dropna().copy()
+        if spy_ret.index.tz is not None:
+            spy_ret.index = spy_ret.index.tz_localize(None)
+        combined = pd.concat([port_returns, spy_ret], axis=1, keys=["port", "spy"]).dropna()
+        if len(combined) >= 20:
+            cov_val = combined.cov().loc["port", "spy"]
+            mkt_var = combined["spy"].var()
+            if mkt_var > 0:
+                beta = round(float(cov_val / mkt_var), 2)
+
+    return {
+        "beta":            beta,
+        "ann_volatility":  ann_vol,
+        "sharpe":          sharpe,
+        "sortino":         sortino,
+        "var_95_pct":      var_pct,
+        "cvar_95_pct":     cvar_pct,
+        "max_drawdown":    max_dd,
+        "drawdown_series": drawdown_series,
+        "cum_returns":     cum_ret,
+    }
