@@ -518,10 +518,11 @@ if page == "🏠 My Portfolio":
             key="holdings_editor",
         )
         if st.button("Save Holdings", type="primary"):
+            st.session_state.holdings_df = edited  # always update session state
             if db.save_holdings(edited):
-                st.session_state.holdings_df = edited
-                st.session_state.db_loaded = False  # force re-load from DB on next run
                 st.success("✅ Saved to Supabase — will persist across sessions.")
+            else:
+                st.success("✅ Holdings updated for this session.")
             st.rerun()
 
     # Load data for all held tickers
@@ -2977,9 +2978,11 @@ elif page == "📒 Trade Journal":
                     else:
                         st.session_state.trades_df = db.load_trades()
 
+                    # ── Sync holdings with trade ─────────────────────────
+                    h_df = st.session_state.holdings_df.copy()
+                    mask = h_df["Ticker"] == ticker_input
+
                     if action == "SELL":
-                        h_df = st.session_state.holdings_df.copy()
-                        mask = h_df["Ticker"] == ticker_input
                         if mask.any():
                             idx = h_df[mask].index[0]
                             current_shares = float(h_df.at[idx, "Shares"])
@@ -2994,7 +2997,8 @@ elif page == "📒 Trade Journal":
                                     int(new_shares) if new_shares == int(new_shares) else new_shares
                                 )
                                 pnl_str = f"${realized_pnl:+,.2f}" if realized_pnl is not None else "—"
-                                pnl_pct = (price_val - cost_basis_val) / cost_basis_val * 100 if cost_basis_val else 0
+                                pnl_pct = ((price_val - cost_basis_val) / cost_basis_val * 100
+                                           if cost_basis_val else 0)
                                 st.success(
                                     f"✅ Sold **{shares_val:.0f} shares of {ticker_input}** "
                                     f"@ ${price_val:.2f}  ·  "
@@ -3003,16 +3007,44 @@ elif page == "📒 Trade Journal":
                                 )
                             db.save_holdings(h_df)
                             st.session_state.holdings_df = h_df
-                            st.session_state.db_loaded = False
                         else:
                             st.success(
                                 f"✅ SELL recorded for **{ticker_input}** "
                                 f"(not in current holdings — logged as historical trade)."
                             )
-                    else:
-                        st.success(
-                            f"✅ BUY recorded: **{shares_val:.0f} × {ticker_input}** @ ${price_val:.2f}"
-                        )
+
+                    else:  # BUY
+                        if mask.any():
+                            # Add to existing position — recalculate weighted avg cost
+                            idx = h_df[mask].index[0]
+                            old_shares   = float(h_df.at[idx, "Shares"])
+                            old_avg_cost = float(h_df.at[idx, "Avg Cost ($)"])
+                            new_shares   = old_shares + shares_val
+                            new_avg_cost = round(
+                                (old_shares * old_avg_cost + shares_val * price_val) / new_shares, 4
+                            )
+                            h_df.at[idx, "Shares"] = (
+                                int(new_shares) if new_shares == int(new_shares) else new_shares
+                            )
+                            h_df.at[idx, "Avg Cost ($)"] = new_avg_cost
+                            st.success(
+                                f"✅ Added **{shares_val:.0f} shares of {ticker_input}** @ ${price_val:.2f}  ·  "
+                                f"Holdings: {old_shares:.0f} → {new_shares:.0f} shares  ·  "
+                                f"New avg cost: **${new_avg_cost:.2f}**"
+                            )
+                        else:
+                            # New position — add row
+                            new_row = pd.DataFrame([{
+                                "Ticker":       ticker_input,
+                                "Shares":       int(shares_val),
+                                "Avg Cost ($)": round(price_val, 4),
+                            }])
+                            h_df = pd.concat([h_df, new_row], ignore_index=True)
+                            st.success(
+                                f"✅ New position opened: **{shares_val:.0f} × {ticker_input}** @ ${price_val:.2f}"
+                            )
+                        db.save_holdings(h_df)
+                        st.session_state.holdings_df = h_df
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
