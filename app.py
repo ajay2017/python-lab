@@ -2447,8 +2447,12 @@ if page == "🏠 My Portfolio":
                 if etf not in _etf_to_sector:
                     _etf_to_sector[etf] = sec
 
-            # Portfolio sector exposure
-            _sec_exp = sector_exposure(port_df)   # {sector: weight%}
+            # Portfolio sector exposure — convert DataFrame → dict {sector: weight%}
+            _sec_exp_df = sector_exposure(port_df)
+            _sec_exp = (
+                dict(zip(_sec_exp_df["Sector"], _sec_exp_df["Pct"]))
+                if not _sec_exp_df.empty else {}
+            )
 
             # Build display table
             _periods = ["1W", "1M", "3M", "6M"]
@@ -2489,7 +2493,8 @@ if page == "🏠 My Portfolio":
             # ── Heatmap ───────────────────────────────────────────────────────
             _z      = _heat_df[["1W %", "1M %", "3M %", "6M %"]].values.tolist()
             _y_lbls = [
-                f"{r['Sector']}  {'●' if r['My Exposure'] > 0 else ''}"
+                f"◀ {r['Sector']}  {r['My Exposure']:.0f}%" if r["My Exposure"] > 0
+                else f"   {r['Sector']}"
                 for _, r in _heat_df.iterrows()
             ]
             _text   = [
@@ -2526,16 +2531,27 @@ if page == "🏠 My Portfolio":
                     "Return: %{text}<extra></extra>"
                 ),
             ))
+            # Gold highlight band for every row where the user holds this sector
+            for _hi, (_, _hr) in enumerate(_heat_df.iterrows()):
+                if _hr["My Exposure"] > 0:
+                    _hmap.add_shape(
+                        type="rect",
+                        xref="paper", x0=0, x1=1,
+                        yref="y", y0=_hi - 0.5, y1=_hi + 0.5,
+                        fillcolor="rgba(255,200,0,0.07)",
+                        line=dict(color="rgba(255,200,0,0.45)", width=1.5),
+                        layer="below",
+                    )
             _hmap.update_layout(
                 template="plotly_dark",
-                height=max(280, len(_heat_df) * 38 + 80),
+                height=max(280, len(_heat_df) * 42 + 80),
                 margin=dict(l=0, r=0, t=20, b=0),
                 xaxis=dict(side="top"),
                 yaxis=dict(autorange="reversed"),
                 plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
             )
             st.plotly_chart(_hmap, use_container_width=True)
-            st.caption("● = you hold this sector  |  Sorted by 3M return (strongest at top)")
+            st.caption("◀ = sector you hold (weight % shown) · gold border = your position · sorted by 3M return")
 
             # ── Exposure vs momentum table ────────────────────────────────────
             st.markdown("#### Your Exposure vs Sector Momentum")
