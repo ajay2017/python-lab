@@ -20,6 +20,7 @@ from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
+from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -4898,6 +4899,209 @@ elif page == "📒 Trade Journal":
                     f"sold {wt['shares']:.0f} shares @ ${wt['price']:.2f} · "
                     f"**${wt['realized_pnl']:,.2f}**"
                 )
+
+    # ── Behavioral Analytics ──────────────────────────────────────────────────
+    if stats["total_trades"] >= 3:
+        try:
+            _ta = build_full_analytics(trades_df)
+        except Exception as _tae:
+            _ta = {}
+            st.warning(f"Analytics unavailable: {_tae}")
+
+        if _ta and not _ta["ext_df"].empty:
+            st.divider()
+            st.subheader("🧠 Behavioral Analytics")
+            st.caption(
+                "Deeper analysis of your trading patterns. "
+                "Goldman PMs review these metrics monthly to identify behavioral drift — "
+                "the subtle habits that silently erode performance."
+            )
+
+            # Extended KPI row
+            _ta_k = st.columns(5)
+            _pf = _ta["profit_factor"]
+            _pf_delta = "≥2.0 target" if _pf and _pf >= 2.0 else ("< 1.0 ⚠️" if _pf and _pf < 1.0 else None)
+            _pf_dclr  = "normal" if (_pf and _pf >= 2.0) else ("inverse" if (_pf and _pf < 1.0) else "off")
+            _ta_k[0].metric(
+                "Profit Factor",
+                f"{_pf:.2f}" if _pf else "—",
+                delta=_pf_delta, delta_color=_pf_dclr,
+                help="Gross wins / gross losses. Target ≥ 2.0",
+            )
+            _ta_k[1].metric(
+                "Avg Win (%)",
+                f"{_ta['avg_win_pct']:+.1f}%" if _ta["avg_win_pct"] else "—",
+                help="Average % return on profitable closed trades",
+            )
+            _ta_k[2].metric(
+                "Avg Loss (%)",
+                f"{_ta['avg_loss_pct']:.1f}%" if _ta["avg_loss_pct"] else "—",
+                help="Average % loss on unprofitable closed trades",
+            )
+            _hs = _ta["hold_stats"]
+            _ta_k[3].metric(
+                "Avg Hold (days)",
+                f"{_hs['avg_hold_days']:.0f}d" if _hs.get("avg_hold_days") else "—",
+                help="Estimated average hold time (days from matched BUY to SELL)",
+            )
+            _wl_ratio = (
+                round(abs(_ta["avg_win_pct"] / _ta["avg_loss_pct"]), 2)
+                if _ta["avg_win_pct"] and _ta["avg_loss_pct"] and _ta["avg_loss_pct"] != 0
+                else None
+            )
+            _wl_dclr = "normal" if (_wl_ratio and _wl_ratio >= 2.0) else ("inverse" if (_wl_ratio and _wl_ratio < 1.0) else "off")
+            _ta_k[4].metric(
+                "Win/Loss Ratio",
+                f"{_wl_ratio:.2f}:1" if _wl_ratio else "—",
+                delta="≥2:1 target" if _wl_ratio and _wl_ratio >= 2.0 else None,
+                delta_color=_wl_dclr,
+                help="Avg win % / avg loss % — target ≥ 2.0",
+            )
+
+            # ── Monthly P&L trend ─────────────────────────────────────────────
+            if not _ta["monthly_df"].empty and len(_ta["monthly_df"]) >= 2:
+                import plotly.graph_objects as _go2
+                _mon = _ta["monthly_df"]
+                _mon_colors = ["#00C851" if v >= 0 else "#ff4444" for v in _mon["pnl"]]
+                _mon_fig = _go2.Figure()
+                _mon_fig.add_trace(_go2.Bar(
+                    x=_mon["month_str"],
+                    y=_mon["pnl"],
+                    marker_color=_mon_colors,
+                    name="Monthly P&L",
+                    text=[f"${v:+,.0f}" for v in _mon["pnl"]],
+                    textposition="outside",
+                    customdata=list(zip(_mon["trade_count"], _mon["win_rate"])),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        "P&L: $%{y:+,.0f}<br>"
+                        "Trades: %{customdata[0]}<br>"
+                        "Win rate: %{customdata[1]:.0f}%"
+                        "<extra></extra>"
+                    ),
+                ))
+                _mon_fig.update_layout(
+                    title="Monthly Realized P&L Trend",
+                    template="plotly_dark", height=260,
+                    yaxis_title="Realized P&L ($)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(_mon_fig, use_container_width=True)
+
+            # ── Trigger performance breakdown ─────────────────────────────────
+            if not _ta["trigger_df"].empty:
+                st.markdown("#### Performance by Trade Trigger")
+                st.caption(
+                    "Which reason for entering a trade generates the best outcome? "
+                    "This is the single most actionable signal in the journal — "
+                    "do more of what works, less of what doesn't."
+                )
+
+                _trig_df = _ta["trigger_df"].copy()
+
+                def _trig_style(row):
+                    exp = row.get("Expectancy ($)", 0)
+                    if exp > 0:
+                        return ["color:#00C851" if i == 0 else "" for i in range(len(row))]
+                    elif exp < 0:
+                        return ["color:#ff4444" if i == 0 else "" for i in range(len(row))]
+                    return [""] * len(row)
+
+                _trig_display = _trig_df.copy()
+                for _tc in ["Avg Win ($)", "Avg Loss ($)", "Expectancy ($)"]:
+                    if _tc in _trig_display.columns:
+                        _trig_display[_tc] = _trig_display[_tc].apply(
+                            lambda v: f"${v:+,.0f}" if pd.notna(v) else "—"
+                        )
+                for _tc in ["Win Rate (%)"]:
+                    if _tc in _trig_display.columns:
+                        _trig_display[_tc] = _trig_display[_tc].apply(
+                            lambda v: f"{v:.0f}%" if pd.notna(v) else "—"
+                        )
+                for _tc in ["Avg Win (%)", "Avg Loss (%)"]:
+                    if _tc in _trig_display.columns:
+                        _trig_display[_tc] = _trig_display[_tc].apply(
+                            lambda v: f"{v:+.1f}%" if pd.notna(v) else "—"
+                        )
+                for _tc in ["Profit Factor"]:
+                    if _tc in _trig_display.columns:
+                        _trig_display[_tc] = _trig_display[_tc].apply(
+                            lambda v: f"{v:.2f}" if pd.notna(v) else "—"
+                        )
+                st.dataframe(_trig_display, use_container_width=True, hide_index=True)
+
+            # ── Hold time breakdown ───────────────────────────────────────────
+            _hs = _ta["hold_stats"]
+            if _hs.get("avg_hold_days") and _hs.get("winners_avg_days") and _hs.get("losers_avg_days"):
+                st.markdown("#### Hold Time Analysis")
+                _ht1, _ht2, _ht3 = st.columns(3)
+                _ht1.metric("Winners: avg hold", f"{_hs['winners_avg_days']:.0f} days")
+                _ht2.metric("Losers: avg hold",  f"{_hs['losers_avg_days']:.0f} days",
+                            delta=(
+                                "Holding losers too long ⚠️"
+                                if _hs["losers_avg_days"] > _hs["winners_avg_days"] * 1.3
+                                else "Cutting losers faster ✓"
+                            ),
+                            delta_color=(
+                                "inverse"
+                                if _hs["losers_avg_days"] > _hs["winners_avg_days"] * 1.3
+                                else "normal"
+                            ))
+                _ht3.metric("Sample size", f"{_hs['sample_size']} matched pairs",
+                            help="Trades where a BUY was found before the SELL for the same ticker")
+
+            # ── Behavioral insights cards ─────────────────────────────────────
+            if _ta["insights"]:
+                st.divider()
+                st.markdown("#### 🎯 Behavioral Coaching")
+                st.caption(
+                    "Pattern-based feedback on your trading behavior — "
+                    "not individual trade quality, but systematic habits that affect long-run performance."
+                )
+
+                for _ins in _ta["insights"]:
+                    _ins_pri  = _ins["priority"]
+                    _ins_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "OK": "✅"}.get(_ins_pri, "📌")
+                    _ins_bclr = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33", "OK": "#00C851"}.get(_ins_pri, "#888")
+                    _ins_exp  = _ins_pri in ("HIGH", "MEDIUM")
+
+                    with st.expander(
+                        f"{_ins_icon} **{_ins_pri}** · {_ins['title']}",
+                        expanded=_ins_exp,
+                    ):
+                        # Observation banner
+                        st.markdown(
+                            f"<div style='padding:10px 14px;background:#1a1a1a;"
+                            f"border-radius:6px;border-left:4px solid {_ins_bclr};margin:8px 0'>"
+                            f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>What the Data Shows</span><br>"
+                            f"<span style='color:#eee'>{_ins['observation']}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        _ins_cl, _ins_cr = st.columns([1, 1])
+                        with _ins_cl:
+                            st.markdown("**Why It Matters**")
+                            st.markdown(
+                                f"<div style='color:#bbb;font-size:0.88em'>"
+                                f"{_ins['implication']}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        with _ins_cr:
+                            st.markdown(
+                                f"<div style='padding:10px 14px;background:#0d2137;"
+                                f"border-radius:6px;border-left:4px solid #4a9eff'>"
+                                f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>Corrective Action</span><br>"
+                                f"<span style='color:#eee;font-size:0.88em'>{_ins['action']}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                        if _ins.get("goldman_lens"):
+                            st.markdown("")
+                            st.info(f"**Goldman Lens** · {_ins['goldman_lens']}")
 
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")
