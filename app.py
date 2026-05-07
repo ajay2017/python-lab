@@ -34,11 +34,11 @@ from stock_analyzer import db
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
-# Reduce Streamlit's default top padding so the index strip sits flush at the top
+# Nudge top padding down so the index strip aligns with the sidebar header
 st.markdown(
     "<style>"
-    ".block-container{padding-top:0.6rem !important;padding-bottom:0.5rem !important}"
-    ".stMainBlockContainer{padding-top:0.6rem !important}"
+    ".block-container{padding-top:2.5rem !important;padding-bottom:0.5rem !important}"
+    ".stMainBlockContainer{padding-top:2.5rem !important}"
     "</style>",
     unsafe_allow_html=True,
 )
