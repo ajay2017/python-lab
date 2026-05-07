@@ -3690,34 +3690,56 @@ elif page == "📒 Trade Journal":
     prefill = st.session_state.pop("_prefill_trade", {})
 
     # ── Log a Trade form ──────────────────────────────────────────────────────
-    # Pre-compute cost basis hint before entering the form so the default is
-    # available as a widget value (form widgets don't update reactively).
-    _prefill_ticker  = prefill.get("ticker", "").strip().upper()
-    _prefill_action  = prefill.get("action", "SELL")
-    _cost_basis_hint = 0.01
-    _cost_hint_label = "Cost Basis / share ($)"
-    if _prefill_action == "SELL" and _prefill_ticker:
-        _cb_match = st.session_state.holdings_df[
-            st.session_state.holdings_df["Ticker"] == _prefill_ticker
-        ]
-        if not _cb_match.empty:
-            _cost_basis_hint = float(_cb_match.iloc[0]["Avg Cost ($)"])
-            _cost_hint_label = f"Cost Basis / share ($) — auto-filled from holdings (${_cost_basis_hint:.2f})"
+    _prefill_ticker = prefill.get("ticker", "").strip().upper()
+    _prefill_action = prefill.get("action", "BUY")
+
+    # Sync pre-fill into session state keys when a recommendation pushes values in
+    if _prefill_ticker:
+        st.session_state["_tj_ticker"] = _prefill_ticker
+    if prefill.get("action"):
+        st.session_state["_tj_action"] = _prefill_action
 
     with st.expander("➕ Log a Trade", expanded=bool(prefill)):
-        # st.form guarantees exactly one submission per button click,
-        # preventing the duplicate-entry glitch caused by page reruns.
+        # ── Action + Ticker live OUTSIDE the form so changes trigger a rerun
+        # and cost basis can be auto-looked-up before the form renders.
+        _tx_c1, _tx_c2 = st.columns([1, 2])
+        with _tx_c1:
+            st.radio(
+                "Action", ["BUY", "SELL"], horizontal=True,
+                key="_tj_action",
+                index=0 if st.session_state.get("_tj_action", _prefill_action) == "BUY" else 1,
+            )
+        with _tx_c2:
+            st.text_input(
+                "Ticker", placeholder="e.g. CRWV",
+                key="_tj_ticker",
+            )
+
+        # Reactive cost-basis lookup — runs on every rerun after ticker/action change
+        _live_action = st.session_state.get("_tj_action", "BUY")
+        _live_ticker = (st.session_state.get("_tj_ticker") or "").strip().upper()
+        _cost_basis_hint = 0.01
+        _cost_hint_label = "Cost Basis / share ($)"
+        _cb_info = ""
+        if _live_ticker:
+            _cb_match = st.session_state.holdings_df[
+                st.session_state.holdings_df["Ticker"] == _live_ticker
+            ]
+            if not _cb_match.empty:
+                _avg = float(_cb_match.iloc[0]["Avg Cost ($)"])
+                _cost_basis_hint = _avg
+                if _live_action == "SELL":
+                    _cost_hint_label = f"Cost Basis / share ($)  ← auto-filled ${_avg:.2f}"
+                    _cb_info = f"ℹ️ Avg cost from holdings: **${_avg:.2f}** — pre-filled below"
+            elif _live_action == "BUY":
+                _cb_info = "🆕 New position — cost basis will be set to your buy price"
+
+        if _cb_info:
+            st.caption(_cb_info)
+
+        # st.form prevents double-submission on rerun (shares / price / notes only)
         with st.form("log_trade_form", clear_on_submit=True):
-            f_col1, f_col2, f_col3 = st.columns(3)
-            with f_col1:
-                action = st.radio(
-                    "Action", ["SELL", "BUY"], horizontal=True,
-                    index=0 if _prefill_action == "SELL" else 1,
-                )
-            with f_col2:
-                ticker_input = st.text_input(
-                    "Ticker", value=_prefill_ticker, placeholder="e.g. NET",
-                ).strip().upper()
+            f_col3, f_col4, f_col5 = st.columns(3)
             with f_col3:
                 trigger_type = st.selectbox(
                     "Reason",
@@ -3726,8 +3748,6 @@ elif page == "📒 Trade Journal":
                         prefill.get("trigger", "MANUAL")
                     ),
                 )
-
-            f_col4, f_col5, f_col6 = st.columns(3)
             with f_col4:
                 shares_val = st.number_input(
                     "Shares", min_value=0.001,
@@ -3740,21 +3760,30 @@ elif page == "📒 Trade Journal":
                     value=float(prefill.get("price", 0.01)),
                     step=0.01, format="%.2f",
                 )
-            with f_col6:
+
+            # Cost basis: shown for SELL (pre-filled); hidden for BUY (auto = buy price)
+            if _live_action == "SELL":
                 cost_basis_val = st.number_input(
                     _cost_hint_label,
                     min_value=0.01, value=max(0.01, _cost_basis_hint),
                     step=0.01, format="%.2f",
-                    help="Your average purchase price per share. "
-                         "Auto-filled when the ticker matches a current holding.",
+                    help="Auto-filled from your holdings avg cost. Edit if needed.",
                 )
+            else:
+                cost_basis_val = None   # set to price_val after submission
 
             notes_val = st.text_input(
                 "Notes (optional)", value=prefill.get("notes", ""),
-                placeholder="e.g. Partial profit on bearish signal",
+                placeholder="e.g. Added on dip",
             )
 
             submitted = st.form_submit_button("✅ Record Trade", type="primary")
+
+        # Read action + ticker from session state (set by widgets outside the form)
+        action       = st.session_state.get("_tj_action", "BUY")
+        ticker_input = (st.session_state.get("_tj_ticker") or "").strip().upper()
+        if action == "BUY":
+            cost_basis_val = price_val  # cost basis = what you paid
 
         # Process submission outside the form block
         if submitted:
