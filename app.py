@@ -601,27 +601,6 @@ st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
 if page == "🏠 My Portfolio":
     st.title("🏠 My Portfolio")
 
-    # Holdings editor
-    with st.expander("✏️ Edit Holdings", expanded=False):
-        st.caption("Update your actual shares and average cost. Add rows for new positions.")
-        edited = st.data_editor(
-            st.session_state.holdings_df,
-            num_rows="dynamic",
-            column_config={
-                "Ticker":        st.column_config.TextColumn("Ticker", width="small"),
-                "Shares":        st.column_config.NumberColumn("Shares", min_value=1, step=1),
-                "Avg Cost ($)":  st.column_config.NumberColumn("Avg Cost ($)", min_value=0.01, format="$%.2f"),
-            },
-            use_container_width=True,
-            key="holdings_editor",
-        )
-        if st.button("Save Holdings", type="primary"):
-            st.session_state.holdings_df = edited  # always update session state
-            if db.save_holdings(edited):
-                st.success("✅ Saved to Supabase — will persist across sessions.")
-            else:
-                st.success("✅ Holdings updated for this session.")
-            st.rerun()
 
     # Load data for all held tickers
     held_tickers = [
