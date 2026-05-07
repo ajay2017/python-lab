@@ -762,10 +762,11 @@ if page == "🏠 My Portfolio":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    tab_ov, tab_perf, tab_earn, tab_act, tab_risk, tab_rs, tab_macro, tab_rank, tab_brief = st.tabs([
+    tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_rank, tab_brief = st.tabs([
         "📊 Overview",
         "📈 Performance",
         "📅 Earnings",
+        "💰 P&L Attribution",
         f"⚠️ Alerts & Actions{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
         "🔗 Risk Analysis",
         "📈 Relative Strength",
@@ -1264,7 +1265,136 @@ if page == "🏠 My Portfolio":
             )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 4 — ALERTS & ACTIONS
+    # TAB 4 — P&L ATTRIBUTION WATERFALL
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_pnl:
+        st.caption(
+            "Shows each position's dollar contribution to total portfolio P&L — "
+            "largest winners on the left, largest losers on the right. "
+            "Identifies which holdings are driving performance and which are dragging it."
+        )
+
+        # Sort by P&L $ descending (winners left, losers right)
+        _pnl_df = port_df[["Ticker", "Sector", "P&L ($)", "P&L (%)", "Weight (%)", "Market Value", "Signal"]].copy()
+        _pnl_df = _pnl_df.sort_values("P&L ($)", ascending=False).reset_index(drop=True)
+
+        _total_pnl   = float(_pnl_df["P&L ($)"].sum())
+        _winners     = _pnl_df[_pnl_df["P&L ($)"] > 0]
+        _losers      = _pnl_df[_pnl_df["P&L ($)"] < 0]
+        _win_total   = float(_winners["P&L ($)"].sum())
+        _loss_total  = float(_losers["P&L ($)"].sum())
+        _best        = _pnl_df.iloc[0]
+        _worst       = _pnl_df.iloc[-1]
+
+        # KPI strip
+        _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
+        _pk1.metric("Total P&L",      f"${_total_pnl:+,.0f}",
+                    delta_color="normal" if _total_pnl >= 0 else "inverse")
+        _pk2.metric("Gross Gains",    f"${_win_total:,.0f}",
+                    f"{len(_winners)} positions", delta_color="off")
+        _pk3.metric("Gross Losses",   f"${_loss_total:,.0f}",
+                    f"{len(_losers)} positions",  delta_color="off")
+        _pk4.metric(f"Top: {_best['Ticker']}",
+                    f"${_best['P&L ($)']:+,.0f}", f"{_best['P&L (%)']:+.1f}%",
+                    delta_color="normal")
+        _pk5.metric(f"Drag: {_worst['Ticker']}",
+                    f"${_worst['P&L ($)']:+,.0f}", f"{_worst['P&L (%)']:+.1f}%",
+                    delta_color="inverse")
+
+        # ── Waterfall chart ───────────────────────────────────────────────────
+        _tickers  = list(_pnl_df["Ticker"]) + ["Total"]
+        _measures = ["relative"] * len(_pnl_df) + ["total"]
+        _values   = list(_pnl_df["P&L ($)"]) + [_total_pnl]
+        _bar_clrs = [
+            "#00C851" if v >= 0 else "#ff4444"
+            for v in list(_pnl_df["P&L ($)"]) + [_total_pnl]
+        ]
+        _hover = [
+            f"{row['Ticker']}<br>"
+            f"P&L: ${row['P&L ($)']:+,.0f} ({row['P&L (%)']:+.1f}%)<br>"
+            f"Weight: {row['Weight (%)']:.1f}%<br>"
+            f"Sector: {row['Sector']}<br>"
+            f"Signal: {row['Signal']}"
+            for _, row in _pnl_df.iterrows()
+        ] + [f"Total P&L: ${_total_pnl:+,.0f}"]
+
+        _wf_fig = go.Figure(go.Waterfall(
+            orientation="v",
+            measure=_measures,
+            x=_tickers,
+            y=_values,
+            text=[f"${v:+,.0f}" for v in _values],
+            textposition="outside",
+            textfont=dict(size=11),
+            customdata=_hover,
+            hovertemplate="%{customdata}<extra></extra>",
+            connector=dict(line=dict(color="#333", width=1, dash="dot")),
+            increasing=dict(marker=dict(color="#00C851")),
+            decreasing=dict(marker=dict(color="#ff4444")),
+            totals=dict(marker=dict(
+                color="#00C851" if _total_pnl >= 0 else "#ff4444",
+                line=dict(color="#fff", width=1.5),
+            )),
+        ))
+        _wf_fig.update_layout(
+            template="plotly_dark", height=420,
+            margin=dict(l=0, r=0, t=20, b=0),
+            xaxis=dict(gridcolor="#1f2937"),
+            yaxis=dict(
+                tickprefix="$", tickformat=",.0f",
+                gridcolor="#1f2937", zeroline=True, zerolinecolor="#555",
+            ),
+            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+            showlegend=False,
+        )
+        st.plotly_chart(_wf_fig, use_container_width=True)
+
+        # ── Sector attribution breakdown ──────────────────────────────────────
+        st.markdown("#### Sector Attribution")
+        _sec_pnl = (
+            _pnl_df.groupby("Sector")["P&L ($)"]
+            .sum().sort_values(ascending=False).reset_index()
+        )
+        _sec_pnl["Share of P&L (%)"] = (
+            _sec_pnl["P&L ($)"] / abs(_total_pnl) * 100
+            if _total_pnl != 0 else 0.0
+        )
+        _sec_fig = go.Figure(go.Bar(
+            x=_sec_pnl["Sector"],
+            y=_sec_pnl["P&L ($)"],
+            marker_color=[
+                "#00C851" if v >= 0 else "#ff4444"
+                for v in _sec_pnl["P&L ($)"]
+            ],
+            text=[f"${v:+,.0f}" for v in _sec_pnl["P&L ($)"]],
+            textposition="outside",
+            customdata=list(zip(_sec_pnl["Sector"], _sec_pnl["Share of P&L (%)"])),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "P&L: $%{y:+,.0f}<br>"
+                "Share: %{customdata[1]:.1f}% of total<extra></extra>"
+            ),
+        ))
+        _sec_fig.update_layout(
+            template="plotly_dark", height=280,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis=dict(gridcolor="#1f2937"),
+            yaxis=dict(
+                tickprefix="$", tickformat=",.0f",
+                gridcolor="#1f2937", zeroline=True, zerolinecolor="#555",
+            ),
+            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+            showlegend=False,
+        )
+        st.plotly_chart(_sec_fig, use_container_width=True)
+        st.caption(
+            "Waterfall: each bar is one position's dollar P&L contribution; "
+            "the final 'Total' bar is the portfolio sum.  "
+            "Sector chart groups by GICS sector."
+        )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 5 — ALERTS & ACTIONS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_act:
         # ── Active Alerts — grouped by category ──────────────────────────────
