@@ -27,6 +27,7 @@ from stock_analyzer.rebalancer import (
     TOLERANCE_OK, TOLERANCE_WATCH,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
+from stock_analyzer.tax_advisor import build_tax_analysis
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -1499,6 +1500,203 @@ if page == "🏠 My Portfolio":
                                     f"</div>",
                                     unsafe_allow_html=True,
                                 )
+
+        # ── Tax Efficiency Advisor ────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 💰 Tax Efficiency Advisor")
+        st.caption(
+            "Estimates the tax impact of selling each position today vs waiting for "
+            "long-term capital gains treatment (>365 days held). "
+            "Holding periods sourced from your Trade Journal — positions not yet logged show 'Unknown'."
+        )
+
+        # Tax bracket selector
+        _tx_col1, _tx_col2 = st.columns([2, 1])
+        with _tx_col1:
+            _tx_bracket = st.radio(
+                "Your tax bracket",
+                ["🟢 Low  (22% STCG / 15% LTCG)",
+                 "🟡 Medium  (32% STCG / 15% LTCG)",
+                 "🔴 High  (37% STCG / 20% LTCG)"],
+                index=2, horizontal=True, key="_tx_bracket",
+            )
+        _tx_rates = {
+            "🟢 Low  (22% STCG / 15% LTCG)":    (0.22, 0.15),
+            "🟡 Medium  (32% STCG / 15% LTCG)":  (0.32, 0.15),
+            "🔴 High  (37% STCG / 20% LTCG)":    (0.37, 0.20),
+        }
+        _stcg_r, _ltcg_r = _tx_rates[_tx_bracket]
+
+        _trades_for_tax = st.session_state.get("trades_df", pd.DataFrame())
+        try:
+            _tax = build_tax_analysis(port_df, _trades_for_tax, _stcg_r, _ltcg_r)
+        except Exception as _txe:
+            _tax = {}
+            st.warning(f"Tax analysis unavailable: {_txe}")
+
+        if _tax and _tax.get("rows"):
+            # Portfolio-level KPI strip
+            _tx_k1, _tx_k2, _tx_k3, _tx_k4, _tx_k5 = st.columns(5)
+            _tx_k1.metric("STCG Unrealized",    f"${_tax['total_stcg_gain']:,.0f}",
+                          help=f"Taxed at {_stcg_r*100:.0f}% if sold today")
+            _tx_k2.metric("LTCG Unrealized",    f"${_tax['total_ltcg_gain']:,.0f}",
+                          help=f"Taxed at {_ltcg_r*100:.0f}% — already long-term")
+            _tx_k3.metric("Harvestable Losses", f"${_tax['total_harvestable']:,.0f}",
+                          help="Unrealized losses that could offset gains")
+            _tx_k4.metric("Tax Bill Today",     f"${_tax['tax_today']:,.0f}",
+                          help="Estimated federal tax if all positions sold now")
+            _sav = _tax["tax_savings"]
+            _tx_k5.metric("Savings by Waiting", f"${_sav:,.0f}",
+                          delta="Wait for LTCG" if _sav > 500 else None,
+                          delta_color="normal" if _sav > 500 else "off",
+                          help="Extra tax saved if STCG positions wait for long-term treatment")
+
+            # Position table
+            _tx_table_rows = []
+            for _tr in _tax["rows"]:
+                _tx_table_rows.append({
+                    "Ticker":         _tr["ticker"],
+                    "Unrealized P&L": _tr["pnl"],
+                    "Held (days)":    _tr["days_held"] if _tr["days_held"] is not None else "—",
+                    "Type":           _tr["gain_type"],
+                    "Days to LTCG":   _tr["days_to_ltcg"] if _tr["days_to_ltcg"] else "—",
+                    "Tax Today ($)":  _tr["tax_if_sold_today"],
+                    "Tax at LTCG ($)": _tr["tax_if_ltcg"],
+                    "Savings ($)":    _tr["tax_savings"],
+                    "Action":         _tr["action"],
+                })
+            _tx_df = pd.DataFrame(_tx_table_rows)
+
+            def _tx_row_style(row):
+                a = str(row.get("Action", ""))
+                if a == "HARVEST":
+                    return ["background-color:rgba(74,158,255,0.10)"] * len(row)
+                if a == "WAIT":
+                    return ["background-color:rgba(0,200,81,0.10)"] * len(row)
+                if a == "HOLD_FOR_LTCG":
+                    return ["background-color:rgba(255,187,51,0.07)"] * len(row)
+                return [""] * len(row)
+
+            def _tx_type_style(val):
+                if val == "STCG": return "color:#ffbb33;font-weight:bold"
+                if val == "LTCG": return "color:#00C851;font-weight:bold"
+                return "color:#888"
+
+            st.dataframe(
+                _tx_df.style
+                    .apply(_tx_row_style, axis=1)
+                    .map(_tx_type_style, subset=["Type"])
+                    .format({
+                        "Unrealized P&L":  lambda v: f"${v:+,.0f}" if isinstance(v, (int,float)) else v,
+                        "Tax Today ($)":   lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
+                        "Tax at LTCG ($)": lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
+                        "Savings ($)":     lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
+                    }),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "🟡 **STCG** = held ≤365 days — short-term rate applies  ·  "
+                "🟢 **LTCG** = held >365 days — preferential rate  ·  "
+                "⬛ **Unknown** = no BUY record in Trade Journal for this position  ·  "
+                "Estimates are federal tax only — state taxes additional."
+            )
+
+            # Action cards for notable situations
+            _harvest_rows = [r for r in _tax["rows"] if r["action"] == "HARVEST"]
+            _wait_rows    = [r for r in _tax["rows"] if r["action"] == "WAIT"]
+            _ltcg_rows    = [r for r in _tax["rows"] if r["action"] == "HOLD_FOR_LTCG"]
+
+            if _harvest_rows:
+                st.markdown("#### 🔵 Tax Loss Harvesting Opportunities")
+                for _hr in _harvest_rows:
+                    with st.expander(
+                        f"🔵 **{_hr['ticker']}** — harvest ${_hr['harvestable']:,.0f} loss  "
+                        f"| saves ~${_hr['harvestable'] * _stcg_r:,.0f} in taxes on other gains",
+                        expanded=True,
+                    ):
+                        _hc = st.columns(3)
+                        _hc[0].metric("Unrealized Loss",   f"${_hr['pnl']:+,.0f}")
+                        _hc[1].metric("Tax Offset Value",  f"~${_hr['harvestable'] * _stcg_r:,.0f}",
+                                      help=f"Loss × {_stcg_r*100:.0f}% STCG rate")
+                        _hc[2].metric("Held",
+                                      f"{_hr['days_held']}d" if _hr["days_held"] else "Unknown")
+                        st.markdown(
+                            f"<div style='padding:10px 14px;background:#0a0d1a;"
+                            f"border-radius:6px;border-left:4px solid #4a9eff;margin:8px 0'>"
+                            f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>Tax Loss Harvesting</span><br>"
+                            f"<span style='color:#eee'>"
+                            f"Selling <b>{_hr['ticker']}</b> realises a <b>${_hr['harvestable']:,.0f}</b> loss. "
+                            f"At your {_stcg_r*100:.0f}% rate, this offsets approximately "
+                            f"<b>${_hr['harvestable'] * _stcg_r:,.0f}</b> in taxes on other gains. "
+                            f"<b>⚠️ Wash sale rule:</b> do not repurchase {_hr['ticker']} or a "
+                            f"substantially identical security within 30 days before or after the sale — "
+                            f"the IRS will disallow the loss deduction."
+                            f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.info(
+                            "**Goldman Lens** · Tax loss harvesting is one of the highest-certainty "
+                            "alpha sources available — it doesn't require predicting the market. "
+                            "Goldman's tax-aware strategies harvest losses systematically throughout "
+                            "the year, not just in December. The key discipline: replace the sold "
+                            "position with a correlated but not identical ETF or name to maintain "
+                            "market exposure while the 30-day wash sale window passes."
+                        )
+
+            if _wait_rows:
+                st.markdown("#### 🟢 Wait for LTCG — Threshold Close")
+                for _wr2 in _wait_rows:
+                    with st.expander(
+                        f"🟢 **{_wr2['ticker']}** — LTCG in {_wr2['days_to_ltcg']} days  "
+                        f"| saves ${_wr2['tax_savings']:,.0f} by waiting",
+                        expanded=True,
+                    ):
+                        _wc = st.columns(4)
+                        _wc[0].metric("Unrealized Gain",  f"${_wr2['pnl']:+,.0f}")
+                        _wc[1].metric("Days to LTCG",     f"{_wr2['days_to_ltcg']}d")
+                        _wc[2].metric("Tax if Sold Now",  f"${_wr2['tax_if_sold_today']:,.0f}")
+                        _wc[3].metric("Tax Savings",      f"${_wr2['tax_savings']:,.0f}",
+                                      delta="Wait", delta_color="normal")
+                        st.markdown(
+                            f"<div style='padding:10px 14px;background:#0a1a0a;"
+                            f"border-radius:6px;border-left:4px solid #00C851;margin:8px 0'>"
+                            f"<span style='color:#eee'>"
+                            f"Waiting <b>{_wr2['days_to_ltcg']} more days</b> before selling "
+                            f"<b>{_wr2['ticker']}</b> saves <b>${_wr2['tax_savings']:,.0f}</b> "
+                            f"in federal taxes — the gain shifts from {_stcg_r*100:.0f}% to "
+                            f"{_ltcg_r*100:.0f}% treatment. "
+                            f"Unless the investment thesis has broken, this is almost always "
+                            f"worth the wait."
+                            f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        st.info(
+                            "**Goldman Lens** · The LTCG threshold is one of the most valuable "
+                            "and underused tools in portfolio management. Goldman's PMs always flag "
+                            "positions within 60 days of the 1-year mark — selling before the "
+                            f"threshold costs {(_stcg_r - _ltcg_r)*100:.0f} percentage points of "
+                            "extra tax with zero investment rationale. "
+                            "The only reason to sell before LTCG eligibility is a broken thesis — "
+                            "not a preference for cash or a desire to lock in gains."
+                        )
+
+            if _ltcg_rows:
+                with st.expander(
+                    f"🟡 {len(_ltcg_rows)} position(s) working toward LTCG — monitor", expanded=False
+                ):
+                    for _lr in _ltcg_rows:
+                        st.markdown(
+                            f"**{_lr['ticker']}** — {_lr['days_to_ltcg']}d to LTCG · "
+                            f"gain ${_lr['pnl']:+,.0f} · "
+                            f"tax saving ${_lr['tax_savings']:,.0f} by waiting"
+                        )
+
+            if not _harvest_rows and not _wait_rows and not _ltcg_rows:
+                st.success(
+                    "✅ No immediate tax efficiency actions. "
+                    "All gains are already LTCG-eligible, or positions have no unrealized gains."
+                )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2 — PERFORMANCE VS SPY
