@@ -34,6 +34,15 @@ from stock_analyzer import db
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
+# Reduce Streamlit's default top padding so the index strip sits flush at the top
+st.markdown(
+    "<style>"
+    ".block-container{padding-top:0.6rem !important;padding-bottom:0.5rem !important}"
+    ".stMainBlockContainer{padding-top:0.6rem !important}"
+    "</style>",
+    unsafe_allow_html=True,
+)
+
 MODERATE_RISK_PCT = 0.015
 
 
@@ -528,32 +537,36 @@ def _index_strip():
     indices = fetch_market_indices()
     if not indices:
         return
-    cols = st.columns(len(indices))
-    for col, idx in zip(cols, indices):
-        up      = idx["change_pct"] >= 0
-        bg      = "rgba(0,200,81,0.10)"  if up else "rgba(255,68,68,0.10)"
-        border  = "#00C851"              if up else "#ff4444"
-        val_clr = "#00C851"              if up else "#ff4444"
-        sign    = "▲ +" if up else "▼ "
+    tiles = ""
+    for idx in indices:
+        up         = idx["change_pct"] >= 0
+        bg         = "rgba(0,200,81,0.08)"  if up else "rgba(255,68,68,0.08)"
+        border     = "#00C851"              if up else "#ff4444"
+        val_clr    = "#00C851"              if up else "#ff4444"
+        arrow      = "▲" if up else "▼"
+        sign       = "+" if up else ""
         price_str  = f"{idx['price']:,.2f}"
-        change_str = f"{sign}{abs(idx['change']):.2f} ({abs(idx['change_pct']):.2f}%)"
-        col.markdown(
-            f"<div style='background:{bg};border:1px solid {border};"
-            f"border-top:3px solid {border};border-radius:8px;"
-            f"padding:12px 16px;text-align:center'>"
-            f"<div style='font-size:0.7em;color:#aaa;font-weight:700;"
-            f"letter-spacing:0.09em;text-transform:uppercase'>{idx['short']}</div>"
-            f"<div style='font-size:0.75em;color:#777;margin-bottom:4px'>{idx['full']}</div>"
-            f"<div style='font-size:1.35em;font-weight:700;color:#fff'>{price_str}</div>"
-            f"<div style='font-size:0.82em;font-weight:600;color:{val_clr};margin-top:3px'>"
-            f"{change_str}</div>"
-            f"<div style='font-size:0.65em;color:#555;margin-top:4px'>{idx['fetched_at']}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
+        change_str = f"{arrow} {sign}{idx['change_pct']:.2f}%  {sign}{abs(idx['change']):.2f} pts"
+        tiles += (
+            f"<div style='flex:1;background:{bg};"
+            f"border:1px solid {border};border-left:3px solid {border};"
+            f"border-radius:6px;padding:6px 14px 7px;text-align:center;line-height:1.35'>"
+            f"<div style='font-size:0.62em;color:#999;font-weight:700;"
+            f"letter-spacing:0.09em;text-transform:uppercase;margin-bottom:1px'>{idx['short']}</div>"
+            f"<div style='font-size:1.05em;font-weight:700;color:#e8e8e8'>{price_str}</div>"
+            f"<div style='font-size:0.72em;font-weight:600;color:{val_clr};margin-top:1px'>{change_str}</div>"
+            f"</div>"
         )
+    ts = indices[0]["fetched_at"] if indices else ""
+    st.markdown(
+        f"<div style='display:flex;gap:10px;align-items:stretch;margin-bottom:2px'>{tiles}</div>"
+        f"<div style='font-size:0.62em;color:#444;text-align:right;margin-top:2px'>"
+        f"📡 {ts} · auto-refreshes every 60s</div>",
+        unsafe_allow_html=True,
+    )
 
 _index_strip()
-st.divider()
+st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
