@@ -823,6 +823,35 @@ if page == "🏠 My Portfolio":
     else:
         _rag_label, _rag_color = "All Clear", "#00C851"
 
+    # Compute price alert triggers here so they surface in the Command Center
+    _pa_store_cc = st.session_state.get("_price_alerts", {})
+    _pa_fired_cc = []
+    for _, _ccpr in port_df.iterrows():
+        _cct  = _ccpr["Ticker"]
+        _ccpx = _f(_ccpr.get("Price"))
+        _ccpa = _pa_store_cc.get(_cct, {})
+        _cctgt = _ccpa.get("target") or 0.0
+        _ccflr = _ccpa.get("floor")  or 0.0
+        if _cctgt > 0 and _ccpx >= _cctgt:
+            _pa_fired_cc.append(("🎯", "#f59e0b", f"{_cct} hit take-profit ${_cctgt:.2f}"))
+        if _ccflr > 0 and _ccpx <= _ccflr:
+            _pa_fired_cc.append(("🚨", "#ef4444", f"{_cct} breached floor ${_ccflr:.2f}"))
+
+    # Build optional alert row for inside the Command Center box
+    _cc_alert_row = ""
+    if _pa_fired_cc:
+        _cc_badges = "".join(
+            f"<span style='background:{c};color:#fff;padding:2px 10px;border-radius:12px;"
+            f"font-size:0.72em;font-weight:700;white-space:nowrap'>{ico} {msg}</span>"
+            for ico, c, msg in _pa_fired_cc
+        )
+        _cc_alert_row = (
+            f"<div style='margin-top:10px;padding-top:10px;border-top:1px solid #374151;"
+            f"display:flex;gap:8px;flex-wrap:wrap;align-items:center'>"
+            f"<span style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>"
+            f"PRICE ALERTS</span>{_cc_badges}</div>"
+        )
+
     # ── Portfolio Command Center ───────────────────────────────────────────────
     st.markdown(
         f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
@@ -834,7 +863,7 @@ if page == "🏠 My Portfolio":
         f"{_rag_label}</span>"
         f"<span style='margin-left:auto;color:#6b7280;font-size:0.75em'>"
         f"{len(port_df)} positions · {datetime.now().strftime('%b %d, %Y')}</span>"
-        f"</div></div>",
+        f"</div>{_cc_alert_row}</div>",
         unsafe_allow_html=True,
     )
 
@@ -2561,11 +2590,11 @@ if page == "🏠 My Portfolio":
         if st.session_state.pop("_pa_saved_ok", False):
             st.success("✅ Price alerts saved.")
 
-        # Check triggers and surface them
+        # Check triggers — full detail shown here, badge summary shown in Command Center above
         _pa_fired = []
         for _, _pr in port_df.iterrows():
             _t    = _pr["Ticker"]
-            _px   = _pr["Price"]
+            _px   = _f(_pr.get("Price"))
             _pa   = _pa_store.get(_t, {})
             _tgt  = _pa.get("target") or 0.0
             _flr  = _pa.get("floor")  or 0.0
@@ -2574,7 +2603,7 @@ if page == "🏠 My Portfolio":
             if _flr > 0 and _px <= _flr:
                 _pa_fired.append(("danger",  f"🚨 **{_t}** breached floor alert **${_flr:.2f}** (current ${_px:.2f}) — review position now"))
         if _pa_fired:
-            st.markdown("**🔔 Price Alert Triggers:**")
+            st.markdown("#### 🔔 Active Price Alerts")
             for _lvl, _msg in _pa_fired:
                 if _lvl == "danger":   st.error(_msg)
                 else:                  st.warning(_msg)
