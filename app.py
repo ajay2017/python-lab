@@ -34,14 +34,6 @@ from stock_analyzer import db
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
-# Nudge top padding down so the index strip aligns with the sidebar header
-st.markdown(
-    "<style>"
-    ".block-container{padding-top:2.5rem !important;padding-bottom:0.5rem !important}"
-    ".stMainBlockContainer{padding-top:2.5rem !important}"
-    "</style>",
-    unsafe_allow_html=True,
-)
 
 MODERATE_RISK_PCT = 0.015
 
@@ -559,7 +551,7 @@ def _index_strip():
         )
     ts = indices[0]["fetched_at"] if indices else ""
     st.markdown(
-        f"<div style='display:flex;gap:10px;align-items:stretch;margin-bottom:2px'>{tiles}</div>"
+        f"<div style='display:flex;gap:10px;align-items:stretch;margin-top:8px;margin-bottom:2px'>{tiles}</div>"
         f"<div style='font-size:0.62em;color:#444;text-align:right;margin-top:2px'>"
         f"📡 {ts} · auto-refreshes every 60s</div>",
         unsafe_allow_html=True,
