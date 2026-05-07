@@ -2538,13 +2538,22 @@ if page == "🏠 My Portfolio":
             key="_pa_editor",
         )
         if st.button("💾 Save price alerts", key="_pa_save"):
-            for _, _row in _pa_edited.iterrows():
-                _t = _row["Ticker"]
-                _pa_store[_t] = {
-                    "target": float(_row["Take-Profit ($)"]) or 0.0,
-                    "floor":  float(_row["Floor Alert ($)"]) or 0.0,
-                }
-            st.success("✅ Price alerts saved — active on next page load.")
+            # Read directly from the editor's session-state diff (more reliable than
+            # the return value, which can be stale when a button triggers the re-run).
+            _editor_state = st.session_state.get("_pa_editor") or {}
+            _edited_rows  = _editor_state.get("edited_rows") or {}
+            for _idx, _edits in _edited_rows.items():
+                _t = _pa_df.iloc[int(_idx)]["Ticker"]
+                if "Take-Profit ($)" in _edits:
+                    _pa_store[_t]["target"] = float(_edits["Take-Profit ($)"]) or 0.0
+                if "Floor Alert ($)" in _edits:
+                    _pa_store[_t]["floor"]  = float(_edits["Floor Alert ($)"]) or 0.0
+            st.session_state.pop("_pa_editor", None)  # clear stale diffs so table re-renders clean
+            st.session_state["_pa_saved_ok"] = True
+            st.rerun()
+
+        if st.session_state.pop("_pa_saved_ok", False):
+            st.success("✅ Price alerts saved.")
 
         # Check triggers and surface them
         _pa_fired = []
