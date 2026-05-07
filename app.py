@@ -448,11 +448,14 @@ with st.sidebar:
     _news_slot = st.container()   # placeholder — filled by page code below
 
     st.divider()
-    portfolio_value = st.number_input(
-        "Portfolio Value ($)", min_value=1_000, max_value=10_000_000,
-        value=50_000, step=1_000, format="%d",
-    )
-    st.caption(f"Risk/trade: **${portfolio_value * MODERATE_RISK_PCT:,.0f}** (1.5% · Moderate)")
+    _pv = st.session_state.get("_portfolio_value", 0)
+    if _pv > 0:
+        st.metric("Portfolio Value", f"${_pv:,.0f}",
+                  help="Auto-calculated from current holdings × live prices")
+        st.caption(f"Risk/trade: **${_pv * MODERATE_RISK_PCT:,.0f}** (1.5% · Moderate)")
+    else:
+        st.caption("Portfolio value loads with holdings")
+    portfolio_value = _pv if _pv > 0 else 50_000
     st.divider()
     if db.has_db():
         st.markdown("🟢 **Supabase connected** — data persists")
@@ -596,6 +599,8 @@ if page == "🏠 My Portfolio":
     total_pnl   = port_df["P&L ($)"].sum()
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
+    portfolio_value = total_val                        # drive risk calc from live holdings
+    st.session_state["_portfolio_value"] = total_val  # update sidebar display
 
     # ── Pre-compute all analytics (before tabs so all tabs can access) ────────
     # Signal change detection (session-state baseline)
@@ -792,18 +797,24 @@ if page == "🏠 My Portfolio":
             if "Sell" in s:       return "color:#ff4444"
             return ""
 
-        display_cols = ["Ticker", "Shares", "Avg Cost", "Price", "P&L ($)", "P&L (%)",
-                        "Weight (%)", "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
+        display_cols = ["Ticker", "Shares", "Avg Cost", "Price", "Market Value",
+                        "P&L ($)", "P&L (%)", "Weight (%)",
+                        "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
         styled = (
             port_df[display_cols].style
             .map(_pnl_color, subset=["P&L ($)", "P&L (%)"])
             .map(_stop_color, subset=["Stop Type"])
             .map(_sig_color, subset=["Signal"])
             .format({
-                "Avg Cost": "${:.2f}", "Price": "${:.2f}",
-                "P&L ($)": "${:,.0f}", "P&L (%)": "{:+.1f}%",
-                "Weight (%)": "{:.1f}%", "Stop": "${:.2f}",
-                "Gap to Stop (%)": "{:.1f}%", "Score": "{:.0f}",
+                "Avg Cost":        "${:.2f}",
+                "Price":           "${:.2f}",
+                "Market Value":    "${:,.0f}",
+                "P&L ($)":         "${:,.0f}",
+                "P&L (%)":         "{:+.1f}%",
+                "Weight (%)":      "{:.1f}%",
+                "Stop":            "${:.2f}",
+                "Gap to Stop (%)": "{:.1f}%",
+                "Score":           "{:.0f}",
             })
         )
         st.dataframe(styled, use_container_width=True)
