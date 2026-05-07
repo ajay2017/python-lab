@@ -21,6 +21,7 @@ from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommen
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.trade_analytics import build_full_analytics
+from stock_analyzer.stress_test import SCENARIOS, run_scenario, run_all_scenarios
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -2782,6 +2783,206 @@ if page == "🏠 My Portfolio":
                     if _rec.get("goldman_lens"):
                         st.markdown("")
                         st.info(f"**Goldman Lens** · {_rec['goldman_lens']}")
+
+        # ── Stress Testing ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔥 Stress Testing & Scenario Analysis")
+        st.caption(
+            "Estimates portfolio impact under market shock scenarios using each position's "
+            "individual beta vs SPY. Historical scenarios apply sector-specific drawdowns "
+            "from that event — more accurate than a flat beta adjustment."
+        )
+
+        _st_beta = _port_risk.get("beta") if _port_risk else None
+
+        # Scenario selector + custom shock slider side by side
+        _st_col1, _st_col2 = st.columns([2, 1])
+        with _st_col1:
+            _sc_labels = [s["label"] for s in SCENARIOS] + ["Custom Scenario"]
+            _sc_choice = st.selectbox("Select scenario", _sc_labels, key="_stress_scenario")
+        with _st_col2:
+            _custom_move = st.slider(
+                "Custom SPY move (%)", min_value=-50, max_value=20,
+                value=-15, step=1, key="_stress_custom",
+                help="Only used when 'Custom Scenario' is selected above",
+            )
+
+        # Resolve which scenario to run
+        if _sc_choice == "Custom Scenario":
+            _active_sc = {
+                "id": "custom", "label": f"Custom  (SPY {_custom_move:+.0f}%)",
+                "description": f"User-defined scenario: SPY {_custom_move:+.0f}%. "
+                               "Beta-adjusted impact per position, no sector overrides.",
+                "spy_move": float(_custom_move), "sector_key": None,
+            }
+            _sc_result = run_scenario(_active_sc, port_df, held_data, _st_beta,
+                                      custom_spy_move=float(_custom_move))
+        else:
+            _active_sc  = next(s for s in SCENARIOS if s["label"] == _sc_choice)
+            _sc_result  = run_scenario(_active_sc, port_df, held_data, _st_beta)
+
+        if _sc_result:
+            _est_pnl   = _sc_result["estimated_port_pnl"]
+            _est_move  = _sc_result["estimated_port_move"]
+            _post_val  = _sc_result["post_shock_value"]
+            _port_val  = _sc_result["portfolio_value"]
+            _pnl_clr   = "#ff4444" if _est_pnl < 0 else "#00C851"
+
+            # Summary banner
+            st.markdown(
+                f"<div style='padding:12px 18px;background:#1a1a1a;"
+                f"border-radius:8px;border-left:5px solid {_pnl_clr};margin:10px 0'>"
+                f"<span style='font-size:0.75em;color:#888;font-weight:700;"
+                f"letter-spacing:0.08em;text-transform:uppercase'>Scenario: {_active_sc['label']}</span><br>"
+                f"<span style='color:#bbb;font-size:0.88em'>{_active_sc['description']}</span><br><br>"
+                f"<span style='font-size:1.35em;font-weight:700;color:{_pnl_clr}'>"
+                f"Estimated Portfolio P&L: ${_est_pnl:+,.0f}  ({_est_move:+.1f}%)</span><br>"
+                f"<span style='color:#aaa;font-size:0.9em'>"
+                f"Portfolio value: ${_port_val:,.0f}  →  ${_post_val:,.0f} after shock</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # KPI summary
+            _s1, _s2, _s3, _s4 = st.columns(4)
+            _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
+            _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%",
+                       delta_color="inverse" if _est_pnl < 0 else "normal")
+            _s3.metric("Est. $ Impact",    f"${_est_pnl:+,.0f}",
+                       delta_color="inverse" if _est_pnl < 0 else "normal")
+            _s4.metric("Post-Shock Value", f"${_post_val:,.0f}")
+
+            # Position impact table
+            if _sc_result["rows"]:
+                import plotly.graph_objects as _go_st
+                _st_rows = _sc_result["rows"]
+                _st_tickers = [r["Ticker"] for r in _st_rows]
+                _st_pnls    = [r["Est. P&L ($)"] for r in _st_rows]
+                _st_moves   = [r["Est. Move (%)"] for r in _st_rows]
+                _st_clrs    = ["#00C851" if v >= 0 else "#ff4444" for v in _st_pnls]
+
+                _st_fig = _go_st.Figure(_go_st.Bar(
+                    x=_st_tickers,
+                    y=_st_pnls,
+                    marker_color=_st_clrs,
+                    text=[f"${v:+,.0f}" for v in _st_pnls],
+                    textposition="outside",
+                    customdata=list(zip(_st_moves, [r["Weight (%)"] for r in _st_rows])),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        "Est. P&L: $%{y:+,.0f}<br>"
+                        "Est. Move: %{customdata[0]:+.1f}%<br>"
+                        "Weight: %{customdata[1]:.1f}%"
+                        "<extra></extra>"
+                    ),
+                ))
+                _st_fig.add_hline(y=0, line_color="#444", line_width=1)
+                _st_fig.update_layout(
+                    title="Position-Level Impact (sorted by loss)",
+                    template="plotly_dark",
+                    height=max(260, len(_st_rows) * 28 + 80),
+                    yaxis_title="Estimated P&L ($)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(_st_fig, use_container_width=True)
+
+                # Detail table
+                with st.expander("📋 Full position breakdown", expanded=False):
+                    _st_df = pd.DataFrame(_st_rows)
+                    def _st_row_style(row):
+                        v = row.get("Est. P&L ($)", 0)
+                        if v < -1000:
+                            return ["background-color:rgba(255,68,68,0.10)"] * len(row)
+                        if v > 0:
+                            return ["background-color:rgba(0,200,81,0.08)"] * len(row)
+                        return [""] * len(row)
+                    st.dataframe(
+                        _st_df.style.apply(_st_row_style, axis=1).format({
+                            "Weight (%)":       "{:.1f}%",
+                            "Market Value ($)": "${:,.0f}",
+                            "Est. Move (%)":    "{:+.1f}%",
+                            "Est. P&L ($)":     "${:+,.0f}",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+
+            # Most exposed + any gainers
+            _me_col, _ag_col = st.columns([1, 1])
+            with _me_col:
+                if _sc_result["most_exposed"]:
+                    st.markdown("**Most Exposed Positions**")
+                    for _me in _sc_result["most_exposed"]:
+                        st.markdown(
+                            f"<div style='padding:8px 12px;background:#1a0a0a;"
+                            f"border-radius:6px;border-left:3px solid #ff4444;margin:4px 0;"
+                            f"font-size:0.88em'>"
+                            f"<b style='color:#ff6666'>{_me['Ticker']}</b> · {_me['Sector']}<br>"
+                            f"<span style='color:#ccc'>{_me['Est. Move (%)']:+.1f}%  ·  "
+                            f"${_me['Est. P&L ($)']:+,.0f}  ·  {_me['Weight (%)']:.1f}% weight</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+            with _ag_col:
+                if _sc_result["any_gainers"]:
+                    st.markdown("**Positions That May Benefit**")
+                    for _ag in _sc_result["any_gainers"]:
+                        st.markdown(
+                            f"<div style='padding:8px 12px;background:#0a1a0a;"
+                            f"border-radius:6px;border-left:3px solid #00C851;margin:4px 0;"
+                            f"font-size:0.88em'>"
+                            f"<b style='color:#00C851'>{_ag['Ticker']}</b> · {_ag['Sector']}<br>"
+                            f"<span style='color:#ccc'>{_ag['Est. Move (%)']:+.1f}%  ·  "
+                            f"${_ag['Est. P&L ($)']:+,.0f}  ·  {_ag['Weight (%)']:.1f}% weight</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.info("No positions estimated to benefit under this scenario — "
+                            "consider defensive names (Healthcare, Energy, Defense) for hedging.")
+
+            # Scenario comparison summary — all scenarios, one row each
+            st.markdown("")
+            with st.expander("📊 Compare all scenarios at a glance", expanded=False):
+                _all_results = run_all_scenarios(port_df, held_data, _st_beta)
+                if _all_results:
+                    _cmp_rows = []
+                    for _ar in _all_results:
+                        _cmp_rows.append({
+                            "Scenario":      _ar["label"],
+                            "SPY Move":      f"{_ar['spy_move']:+.0f}%",
+                            "Portfolio Δ":   f"{_ar['estimated_port_move']:+.1f}%",
+                            "Est. P&L ($)":  _ar["estimated_port_pnl"],
+                            "Post Value ($)": _ar["post_shock_value"],
+                        })
+                    _cmp_df = pd.DataFrame(_cmp_rows)
+
+                    def _cmp_style(row):
+                        v = row.get("Est. P&L ($)", 0)
+                        if v < -_port_val * 0.20:
+                            return ["background-color:rgba(255,68,68,0.15)"] * len(row)
+                        if v < -_port_val * 0.10:
+                            return ["background-color:rgba(255,187,51,0.10)"] * len(row)
+                        return [""] * len(row)
+
+                    st.dataframe(
+                        _cmp_df.style.apply(_cmp_style, axis=1).format({
+                            "Est. P&L ($)":   "${:+,.0f}",
+                            "Post Value ($)":  "${:,.0f}",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.caption(
+                        "🔴 Red = estimated loss > 20% of portfolio  ·  "
+                        "🟡 Amber = estimated loss 10–20%  ·  "
+                        "Beta-adjusted for market-wide scenarios; sector overrides for historical events."
+                    )
+
+            st.info(
+                "**Methodology:** Market-wide scenarios multiply each position's individual beta × SPY shock. "
+                "Named historical scenarios (2022, 2020, AI Unwind) apply sector-specific drawdowns "
+                "observed during those events — more accurate for portfolios with sector concentration. "
+                "Estimates assume linear beta and do not model liquidity effects or margin calls."
+            )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 4 — RELATIVE STRENGTH
