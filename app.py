@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -28,6 +29,7 @@ from stock_analyzer.rebalancer import (
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
+from stock_analyzer.macro_calendar import build_macro_calendar, HIGH as MC_HIGH, MEDIUM as MC_MEDIUM
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -498,7 +500,7 @@ with st.sidebar:
     st.header("📊 Portfolio Manager")
     page = st.radio(
         "Navigate",
-        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal"],
+        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -823,6 +825,20 @@ if page == "🏠 My Portfolio":
     else:
         _rag_label, _rag_color = "All Clear", "#00C851"
 
+    # Load macro calendar (cached per day — free tier FMP key optional)
+    _mc_day_key = f"_macro_cal_{date.today()}"
+    if _mc_day_key not in st.session_state:
+        _fmp_k = (
+            st.secrets.get("fmp", {}).get("api_key")
+            or os.environ.get("FMP_API_KEY", "")
+        )
+        st.session_state[_mc_day_key] = build_macro_calendar(
+            port_df, fmp_key=_fmp_k or None, days_ahead=45
+        )
+    _macro_events = st.session_state[_mc_day_key]
+    # Next 3 HIGH-impact events for the Command Center strip
+    _cc_catalysts = [e for e in _macro_events if e["impact"] == MC_HIGH][:3]
+
     # Compute price alert triggers here so they surface in the Command Center
     _pa_store_cc = st.session_state.get("_price_alerts", {})
     _pa_fired_cc = []
@@ -852,6 +868,40 @@ if page == "🏠 My Portfolio":
             f"PRICE ALERTS</span>{_cc_badges}</div>"
         )
 
+    # Build catalyst strip HTML for Command Center
+    _cc_catalyst_row = ""
+    if _cc_catalysts:
+        _impact_colors = {MC_HIGH: "#ef4444", MC_MEDIUM: "#f59e0b"}
+        _cat_icons = {
+            "Fed Policy": "🏦", "Inflation": "📊", "Employment": "👷",
+            "Growth": "📈", "Consumer": "🛒", "Activity": "🏭",
+        }
+        _cat_chips = []
+        for _ce in _cc_catalysts:
+            _ico   = _cat_icons.get(_ce["category"], "📅")
+            _color = _impact_colors.get(_ce["impact"], "#6b7280")
+            _tix   = ", ".join(_ce["affected_tickers"][:3]) if _ce["affected_tickers"] else "All"
+            if len(_ce["affected_tickers"]) > 3:
+                _tix += f" +{len(_ce['affected_tickers'])-3}"
+            _cat_chips.append(
+                f"<span style='display:inline-flex;align-items:center;gap:5px;"
+                f"background:#1f2937;border:1px solid {_color};border-radius:8px;"
+                f"padding:3px 10px;font-size:0.72em;white-space:nowrap'>"
+                f"<span style='color:{_color};font-weight:700'>{_ico} {_ce['event']}</span>"
+                f"<span style='color:#9ca3af'>·</span>"
+                f"<span style='color:#e5e7eb'>{_ce['days_label']}</span>"
+                f"<span style='color:#9ca3af'>·</span>"
+                f"<span style='color:#6b7280'>{_tix}</span>"
+                f"</span>"
+            )
+        _cc_catalyst_row = (
+            f"<div style='margin-top:10px;padding-top:10px;border-top:1px solid #374151;"
+            f"display:flex;gap:8px;flex-wrap:wrap;align-items:center'>"
+            f"<span style='color:#9ca3af;font-size:0.7em;font-weight:600;"
+            f"letter-spacing:0.05em;white-space:nowrap'>UPCOMING CATALYSTS</span>"
+            f"{''.join(_cat_chips)}</div>"
+        )
+
     # ── Portfolio Command Center ───────────────────────────────────────────────
     st.markdown(
         f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
@@ -863,7 +913,7 @@ if page == "🏠 My Portfolio":
         f"{_rag_label}</span>"
         f"<span style='margin-left:auto;color:#6b7280;font-size:0.75em'>"
         f"{len(port_df)} positions · {datetime.now().strftime('%b %d, %Y')}</span>"
-        f"</div>{_cc_alert_row}</div>",
+        f"</div>{_cc_alert_row}{_cc_catalyst_row}</div>",
         unsafe_allow_html=True,
     )
 
@@ -6126,5 +6176,173 @@ elif page == "📒 Trade Journal":
             "<code>stock_analyzer/db.py</code> → Supabase SQL Editor → New Query</div>",
             unsafe_allow_html=True,
         )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE 6 — ECONOMIC CALENDAR
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "📅 Economic Calendar":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("📅 Economic Calendar")
+    st.caption(
+        "High-impact macro events for the next 45 days — FOMC, CPI, NFP, GDP and more. "
+        "Static backbone (Fed/BLS/BEA schedules) enriched with live estimates from FMP when an API key is configured. "
+        "Holdings at risk column maps each event to your specific positions."
+    )
+
+    # ── FMP key config ────────────────────────────────────────────────────────
+    _ec_fmp_key = (
+        st.secrets.get("fmp", {}).get("api_key")
+        or os.environ.get("FMP_API_KEY", "")
+        or st.session_state.get("_ec_fmp_key", "")
+    )
+    with st.expander("⚙️ FMP API key (optional — adds live estimates & secondary events)", expanded=not _ec_fmp_key):
+        _ec_key_input = st.text_input(
+            "Financial Modeling Prep API key",
+            value=st.session_state.get("_ec_fmp_key", ""),
+            type="password",
+            placeholder="your-fmp-key",
+            help="Free at financialmodelingprep.com — 250 calls/day, no credit card required",
+        )
+        if _ec_key_input:
+            st.session_state["_ec_fmp_key"] = _ec_key_input
+            _ec_fmp_key = _ec_key_input
+        if _ec_fmp_key:
+            st.success("FMP key active — live estimates enabled.")
+        else:
+            st.info("Running on static backbone only (FOMC, CPI, NFP, GDP). Add FMP key for live estimates and consensus values.")
+
+    # ── Load / refresh calendar ───────────────────────────────────────────────
+    _ec_cache_key = f"_ec_cal_{date.today()}_{bool(_ec_fmp_key)}"
+    if _ec_cache_key not in st.session_state or st.button("🔄 Refresh calendar", key="_ec_refresh"):
+        with st.spinner("Loading economic calendar…"):
+            _ec_events = build_macro_calendar(
+                st.session_state.get("holdings_df", pd.DataFrame()),
+                fmp_key=_ec_fmp_key or None,
+                days_ahead=45,
+            )
+            st.session_state[_ec_cache_key] = _ec_events
+    _ec_events = st.session_state.get(_ec_cache_key, [])
+
+    if not _ec_events:
+        st.info("No upcoming events found in the next 45 days.")
+        st.stop()
+
+    # ── KPI strip ─────────────────────────────────────────────────────────────
+    _ec_high   = [e for e in _ec_events if e["impact"] == MC_HIGH]
+    _ec_week   = [e for e in _ec_events if (e["date"] - date.today()).days <= 7]
+    _ec_next   = _ec_high[0] if _ec_high else (_ec_events[0] if _ec_events else None)
+    _ek1, _ek2, _ek3, _ek4 = st.columns(4)
+    _ek1.metric("Events next 45d",    len(_ec_events))
+    _ek2.metric("🔴 High impact",      len(_ec_high))
+    _ek3.metric("This week",           len(_ec_week),
+                delta="⚠️ Be prepared" if _ec_week else None,
+                delta_color="inverse" if _ec_week else "off")
+    _ek4.metric("Next major event",
+                _ec_next["event"][:20] if _ec_next else "—",
+                _ec_next["days_label"] if _ec_next else "")
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    _ef1, _ef2 = st.columns([3, 4])
+    with _ef1:
+        _ec_impact_filter = st.radio(
+            "Impact", ["All", "🔴 HIGH only", "🟡 MEDIUM+"],
+            horizontal=True, key="_ec_imp_filter",
+        )
+    with _ef2:
+        _all_cats = sorted({e["category"] for e in _ec_events})
+        _ec_cat_filter = st.multiselect(
+            "Categories", _all_cats, default=_all_cats, key="_ec_cat_filter"
+        )
+
+    # Apply filters
+    _ec_filtered = _ec_events
+    if _ec_impact_filter == "🔴 HIGH only":
+        _ec_filtered = [e for e in _ec_filtered if e["impact"] == MC_HIGH]
+    elif _ec_impact_filter == "🟡 MEDIUM+":
+        _ec_filtered = [e for e in _ec_filtered if e["impact"] in (MC_HIGH, MC_MEDIUM)]
+    if _ec_cat_filter:
+        _ec_filtered = [e for e in _ec_filtered if e["category"] in _ec_cat_filter]
+
+    st.divider()
+
+    # ── Calendar cards ────────────────────────────────────────────────────────
+    _impact_cfg = {
+        MC_HIGH:   ("#ef4444", "🔴", "#1a0000"),
+        MC_MEDIUM: ("#f59e0b", "🟡", "#1a1200"),
+    }
+    _cat_icons = {
+        "Fed Policy": "🏦", "Inflation": "📊", "Employment": "👷",
+        "Growth": "📈", "Consumer": "🛒", "Activity": "🏭", "Other": "📋",
+    }
+
+    # Group by date
+    from itertools import groupby as _groupby
+    for _ec_date, _ec_day_events in _groupby(_ec_filtered, key=lambda x: x["date"]):
+        _ec_day_list = list(_ec_day_events)
+        _delta_days  = (_ec_date - date.today()).days
+        _date_label  = _ec_date.strftime("%A, %B %-d") if hasattr(_ec_date, "strftime") else str(_ec_date)
+        _urgency_tag = ""
+        if _delta_days == 0:
+            _urgency_tag = " — **TODAY**"
+        elif _delta_days == 1:
+            _urgency_tag = " — **TOMORROW**"
+        elif _delta_days <= 7:
+            _urgency_tag = f" — *this week*"
+
+        st.markdown(f"#### {_date_label}{_urgency_tag}")
+
+        for _ev in _ec_day_list:
+            _imp_color, _imp_icon, _imp_bg = _impact_cfg.get(
+                _ev["impact"], ("#6b7280", "⚪", "#111")
+            )
+            _icon = _cat_icons.get(_ev["category"], "📋")
+            _tix  = _ev["affected_tickers"]
+            _tix_str = ", ".join(f"**{t}**" for t in _tix[:5])
+            if len(_tix) > 5:
+                _tix_str += f" +{len(_tix)-5} more"
+            if not _tix_str:
+                _tix_str = "*No direct holdings*"
+
+            # Estimate / previous / actual row
+            _data_parts = []
+            if _ev.get("previous") is not None:
+                _data_parts.append(f"Prev: **{_ev['previous']}**")
+            if _ev.get("estimate") is not None:
+                _data_parts.append(f"Est: **{_ev['estimate']}**")
+            if _ev.get("actual") is not None:
+                _data_parts.append(f"Actual: **{_ev['actual']}**")
+            _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+
+            with st.expander(
+                f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev['time']} ET  ·  "
+                f"{_ev['category']}  ·  {_ev['days_label']}",
+                expanded=(_delta_days <= 2 and _ev["impact"] == MC_HIGH),
+            ):
+                _el, _er = st.columns([3, 2])
+                with _el:
+                    if _ev.get("description"):
+                        st.caption(_ev["description"])
+                    if _data_row:
+                        st.markdown(_data_row)
+                    st.markdown(f"**Holdings at risk:** {_tix_str}")
+                with _er:
+                    st.markdown(
+                        f"<div style='background:{_imp_bg};border-left:3px solid {_imp_color};"
+                        f"border-radius:6px;padding:8px 12px;font-size:0.82em;color:#ddd'>"
+                        f"<span style='font-size:0.7em;color:{_imp_color};font-weight:700;"
+                        f"letter-spacing:0.08em'>IMPACT: {_ev['impact']}</span><br>"
+                        f"{_ev['category']}</div>",
+                        unsafe_allow_html=True,
+                    )
+                if _ev.get("context"):
+                    st.markdown("")
+                    st.info(f"**Institutional Lens** · {_ev['context']}")
+
+        st.markdown("")
+
+    st.caption(
+        f"Static backbone: FOMC (Fed Reserve) · CPI/PPI/NFP/GDP/Retail Sales (BLS/BEA) — published months in advance.  "
+        f"{'FMP live layer active — estimates and secondary events included.' if _ec_fmp_key else 'Add FMP key for live consensus estimates.'}"
+    )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
