@@ -6045,7 +6045,10 @@ elif page == "📈 Stock Analysis":
                 f"{r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
                 f"</span><br>{rec['rationale']}"
                 + (f"<br><small>📍 {r['upside']}</small>"
-                   if r["upside"] and rec["label"] not in ("Sell", "Strong Sell") else "")
+                   if r["upside"]
+                   and rec["label"] not in ("Sell", "Strong Sell")
+                   and "upside" in r["upside"].lower()
+                   else "")
                 + "</div>", unsafe_allow_html=True,
             )
 
