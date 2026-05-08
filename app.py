@@ -833,11 +833,14 @@ if page == "🏠 My Portfolio":
             or os.environ.get("FMP_API_KEY", "")
         )
         st.session_state[_mc_day_key] = build_macro_calendar(
-            port_df, fmp_key=_fmp_k or None, days_ahead=45
+            port_df, fmp_key=_fmp_k or None, days_ahead=45, days_behind=7
         )
     _macro_events = st.session_state[_mc_day_key]
-    # Next 3 HIGH-impact events for the Command Center strip
-    _cc_catalysts = [e for e in _macro_events if e["impact"] == MC_HIGH][:3]
+    # Next 3 HIGH-impact events for the Command Center strip (future only)
+    _cc_catalysts = [
+        e for e in _macro_events
+        if e["impact"] == MC_HIGH and e["date"] >= date.today()
+    ][:3]
 
     # Compute price alert triggers here so they surface in the Command Center
     _pa_store_cc = st.session_state.get("_price_alerts", {})
@@ -6219,18 +6222,20 @@ elif page == "📅 Economic Calendar":
                 st.session_state.get("holdings_df", pd.DataFrame()),
                 fmp_key=_ec_fmp_key or None,
                 days_ahead=45,
+                days_behind=7,
             )
             st.session_state[_ec_cache_key] = _ec_events
     _ec_events = st.session_state.get(_ec_cache_key, [])
 
     if not _ec_events:
-        st.info("No upcoming events found in the next 45 days.")
+        st.info("No events found in the calendar window.")
         st.stop()
 
-    # ── KPI strip ─────────────────────────────────────────────────────────────
-    _ec_high   = [e for e in _ec_events if e["impact"] == MC_HIGH]
-    _ec_week   = [e for e in _ec_events if (e["date"] - date.today()).days <= 7]
-    _ec_next   = _ec_high[0] if _ec_high else (_ec_events[0] if _ec_events else None)
+    # ── KPI strip (forward-looking counts only) ───────────────────────────────
+    _ec_fwd    = [e for e in _ec_events if e["date"] >= date.today()]
+    _ec_high   = [e for e in _ec_fwd if e["impact"] == MC_HIGH]
+    _ec_week   = [e for e in _ec_fwd if (e["date"] - date.today()).days <= 7]
+    _ec_next   = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
     _ek1.metric("Events next 45d",    len(_ec_events))
     _ek2.metric("🔴 High impact",      len(_ec_high))
@@ -6282,12 +6287,14 @@ elif page == "📅 Economic Calendar":
         _delta_days  = (_ec_date - date.today()).days
         _date_label  = _ec_date.strftime("%A, %B %-d") if hasattr(_ec_date, "strftime") else str(_ec_date)
         _urgency_tag = ""
-        if _delta_days == 0:
+        if _delta_days < 0:
+            _urgency_tag = " — *completed*"
+        elif _delta_days == 0:
             _urgency_tag = " — **TODAY**"
         elif _delta_days == 1:
             _urgency_tag = " — **TOMORROW**"
         elif _delta_days <= 7:
-            _urgency_tag = f" — *this week*"
+            _urgency_tag = " — *this week*"
 
         st.markdown(f"#### {_date_label}{_urgency_tag}")
 
@@ -6316,7 +6323,7 @@ elif page == "📅 Economic Calendar":
             with st.expander(
                 f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev['time']} ET  ·  "
                 f"{_ev['category']}  ·  {_ev['days_label']}",
-                expanded=(_delta_days <= 2 and _ev["impact"] == MC_HIGH),
+                expanded=(0 <= _delta_days <= 2 and _ev["impact"] == MC_HIGH),
             ):
                 _el, _er = st.columns([3, 2])
                 with _el:

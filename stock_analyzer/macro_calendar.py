@@ -342,10 +342,11 @@ def build_macro_calendar(
     port_df: _pd.DataFrame,
     fmp_key: str | None = None,
     days_ahead: int = 45,
+    days_behind: int = 7,
     today: _date | None = None,
 ) -> list[dict]:
     """
-    Build merged calendar covering today → today + days_ahead.
+    Build merged calendar covering today - days_behind → today + days_ahead.
 
     Returns list sorted by date. Each event dict contains:
       date, time, event, category, impact, days_label, description,
@@ -353,7 +354,8 @@ def build_macro_calendar(
     """
     if today is None:
         today = _date.today()
-    cutoff = today + _td(days=days_ahead)
+    lookback = today - _td(days=days_behind)
+    cutoff   = today + _td(days=days_ahead)
 
     rows: list[dict] = []
 
@@ -363,7 +365,7 @@ def build_macro_calendar(
             d = _date.fromisoformat(ds)
         except ValueError:
             continue
-        if d < today or d > cutoff:
+        if d < lookback or d > cutoff:
             continue
         rows.append({
             "date":             d,
@@ -383,7 +385,7 @@ def build_macro_calendar(
 
     # ── FMP live layer ────────────────────────────────────────────────────────
     if fmp_key:
-        fmp_items = _fetch_fmp(fmp_key, today, cutoff)
+        fmp_items = _fetch_fmp(fmp_key, lookback, cutoff)
         for fi in fmp_items:
             try:
                 fd = _date.fromisoformat(fi["date_str"])
