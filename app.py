@@ -6044,7 +6044,8 @@ elif page == "📈 Stock Analysis":
                 f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Fundamental</abbr> "
                 f"{r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
                 f"</span><br>{rec['rationale']}"
-                + (f"<br><small>📍 {r['upside']}</small>" if r["upside"] else "")
+                + (f"<br><small>📍 {r['upside']}</small>"
+                   if r["upside"] and rec["label"] not in ("Sell", "Strong Sell") else "")
                 + "</div>", unsafe_allow_html=True,
             )
 
@@ -6113,11 +6114,17 @@ elif page == "📈 Stock Analysis":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if r["stop"]:
-                        st.caption(
-                            f"**Bear thesis invalidated above ${r['stop']:.2f}** — "
-                            "if price recovers to this level, reassess before exiting."
-                        )
+                    if r["stop"] and price:
+                        if r["stop"] < price:
+                            st.caption(
+                                f"📉 ATR downside level: **${r['stop']:.2f}** — "
+                                "a break below this may accelerate the decline."
+                            )
+                        else:
+                            st.caption(
+                                f"⚠ Sell signal triggered above ATR stop (${r['stop']:.2f}) — "
+                                "momentum has reversed. Exit before stop is tested."
+                            )
 
                     # Downside scenarios (reframed for exit context)
                     if targets:
