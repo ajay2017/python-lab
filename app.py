@@ -475,7 +475,11 @@ if "nav_page" not in st.session_state:
 # Apply any pending navigation set by mid-page buttons (must run before
 # the sidebar radio widget renders so the widget picks up the new value).
 if "_pending_page" in st.session_state:
-    st.session_state["nav_page"] = st.session_state.pop("_pending_page")
+    _dest = st.session_state.pop("_pending_page")
+    if _dest == "📈 Stock Analysis":
+        # Remember where we came from so a Back button can return us there
+        st.session_state["_nav_origin"] = st.session_state.get("nav_page", "")
+    st.session_state["nav_page"] = _dest
 if not st.session_state.get("db_loaded"):
     st.session_state.holdings_df = db.load_holdings()
     st.session_state.watchlist   = db.load_watchlist()
@@ -5755,6 +5759,19 @@ elif page == "🔍 Market Scanner":
 # PAGE 3 — STOCK ANALYSIS
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "📈 Stock Analysis":
+    # ── Back button — shown when navigated here via an Analyze button ─────────
+    _nav_origin = st.session_state.get("_nav_origin", "")
+    if _nav_origin:
+        _back_label = {
+            "🏠 My Portfolio":   "← Back to My Portfolio",
+            "🔍 Market Scanner": "← Back to Market Scanner",
+            "📋 Watchlist":      "← Back to Watchlist",
+        }.get(_nav_origin, f"← Back to {_nav_origin}")
+        if st.button(_back_label, key="_sa_back"):
+            st.session_state["_pending_page"] = _nav_origin
+            del st.session_state["_nav_origin"]
+            st.rerun()
+
     st.title("📈 Stock Analysis")
 
     # Consume any ticker pre-selection set by navigation buttons (News Intelligence, etc.)
