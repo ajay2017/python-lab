@@ -1329,57 +1329,89 @@ if page == "🏠 My Portfolio":
             if deploy_note:
                 st.info(f"💰 {deploy_note}")
 
-        # On bull days: Grow Today leads; on bear/flat: Act Today leads
-        if _db_tone == "bull":
-            _render_grow_today(_db_grow, _db_tone)
-            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+        # ── Two-column layout: Grow Today (left) | Act Today (right) ────────
+        _db_col_left, _db_col_right = st.columns([1, 1])
 
-        # ── Section 1: Act Today ──────────────────────────────────────────────
-        _db_c1_label = f"🔴 Act Today ({len(_db_act)})" if _db_act else "🟢 Act Today — All Clear"
-        _db_c1_color = "#7f1d1d" if _db_act else "#14532d"
-        _db_c1_border = "#ef4444" if _db_act else "#22c55e"
+        with _db_col_left:
+            _render_grow_today(_db_grow, _db_tone)
+
+        with _db_col_right:
+            _db_c1_label  = f"🔴 Act Today ({len(_db_act)})" if _db_act else "🟢 Act Today — All Clear"
+            _db_c1_color  = "#7f1d1d" if _db_act else "#14532d"
+            _db_c1_border = "#ef4444" if _db_act else "#22c55e"
+            st.markdown(
+                f"<div style='background:{_db_c1_color};border-left:4px solid {_db_c1_border};"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c1_label}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if not _db_act:
+                st.caption("No urgent actions required. Portfolio is within all risk parameters.")
+            else:
+                for _db_item in _db_act:
+                    _db_is_crit = _db_item["priority"] == "critical"
+                    _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
+                    _db_border  = "#ef4444" if _db_is_crit else "#f59e0b"
+                    _db_ticker  = _db_item.get("ticker")
+                    _db_weight_txt = (
+                        f" · {_db_item['weight']:.1f}% of portfolio"
+                        if _db_item.get("weight") else ""
+                    )
+                    _db_pnl_txt = (
+                        f" · P&L {_db_item['pnl_pct']:+.1f}%"
+                        if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
+                    )
+                    st.markdown(
+                        f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                        f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                        f"{_db_item['icon']} {_db_item['action']}"
+                        + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                        + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
+                        f"</div>"
+                        f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_item['reason']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if _db_ticker:
+                        if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
+                                     use_container_width=False):
+                            st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                            st.session_state["_analysis_ticker"] = _db_ticker
+                            st.rerun()
+
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+        # ── Section 2: Review Before Close (full width) ──────────────────────
+        _db_c3_label = f"🟡 Review Before Close ({len(_db_review)})"
         st.markdown(
-            f"<div style='background:{_db_c1_color};border-left:4px solid {_db_c1_border};"
+            f"<div style='background:#422006;border-left:4px solid #f59e0b;"
             f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c1_label}</span>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c3_label}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
-        if not _db_act:
-            st.caption("No urgent actions required. Portfolio is within all risk parameters.")
+        if not _db_review:
+            st.caption("Nothing requiring pre-close review today.")
         else:
-            for _db_item in _db_act:
-                _db_is_crit = _db_item["priority"] == "critical"
-                _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
-                _db_border  = "#ef4444" if _db_is_crit else "#f59e0b"
-                _db_ticker  = _db_item.get("ticker")
-                _db_weight_txt = (
-                    f" · {_db_item['weight']:.1f}% of portfolio"
-                    if _db_item.get("weight") else ""
-                )
-                _db_pnl_txt = (
-                    f" · P&L {_db_item['pnl_pct']:+.1f}%"
-                    if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
-                )
-                _db_header = (
-                    f"{_db_item['icon']} **{_db_item['action']}**"
-                    + (f" — {_db_ticker}" if _db_ticker else "")
-                    + _db_weight_txt + _db_pnl_txt
-                )
+            for _db_rev in _db_review:
+                _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
+                _db_bg      = "#1c1917"
+                _db_ticker  = _db_rev.get("ticker")
                 st.markdown(
                     f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                     f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                    f"{_db_item['icon']} {_db_item['action']}"
-                    + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
-                    + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
-                    f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_item['reason']}</div>"
+                    f"{_db_rev['icon']}"
+                    + (f" <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                    + f"</div>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_rev['reason']}</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
                 if _db_ticker:
-                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
+                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
                                  use_container_width=False):
                         st.session_state["_pending_page"]    = "📈 Stock Analysis"
                         st.session_state["_analysis_ticker"] = _db_ticker
@@ -1387,12 +1419,7 @@ if page == "🏠 My Portfolio":
 
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
-        # On bear/flat days Grow Today appears after Act Today
-        if _db_tone != "bull":
-            _render_grow_today(_db_grow, _db_tone)
-            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-
-        # ── Section 2: Buy Candidates ─────────────────────────────────────────
+        # ── Section 3: Buy Candidates (full width) ────────────────────────────
         _db_confirmed   = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "confirmed")
         _db_unverified  = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "unverified")
         _db_conflicted  = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
@@ -1429,11 +1456,9 @@ if page == "🏠 My Portfolio":
                 _vconflicts = _xref.get("conflicts", [])
                 _vlayers    = _xref.get("layers_checked", 0)
                 _db_bg      = "#1c1917"
-                # Card
                 st.markdown(
                     f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
-                    # Header row
                     f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
                     f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
                     f"{_db_buy['icon']} {_db_buy['action']} — "
@@ -1441,31 +1466,26 @@ if page == "🏠 My Portfolio":
                     f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
                     + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
                     + f"</span>"
-                    # Verdict badge
                     f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
                     f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
                     f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
                     f"</div>"
-                    # Technical summary line
                     + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
                        f"📊 {_db_buy.get('scanner_signal','')} · "
                        f"RSI {_db_buy.get('rsi',0):.0f} · "
                        f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
                        f"{_db_buy.get('trend','')}"
                        f"</div>" if _db_buy.get("rsi") else "")
-                    # Unverified note (non-held scanner picks)
                     + (f"<div style='color:#93c5fd;font-size:0.8em;margin-top:4px'>"
                        f"ℹ Composite signal not yet computed — scanner measures technical "
                        f"momentum only. Click Analyze to run full multi-factor assessment "
                        f"(sentiment · analyst revisions · earnings · fundamentals) before acting."
                        f"</div>"
                        if _xref.get("verdict") == "unverified" else "")
-                    # Conflicts (shown prominently)
                     + ("".join(
                         f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
                         for c in _vconflicts
                     ) if _vconflicts else "")
-                    # Agreed signals (collapsed style)
                     + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
                        f"✓ {' · '.join(_vagreed[:3])}"
                        + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
@@ -1478,42 +1498,6 @@ if page == "🏠 My Portfolio":
                     st.session_state["_pending_page"]    = "📈 Stock Analysis"
                     st.session_state["_analysis_ticker"] = _db_buy["ticker"]
                     st.rerun()
-
-        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-
-        # ── Section 3: Review Before Close ───────────────────────────────────
-        _db_c3_label = f"🟡 Review Before Close ({len(_db_review)})"
-        st.markdown(
-            f"<div style='background:#422006;border-left:4px solid #f59e0b;"
-            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c3_label}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        if not _db_review:
-            st.caption("Nothing requiring pre-close review today.")
-        else:
-            for _db_rev in _db_review:
-                _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
-                _db_bg      = "#1c1917"
-                _db_ticker  = _db_rev.get("ticker")
-                st.markdown(
-                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                    f"{_db_rev['icon']}"
-                    + (f" <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
-                    + f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_rev['reason']}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if _db_ticker:
-                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
-                                 use_container_width=False):
-                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
-                        st.session_state["_analysis_ticker"] = _db_ticker
-                        st.rerun()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — OVERVIEW
