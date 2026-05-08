@@ -64,9 +64,11 @@ def _client():
 # ── Holdings ──────────────────────────────────────────────────────────────────
 
 def load_holdings() -> pd.DataFrame:
+    from stock_analyzer import api_health as _ah
     if has_db():
         try:
             rows = _client().table("holdings").select("*").order("ticker").execute().data
+            _ah.record("supabase", "success")
             if rows:
                 df = pd.DataFrame(rows)[["ticker", "shares", "avg_cost"]]
                 df.columns = ["Ticker", "Shares", "Avg Cost ($)"]
@@ -77,6 +79,7 @@ def load_holdings() -> pd.DataFrame:
             return pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost ($)"])
         except Exception as e:
             err = str(e)
+            _ah.record("supabase", "error", msg=err[:120])
             if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
                 st.error(
                     "⛔ Supabase RLS is blocking reads. "
@@ -91,6 +94,7 @@ def load_holdings() -> pd.DataFrame:
 
 def save_holdings(df: pd.DataFrame) -> bool:
     """Persist the holdings DataFrame to Supabase. Returns True on success."""
+    from stock_analyzer import api_health as _ah
     if not has_db():
         return False
 
@@ -107,9 +111,11 @@ def save_holdings(df: pd.DataFrame) -> bool:
                 records.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
         if records:
             client.table("holdings").insert(records).execute()
+        _ah.record("supabase", "success")
         return True
     except Exception as e:
         err = str(e)
+        _ah.record("supabase", "error", msg=err[:120])
         if "row-level security" in err.lower() or "42501" in err:
             st.error(
                 "⛔ Supabase RLS is blocking writes. "

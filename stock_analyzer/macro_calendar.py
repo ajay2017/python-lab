@@ -307,6 +307,7 @@ def _affected_tickers(category: str, port_df: _pd.DataFrame) -> list[str]:
 
 def _fetch_fmp(fmp_key: str, from_date: _date, to_date: _date) -> list[dict]:
     """Fetch US economic calendar from FMP free tier."""
+    from stock_analyzer import api_health as _ah
     try:
         import requests as _req
         resp = _req.get(
@@ -314,10 +315,15 @@ def _fetch_fmp(fmp_key: str, from_date: _date, to_date: _date) -> list[dict]:
             params={"from": str(from_date), "to": str(to_date), "apikey": fmp_key},
             timeout=10,
         )
+        if resp.status_code == 429:
+            _ah.record("fmp", "rate_limit")
+            return []
         if resp.status_code != 200:
+            _ah.record("fmp", "error", msg=f"HTTP {resp.status_code}")
             return []
         data = resp.json()
         if not isinstance(data, list):
+            _ah.record("fmp", "empty")
             return []
         out = []
         for item in data:
@@ -337,8 +343,10 @@ def _fetch_fmp(fmp_key: str, from_date: _date, to_date: _date) -> list[dict]:
                 "estimate": item.get("estimate"),
                 "actual":   item.get("actual"),
             })
+        _ah.record("fmp", "success" if out else "empty")
         return out
-    except Exception:
+    except Exception as _e:
+        _ah.record("fmp", "error", msg=str(_e)[:120])
         return []
 
 

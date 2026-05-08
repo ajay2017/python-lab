@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 import pytz
+from stock_analyzer import api_health as _ah
 
 _ET = pytz.timezone("America/New_York")
 
@@ -15,9 +16,11 @@ def _retry(fn, *args, retries: int = 3, backoff: float = 3.0, **kwargs):
         except Exception as exc:
             msg = str(exc).lower()
             if any(k in msg for k in ("429", "too many", "rate limit", "rate-limit")):
+                _ah.record("yahoo_finance", "rate_limit")
                 if attempt < retries - 1:
                     time.sleep(backoff * (attempt + 1))
                     continue
+            _ah.record("yahoo_finance", "error", msg=str(exc)[:120])
             raise
 
 
@@ -105,7 +108,9 @@ def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
             "earnings": earnings, "revisions": revisions,
         }
 
-    return _retry(_fetch)
+    result = _retry(_fetch)
+    _ah.record("yahoo_finance", "success")
+    return result
 
 
 _INDICES = [
@@ -145,8 +150,12 @@ def fetch_market_indices() -> list[dict]:
                 })
             except Exception:
                 continue
-    except Exception:
-        pass
+    except Exception as _e:
+        _ah.record("yahoo_finance", "error", msg=str(_e)[:80])
+    if results:
+        _ah.record("yahoo_finance", "success")
+    else:
+        _ah.record("yahoo_finance", "empty")
     return results
 
 
@@ -180,8 +189,12 @@ def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
                 }
             except Exception:
                 continue
-    except Exception:
-        pass
+    except Exception as _e:
+        _ah.record("yahoo_finance", "error", msg=str(_e)[:80])
+    if results:
+        _ah.record("yahoo_finance", "success")
+    else:
+        _ah.record("yahoo_finance", "empty")
     return results
 
 

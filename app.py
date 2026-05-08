@@ -51,6 +51,7 @@ from stock_analyzer.macro import (
 from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternatives, tier_label
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
+from stock_analyzer import api_health as _ah
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
@@ -522,6 +523,7 @@ with st.sidebar:
 
     # Refresh button
     if st.button("🔄 Refresh Prices", use_container_width=True):
+        _ah.reset()
         st.cache_data.clear()
         st.session_state.last_refresh = datetime.now()
         st.rerun()
@@ -531,6 +533,40 @@ with st.sidebar:
         st.caption(f"Last refresh: {refresh_ago}s ago")
     else:
         st.caption(f"Last refresh: {refresh_ago // 60}m {refresh_ago % 60}s ago")
+
+    # ── Data Health widget ────────────────────────────────────────────────
+    _ah_overall_lv, _ah_overall_icon = _ah.overall_level()
+    _ah_auto_expand = _ah_overall_lv in ("red", "yellow")
+    with st.expander(f"{_ah_overall_icon} Data Health", expanded=_ah_auto_expand):
+        for _ah_src, _ah_label in [
+            ("yahoo_finance", "Yahoo Finance"),
+            ("fmp",           "FMP API"),
+            ("supabase",      "Supabase DB"),
+        ]:
+            _ah_h = _ah.get_health(_ah_src)
+            _ah_parts = []
+            if _ah_h["calls"] > 0:
+                _ah_parts.append(f"{_ah_h['calls']} calls")
+            if _ah_h["errors"] > 0:
+                _ah_parts.append(f"**{_ah_h['errors']} err**")
+            if _ah_h["rate_limits"] > 0:
+                _ah_parts.append(f"**{_ah_h['rate_limits']} RL**")
+            _ah_detail = " · ".join(_ah_parts) if _ah_parts else "no calls yet"
+            _ah_fresh  = _ah_h["freshness"]
+            _ah_err_snippet = (
+                f" · _{_ah_h['last_error'][:45]}…_"
+                if _ah_h["last_error"] else ""
+            )
+            st.markdown(
+                f"{_ah_h['icon']} **{_ah_label}** — {_ah_detail}  \n"
+                f"<span style='font-size:0.74em;color:#888'>"
+                f"Fresh: {_ah_fresh}{_ah_err_snippet}"
+                f"</span>",
+                unsafe_allow_html=True,
+            )
+        if st.button("Reset counters", key="_ah_reset", use_container_width=True):
+            _ah.reset()
+            st.rerun()
 
     # ── Curated news feed — filled after page data loads ─────────────────
     st.divider()
