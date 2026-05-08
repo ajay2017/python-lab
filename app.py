@@ -5335,6 +5335,9 @@ elif page == "🔍 Market Scanner":
 elif page == "📈 Stock Analysis":
     st.title("📈 Stock Analysis")
 
+    # Consume any ticker pre-selection set by navigation buttons (News Intelligence, etc.)
+    _preselect_ticker = st.session_state.pop("_analysis_ticker", None)
+
     with st.sidebar:
         st.divider()
         name_to_ticker = dict(DEFAULT_TICKERS)
@@ -5343,14 +5346,21 @@ elif page == "📈 Stock Analysis":
             if t not in name_to_ticker.values():
                 name_to_ticker[t] = t
 
-        # Pre-select watchlist by default
-        watchlist_names = [
-            k for k, v in name_to_ticker.items() if v in st.session_state.watchlist
-        ] + [t for t in st.session_state.watchlist if t not in name_to_ticker.values()]
+        # If navigated here from an Analyze button, add that ticker and pre-select it
+        if _preselect_ticker:
+            _pt = _preselect_ticker.strip().upper()
+            if _pt not in name_to_ticker.values():
+                name_to_ticker[_pt] = _pt
+            _sa_default = [_pt]
+        else:
+            watchlist_names = [
+                k for k, v in name_to_ticker.items() if v in st.session_state.watchlist
+            ] + [t for t in st.session_state.watchlist if t not in name_to_ticker.values()]
+            _sa_default = [n for n in watchlist_names if n in name_to_ticker][:4]
 
         selected_names = st.multiselect(
             "Companies", options=list(name_to_ticker.keys()),
-            default=[n for n in watchlist_names if n in name_to_ticker][:4],
+            default=_sa_default,
         )
         custom = st.text_input("Add ticker", "")
         if custom:
