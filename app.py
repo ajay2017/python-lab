@@ -470,6 +470,10 @@ if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
 if "nav_page" not in st.session_state:
     st.session_state.nav_page = "🏠 My Portfolio"
+# Apply any pending navigation set by mid-page buttons (must run before
+# the sidebar radio widget renders so the widget picks up the new value).
+if "_pending_page" in st.session_state:
+    st.session_state["nav_page"] = st.session_state.pop("_pending_page")
 if not st.session_state.get("db_loaded"):
     st.session_state.holdings_df = db.load_holdings()
     st.session_state.watchlist   = db.load_watchlist()
@@ -1374,7 +1378,7 @@ if page == "🏠 My Portfolio":
                         unsafe_allow_html=True,
                     )
                     if st.button(f"▶ Analyze {_al['ticker']}", key=f"_ni_analyze_{_al['ticker']}_{_al.get('ts',0)}"):
-                        st.session_state["nav_page"] = "📈 Stock Analysis"
+                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
                         st.session_state["_analysis_ticker"] = _al["ticker"]
                         st.rerun()
 
@@ -1412,7 +1416,7 @@ if page == "🏠 My Portfolio":
                         unsafe_allow_html=True,
                     )
                     if st.button(f"▶ Analyze {_op['ticker']}", key=f"_ni_opp_{_op['ticker']}_{_op.get('ts',0)}"):
-                        st.session_state["nav_page"] = "📈 Stock Analysis"
+                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
                         st.session_state["_analysis_ticker"] = _op["ticker"]
                         st.rerun()
 
