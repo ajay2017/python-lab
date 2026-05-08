@@ -531,7 +531,7 @@ with st.sidebar:
     )
 
     # Refresh button
-    if st.button("🔄 Refresh Prices", use_container_width=True):
+    if st.button("🔄 Refresh All Data", use_container_width=True):
         _ah.reset()
         st.cache_data.clear()
         st.session_state.last_refresh = datetime.now()
