@@ -2,10 +2,25 @@
 Daily Briefing module.
 
 Synthesizes all available intelligence into three prioritized action buckets:
-  - Act Today   : stop triggers, sell signals, critical news, today's macro, REDUCE flags
-  - Buy Candidates : scanner picks not held + add-to-winner signals
+  - Act Today      : stop triggers, sell signals, critical news, today's macro, REDUCE flags
+  - Buy Candidates : scanner picks + add-to-winner, each with a multi-signal confidence verdict
   - Review Before Close : approaching stops, near-term earnings, weak large positions,
                           warning news, upcoming macro catalysts
+
+Confidence verdict system (Buy Candidates)
+------------------------------------------
+Each candidate is cross-referenced across every available signal layer:
+  Layer 1 — Technical setup   (scanner: RSI, trend, momentum)
+  Layer 2 — Composite signal  (port_df Signal/Score — held positions only)
+  Layer 3 — News sentiment    (news_items avg compound for ticker)
+  Layer 4 — Earnings risk     (held_data earnings date)
+  Layer 5 — Analyst revisions (held_data revisions.net — held only)
+
+Verdict tiers:
+  Confirmed  — all available layers agree (green)
+  Mixed      — 1 soft conflict (amber)
+  Conflicted — hard conflict: composite ≠ technical OR strong negative news (red)
+  Caution    — earnings within 7 days regardless of other signals (amber)
 """
 
 from datetime import date, timedelta
@@ -31,12 +46,145 @@ def _days_until(date_str: str, today: date) -> int | None:
         return None
 
 
+# ── Cross-reference engine ────────────────────────────────────────────────────
+
+def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
+                     held_data: dict, today: date) -> dict:
+    """
+    Cross-check a buy candidate across all available signal layers.
+
+    Returns a dict with:
+      verdict       — 'confirmed' | 'mixed' | 'conflicted' | 'caution'
+      verdict_label — display string
+      verdict_color — hex colour
+      agreed        — list of supporting signals
+      conflicts     — list of conflicting signals
+      layers_checked— int (how many independent layers evaluated)
+    """
+    agreed:    list[str] = []
+    conflicts: list[str] = []
+
+    # ── Layer 1: Technical setup (always present from scanner) ────────────────
+    scan_sig   = str(scanner_row.get("Signal", ""))
+    scan_score = _f(scanner_row.get("Score", 0))
+    rsi        = _f(scanner_row.get("RSI", 0))
+    mom_1m     = _f(scanner_row.get("1M Momentum", 0))
+    trend      = str(scanner_row.get("Trend", ""))
+    agreed.append(f"Technical: {scan_sig} ({scan_score:.0f}/100) · {trend} · RSI {rsi:.0f}")
+
+    # ── Layer 2: Composite signal (held positions only) ───────────────────────
+    composite_conflict = False
+    if port_df is not None and not port_df.empty:
+        pm = port_df[port_df["Ticker"] == ticker]
+        if not pm.empty:
+            comp_sig = str(pm.iloc[0].get("Signal", ""))
+            comp_scr = _f(pm.iloc[0].get("Score", 0))
+            buy_words      = ("Strong Buy", "Buy")
+            hold_sell_words = ("Hold", "Sell", "Avoid", "Weak")
+            if any(w in comp_sig for w in buy_words):
+                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+            elif any(w in comp_sig for w in hold_sell_words):
+                conflicts.append(
+                    f"Composite signal: **{comp_sig}** ({comp_scr:.0f}/100) — "
+                    "technicals say Buy but full analysis is more cautious"
+                )
+                composite_conflict = True
+            else:
+                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+
+    # ── Layer 3: News sentiment ───────────────────────────────────────────────
+    ticker_news = [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == ticker]
+    sentiment_conflict = False
+    if ticker_news:
+        avg_compound = sum(n.get("compound", 0) for n in ticker_news) / len(ticker_news)
+        best_headline = max(ticker_news, key=lambda n: abs(n.get("compound", 0)))
+        if avg_compound <= -0.15:
+            conflicts.append(
+                f"News sentiment: Negative (avg {avg_compound:+.2f}) — "
+                f"\"{best_headline.get('headline', '')[:60]}\""
+            )
+            sentiment_conflict = True
+        elif avg_compound >= 0.1:
+            agreed.append(f"News sentiment: Positive (avg {avg_compound:+.2f})")
+        else:
+            agreed.append(f"News sentiment: Neutral (avg {avg_compound:+.2f})")
+    else:
+        agreed.append("News sentiment: No recent headlines")
+
+    # ── Layer 4: Earnings risk ────────────────────────────────────────────────
+    earnings_conflict = False
+    earn_days = None
+    if held_data and ticker in held_data:
+        earn_date = (held_data[ticker] or {}).get("earnings")
+        if earn_date:
+            earn_days = _days_until(earn_date, today)
+            if earn_days is not None and 0 <= earn_days <= 7:
+                label = "today" if earn_days == 0 else f"in {earn_days}d"
+                conflicts.append(
+                    f"Earnings {label} ({earn_date}) — binary event risk; "
+                    "signals may not hold post-release"
+                )
+                earnings_conflict = True
+            elif earn_days is not None and 8 <= earn_days <= 21:
+                agreed.append(f"Earnings in {earn_days}d — manageable window")
+
+    # ── Layer 5: Analyst revisions (held positions with held_data) ────────────
+    if held_data and ticker in held_data:
+        revs = ((held_data[ticker] or {}).get("revisions") or {})
+        net  = revs.get("net")
+        if net is not None:
+            if net >= 2:
+                agreed.append(f"Analyst revisions: +{net} net upgrades (90d)")
+            elif net <= -2:
+                conflicts.append(f"Analyst revisions: {net} net downgrades (90d)")
+            else:
+                agreed.append(f"Analyst revisions: flat ({net:+d} net)")
+
+    # ── Verdict ───────────────────────────────────────────────────────────────
+    layers = len(agreed) + len(conflicts)
+
+    if earnings_conflict:
+        verdict       = "caution"
+        verdict_label = "⚠️ Caution — Earnings Risk"
+        verdict_color = "#f59e0b"
+    elif composite_conflict and sentiment_conflict:
+        verdict       = "conflicted"
+        verdict_label = "❌ Conflicted — Multiple Signal Conflicts"
+        verdict_color = "#ef4444"
+    elif composite_conflict:
+        verdict       = "conflicted"
+        verdict_label = "❌ Conflicted — Composite vs Technical"
+        verdict_color = "#ef4444"
+    elif sentiment_conflict:
+        verdict       = "mixed"
+        verdict_label = "⚠️ Mixed — Negative News"
+        verdict_color = "#f59e0b"
+    elif conflicts:
+        verdict       = "mixed"
+        verdict_label = "⚠️ Mixed"
+        verdict_color = "#f59e0b"
+    else:
+        verdict       = "confirmed"
+        verdict_label = "✅ Confirmed — All Signals Aligned"
+        verdict_color = "#22c55e"
+
+    return {
+        "verdict":        verdict,
+        "verdict_label":  verdict_label,
+        "verdict_color":  verdict_color,
+        "agreed":         agreed,
+        "conflicts":      conflicts,
+        "layers_checked": layers,
+        "earn_days":      earn_days,
+    }
+
+
 # ── Act Today ─────────────────────────────────────────────────────────────────
 
 def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) -> list[dict]:
     items: list[dict] = []
 
-    # 1 — Stop-loss breaches (Gap to Stop ≤ 0 means price AT or BELOW stop)
+    # 1 — Stop-loss breaches (Gap to Stop ≤ 0)
     for _, row in port_df.iterrows():
         gap = _f(row.get("Gap to Stop (%)"), None)
         if gap is None:
@@ -52,8 +200,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
                     f"{row.get('Stop Type', '')} stop at ${_f(row.get('Stop')):.2f} "
                     f"(gap {gap:+.1f}%). Mechanical sell rule triggered."
                 ),
-                "weight":   _f(row.get("Weight (%)")),
-                "pnl_pct":  _f(row.get("P&L (%)")),
+                "weight":  _f(row.get("Weight (%)")),
+                "pnl_pct": _f(row.get("P&L (%)")),
             })
 
     # 2 — Sell / Avoid signals on held positions
@@ -71,8 +219,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
                     f"score {_f(row.get('Score')):.0f}/100. "
                     f"P&L {_f(row.get('P&L (%)')):+.1f}%, weight {_f(row.get('Weight (%)')):+.1f}%."
                 ),
-                "weight":   _f(row.get("Weight (%)")),
-                "pnl_pct":  _f(row.get("P&L (%)")),
+                "weight":  _f(row.get("Weight (%)")),
+                "pnl_pct": _f(row.get("P&L (%)")),
             })
 
     # 3 — Critical news on held positions (compound ≤ -0.25, tier ≤ 2)
@@ -83,19 +231,20 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
                 and item.get("compound", 0) <= -0.25
                 and item.get("tier", 3) <= 2):
             if ticker not in {i["ticker"] for i in items}:
-                row = port_df[port_df["Ticker"] == ticker].iloc[0] if any(port_df["Ticker"] == ticker) else {}
+                pm = port_df[port_df["Ticker"] == ticker]
+                row = pm.iloc[0] if not pm.empty else {}
                 items.append({
                     "priority": "high",
                     "icon":     "🚨",
                     "ticker":   ticker,
                     "action":   "MONITOR — Critical News",
                     "reason":   (
-                        f"Tier-{item.get('tier',3)} source: \"{item.get('headline', 'news alert')[:80]}\" "
-                        f"(sentiment {item.get('compound', 0):+.2f}). "
-                        f"Verify thesis integrity before next open."
+                        f"Tier-{item.get('tier',3)} source: \"{item.get('headline','news alert')[:80]}\" "
+                        f"(sentiment {item.get('compound',0):+.2f}). "
+                        "Verify thesis integrity before next open."
                     ),
-                    "weight":   _f(row.get("Weight (%)") if hasattr(row, 'get') else 0),
-                    "pnl_pct":  _f(row.get("P&L (%)") if hasattr(row, 'get') else 0),
+                    "weight":  _f(row.get("Weight (%)") if hasattr(row, "get") else 0),
+                    "pnl_pct": _f(row.get("P&L (%)") if hasattr(row, "get") else 0),
                 })
 
     # 4 — Today's HIGH-impact macro events
@@ -108,43 +257,39 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
             "ticker":   None,
             "action":   f"MACRO — {ev.get('event', 'Economic Event')}",
             "reason":   (
-                f"{ev.get('category', '')} release today. "
-                f"Affected positions: {', '.join(ev.get('affected_tickers', [])[:5]) or 'All'}. "
-                f"{ev.get('playbook_note', '') or 'Review macro playbook for positioning.'}"
+                f"{ev.get('category','')} release today. "
+                f"Affected: {', '.join(ev.get('affected_tickers',[])[:5]) or 'All'}. "
+                f"{ev.get('playbook_note','') or 'Review macro playbook for positioning.'}"
             ),
-            "weight":   None,
-            "pnl_pct":  None,
+            "weight":  None,
+            "pnl_pct": None,
         })
 
-    # 5 — REDUCE flags from risk advisor (HIGH priority)
+    # 5 — HIGH-priority risk advisor flags
     for rec in (risk_recs or []):
         if rec.get("priority") != "HIGH":
             continue
         rt = rec.get("root_tickers", [])
-        tickers_text = ", ".join(r.get("ticker", "") for r in rt) if rt else "portfolio"
         items.append({
             "priority": "high",
             "icon":     "⚠️",
             "ticker":   rt[0]["ticker"] if rt else None,
-            "action":   f"RISK — {rec.get('title', 'Risk Alert')}",
+            "action":   f"RISK — {rec.get('title','Risk Alert')}",
             "reason":   rec.get("recommendation", rec.get("problem", "")),
-            "weight":   None,
-            "pnl_pct":  None,
+            "weight":  None,
+            "pnl_pct": None,
         })
 
-    # Sort: critical first, then by weight desc
-    def _sort_key(x):
-        pri = 0 if x["priority"] == "critical" else 1
-        w   = -(x["weight"] or 0)
-        return (pri, w)
-
-    items.sort(key=_sort_key)
+    items.sort(key=lambda x: (0 if x["priority"] == "critical" else 1, -(x.get("weight") or 0)))
     return items
 
 
 # ── Buy Candidates ─────────────────────────────────────────────────────────────
 
-def _buy_candidates(port_df, scanner_results) -> list[dict]:
+def _buy_candidates(port_df, scanner_results, news_items, held_data, today) -> list[dict]:
+    """
+    Build buy candidate list with multi-signal confidence verdict for each pick.
+    """
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
 
@@ -153,43 +298,59 @@ def _buy_candidates(port_df, scanner_results) -> list[dict]:
         top_picks = scanner_results[
             (scanner_results["Score"] >= 65) &
             (~scanner_results["Ticker"].isin(held_tickers))
-        ].copy()
-        top_picks = top_picks.sort_values("Score", ascending=False).head(5)
+        ].copy().sort_values("Score", ascending=False).head(5)
+
         for _, row in top_picks.iterrows():
-            sig = str(row.get("Signal", ""))
+            ticker = str(row["Ticker"])
+            xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today)
             items.append({
-                "type":    "new_pick",
-                "icon":    "🆕",
-                "ticker":  row["Ticker"],
-                "action":  "BUY — Scanner Pick",
-                "reason":  (
-                    f"Score {_f(row.get('Score')):.0f}/100 · Signal: {sig} · "
-                    f"Sector: {row.get('Sector', '—')}. "
-                    f"Not currently held — consider initiating position."
-                ),
-                "score":   _f(row.get("Score")),
+                "type":           "new_pick",
+                "icon":           "🆕",
+                "ticker":         ticker,
+                "action":         "BUY — Scanner Pick",
+                "score":          _f(row.get("Score")),
+                "scanner_signal": str(row.get("Signal", "")),
+                "sector":         str(row.get("Sector", "—")),
+                "rsi":            _f(row.get("RSI")),
+                "mom_1m":         _f(row.get("1M Momentum")),
+                "trend":          str(row.get("Trend", "")),
+                "xref":           xref,
             })
 
-    # 2 — Add-to-winner: held, Strong Buy, Score ≥ 68, Gap to Stop ≥ 8%
+    # 2 — Add-to-winner: held, Strong Buy composite signal, Score ≥ 68, Gap ≥ 8%
     for _, row in port_df.iterrows():
-        sig  = str(row.get("Signal", ""))
-        gap  = _f(row.get("Gap to Stop (%)"), 0)
-        scr  = _f(row.get("Score"), 0)
+        sig = str(row.get("Signal", ""))
+        gap = _f(row.get("Gap to Stop (%)"), 0)
+        scr = _f(row.get("Score"), 0)
         if "Strong Buy" in sig and scr >= 68 and gap >= 8:
+            ticker = str(row["Ticker"])
+            # Build a minimal scanner_row from portfolio data for cross-reference
+            _synthetic = {
+                "Signal": sig, "Score": scr,
+                "RSI": 0, "1M Momentum": 0, "Trend": sig,
+            }
+            xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today)
             items.append({
-                "type":   "add_winner",
-                "icon":   "➕",
-                "ticker": row["Ticker"],
-                "action": "ADD — Winning Position",
-                "reason": (
-                    f"**{sig}** signal, score {scr:.0f}/100, "
-                    f"{gap:.1f}% above stop ({row.get('Stop Type', 'ATR')}). "
-                    f"P&L {_f(row.get('P&L (%)')):+.1f}% — trend intact, room to add."
-                ),
-                "score":  scr,
+                "type":           "add_winner",
+                "icon":           "➕",
+                "ticker":         ticker,
+                "action":         "ADD — Winning Position",
+                "score":          scr,
+                "scanner_signal": sig,
+                "sector":         str(row.get("Sector", "—")),
+                "rsi":            0,
+                "mom_1m":         _f(row.get("1M Momentum", 0)),
+                "trend":          sig,
+                "gap_to_stop":    gap,
+                "pnl_pct":        _f(row.get("P&L (%)")),
+                "xref":           xref,
             })
 
-    items.sort(key=lambda x: -x["score"])
+    items.sort(key=lambda x: (
+        0 if x["xref"]["verdict"] == "confirmed" else
+        1 if x["xref"]["verdict"] in ("mixed", "caution") else 2,
+        -x["score"]
+    ))
     return items
 
 
@@ -200,50 +361,46 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
     held_tickers = set(port_df["Ticker"].tolist())
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH
 
-    # 1 — Approaching stop (3–8% gap)
+    # 1 — Approaching stop (0–8% gap)
     for _, row in port_df.iterrows():
         gap = _f(row.get("Gap to Stop (%)"), None)
         if gap is None:
             continue
         if 0 < gap <= 8:
-            urgency = "medium" if gap > 3 else "low"
             items.append({
-                "priority": urgency,
+                "priority": "medium" if gap > 3 else "low",
                 "icon":     "📍",
                 "ticker":   row["Ticker"],
                 "reason":   (
-                    f"Only **{gap:.1f}%** above {row.get('Stop Type', 'ATR')} stop "
+                    f"Only **{gap:.1f}%** above {row.get('Stop Type','ATR')} stop "
                     f"(${_f(row.get('Stop')):.2f}). P&L {_f(row.get('P&L (%)')):+.1f}%. "
                     "Tighten stop or plan exit if level breaks."
                 ),
-                "weight":   _f(row.get("Weight (%)")),
+                "weight": _f(row.get("Weight (%)")),
             })
 
     # 2 — Earnings within 7 days
-    seen_earn = set()
+    seen_earn: set = set()
     for ticker, data in (held_data or {}).items():
         earn_date = (data or {}).get("earnings")
-        if not earn_date:
+        if not earn_date or ticker in seen_earn:
             continue
         days = _days_until(earn_date, today)
         if days is None or not (0 <= days <= 7):
             continue
-        if ticker in seen_earn:
-            continue
         seen_earn.add(ticker)
-        row_match = port_df[port_df["Ticker"] == ticker]
-        weight = _f(row_match["Weight (%)"].iloc[0]) if not row_match.empty else 0
+        pm     = port_df[port_df["Ticker"] == ticker]
+        weight = _f(pm["Weight (%)"].iloc[0]) if not pm.empty else 0
         label  = "TODAY" if days == 0 else f"in {days}d"
         items.append({
             "priority": "medium" if days <= 3 else "low",
             "icon":     "📅",
             "ticker":   ticker,
             "reason":   (
-                f"Earnings **{label}** ({earn_date}). "
-                f"Position weight {weight:.1f}%. "
+                f"Earnings **{label}** ({earn_date}). Weight {weight:.1f}%. "
                 "Consider sizing down before event or confirm thesis."
             ),
-            "weight":   weight,
+            "weight": weight,
         })
 
     # 3 — Weak large positions (weight ≥ 10%, Score < 55)
@@ -258,11 +415,11 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
                     f"but weak conviction score {_f(row.get('Score')):.0f}/100. "
                     "Reassess or trim to free capital for higher-conviction names."
                 ),
-                "weight":   _f(row.get("Weight (%)")),
+                "weight": _f(row.get("Weight (%)")),
             })
 
-    # 4 — Warning news on held positions (compound ≤ -0.05, not already flagged critical)
-    warned = set()
+    # 4 — Warning news on held positions (compound ≤ -0.05, not critical-level)
+    warned: set = set()
     for item in (news_items or []):
         ticker = str(item.get("ticker", "")).upper()
         if (ticker in held_tickers
@@ -274,10 +431,10 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
                 "icon":     "📰",
                 "ticker":   ticker,
                 "reason":   (
-                    f"Negative headline: \"{item.get('headline', 'news')[:70]}\" "
-                    f"(sentiment {item.get('compound', 0):+.2f}). Monitor for confirmation."
+                    f"Negative headline: \"{item.get('headline','news')[:70]}\" "
+                    f"(sentiment {item.get('compound',0):+.2f}). Monitor for confirmation."
                 ),
-                "weight":   0,
+                "weight": 0,
             })
 
     # 5 — Upcoming macro events (1–3 days)
@@ -294,15 +451,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
             "ticker":   None,
             "reason":   (
                 f"**{ev.get('event')}** in {days}d ({ev_date}). "
-                f"Affected: {', '.join(ev.get('affected_tickers', [])[:4]) or 'macro-sensitive'}. "
-                f"{ev.get('playbook_note', '') or 'Review playbook before event.'}"
+                f"Affected: {', '.join(ev.get('affected_tickers',[])[:4]) or 'macro-sensitive'}. "
+                f"{ev.get('playbook_note','') or 'Review playbook before event.'}"
             ),
-            "weight":   None,
+            "weight": None,
         })
 
-    # Sort: medium first, then by weight desc
     pri_order = {"medium": 0, "low": 1}
-    items.sort(key=lambda x: (pri_order.get(x.get("priority", "low"), 1), -(x.get("weight") or 0)))
+    items.sort(key=lambda x: (pri_order.get(x.get("priority","low"), 1), -(x.get("weight") or 0)))
     return items
 
 
@@ -310,30 +466,21 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
 
 def build_daily_briefing(
     port_df,
-    alert_list: list,
-    risk_recs: list,
-    news_items: list,
-    macro_events: list,
-    held_data: dict,
+    alert_list:      list,
+    risk_recs:       list,
+    news_items:      list,
+    macro_events:    list,
+    held_data:       dict,
     scanner_results,
     portfolio_value: float,
-    today: date,
+    today:           date,
 ) -> dict:
     """
-    Build a Start-Your-Day briefing from all available intelligence.
+    Build a Start-Your-Day briefing synthesising all available intelligence.
 
-    Returns
-    -------
-    dict with keys:
-      act_today       — list of urgent, must-act items
-      buy_candidates  — list of buy/add opportunities
-      review_list     — list of things to watch before close
+    Returns dict with: act_today, buy_candidates, review_list.
     """
-    act     = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
-    buys    = _buy_candidates(port_df, scanner_results)
-    review  = _review_list(port_df, news_items, macro_events, held_data, today)
-    return {
-        "act_today":      act,
-        "buy_candidates": buys,
-        "review_list":    review,
-    }
+    act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
+    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today)
+    review = _review_list(port_df, news_items, macro_events, held_data, today)
+    return {"act_today": act, "buy_candidates": buys, "review_list": review}

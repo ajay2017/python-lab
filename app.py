@@ -1208,11 +1208,17 @@ if page == "🏠 My Portfolio":
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
         # ── Section 2: Buy Candidates ─────────────────────────────────────────
-        _db_c2_label = f"🟢 Buy Candidates ({len(_db_buys)})"
+        _db_confirmed = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "confirmed")
+        _db_c2_label  = f"🟢 Buy Candidates ({len(_db_buys)})"
+        _db_c2_sub    = (
+            f" · {_db_confirmed} fully confirmed" if _db_confirmed else
+            " · verify before acting" if _db_buys else ""
+        )
         st.markdown(
             f"<div style='background:#14532d;border-left:4px solid #22c55e;"
             f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
             f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
+            f"<span style='color:#86efac;font-size:0.82em'>{_db_c2_sub}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -1223,19 +1229,48 @@ if page == "🏠 My Portfolio":
                 st.rerun()
         else:
             for _db_buy in _db_buys:
-                _db_is_add  = _db_buy["type"] == "add_winner"
-                _db_bg      = "#052e16" if _db_is_add else "#1c1917"
-                _db_border  = "#4ade80" if _db_is_add else "#86efac"
+                _xref       = _db_buy.get("xref", {})
+                _vcolor     = _xref.get("verdict_color", "#86efac")
+                _vlabel     = _xref.get("verdict_label", "")
+                _vagreed    = _xref.get("agreed", [])
+                _vconflicts = _xref.get("conflicts", [])
+                _vlayers    = _xref.get("layers_checked", 0)
+                _db_bg      = "#1c1917"
+                # Card
                 st.markdown(
-                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
+                    # Header row
+                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                    f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
                     f"{_db_buy['icon']} {_db_buy['action']} — "
-                    f"<span style='color:#4ade80'>{_db_buy['ticker']}</span>"
-                    f"<span style='color:#9ca3af;font-weight:400'> · Score {_db_buy['score']:.0f}/100</span>"
+                    f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
+                    f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
+                    + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
+                    + f"</span>"
+                    # Verdict badge
+                    f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
+                    f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
+                    f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
                     f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_buy['reason']}</div>"
-                    f"</div>",
+                    # Technical summary line
+                    + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
+                       f"📊 {_db_buy.get('scanner_signal','')} · "
+                       f"RSI {_db_buy.get('rsi',0):.0f} · "
+                       f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
+                       f"{_db_buy.get('trend','')}"
+                       f"</div>" if _db_buy.get("rsi") else "")
+                    # Conflicts (shown prominently)
+                    + ("".join(
+                        f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
+                        for c in _vconflicts
+                    ) if _vconflicts else "")
+                    # Agreed signals (collapsed style)
+                    + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
+                       f"✓ {' · '.join(_vagreed[:3])}"
+                       + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
+                       + f"</div>" if _vagreed else "")
+                    + f"</div>",
                     unsafe_allow_html=True,
                 )
                 if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
