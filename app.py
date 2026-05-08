@@ -57,6 +57,7 @@ from stock_analyzer import db
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
@@ -643,6 +644,9 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     except Exception:
         risk_metrics = compute_all_risk(df, None)
     upside = upside_potential(price, financials) if price else None
+    _info  = bundle.get("info", {})
+    name   = _info.get("shortName") or _info.get("longName") or ticker
+    sector = _info.get("sector", "")
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
         "f_score": f_score, "f_signals": f_signals,
@@ -654,6 +658,7 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "targets": targets, "sr": sr,
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
         "revisions": bundle.get("revisions", {}),
+        "name": name, "sector": sector,
     }
 
 # ── Sector ETF multi-period returns (for heatmap) ────────────────────────────
@@ -1218,6 +1223,106 @@ if page == "🏠 My Portfolio":
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # ── Quick Research ────────────────────────────────────────────────────
+        st.markdown(
+            "<div style='background:#111827;border:1px solid #374151;"
+            "border-radius:10px;padding:12px 16px;margin-bottom:12px'>"
+            "<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px'>"
+            "<span style='color:#f9fafb;font-size:0.95em;font-weight:700'>🔍 Research a Stock</span>"
+            "<span style='color:#6b7280;font-size:0.8em'>Spot a news catalyst? Enter any ticker for an instant actionable summary.</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        _qr_ic1, _qr_ic2 = st.columns([5, 1])
+        with _qr_ic1:
+            _qr_ticker_in = st.text_input(
+                "ticker", key="_qr_ticker_input",
+                placeholder="e.g. RKLB, TSLA, AAPL  — any ticker you've seen in the news",
+                label_visibility="collapsed",
+            )
+        with _qr_ic2:
+            _qr_btn = st.button("Research →", key="_qr_btn", use_container_width=True)
+
+        if _qr_btn and _qr_ticker_in.strip():
+            _t = _qr_ticker_in.strip().upper()
+            with st.spinner(f"Analyzing {_t}..."):
+                try:
+                    _qr_raw  = load_all(_t)
+                    st.session_state["_qr_result"] = _qr_research(_t, _qr_raw)
+                except Exception as _qr_e:
+                    st.session_state["_qr_result"] = {"error": str(_qr_e), "ticker": _t}
+
+        _qr_res = st.session_state.get("_qr_result")
+        if _qr_res:
+            if "error" in _qr_res:
+                st.error(f"Could not load data for {_qr_res['ticker']}: {_qr_res['error']}")
+            else:
+                _qr_e = _qr_res["entry"]
+                # Header strip: ticker | name | sector | price | entry verdict badge
+                st.markdown(
+                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
+                    f"border-top:1px solid #374151;padding-top:10px;margin-top:4px'>"
+                    f"<span style='color:#fbbf24;font-size:1em;font-weight:700'>{_qr_res['ticker']}</span>"
+                    + (f"<span style='color:#d1d5db;font-size:0.85em'>{_qr_res['name']}</span>"
+                       if _qr_res.get("name") and _qr_res["name"] != _qr_res["ticker"] else "")
+                    + (f"<span style='color:#9ca3af;font-size:0.8em'>{_qr_res['sector']}</span>"
+                       if _qr_res.get("sector") else "")
+                    + (f"<span style='color:#f9fafb;font-size:0.9em'>${_qr_res['price']:.2f}</span>"
+                       if _qr_res.get("price") else "")
+                    + f"<span style='background:{_qr_e['color']}22;border:1px solid {_qr_e['color']};"
+                    f"color:{_qr_e['color']};padding:2px 10px;border-radius:10px;"
+                    f"font-size:0.78em;font-weight:700'>{_qr_e['icon']} {_qr_e['label']}</span>"
+                    f"<span style='background:{_qr_res['signal_color']}22;border:1px solid {_qr_res['signal_color']};"
+                    f"color:{_qr_res['signal_color']};padding:2px 10px;border-radius:10px;"
+                    f"font-size:0.78em;font-weight:700'>{_qr_res['signal_icon']} {_qr_res['signal']} {_qr_res['score']:.0f}/100</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                # 4-bullet actionable summary
+                for _qr_b in _qr_res["bullets"]:
+                    st.markdown(f"- {_qr_b}")
+                # Recent headlines (top 3)
+                if _qr_res.get("headlines"):
+                    st.markdown(
+                        "<div style='color:#6b7280;font-size:0.8em;margin-top:4px'>"
+                        "<strong style='color:#9ca3af'>Recent headlines:</strong></div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _qr_h in _qr_res["headlines"][:3]:
+                        _qr_dot = (
+                            "🟢" if _qr_h.get("label") == "Positive" else
+                            "🔴" if _qr_h.get("label") == "Negative" else "⚪"
+                        )
+                        _qr_url   = _qr_h.get("url", "")
+                        _qr_title = _qr_h.get("headline", "")
+                        if _qr_url:
+                            st.markdown(
+                                f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
+                                f"{_qr_dot} <a href='{_qr_url}' target='_blank' "
+                                f"style='color:#60a5fa'>{_qr_title}</a></div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
+                                f"{_qr_dot} {_qr_title}</div>",
+                                unsafe_allow_html=True,
+                            )
+                # Action buttons
+                _qr_bc1, _qr_bc2 = st.columns([3, 1])
+                with _qr_bc1:
+                    if st.button(f"▶ Full Analysis — {_qr_res['ticker']}", key="_qr_full_btn"):
+                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_analysis_ticker"] = _qr_res["ticker"]
+                        st.session_state["_nav_origin"]      = "🌅 Start Your Day"
+                        st.rerun()
+                with _qr_bc2:
+                    if st.button("✕ Clear", key="_qr_clear_btn"):
+                        del st.session_state["_qr_result"]
+                        st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
         # ── Grow Today (before Act Today on bull days, after on bear/flat) ────
         def _render_grow_today(grow: dict, tone: str):
