@@ -6020,76 +6020,250 @@ elif page == "📈 Stock Analysis":
                 f"[🔍 News](https://finance.yahoo.com/quote/{ticker}/news/)"
             )
 
+            # Signal-aware tab label and portfolio lookup
+            _sa_is_sell = rec["label"] in ("Sell", "Strong Sell")
+            _sa_is_hold = rec["label"] == "Hold"
+            _sa_holding = None
+            if not port_df.empty and ticker in port_df["Ticker"].values:
+                _sa_holding = port_df[port_df["Ticker"] == ticker].iloc[0].to_dict()
+
+            _plan_label = "🚪 Exit Plan" if _sa_is_sell else "📋 Trade Plan"
             plan_tab, chart_tab, risk_tab, deep_tab = st.tabs(
-                ["📋 Trade Plan", "📈 Chart", "⚖️ Risk", "🔬 Deep Dive"]
+                [_plan_label, "📈 Chart", "⚖️ Risk", "🔬 Deep Dive"]
             )
 
-            # ── Trade Plan ────────────────────────────────────────────────
+            # ── Trade Plan / Exit Plan ─────────────────────────────────────
             with plan_tab:
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Price", f"${price:.2f}" if price else "N/A")
-                c2.metric("Entry Zone",
-                          f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
-                c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
-                          delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
-                          delta_color="inverse", help=_tip("ATR Stop"))
                 rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
-                c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
-                          help=_tip("R:R Ratio"))
 
-                if ps:
-                    st.markdown("#### Position Sizing")
-                    p1, p2, p3, p4 = st.columns(4)
-                    p1.metric("Shares", f"{ps['shares']:,}", help=_tip("Position Sizing"))
-                    p2.metric("Investment",  f"${ps['total_cost']:,.0f}",
-                              f"{ps['portfolio_pct']:.1f}% of portfolio",
-                              help=_tip("Position Sizing"))
-                    p3.metric("Max Risk", f"${ps['actual_risk']:,.0f}",
-                              f"{ps['risk_pct_actual']:.2f}%", delta_color="inverse",
-                              help="Maximum dollar loss if stop is hit. Should not exceed 1.5–2% of portfolio.")
-                    p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}",
-                              help="Dollar distance from entry to stop per share.")
-
-                if targets:
-                    st.markdown("#### Price Scenarios")
-                    sc1, sc2 = st.columns([2, 1])
-                    with sc1:
-                        sfig = go.Figure()
-                        for case, tgt, pct, color in [
-                            ("Bear", targets["bear"], targets["bear_pct"], "#ff4444"),
-                            ("Base", targets["base"], targets["base_pct"], "#ffbb33"),
-                            ("Bull", targets["bull"], targets["bull_pct"], "#00C851"),
-                        ]:
-                            sfig.add_trace(go.Bar(
-                                x=[case], y=[tgt], name=case, marker_color=color,
-                                text=f"${tgt:.2f}<br>{pct:+.1f}%", textposition="outside",
-                            ))
-                        if price:
-                            sfig.add_hline(y=price, line_dash="dash", line_color="white",
-                                           annotation_text=f"Now ${price:.2f}", annotation_position="right")
-                        if r["stop"]:
-                            sfig.add_hline(y=r["stop"], line_dash="dot", line_color="#ff4444",
-                                           annotation_text=f"Stop ${r['stop']:.2f}", annotation_position="right")
-                        sfig.update_layout(
-                            height=300, template="plotly_dark", showlegend=False,
-                            margin=dict(l=0, r=80, t=30, b=0),
+                if _sa_is_sell:
+                    # ── EXIT PLAN ──────────────────────────────────────────
+                    if _sa_holding:
+                        _sh = _sa_holding
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Current Price",  f"${price:.2f}" if price else "N/A")
+                        c2.metric("Shares Held",    f"{int(_sh.get('Shares', 0)):,}")
+                        c3.metric("Position Value", f"${_sh.get('Market Value', 0):,.0f}")
+                        c4.metric(
+                            "P&L if Sold Now",
+                            f"${_sh.get('P&L ($)', 0):+,.0f}",
+                            f"{_sh.get('P&L (%)', 0):+.1f}%",
+                            delta_color="normal",
                         )
-                        st.plotly_chart(sfig, use_container_width=True)
-                    with sc2:
-                        st.markdown("**Scenarios**")
-                        for label, tgt, pct, clr in [
-                            ("🐂 Bull", targets["bull"], targets["bull_pct"], "#00C851"),
-                            ("➡ Base", targets["base"], targets["base_pct"], "#ffbb33"),
-                            ("🐻 Bear", targets["bear"], targets["bear_pct"], "#ff4444"),
-                        ]:
-                            st.markdown(
-                                f"{label} `${tgt:.2f}` <span style='color:{clr}'>{pct:+.1f}%</span>",
-                                unsafe_allow_html=True,
+                    else:
+                        _ec1, _ec2 = st.columns([1, 3])
+                        _ec1.metric("Current Price", f"${price:.2f}" if price else "N/A")
+                        with _ec2:
+                            st.info(
+                                f"**{ticker}** is not in your portfolio — "
+                                "this is an informational Sell signal for awareness only."
                             )
-                        if rr_val and rr_val > 0:
-                            quality = "✅ Favourable" if rr_val >= 2.5 else ("⚠️ Marginal" if rr_val >= 1.5 else "❌ Poor")
-                            st.markdown(f"**R:R** `{rr_val:.1f}:1` — {quality}")
 
+                    # Exit recommendation banner
+                    _exit_urgent = rec["label"] == "Strong Sell"
+                    _exit_color  = "#ef4444" if _exit_urgent else "#f59e0b"
+                    _exit_bg     = "#450a0a" if _exit_urgent else "#422006"
+                    _exit_action = (
+                        "Exit full position. Multiple bearish signals indicate elevated risk of continued decline."
+                        if _exit_urgent else
+                        "Consider reducing or exiting. At minimum, raise your stop loss to protect gains."
+                    )
+                    st.markdown(
+                        f"<div style='background:{_exit_bg};border-left:4px solid {_exit_color};"
+                        f"border-radius:8px;padding:12px 16px;margin:10px 0'>"
+                        f"<div style='color:{_exit_color};font-weight:700'>🚪 Recommended Action</div>"
+                        f"<div style='color:#d1d5db;font-size:0.88em;margin-top:4px'>{_exit_action}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if r["stop"]:
+                        st.caption(
+                            f"**Bear thesis invalidated above ${r['stop']:.2f}** — "
+                            "if price recovers to this level, reassess before exiting."
+                        )
+
+                    # Downside scenarios (reframed for exit context)
+                    if targets:
+                        st.markdown("#### Downside Risk — If You Hold")
+                        _sc1, _sc2 = st.columns([2, 1])
+                        with _sc1:
+                            _sfig = go.Figure()
+                            for _case, _tgt, _pct, _clr in [
+                                ("Bear", targets["bear"], targets["bear_pct"], "#ff4444"),
+                                ("Base", targets["base"], targets["base_pct"], "#ffbb33"),
+                                ("Bull", targets["bull"], targets["bull_pct"], "#00C851"),
+                            ]:
+                                _sfig.add_trace(go.Bar(
+                                    x=[_case], y=[_tgt], name=_case, marker_color=_clr,
+                                    text=f"${_tgt:.2f}<br>{_pct:+.1f}%", textposition="outside",
+                                ))
+                            if price:
+                                _sfig.add_hline(y=price, line_dash="dash", line_color="white",
+                                                annotation_text=f"Now ${price:.2f}",
+                                                annotation_position="right")
+                            _sfig.update_layout(
+                                height=300, template="plotly_dark", showlegend=False,
+                                margin=dict(l=0, r=80, t=30, b=0),
+                            )
+                            st.plotly_chart(_sfig, use_container_width=True)
+                        with _sc2:
+                            st.markdown("**Potential outcomes if held**")
+                            _held_shares = int(_sa_holding.get("Shares", 0)) if _sa_holding else None
+                            for _lbl, _tgt, _pct, _clr in [
+                                ("🐂 Recovery", targets["bull"], targets["bull_pct"], "#00C851"),
+                                ("➡ Base",     targets["base"], targets["base_pct"], "#ffbb33"),
+                                ("🐻 Bear risk", targets["bear"], targets["bear_pct"], "#ff4444"),
+                            ]:
+                                _impact = ""
+                                if _held_shares and price:
+                                    _chg = (_tgt - price) * _held_shares
+                                    _impact = f" (${_chg:+,.0f})"
+                                st.markdown(
+                                    f"{_lbl} `${_tgt:.2f}` "
+                                    f"<span style='color:{_clr}'>{_pct:+.1f}%{_impact}</span>",
+                                    unsafe_allow_html=True,
+                                )
+
+                elif _sa_is_hold:
+                    # ── HOLD — POSITION MONITOR ────────────────────────────
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Price", f"${price:.2f}" if price else "N/A")
+                    c2.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
+                              delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
+                              delta_color="inverse", help=_tip("ATR Stop"))
+                    if _sa_holding:
+                        c3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
+                        c4.metric("P&L",
+                                  f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
+                                  f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
+                        st.info(
+                            f"**Hold** your {int(_sa_holding.get('Shares', 0))} shares with stop at "
+                            f"**${r['stop']:.2f}**. Mixed signals — no new entry until conviction improves to Buy."
+                        )
+                    else:
+                        c3.metric("Entry Zone",
+                                  f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
+                        c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
+                                  help=_tip("R:R Ratio"))
+                        st.caption(
+                            "Mixed signals — not a high-conviction entry. "
+                            "Wait for clearer trend before initiating a new position."
+                        )
+
+                    if targets:
+                        st.markdown("#### Price Scenarios")
+                        _sc1, _sc2 = st.columns([2, 1])
+                        with _sc1:
+                            _sfig = go.Figure()
+                            for _case, _tgt, _pct, _clr in [
+                                ("Bear", targets["bear"], targets["bear_pct"], "#ff4444"),
+                                ("Base", targets["base"], targets["base_pct"], "#ffbb33"),
+                                ("Bull", targets["bull"], targets["bull_pct"], "#00C851"),
+                            ]:
+                                _sfig.add_trace(go.Bar(
+                                    x=[_case], y=[_tgt], name=_case, marker_color=_clr,
+                                    text=f"${_tgt:.2f}<br>{_pct:+.1f}%", textposition="outside",
+                                ))
+                            if price:
+                                _sfig.add_hline(y=price, line_dash="dash", line_color="white",
+                                                annotation_text=f"Now ${price:.2f}",
+                                                annotation_position="right")
+                            if r["stop"]:
+                                _sfig.add_hline(y=r["stop"], line_dash="dot", line_color="#ff4444",
+                                                annotation_text=f"Stop ${r['stop']:.2f}",
+                                                annotation_position="right")
+                            _sfig.update_layout(
+                                height=300, template="plotly_dark", showlegend=False,
+                                margin=dict(l=0, r=80, t=30, b=0),
+                            )
+                            st.plotly_chart(_sfig, use_container_width=True)
+                        with _sc2:
+                            st.markdown("**Scenarios**")
+                            for _lbl, _tgt, _pct, _clr in [
+                                ("🐂 Bull", targets["bull"], targets["bull_pct"], "#00C851"),
+                                ("➡ Base",  targets["base"], targets["base_pct"], "#ffbb33"),
+                                ("🐻 Bear",  targets["bear"], targets["bear_pct"], "#ff4444"),
+                            ]:
+                                st.markdown(
+                                    f"{_lbl} `${_tgt:.2f}` <span style='color:{_clr}'>{_pct:+.1f}%</span>",
+                                    unsafe_allow_html=True,
+                                )
+
+                else:
+                    # ── BUY / STRONG BUY — TRADE PLAN ─────────────────────
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Price", f"${price:.2f}" if price else "N/A")
+                    c2.metric("Entry Zone",
+                              f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
+                    c3.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
+                              delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
+                              delta_color="inverse", help=_tip("ATR Stop"))
+                    c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
+                              help=_tip("R:R Ratio"))
+
+                    if _sa_holding:
+                        st.info(
+                            f"**Already held:** {int(_sa_holding.get('Shares', 0))} shares · "
+                            f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%. "
+                            "Sizing below is for adding to your existing position."
+                        )
+
+                    if ps:
+                        st.markdown("#### Position Sizing")
+                        p1, p2, p3, p4 = st.columns(4)
+                        p1.metric("Shares", f"{ps['shares']:,}", help=_tip("Position Sizing"))
+                        p2.metric("Investment", f"${ps['total_cost']:,.0f}",
+                                  f"{ps['portfolio_pct']:.1f}% of portfolio",
+                                  help=_tip("Position Sizing"))
+                        p3.metric("Max Risk", f"${ps['actual_risk']:,.0f}",
+                                  f"{ps['risk_pct_actual']:.2f}%", delta_color="inverse",
+                                  help="Maximum dollar loss if stop is hit. Should not exceed 1.5–2% of portfolio.")
+                        p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}",
+                                  help="Dollar distance from entry to stop per share.")
+
+                    if targets:
+                        st.markdown("#### Price Scenarios")
+                        _sc1, _sc2 = st.columns([2, 1])
+                        with _sc1:
+                            _sfig = go.Figure()
+                            for _case, _tgt, _pct, _clr in [
+                                ("Bear", targets["bear"], targets["bear_pct"], "#ff4444"),
+                                ("Base", targets["base"], targets["base_pct"], "#ffbb33"),
+                                ("Bull", targets["bull"], targets["bull_pct"], "#00C851"),
+                            ]:
+                                _sfig.add_trace(go.Bar(
+                                    x=[_case], y=[_tgt], name=_case, marker_color=_clr,
+                                    text=f"${_tgt:.2f}<br>{_pct:+.1f}%", textposition="outside",
+                                ))
+                            if price:
+                                _sfig.add_hline(y=price, line_dash="dash", line_color="white",
+                                                annotation_text=f"Now ${price:.2f}",
+                                                annotation_position="right")
+                            if r["stop"]:
+                                _sfig.add_hline(y=r["stop"], line_dash="dot", line_color="#ff4444",
+                                                annotation_text=f"Stop ${r['stop']:.2f}",
+                                                annotation_position="right")
+                            _sfig.update_layout(
+                                height=300, template="plotly_dark", showlegend=False,
+                                margin=dict(l=0, r=80, t=30, b=0),
+                            )
+                            st.plotly_chart(_sfig, use_container_width=True)
+                        with _sc2:
+                            st.markdown("**Scenarios**")
+                            for _lbl, _tgt, _pct, _clr in [
+                                ("🐂 Bull", targets["bull"], targets["bull_pct"], "#00C851"),
+                                ("➡ Base",  targets["base"], targets["base_pct"], "#ffbb33"),
+                                ("🐻 Bear",  targets["bear"], targets["bear_pct"], "#ff4444"),
+                            ]:
+                                st.markdown(
+                                    f"{_lbl} `${_tgt:.2f}` <span style='color:{_clr}'>{_pct:+.1f}%</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            if rr_val and rr_val > 0:
+                                quality = "✅ Favourable" if rr_val >= 2.5 else ("⚠️ Marginal" if rr_val >= 1.5 else "❌ Poor")
+                                st.markdown(f"**R:R** `{rr_val:.1f}:1` — {quality}")
+
+                # ── Shared: consensus warning + earnings + S&R ─────────────
                 if targets and targets.get("above_consensus"):
                     at = targets["analyst_target"]
                     st.warning(
