@@ -5926,6 +5926,7 @@ elif page == "📈 Stock Analysis":
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
+    _sc_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
     rows = []
     for ticker, r in results.items():
         price = r["current_price"]
@@ -5943,18 +5944,53 @@ elif page == "📈 Stock Analysis":
                 earn_label = f"{earn} ({days}d)" if days >= 0 else earn
             except Exception:
                 earn_label = earn
+
+        # Check if this ticker is held in the portfolio
+        _sc_held = None
+        if not _sc_port.empty and ticker in _sc_port["Ticker"].values:
+            _sc_held = _sc_port[_sc_port["Ticker"] == ticker].iloc[0].to_dict()
+
+        _sc_is_sell = r["rec"]["label"] in ("Sell", "Strong Sell")
+        _sc_is_buy  = r["rec"]["label"] in ("Buy", "Strong Buy")
+
+        # "Position / Entry Zone" column — held: show holding; buy: show entry zone
+        if _sc_held:
+            _avg_cost = _sc_held.get("Avg Cost", 0)
+            _sc_position = f"{int(_sc_held.get('Shares', 0))} sh @ ${_avg_cost:.2f} avg"
+        else:
+            _sc_position = f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "—"
+
+        # "Shares" column — held: actual shares; not held: suggested entry
+        if _sc_held:
+            _sc_shares = int(_sc_held.get("Shares", 0))
+        elif ps:
+            _sc_shares = ps["shares"]
+        else:
+            _sc_shares = "—"
+
+        # "P&L / Entry Cost" column — held: P&L; not held: entry cost
+        if _sc_held:
+            _sc_cost = f"{_sc_held.get('P&L (%)', 0):+.1f}% P&L"
+        elif ps:
+            _sc_cost = f"${ps['total_cost']:,.0f}"
+        else:
+            _sc_cost = "—"
+
+        # R:R only meaningful for buy signals
+        _sc_rr = f"{rr_val:.1f}:1" if (rr_val and rr_val > 0 and _sc_is_buy) else "—"
+
         rows.append({
-            "Ticker": ticker,
-            "Price": f"${price:.2f}" if price else "N/A",
-            "Score": r["total"],
-            "Signal": f"{r['rec']['icon']} {r['rec']['label']}",
-            "Entry Zone": f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "—",
-            "Stop": f"${r['stop']:.2f}" if r["stop"] else "—",
-            "Base Target": f"${targets['base']:.2f} ({targets['base_pct']:+.1f}%)" if targets else "—",
-            "R:R": f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "—",
-            "Shares": ps["shares"] if ps else "—",
-            "Cost": f"${ps['total_cost']:,.0f}" if ps else "—",
-            "Earnings": earn_label,
+            "Ticker":           ticker,
+            "Price":            f"${price:.2f}" if price else "N/A",
+            "Score":            r["total"],
+            "Signal":           f"{r['rec']['icon']} {r['rec']['label']}",
+            "Position / Entry": _sc_position,
+            "Stop":             f"${r['stop']:.2f}" if r["stop"] else "—",
+            "Base Target":      f"${targets['base']:.2f} ({targets['base_pct']:+.1f}%)" if targets else "—",
+            "R:R":              _sc_rr,
+            "Shares":           _sc_shares,
+            "P&L / Cost":       _sc_cost,
+            "Earnings":         earn_label,
         })
 
     summary_df = pd.DataFrame(rows).set_index("Ticker")
@@ -5976,7 +6012,7 @@ elif page == "📈 Stock Analysis":
 
     st.dataframe(
         summary_df.style.map(_sig, subset=["Signal"]).map(_sc, subset=["Score"])
-        .format({"Score": "{:.1f}"}),
+        .format({"Score": "{:.1f}", "Shares": lambda v: str(v)}),
         use_container_width=True,
     )
 
