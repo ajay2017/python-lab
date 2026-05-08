@@ -55,6 +55,7 @@ from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternative
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 from stock_analyzer import api_health as _ah
+from stock_analyzer.news_intelligence import build_news_intelligence
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
@@ -1299,6 +1300,179 @@ if page == "🏠 My Portfolio":
                 margin=dict(l=0, r=80, t=10, b=0),
             )
             st.plotly_chart(mini, use_container_width=True)
+
+        # ── News Intelligence ─────────────────────────────────────────────────
+        st.divider()
+        _ni_data = build_news_intelligence(
+            st.session_state.get("_sidebar_news", []), port_df
+        )
+        _ni_sum   = _ni_data.get("summary", {})
+        _ni_alts  = _ni_data.get("alerts", [])
+        _ni_opps  = _ni_data.get("opportunities", [])
+        _ni_sects = _ni_data.get("sector_digest", [])
+        _ni_held  = _ni_data.get("held_news", [])
+
+        # Expander title shows alert count so user sees urgency at a glance
+        _ni_title_badge = (
+            f"🚨 {len(_ni_alts)} alert{'s' if len(_ni_alts) != 1 else ''} · "
+            if _ni_alts else ""
+        )
+        _ni_expander_title = (
+            f"📰 News Intelligence  ·  {_ni_title_badge}"
+            f"{_ni_sum.get('positive', 0)} ▲  "
+            f"{_ni_sum.get('negative', 0)} ▼  "
+            f"{_ni_sum.get('neutral', 0)} –  "
+            f"({_ni_sum.get('held_count', 0)} for your holdings)"
+        )
+        with st.expander(_ni_expander_title, expanded=bool(_ni_alts)):
+
+            # ── Summary KPI row ───────────────────────────────────────────
+            _nic1, _nic2, _nic3, _nic4 = st.columns(4)
+            _nic1.metric("Total stories",    _ni_sum.get("total",      0))
+            _nic2.metric("For holdings",     _ni_sum.get("held_count", 0))
+            _nic3.metric("🚨 Alerts",        len(_ni_alts),
+                         delta="Requires attention" if _ni_alts else None,
+                         delta_color="inverse" if _ni_alts else "off")
+            _nic4.metric("📈 Opportunities", len(_ni_opps),
+                         delta="Positive signals" if _ni_opps else None,
+                         delta_color="normal" if _ni_opps else "off")
+
+            # ── Alerts ────────────────────────────────────────────────────
+            if _ni_alts:
+                st.markdown("#### 🚨 Requires Attention")
+                st.caption(
+                    "Negative news on positions you currently hold, ranked by "
+                    "position size × sentiment strength × source credibility."
+                )
+                for _al in _ni_alts:
+                    _al_border = "#ef4444" if _al["alert_level"] == "critical" else "#f59e0b"
+                    _al_bg     = "#1a0000" if _al["alert_level"] == "critical" else "#1a1000"
+                    _al_tag    = "🔴 CRITICAL" if _al["alert_level"] == "critical" else "🟡 WATCH"
+                    _al_url    = _al.get("url", "")
+                    _al_link   = (
+                        f"<a href='{_al_url}' target='_blank' "
+                        f"style='color:#ddd;text-decoration:none'>{_html.escape(_al['title'][:90])}"
+                        f"{'…' if len(_al['title']) > 90 else ''}</a>"
+                        if _al_url else
+                        f"<span style='color:#ddd'>{_html.escape(_al['title'][:90])}</span>"
+                    )
+                    st.markdown(
+                        f"<div style='background:{_al_bg};border-left:4px solid {_al_border};"
+                        f"border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:8px'>"
+                        f"<div style='font-size:0.72em;color:{_al_border};font-weight:700;"
+                        f"margin-bottom:4px'>{_al_tag}  ·  "
+                        f"<b style='color:#bbb'>{_al['ticker']}</b>  ·  "
+                        f"{_al['weight']:.1f}% weight  ·  "
+                        f"P&L {_al['pnl_pct']:+.1f}%  ·  "
+                        f"Score {_al['score']:.0f}/100  ·  "
+                        f"{_al.get('publisher', '')[:20]}  ·  "
+                        f"{_time_ago(_al.get('ts', 0))}</div>"
+                        f"<div style='font-size:0.84em'>{_al_link}</div>"
+                        f"<div style='font-size:0.72em;color:#666;margin-top:5px'>"
+                        f"Sector: {_al['sector']}  ·  Signal: {_al['signal']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(f"▶ Analyze {_al['ticker']}", key=f"_ni_analyze_{_al['ticker']}_{_al.get('ts',0)}"):
+                        st.session_state["nav_page"] = "📈 Stock Analysis"
+                        st.session_state["_analysis_ticker"] = _al["ticker"]
+                        st.rerun()
+
+            # ── Opportunities ─────────────────────────────────────────────
+            if _ni_opps:
+                st.markdown("#### 📈 Opportunity Signals")
+                st.caption(
+                    "Positive news on quality positions you already hold. "
+                    "These may support adding on a pullback — not a signal to chase the gap."
+                )
+                for _op in _ni_opps[:5]:
+                    _op_url  = _op.get("url", "")
+                    _op_link = (
+                        f"<a href='{_op_url}' target='_blank' "
+                        f"style='color:#ddd;text-decoration:none'>{_html.escape(_op['title'][:90])}"
+                        f"{'…' if len(_op['title']) > 90 else ''}</a>"
+                        if _op_url else
+                        f"<span style='color:#ddd'>{_html.escape(_op['title'][:90])}</span>"
+                    )
+                    st.markdown(
+                        f"<div style='background:#001a08;border-left:4px solid #00C851;"
+                        f"border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:8px'>"
+                        f"<div style='font-size:0.72em;color:#00C851;font-weight:700;"
+                        f"margin-bottom:4px'>📈 SIGNAL  ·  "
+                        f"<b style='color:#bbb'>{_op['ticker']}</b>  ·  "
+                        f"{_op['weight']:.1f}% weight  ·  "
+                        f"P&L {_op['pnl_pct']:+.1f}%  ·  "
+                        f"Score {_op['score']:.0f}/100  ·  "
+                        f"{_op.get('publisher', '')[:20]}  ·  "
+                        f"{_time_ago(_op.get('ts', 0))}</div>"
+                        f"<div style='font-size:0.84em'>{_op_link}</div>"
+                        f"<div style='font-size:0.72em;color:#666;margin-top:5px'>"
+                        f"Sector: {_op['sector']}  ·  Signal: {_op['signal']}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(f"▶ Analyze {_op['ticker']}", key=f"_ni_opp_{_op['ticker']}_{_op.get('ts',0)}"):
+                        st.session_state["nav_page"] = "📈 Stock Analysis"
+                        st.session_state["_analysis_ticker"] = _op["ticker"]
+                        st.rerun()
+
+            # ── Sector patterns ───────────────────────────────────────────
+            if _ni_sects:
+                st.markdown("#### ⚠️ Sector Patterns")
+                st.caption(
+                    "Multiple news items pointing the same direction for a sector "
+                    "often precede rotation. Use as context — not a standalone signal."
+                )
+                for _sd in _ni_sects:
+                    _sd_clr = "#ef4444" if _sd["direction"] == "negative" else "#00C851"
+                    _sd_icon = "📉" if _sd["direction"] == "negative" else "📈"
+                    _sd_word = "negative" if _sd["direction"] == "negative" else "positive"
+                    st.markdown(
+                        f"<div style='background:#111;border-left:3px solid {_sd_clr};"
+                        f"border-radius:0 4px 4px 0;padding:8px 12px;margin-bottom:6px'>"
+                        f"<span style='color:{_sd_clr};font-weight:700'>{_sd_icon} {_sd['sector']}</span>"
+                        f"  ·  <span style='color:#bbb'>{_sd['count']} {_sd_word} stories this session</span>"
+                        f"{'  ·  ⚠️ Sector rotation risk' if _sd['direction'] == 'negative' else ''}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _si in _sd["items"][:3]:
+                        st.caption(f"  ↳ [{_si['ticker']}] {_si['title'][:80]}{'…' if len(_si['title']) > 80 else ''}")
+
+            # ── All portfolio news ────────────────────────────────────────
+            if _ni_held:
+                st.markdown("#### 📰 All News for Your Holdings")
+                for _hn in _ni_held:
+                    _hn_clr  = ("#00C851" if _hn["compound"] >=  0.05 else
+                                 "#ef4444" if _hn["compound"] <= -0.05 else "#555")
+                    _hn_icon = ("▲" if _hn["compound"] >= 0.05 else
+                                "▼" if _hn["compound"] <= -0.05 else "–")
+                    _hn_url  = _hn.get("url", "")
+                    _hn_link = (
+                        f"<a href='{_hn_url}' target='_blank' "
+                        f"style='color:#bbb;text-decoration:none'>{_html.escape(_hn['title'][:85])}"
+                        f"{'…' if len(_hn['title']) > 85 else ''}</a>"
+                        if _hn_url else
+                        f"<span style='color:#bbb'>{_html.escape(_hn['title'][:85])}</span>"
+                    )
+                    st.markdown(
+                        f"<div style='padding:5px 0;border-bottom:1px solid #1a1a1a'>"
+                        f"<span style='color:{_hn_clr};font-weight:bold'>{_hn_icon}</span>  "
+                        f"<b style='color:#999;font-size:0.85em'>{_hn['ticker']}</b>  "
+                        f"<span style='color:#555;font-size:0.78em'>"
+                        f"{_hn['weight']:.1f}% · P&L {_hn['pnl_pct']:+.1f}% · "
+                        f"{_hn.get('publisher','')[:18]} · {_time_ago(_hn.get('ts',0))}"
+                        f"</span><br>"
+                        f"<span style='font-size:0.82em'>{_hn_link}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+            elif not _ni_alts and not _ni_opps:
+                st.info(
+                    "No news found for your current holdings yet. "
+                    "News populates after the portfolio loads — try refreshing.",
+                    icon="📭",
+                )
 
         # ── Rebalancing Advisor ───────────────────────────────────────────────
         st.divider()
