@@ -56,6 +56,7 @@ from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
+from stock_analyzer.daily_briefing import build_daily_briefing
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
@@ -965,6 +966,23 @@ if page == "🏠 My Portfolio":
             today=_TODAY_ET,
         )
     _macro_events = st.session_state[_mc_day_key]
+
+    # Build Daily Briefing (synthesises all intelligence — computed once before tabs)
+    try:
+        _daily_brief = build_daily_briefing(
+            port_df        = port_df,
+            alert_list     = alert_list,
+            risk_recs      = _risk_advisor_recs,
+            news_items     = st.session_state.get("_sidebar_news", []),
+            macro_events   = _macro_events,
+            held_data      = held_data,
+            scanner_results= st.session_state.get("scanner_results"),
+            portfolio_value= total_val,
+            today          = _TODAY_ET,
+        )
+    except Exception:
+        _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": []}
+
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
@@ -1075,7 +1093,11 @@ if page == "🏠 My Portfolio":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
+    _db_act_n   = len(_daily_brief["act_today"])
+    _db_buy_n   = len(_daily_brief["buy_candidates"])
+    _db_icon    = " 🔴" if _db_act_n else ""
+    tab_daily, tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
+        f"🌅 Start Your Day{_db_icon}",
         "📊 Overview",
         "📈 Performance",
         "📅 Earnings",
@@ -1088,6 +1110,153 @@ if page == "🏠 My Portfolio":
         "🏆 Rankings",
         "🤖 AI Brief",
     ])
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 0 — DAILY BRIEFING
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_daily:
+        from datetime import datetime as _dt
+
+        _db_act    = _daily_brief["act_today"]
+        _db_buys   = _daily_brief["buy_candidates"]
+        _db_review = _daily_brief["review_list"]
+
+        st.markdown(
+            f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
+            f"padding:14px 20px;margin-bottom:16px'>"
+            f"<span style='font-size:1.15em;font-weight:700;color:#f9fafb'>🌅 Start Your Day</span>"
+            f"<span style='margin-left:12px;color:#6b7280;font-size:0.8em'>"
+            f"{_dt.now().strftime('%A, %B %d %Y')} · {len(_db_act)} urgent · "
+            f"{len(_db_buys)} opportunities · {len(_db_review)} to review</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Section 1: Act Today ──────────────────────────────────────────────
+        _db_c1_label = f"🔴 Act Today ({len(_db_act)})" if _db_act else "🟢 Act Today — All Clear"
+        _db_c1_color = "#7f1d1d" if _db_act else "#14532d"
+        _db_c1_border = "#ef4444" if _db_act else "#22c55e"
+        st.markdown(
+            f"<div style='background:{_db_c1_color};border-left:4px solid {_db_c1_border};"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c1_label}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not _db_act:
+            st.caption("No urgent actions required. Portfolio is within all risk parameters.")
+        else:
+            for _db_item in _db_act:
+                _db_is_crit = _db_item["priority"] == "critical"
+                _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
+                _db_border  = "#ef4444" if _db_is_crit else "#f59e0b"
+                _db_ticker  = _db_item.get("ticker")
+                _db_weight_txt = (
+                    f" · {_db_item['weight']:.1f}% of portfolio"
+                    if _db_item.get("weight") else ""
+                )
+                _db_pnl_txt = (
+                    f" · P&L {_db_item['pnl_pct']:+.1f}%"
+                    if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
+                )
+                _db_header = (
+                    f"{_db_item['icon']} **{_db_item['action']}**"
+                    + (f" — {_db_ticker}" if _db_ticker else "")
+                    + _db_weight_txt + _db_pnl_txt
+                )
+                st.markdown(
+                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"{_db_item['icon']} {_db_item['action']}"
+                    + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                    + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
+                    f"</div>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_item['reason']}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if _db_ticker:
+                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
+                                 use_container_width=False):
+                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_analysis_ticker"] = _db_ticker
+                        st.rerun()
+
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+        # ── Section 2: Buy Candidates ─────────────────────────────────────────
+        _db_c2_label = f"🟢 Buy Candidates ({len(_db_buys)})"
+        st.markdown(
+            f"<div style='background:#14532d;border-left:4px solid #22c55e;"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not _db_buys:
+            st.caption("No scanner results available. Run Market Scanner to populate buy candidates.")
+            if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
+                st.session_state["_pending_page"] = "🔍 Market Scanner"
+                st.rerun()
+        else:
+            for _db_buy in _db_buys:
+                _db_is_add  = _db_buy["type"] == "add_winner"
+                _db_bg      = "#052e16" if _db_is_add else "#1c1917"
+                _db_border  = "#4ade80" if _db_is_add else "#86efac"
+                st.markdown(
+                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"{_db_buy['icon']} {_db_buy['action']} — "
+                    f"<span style='color:#4ade80'>{_db_buy['ticker']}</span>"
+                    f"<span style='color:#9ca3af;font-weight:400'> · Score {_db_buy['score']:.0f}/100</span>"
+                    f"</div>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_buy['reason']}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
+                             use_container_width=False):
+                    st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                    st.session_state["_analysis_ticker"] = _db_buy["ticker"]
+                    st.rerun()
+
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+        # ── Section 3: Review Before Close ───────────────────────────────────
+        _db_c3_label = f"🟡 Review Before Close ({len(_db_review)})"
+        st.markdown(
+            f"<div style='background:#422006;border-left:4px solid #f59e0b;"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c3_label}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not _db_review:
+            st.caption("Nothing requiring pre-close review today.")
+        else:
+            for _db_rev in _db_review:
+                _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
+                _db_bg      = "#1c1917"
+                _db_ticker  = _db_rev.get("ticker")
+                st.markdown(
+                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"{_db_rev['icon']}"
+                    + (f" <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                    + f"</div>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_rev['reason']}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if _db_ticker:
+                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
+                                 use_container_width=False):
+                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_analysis_ticker"] = _db_ticker
+                        st.rerun()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — OVERVIEW
