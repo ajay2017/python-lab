@@ -35,7 +35,10 @@ from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import build_macro_calendar, HIGH as MC_HIGH, MEDIUM as MC_MEDIUM
-from stock_analyzer.macro_playbook import build_event_playbooks
+from stock_analyzer.macro_playbook import (
+    build_event_playbooks, classify_scenario,
+    build_post_event_analysis, get_scenario_conditions,
+)
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -6618,8 +6621,12 @@ elif page == "📅 Economic Calendar":
             st.info("Running on static backbone only (FOMC, CPI, NFP, GDP). Add FMP key for live estimates and consensus values.")
 
     # ── Load / refresh calendar ───────────────────────────────────────────────
-    _ec_port_hash = len(st.session_state.get("_port_df_enriched", pd.DataFrame()))
-    _ec_cache_key = f"_ec_cal_{_TODAY_ET}_{bool(_ec_fmp_key)}_{_ec_port_hash}"
+    # During market hours (8 AM–6 PM ET) the cache refreshes each hour so that
+    # actual values (e.g. NFP at 08:30 ET) appear automatically without a manual refresh.
+    _ec_port_hash  = len(st.session_state.get("_port_df_enriched", pd.DataFrame()))
+    _ec_now_et     = datetime.now(_pytz.timezone("America/New_York"))
+    _ec_hour_slot  = str(_ec_now_et.hour) if 8 <= _ec_now_et.hour <= 18 else "off"
+    _ec_cache_key  = f"_ec_cal_{_TODAY_ET}_{bool(_ec_fmp_key)}_{_ec_port_hash}_{_ec_hour_slot}"
     if _ec_cache_key not in st.session_state or st.button("🔄 Refresh calendar", key="_ec_refresh"):
         with st.spinner("Loading economic calendar…"):
             _ec_events = build_macro_calendar(
@@ -6652,7 +6659,9 @@ elif page == "📅 Economic Calendar":
                 _ec_next["days_label"] if _ec_next else "")
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    _cal_tab, _play_tab = st.tabs(["📅 Calendar", "📋 Pre-Event Playbook"])
+    _cal_tab, _play_tab, _post_tab = st.tabs(
+        ["📅 Calendar", "📋 Pre-Event Playbook", "📊 Post-Event Results"]
+    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 1 — CALENDAR
@@ -6928,6 +6937,222 @@ elif page == "📅 Economic Calendar":
                                     f"<b style='color:{_ac_clr}'>{_pp['ticker']}</b> — "
                                     f"{_pp['post_event']}</div>",
                                     unsafe_allow_html=True,
+                                )
+
+                    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 3 — POST-EVENT RESULTS
+    # ══════════════════════════════════════════════════════════════════════════
+    with _post_tab:
+        _pb_port  = st.session_state.get("_port_df_enriched", pd.DataFrame())
+        _pb_total = float(_pb_port["Market Value"].sum()) if not _pb_port.empty else 0.0
+
+        if _pb_port.empty:
+            st.info(
+                "Visit **My Portfolio** first so the post-event analysis can map "
+                "outcomes to your specific holdings.",
+                icon="ℹ️",
+            )
+        else:
+            from stock_analyzer.macro_playbook import _SCENARIOS as _PB_SCEN_DEF
+
+            # Events where date ≤ today, HIGH-impact, and have a scenario definition
+            _past_events = sorted(
+                [
+                    e for e in _ec_events
+                    if e["date"] <= _TODAY_ET
+                    and e["impact"] == MC_HIGH
+                    and e["event"] in _PB_SCEN_DEF
+                ],
+                key=lambda x: x["date"],
+                reverse=True,
+            )
+
+            if not _past_events:
+                st.info(
+                    "No recently-released HIGH-impact events with scenario data in the calendar window. "
+                    "Check back after the next NFP, CPI, FOMC, GDP, PPI or Retail Sales release.",
+                    icon="📭",
+                )
+            else:
+                st.markdown(
+                    "For each recently-released HIGH-impact event: select (or auto-detect) which "
+                    "scenario played out and see the immediate impact on your holdings."
+                )
+                st.divider()
+
+                _post_action_colors = {
+                    "ADD":    "#00C851", "HOLD":   "#3b82f6",
+                    "WATCH":  "#f59e0b", "REDUCE": "#ef4444",
+                }
+                _post_action_icons = {
+                    "ADD": "➕", "HOLD": "✋", "WATCH": "👁️", "REDUCE": "📉",
+                }
+
+                for _pe in _past_events:
+                    _pe_name    = _pe["event"]
+                    _pe_date    = _pe["date"]
+                    _pe_actual  = _pe.get("actual")
+                    _pe_est     = _pe.get("estimate")
+                    _pe_prev    = _pe.get("previous")
+                    _is_today   = (_pe_date == _TODAY_ET)
+                    _conds      = get_scenario_conditions(_pe_name)
+
+                    _date_lbl = (
+                        _pe_date.strftime("%A, %B %d").replace(" 0", " ")
+                        if hasattr(_pe_date, "strftime") else str(_pe_date)
+                    )
+                    _today_badge = "  ·  **TODAY**" if _is_today else ""
+                    st.subheader(f"🔴 {_pe_name}  ·  {_date_lbl}{_today_badge}")
+
+                    # Actual / Estimate / Previous data row
+                    _pe_parts = []
+                    if _pe_prev    is not None: _pe_parts.append(f"Previous: **{_pe_prev}**")
+                    if _pe_est     is not None: _pe_parts.append(f"Estimate: **{_pe_est}**")
+
+                    _auto_sc = classify_scenario(_pe_name, _pe_actual, _pe_est)
+                    if _pe_actual is not None:
+                        _beat_badge = (
+                            " 🟢 Beat"    if _auto_sc == "bull" else
+                            " 🔴 Missed"  if _auto_sc == "bear" else
+                            " ⬜ In-Line"
+                        )
+                        _pe_parts.append(f"Actual: **{_pe_actual}**{_beat_badge}")
+                    if _pe_parts:
+                        st.markdown("  ·  ".join(_pe_parts))
+
+                    # Scenario selector
+                    _sc_key  = f"_post_sc_{_pe_name}_{_pe_date}"
+                    _sc_opts = ["🐂 Bull — " + _PB_SCEN_DEF[_pe_name]["bull"]["label"],
+                                "📊 Base — " + _PB_SCEN_DEF[_pe_name]["base"]["label"],
+                                "🐻 Bear — " + _PB_SCEN_DEF[_pe_name]["bear"]["label"]]
+                    _sc_map  = {o: k for o, k in zip(_sc_opts, ["bull", "base", "bear"])}
+
+                    if _auto_sc:
+                        _default_idx = ["bull", "base", "bear"].index(_auto_sc)
+                        st.success(
+                            f"Scenario auto-detected from FMP data: **{_sc_opts[_default_idx]}**",
+                            icon="✅",
+                        )
+                        _sc_sel = st.selectbox(
+                            "Override if needed:",
+                            _sc_opts, index=_default_idx,
+                            key=f"_sc_sel_{_sc_key}",
+                        )
+                    else:
+                        if _pe_actual is None:
+                            if _is_today:
+                                st.warning(
+                                    f"Actual data not yet populated for today's **{_pe_name}**.  \n"
+                                    "Click **🔄 Refresh calendar** above (FMP key required for auto-population), "
+                                    "or select the scenario manually based on news reports.",
+                                    icon="⚠️",
+                                )
+                            else:
+                                st.info(
+                                    "Actual value not available — add an FMP key for automatic population.  \n"
+                                    "Select the scenario manually based on the reported result.",
+                                    icon="ℹ️",
+                                )
+                        _sc_col1, _sc_col2 = st.columns([2, 3])
+                        with _sc_col1:
+                            _sc_sel = st.selectbox(
+                                "What was the outcome?",
+                                ["— select —"] + _sc_opts,
+                                key=f"_sc_sel_{_sc_key}",
+                            )
+                        with _sc_col2:
+                            if _sc_sel != "— select —" and _sc_sel in _sc_map:
+                                _sk = _sc_map[_sc_sel]
+                                st.caption(f"Condition: {_conds[_sk]}")
+
+                    _selected_sc = _sc_map.get(_sc_sel) if _sc_sel != "— select —" else None
+
+                    # ── Post-event analysis ───────────────────────────────
+                    if _selected_sc:
+                        _pea = build_post_event_analysis(_pe, _pb_port, _pb_total, _selected_sc)
+                        if _pea:
+                            _sc_colors = {"bull": "#00C851", "base": "#3b82f6", "bear": "#ef4444"}
+                            _sc_bgs    = {"bull": "#001a08", "base": "#0a1628", "bear": "#1a0000"}
+                            _sc_clr    = _sc_colors[_selected_sc]
+                            _sc_bg     = _sc_bgs[_selected_sc]
+
+                            # Scenario banner
+                            st.markdown(
+                                f"<div style='background:{_sc_bg};border-left:4px solid {_sc_clr};"
+                                f"border-radius:8px;padding:14px 16px;margin:12px 0'>"
+                                f"<div style='font-size:1.25em;font-weight:700;color:{_sc_clr}'>"
+                                f"{_pea['scenario_icon']} {_pea['scenario_label']}</div>"
+                                f"<div style='font-size:0.85em;color:#bbb;margin-top:6px'>"
+                                f"{_pea['scenario_notes']}</div>"
+                                f"<div style='font-size:0.82em;color:#888;margin-top:8px'>"
+                                f"Expected broad market move: "
+                                f"<span style='color:{_sc_clr};font-weight:bold'>"
+                                f"{_pea['market_pct']:+.1f}%</span></div></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                            # Portfolio impact KPI
+                            _imp_sign = "+" if _pea["total_impact"] >= 0 else ""
+                            _imp_pct  = (
+                                f"{_pea['total_impact'] / _pb_total * 100:+.1f}% of portfolio"
+                                if _pb_total > 0 else None
+                            )
+                            st.metric(
+                                "Estimated portfolio impact",
+                                f"${_imp_sign}{_pea['total_impact']:,.0f}",
+                                delta=_imp_pct,
+                                delta_color="normal" if _pea["total_impact"] >= 0 else "inverse",
+                            )
+
+                            # Position-level impact cards
+                            if _pea["positions"]:
+                                st.markdown(
+                                    "**Position-level impact & recommended actions** "
+                                    "— expand any row for detail:"
+                                )
+                                for _pp in _pea["positions"]:
+                                    _act   = _pp["action"]
+                                    _aclr  = _post_action_colors.get(_act, "#888")
+                                    _aicon = _post_action_icons.get(_act, "—")
+                                    _imp   = _pp["dollar_impact"]
+                                    _mc    = "#00C851" if _imp >= 0 else "#ef4444"
+                                    _smc   = "#00C851" if _pp["sector_move"] >= 0 else "#ef4444"
+
+                                    with st.expander(
+                                        f"{_aicon} **{_pp['ticker']}**  ·  "
+                                        f"Sector {_pp['sector_move']:+.1f}%  ·  "
+                                        f"${_imp:+,.0f}  ·  "
+                                        f"**{_act}**"
+                                    ):
+                                        _ppc1, _ppc2 = st.columns(2)
+                                        with _ppc1:
+                                            st.markdown(
+                                                f"**Sector:** {_pp['sector']}  \n"
+                                                f"**Scenario sector move:** "
+                                                f"<span style='color:{_smc};font-weight:bold'>"
+                                                f"{_pp['sector_move']:+.1f}%</span>  \n"
+                                                f"**Dollar impact:** "
+                                                f"<span style='color:{_mc};font-weight:bold'>"
+                                                f"${_imp:+,.0f}</span>  \n"
+                                                f"**Weight:** {_pp['weight']:.1f}%  ·  "
+                                                f"**Score:** {_pp['score']:.0f}/100  ·  "
+                                                f"**P&L:** {_pp['pnl_pct']:+.1f}%",
+                                                unsafe_allow_html=True,
+                                            )
+                                        with _ppc2:
+                                            st.markdown(
+                                                f"<span style='color:{_aclr};"
+                                                f"font-weight:bold;font-size:1.05em'>"
+                                                f"{_aicon} {_act}</span>",
+                                                unsafe_allow_html=True,
+                                            )
+                                            st.markdown(_pp["action_detail"])
+                            else:
+                                st.info(
+                                    "No holdings have direct sector exposure to this event. "
+                                    "No action required."
                                 )
 
                     st.divider()

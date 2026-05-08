@@ -582,3 +582,173 @@ def build_event_playbooks(
 
     playbooks.sort(key=lambda x: x["date"])
     return playbooks
+
+
+# ── Post-event scenario classification ────────────────────────────────────────
+
+# Per-event thresholds: how much actual must beat/miss estimate to leave "base"
+# higher_is_bull: True = higher actual is bullish (NFP, GDP, Retail Sales)
+#                 False = lower actual is bullish (CPI, PPI — lower inflation = good)
+# implied_base: fallback reference when FMP estimate isn't available
+_SCENARIO_THRESHOLDS: dict = {
+    "Non-Farm Payrolls":    {"higher_is_bull": True,  "beat": 20,   "miss": 20,   "implied_base": 165},
+    "CPI Inflation":        {"higher_is_bull": False, "beat": 0.05, "miss": 0.05, "implied_base": None},
+    "FOMC Rate Decision":   {"higher_is_bull": False, "beat": 0,    "miss": 0,    "implied_base": None},
+    "GDP Advance Estimate": {"higher_is_bull": True,  "beat": 0.3,  "miss": 0.3,  "implied_base": None},
+    "PPI Producer Prices":  {"higher_is_bull": False, "beat": 0.1,  "miss": 0.1,  "implied_base": None},
+    "Retail Sales":         {"higher_is_bull": True,  "beat": 0.2,  "miss": 0.2,  "implied_base": None},
+}
+
+
+def classify_scenario(event_name: str, actual, estimate=None) -> str | None:
+    """
+    Determine which scenario played out based on actual vs estimate.
+    Returns 'bull', 'base', 'bear', or None if data is insufficient.
+    Compares actual to estimate when available, or implied_base as fallback.
+    """
+    if actual is None:
+        return None
+    cfg = _SCENARIO_THRESHOLDS.get(event_name)
+    if not cfg:
+        return None
+    try:
+        a = float(actual)
+    except (TypeError, ValueError):
+        return None
+    ref = None
+    if estimate is not None:
+        try:
+            ref = float(estimate)
+        except (TypeError, ValueError):
+            pass
+    if ref is None:
+        ref = cfg.get("implied_base")
+    if ref is None:
+        return None
+    beat, miss = cfg["beat"], cfg["miss"]
+    if cfg["higher_is_bull"]:
+        if a > ref + beat:  return "bull"
+        if a < ref - miss:  return "bear"
+        return "base"
+    else:
+        if a < ref - beat:  return "bull"
+        if a > ref + miss:  return "bear"
+        return "base"
+
+
+def build_post_event_analysis(
+    event: dict,
+    port_df,
+    total_val: float,
+    scenario_key: str,
+) -> dict:
+    """
+    Build post-event portfolio impact analysis for the scenario that played out.
+
+    Parameters
+    ----------
+    event        : event dict from build_macro_calendar
+    port_df      : enriched portfolio DataFrame with Sector, Market Value, etc.
+    total_val    : total portfolio market value ($)
+    scenario_key : 'bull', 'base', or 'bear'
+
+    Returns dict with scenario details and per-position impacts + actions.
+    """
+    ev_name = event["event"]
+    sc_def  = _SCENARIOS.get(ev_name)
+    if not sc_def or scenario_key not in sc_def:
+        return {}
+
+    sc = sc_def[scenario_key]
+    positions    = []
+    total_impact = 0.0
+
+    for _, row in (port_df if port_df is not None else _pd.DataFrame()).iterrows():
+        sector      = str(row.get("Sector", ""))
+        mval        = _f(row.get("Market Value"), 0.0)
+        ticker      = str(row.get("Ticker", ""))
+        weight      = _f(row.get("Weight (%)"),  0.0)
+        score       = _f(row.get("Score"),       50.0)
+        signal      = str(row.get("Signal",      ""))
+        pnl_pct     = _f(row.get("P&L (%)"),     0.0)
+        shares      = int(_f(row.get("Shares"),  0))
+        price       = _f(row.get("Price"),       0.0)
+
+        sector_move   = _f(sc["sector_moves"].get(sector, 0))
+        if abs(sector_move) < 0.1:
+            continue
+        dollar_impact  = round(mval * sector_move / 100, 0)
+        total_impact  += dollar_impact
+
+        if scenario_key == "bull":
+            if sector_move >= 2.0 and score >= 65 and "Buy" in signal:
+                action = "ADD"
+                detail = (
+                    f"High-conviction position in a sector with {sector_move:+.1f}% tailwind. "
+                    f"Wait for the first 30-min candle to confirm direction before adding."
+                )
+            elif sector_move >= 1.0:
+                action = "HOLD"
+                detail = f"Positive sector tailwind ({sector_move:+.1f}%). Let the position run — trail your stop up."
+            else:
+                action = "HOLD"
+                detail = "Limited direct sector exposure. Monitor for indirect spillover."
+        elif scenario_key == "bear":
+            if sector_move <= -2.0 and weight >= 8.0:
+                action = "REDUCE"
+                detail = (
+                    f"Significant sector headwind ({sector_move:.1f}%) on a {weight:.1f}% position. "
+                    f"Review whether thesis is impaired. Consider trimming 25–50% if stop is hit."
+                )
+            elif sector_move <= -1.0:
+                action = "WATCH"
+                detail = (
+                    f"Sector headwind ({sector_move:.1f}%). Monitor for follow-through selling "
+                    f"in the next 24–48h. Tighten stop to protect gains."
+                )
+            else:
+                action = "HOLD"
+                detail = f"Modest sector impact ({sector_move:.1f}%). Hold — limited direct exposure."
+        else:
+            action = "HOLD"
+            detail = "In-line result. No significant sector rotation expected. Hold and reassess at next catalyst."
+
+        positions.append({
+            "ticker":        ticker,
+            "sector":        sector,
+            "weight":        weight,
+            "score":         score,
+            "signal":        signal,
+            "pnl_pct":       pnl_pct,
+            "shares":        shares,
+            "price":         price,
+            "market_value":  mval,
+            "sector_move":   sector_move,
+            "dollar_impact": dollar_impact,
+            "action":        action,
+            "action_detail": detail,
+        })
+
+    positions.sort(key=lambda x: abs(x["dollar_impact"]), reverse=True)
+
+    return {
+        "event":          ev_name,
+        "date":           event["date"],
+        "scenario_key":   scenario_key,
+        "scenario_label": sc["label"],
+        "scenario_icon":  sc["icon"],
+        "scenario_notes": sc["notes"],
+        "market_pct":     sc["market_pct"],
+        "total_impact":   round(total_impact, 0),
+        "positions":      positions,
+    }
+
+
+def get_scenario_conditions(event_name: str) -> dict:
+    """Return {bull_condition, base_condition, bear_condition} strings for an event."""
+    sc = _SCENARIOS.get(event_name, {})
+    return {
+        "bull": sc.get("bull", {}).get("condition", ""),
+        "base": sc.get("base", {}).get("condition", ""),
+        "bear": sc.get("bear", {}).get("condition", ""),
+    }
