@@ -12,8 +12,12 @@ Portfolio impact: maps each event category to affected sectors, then to the
                   macro calendar.
 """
 
-from datetime import date as _date, timedelta as _td
+from datetime import date as _date, datetime as _datetime, timedelta as _td
 import pandas as _pd
+import pytz as _pytz
+
+def _today_et() -> _date:
+    return _datetime.now(_pytz.timezone("America/New_York")).date()
 
 HIGH   = "HIGH"
 MEDIUM = "MEDIUM"
@@ -353,7 +357,7 @@ def build_macro_calendar(
       context, affected_tickers, previous, estimate, actual, source
     """
     if today is None:
-        today = _date.today()
+        today = _today_et()
     lookback = today - _td(days=days_behind)
     cutoff   = today + _td(days=days_ahead)
 

@@ -8,8 +8,12 @@ For each upcoming high-impact macro event generates:
   - Post-event decision rules (what to do the morning the number drops)
 """
 
-from datetime import date as _date
+from datetime import date as _date, datetime as _datetime
 import pandas as _pd
+import pytz as _pytz
+
+def _today_et() -> _date:
+    return _datetime.now(_pytz.timezone("America/New_York")).date()
 
 
 def _f(val, default=0.0):
@@ -467,7 +471,7 @@ def build_event_playbooks(
     if port_df is None or port_df.empty:
         return []
 
-    today     = _date.today()
+    today     = _today_et()
     playbooks = []
 
     for event in events:

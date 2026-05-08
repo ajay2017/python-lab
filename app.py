@@ -5,6 +5,10 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, date
+import pytz as _pytz
+
+# All date comparisons use ET so the calendar never flips at midnight UTC
+_TODAY_ET = datetime.now(_pytz.timezone("America/New_York")).date()
 
 import html as _html
 from stock_analyzer.data import (
@@ -829,21 +833,22 @@ if page == "🏠 My Portfolio":
     else:
         _rag_label, _rag_color = "All Clear", "#00C851"
 
-    # Load macro calendar (cached per day — free tier FMP key optional)
-    _mc_day_key = f"_macro_cal_{date.today()}"
+    # Load macro calendar (cached per ET date — free tier FMP key optional)
+    _mc_day_key = f"_macro_cal_{_TODAY_ET}"
     if _mc_day_key not in st.session_state:
         _fmp_k = (
             st.secrets.get("fmp", {}).get("api_key")
             or os.environ.get("FMP_API_KEY", "")
         )
         st.session_state[_mc_day_key] = build_macro_calendar(
-            port_df, fmp_key=_fmp_k or None, days_ahead=45, days_behind=7
+            port_df, fmp_key=_fmp_k or None, days_ahead=45, days_behind=7,
+            today=_TODAY_ET,
         )
     _macro_events = st.session_state[_mc_day_key]
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
-        if e["impact"] == MC_HIGH and e["date"] >= date.today()
+        if e["impact"] == MC_HIGH and e["date"] >= _TODAY_ET
     ][:3]
 
     # Compute price alert triggers here so they surface in the Command Center
@@ -6220,7 +6225,7 @@ elif page == "📅 Economic Calendar":
 
     # ── Load / refresh calendar ───────────────────────────────────────────────
     _ec_port_hash = len(st.session_state.get("_port_df_enriched", pd.DataFrame()))
-    _ec_cache_key = f"_ec_cal_{date.today()}_{bool(_ec_fmp_key)}_{_ec_port_hash}"
+    _ec_cache_key = f"_ec_cal_{_TODAY_ET}_{bool(_ec_fmp_key)}_{_ec_port_hash}"
     if _ec_cache_key not in st.session_state or st.button("🔄 Refresh calendar", key="_ec_refresh"):
         with st.spinner("Loading economic calendar…"):
             _ec_events = build_macro_calendar(
@@ -6228,6 +6233,7 @@ elif page == "📅 Economic Calendar":
                 fmp_key=_ec_fmp_key or None,
                 days_ahead=45,
                 days_behind=7,
+                today=_TODAY_ET,
             )
             st.session_state[_ec_cache_key] = _ec_events
     _ec_events = st.session_state.get(_ec_cache_key, [])
@@ -6237,9 +6243,9 @@ elif page == "📅 Economic Calendar":
         st.stop()
 
     # ── KPI strip (forward-looking counts only) ───────────────────────────────
-    _ec_fwd  = [e for e in _ec_events if e["date"] >= date.today()]
+    _ec_fwd  = [e for e in _ec_events if e["date"] >= _TODAY_ET]
     _ec_high = [e for e in _ec_fwd if e["impact"] == MC_HIGH]
-    _ec_week = [e for e in _ec_fwd if (e["date"] - date.today()).days <= 7]
+    _ec_week = [e for e in _ec_fwd if (e["date"] - _TODAY_ET).days <= 7]
     _ec_next = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
     _ek1.metric("Events next 45d",  len(_ec_fwd))
@@ -6292,7 +6298,7 @@ elif page == "📅 Economic Calendar":
         from itertools import groupby as _groupby
         for _ec_date, _ec_day_evs in _groupby(_ec_filtered, key=lambda x: x["date"]):
             _ec_day_list = list(_ec_day_evs)
-            _delta_days  = (_ec_date - date.today()).days
+            _delta_days  = (_ec_date - _TODAY_ET).days
             _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ") if hasattr(_ec_date, "strftime") else str(_ec_date)
             _urgency_tag = ""
             if _delta_days < 0:
