@@ -4758,6 +4758,288 @@ elif page == "🔍 Market Scanner":
                         unsafe_allow_html=True,
                     )
 
+        # ── Signal Evidence — on-demand for top 10 ──────────────────────────
+        _top10 = filtered.head(10)
+        _ev_cache_key = f"_scanner_ev_{','.join(_top10['Ticker'].tolist())}"
+
+        _ev_btn_col, _ev_hint_col = st.columns([1, 3])
+        with _ev_btn_col:
+            _load_ev = st.button(
+                "📊 Load Signal Evidence",
+                key="_load_ev_btn",
+                use_container_width=True,
+            )
+        with _ev_hint_col:
+            st.caption(
+                "Fetches analyst consensus, price targets, revisions, earnings date "
+                "and news sentiment for the top 10 picks. Runs once, cached until next scan."
+            )
+
+        if _load_ev:
+            _ev_bundle_map: dict = {}
+            with st.spinner("Loading evidence for top 10 picks…"):
+                for _ev_t in _top10["Ticker"].tolist():
+                    try:
+                        _ev_bundle_map[_ev_t] = fetch_ticker_bundle(_ev_t, period="1mo")
+                    except Exception:
+                        _ev_bundle_map[_ev_t] = {}
+            st.session_state[_ev_cache_key] = _ev_bundle_map
+
+        if _ev_cache_key in st.session_state:
+            _ev_bundle_map = st.session_state[_ev_cache_key]
+
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _EV_VADER
+            _ev_va = _EV_VADER()
+
+            _ev_rows: list[dict] = []
+            for _, _ev_srow in _top10.iterrows():
+                _ev_t     = _ev_srow["Ticker"]
+                _ev_score = int(_ev_srow["Score"])
+                _ev_price = float(_ev_srow.get("Price") or 0)
+                _bndl     = _ev_bundle_map.get(_ev_t, {})
+                _ev_info  = _bndl.get("info", {})
+                _ev_revs  = _bndl.get("revisions", {})
+                _ev_news  = _bndl.get("news", [])
+                _ev_earn  = _bndl.get("earnings")
+
+                # Analyst consensus
+                _rec_mean   = _ev_info.get("recommendationMean")
+                _n_analysts = int(_ev_info.get("numberOfAnalystOpinions") or 0)
+                _ev_target  = _ev_info.get("targetMeanPrice")
+                _ev_t_high  = _ev_info.get("targetHighPrice")
+                _ev_t_low   = _ev_info.get("targetLowPrice")
+                _ev_t_med   = _ev_info.get("targetMedianPrice")
+                _ev_upside  = (round((_ev_target / _ev_price - 1) * 100, 1)
+                               if _ev_target and _ev_price > 0 else None)
+
+                if _rec_mean is None:       _rec_label = "No Coverage"
+                elif _rec_mean <= 1.5:      _rec_label = "Strong Buy"
+                elif _rec_mean <= 2.5:      _rec_label = "Buy"
+                elif _rec_mean <= 3.5:      _rec_label = "Hold"
+                elif _rec_mean <= 4.5:      _rec_label = "Sell"
+                else:                       _rec_label = "Strong Sell"
+
+                # Revisions
+                _ev_ups   = int(_ev_revs.get("upgrades_90d")  or 0)
+                _ev_downs = int(_ev_revs.get("downgrades_90d") or 0)
+                _ev_maint = int(_ev_revs.get("maintained_90d") or 0)
+                _ev_net   = _ev_revs.get("net")
+
+                # Earnings countdown
+                _ev_earn_days = None
+                if _ev_earn:
+                    try:
+                        _ev_earn_days = (date.fromisoformat(_ev_earn[:10]) - _TODAY_ET).days
+                    except Exception:
+                        pass
+
+                # News sentiment (title-based VADER)
+                _ev_compounds = []
+                for _ni in (_ev_news or [])[:6]:
+                    _nt = (
+                        _ni.get("title") or
+                        (_ni.get("content") or {}).get("title") or ""
+                    ).strip()
+                    if _nt:
+                        _ev_compounds.append(_ev_va.polarity_scores(_nt)["compound"])
+                _avg_sent = (round(sum(_ev_compounds) / len(_ev_compounds), 2)
+                             if _ev_compounds else None)
+
+                # Verdict: does analyst data confirm or contradict the momentum signal?
+                if _rec_mean is None and not _ev_revs:
+                    _verdict, _v_color = "⚪ No Coverage", "#888"
+                elif (_rec_mean is not None and _rec_mean <= 2.5
+                      and (_ev_net is None or _ev_net >= 0)):
+                    _verdict, _v_color = "✅ Confirmed", "#00C851"
+                elif (_rec_mean is not None and _rec_mean > 3.5
+                      or (_ev_net is not None and _ev_net <= -2)):
+                    _verdict, _v_color = "❌ Diverging", "#ff4444"
+                else:
+                    _verdict, _v_color = "⚠️ Mixed", "#ffbb33"
+
+                _ev_rows.append({
+                    "ticker": _ev_t,        "score":     _ev_score,
+                    "price":  _ev_price,    "rec_label": _rec_label,
+                    "rec_mean": _rec_mean,  "n_analysts": _n_analysts,
+                    "target": _ev_target,   "upside":    _ev_upside,
+                    "t_high": _ev_t_high,   "t_low":     _ev_t_low,  "t_med": _ev_t_med,
+                    "ups":    _ev_ups,      "downs":     _ev_downs,   "maint": _ev_maint,
+                    "net":    _ev_net,      "latest":    _ev_revs.get("latest", []),
+                    "earnings": _ev_earn,   "earn_days": _ev_earn_days,
+                    "avg_sent": _avg_sent,  "n_news":    len(_ev_compounds),
+                    "verdict":  _verdict,   "v_color":   _v_color,
+                    "info":     _ev_info,
+                })
+
+            st.subheader("📊 Signal Evidence — Top 10")
+
+            # ── Summary evidence table ────────────────────────────────────
+            _ev_tbl = pd.DataFrame([{
+                "Ticker":    r["ticker"],
+                "Score":     r["score"],
+                "Analyst":   (f"{r['rec_label']} / {r['n_analysts']}"
+                              if r["n_analysts"] else r["rec_label"]),
+                "Upside":    r["upside"],
+                "Revisions": (f"↑{r['ups']} ↓{r['downs']} net {r['net']:+d}"
+                              if r["net"] is not None else "—"),
+                "Earnings":  (f"In {r['earn_days']}d"
+                              if r["earn_days"] is not None and r["earn_days"] >= 0
+                              else ("Past" if r["earn_days"] is not None else "—")),
+                "Verdict":   r["verdict"],
+            } for r in _ev_rows])
+
+            def _ev_verdict_style(v):
+                if "Confirmed" in str(v): return "color:#00C851;font-weight:bold"
+                if "Diverging" in str(v): return "color:#ff4444;font-weight:bold"
+                if "Mixed"     in str(v): return "color:#ffbb33;font-weight:bold"
+                return "color:#888"
+            def _ev_score_style(v):
+                if isinstance(v, (int, float)):
+                    if v >= 70: return "color:#00C851;font-weight:bold"
+                    if v >= 50: return "color:#ffbb33"
+                    return "color:#ff4444"
+                return ""
+            def _ev_upside_style(v):
+                if isinstance(v, (int, float)):
+                    return ("color:#00C851" if v >= 10 else
+                            "color:#ff4444" if v <= -5  else "")
+                return ""
+
+            st.dataframe(
+                _ev_tbl.style
+                .map(_ev_verdict_style, subset=["Verdict"])
+                .map(_ev_score_style,   subset=["Score"])
+                .map(_ev_upside_style,  subset=["Upside"])
+                .format({
+                    "Score":  "{:.0f}",
+                    "Upside": lambda x: f"{x:+.1f}%" if isinstance(x, (int, float)) else "—",
+                })
+                .hide(axis="index"),
+                use_container_width=True,
+            )
+            st.caption(
+                "✅ Confirmed = momentum + analyst consensus + positive revisions all aligned  ·  "
+                "⚠️ Mixed = analyst cautious despite strong price action  ·  "
+                "❌ Diverging = analysts bearish — proceed carefully"
+            )
+
+            # ── Detailed drill-down cards ─────────────────────────────────
+            st.markdown("**Drill-down** — expand any ticker for the full evidence breakdown:")
+            for _evr in _ev_rows:
+                _card_hdr = (
+                    f"{_evr['verdict']}  ·  {_evr['ticker']}  ·  "
+                    f"Score {_evr['score']}  ·  {_evr['rec_label']}"
+                )
+                with st.expander(_card_hdr):
+                    _dc1, _dc2 = st.columns(2)
+
+                    with _dc1:
+                        st.markdown("**📈 Analyst Consensus**")
+                        _rc = (
+                            "#00C851" if _evr["rec_mean"] and _evr["rec_mean"] <= 2.5 else
+                            "#ff4444" if _evr["rec_mean"] and _evr["rec_mean"] > 3.5  else
+                            "#ffbb33"
+                        )
+                        st.markdown(
+                            f"<span style='color:{_rc};font-weight:bold;font-size:1.05em'>"
+                            f"{_evr['rec_label']}</span>"
+                            + (f" · {_evr['n_analysts']} analysts" if _evr["n_analysts"] else ""),
+                            unsafe_allow_html=True,
+                        )
+                        if _evr["target"] and _evr["upside"] is not None:
+                            _uc = "#00C851" if _evr["upside"] >= 0 else "#ff4444"
+                            st.markdown(
+                                f"Mean target: **${_evr['target']:.2f}**  "
+                                f"<span style='color:{_uc}'>({_evr['upside']:+.1f}%)</span>",
+                                unsafe_allow_html=True,
+                            )
+                        if _evr["t_low"] and _evr["t_high"]:
+                            st.caption(
+                                f"Range ${_evr['t_low']:.2f} → ${_evr['t_high']:.2f}"
+                                + (f"  ·  Median ${_evr['t_med']:.2f}" if _evr["t_med"] else "")
+                            )
+
+                        st.markdown("**🔼 Analyst Revisions (last 90 days)**")
+                        if _evr["net"] is not None:
+                            _nc = ("#00C851" if _evr["net"] > 0 else
+                                   "#ff4444" if _evr["net"] < 0 else "#888")
+                            st.markdown(
+                                f"Upgrades **{_evr['ups']}** · "
+                                f"Downgrades **{_evr['downs']}** · "
+                                f"Maintained **{_evr['maint']}**  \n"
+                                f"Net: <span style='color:{_nc};font-weight:bold'>"
+                                f"{_evr['net']:+d}</span>",
+                                unsafe_allow_html=True,
+                            )
+                            for _lt in (_evr["latest"] or [])[:3]:
+                                _a = str(_lt.get("action", "")).upper()
+                                _li = ("🔼" if _a in ("UP", "INIT") else
+                                       "🔽" if _a == "DOWN" else "➡")
+                                _frm = _lt.get("from_grade", "")
+                                _tog = _lt.get("to_grade", "")
+                                _sep = f" → {_tog}" if _tog and _tog != _frm else ""
+                                st.caption(
+                                    f"{_li} {_lt.get('firm', '')}  ·  "
+                                    f"{_frm}{_sep}  ({_lt.get('action', '')})"
+                                )
+                        else:
+                            st.caption("No revision data available")
+
+                    with _dc2:
+                        st.markdown("**📅 Earnings Catalyst**")
+                        _ed = _evr["earn_days"]
+                        if _evr["earnings"] and _ed is not None:
+                            if 0 <= _ed <= 14:
+                                st.markdown(
+                                    f"⚠️ **{_evr['earnings']}** — in **{_ed} days**",
+                                    help="Imminent earnings → expect elevated volatility",
+                                )
+                                st.caption("Imminent — consider sizing down before report.")
+                            elif 0 <= _ed <= 30:
+                                st.markdown(f"📅 **{_evr['earnings']}** — in {_ed} days")
+                            elif _ed > 30:
+                                st.markdown(f"📅 {_evr['earnings']} — in {_ed} days")
+                            else:
+                                st.caption(f"Last reported: {_evr['earnings']}")
+                        else:
+                            st.caption("Earnings date not available")
+
+                        st.markdown("**💰 Key Fundamentals**")
+                        _ei   = _evr["info"]
+                        _fpe  = _ei.get("forwardPE")
+                        _revg = _ei.get("revenueGrowth")
+                        _marg = _ei.get("profitMargins")
+                        _roe  = _ei.get("returnOnEquity")
+                        _de   = _ei.get("debtToEquity")
+                        _fcf  = _ei.get("freeCashflow")
+                        _mktc = _ei.get("marketCap")
+                        _fcfy = (round(_fcf / _mktc * 100, 1)
+                                 if _fcf and _mktc and _mktc > 0 else None)
+                        _flines = []
+                        if _fpe:   _flines.append(f"Fwd P/E: **{_fpe:.1f}x**")
+                        if _revg:  _flines.append(f"Rev growth: **{_revg * 100:+.1f}%**")
+                        if _marg:  _flines.append(f"Profit margin: **{_marg * 100:.1f}%**")
+                        if _roe:   _flines.append(f"ROE: **{_roe * 100:.1f}%**")
+                        if _fcfy:  _flines.append(f"FCF yield: **{_fcfy:.1f}%**")
+                        if _de:    _flines.append(f"D/E ratio: **{_de:.1f}x**")
+                        if _flines:
+                            st.markdown("  \n".join(_flines))
+                        else:
+                            st.caption("Fundamental data not available")
+
+                        if _evr["avg_sent"] is not None:
+                            st.markdown("**📰 News Sentiment**")
+                            _sc = _evr["avg_sent"]
+                            _sl = ("Positive" if _sc >= 0.05 else
+                                   "Negative" if _sc <= -0.05 else "Neutral")
+                            _sc_col = ("#00C851" if _sc >= 0.05 else
+                                       "#ff4444" if _sc <= -0.05 else "#888")
+                            st.markdown(
+                                f"<span style='color:{_sc_col};font-weight:bold'>{_sl}</span>"
+                                f" ({_sc:+.2f} avg · {_evr['n_news']} recent articles)",
+                                unsafe_allow_html=True,
+                            )
+
         st.divider()
 
         # Full results table
