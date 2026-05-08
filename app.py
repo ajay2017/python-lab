@@ -30,6 +30,7 @@ from stock_analyzer.rebalancer import (
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
 from stock_analyzer.macro_calendar import build_macro_calendar, HIGH as MC_HIGH, MEDIUM as MC_MEDIUM
+from stock_analyzer.macro_playbook import build_event_playbooks
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
 )
@@ -6236,124 +6237,299 @@ elif page == "📅 Economic Calendar":
         st.stop()
 
     # ── KPI strip (forward-looking counts only) ───────────────────────────────
-    _ec_fwd    = [e for e in _ec_events if e["date"] >= date.today()]
-    _ec_high   = [e for e in _ec_fwd if e["impact"] == MC_HIGH]
-    _ec_week   = [e for e in _ec_fwd if (e["date"] - date.today()).days <= 7]
-    _ec_next   = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
+    _ec_fwd  = [e for e in _ec_events if e["date"] >= date.today()]
+    _ec_high = [e for e in _ec_fwd if e["impact"] == MC_HIGH]
+    _ec_week = [e for e in _ec_fwd if (e["date"] - date.today()).days <= 7]
+    _ec_next = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
-    _ek1.metric("Events next 45d",    len(_ec_events))
-    _ek2.metric("🔴 High impact",      len(_ec_high))
-    _ek3.metric("This week",           len(_ec_week),
+    _ek1.metric("Events next 45d",  len(_ec_fwd))
+    _ek2.metric("🔴 High impact",    len(_ec_high))
+    _ek3.metric("This week",         len(_ec_week),
                 delta="⚠️ Be prepared" if _ec_week else None,
                 delta_color="inverse" if _ec_week else "off")
     _ek4.metric("Next major event",
                 _ec_next["event"][:20] if _ec_next else "—",
                 _ec_next["days_label"] if _ec_next else "")
 
-    # ── Filters ───────────────────────────────────────────────────────────────
-    _ef1, _ef2 = st.columns([3, 4])
-    with _ef1:
-        _ec_impact_filter = st.radio(
-            "Impact", ["All", "🔴 HIGH only", "🟡 MEDIUM+"],
-            horizontal=True, key="_ec_imp_filter",
-        )
-    with _ef2:
-        _all_cats = sorted({e["category"] for e in _ec_events})
-        _ec_cat_filter = st.multiselect(
-            "Categories", _all_cats, default=_all_cats, key="_ec_cat_filter"
-        )
+    # ── Tabs ──────────────────────────────────────────────────────────────────
+    _cal_tab, _play_tab = st.tabs(["📅 Calendar", "📋 Pre-Event Playbook"])
 
-    # Apply filters
-    _ec_filtered = _ec_events
-    if _ec_impact_filter == "🔴 HIGH only":
-        _ec_filtered = [e for e in _ec_filtered if e["impact"] == MC_HIGH]
-    elif _ec_impact_filter == "🟡 MEDIUM+":
-        _ec_filtered = [e for e in _ec_filtered if e["impact"] in (MC_HIGH, MC_MEDIUM)]
-    if _ec_cat_filter:
-        _ec_filtered = [e for e in _ec_filtered if e["category"] in _ec_cat_filter]
-
-    st.divider()
-
-    # ── Calendar cards ────────────────────────────────────────────────────────
-    _impact_cfg = {
-        MC_HIGH:   ("#ef4444", "🔴", "#1a0000"),
-        MC_MEDIUM: ("#f59e0b", "🟡", "#1a1200"),
-    }
-    _cat_icons = {
-        "Fed Policy": "🏦", "Inflation": "📊", "Employment": "👷",
-        "Growth": "📈", "Consumer": "🛒", "Activity": "🏭", "Other": "📋",
-    }
-
-    # Group by date
-    from itertools import groupby as _groupby
-    for _ec_date, _ec_day_events in _groupby(_ec_filtered, key=lambda x: x["date"]):
-        _ec_day_list = list(_ec_day_events)
-        _delta_days  = (_ec_date - date.today()).days
-        _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ") if hasattr(_ec_date, "strftime") else str(_ec_date)
-        _urgency_tag = ""
-        if _delta_days < 0:
-            _urgency_tag = " — *completed*"
-        elif _delta_days == 0:
-            _urgency_tag = " — **TODAY**"
-        elif _delta_days == 1:
-            _urgency_tag = " — **TOMORROW**"
-        elif _delta_days <= 7:
-            _urgency_tag = " — *this week*"
-
-        st.markdown(f"#### {_date_label}{_urgency_tag}")
-
-        for _ev in _ec_day_list:
-            _imp_color, _imp_icon, _imp_bg = _impact_cfg.get(
-                _ev["impact"], ("#6b7280", "⚪", "#111")
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — CALENDAR
+    # ══════════════════════════════════════════════════════════════════════════
+    with _cal_tab:
+        _ef1, _ef2 = st.columns([3, 4])
+        with _ef1:
+            _ec_impact_filter = st.radio(
+                "Impact", ["All", "🔴 HIGH only", "🟡 MEDIUM+"],
+                horizontal=True, key="_ec_imp_filter",
             )
-            _icon = _cat_icons.get(_ev["category"], "📋")
-            _tix  = _ev["affected_tickers"]
-            _tix_str = ", ".join(f"**{t}**" for t in _tix[:5])
-            if len(_tix) > 5:
-                _tix_str += f" +{len(_tix)-5} more"
-            if not _tix_str:
-                _tix_str = "*No direct holdings*"
+        with _ef2:
+            _all_cats = sorted({e["category"] for e in _ec_events})
+            _ec_cat_filter = st.multiselect(
+                "Categories", _all_cats, default=_all_cats, key="_ec_cat_filter"
+            )
 
-            # Estimate / previous / actual row
-            _data_parts = []
-            if _ev.get("previous") is not None:
-                _data_parts.append(f"Prev: **{_ev['previous']}**")
-            if _ev.get("estimate") is not None:
-                _data_parts.append(f"Est: **{_ev['estimate']}**")
-            if _ev.get("actual") is not None:
-                _data_parts.append(f"Actual: **{_ev['actual']}**")
-            _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+        _ec_filtered = _ec_events
+        if _ec_impact_filter == "🔴 HIGH only":
+            _ec_filtered = [e for e in _ec_filtered if e["impact"] == MC_HIGH]
+        elif _ec_impact_filter == "🟡 MEDIUM+":
+            _ec_filtered = [e for e in _ec_filtered if e["impact"] in (MC_HIGH, MC_MEDIUM)]
+        if _ec_cat_filter:
+            _ec_filtered = [e for e in _ec_filtered if e["category"] in _ec_cat_filter]
 
-            with st.expander(
-                f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev['time']} ET  ·  "
-                f"{_ev['category']}  ·  {_ev['days_label']}",
-                expanded=(0 <= _delta_days <= 2 and _ev["impact"] == MC_HIGH),
-            ):
-                _el, _er = st.columns([3, 2])
-                with _el:
-                    if _ev.get("description"):
-                        st.caption(_ev["description"])
-                    if _data_row:
-                        st.markdown(_data_row)
-                    st.markdown(f"**Holdings at risk:** {_tix_str}")
-                with _er:
+        st.divider()
+
+        _impact_cfg = {
+            MC_HIGH:   ("#ef4444", "🔴", "#1a0000"),
+            MC_MEDIUM: ("#f59e0b", "🟡", "#1a1200"),
+        }
+        _cat_icons = {
+            "Fed Policy": "🏦", "Inflation": "📊", "Employment": "👷",
+            "Growth": "📈", "Consumer": "🛒", "Activity": "🏭", "Other": "📋",
+        }
+
+        from itertools import groupby as _groupby
+        for _ec_date, _ec_day_evs in _groupby(_ec_filtered, key=lambda x: x["date"]):
+            _ec_day_list = list(_ec_day_evs)
+            _delta_days  = (_ec_date - date.today()).days
+            _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ") if hasattr(_ec_date, "strftime") else str(_ec_date)
+            _urgency_tag = ""
+            if _delta_days < 0:
+                _urgency_tag = " — *completed*"
+            elif _delta_days == 0:
+                _urgency_tag = " — **TODAY**"
+            elif _delta_days == 1:
+                _urgency_tag = " — **TOMORROW**"
+            elif _delta_days <= 7:
+                _urgency_tag = " — *this week*"
+
+            st.markdown(f"#### {_date_label}{_urgency_tag}")
+
+            for _ev in _ec_day_list:
+                _imp_color, _imp_icon, _imp_bg = _impact_cfg.get(
+                    _ev["impact"], ("#6b7280", "⚪", "#111")
+                )
+                _icon    = _cat_icons.get(_ev["category"], "📋")
+                _tix     = _ev["affected_tickers"]
+                _tix_str = ", ".join(f"**{t}**" for t in _tix[:5])
+                if len(_tix) > 5:
+                    _tix_str += f" +{len(_tix)-5} more"
+                if not _tix_str:
+                    _tix_str = "*No direct holdings*"
+
+                _data_parts = []
+                if _ev.get("previous") is not None:
+                    _data_parts.append(f"Prev: **{_ev['previous']}**")
+                if _ev.get("estimate") is not None:
+                    _data_parts.append(f"Est: **{_ev['estimate']}**")
+                if _ev.get("actual") is not None:
+                    _data_parts.append(f"Actual: **{_ev['actual']}**")
+                _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+
+                with st.expander(
+                    f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev['time']} ET  ·  "
+                    f"{_ev['category']}  ·  {_ev['days_label']}",
+                    expanded=(0 <= _delta_days <= 2 and _ev["impact"] == MC_HIGH),
+                ):
+                    _el, _er = st.columns([3, 2])
+                    with _el:
+                        if _ev.get("description"):
+                            st.caption(_ev["description"])
+                        if _data_row:
+                            st.markdown(_data_row)
+                        st.markdown(f"**Holdings at risk:** {_tix_str}")
+                    with _er:
+                        st.markdown(
+                            f"<div style='background:{_imp_bg};border-left:3px solid {_imp_color};"
+                            f"border-radius:6px;padding:8px 12px;font-size:0.82em;color:#ddd'>"
+                            f"<span style='font-size:0.7em;color:{_imp_color};font-weight:700;"
+                            f"letter-spacing:0.08em'>IMPACT: {_ev['impact']}</span><br>"
+                            f"{_ev['category']}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    if _ev.get("context"):
+                        st.markdown("")
+                        st.info(f"**Institutional Lens** · {_ev['context']}")
+
+            st.markdown("")
+
+        st.caption(
+            f"Static backbone: FOMC · CPI/PPI/NFP/GDP/Retail Sales (Fed/BLS/BEA).  "
+            f"{'FMP live layer active — estimates included.' if _ec_fmp_key else 'Add FMP key for live consensus estimates.'}"
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — PRE-EVENT PLAYBOOK
+    # ══════════════════════════════════════════════════════════════════════════
+    with _play_tab:
+        _pb_port  = st.session_state.get("_port_df_enriched", pd.DataFrame())
+        _pb_total = float(_pb_port["Market Value"].sum()) if not _pb_port.empty else 0.0
+
+        if _pb_port.empty:
+            st.info(
+                "Visit **My Portfolio** first so the playbook can map events to your specific holdings.",
+                icon="ℹ️",
+            )
+        else:
+            _playbooks = build_event_playbooks(_ec_fwd, _pb_port, _pb_total)
+
+            if not _playbooks:
+                st.info("No upcoming HIGH-impact events with playbook data in the next 45 days.")
+            else:
+                st.markdown(
+                    "For each upcoming HIGH-impact event: scenario analysis, position-level pre-event "
+                    "actions, and post-event decision rules tailored to your holdings."
+                )
+                st.divider()
+
+                _action_colors = {
+                    "PROTECT":     ("#ef4444", "#2d0000"),
+                    "WATCH":       ("#f59e0b", "#1a1000"),
+                    "OPPORTUNITY": ("#22c55e", "#001a08"),
+                    "HOLD":        ("#6b7280", "#111"),
+                }
+                _action_icons = {
+                    "PROTECT": "🛡️", "WATCH": "👁️",
+                    "OPPORTUNITY": "🎯", "HOLD": "✋",
+                }
+
+                for _pb in _playbooks:
+                    _pb_days   = _pb["days_until"]
+                    _pb_urgent = _pb_days <= 7
+                    _pb_icon   = "🔴" if _pb_urgent else "🟡"
+                    _pb_date_str = _pb["date"].strftime("%A, %B %d").replace(" 0", " ")
+
                     st.markdown(
-                        f"<div style='background:{_imp_bg};border-left:3px solid {_imp_color};"
-                        f"border-radius:6px;padding:8px 12px;font-size:0.82em;color:#ddd'>"
-                        f"<span style='font-size:0.7em;color:{_imp_color};font-weight:700;"
-                        f"letter-spacing:0.08em'>IMPACT: {_ev['impact']}</span><br>"
-                        f"{_ev['category']}</div>",
-                        unsafe_allow_html=True,
+                        f"### {_pb_icon} {_pb['event']}  —  {_pb_date_str}  ·  *{_pb['days_label']}*"
                     )
-                if _ev.get("context"):
+                    if _pb.get("description"):
+                        st.caption(_pb["description"])
+
+                    # ── Portfolio exposure KPIs ────────────────────────────
+                    _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
+                    _pk1.metric("Portfolio Exposure",
+                                f"{_pb['exposure_pct']:.0f}%",
+                                delta=_pb["exposure_level"],
+                                delta_color="inverse" if _pb["exposure_level"] in ("HIGH","CRITICAL") else "off")
+                    _sign_bear = "-" if _pb["total_bear_impact"] < 0 else "+"
+                    _sign_bull = "+" if _pb["total_bull_impact"] > 0 else ""
+                    _pk2.metric("🐻 Bear Scenario",  f"${_pb['total_bear_impact']:+,.0f}")
+                    _pk3.metric("🐂 Bull Scenario",  f"${_pb['total_bull_impact']:+,.0f}")
+                    _pk4.metric("🛡️ PROTECT",        _pb["protect_count"],
+                                delta="action needed" if _pb["protect_count"] > 0 else None,
+                                delta_color="inverse" if _pb["protect_count"] > 0 else "off")
+                    _pk5.metric("🎯 Opportunities",  _pb["opp_count"])
+
+                    # ── Scenario cards ─────────────────────────────────────
+                    _sc_bull = _pb["scenarios"]["bull"]
+                    _sc_base = _pb["scenarios"]["base"]
+                    _sc_bear = _pb["scenarios"]["bear"]
+
+                    # Compute portfolio-level $ for each scenario from positions
+                    _port_bull = sum(p["bull_impact"] for p in _pb["positions"])
+                    _port_base = sum(p["base_impact"] for p in _pb["positions"])
+                    _port_bear = sum(p["bear_impact"] for p in _pb["positions"])
+
+                    _sc1, _sc2, _sc3 = st.columns(3)
+                    for _sc_col, _sc_data, _port_impact, _clr, _bg in [
+                        (_sc1, _sc_bull, _port_bull, "#22c55e", "#001a08"),
+                        (_sc2, _sc_base, _port_base, "#6b7280", "#111118"),
+                        (_sc3, _sc_bear, _port_bear, "#ef4444", "#1a0000"),
+                    ]:
+                        _impact_sign = "+" if _port_impact >= 0 else ""
+                        _sc_col.markdown(
+                            f"<div style='background:{_bg};border:1px solid {_clr}33;"
+                            f"border-top:3px solid {_clr};border-radius:8px;"
+                            f"padding:14px 16px;height:100%'>"
+                            f"<div style='font-size:1.4em'>{_sc_data['icon']}</div>"
+                            f"<div style='font-weight:700;color:{_clr};font-size:0.9em;"
+                            f"margin:4px 0'>{_sc_data['label']}</div>"
+                            f"<div style='font-size:1.6em;font-weight:800;color:{_clr};"
+                            f"margin:6px 0'>{_impact_sign}${abs(_port_impact):,.0f}</div>"
+                            f"<div style='font-size:0.75em;color:#aaa;margin-bottom:8px'>"
+                            f"est. portfolio impact</div>"
+                            f"<div style='font-size:0.78em;color:#ccc;border-top:1px solid #333;"
+                            f"padding-top:8px'><b>If:</b> {_sc_data['condition']}</div>"
+                            f"<div style='font-size:0.75em;color:#999;margin-top:6px'>"
+                            f"{_sc_data['notes']}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
                     st.markdown("")
-                    st.info(f"**Institutional Lens** · {_ev['context']}")
 
-        st.markdown("")
+                    # ── Pre-event actions ──────────────────────────────────
+                    _actions_needed = _pb["protect_count"] + _pb["watch_count"]
+                    with st.expander(
+                        f"⚡ Pre-Event Actions — "
+                        f"{_pb['protect_count']} PROTECT  ·  {_pb['watch_count']} WATCH  ·  "
+                        f"{_pb['opp_count']} OPPORTUNITY  ·  "
+                        f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} HOLD",
+                        expanded=(_pb_urgent and _actions_needed > 0),
+                    ):
+                        for _pos in _pb["positions"]:
+                            _ac     = _pos["action"]
+                            _ac_clr, _ac_bg = _action_colors.get(_ac, ("#6b7280", "#111"))
+                            _ac_ico = _action_icons.get(_ac, "")
 
-    st.caption(
-        f"Static backbone: FOMC (Fed Reserve) · CPI/PPI/NFP/GDP/Retail Sales (BLS/BEA) — published months in advance.  "
-        f"{'FMP live layer active — estimates and secondary events included.' if _ec_fmp_key else 'Add FMP key for live consensus estimates.'}"
-    )
+                            _bear_str = f"${_pos['bear_impact']:+,.0f}" if _pos["bear_impact"] != 0 else "—"
+                            _bull_str = f"${_pos['bull_impact']:+,.0f}" if _pos["bull_impact"] != 0 else "—"
+
+                            # Action badge row
+                            _pa1, _pa2, _pa3, _pa4 = st.columns([1.5, 1, 1, 1])
+                            _pa1.markdown(
+                                f"<span style='background:{_ac_bg};border:1px solid {_ac_clr};"
+                                f"color:{_ac_clr};padding:3px 10px;border-radius:4px;"
+                                f"font-size:0.8em;font-weight:700'>{_ac_ico} {_ac}</span>"
+                                f"&nbsp;&nbsp;<b>{_pos['ticker']}</b> "
+                                f"<span style='color:#aaa;font-size:0.85em'>({_pos['sector']})</span>",
+                                unsafe_allow_html=True,
+                            )
+                            _pa2.markdown(f"**{_pos['weight']:.1f}%** weight")
+                            _pa3.markdown(f"Bear: **{_bear_str}**")
+                            _pa4.markdown(f"Bull: **{_bull_str}**")
+
+                            # Rationale + action detail
+                            st.markdown(
+                                f"<div style='background:#0d1117;border-left:3px solid {_ac_clr};"
+                                f"border-radius:0 6px 6px 0;padding:10px 14px;margin:4px 0 12px 0;"
+                                f"font-size:0.85em;color:#ccc'>"
+                                f"{_pos['rationale']}<br>"
+                                f"<span style='color:{_ac_clr};font-weight:600;margin-top:6px;"
+                                f"display:block'>{_pos['detail']}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    # ── What to watch ──────────────────────────────────────
+                    if _pb.get("watch_for"):
+                        with st.expander("👁️ What to Watch in the Release", expanded=_pb_urgent):
+                            for _wf in _pb["watch_for"]:
+                                st.markdown(f"• {_wf}")
+
+                    # ── Institutional Lens ─────────────────────────────────
+                    if _pb.get("context"):
+                        with st.expander("🏛️ Institutional Lens", expanded=False):
+                            st.info(_pb["context"])
+
+                    # ── Post-event decision rules ──────────────────────────
+                    _post_positions = [p for p in _pb["positions"] if p["action"] in ("PROTECT", "WATCH")]
+                    if _post_positions:
+                        with st.expander("🎯 Post-Event Decision Rules", expanded=False):
+                            st.caption(
+                                "These rules apply the morning the number drops (08:30 ET). "
+                                "Have a plan before the release — not after."
+                            )
+                            for _pp in _post_positions:
+                                _ac_clr, _ = _action_colors.get(_pp["action"], ("#6b7280", "#111"))
+                                st.markdown(
+                                    f"<div style='padding:8px 0;border-bottom:1px solid #222'>"
+                                    f"<b style='color:{_ac_clr}'>{_pp['ticker']}</b> — "
+                                    f"{_pp['post_event']}</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                    st.divider()
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
