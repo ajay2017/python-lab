@@ -5771,9 +5771,13 @@ elif page == "📈 Stock Analysis":
         # If navigated here from an Analyze button, add that ticker and pre-select it
         if _preselect_ticker:
             _pt = _preselect_ticker.strip().upper()
-            if _pt not in name_to_ticker.values():
+            # Find the display-name key for this ticker (may already exist as "Company (TICK)")
+            _pt_key = next((k for k, v in name_to_ticker.items() if v == _pt), None)
+            if _pt_key is None:
+                # Not yet in options — add with ticker as both key and value
                 name_to_ticker[_pt] = _pt
-            _sa_default = [_pt]
+                _pt_key = _pt
+            _sa_default = [_pt_key]
         else:
             watchlist_names = [
                 k for k, v in name_to_ticker.items() if v in st.session_state.watchlist
