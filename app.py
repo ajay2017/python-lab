@@ -1208,19 +1208,27 @@ if page == "🏠 My Portfolio":
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
         # ── Section 2: Buy Candidates ─────────────────────────────────────────
-        _db_confirmed = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "confirmed")
-        _db_c2_label  = f"🟢 Buy Candidates ({len(_db_buys)})"
-        _db_c2_sub    = (
-            f" · {_db_confirmed} fully confirmed" if _db_confirmed else
-            " · verify before acting" if _db_buys else ""
-        )
+        _db_confirmed   = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "confirmed")
+        _db_unverified  = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "unverified")
+        _db_conflicted  = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
+        _db_c2_label    = f"🟢 Buy Candidates ({len(_db_buys)})"
+        _db_c2_parts    = []
+        if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
+        if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
+        if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
+        _db_c2_sub = " · ".join(_db_c2_parts)
         st.markdown(
             f"<div style='background:#14532d;border-left:4px solid #22c55e;"
-            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
             f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
-            f"<span style='color:#86efac;font-size:0.82em'>{_db_c2_sub}</span>"
-            f"</div>",
+            + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
+            + f"</div>",
             unsafe_allow_html=True,
+        )
+        st.caption(
+            "📊 **Scanner = technical momentum only** (RSI, trend, price momentum). "
+            "🔍 **Verify** picks via Stock Analysis before acting — composite signal adds "
+            "sentiment, analyst revisions, earnings risk and fundamentals."
         )
         if not _db_buys:
             st.caption("No scanner results available. Run Market Scanner to populate buy candidates.")
@@ -1260,6 +1268,13 @@ if page == "🏠 My Portfolio":
                        f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
                        f"{_db_buy.get('trend','')}"
                        f"</div>" if _db_buy.get("rsi") else "")
+                    # Unverified note (non-held scanner picks)
+                    + (f"<div style='color:#93c5fd;font-size:0.8em;margin-top:4px'>"
+                       f"ℹ Composite signal not yet computed — scanner measures technical "
+                       f"momentum only. Click Analyze to run full multi-factor assessment "
+                       f"(sentiment · analyst revisions · earnings · fundamentals) before acting."
+                       f"</div>"
+                       if _xref.get("verdict") == "unverified" else "")
                     # Conflicts (shown prominently)
                     + ("".join(
                         f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"

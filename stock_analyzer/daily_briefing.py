@@ -54,62 +54,68 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     Cross-check a buy candidate across all available signal layers.
 
     Returns a dict with:
-      verdict       — 'confirmed' | 'mixed' | 'conflicted' | 'caution'
-      verdict_label — display string
-      verdict_color — hex colour
-      agreed        — list of supporting signals
-      conflicts     — list of conflicting signals
-      layers_checked— int (how many independent layers evaluated)
+      verdict        — 'confirmed' | 'mixed' | 'conflicted' | 'caution' | 'unverified'
+      verdict_label  — display string
+      verdict_color  — hex colour
+      agreed         — list of supporting signals
+      conflicts      — list of conflicting signals
+      layers_checked — int (how many independent layers evaluated)
+      is_held        — bool (composite signal available only for held positions)
     """
     agreed:    list[str] = []
     conflicts: list[str] = []
+
+    # ── Determine whether ticker is held (composite signal available) ─────────
+    is_held = False
+    if port_df is not None and not port_df.empty:
+        is_held = not port_df[port_df["Ticker"] == ticker].empty
 
     # ── Layer 1: Technical setup (always present from scanner) ────────────────
     scan_sig   = str(scanner_row.get("Signal", ""))
     scan_score = _f(scanner_row.get("Score", 0))
     rsi        = _f(scanner_row.get("RSI", 0))
-    mom_1m     = _f(scanner_row.get("1M Momentum", 0))
     trend      = str(scanner_row.get("Trend", ""))
     agreed.append(f"Technical: {scan_sig} ({scan_score:.0f}/100) · {trend} · RSI {rsi:.0f}")
 
     # ── Layer 2: Composite signal (held positions only) ───────────────────────
-    composite_conflict = False
-    if port_df is not None and not port_df.empty:
+    composite_conflict   = False
+    composite_available  = False
+    if is_held:
+        composite_available = True
         pm = port_df[port_df["Ticker"] == ticker]
-        if not pm.empty:
-            comp_sig = str(pm.iloc[0].get("Signal", ""))
-            comp_scr = _f(pm.iloc[0].get("Score", 0))
-            buy_words      = ("Strong Buy", "Buy")
-            hold_sell_words = ("Hold", "Sell", "Avoid", "Weak")
-            if any(w in comp_sig for w in buy_words):
-                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
-            elif any(w in comp_sig for w in hold_sell_words):
-                conflicts.append(
-                    f"Composite signal: **{comp_sig}** ({comp_scr:.0f}/100) — "
-                    "technicals say Buy but full analysis is more cautious"
-                )
-                composite_conflict = True
-            else:
-                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+        comp_sig = str(pm.iloc[0].get("Signal", ""))
+        comp_scr = _f(pm.iloc[0].get("Score", 0))
+        buy_words       = ("Strong Buy", "Buy")
+        hold_sell_words = ("Hold", "Sell", "Avoid", "Weak")
+        if any(w in comp_sig for w in buy_words):
+            agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+        elif any(w in comp_sig for w in hold_sell_words):
+            conflicts.append(
+                f"Composite signal: {comp_sig} ({comp_scr:.0f}/100) — "
+                "technicals say Buy but full multi-factor analysis is more cautious"
+            )
+            composite_conflict = True
+        else:
+            agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+    # Non-held: composite signal NOT available — must not issue "Confirmed"
 
     # ── Layer 3: News sentiment ───────────────────────────────────────────────
     ticker_news = [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == ticker]
     sentiment_conflict = False
     if ticker_news:
-        avg_compound = sum(n.get("compound", 0) for n in ticker_news) / len(ticker_news)
+        avg_compound  = sum(n.get("compound", 0) for n in ticker_news) / len(ticker_news)
         best_headline = max(ticker_news, key=lambda n: abs(n.get("compound", 0)))
         if avg_compound <= -0.15:
             conflicts.append(
                 f"News sentiment: Negative (avg {avg_compound:+.2f}) — "
-                f"\"{best_headline.get('headline', '')[:60]}\""
+                f"\"{best_headline.get('headline','')[:60]}\""
             )
             sentiment_conflict = True
         elif avg_compound >= 0.1:
             agreed.append(f"News sentiment: Positive (avg {avg_compound:+.2f})")
         else:
             agreed.append(f"News sentiment: Neutral (avg {avg_compound:+.2f})")
-    else:
-        agreed.append("News sentiment: No recent headlines")
+    # No news available — don't add to agreed (absence of data ≠ confirmation)
 
     # ── Layer 4: Earnings risk ────────────────────────────────────────────────
     earnings_conflict = False
@@ -149,7 +155,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict_color = "#f59e0b"
     elif composite_conflict and sentiment_conflict:
         verdict       = "conflicted"
-        verdict_label = "❌ Conflicted — Multiple Signal Conflicts"
+        verdict_label = "❌ Conflicted — Multiple Conflicts"
         verdict_color = "#ef4444"
     elif composite_conflict:
         verdict       = "conflicted"
@@ -163,19 +169,27 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict       = "mixed"
         verdict_label = "⚠️ Mixed"
         verdict_color = "#f59e0b"
+    elif not is_held:
+        # Not held — composite signal was never computed.
+        # Technical momentum looks good but we cannot confirm without full analysis.
+        verdict       = "unverified"
+        verdict_label = "🔍 Verify — Run Stock Analysis First"
+        verdict_color = "#60a5fa"   # blue — informational, not alarm
     else:
         verdict       = "confirmed"
         verdict_label = "✅ Confirmed — All Signals Aligned"
         verdict_color = "#22c55e"
 
     return {
-        "verdict":        verdict,
-        "verdict_label":  verdict_label,
-        "verdict_color":  verdict_color,
-        "agreed":         agreed,
-        "conflicts":      conflicts,
-        "layers_checked": layers,
-        "earn_days":      earn_days,
+        "verdict":             verdict,
+        "verdict_label":       verdict_label,
+        "verdict_color":       verdict_color,
+        "agreed":              agreed,
+        "conflicts":           conflicts,
+        "layers_checked":      layers,
+        "earn_days":           earn_days,
+        "is_held":             is_held,
+        "composite_available": composite_available,
     }
 
 
@@ -346,11 +360,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today) -> l
                 "xref":           xref,
             })
 
-    items.sort(key=lambda x: (
-        0 if x["xref"]["verdict"] == "confirmed" else
-        1 if x["xref"]["verdict"] in ("mixed", "caution") else 2,
-        -x["score"]
-    ))
+    _verdict_order = {"confirmed": 0, "mixed": 1, "caution": 1, "unverified": 2, "conflicted": 3}
+    items.sort(key=lambda x: (_verdict_order.get(x["xref"]["verdict"], 2), -x["score"]))
     return items
 
 
