@@ -725,6 +725,9 @@ if page == "🏠 My Portfolio":
         st.info("Enter your holdings above to see portfolio analytics.")
         st.stop()
 
+    # Cache enriched port_df (with Sector) so other pages can use it
+    st.session_state["_port_df_enriched"] = port_df
+
     total_val   = port_df["Market Value"].sum()
     total_cost  = (port_df["Avg Cost"] * port_df["Shares"]).sum()
     total_pnl   = port_df["P&L ($)"].sum()
@@ -6215,11 +6218,12 @@ elif page == "📅 Economic Calendar":
             st.info("Running on static backbone only (FOMC, CPI, NFP, GDP). Add FMP key for live estimates and consensus values.")
 
     # ── Load / refresh calendar ───────────────────────────────────────────────
-    _ec_cache_key = f"_ec_cal_{date.today()}_{bool(_ec_fmp_key)}"
+    _ec_port_hash = len(st.session_state.get("_port_df_enriched", pd.DataFrame()))
+    _ec_cache_key = f"_ec_cal_{date.today()}_{bool(_ec_fmp_key)}_{_ec_port_hash}"
     if _ec_cache_key not in st.session_state or st.button("🔄 Refresh calendar", key="_ec_refresh"):
         with st.spinner("Loading economic calendar…"):
             _ec_events = build_macro_calendar(
-                st.session_state.get("holdings_df", pd.DataFrame()),
+                st.session_state.get("_port_df_enriched", pd.DataFrame()),
                 fmp_key=_ec_fmp_key or None,
                 days_ahead=45,
                 days_behind=7,
