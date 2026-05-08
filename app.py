@@ -57,6 +57,7 @@ from stock_analyzer import db
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.decision_journal import compute_patterns
 
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
@@ -791,6 +792,7 @@ if page == "🏠 My Portfolio":
 
     holdings = st.session_state.holdings_df.to_dict("records")
     port_df = build_portfolio_df(holdings, held_data)
+    st.session_state["_last_port_df"] = port_df   # used by Trade Journal decision context
 
     if port_df.empty:
         st.info("Enter your holdings above to see portfolio analytics.")
@@ -6439,6 +6441,57 @@ elif page == "📒 Trade Journal":
         # Reactive cost-basis lookup — runs on every rerun after ticker/action change
         _live_action = st.session_state.get("_tj_action", "BUY")
         _live_ticker = (st.session_state.get("_tj_ticker") or "").strip().upper()
+
+        # ── Decision Context — outside form so followed_signal can gate fields ──
+        # Pre-fill signal_seen from current portfolio signal if ticker is held
+        _dc_signal_default = ""
+        if _live_ticker:
+            _dc_held = st.session_state.get("holdings_df", pd.DataFrame())
+            _dc_match = _dc_held[_dc_held["Ticker"] == _live_ticker] if not _dc_held.empty else pd.DataFrame()
+            if not _dc_match.empty:
+                # Try to get the current signal from last loaded port_df stored in session
+                _dc_pf = st.session_state.get("_last_port_df")
+                if _dc_pf is not None and not _dc_pf.empty and "Signal" in _dc_pf.columns:
+                    _dc_row = _dc_pf[_dc_pf["Ticker"] == _live_ticker]
+                    if not _dc_row.empty:
+                        _dc_sig  = str(_dc_row.iloc[0].get("Signal", ""))
+                        _dc_scr  = _dc_row.iloc[0].get("Score", "")
+                        _dc_signal_default = f"{_dc_sig} · Score {_dc_scr:.0f}/100" if _dc_sig else ""
+
+        with st.expander("📋 Decision Context (optional — builds your pattern library)", expanded=False):
+            st.caption(
+                "Capture *why* you made this trade vs the signal. "
+                "Over time this builds a personal pattern library showing where signals help or hurt."
+            )
+            _dc_c1, _dc_c2 = st.columns([2, 1])
+            with _dc_c1:
+                st.selectbox(
+                    "Did you follow the signal?",
+                    ["— (skip)", "Yes — followed signal", "No — overrode signal", "No signal — discretionary"],
+                    key="_tj_followed",
+                )
+            with _dc_c2:
+                st.text_input(
+                    "Signal at time of trade",
+                    value=_dc_signal_default,
+                    key="_tj_signal_seen",
+                    placeholder="e.g. Sell · Score 42",
+                    help="Auto-filled from current portfolio signal if held.",
+                )
+            _tj_followed_val = st.session_state.get("_tj_followed", "— (skip)")
+            if "No — overrode" in _tj_followed_val:
+                st.text_input(
+                    "Why did you override?",
+                    key="_tj_deviation_reason",
+                    placeholder="e.g. Believed earnings beat was priced in",
+                )
+            else:
+                st.session_state["_tj_deviation_reason"] = ""
+            st.text_input(
+                "Lesson learned (optional)",
+                key="_tj_lesson",
+                placeholder="e.g. Always follow pre-earnings sell signals on small-caps",
+            )
         _cost_basis_hint = 0.01
         _cost_hint_label = "Cost Basis / share ($)"
         _cb_info = ""
@@ -6519,15 +6572,27 @@ elif page == "📒 Trade Journal":
                     compute_realized_pnl(shares_val, price_val, cost_basis_val)
                     if action == "SELL" else None
                 )
+                # Decision context fields
+                _dc_followed_raw = st.session_state.get("_tj_followed", "— (skip)")
+                _dc_followed = (
+                    "yes" if "Yes" in _dc_followed_raw
+                    else "no" if "No — overrode" in _dc_followed_raw
+                    else "discretionary" if "discretionary" in _dc_followed_raw
+                    else None
+                )
                 record = {
-                    "ticker":       ticker_input,
-                    "action":       action,
-                    "shares":       shares_val,
-                    "price":        price_val,
-                    "cost_basis":   cost_basis_val if action == "SELL" else None,
-                    "realized_pnl": realized_pnl,
-                    "notes":        notes_val or None,
-                    "trigger_type": trigger_type,
+                    "ticker":           ticker_input,
+                    "action":           action,
+                    "shares":           shares_val,
+                    "price":            price_val,
+                    "cost_basis":       cost_basis_val if action == "SELL" else None,
+                    "realized_pnl":     realized_pnl,
+                    "notes":            notes_val or None,
+                    "trigger_type":     trigger_type,
+                    "signal_seen":      (st.session_state.get("_tj_signal_seen") or "").strip() or None,
+                    "followed_signal":  _dc_followed,
+                    "deviation_reason": (st.session_state.get("_tj_deviation_reason") or "").strip() or None,
+                    "lesson":           (st.session_state.get("_tj_lesson") or "").strip() or None,
                 }
                 saved = db.save_trade(record)
                 if saved or not db.has_db():
@@ -6887,6 +6952,120 @@ elif page == "📒 Trade Journal":
                         if _ins.get("institutional_lens"):
                             st.markdown("")
                             st.info(f"**Institutional Lens** · {_ins['institutional_lens']}")
+
+    # ── Decision Journal — My Patterns ───────────────────────────────────────
+    try:
+        _dj = compute_patterns(trades_df)
+    except Exception:
+        _dj = {"total_with_context": 0}
+
+    if _dj.get("total_with_context", 0) > 0:
+        st.divider()
+        st.subheader("🧭 Decision Journal — My Patterns")
+        st.caption(
+            "Tracks how often you follow signals vs override them, and what the outcomes are. "
+            "This is your personal accountability layer — patterns you can't see cost money silently."
+        )
+
+        # Behavioral insight banner
+        if _dj.get("behavioral_insight"):
+            _dj_clr = "#7f1d1d" if _dj["ignored_losses"] > _dj["ignored_wins"] else "#14532d"
+            _dj_bdr = "#ef4444" if _dj["ignored_losses"] > _dj["ignored_wins"] else "#22c55e"
+            st.markdown(
+                f"<div style='background:{_dj_clr};border-left:4px solid {_dj_bdr};"
+                f"border-radius:8px;padding:12px 16px;margin-bottom:12px'>"
+                f"<span style='font-size:0.78em;color:#9ca3af;font-weight:700;"
+                f"letter-spacing:0.08em;text-transform:uppercase'>Pattern Insight</span><br>"
+                f"<span style='color:#f9fafb'>{_dj['behavioral_insight']}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        # KPI strip
+        _dj_k1, _dj_k2, _dj_k3, _dj_k4, _dj_k5 = st.columns(5)
+        _dj_k1.metric("Trades with context", _dj["total_with_context"])
+        _dj_k2.metric(
+            "Signal accuracy",
+            f"{_dj['signal_accuracy']:.0f}%" if _dj["signal_accuracy"] is not None else "—",
+            f"{_dj['followed_wins']}W / {_dj['followed_losses']}L",
+            help="Win rate when you followed the signal",
+        )
+        _dj_k3.metric(
+            "Override accuracy",
+            f"{_dj['override_accuracy']:.0f}%" if _dj["override_accuracy"] is not None else "—",
+            f"{_dj['ignored_wins']}W / {_dj['ignored_losses']}L",
+            help="Win rate when you ignored the signal",
+        )
+        _dj_k4.metric(
+            "P&L from following",
+            f"${_dj['followed_pnl']:+,.0f}",
+            delta_color="normal" if _dj["followed_pnl"] >= 0 else "inverse",
+            help="Total realized P&L on trades where you followed the signal",
+        )
+        _dj_k5.metric(
+            "P&L from overrides",
+            f"${_dj['ignored_pnl']:+,.0f}",
+            delta_color="normal" if _dj["ignored_pnl"] >= 0 else "inverse",
+            help="Total realized P&L on trades where you overrode the signal",
+        )
+
+        # Costly deviations
+        if _dj["costly_deviations"]:
+            st.markdown(f"##### 🚨 Costly Deviations ({len(_dj['costly_deviations'])})")
+            st.caption("Trades where you ignored a signal and lost money. The most important pattern to study.")
+            for _cd in _dj["costly_deviations"]:
+                st.markdown(
+                    f"<div style='background:#1c1917;border-left:3px solid #ef4444;"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"📉 <span style='color:#fbbf24'>{_cd['ticker']}</span> · "
+                    f"<span style='color:#ef4444'>${_cd['realized_pnl']:+,.0f}</span> · "
+                    f"<span style='color:#9ca3af;font-weight:400'>{_cd['traded_at']}</span></div>"
+                    + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
+                       f"Signal: {_cd['signal_seen']}</div>" if _cd["signal_seen"] else "")
+                    + (f"<div style='color:#d1d5db;font-size:0.82em;margin-top:2px'>"
+                       f"Override reason: {_cd['deviation_reason']}</div>" if _cd["deviation_reason"] else "")
+                    + (f"<div style='background:#292524;border-radius:4px;padding:6px 10px;margin-top:6px;"
+                       f"color:#fbbf24;font-size:0.82em'>💡 {_cd['lesson']}</div>" if _cd["lesson"] else "")
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        # Good overrides
+        if _dj["good_overrides"]:
+            with st.expander(f"✅ Good Overrides ({len(_dj['good_overrides'])}) — when ignoring the signal paid off"):
+                for _go_item in _dj["good_overrides"]:
+                    st.markdown(
+                        f"<div style='background:#1c1917;border-left:3px solid #22c55e;"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                        f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                        f"✅ <span style='color:#4ade80'>{_go_item['ticker']}</span> · "
+                        f"<span style='color:#22c55e'>${_go_item['realized_pnl']:+,.0f}</span> · "
+                        f"<span style='color:#9ca3af;font-weight:400'>{_go_item['traded_at']}</span></div>"
+                        + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
+                           f"Signal: {_go_item['signal_seen']}</div>" if _go_item["signal_seen"] else "")
+                        + (f"<div style='color:#d1d5db;font-size:0.82em;margin-top:2px'>"
+                           f"Override reason: {_go_item['deviation_reason']}</div>" if _go_item["deviation_reason"] else "")
+                        + f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+        # Lessons library
+        if _dj["lessons"]:
+            with st.expander(f"📚 Lessons Library ({len(_dj['lessons'])})"):
+                st.caption("Every lesson you've logged, newest first. Your personal trading rulebook.")
+                for _les in _dj["lessons"]:
+                    _les_clr = "#22c55e" if _les["pnl"] >= 0 else "#ef4444"
+                    st.markdown(
+                        f"<div style='background:#1c1917;border-left:3px solid {_les_clr};"
+                        f"border-radius:6px;padding:8px 12px;margin-bottom:5px'>"
+                        f"<span style='color:#fbbf24;font-weight:600'>{_les['ticker']}</span> "
+                        f"<span style='color:#9ca3af;font-size:0.8em'>· {_les['date']} · "
+                        f"{'followed' if _les['followed'] == 'yes' else 'overrode'} signal</span><br>"
+                        f"<span style='color:#f9fafb'>💡 {_les['text']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")

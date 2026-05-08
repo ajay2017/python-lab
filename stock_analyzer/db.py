@@ -24,17 +24,28 @@ Table schema (run once if tables don't exist):
     );
 
     create table if not exists trades (
-        id           bigint primary key generated always as identity,
-        ticker       text    not null,
-        action       text    not null,
-        shares       numeric not null check (shares > 0),
-        price        numeric not null check (price > 0),
-        cost_basis   numeric,
-        realized_pnl numeric,
-        notes        text,
-        trigger_type text default 'MANUAL',
-        traded_at    timestamptz default now()
+        id               bigint primary key generated always as identity,
+        ticker           text    not null,
+        action           text    not null,
+        shares           numeric not null check (shares > 0),
+        price            numeric not null check (price > 0),
+        cost_basis       numeric,
+        realized_pnl     numeric,
+        notes            text,
+        trigger_type     text default 'MANUAL',
+        signal_seen      text,
+        followed_signal  text,
+        deviation_reason text,
+        lesson           text,
+        traded_at        timestamptz default now()
     );
+
+If trades table already exists, run this once to add the decision-journal columns:
+
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_seen      text;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS followed_signal  text;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS deviation_reason text;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS lesson           text;
 """
 
 import streamlit as st
@@ -142,7 +153,9 @@ def load_watchlist() -> list[str]:
 # ── Trades ───────────────────────────────────────────────────────────────────
 
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
-               "cost_basis", "realized_pnl", "notes", "trigger_type", "traded_at"]
+               "cost_basis", "realized_pnl", "notes", "trigger_type",
+               "signal_seen", "followed_signal", "deviation_reason", "lesson",
+               "traded_at"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -155,7 +168,14 @@ def load_trades() -> pd.DataFrame:
                 .order("traded_at", desc=True)
                 .execute().data
             )
-            return pd.DataFrame(rows) if rows else empty
+            if rows:
+                df = pd.DataFrame(rows)
+                # Backfill decision-journal columns for rows pre-dating the feature
+                for col in ("signal_seen", "followed_signal", "deviation_reason", "lesson"):
+                    if col not in df.columns:
+                        df[col] = None
+                return df
+            return empty
         except Exception as e:
             err = str(e)
             if "row-level security" in err.lower() or "42501" in err:
