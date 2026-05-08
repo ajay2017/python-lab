@@ -193,6 +193,195 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     }
 
 
+# ── Grow Today ───────────────────────────────────────────────────────────────
+
+def _thesis(ticker: str, scanner_row: dict, is_sector_leader: bool) -> str:
+    parts = []
+    trend  = str(scanner_row.get("Trend", ""))
+    mom_1m = _f(scanner_row.get("1M Momentum", 0))
+    mom_3m = _f(scanner_row.get("3M Momentum", 0))
+    rsi    = _f(scanner_row.get("RSI", 50))
+
+    if "Strong Uptrend" in trend:
+        parts.append("price above both 20d and 50d MAs — primary trend intact")
+    elif "Uptrend" in trend:
+        parts.append("price above 20d MA — trend building")
+
+    if mom_1m > 10:
+        parts.append(f"1M momentum +{mom_1m:.1f}% — strong recent acceleration")
+    elif mom_1m > 5:
+        parts.append(f"1M momentum +{mom_1m:.1f}%")
+
+    if mom_3m > 20:
+        parts.append(f"3M momentum +{mom_3m:.1f}% — sustained move")
+
+    if 40 <= rsi <= 60:
+        parts.append("RSI in ideal entry zone (not overbought)")
+    elif rsi < 40:
+        parts.append(f"RSI {rsi:.0f} — oversold, mean-reversion potential")
+    elif rsi > 70:
+        parts.append(f"RSI {rsi:.0f} — extended, wait for pullback")
+
+    if is_sector_leader:
+        parts.append("sector leading the market today — institutional tailwind")
+
+    return (". ".join(parts).capitalize() + ".") if parts else "Momentum and trend aligned."
+
+
+def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
+    """Estimate position size using a trend-based stop approximation."""
+    stop_pct = 0.05 if "Strong" in trend else 0.07 if "Uptrend" in trend else 0.08
+    stop     = price * (1 - stop_pct)
+    risk_dollars  = portfolio_value * 0.015          # 1.5% portfolio risk per trade
+    risk_per_share = price - stop
+    if risk_per_share <= 0:
+        return {}
+    shares     = max(1, int(risk_dollars / risk_per_share))
+    total_cost = round(shares * price, 0)
+    return {
+        "shares":      shares,
+        "total_cost":  total_cost,
+        "stop":        round(stop, 2),
+        "stop_pct":    round(stop_pct * 100, 1),
+        "port_pct":    round(total_cost / portfolio_value * 100, 1) if portfolio_value else 0,
+        "risk_budget": round(risk_dollars, 0),
+    }
+
+
+def _grow_today(port_df, scanner_results, news_items, held_data, today,
+                portfolio_value: float, market_context: dict) -> dict:
+    """
+    Build growth-oriented action list calibrated to today's market tone.
+
+    market_context keys: sp500_pct, nasdaq_pct, tone ('bull'|'bear'|'flat'),
+                         leading_sectors [{"sector", "etf", "return_1w"}]
+    """
+    tone        = market_context.get("tone", "flat")
+    sp500_pct   = _f(market_context.get("sp500_pct", 0))
+    nasdaq_pct  = _f(market_context.get("nasdaq_pct", 0))
+    lead_secs   = market_context.get("leading_sectors", [])
+    lead_names  = {ls.get("sector", "") for ls in lead_secs}
+    held_tickers = set(port_df["Ticker"].tolist()) if port_df is not None else set()
+
+    # On bear days — no new entries, return protection message
+    if tone == "bear":
+        return {
+            "tone": "bear",
+            "message": (
+                f"S&P 500 {sp500_pct:+.2f}% today — market in risk-off mode. "
+                "Focus on protecting existing positions. "
+                "Defer new entries until conditions stabilise."
+            ),
+            "new_picks":    [],
+            "add_positions": [],
+            "deploy_note":  None,
+        }
+
+    # Score threshold: higher bar on flat days, standard on bull days
+    min_score   = 65 if tone == "bull" else 78
+    max_picks   = 3  if tone == "bull" else 1
+
+    new_picks: list[dict] = []
+    if scanner_results is not None and not scanner_results.empty:
+        candidates = scanner_results[
+            (scanner_results["Score"] >= min_score) &
+            (~scanner_results["Ticker"].isin(held_tickers))
+        ].copy()
+
+        # Bonus sort key: sector leader gets +5 to score for ranking
+        def _rank_score(row):
+            sector_bonus = 5 if any(ls.get("sector","") in str(row.get("Sector",""))
+                                    for ls in lead_secs) else 0
+            return _f(row.get("Score", 0)) + sector_bonus
+
+        candidates["_rank"] = candidates.apply(_rank_score, axis=1)
+        candidates = candidates.sort_values("_rank", ascending=False).head(max_picks * 2)
+
+        for _, row in candidates.iterrows():
+            ticker   = str(row["Ticker"])
+            price    = _f(row.get("Price", 0))
+            sector   = str(row.get("Sector", ""))
+            trend    = str(row.get("Trend", ""))
+            is_leader = any(ls.get("sector","") in sector for ls in lead_secs)
+
+            xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today)
+
+            # Skip hard conflicts on bull days; skip anything but confirmed on flat
+            if tone == "flat" and xref["verdict"] not in ("confirmed", "unverified"):
+                continue
+            if xref["verdict"] == "conflicted":
+                continue
+
+            sizing = _suggest_size(price, trend, portfolio_value) if price > 0 and portfolio_value > 0 else {}
+            thesis = _thesis(ticker, row.to_dict(), is_leader)
+
+            new_picks.append({
+                "ticker":       ticker,
+                "score":        _f(row.get("Score", 0)),
+                "sector":       sector,
+                "price":        price,
+                "trend":        trend,
+                "scanner_signal": str(row.get("Signal", "")),
+                "is_leader":    is_leader,
+                "thesis":       thesis,
+                "sizing":       sizing,
+                "xref":         xref,
+            })
+            if len(new_picks) >= max_picks:
+                break
+
+    # Add-to-winner: held Strong Buy, Score ≥ 68, Gap ≥ 8% — only on bull days
+    add_positions: list[dict] = []
+    if tone == "bull" and port_df is not None:
+        for _, row in port_df.iterrows():
+            sig = str(row.get("Signal", ""))
+            gap = _f(row.get("Gap to Stop (%)"), 0)
+            scr = _f(row.get("Score"), 0)
+            if "Strong Buy" in sig and scr >= 68 and gap >= 8:
+                ticker  = str(row["Ticker"])
+                price   = _f(row.get("Price", 0))
+                sector  = str(row.get("Sector", ""))
+                is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
+                sizing  = _suggest_size(price, "Strong Uptrend", portfolio_value) if price > 0 else {}
+                add_positions.append({
+                    "ticker":    ticker,
+                    "score":     scr,
+                    "signal":    sig,
+                    "pnl_pct":   _f(row.get("P&L (%)")),
+                    "gap":       gap,
+                    "sector":    sector,
+                    "is_leader": is_lead,
+                    "thesis":    (
+                        f"Already profitable (+{_f(row.get('P&L (%)')):+.1f}%), "
+                        f"{gap:.1f}% above stop — trend intact, adds within existing position."
+                        + (" Sector leading today." if is_lead else "")
+                    ),
+                    "sizing":    sizing,
+                })
+        add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
+
+    # Capital deployment note
+    deploy_note = None
+    if portfolio_value > 0 and (new_picks or add_positions):
+        n_trades = len(new_picks) + len(add_positions)
+        deploy   = portfolio_value * 0.015 * n_trades
+        deploy_note = (
+            f"At 1.5% risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
+            f"consider deploying ~${deploy:,.0f} today."
+        )
+
+    return {
+        "tone":          tone,
+        "message":       None,
+        "new_picks":     new_picks,
+        "add_positions": add_positions,
+        "deploy_note":   deploy_note,
+        "sp500_pct":     sp500_pct,
+        "nasdaq_pct":    nasdaq_pct,
+        "leading_sectors": lead_secs,
+    }
+
+
 # ── Act Today ─────────────────────────────────────────────────────────────────
 
 def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) -> list[dict]:
@@ -485,13 +674,16 @@ def build_daily_briefing(
     scanner_results,
     portfolio_value: float,
     today:           date,
+    market_context:  dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
 
-    Returns dict with: act_today, buy_candidates, review_list.
+    Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
+    ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": []}
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today)
     review = _review_list(port_df, news_items, macro_events, held_data, today)
-    return {"act_today": act, "buy_candidates": buys, "review_list": review}
+    grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx)
+    return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}

@@ -989,6 +989,37 @@ if page == "🏠 My Portfolio":
         )
     _macro_events = st.session_state[_mc_day_key]
 
+    # Market context — drives Daily Briefing tone (bull / bear / flat)
+    try:
+        _mkt_indices = fetch_market_indices()
+        _sp_row      = next((i for i in _mkt_indices if i["short"] == "S&P 500"), None)
+        _nq_row      = next((i for i in _mkt_indices if i["short"] == "NASDAQ"),  None)
+        _sp_pct      = float(_sp_row["change_pct"]) if _sp_row else 0.0
+        _nq_pct      = float(_nq_row["change_pct"]) if _nq_row else 0.0
+        _mkt_tone    = "bull" if _sp_pct >= 0.5 else "bear" if _sp_pct <= -0.5 else "flat"
+
+        # Leading / lagging sectors from 1-week returns
+        _sect_df_ctx  = _fetch_sector_returns()
+        _lead_sectors: list[dict] = []
+        if not _sect_df_ctx.empty and "1W" in _sect_df_ctx.columns:
+            _sect_sorted = _sect_df_ctx.sort_values("1W", ascending=False)
+            for _, _sr in _sect_sorted.head(3).iterrows():
+                _etf = str(_sr["ETF"])
+                _lead_sectors.append({
+                    "etf":       _etf,
+                    "sector":    next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf),
+                    "return_1w": float(_sr["1W"]),
+                })
+
+        _market_context = {
+            "tone":            _mkt_tone,
+            "sp500_pct":       _sp_pct,
+            "nasdaq_pct":      _nq_pct,
+            "leading_sectors": _lead_sectors,
+        }
+    except Exception:
+        _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+
     # Build Daily Briefing (synthesises all intelligence — computed once before tabs)
     try:
         _daily_brief = build_daily_briefing(
@@ -1001,9 +1032,11 @@ if page == "🏠 My Portfolio":
             scanner_results= st.session_state.get("scanner_results"),
             portfolio_value= total_val,
             today          = _TODAY_ET,
+            market_context = _market_context,
         )
     except Exception:
-        _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": []}
+        _daily_brief    = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
+        _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
 
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
@@ -1142,17 +1175,160 @@ if page == "🏠 My Portfolio":
         _db_act    = _daily_brief["act_today"]
         _db_buys   = _daily_brief["buy_candidates"]
         _db_review = _daily_brief["review_list"]
+        _db_grow   = _daily_brief.get("grow_today", {})
+        _db_tone   = _market_context.get("tone", "flat")
+        _db_sp_pct = _market_context.get("sp500_pct", 0.0)
+        _db_nq_pct = _market_context.get("nasdaq_pct", 0.0)
 
+        # ── Briefing header — tone-aware ──────────────────────────────────────
+        _tone_label = (
+            "📈 Growth Mode — Markets Up"   if _db_tone == "bull" else
+            "🛡️ Protect Mode — Markets Down" if _db_tone == "bear" else
+            "📊 Hold Steady — Mixed Market"
+        )
+        _tone_color = "#14532d" if _db_tone == "bull" else "#7f1d1d" if _db_tone == "bear" else "#1c1917"
+        _tone_bdr   = "#22c55e" if _db_tone == "bull" else "#ef4444" if _db_tone == "bear" else "#4b5563"
+        _sp_str     = f"S&P 500 {_db_sp_pct:+.2f}%"
+        _nq_str     = f"Nasdaq {_db_nq_pct:+.2f}%"
+        _lead_str   = (
+            " · Leading: " + ", ".join(
+                f"{ls['sector']} ({ls['return_1w']:+.1f}% 1W)"
+                for ls in _market_context.get("leading_sectors", [])[:2]
+            ) if _market_context.get("leading_sectors") else ""
+        )
         st.markdown(
-            f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
-            f"padding:14px 20px;margin-bottom:16px'>"
-            f"<span style='font-size:1.15em;font-weight:700;color:#f9fafb'>🌅 Start Your Day</span>"
-            f"<span style='margin-left:12px;color:#6b7280;font-size:0.8em'>"
-            f"{_dt.now().strftime('%A, %B %d %Y')} · {len(_db_act)} urgent · "
-            f"{len(_db_buys)} opportunities · {len(_db_review)} to review</span>"
+            f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
+            f"border-radius:12px;padding:14px 20px;margin-bottom:12px'>"
+            f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
+            f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
+            f"🌅 Start Your Day · {_tone_label}</span>"
+            f"<span style='color:#9ca3af;font-size:0.8em'>"
+            f"{_dt.now().strftime('%A, %B %d %Y')}</span>"
+            f"</div>"
+            f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
+            f"{_sp_str} · {_nq_str}{_lead_str}</div>"
+            f"<div style='color:#9ca3af;font-size:0.77em;margin-top:4px'>"
+            f"{len(_db_act)} urgent action{'s' if len(_db_act) != 1 else ''} · "
+            f"{len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))} growth setup{'s' if (len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))) != 1 else ''} · "
+            f"{len(_db_review)} to review before close</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # ── Grow Today (before Act Today on bull days, after on bear/flat) ────
+        def _render_grow_today(grow: dict, tone: str):
+            if not grow:
+                return
+            new_picks    = grow.get("new_picks", [])
+            add_pos      = grow.get("add_positions", [])
+            deploy_note  = grow.get("deploy_note")
+            bear_msg     = grow.get("message")
+            lead_secs_ui = grow.get("leading_sectors", [])
+
+            _g_label = (
+                "📈 Grow Today"      if tone == "bull" else
+                "🛡️ Defer New Entries" if tone == "bear" else
+                "📈 High-Conviction Entries Only"
+            )
+            _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
+            _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
+            _g_count = f" ({len(new_picks) + len(add_pos)} setups)" if (new_picks or add_pos) else ""
+
+            st.markdown(
+                f"<div style='background:{_g_bg};border-left:4px solid {_g_bdr};"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_g_label}{_g_count}</span>"
+                + (f"<span style='color:#86efac;font-size:0.82em;margin-left:8px'>"
+                   f"Sector leaders: {', '.join(ls['sector'] for ls in lead_secs_ui[:2])}</span>"
+                   if lead_secs_ui and tone == "bull" else "")
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            if bear_msg:
+                st.caption(f"🛡️ {bear_msg}")
+                return
+
+            if not new_picks and not add_pos:
+                st.caption(
+                    "No high-confidence setups meet today's criteria. "
+                    "Run Market Scanner to refresh candidates." if tone == "bull"
+                    else "Flat market — waiting for clearer direction before adding new positions."
+                )
+                if tone == "bull":
+                    if st.button("🔍 Run Market Scanner", key="_db_grow_scanner"):
+                        st.session_state["_pending_page"] = "🔍 Market Scanner"
+                        st.rerun()
+                return
+
+            # New picks
+            if new_picks:
+                st.markdown("**🆕 New Positions to Initiate**")
+            for _gp in new_picks:
+                _gx = _gp.get("xref", {})
+                _vc = _gx.get("verdict_color", "#22c55e")
+                _vl = _gx.get("verdict_label", "")
+                _sz = _gp.get("sizing", {})
+                st.markdown(
+                    f"<div style='background:#111827;border-left:3px solid {_vc};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                    f"<span style='color:#f9fafb;font-weight:700'>{_gp['ticker']}</span>"
+                    f"<span style='color:#9ca3af;font-size:0.8em'>Score {_gp['score']:.0f}/100 · {_gp['sector']}"
+                    + (f" 🔥" if _gp.get("is_leader") else "")
+                    + f"</span>"
+                    f"<span style='background:{_vc}22;border:1px solid {_vc};color:{_vc};"
+                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_vl}</span>"
+                    f"</div>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
+                    f"💡 <em>{_gp['thesis']}</em></div>"
+                    + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
+                       f"📐 Suggested: {_sz.get('shares',0)} shares @ ~${_gp['price']:.2f} "
+                       f"= ${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
+                       f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
+                       f"</div>" if _sz else "")
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
+                    st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                    st.session_state["_analysis_ticker"] = _gp["ticker"]
+                    st.rerun()
+
+            # Add-to-winner
+            if add_pos:
+                st.markdown("**➕ Add to Winning Positions**")
+            for _ga in add_pos:
+                _sz = _ga.get("sizing", {})
+                st.markdown(
+                    f"<div style='background:#052e16;border-left:3px solid #4ade80;"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                    f"<span style='color:#f9fafb;font-weight:700'>{_ga['ticker']}</span>"
+                    f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
+                    f"Score {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
+                    + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
+                    + f"</span></div>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
+                    f"💡 <em>{_ga['thesis']}</em></div>"
+                    + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
+                       f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
+                       f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(f"▶ Analyze {_ga['ticker']}", key=f"_db_grow_add_{_ga['ticker']}"):
+                    st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                    st.session_state["_analysis_ticker"] = _ga["ticker"]
+                    st.rerun()
+
+            if deploy_note:
+                st.info(f"💰 {deploy_note}")
+
+        # On bull days: Grow Today leads; on bear/flat: Act Today leads
+        if _db_tone == "bull":
+            _render_grow_today(_db_grow, _db_tone)
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
         # ── Section 1: Act Today ──────────────────────────────────────────────
         _db_c1_label = f"🔴 Act Today ({len(_db_act)})" if _db_act else "🟢 Act Today — All Clear"
@@ -1206,6 +1382,11 @@ if page == "🏠 My Portfolio":
                         st.rerun()
 
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+        # On bear/flat days Grow Today appears after Act Today
+        if _db_tone != "bull":
+            _render_grow_today(_db_grow, _db_tone)
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
         # ── Section 2: Buy Candidates ─────────────────────────────────────────
         _db_confirmed   = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "confirmed")
