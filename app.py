@@ -1161,7 +1161,7 @@ if page == "🏠 My Portfolio":
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
     tab_daily, tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
-        f"🌅 Start Your Day{_db_icon}",
+        f"📋 Today's Brief{_db_icon}",
         "📊 Overview",
         "📈 Performance",
         "📅 Earnings",
@@ -1210,7 +1210,7 @@ if page == "🏠 My Portfolio":
             f"border-radius:12px;padding:14px 20px;margin-bottom:12px'>"
             f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
             f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
-            f"🌅 Start Your Day · {_tone_label}</span>"
+            f"{_tone_label}</span>"
             f"<span style='color:#9ca3af;font-size:0.8em'>"
             f"{_dt.now().strftime('%A, %B %d %Y')}</span>"
             f"</div>"
@@ -1315,7 +1315,7 @@ if page == "🏠 My Portfolio":
                     if st.button(f"▶ Full Analysis — {_qr_res['ticker']}", key="_qr_full_btn"):
                         st.session_state["_pending_page"]    = "📈 Stock Analysis"
                         st.session_state["_analysis_ticker"] = _qr_res["ticker"]
-                        st.session_state["_nav_origin"]      = "🌅 Start Your Day"
+                        st.session_state["_nav_origin"]      = "📋 Today's Brief"
                         st.rerun()
                 with _qr_bc2:
                     if st.button("✕ Clear", key="_qr_clear_btn"):
@@ -5855,6 +5855,7 @@ elif page == "📈 Stock Analysis":
             "🏠 My Portfolio":   "← Back to My Portfolio",
             "🔍 Market Scanner": "← Back to Market Scanner",
             "📋 Watchlist":      "← Back to Watchlist",
+            "📋 Today's Brief":  "← Back to Today's Brief",
         }.get(_nav_origin, f"← Back to {_nav_origin}")
         if st.button(_back_label, key="_sa_back"):
             st.session_state["_pending_page"] = _nav_origin
@@ -6662,8 +6663,8 @@ elif page == "📈 Stock Analysis":
             )
             st.plotly_chart(hfig, use_container_width=True)
 
-    # Client brief
-    with st.expander("📄 Client Brief"):
+    # Analysis summary
+    with st.expander("📋 Analysis Summary"):
         today_str = date.today().strftime("%B %d, %Y")
         lines = [f"# Investment Brief — {today_str}",
                  f"Portfolio: ${portfolio_value:,.0f} · Moderate Risk\n\n---"]
