@@ -6024,8 +6024,9 @@ elif page == "📈 Stock Analysis":
             _sa_is_sell = rec["label"] in ("Sell", "Strong Sell")
             _sa_is_hold = rec["label"] == "Hold"
             _sa_holding = None
-            if not port_df.empty and ticker in port_df["Ticker"].values:
-                _sa_holding = port_df[port_df["Ticker"] == ticker].iloc[0].to_dict()
+            _sa_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
+            if not _sa_port.empty and ticker in _sa_port["Ticker"].values:
+                _sa_holding = _sa_port[_sa_port["Ticker"] == ticker].iloc[0].to_dict()
 
             _plan_label = "🚪 Exit Plan" if _sa_is_sell else "📋 Trade Plan"
             plan_tab, chart_tab, risk_tab, deep_tab = st.tabs(
