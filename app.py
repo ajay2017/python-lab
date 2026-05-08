@@ -4365,8 +4365,8 @@ if page == "🏠 My Portfolio":
             },
             "Gemini (Google)": {
                 "models": {
-                    "gemini-1.5-flash": "Gemini 1.5 Flash — fast",
-                    "gemini-1.5-pro":   "Gemini 1.5 Pro — more capable",
+                    "gemini-2.0-flash":       "Gemini 2.0 Flash — fast (free tier)",
+                    "gemini-2.5-flash-preview-04-17": "Gemini 2.5 Flash — most capable",
                 },
                 "secrets_path": ("google", "api_key"),
                 "env_var":      "GOOGLE_API_KEY",
