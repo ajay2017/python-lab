@@ -529,6 +529,26 @@ with st.sidebar:
         f"<span style='color:#888'> · {mkt['time_et']}</span>",
         unsafe_allow_html=True,
     )
+    if not mkt["is_open"]:
+        # Compute last trading day for the closed-market note
+        from datetime import timedelta as _td
+        _now_et   = datetime.now(_pytz.timezone("America/New_York"))
+        _weekday  = _now_et.weekday()          # 0=Mon … 6=Sun
+        _hour_et  = _now_et.hour + _now_et.minute / 60
+        if _weekday >= 5:                       # weekend → back to Friday
+            _last_close = _TODAY_ET - _td(days=_weekday - 4)
+        elif _hour_et < 9.5:                    # pre-market → previous trading day
+            _prev = _TODAY_ET - _td(days=1)
+            while _prev.weekday() >= 5:
+                _prev -= _td(days=1)
+            _last_close = _prev
+        else:                                   # after-hours / overnight → today
+            _last_close = _TODAY_ET
+        st.caption(
+            f"📊 Showing end-of-day data as of "
+            f"{_last_close.strftime('%a %b %d')}. "
+            f"Prices & signals update when market opens."
+        )
 
     # Refresh button
     if st.button("🔄 Refresh All Data", use_container_width=True):
