@@ -1221,7 +1221,7 @@ if page == "🏠 My Portfolio":
                 _rc1, _rc2, _rc3, _rc4 = st.columns([2, 2, 2, 2])
                 _rc1.markdown(f"**{_t}**")
                 _rc2.markdown(str(_rrow.get("Sector", "")))
-                _rc3.markdown(f"{round(_f(_rrow.get('Weight (%)')), 1):.1f}%")
+                _rc3.markdown(f"{round(float(_rrow.get('Weight (%)') or 0), 1):.1f}%")
                 _rc4.number_input(
                     "target", key=f"_rb_tgt_{_t}",
                     min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
@@ -4506,7 +4506,7 @@ if page == "🏠 My Portfolio":
             _ctx_lines += ["", "## ACTIVE ALERTS"]
             if alert_list:
                 for _al in alert_list[:12]:
-                    _ctx_lines.append(f"  [{_al['level'].upper()}] {_re.sub(r'[*_`]', '', _al['msg'])}")
+                    _ctx_lines.append(f"  [{_al['level'].upper()}] {_al['msg'].replace('*','').replace('_','').replace('`','')}")
             else:
                 _ctx_lines.append("  No active alerts.")
             _live_idx = fetch_market_indices()
@@ -6285,7 +6285,7 @@ elif page == "📅 Economic Calendar":
     for _ec_date, _ec_day_events in _groupby(_ec_filtered, key=lambda x: x["date"]):
         _ec_day_list = list(_ec_day_events)
         _delta_days  = (_ec_date - date.today()).days
-        _date_label  = _ec_date.strftime("%A, %B %-d") if hasattr(_ec_date, "strftime") else str(_ec_date)
+        _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ") if hasattr(_ec_date, "strftime") else str(_ec_date)
         _urgency_tag = ""
         if _delta_days < 0:
             _urgency_tag = " — *completed*"
