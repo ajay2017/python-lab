@@ -318,6 +318,12 @@ def _fetch_fmp(fmp_key: str, from_date: _date, to_date: _date) -> list[dict]:
         if resp.status_code == 429:
             _ah.record("fmp", "rate_limit")
             return []
+        if resp.status_code == 403:
+            _ah.record("fmp", "error", msg="403 — Economic calendar requires a paid FMP plan (Starter+). Free tier does not include this endpoint.")
+            return []
+        if resp.status_code == 401:
+            _ah.record("fmp", "error", msg="401 — Invalid or expired FMP API key. Check your key at financialmodelingprep.com.")
+            return []
         if resp.status_code != 200:
             _ah.record("fmp", "error", msg=f"HTTP {resp.status_code}")
             return []

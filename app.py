@@ -6616,7 +6616,23 @@ elif page == "📅 Economic Calendar":
             st.session_state["_ec_fmp_key"] = _ec_key_input
             _ec_fmp_key = _ec_key_input
         if _ec_fmp_key:
-            st.success("FMP key active — live estimates enabled.")
+            _fmp_health = _ah.get_health("fmp")
+            _fmp_err    = _fmp_health.get("last_error", "")
+            if "403" in _fmp_err:
+                st.warning(
+                    "⚠️ **FMP key is valid but this endpoint requires a paid plan.**  \n"
+                    "The economic calendar (`/api/v3/economic_calendar`) is not available on the free tier.  \n"
+                    "👉 Upgrade to FMP Starter ($14.99/mo) at [financialmodelingprep.com](https://financialmodelingprep.com/developer/docs/pricing) "
+                    "to enable live estimates.  \n"
+                    "The app continues to work on the **static backbone** (FOMC, CPI, NFP, GDP, PPI, Retail Sales) — "
+                    "only live consensus estimates and secondary events are unavailable.",
+                )
+            elif "401" in _fmp_err:
+                st.error(
+                    "❌ **Invalid or expired FMP API key.** Check your key at financialmodelingprep.com."
+                )
+            else:
+                st.success("FMP key active — live estimates enabled.")
         else:
             st.info("Running on static backbone only (FOMC, CPI, NFP, GDP). Add FMP key for live estimates and consensus values.")
 
