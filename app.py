@@ -33,6 +33,7 @@ from stock_analyzer.rebalancer import (
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
+from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import build_macro_calendar, HIGH as MC_HIGH, MEDIUM as MC_MEDIUM
 from stock_analyzer.macro_playbook import build_event_playbooks
 from stock_analyzer.targets import (
@@ -732,6 +733,81 @@ if page == "🏠 My Portfolio":
 
     # Cache enriched port_df (with Sector) so other pages can use it
     st.session_state["_port_df_enriched"] = port_df
+
+    # ── Stock split detection ─────────────────────────────────────────────────
+    _sp_check_key = f"_split_check_{_TODAY_ET}"
+    if _sp_check_key not in st.session_state:
+        _dismissed_sp = st.session_state.get("_dismissed_splits", set())
+        with st.spinner("Checking for unaccounted stock splits…"):
+            st.session_state[_sp_check_key] = detect_portfolio_splits(
+                st.session_state.holdings_df,
+                st.session_state.get("_live_prices", {}),
+                dismissed=_dismissed_sp,
+            )
+    _pending_splits = st.session_state.get(_sp_check_key, [])
+
+    for _sp in _pending_splits:
+        _sp_key = f"{_sp['ticker']}_{_sp['split_date']}"
+        _sp_color = "#f59e0b"
+        st.markdown(
+            f"<div style='background:#1a1200;border:1px solid {_sp_color};"
+            f"border-left:4px solid {_sp_color};border-radius:8px;"
+            f"padding:16px 20px;margin-bottom:12px'>"
+            f"<span style='color:{_sp_color};font-weight:700;font-size:1.05em'>"
+            f"⚠️ Stock Split Detected — {_sp['ticker']} {_sp['ratio_str']} {_sp['split_type']} Split"
+            f"</span>"
+            f"<span style='color:#aaa;font-size:0.85em;margin-left:12px'>"
+            f"detected on {_sp['split_date']}</span>"
+            f"<div style='display:flex;gap:40px;margin-top:12px;font-size:0.9em'>"
+            f"<div><span style='color:#ef4444'>❌ Before adjustment</span><br>"
+            f"<b>{_sp['orig_shares']:g} shares</b> @ <b>${_sp['orig_avg_cost']:,.2f}</b><br>"
+            f"<span style='color:#ef4444'>P&L: {_sp['orig_pnl_pct']:+.1f}%</span></div>"
+            f"<div style='color:#aaa;font-size:1.4em;align-self:center'>→</div>"
+            f"<div><span style='color:#22c55e'>✅ After adjustment</span><br>"
+            f"<b>{_sp['adj_shares']:g} shares</b> @ <b>${_sp['adj_avg_cost']:,.2f}</b><br>"
+            f"<span style='color:#22c55e'>P&L: {_sp['adj_pnl_pct']:+.1f}%</span></div>"
+            f"<div style='color:#aaa;font-size:0.82em;align-self:center;max-width:260px'>"
+            f"Current price: <b>${_sp['current_price']:,.2f}</b><br>"
+            f"This adjusts your cost basis and share count to reflect the {_sp['ratio_str']} split. "
+            f"Your actual investment value is unchanged.</div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+        _sp_c1, _sp_c2, _sp_c3 = st.columns([2, 2, 8])
+        with _sp_c1:
+            if st.button(f"✅ Apply Adjustment", key=f"_sp_apply_{_sp_key}",
+                         type="primary", use_container_width=True):
+                _hdf = st.session_state.holdings_df.copy()
+                _mask = _hdf["Ticker"] == _sp["ticker"]
+                _hdf.loc[_mask, "Shares"]      = _sp["adj_shares"]
+                _hdf.loc[_mask, "Avg Cost ($)"] = _sp["adj_avg_cost"]
+                st.session_state.holdings_df = _hdf
+                if db.save_holdings(_hdf):
+                    # Invalidate caches so portfolio rebuilds with new values
+                    for _k in list(st.session_state.keys()):
+                        if _k.startswith("_split_check_") or _k.startswith("_live_prices"):
+                            del st.session_state[_k]
+                    st.success(
+                        f"{_sp['ticker']} adjusted: {_sp['orig_shares']:g} shares @ "
+                        f"${_sp['orig_avg_cost']:,.2f} → {_sp['adj_shares']:g} shares @ "
+                        f"${_sp['adj_avg_cost']:,.2f}"
+                    )
+                    st.rerun()
+                else:
+                    st.error("Failed to save — check Supabase connection.")
+        with _sp_c2:
+            if st.button("Dismiss", key=f"_sp_dismiss_{_sp_key}",
+                         use_container_width=True):
+                _dismissed = st.session_state.get("_dismissed_splits", set())
+                _dismissed.add(_sp_key)
+                st.session_state["_dismissed_splits"] = _dismissed
+                # Remove from today's cache
+                if _sp_check_key in st.session_state:
+                    st.session_state[_sp_check_key] = [
+                        s for s in st.session_state[_sp_check_key]
+                        if f"{s['ticker']}_{s['split_date']}" != _sp_key
+                    ]
+                st.rerun()
 
     total_val   = port_df["Market Value"].sum()
     total_cost  = (port_df["Avg Cost"] * port_df["Shares"]).sum()
