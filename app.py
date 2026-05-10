@@ -6258,10 +6258,24 @@ elif page == "📈 Stock Analysis":
                               help=_tip("R:R Ratio"))
 
                     if _sa_holding:
+                        # Pre-compute earnings proximity so we can fold it into this message
+                        # rather than showing a contradictory standalone warning below.
+                        _earn_str = r.get("earnings", "")
+                        _earn_note = ""
+                        try:
+                            if _earn_str:
+                                _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - date.today()).days
+                                if 0 <= _earn_d <= 21:
+                                    _earn_note = (
+                                        f" Earnings in **{_earn_d} days** ({_earn_str}) — "
+                                        "consider reduced add-on size or wait until after the report."
+                                    )
+                        except Exception:
+                            pass
                         st.info(
                             f"**Already held:** {int(_sa_holding.get('Shares', 0))} shares · "
                             f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%. "
-                            "Sizing below is for adding to your existing position."
+                            f"Sizing below is for adding to your existing position.{_earn_note}"
                         )
 
                     if ps:
@@ -6331,7 +6345,13 @@ elif page == "📈 Stock Analysis":
                     try:
                         days = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
                         if 0 <= days <= 21:
-                            st.warning(f"⚠️ Earnings in {days} days ({earn}) — consider reduced size.")
+                            # For held tickers on a Buy signal the earnings note is already
+                            # merged into the "Already held" info box above — skip the duplicate.
+                            if not _sa_holding:
+                                st.warning(
+                                    f"⚠️ Earnings in {days} days ({earn}) — "
+                                    "consider reduced position size or waiting until after the report."
+                                )
                         else:
                             st.info(f"📅 Next earnings: {earn} ({days}d)")
                     except Exception:
