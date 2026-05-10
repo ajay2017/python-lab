@@ -4003,9 +4003,10 @@ if page == "🏠 My Portfolio":
         # ── Portfolio Risk Dashboard ──────────────────────────────────────────
         if _port_risk:
             st.markdown("### Portfolio Risk Dashboard")
+            _rfr_display = _get_rfr()
             st.caption(
                 "All metrics derived from 6-month weighted daily portfolio returns. "
-                "Risk-free rate: 4.5% (approximate 3-month T-bill). "
+                f"Risk-free rate: {_rfr_display*100:.2f}% (live 13-week T-bill, ^IRX). "
                 "Weights are current allocation — not time-weighted."
             )
 
@@ -4147,6 +4148,74 @@ if page == "🏠 My Portfolio":
                     "Red fill = periods below prior high. "
                     f"Current drawdown from peak: **{_current_dd:.1f}%**"
                 )
+
+            # ── Beta contribution breakdown ────────────────────────────────
+            if _beta is not None and held_data:
+                _bc_rows = []
+                for _, _bcrow in port_df.iterrows():
+                    _bct = _bcrow["Ticker"]
+                    _bcb = ((held_data.get(_bct) or {})
+                            .get("risk_metrics", {})
+                            .get("beta"))
+                    _bcw = float(_bcrow.get("Weight (%)", 0))
+                    if _bcb is not None and _bcw > 0:
+                        _bcb = float(_bcb)
+                        _bc_rows.append({
+                            "ticker":       _bct,
+                            "beta":         round(_bcb, 2),
+                            "weight_pct":   round(_bcw, 1),
+                            "contribution": round(_bcb * _bcw / 100, 3),
+                        })
+                if _bc_rows:
+                    _bc_rows.sort(key=lambda x: -x["contribution"])
+                    _bc_tickers = [r["ticker"]       for r in _bc_rows]
+                    _bc_contribs = [r["contribution"] for r in _bc_rows]
+                    _bc_betas    = [r["beta"]          for r in _bc_rows]
+                    _bc_weights  = [r["weight_pct"]    for r in _bc_rows]
+                    _bc_colors   = [
+                        "#ff4444" if c > 0.15 else
+                        "#ffbb33" if c > 0.08 else
+                        "#00C851"
+                        for c in _bc_contribs
+                    ]
+                    _bc_fig = go.Figure(go.Bar(
+                        x=_bc_contribs,
+                        y=_bc_tickers,
+                        orientation="h",
+                        marker_color=_bc_colors,
+                        text=[
+                            f"β {b:.2f} · {w:.0f}% weight → {c:.3f} contrib"
+                            for b, w, c in zip(_bc_betas, _bc_weights, _bc_contribs)
+                        ],
+                        textposition="outside",
+                        hovertemplate=(
+                            "<b>%{y}</b><br>"
+                            "Beta contribution: %{x:.3f}<br>"
+                            "<extra></extra>"
+                        ),
+                    ))
+                    _bc_fig.add_vline(
+                        x=_beta / len(_bc_rows),
+                        line_dash="dot", line_color="#888",
+                        annotation_text="Equal contrib",
+                        annotation_position="top right",
+                    )
+                    _bc_fig.update_layout(
+                        title=f"Beta Contribution by Position  (Portfolio β = {_beta:.2f})",
+                        template="plotly_dark",
+                        height=max(220, 36 * len(_bc_rows)),
+                        margin=dict(l=0, r=160, t=40, b=0),
+                        xaxis=dict(title="Weighted beta contribution", gridcolor="#1f2937"),
+                        yaxis=dict(autorange="reversed", gridcolor="#1f2937"),
+                        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_bc_fig, use_container_width=True)
+                    st.caption(
+                        "Contribution = position beta × portfolio weight. "
+                        "🔴 Red bars are the primary beta drivers — reducing these positions "
+                        "has the highest impact on lowering portfolio beta."
+                    )
 
             st.divider()
 

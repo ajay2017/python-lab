@@ -104,26 +104,44 @@ def build_risk_advisor_recommendations(
                 w = tr["weight"]
                 if b is not None and b > 0 and w > 0:
                     contribs.append({
-                        "ticker":  t,
-                        "value":   round(b, 2),
-                        "weight":  w,
-                        "label":   f"β {b:.2f}  ·  {w:.1f}% of portfolio",
-                        "_contrib": b * w / 100,
+                        "ticker":       t,
+                        "value":        round(b, 2),
+                        "weight":       w,
+                        "market_value": tr["market_value"],
+                        "label":        f"β {b:.2f}  ·  {w:.1f}% of portfolio",
+                        "_contrib":     b * w / 100,
                     })
             contribs.sort(key=lambda x: -x["_contrib"])
             top_beta = contribs[:3]
 
-            target   = 1.2
-            excess   = beta - target
-            loss_10  = excess * pv * 0.10
-            loss_20  = excess * pv * 0.20
+            target  = 1.2
+            excess  = beta - target
+            loss_10 = excess * pv * 0.10
+            loss_20 = excess * pv * 0.20
             top_names = "  ·  ".join(
                 f"**{x['ticker']}** (β {x['value']:.2f})"
                 for x in top_beta
             ) if top_beta else "your highest-weight positions"
 
+            # Compute exact new portfolio beta after selling 50% of the top contributor.
+            # Formula: new_beta = (beta - w_i × b_i × f) / (1 - w_i × f)
+            # where w_i is weight as fraction and f is the sell fraction.
             trim_ticker = top_beta[0]["ticker"] if top_beta else None
-            trim_amt    = round(min(top_beta[0]["weight"] * 0.30, 8) / 100 * pv) if top_beta else 0
+            if top_beta:
+                _tw   = top_beta[0]["weight"] / 100          # weight as fraction
+                _tb   = top_beta[0]["value"]                  # position beta
+                _tf   = 0.50                                   # sell 50%
+                _new_beta = (_tw * _tf > 0.999) and beta or \
+                    round((beta - _tw * _tb * _tf) / max(1 - _tw * _tf, 0.001), 2)
+                _new_beta    = round(max(float(_new_beta), 0.3), 2)
+                _beta_drop   = round(beta - _new_beta, 2)
+                _trim_dollar = round(top_beta[0]["market_value"] * _tf)
+                _saved_10    = round(_beta_drop * pv * 0.10)
+                _saved_20    = round(_beta_drop * pv * 0.20)
+            else:
+                _new_beta = round(beta * 0.85, 2)
+                _beta_drop = round(beta - _new_beta, 2)
+                _trim_dollar = _saved_10 = _saved_20 = 0
 
             recs.append({
                 "priority": beta_priority,
@@ -142,16 +160,26 @@ def build_risk_advisor_recommendations(
                 ),
                 "root_tickers": top_beta,
                 "recommendation": (
-                    (f"Trim **{trim_ticker}** by ~30% of position (~${trim_amt:,.0f}). " if trim_ticker else "")
-                    + f"This brings weighted portfolio Beta toward {target:.1f}. "
-                    "Alternatively, add 8–10% in a defensive sector (Healthcare XLV, Consumer Staples XLP, "
-                    "or Utilities XLU) to dilute beta without exiting high-conviction names."
+                    (
+                        f"Sell 50% of **{trim_ticker}** (~${_trim_dollar:,.0f}): "
+                        f"portfolio beta drops **{beta:.2f} → {_new_beta:.2f}** "
+                        f"(saving ~${_saved_10:,.0f} in a 10% correction). "
+                    ) if trim_ticker else ""
+                ) + (
+                    f"To reach target beta of {target:.1f}, also consider adding 8–10% in a "
+                    "defensive sector (Healthcare XLV, Consumer Staples XLP, or Utilities XLU) "
+                    "to dilute beta without fully exiting high-conviction names."
                 ),
                 "expected_outcome": (
-                    f"Reducing Beta to {target:.1f} eliminates ~${loss_10:,.0f} of extra loss in a 10% correction "
-                    f"and ~${loss_20:,.0f} in a 20% bear market. "
-                    "Defensive additions typically bring portfolio Beta from the current "
-                    f"{beta:.2f} to {beta - excess * 0.6:.2f} with a single 10% position change."
+                    (
+                        f"Trimming 50% of **{trim_ticker}** reduces portfolio beta "
+                        f"from {beta:.2f} to **{_new_beta:.2f}** — "
+                        f"saving ~${_saved_10:,.0f} in a 10% correction and ~${_saved_20:,.0f} "
+                        f"in a 20% bear market. "
+                    ) if trim_ticker else ""
+                ) + (
+                    f"Full reduction to target {target:.1f} eliminates "
+                    f"~${loss_10:,.0f} / ~${loss_20:,.0f} of extra loss in 10% / 20% corrections."
                 ),
                 "institutional_lens": (
                     "Institutional risk teams impose a hard Beta ceiling of 1.4 for managed equity accounts, "
