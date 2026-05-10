@@ -53,7 +53,11 @@ def sortino_ratio(df: pd.DataFrame, risk_free_annual: float = 0.045) -> float:
     returns = df["Close"].pct_change().dropna()
     rf_daily = risk_free_annual / 252
     excess = returns - rf_daily
-    downside_std = excess[excess < 0].std()
+    downside = excess[excess < 0]
+    if downside.empty:
+        # No negative excess-return days: strong uptrend — Sortino is excellent, not zero.
+        return 99.0 if excess.mean() > 0 else 0.0
+    downside_std = downside.std()
     if downside_std == 0 or np.isnan(downside_std):
         return 0.0
     return round(float((excess.mean() / downside_std) * np.sqrt(252)), 2)

@@ -149,10 +149,12 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     # ── Verdict ───────────────────────────────────────────────────────────────
     layers = len(agreed) + len(conflicts)
 
-    if earnings_conflict:
-        verdict       = "caution"
-        verdict_label = "⚠️ Caution — Earnings Risk"
-        verdict_color = "#f59e0b"
+    # Earnings within 7 days is a binary risk event. When combined with other signal
+    # conflicts it must ESCALATE severity, not override to a lower "caution" level.
+    if earnings_conflict and (composite_conflict or sentiment_conflict):
+        verdict       = "conflicted"
+        verdict_label = "❌ Conflicted — Earnings + Signal Conflict"
+        verdict_color = "#ef4444"
     elif composite_conflict and sentiment_conflict:
         verdict       = "conflicted"
         verdict_label = "❌ Conflicted — Multiple Conflicts"
@@ -161,6 +163,10 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict       = "conflicted"
         verdict_label = "❌ Conflicted — Composite vs Technical"
         verdict_color = "#ef4444"
+    elif earnings_conflict:
+        verdict       = "caution"
+        verdict_label = "⚠️ Caution — Earnings Within 7 Days"
+        verdict_color = "#f59e0b"
     elif sentiment_conflict:
         verdict       = "mixed"
         verdict_label = "⚠️ Mixed — Negative News"

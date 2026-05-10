@@ -21,7 +21,15 @@ def rsi(close: pd.Series, length: int = 14) -> pd.Series:
     avg_gain = gain.ewm(com=length - 1, adjust=False).mean()
     avg_loss = loss.ewm(com=length - 1, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    rsi_vals = 100 - 100 / (1 + rs)
+    # avg_loss == 0 means no losing periods in the EWM window.
+    # RSI approaches 100 in a pure uptrend; fill the NaN produced by /0 accordingly.
+    # When both avg_gain and avg_loss are 0 (flat price) use 50 (neutral).
+    rsi_vals = rsi_vals.where(
+        avg_loss > 0,
+        np.where(avg_gain > 0, 100.0, 50.0)
+    )
+    return rsi_vals
 
 
 def macd(

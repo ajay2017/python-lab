@@ -83,7 +83,7 @@ def load_holdings() -> pd.DataFrame:
             if rows:
                 df = pd.DataFrame(rows)[["ticker", "shares", "avg_cost"]]
                 df.columns = ["Ticker", "Shares", "Avg Cost ($)"]
-                df["Shares"] = df["Shares"].astype(int)
+                df["Shares"] = df["Shares"].astype(float)
                 df["Avg Cost ($)"] = df["Avg Cost ($)"].astype(float)
                 return df
             # Table is empty — return empty frame so user starts fresh
