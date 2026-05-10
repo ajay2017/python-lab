@@ -3,7 +3,7 @@ import pandas as pd
 from stock_analyzer.indicators import sma, rsi as calc_rsi
 
 SECTOR_UNIVERSE = {
-    "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "SNOW"],
+    "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "WDAY"],
     "Cybersecurity": ["PANW", "CRWD", "ZS", "NET", "FTNT", "OKTA", "S"],
     "Semiconductors": ["NVDA", "AMD", "AVGO", "MU", "QCOM", "AMAT", "ASML", "INTC"],
     "Consumer Tech": ["AAPL", "NFLX", "SHOP", "UBER", "ABNB"],

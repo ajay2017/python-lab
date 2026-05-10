@@ -1,4 +1,13 @@
 import pandas as pd
+from stock_analyzer.indicators import atr as _atr_series
+
+
+def _atr_val(df: pd.DataFrame, length: int = 14) -> float:
+    """14-period ATR, falling back to mean daily range if insufficient data."""
+    s = _atr_series(df["High"], df["Low"], df["Close"], length).dropna()
+    if not s.empty:
+        return float(s.iloc[-1])
+    return float((df["High"] - df["Low"]).tail(length).mean())
 
 
 def support_resistance(df: pd.DataFrame, lookback: int = 60) -> dict:
@@ -60,8 +69,13 @@ def compute_price_targets(
     ]
     bull = round(max(c for c in bull_candidates if c > current_price), 2)
 
-    # Bear: strongest support floor below current price
-    bear = round(max(nearest_support * 0.98, week52_low * 1.03, current_price * 0.78), 2)
+    # Bear: strongest support floor below current price.
+    # ATR-based floor replaces the old flat 0.78× multiplier so that volatile
+    # stocks get a deeper bear scenario and stable stocks a shallower one.
+    # 6× ATR ≈ 1.5 monthly adverse moves — a meaningful but not extreme bear case.
+    atr = _atr_val(df)
+    atr_bear = current_price - 6.0 * atr
+    bear = round(max(nearest_support * 0.98, week52_low * 1.03, atr_bear), 2)
 
     def pct(t: float) -> float:
         return round((t - current_price) / current_price * 100, 1)

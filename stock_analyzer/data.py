@@ -227,6 +227,21 @@ def fetch_spy(period: str = "6mo") -> pd.DataFrame:
     return fetch_price_history("SPY", period)
 
 
+def fetch_risk_free_rate(fallback: float = 0.045) -> float:
+    """
+    Return the current annualised risk-free rate from the 13-week T-bill (^IRX).
+    ^IRX quotes in percentage points (e.g. 5.25 = 5.25%), so we divide by 100.
+    Falls back to `fallback` on any error.
+    """
+    try:
+        hist = _retry(lambda: yf.Ticker("^IRX").history(period="5d"))
+        if hist is not None and not hist.empty:
+            return round(float(hist["Close"].iloc[-1]) / 100, 4)
+    except Exception:
+        pass
+    return fallback
+
+
 def fetch_financials_from_info(info: dict) -> dict:
     """Extract financials from a pre-fetched .info dict — no extra API call."""
     fcf = info.get("freeCashflow")

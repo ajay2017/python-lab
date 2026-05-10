@@ -14,7 +14,7 @@ import html as _html
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
-    curate_news_items, fetch_price_history,
+    curate_news_items, fetch_price_history, fetch_risk_free_rate,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -620,6 +620,12 @@ with st.sidebar:
         st.markdown("🟡 **Local session only** — [configure DB to persist](https://supabase.com)")
     st.caption("Prices: Yahoo Finance · Not financial advice")
 
+# ── Risk-free rate (13-week T-bill, refreshed daily) ─────────────────────────
+@st.cache_data(ttl=86400)
+def _get_rfr() -> float:
+    return fetch_risk_free_rate()
+
+
 # ── Shared data loader ────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def load_all(ticker: str, period: str = "6mo") -> dict:
@@ -628,7 +634,8 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     df = compute_indicators(bundle["history"])
     t_score, t_signals = technical_score(df)
     financials = fetch_financials_from_info(bundle["info"])
-    f_score, f_signals = fundamental_score(financials)
+    _sector_for_scoring = bundle.get("info", {}).get("sector", "")
+    f_score, f_signals = fundamental_score(financials, _sector_for_scoring)
     avg_sent, headlines = analyze_news(bundle["news"])
     s_score = sentiment_score_0_100(avg_sent)
     total = combined_score(t_score, f_score, s_score)
@@ -638,11 +645,12 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
     targets = compute_price_targets(df, financials, price) if price else None
     sr = support_resistance(df)
+    _rfr = _get_rfr()
     try:
         spy_df = fetch_spy(period)
-        risk_metrics = compute_all_risk(df, spy_df)
+        risk_metrics = compute_all_risk(df, spy_df, _rfr)
     except Exception:
-        risk_metrics = compute_all_risk(df, None)
+        risk_metrics = compute_all_risk(df, None, _rfr)
     upside = upside_potential(price, financials) if price else None
     _info  = bundle.get("info", {})
     name   = _info.get("shortName") or _info.get("longName") or ticker
@@ -962,7 +970,7 @@ if page == "🏠 My Portfolio":
     # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
     try:
         _spy_for_risk = fetch_spy("6mo")
-        _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk)
+        _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
     except Exception:
         _port_risk = {}
 

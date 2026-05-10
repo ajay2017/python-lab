@@ -85,10 +85,14 @@ def beta_vs_market(df: pd.DataFrame, market_df: pd.DataFrame) -> float | None:
     return round(float(cov / mkt_var), 2)
 
 
-def compute_all_risk(df: pd.DataFrame, spy_df: pd.DataFrame | None = None) -> dict:
+def compute_all_risk(
+    df: pd.DataFrame,
+    spy_df: pd.DataFrame | None = None,
+    risk_free_rate: float = 0.045,
+) -> dict:
     return {
-        "sharpe": sharpe_ratio(df),
-        "sortino": sortino_ratio(df),
+        "sharpe": sharpe_ratio(df, risk_free_rate),
+        "sortino": sortino_ratio(df, risk_free_rate),
         "max_drawdown": max_drawdown_pct(df),
         "var_95": var_95_daily(df),
         "beta": beta_vs_market(df, spy_df) if spy_df is not None else None,

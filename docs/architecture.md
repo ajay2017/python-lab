@@ -230,7 +230,28 @@ All component scores are on a 0–100 scale.
 | 30–43 | ⬇ Sell | Weakening; consider reducing |
 | < 30 | ⬇⬇ Strong Sell | Multiple bearish signals; elevated downside risk |
 
-### 5.3 Technical Score Components (0–100)
+### 5.3 Fundamental Score — Sector-Relative Benchmarks
+
+P/E, revenue growth, and profit margin thresholds are normalised per sector so high-multiple growth companies (Technology, Communication Services) are not structurally penalised vs value sectors (Utilities, Energy).
+
+| Sector | P/E Cheap | P/E Fair Hi | P/E Expensive | Rev Strong | Rev Healthy | Margin Excel | Margin Good |
+|--------|-----------|-------------|---------------|------------|-------------|--------------|-------------|
+| Technology | <20 | <45 | ≥65 | >15% | >8% | >20% | >12% |
+| Healthcare | <15 | <30 | ≥50 | >12% | >6% | >20% | >10% |
+| Financial Services | <10 | <18 | ≥28 | >10% | >5% | >25% | >15% |
+| Consumer Cyclical | <14 | <25 | ≥40 | >12% | >6% | >12% | >6% |
+| Consumer Defensive | <15 | <24 | ≥35 | >8% | >4% | >10% | >5% |
+| Industrials | <13 | <22 | ≥35 | >10% | >5% | >15% | >8% |
+| Basic Materials | <10 | <20 | ≥30 | >8% | >4% | >15% | >8% |
+| Energy | <10 | <18 | ≥28 | >10% | >5% | >12% | >6% |
+| Utilities | <14 | <20 | ≥28 | >5% | >2% | >15% | >8% |
+| Communication Services | <15 | <28 | ≥45 | >10% | >5% | >20% | >10% |
+| Real Estate | <25 | <45 | ≥70 | >8% | >4% | >30% | >15% |
+| Default | <15 | <28 | ≥45 | >15% | >8% | >18% | >10% |
+
+Earnings growth and debt/equity retain universal thresholds; FCF Yield retains universal thresholds.
+
+### 5.4 Technical Score Components (0–100)
 
 | Component | Max Pts | Key Thresholds |
 |-----------|---------|----------------|
@@ -240,7 +261,7 @@ All component scores are on a 0–100 scale.
 | Bollinger Band position | 20 | Below lower=18; lower-mid=14; mid-upper=8; above upper=2 |
 | OBV trend | 20 | Rising=20; neutral=10; falling=2 |
 
-### 5.4 Scanner Score Components (0–100)
+### 5.5 Scanner Score Components (0–100)
 
 | Component | Max Pts | Key Thresholds |
 |-----------|---------|----------------|
@@ -350,6 +371,12 @@ def load_all(ticker, period):
 def _fetch_sector_returns():
     # Downloads all sector ETFs (batch)
     # Computes 1W/1M/3M/6M returns
+
+@st.cache_data(ttl=86400)  # 24 hours
+def _get_rfr():
+    # Fetches 13-week T-bill rate (^IRX) as annual decimal
+    # Fallback: 0.045 (4.5%) if Yahoo Finance unavailable
+    # Used for Sharpe and Sortino calculations
 
 # Not cached (always fresh):
 fetch_market_indices()      # Called on Daily Briefing load
