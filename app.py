@@ -412,6 +412,11 @@ def _tip(key: str) -> str:
     return _TIPS.get(key, "")
 
 
+def _m(val_str: str) -> str:
+    """Return masked placeholder when privacy mode is on, otherwise the value as-is."""
+    return "••••••" if st.session_state.get("_privacy") else val_str
+
+
 def _fill_news_slot(slot, items: list) -> None:
     """Render curated news items into a sidebar container slot."""
     with slot:
@@ -497,15 +502,22 @@ if not st.session_state.get("db_loaded"):
 with st.sidebar:
     # ── Portfolio value banner — always at the very top ──────────────────
     _pv = st.session_state.get("_portfolio_value", 0)
+    # Privacy toggle — persists across reruns within the session
+    _priv_on = st.session_state.get("_privacy", False)
+
     if _pv > 0:
         _risk_val = _pv * MODERATE_RISK_PCT
-        _pv_label    = f"${_pv:,.0f}"
-        _risk_label  = f"${_risk_val:,.0f}"
+        _pv_label    = _m(f"${_pv:,.0f}")
+        _risk_label  = _m(f"${_risk_val:,.0f}")
+        _eye_icon    = "🙈" if not _priv_on else "👁"
         st.markdown(
             f"<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
-            f"margin-bottom:12px;color:#fff'>"
-            f"<div style='font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
-            f"text-transform:uppercase;opacity:0.8;margin-bottom:4px'>Portfolio Value</div>"
+            f"margin-bottom:4px;color:#fff'>"
+            f"<div style='display:flex;align-items:center;justify-content:space-between;"
+            f"font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
+            f"text-transform:uppercase;opacity:0.8;margin-bottom:4px'>"
+            f"<span>Portfolio Value</span>"
+            f"</div>"
             f"<div style='font-size:1.5em;font-weight:700;line-height:1.1'>{_pv_label}</div>"
             f"<div style='font-size:0.74em;margin-top:6px;opacity:0.9'>"
             f"Risk/trade: <b>{_risk_label}</b>&nbsp;"
@@ -513,6 +525,11 @@ with st.sidebar:
             f"</div>",
             unsafe_allow_html=True,
         )
+        if st.button(f"{_eye_icon} {'Hide' if not _priv_on else 'Show'} values",
+                     key="_privacy_toggle", use_container_width=True,
+                     help="Hide or show all dollar amounts — useful in public"):
+            st.session_state["_privacy"] = not _priv_on
+            st.rerun()
     else:
         st.markdown(
             "<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
@@ -1191,12 +1208,12 @@ if page == "🏠 My Portfolio":
     )
 
     _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8 = st.columns(8)
-    _c1.metric("Portfolio Value",  f"${total_val:,.0f}")
-    _c2.metric("Total P&L",        f"${total_pnl:,.0f}", f"{total_pnl_pct:+.1f}%", delta_color="normal")
+    _c1.metric("Portfolio Value",  _m(f"${total_val:,.0f}"))
+    _c2.metric("Total P&L",        _m(f"${total_pnl:,.0f}"), f"{total_pnl_pct:+.1f}%", delta_color="normal")
     if _today_loaded:
         _c3.metric(
             "Today's P&L",
-            f"${_today_pnl:+,.0f}",
+            _m(f"${_today_pnl:+,.0f}"),
             f"{_today_pnl_pct:+.2f}%",
             delta_color="normal" if _today_pnl >= 0 else "inverse",
             help="Intraday gain/loss vs yesterday's close · updates every 60s",
@@ -1209,9 +1226,9 @@ if page == "🏠 My Portfolio":
     _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
                _div_label, delta_color="off")
     _c7.metric(f"Best: {best_row['Ticker']}",
-               f"{best_row['P&L (%)']:+.1f}%", f"${best_row['P&L ($)']:,.0f}", delta_color="normal")
+               f"{best_row['P&L (%)']:+.1f}%", _m(f"${best_row['P&L ($)']:,.0f}"), delta_color="normal")
     _c8.metric(f"Worst: {worst_row['Ticker']}",
-               f"{worst_row['P&L (%)']:+.1f}%", f"${worst_row['P&L ($)']:,.0f}", delta_color="normal")
+               f"{worst_row['P&L (%)']:+.1f}%", _m(f"${worst_row['P&L ($)']:,.0f}"), delta_color="normal")
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
@@ -1966,8 +1983,8 @@ if page == "🏠 My Portfolio":
             pnl_fig = go.Figure(go.Bar(
                 x=port_df["Ticker"], y=port_df["P&L ($)"],
                 marker_color=colors,
-                text=[f"${v:,.0f}<br>{p:+.1f}%" for v, p in
-                      zip(port_df["P&L ($)"], port_df["P&L (%)"])],
+                text=[(f"••••<br>{p:+.1f}%" if st.session_state.get("_privacy") else f"${v:,.0f}<br>{p:+.1f}%")
+                      for v, p in zip(port_df["P&L ($)"], port_df["P&L (%)"])],
                 textposition="outside",
             ))
             pnl_fig.update_layout(
@@ -2026,23 +2043,42 @@ if page == "🏠 My Portfolio":
         display_cols = ["Ticker", "Shares", "Avg Cost", "Price", "Market Value",
                         "P&L ($)", "P&L (%)", "Weight (%)",
                         "Stop", "Stop Type", "Gap to Stop (%)", "Signal", "Score"]
-        styled = (
-            port_df[display_cols].style
-            .map(_pnl_color, subset=["P&L ($)", "P&L (%)"])
-            .map(_stop_color, subset=["Stop Type"])
-            .map(_sig_color, subset=["Signal"])
-            .format({
-                "Avg Cost":        "${:.2f}",
-                "Price":           "${:.2f}",
-                "Market Value":    "${:,.0f}",
-                "P&L ($)":         "${:,.0f}",
-                "P&L (%)":         "{:+.1f}%",
-                "Weight (%)":      "{:.1f}%",
-                "Stop":            "${:.2f}",
-                "Gap to Stop (%)": "{:.1f}%",
-                "Score":           "{:.0f}",
-            })
-        )
+        _tbl = port_df[display_cols].copy()
+        if st.session_state.get("_privacy"):
+            for _mc in ["Avg Cost", "Market Value", "P&L ($)"]:
+                _tbl[_mc] = "••••••"
+            styled = (
+                _tbl.style
+                .map(_pnl_color, subset=["P&L (%)"])
+                .map(_stop_color, subset=["Stop Type"])
+                .map(_sig_color,  subset=["Signal"])
+                .format({
+                    "Price":           "${:.2f}",
+                    "P&L (%)":         "{:+.1f}%",
+                    "Weight (%)":      "{:.1f}%",
+                    "Stop":            "${:.2f}",
+                    "Gap to Stop (%)": "{:.1f}%",
+                    "Score":           "{:.0f}",
+                })
+            )
+        else:
+            styled = (
+                _tbl.style
+                .map(_pnl_color, subset=["P&L ($)", "P&L (%)"])
+                .map(_stop_color, subset=["Stop Type"])
+                .map(_sig_color,  subset=["Signal"])
+                .format({
+                    "Avg Cost":        "${:.2f}",
+                    "Price":           "${:.2f}",
+                    "Market Value":    "${:,.0f}",
+                    "P&L ($)":         "${:,.0f}",
+                    "P&L (%)":         "{:+.1f}%",
+                    "Weight (%)":      "{:.1f}%",
+                    "Stop":            "${:.2f}",
+                    "Gap to Stop (%)": "{:.1f}%",
+                    "Score":           "{:.0f}",
+                })
+            )
         st.dataframe(styled, use_container_width=True)
         _sig_ts = st.session_state.get("_signals_computed_at", "")
         st.caption(
@@ -2061,7 +2097,7 @@ if page == "🏠 My Portfolio":
             ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
 
             d1, d2, d3, d4 = st.columns(4)
-            d1.metric("P&L",         f"${ps_row['P&L ($)']:,.0f}", f"{ps_row['P&L (%)']:+.1f}%")
+            d1.metric("P&L",         _m(f"${ps_row['P&L ($)']:,.0f}"), f"{ps_row['P&L (%)']:+.1f}%")
             d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'],
                       help=_tip("ATR Stop"))
             d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%",
@@ -3586,17 +3622,17 @@ if page == "🏠 My Portfolio":
 
         # KPI strip
         _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
-        _pk1.metric("Total P&L",      f"${_total_pnl:+,.0f}",
+        _pk1.metric("Total P&L",      _m(f"${_total_pnl:+,.0f}"),
                     delta_color="normal" if _total_pnl >= 0 else "inverse")
-        _pk2.metric("Gross Gains",    f"${_win_total:,.0f}",
+        _pk2.metric("Gross Gains",    _m(f"${_win_total:,.0f}"),
                     f"{len(_winners)} positions", delta_color="off")
-        _pk3.metric("Gross Losses",   f"${_loss_total:,.0f}",
+        _pk3.metric("Gross Losses",   _m(f"${_loss_total:,.0f}"),
                     f"{len(_losers)} positions",  delta_color="off")
         _pk4.metric(f"Top: {_best['Ticker']}",
-                    f"${_best['P&L ($)']:+,.0f}", f"{_best['P&L (%)']:+.1f}%",
+                    _m(f"${_best['P&L ($)']:+,.0f}"), f"{_best['P&L (%)']:+.1f}%",
                     delta_color="normal")
         _pk5.metric(f"Drag: {_worst['Ticker']}",
-                    f"${_worst['P&L ($)']:+,.0f}", f"{_worst['P&L (%)']:+.1f}%",
+                    _m(f"${_worst['P&L ($)']:+,.0f}"), f"{_worst['P&L (%)']:+.1f}%",
                     delta_color="inverse")
 
         # ── Waterfall chart ───────────────────────────────────────────────────
@@ -3607,21 +3643,22 @@ if page == "🏠 My Portfolio":
             "#00C851" if v >= 0 else "#ff4444"
             for v in list(_pnl_df["P&L ($)"]) + [_total_pnl]
         ]
+        _priv = st.session_state.get("_privacy")
         _hover = [
             f"{row['Ticker']}<br>"
-            f"P&L: ${row['P&L ($)']:+,.0f} ({row['P&L (%)']:+.1f}%)<br>"
-            f"Weight: {row['Weight (%)']:.1f}%<br>"
+            + (f"P&L: •••• ({row['P&L (%)']:+.1f}%)<br>" if _priv else f"P&L: ${row['P&L ($)']:+,.0f} ({row['P&L (%)']:+.1f}%)<br>")
+            + f"Weight: {row['Weight (%)']:.1f}%<br>"
             f"Sector: {row['Sector']}<br>"
             f"Signal: {row['Signal']}"
             for _, row in _pnl_df.iterrows()
-        ] + [f"Total P&L: ${_total_pnl:+,.0f}"]
+        ] + [("Total P&L: ••••" if _priv else f"Total P&L: ${_total_pnl:+,.0f}")]
 
         _wf_fig = go.Figure(go.Waterfall(
             orientation="v",
             measure=_measures,
             x=_tickers,
             y=_values,
-            text=[f"${v:+,.0f}" for v in _values],
+            text=["••••" if _priv else f"${v:+,.0f}" for v in _values],
             textposition="outside",
             textfont=dict(size=11),
             customdata=_hover,
@@ -3664,13 +3701,13 @@ if page == "🏠 My Portfolio":
                 "#00C851" if v >= 0 else "#ff4444"
                 for v in _sec_pnl["P&L ($)"]
             ],
-            text=[f"${v:+,.0f}" for v in _sec_pnl["P&L ($)"]],
+            text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _sec_pnl["P&L ($)"]],
             textposition="outside",
             customdata=list(zip(_sec_pnl["Sector"], _sec_pnl["Share of P&L (%)"])),
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>"
-                "P&L: $%{y:+,.0f}<br>"
-                "Share: %{customdata[1]:.1f}% of total<extra></extra>"
+                + ("P&L: ••••<br>" if st.session_state.get("_privacy") else "P&L: $%{y:+,.0f}<br>")
+                + "Share: %{customdata[1]:.1f}% of total<extra></extra>"
             ),
         ))
         _sec_fig.update_layout(
@@ -4766,9 +4803,9 @@ if page == "🏠 My Portfolio":
                 f"letter-spacing:0.08em;text-transform:uppercase'>Scenario: {_active_sc['label']}</span><br>"
                 f"<span style='color:#bbb;font-size:0.88em'>{_active_sc['description']}</span><br><br>"
                 f"<span style='font-size:1.35em;font-weight:700;color:{_pnl_clr}'>"
-                f"Estimated Portfolio P&L: ${_est_pnl:+,.0f}  ({_est_move:+.1f}%)</span><br>"
+                f"Estimated Portfolio P&L: {_m(f'${_est_pnl:+,.0f}')}  ({_est_move:+.1f}%)</span><br>"
                 f"<span style='color:#aaa;font-size:0.9em'>"
-                f"Portfolio value: ${_port_val:,.0f}  →  ${_post_val:,.0f} after shock</span>"
+                f"Portfolio value: {_m(f'${_port_val:,.0f}')}  →  {_m(f'${_post_val:,.0f}')} after shock</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -4778,9 +4815,9 @@ if page == "🏠 My Portfolio":
             _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
             _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%",
                        delta_color="inverse" if _est_pnl < 0 else "normal")
-            _s3.metric("Est. $ Impact",    f"${_est_pnl:+,.0f}",
+            _s3.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"),
                        delta_color="inverse" if _est_pnl < 0 else "normal")
-            _s4.metric("Post-Shock Value", f"${_post_val:,.0f}")
+            _s4.metric("Post-Shock Value", _m(f"${_post_val:,.0f}"))
 
             # Position impact table
             if _sc_result["rows"]:
@@ -4795,13 +4832,13 @@ if page == "🏠 My Portfolio":
                     x=_st_tickers,
                     y=_st_pnls,
                     marker_color=_st_clrs,
-                    text=[f"${v:+,.0f}" for v in _st_pnls],
+                    text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _st_pnls],
                     textposition="outside",
                     customdata=list(zip(_st_moves, [r["Weight (%)"] for r in _st_rows])),
                     hovertemplate=(
                         "<b>%{x}</b><br>"
-                        "Est. P&L: $%{y:+,.0f}<br>"
-                        "Est. Move: %{customdata[0]:+.1f}%<br>"
+                        + ("Est. P&L: ••••<br>" if st.session_state.get("_privacy") else "Est. P&L: $%{y:+,.0f}<br>")
+                        + "Est. Move: %{customdata[0]:+.1f}%<br>"
                         "Weight: %{customdata[1]:.1f}%"
                         "<extra></extra>"
                     ),
