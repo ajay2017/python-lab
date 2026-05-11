@@ -360,8 +360,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _composite_score = _f(_comp_data.get("total")) if _comp_data else None
             _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
 
-            # Exclude picks where composite is available and clearly below buy threshold
-            if _composite_score is not None and _composite_score < 55:
+            # Exclude picks where composite is known and below the Buy threshold (65).
+            # Scanner score measures momentum only — composite (technical + fundamental
+            # + sentiment) is the authoritative signal. A 100/100 momentum score with
+            # a 63 composite is not a high-conviction entry.
+            if _composite_score is not None and _composite_score < 65:
                 continue
 
             # Conviction tier: drives the label shown on the card
@@ -369,7 +372,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 conviction = "unverified"
             elif _composite_score >= 68:
                 conviction = "high"
-            elif _composite_score >= 60:
+            elif _composite_score >= 65:
                 conviction = "moderate"
             else:
                 conviction = "low"

@@ -1067,6 +1067,26 @@ if page == "🏠 My Portfolio":
     except Exception:
         _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
 
+    # Auto-fetch composite scores for top scanner picks so Grow Today conviction
+    # labels are accurate without requiring a manual Refresh Signals click.
+    # load_all() is cached (30-min TTL) so this is instant if picks were recently
+    # analyzed; only the first fetch per ticker per session takes network time.
+    _sr_for_comp = st.session_state.get("scanner_results")
+    if _sr_for_comp is not None and not _sr_for_comp.empty:
+        _existing_comp = st.session_state.get("_grow_composites", {})
+        _top_for_comp  = (
+            _sr_for_comp[~_sr_for_comp["Ticker"].isin(set(held_tickers))]
+            .head(5)["Ticker"].tolist()
+        )
+        _missing_comp  = [t for t in _top_for_comp if t not in _existing_comp]
+        if _missing_comp:
+            for _tc in _missing_comp:
+                try:
+                    _existing_comp[_tc] = load_all(_tc)
+                except Exception:
+                    pass
+            st.session_state._grow_composites = _existing_comp
+
     # Build Daily Briefing (synthesises all intelligence — computed once before tabs)
     try:
         _daily_brief = build_daily_briefing(
