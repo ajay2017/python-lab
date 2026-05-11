@@ -326,7 +326,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             return _f(row.get("Score", 0)) + sector_bonus
 
         candidates["_rank"] = candidates.apply(_rank_score, axis=1)
-        candidates = candidates.sort_values("_rank", ascending=False).head(max_picks * 2)
+        # Wider pool so sector-diversity filtering has enough candidates to draw from
+        candidates = candidates.sort_values("_rank", ascending=False).head(max_picks * 4)
 
         _confirmed_picks: list[dict] = []
         _unverified_picks: list[dict] = []
@@ -397,9 +398,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             else:
                 _unverified_picks.append(pick)
 
-        # On flat days, confirmed picks take priority over unverified
+        # On flat days, confirmed picks take priority over unverified.
+        # Enforce 1-per-sector so all slots don't land in the same sector.
+        _seen_sectors: set[str] = set()
         for _pick in _confirmed_picks + _unverified_picks:
+            _ps = _pick.get("sector", "")
+            if _ps and _ps in _seen_sectors:
+                continue
             new_picks.append(_pick)
+            if _ps:
+                _seen_sectors.add(_ps)
             if len(new_picks) >= max_picks:
                 break
 
