@@ -310,21 +310,25 @@ def _affected_tickers(category: str, port_df: _pd.DataFrame) -> list[str]:
 
 # ── FRED series config ────────────────────────────────────────────────────────
 # Maps each static event name to a FRED series + how to format its value.
-# transform: "yoy_pct" needs 13 obs, "mom_pct"/"mom_diff" need 2, "level" needs 1.
+# limit must be large enough to compute BOTH current and previous values:
+#   yoy_pct  : needs 13 obs for current → fetch 14 so obs[1:] also has 13
+#   mom_pct/
+#   mom_diff : needs  2 obs for current → fetch  3 so obs[1:] also has 2
+#   level    : needs  1 obs for current → fetch  2 so obs[1]  is available
 _FRED_MAP: dict[str, dict] = {
     "CPI Inflation": {
         "series": "CPIAUCSL",        # CPI All Urban, SA (index level)
         "transform": "yoy_pct",
         "label": "CPI YoY",
         "unit": "%",
-        "limit": 13,
+        "limit": 14,                 # 13 for current + 1 so previous can also compute YoY
     },
     "Non-Farm Payrolls": {
         "series": "PAYEMS",          # Total Nonfarm Employees (thousands)
         "transform": "mom_diff",
         "label": "NFP Chg",
         "unit": "K",
-        "limit": 2,
+        "limit": 3,                  # 2 for current diff + 1 extra so previous diff has 2 obs
     },
     "GDP Advance Estimate": {
         "series": "A191RL1Q225SBEA", # Real GDP QoQ annualised % change (pre-computed)
@@ -338,14 +342,14 @@ _FRED_MAP: dict[str, dict] = {
         "transform": "mom_pct",
         "label": "PPI MoM",
         "unit": "%",
-        "limit": 2,
+        "limit": 3,                  # 2 for current pct + 1 extra for previous
     },
     "Retail Sales": {
         "series": "RSAFS",           # Advance Retail Sales, SA (millions)
         "transform": "mom_pct",
         "label": "Retail Sales MoM",
         "unit": "%",
-        "limit": 2,
+        "limit": 3,
     },
     "FOMC Rate Decision": {
         "series": "FEDFUNDS",        # Effective Fed Funds Rate (level)
@@ -449,19 +453,22 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
         if not obs:
             continue
 
-        # Build a second set of observations shifted by one period for "previous"
-        obs_prev = obs[1:] if len(obs) > 1 else []
+        # obs[0]  = most recently released value
+        # obs[1:] = shifted one period back — used to compute the "previous" reading
+        obs_shifted = obs[1:] if len(obs) > 1 else []
 
-        current_val  = _apply_transform(obs,      cfg["transform"], cfg["unit"])
-        previous_val = _apply_transform(obs_prev, cfg["transform"], cfg["unit"])
+        current_val  = _apply_transform(obs,         cfg["transform"], cfg["unit"])
+        previous_val = _apply_transform(obs_shifted, cfg["transform"], cfg["unit"])
 
         label = cfg["label"]
         if ev["date"] > today:
-            # Event not yet released — most recent FRED value is the prior print
-            ev["previous"] = ev["previous"] or (f"{label}: {previous_val}" if previous_val else None)
+            # Future event: the most recently released FRED value IS the "previous" print
+            # (e.g. for May 13 CPI, obs[0] = March CPI YoY = the prior reading).
+            # previous_val (obs[1:]) would be one period further back — too old.
+            ev["previous"] = ev["previous"] or (f"{label}: {current_val}"  if current_val  else None)
             ev["actual"]   = None
         else:
-            # Event already happened — most recent FRED value is the released actual
+            # Past event: obs[0] is the released actual; obs_shifted gives the prior period.
             ev["actual"]   = ev["actual"]   or (f"{label}: {current_val}"  if current_val  else None)
             ev["previous"] = ev["previous"] or (f"{label}: {previous_val}" if previous_val else None)
 
