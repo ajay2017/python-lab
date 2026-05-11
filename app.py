@@ -8344,12 +8344,15 @@ elif page == "📒 Trade Journal":
         with st.form("log_trade_form", clear_on_submit=True):
             f_col3, f_col4, f_col5 = st.columns(3)
             with f_col3:
+                _trigger_opts = ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE", "WATCHLIST_ENTRY"]
+                _prefill_trigger = prefill.get("trigger", "MANUAL")
+                # Defensive: any unknown trigger value falls back to MANUAL
+                # so a future caller doesn't crash this form with a ValueError.
+                _trigger_idx = _trigger_opts.index(_prefill_trigger) if _prefill_trigger in _trigger_opts else 0
                 trigger_type = st.selectbox(
                     "Reason",
-                    ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"],
-                    index=["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE"].index(
-                        prefill.get("trigger", "MANUAL")
-                    ),
+                    _trigger_opts,
+                    index=_trigger_idx,
                 )
             with f_col4:
                 shares_val = st.number_input(
