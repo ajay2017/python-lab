@@ -1070,16 +1070,17 @@ if page == "🏠 My Portfolio":
     # Build Daily Briefing (synthesises all intelligence — computed once before tabs)
     try:
         _daily_brief = build_daily_briefing(
-            port_df        = port_df,
-            alert_list     = alert_list,
-            risk_recs      = _risk_advisor_recs,
-            news_items     = st.session_state.get("_sidebar_news", []),
-            macro_events   = _macro_events,
-            held_data      = held_data,
-            scanner_results= st.session_state.get("scanner_results"),
-            portfolio_value= total_val,
-            today          = _TODAY_ET,
-            market_context = _market_context,
+            port_df         = port_df,
+            alert_list      = alert_list,
+            risk_recs       = _risk_advisor_recs,
+            news_items      = st.session_state.get("_sidebar_news", []),
+            macro_events    = _macro_events,
+            held_data       = held_data,
+            scanner_results = st.session_state.get("scanner_results"),
+            portfolio_value = total_val,
+            today           = _TODAY_ET,
+            market_context  = _market_context,
+            grow_composites = st.session_state.get("_grow_composites", {}),
         )
     except Exception:
         _daily_brief    = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
@@ -1472,7 +1473,23 @@ if page == "🏠 My Portfolio":
                 _fresh_results = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
             if not _fresh_results.empty:
                 st.session_state.scanner_results = _fresh_results
-                st.session_state._brief_signals_ts = datetime.now()
+                # Pre-fetch full composite analysis for top 5 non-held scanner picks so
+                # Grow Today can show composite score and gate the conviction label accurately.
+                _top_candidates = _fresh_results[
+                    ~_fresh_results["Ticker"].isin(set(held_tickers))
+                ].head(5)["Ticker"].tolist()
+                _grow_composites: dict = {}
+                if _top_candidates:
+                    with st.spinner(
+                        f"Validating top {len(_top_candidates)} picks with full analysis…"
+                    ):
+                        for _tc in _top_candidates:
+                            try:
+                                _grow_composites[_tc] = load_all(_tc)
+                            except Exception:
+                                pass
+                st.session_state._grow_composites    = _grow_composites
+                st.session_state._brief_signals_ts   = datetime.now()
                 st.rerun()
             else:
                 st.warning("Scanner returned no results — check your connection and try again.")
@@ -1643,20 +1660,44 @@ if page == "🏠 My Portfolio":
             if new_picks:
                 st.markdown("**🆕 New Positions to Initiate**")
             for _gp in new_picks:
-                _gx = _gp.get("xref", {})
-                _vc = _gx.get("verdict_color", "#22c55e")
-                _vl = _gx.get("verdict_label", "")
-                _sz = _gp.get("sizing", {})
+                _gx         = _gp.get("xref", {})
+                _vc         = _gx.get("verdict_color", "#22c55e")
+                _vl         = _gx.get("verdict_label", "")
+                _sz         = _gp.get("sizing", {})
+                _conv       = _gp.get("conviction", "unverified")
+                _comp_sc    = _gp.get("composite_score")   # None if not yet fetched
+                _comp_lbl   = _gp.get("composite_label", "")
+
+                # Conviction badge: color + text driven by composite score
+                _conv_cfg = {
+                    "high":       ("#22c55e", "✅ High Conviction"),
+                    "moderate":   ("#f59e0b", "🟡 Moderate Setup"),
+                    "low":        ("#ef4444", "⚠ Low Composite"),
+                    "unverified": ("#6b7280", "🔍 Verify — Run Stock Analysis First"),
+                }
+                _conv_clr, _conv_txt = _conv_cfg.get(_conv, _conv_cfg["unverified"])
+
+                # Score line: always show momentum; show composite when available
+                _score_line = f"Momentum {_gp['score']:.0f}/100"
+                if _comp_sc is not None:
+                    _score_line += f" · Composite {_comp_sc:.0f}/100"
+                    if _comp_lbl:
+                        _score_line += f" ({_comp_lbl})"
+
                 st.markdown(
                     f"<div style='background:#111827;border-left:3px solid {_vc};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                     f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
                     f"<span style='color:#f9fafb;font-weight:700'>{_gp['ticker']}</span>"
-                    f"<span style='color:#9ca3af;font-size:0.8em'>Score {_gp['score']:.0f}/100 · {_gp['sector']}"
+                    f"<span style='color:#9ca3af;font-size:0.8em'>{_score_line} · {_gp['sector']}"
                     + (f" 🔥" if _gp.get("is_leader") else "")
                     + f"</span>"
+                    # Cross-reference verdict badge
                     f"<span style='background:{_vc}22;border:1px solid {_vc};color:{_vc};"
                     f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_vl}</span>"
+                    # Conviction badge (composite-driven)
+                    f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
+                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_conv_txt}</span>"
                     f"</div>"
                     f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                     f"💡 <em>{_gp['thesis']}</em></div>"

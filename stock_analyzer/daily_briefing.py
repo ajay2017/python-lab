@@ -261,14 +261,17 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
 
 def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 portfolio_value: float, market_context: dict,
-                act_today: list | None = None) -> dict:
+                act_today: list | None = None,
+                composites: dict | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
     market_context keys: sp500_pct, nasdaq_pct, tone ('bull'|'bear'|'flat'),
                          leading_sectors [{"sector", "etf", "return_1w"}]
-    act_today: output of _act_today — used to cross-filter picks so Grow Today
-               never suggests buying a ticker that Act Today flags for action.
+    act_today  : output of _act_today — tickers flagged here are excluded.
+    composites : {ticker: load_all() result} for top scanner picks — used to
+                 validate conviction using the full composite score so the label
+                 reflects more than just momentum.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -350,17 +353,41 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             sizing = _suggest_size(price, trend, portfolio_value) if price > 0 and portfolio_value > 0 else {}
             thesis = _thesis(ticker, row.to_dict(), is_leader)
 
+            # Validate conviction using full composite score when available.
+            # Scanner score measures momentum only; composite includes fundamentals
+            # and sentiment — a pick can score 100 on momentum but 63 composite.
+            _comp_data       = (composites or {}).get(ticker, {})
+            _composite_score = _f(_comp_data.get("total")) if _comp_data else None
+            _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
+
+            # Exclude picks where composite is available and clearly below buy threshold
+            if _composite_score is not None and _composite_score < 55:
+                continue
+
+            # Conviction tier: drives the label shown on the card
+            if _composite_score is None:
+                conviction = "unverified"
+            elif _composite_score >= 68:
+                conviction = "high"
+            elif _composite_score >= 60:
+                conviction = "moderate"
+            else:
+                conviction = "low"
+
             pick = {
-                "ticker":         ticker,
-                "score":          _f(row.get("Score", 0)),
-                "sector":         sector,
-                "price":          price,
-                "trend":          trend,
-                "scanner_signal": str(row.get("Signal", "")),
-                "is_leader":      is_leader,
-                "thesis":         thesis,
-                "sizing":         sizing,
-                "xref":           xref,
+                "ticker":          ticker,
+                "score":           _f(row.get("Score", 0)),    # momentum / scanner score
+                "composite_score": _composite_score,           # full composite, or None
+                "composite_label": _composite_label,
+                "conviction":      conviction,
+                "sector":          sector,
+                "price":           price,
+                "trend":           trend,
+                "scanner_signal":  str(row.get("Signal", "")),
+                "is_leader":       is_leader,
+                "thesis":          thesis,
+                "sizing":          sizing,
+                "xref":            xref,
             }
             if xref["verdict"] == "confirmed":
                 _confirmed_picks.append(pick)
@@ -741,9 +768,14 @@ def build_daily_briefing(
     portfolio_value: float,
     today:           date,
     market_context:  dict | None = None,
+    grow_composites: dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
+
+    grow_composites: optional dict {ticker: load_all() result} pre-fetched for top
+                     scanner picks so _grow_today can validate conviction using the
+                     full composite score, not just the momentum scanner score.
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -751,7 +783,6 @@ def build_daily_briefing(
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today, act_today=act)
     review = _review_list(port_df, news_items, macro_events, held_data, today)
-    # act is passed so _grow_today can cross-filter conflicting tickers and warn
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
-                         act_today=act)
+                         act_today=act, composites=grow_composites or {})
     return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}
