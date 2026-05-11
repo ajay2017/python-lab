@@ -79,9 +79,16 @@ def _trim_targets(risk_recs: list | None) -> dict[str, dict]:
 # ── Cross-reference engine ────────────────────────────────────────────────────
 
 def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
-                     held_data: dict, today: date) -> dict:
+                     held_data: dict, today: date,
+                     earnings_lookup: dict | None = None) -> dict:
     """
     Cross-check a buy candidate across all available signal layers.
+
+    earnings_lookup (optional): {ticker: earnings_date_str}. Sourced from BOTH
+       held_data and pre-fetched composites, so the earnings risk check applies
+       to non-held new picks too — the previous behaviour was to skip the check
+       silently if a candidate wasn't in held_data, which could have the app
+       recommend buying a stock the day before its earnings call.
 
     Returns a dict with:
       verdict        — 'confirmed' | 'mixed' | 'conflicted' | 'caution' | 'unverified'
@@ -111,22 +118,28 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     composite_conflict   = False
     composite_available  = False
     if is_held:
-        composite_available = True
         pm = port_df[port_df["Ticker"] == ticker]
-        comp_sig = str(pm.iloc[0].get("Signal", ""))
+        comp_sig = str(pm.iloc[0].get("Signal", "")).strip()
         comp_scr = _f(pm.iloc[0].get("Score", 0))
         buy_words       = ("Strong Buy", "Buy")
         hold_sell_words = ("Hold", "Sell", "Avoid", "Weak")
-        if any(w in comp_sig for w in buy_words):
-            agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
-        elif any(w in comp_sig for w in hold_sell_words):
-            conflicts.append(
-                f"Composite signal: {comp_sig} ({comp_scr:.0f}/100) — "
-                "technicals say Buy but full multi-factor analysis is more cautious"
-            )
-            composite_conflict = True
+        # Empty/missing Signal is a DATA gap — must not be coerced into agreement.
+        # Treat it as "composite not available" so the verdict falls through to
+        # "unverified" rather than "Confirmed — All Signals Aligned."
+        if not comp_sig:
+            composite_available = False
         else:
-            agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+            composite_available = True
+            if any(w in comp_sig for w in buy_words):
+                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
+            elif any(w in comp_sig for w in hold_sell_words):
+                conflicts.append(
+                    f"Composite signal: {comp_sig} ({comp_scr:.0f}/100) — "
+                    "technicals say Buy but full multi-factor analysis is more cautious"
+                )
+                composite_conflict = True
+            else:
+                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
     # Non-held: composite signal NOT available — must not issue "Confirmed"
 
     # ── Layer 3: News sentiment ───────────────────────────────────────────────
@@ -148,21 +161,28 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     # No news available — don't add to agreed (absence of data ≠ confirmation)
 
     # ── Layer 4: Earnings risk ────────────────────────────────────────────────
+    # Earnings date is looked up from a UNION of held_data + earnings_lookup so
+    # non-held new picks are also screened. Previously the check fired only on
+    # held positions, so a brand-new scanner pick with earnings tomorrow could
+    # be marked "Confirmed" with no caution.
     earnings_conflict = False
     earn_days = None
-    if held_data and ticker in held_data:
+    earn_date = None
+    if earnings_lookup and ticker in earnings_lookup:
+        earn_date = earnings_lookup[ticker]
+    elif held_data and ticker in held_data:
         earn_date = (held_data[ticker] or {}).get("earnings")
-        if earn_date:
-            earn_days = _days_until(earn_date, today)
-            if earn_days is not None and 0 <= earn_days <= 7:
-                label = "today" if earn_days == 0 else f"in {earn_days}d"
-                conflicts.append(
-                    f"Earnings {label} ({earn_date}) — binary event risk; "
-                    "signals may not hold post-release"
-                )
-                earnings_conflict = True
-            elif earn_days is not None and 8 <= earn_days <= 21:
-                agreed.append(f"Earnings in {earn_days}d — manageable window")
+    if earn_date:
+        earn_days = _days_until(earn_date, today)
+        if earn_days is not None and 0 <= earn_days <= 7:
+            label = "today" if earn_days == 0 else f"in {earn_days}d"
+            conflicts.append(
+                f"Earnings {label} ({earn_date}) — binary event risk; "
+                "signals may not hold post-release"
+            )
+            earnings_conflict = True
+        elif earn_days is not None and 8 <= earn_days <= 21:
+            agreed.append(f"Earnings in {earn_days}d — manageable window")
 
     # ── Layer 5: Analyst revisions (held positions with held_data) ────────────
     if held_data and ticker in held_data:
@@ -205,6 +225,12 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict       = "mixed"
         verdict_label = "⚠️ Mixed"
         verdict_color = "#f59e0b"
+    elif is_held and not composite_available:
+        # Held position but composite Signal is missing — must not issue
+        # "Confirmed." Surface the data gap as "verify" instead.
+        verdict       = "unverified"
+        verdict_label = "🔍 Verify — Composite Signal Missing"
+        verdict_color = "#60a5fa"
     elif not is_held:
         # Not held — composite signal was never computed.
         # Technical momentum looks good but we cannot confirm without full analysis.
@@ -293,7 +319,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 portfolio_value: float, market_context: dict,
                 act_today: list | None = None,
                 composites: dict | None = None,
-                risk_recs: list | None = None) -> dict:
+                risk_recs: list | None = None,
+                earnings_lookup: dict | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -381,7 +408,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if ticker in _act_blocked:
                 continue
 
-            xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today)
+            xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
+                                    earnings_lookup=earnings_lookup)
 
             # Skip hard conflicts; on flat days skip anything but confirmed/unverified
             if xref["verdict"] == "conflicted":
@@ -636,7 +664,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
 
 def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     act_today: list | None = None,
-                    risk_recs: list | None = None) -> list[dict]:
+                    risk_recs: list | None = None,
+                    earnings_lookup: dict | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
@@ -698,7 +727,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "Signal": sig, "Score": scr,
                 "RSI": 0, "1M Momentum": 0, "Trend": sig,
             }
-            xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today)
+            xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today,
+                                    earnings_lookup=earnings_lookup)
             items.append({
                 "type":           "add_winner",
                 "icon":           "➕",
@@ -853,10 +883,25 @@ def build_daily_briefing(
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
     ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": []}
+
+    # Build a unified earnings_lookup from held_data + grow_composites so the
+    # earnings-risk check in _cross_reference applies to non-held new picks too.
+    earnings_lookup: dict = {}
+    for _t, _d in (held_data or {}).items():
+        _ed = (_d or {}).get("earnings")
+        if _ed:
+            earnings_lookup[_t] = _ed
+    for _t, _d in (grow_composites or {}).items():
+        _ed = (_d or {}).get("earnings")
+        if _ed:
+            earnings_lookup.setdefault(_t, _ed)
+
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
-                             act_today=act, risk_recs=risk_recs)
+                             act_today=act, risk_recs=risk_recs,
+                             earnings_lookup=earnings_lookup)
     review = _review_list(port_df, news_items, macro_events, held_data, today)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
-                         act_today=act, composites=grow_composites or {}, risk_recs=risk_recs)
+                         act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
+                         earnings_lookup=earnings_lookup)
     return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}

@@ -8,13 +8,13 @@ import pandas as pd
 def _entry_timing(rsi_val: float | None, move_1d: float, move_5d: float) -> dict:
     rsi = rsi_val if rsi_val is not None else 50.0
 
-    if rsi > 80 or move_1d > 15 or move_5d > 25:
+    if rsi >= 80 or move_1d >= 15 or move_5d >= 25:
         why = []
-        if move_1d > 15:
+        if move_1d >= 15:
             why.append(f"surged {move_1d:+.1f}% today")
-        if rsi > 80:
+        if rsi >= 80:
             why.append(f"RSI {rsi:.0f} — severely overbought")
-        if move_5d > 25 and move_1d <= 15:
+        if move_5d >= 25 and move_1d < 15:
             why.append(f"up {move_5d:+.1f}% over 5 days")
         return {
             "verdict": "high_risk_avoid",
@@ -28,11 +28,11 @@ def _entry_timing(rsi_val: float | None, move_1d: float, move_5d: float) -> dict
                 "Wait for a defined pullback (10–15% from peak) or multi-session consolidation before entering."
             ),
         }
-    elif rsi > 68 or move_1d > 5 or move_5d > 12:
+    elif rsi >= 68 or move_1d >= 5 or move_5d >= 12:
         why = []
-        if move_1d > 5:
+        if move_1d >= 5:
             why.append(f"up {move_1d:+.1f}% today")
-        if rsi > 68:
+        if rsi >= 68:
             why.append(f"RSI {rsi:.0f}")
         return {
             "verdict": "wait_pullback",
@@ -46,7 +46,7 @@ def _entry_timing(rsi_val: float | None, move_1d: float, move_5d: float) -> dict
                 "or let the stock consolidate at current levels for several sessions."
             ),
         }
-    elif rsi_val is not None and rsi_val < 35:
+    elif rsi_val is not None and rsi_val <= 35:
         return {
             "verdict": "oversold",
             "label": "Oversold — Potential Entry",

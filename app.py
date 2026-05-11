@@ -1102,13 +1102,26 @@ if page == "🏠 Portfolio":
             .head(5)["Ticker"].tolist()
         )
         _missing_comp  = [t for t in _top_for_comp if t not in _existing_comp]
+        # Track tickers where the composite fetch failed so the Grow Today UI
+        # can surface a "composite scores unavailable" banner instead of
+        # silently letting picks bypass the composite-score gate.
+        _comp_failures: list[str] = []
         if _missing_comp:
             for _tc in _missing_comp:
                 try:
                     _existing_comp[_tc] = load_all(_tc)
                 except Exception:
-                    pass
+                    _comp_failures.append(_tc)
             st.session_state._grow_composites = _existing_comp
+        # Compute coverage = fraction of intended top picks that have composite data
+        _intended = set(_top_for_comp)
+        _have     = _intended & set(_existing_comp.keys())
+        st.session_state._grow_composites_coverage = {
+            "intended": sorted(_intended),
+            "have":     sorted(_have),
+            "missing":  sorted(_intended - _have),
+            "failures": _comp_failures,
+        }
 
     # Build Daily Briefing (synthesises all intelligence — computed once before tabs)
     try:
@@ -1702,6 +1715,29 @@ if page == "🏠 Portfolio":
             if bear_msg:
                 st.caption(f"🛡️ {bear_msg}")
                 return
+
+            # Composite-fetch failure banner — shown when one or more of the
+            # intended top picks couldn't get a composite score, so picks may be
+            # listed without the full multi-factor signal. Surfacing this lets
+            # the user know to manually run Stock Analysis before acting.
+            _comp_cov = st.session_state.get("_grow_composites_coverage") or {}
+            _missing_comp_ui = _comp_cov.get("missing") or []
+            if _missing_comp_ui:
+                st.markdown(
+                    "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "⚠️ Composite Scores Unavailable for Some Picks</div>"
+                    f"<div style='color:#fcd34d;font-size:0.78em'>"
+                    f"Composite data missing for: <b>{', '.join(_missing_comp_ui[:5])}</b>"
+                    + (f" (+{len(_missing_comp_ui)-5} more)" if len(_missing_comp_ui) > 5 else "")
+                    + "</div>"
+                    "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                    "These picks are shown with momentum data only — the full multi-factor "
+                    "composite gate did not run. Open Stock Analysis on each before acting."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
 
             # Risk banner: shown when Act Today has active portfolio risk flags
             if risk_banner:

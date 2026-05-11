@@ -131,8 +131,13 @@ def build_risk_advisor_recommendations(
                 _tw   = top_beta[0]["weight"] / 100          # weight as fraction
                 _tb   = top_beta[0]["value"]                  # position beta
                 _tf   = 0.50                                   # sell 50%
-                _new_beta = (_tw * _tf > 0.999) and beta or \
-                    round((beta - _tw * _tb * _tf) / max(1 - _tw * _tf, 0.001), 2)
+                # Guard against w_i × f → 1 (would remove >99.9% of portfolio).
+                # Explicit if/else replaces a fragile `and/or` ternary that could
+                # return the wrong branch if `beta` were ever falsy.
+                if _tw * _tf > 0.999:
+                    _new_beta = beta
+                else:
+                    _new_beta = round((beta - _tw * _tb * _tf) / (1 - _tw * _tf), 2)
                 _new_beta    = round(max(float(_new_beta), 0.3), 2)
                 _beta_drop   = round(beta - _new_beta, 2)
                 _trim_dollar = round(top_beta[0]["market_value"] * _tf)

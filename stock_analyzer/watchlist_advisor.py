@@ -248,7 +248,9 @@ def build_watchlist_recommendation(
         )
 
     # ── ENTER NOW ─────────────────────────────────────────────────────────────
-    if score >= 65 and (in_zone or near_zone) and (rr is None or rr >= 2.0):
+    # R:R must be VALIDATED (>= 2:1), not merely "unknown." A missing R:R means
+    # we don't have a target price — that's incomplete homework, not a green light.
+    if score >= 65 and (in_zone or near_zone) and rr is not None and rr >= 2.0:
         # Portfolio risk gate: ENTER_NOW from this advisor only sees the single
         # stock — it must also respect portfolio-level concentration and beta.
         ticker_beta = (data.get("risk_metrics") or {}).get("beta")

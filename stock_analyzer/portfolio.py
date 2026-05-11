@@ -88,9 +88,16 @@ def build_portfolio_df(
         pnl_dollar = round(market_val - cost_basis, 2)
         pnl_pct = round((price - avg_cost) / avg_cost * 100, 1)
 
-        atr_stop = r.get("stop") or price * 0.92
-        stop, stop_label = protective_stop(price, avg_cost, atr_stop)
-        gap_to_stop = round((price - stop) / price * 100, 1)
+        # Stop data integrity: missing stop is a data issue, not a position issue.
+        # Never silently substitute a fabricated stop — that would let mechanical
+        # SELL rules fire on a number nobody chose. Surface None downstream so
+        # consumers can treat it as "manual review required."
+        _raw_stop = r.get("stop")
+        if _raw_stop is None or _raw_stop <= 0:
+            stop, stop_label, gap_to_stop = None, "Stop Unavailable", None
+        else:
+            stop, stop_label = protective_stop(price, avg_cost, _raw_stop)
+            gap_to_stop = round((price - stop) / price * 100, 1)
 
         rows.append({
             "Ticker": ticker,
