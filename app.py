@@ -1663,6 +1663,7 @@ if page == "🏠 Portfolio":
             bear_msg     = grow.get("message")
             lead_secs_ui = grow.get("leading_sectors", [])
             risk_banner  = grow.get("risk_banner")
+            blocked_adds = grow.get("risk_blocked_adds", [])
 
             _g_label = (
                 "📈 Grow Today"      if tone == "bull" else
@@ -1800,6 +1801,34 @@ if page == "🏠 Portfolio":
                     st.session_state["_pending_page"]    = "📈 Stock Analysis"
                     st.session_state["_analysis_ticker"] = _ga["ticker"]
                     st.rerun()
+
+            # Risk Advisor suppressed an add-to-winner — surface the conflict so the
+            # user understands why a winning held position isn't on the add list.
+            if blocked_adds:
+                _reason_label = {
+                    "beta":   "high portfolio beta",
+                    "sharpe": "poor risk-adjusted return",
+                }
+                _rows = "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                    f"(Strong Buy, Score {b.get('score',0):.0f}, P&L {b.get('pnl_pct',0):+.1f}%) — "
+                    f"Risk Advisor flagged for trim due to "
+                    f"{_reason_label.get(b.get('reason',''), b.get('reason',''))}.</div>"
+                    for b in blocked_adds[:3]
+                )
+                st.markdown(
+                    "<div style='background:#422006;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "🔀 Add-to-Winner Suppressed — Risk Advisor Conflict</div>"
+                    + _rows
+                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These positions qualify as winners but Risk Advisor recommends trimming them. "
+                    "Adding more would compound the risk metric being flagged. "
+                    "Resolve in Portfolio → Risk Advisor before adding.</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
             if deploy_note:
                 st.info(f"💰 {deploy_note}")

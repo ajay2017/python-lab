@@ -46,6 +46,36 @@ def _days_until(date_str: str, today: date) -> int | None:
         return None
 
 
+def _trim_targets(risk_recs: list | None) -> dict[str, dict]:
+    """
+    Extract tickers Risk Advisor is recommending the user trim.
+
+    Only beta and sharpe recs concretely identify trim targets (volatility,
+    drawdown, and tail-risk recs instead recommend adding diversifiers).
+    Returns {ticker: {"reason": rec_type, "title": rec_title, "priority": priority}}.
+    """
+    if not risk_recs:
+        return {}
+    targets: dict[str, dict] = {}
+    for rec in risk_recs:
+        pri = rec.get("priority")
+        if pri not in ("HIGH", "MEDIUM"):
+            continue
+        rec_type = rec.get("type", "")
+        if rec_type not in ("beta", "sharpe"):
+            continue
+        for rt in rec.get("root_tickers", []):
+            t = rt.get("ticker")
+            if not t or t in targets:
+                continue
+            targets[str(t).upper()] = {
+                "reason":   rec_type,
+                "title":    rec.get("title", ""),
+                "priority": pri,
+            }
+    return targets
+
+
 # ── Cross-reference engine ────────────────────────────────────────────────────
 
 def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
@@ -262,7 +292,8 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
 def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 portfolio_value: float, market_context: dict,
                 act_today: list | None = None,
-                composites: dict | None = None) -> dict:
+                composites: dict | None = None,
+                risk_recs: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -272,6 +303,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     composites : {ticker: load_all() result} for top scanner picks — used to
                  validate conviction using the full composite score so the label
                  reflects more than just momentum.
+    risk_recs  : Risk Advisor recommendations — tickers flagged for trim (beta
+                 or sharpe root_tickers) are suppressed from add-to-winner so
+                 the briefing never tells the user to trim X and add to X.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -293,6 +327,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _act_risk_flags.append(_action.replace("RISK — ", ""))
     risk_banner = _act_risk_flags[:3] if _act_risk_flags else None
 
+    # Risk Advisor trim targets — used to suppress add-to-winner conflicts.
+    _trim_set = _trim_targets(risk_recs)
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         return {
@@ -302,10 +339,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "Focus on protecting existing positions. "
                 "Defer new entries until conditions stabilise."
             ),
-            "new_picks":     [],
-            "add_positions": [],
-            "deploy_note":   None,
-            "risk_banner":   risk_banner,
+            "new_picks":         [],
+            "add_positions":     [],
+            "risk_blocked_adds": [],
+            "deploy_note":       None,
+            "risk_banner":       risk_banner,
         }
 
     # Score threshold: higher bar on flat days, standard on bull days
@@ -412,7 +450,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 break
 
     # Add-to-winner: held Strong Buy, Score ≥ 68, Gap ≥ 8% — only on bull days
-    add_positions: list[dict] = []
+    add_positions:     list[dict] = []
+    risk_blocked_adds: list[dict] = []
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
             sig = str(row.get("Signal", ""))
@@ -422,6 +461,19 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 ticker  = str(row["Ticker"])
                 # Skip if Act Today already flags this ticker for action
                 if ticker in _act_blocked:
+                    continue
+                # Skip — and record — if Risk Advisor is recommending trim on this ticker
+                _trim_info = _trim_set.get(ticker.upper())
+                if _trim_info:
+                    risk_blocked_adds.append({
+                        "ticker":   ticker,
+                        "reason":   _trim_info["reason"],
+                        "title":    _trim_info["title"],
+                        "priority": _trim_info["priority"],
+                        "score":    scr,
+                        "pnl_pct":  _f(row.get("P&L (%)")),
+                        "gap":      gap,
+                    })
                     continue
                 price   = _f(row.get("Price", 0))
                 sector  = str(row.get("Sector", ""))
@@ -462,15 +514,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             )
 
     return {
-        "tone":            tone,
-        "message":         None,
-        "new_picks":       new_picks,
-        "add_positions":   add_positions,
-        "deploy_note":     deploy_note,
-        "risk_banner":     risk_banner,
-        "sp500_pct":       sp500_pct,
-        "nasdaq_pct":      nasdaq_pct,
-        "leading_sectors": lead_secs,
+        "tone":              tone,
+        "message":           None,
+        "new_picks":         new_picks,
+        "add_positions":     add_positions,
+        "risk_blocked_adds": risk_blocked_adds,
+        "deploy_note":       deploy_note,
+        "risk_banner":       risk_banner,
+        "sp500_pct":         sp500_pct,
+        "nasdaq_pct":        nasdaq_pct,
+        "leading_sectors":   lead_secs,
     }
 
 
@@ -582,10 +635,13 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
 # ── Buy Candidates ─────────────────────────────────────────────────────────────
 
 def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
-                    act_today: list | None = None) -> list[dict]:
+                    act_today: list | None = None,
+                    risk_recs: list | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
+    risk_recs: Risk Advisor recs — tickers flagged for trim are suppressed from
+               the add-to-winner block to avoid same-ticker capital conflicts.
     """
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
@@ -595,6 +651,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
     for _ai in (act_today or []):
         if _ai.get("ticker"):
             _act_blocked.add(str(_ai["ticker"]).upper())
+
+    # Risk Advisor trim targets — suppress same-ticker add-to-winner conflicts.
+    _trim_set = _trim_targets(risk_recs)
 
     # 1 — Scanner picks not in portfolio (Score ≥ 65)
     if scanner_results is not None and not scanner_results.empty:
@@ -630,6 +689,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             ticker = str(row["Ticker"])
             # Skip if Act Today already flags this ticker for any action
             if ticker in _act_blocked:
+                continue
+            # Skip if Risk Advisor is recommending trim — same-ticker conflict
+            if ticker.upper() in _trim_set:
                 continue
             # Build a minimal scanner_row from portfolio data for cross-reference
             _synthetic = {
@@ -792,8 +854,9 @@ def build_daily_briefing(
     """
     ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": []}
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
-    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today, act_today=act)
+    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
+                             act_today=act, risk_recs=risk_recs)
     review = _review_list(port_df, news_items, macro_events, held_data, today)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
-                         act_today=act, composites=grow_composites or {})
+                         act_today=act, composites=grow_composites or {}, risk_recs=risk_recs)
     return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}
