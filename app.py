@@ -1020,6 +1020,7 @@ if page == "🏠 Portfolio":
         _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
     except Exception:
         _port_risk = {}
+    st.session_state["_port_risk_cache"] = _port_risk  # available to Stock Analysis page
 
     # Risk Advisor recommendations — generated from portfolio risk metrics
     try:
@@ -6992,6 +6993,26 @@ elif page == "📈 Stock Analysis":
                                   help="Maximum dollar loss if stop is hit. Should not exceed 1.5–2% of portfolio.")
                         p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}",
                                   help="Dollar distance from entry to stop per share.")
+
+                        # Beta envelope check — warn when adding this position would push
+                        # an already-elevated portfolio beta materially higher
+                        _sa_port_risk = st.session_state.get("_port_risk_cache", {})
+                        _sa_port_beta = _sa_port_risk.get("beta")
+                        _sa_tick_beta = (r.get("risk_metrics") or {}).get("beta")
+                        if _sa_tick_beta and _sa_port_beta:
+                            if _sa_tick_beta > 1.5 and _sa_port_beta > 1.3:
+                                st.warning(
+                                    f"⚠ **Beta envelope:** Portfolio beta is already **{_sa_port_beta:.1f}** (elevated). "
+                                    f"This stock's beta is **{_sa_tick_beta:.1f}** — a full-size position would "
+                                    f"add meaningful market risk. Consider taking **50–60% of the suggested "
+                                    f"{ps['shares']:,} shares** to keep portfolio beta in check."
+                                )
+                            elif _sa_tick_beta > 1.8:
+                                st.warning(
+                                    f"⚠ **High-beta stock:** Beta **{_sa_tick_beta:.1f}** — volatile name. "
+                                    f"Use a firm stop at **${r['stop']:.2f}** and consider a starter position "
+                                    f"(50–75% of suggested size) before committing fully."
+                                )
 
                     if targets:
                         st.markdown("#### Price Scenarios")
