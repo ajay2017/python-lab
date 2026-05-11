@@ -1913,6 +1913,39 @@ if page == "🏠 Portfolio":
         if not _db_review:
             st.caption("Nothing requiring pre-close review today.")
         else:
+            # Trade Journal context lookup — pulled once for all review items so the
+            # weak-large-position assessment is grounded in the original entry thesis
+            # and any prior lessons, not just current weight/score.
+            _db_trades = st.session_state.get("trades_df")
+
+            def _journal_context(ticker: str) -> dict | None:
+                if _db_trades is None or _db_trades.empty:
+                    return None
+                t = str(ticker).strip().upper()
+                df = _db_trades[_db_trades["ticker"].astype(str).str.upper() == t]
+                if df.empty:
+                    return None
+                df = df.sort_values("traded_at", ascending=False)
+                # Entry thesis = notes on the most recent BUY (with non-empty notes)
+                thesis, thesis_date = "", ""
+                buys = df[df["action"].astype(str).str.upper() == "BUY"]
+                for _, _row in buys.iterrows():
+                    n = str(_row.get("notes") or "").strip()
+                    if n and n.lower() != "nan":
+                        thesis, thesis_date = n, str(_row.get("traded_at", ""))[:10]
+                        break
+                # Lessons = up to 2 most recent non-empty lesson entries
+                lessons = []
+                for _, _row in df.iterrows():
+                    l = str(_row.get("lesson") or "").strip()
+                    if l and l.lower() != "nan":
+                        lessons.append({"text": l, "date": str(_row.get("traded_at", ""))[:10]})
+                        if len(lessons) >= 2:
+                            break
+                if not thesis and not lessons:
+                    return None
+                return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
+
             for _db_rev in _db_review:
                 _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
                 _db_bg      = "#1c1917"
@@ -1928,6 +1961,51 @@ if page == "🏠 Portfolio":
                     f"</div>",
                     unsafe_allow_html=True,
                 )
+
+                # Weak-large-position items get Trade Journal context injected so the
+                # user can re-evaluate the position against their original reasoning,
+                # not just the current weight/score metrics.
+                if _db_rev.get("icon") == "🔍" and _db_ticker:
+                    _jctx = _journal_context(_db_ticker)
+                    if _jctx:
+                        _parts = []
+                        if _jctx.get("thesis"):
+                            _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
+                            _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
+                            _parts.append(
+                                f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                                f"📒 <b>Your entry thesis</b>{_date_tag}: "
+                                f"<span style='color:#e7e5e4;font-style:italic'>“{_t_clip}”</span></div>"
+                            )
+                        for _ln in _jctx.get("lessons", []):
+                            _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
+                            _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
+                            _parts.append(
+                                f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                                f"💡 <b>Lesson</b>{_l_date}: "
+                                f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
+                            )
+                        if _parts:
+                            st.markdown(
+                                f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
+                                f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
+                                + "".join(_parts)
+                                + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
+                                "Re-evaluate this large position against your original reasoning before trimming."
+                                f"</div></div>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid #57534e;"
+                            f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
+                            f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
+                            f"📒 No Trade Journal entry found for {_db_ticker}. "
+                            "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
                 if _db_ticker:
                     if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
                                  use_container_width=False):
