@@ -543,18 +543,27 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
 
 # ── Buy Candidates ─────────────────────────────────────────────────────────────
 
-def _buy_candidates(port_df, scanner_results, news_items, held_data, today) -> list[dict]:
+def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
+                    act_today: list | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
+    act_today: output of _act_today — tickers already flagged are excluded.
     """
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
+
+    # Block any ticker already flagged in Act Today
+    _act_blocked: set = set()
+    for _ai in (act_today or []):
+        if _ai.get("ticker"):
+            _act_blocked.add(str(_ai["ticker"]).upper())
 
     # 1 — Scanner picks not in portfolio (Score ≥ 65)
     if scanner_results is not None and not scanner_results.empty:
         top_picks = scanner_results[
             (scanner_results["Score"] >= 65) &
-            (~scanner_results["Ticker"].isin(held_tickers))
+            (~scanner_results["Ticker"].isin(held_tickers)) &
+            (~scanner_results["Ticker"].isin(_act_blocked))
         ].copy().sort_values("Score", ascending=False).head(5)
 
         for _, row in top_picks.iterrows():
@@ -581,6 +590,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today) -> l
         scr = _f(row.get("Score"), 0)
         if "Strong Buy" in sig and scr >= 68 and gap >= 8:
             ticker = str(row["Ticker"])
+            # Skip if Act Today already flags this ticker for any action
+            if ticker in _act_blocked:
+                continue
             # Build a minimal scanner_row from portfolio data for cross-reference
             _synthetic = {
                 "Signal": sig, "Score": scr,
@@ -737,7 +749,7 @@ def build_daily_briefing(
     """
     ctx    = market_context or {"tone": "flat", "sp500_pct": 0, "nasdaq_pct": 0, "leading_sectors": []}
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
-    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today)
+    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today, act_today=act)
     review = _review_list(port_df, news_items, macro_events, held_data, today)
     # act is passed so _grow_today can cross-filter conflicting tickers and warn
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,

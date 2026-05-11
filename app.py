@@ -1219,6 +1219,13 @@ if page == "🏠 My Portfolio":
     with tab_daily:
         from datetime import datetime as _dt
 
+        # Build act_today lookup once — used by pre-market movers and the main sections below
+        _act_today_map: dict = {
+            str(i["ticker"]).upper(): i
+            for i in _daily_brief.get("act_today", [])
+            if i.get("ticker")
+        }
+
         # ── Pre-Market Intel panel (visible 4:00–9:29 AM ET weekdays) ─────────
         if is_premarket():
             try:
@@ -1327,16 +1334,35 @@ if page == "🏠 My Portfolio":
                         for _mv in _pm["movers"][:8]:
                             _mc = "#22c55e" if _mv["chg_pct"] >= 0 else "#ef4444"
                             _marrow = "▲" if _mv["chg_pct"] >= 0 else "▼"
-                            _badge = (
+                            _mv_ticker = str(_mv["ticker"]).upper()
+                            _mv_act    = _act_today_map.get(_mv_ticker)
+                            _held_badge = (
                                 "<span style='background:#1e3a5f;color:#60a5fa;"
                                 "padding:0 5px;border-radius:4px;font-size:0.7em'>held</span> "
                                 if _mv["is_held"] else ""
                             )
+                            # Alert badge when Act Today has an action on this mover
+                            _act_badge = ""
+                            _act_tooltip = ""
+                            if _mv_act:
+                                _act_action = str(_mv_act.get("action", ""))
+                                if "SELL" in _act_action or "Stop" in _act_action:
+                                    _act_badge = ("<span style='background:#7f1d1d;color:#fca5a5;"
+                                                  "padding:0 5px;border-radius:4px;font-size:0.7em;"
+                                                  "font-weight:700'>⚠ SELL SIGNAL</span> ")
+                                elif "RISK" in _act_action:
+                                    _act_badge = ("<span style='background:#422006;color:#fcd34d;"
+                                                  "padding:0 5px;border-radius:4px;font-size:0.7em;"
+                                                  "font-weight:700'>⚠ RISK ALERT</span> ")
+                                else:
+                                    _act_badge = ("<span style='background:#1c1917;color:#f59e0b;"
+                                                  "padding:0 5px;border-radius:4px;font-size:0.7em;"
+                                                  "font-weight:700'>⚠ ACT TODAY</span> ")
                             st.markdown(
                                 f"<div style='display:flex;justify-content:space-between;"
                                 f"align-items:center;padding:3px 0;font-size:0.82em'>"
                                 f"<span style='color:#f9fafb;font-weight:600'>{_mv['ticker']}</span>"
-                                f"<span>{_badge}"
+                                f"<span>{_held_badge}{_act_badge}"
                                 f"<span style='color:#9ca3af;margin-right:6px'>"
                                 f"${_mv['pre_price']:.2f}</span>"
                                 f"<span style='color:{_mc};font-weight:700'>"
@@ -7088,6 +7114,11 @@ elif page == "📋 Watchlist":
         )
         st.stop()
 
+    # Held tickers — used to flag "already in portfolio" on ENTER_NOW cards
+    _wl_held: set = set(
+        st.session_state.get("holdings_df", pd.DataFrame()).get("Ticker", pd.Series()).tolist()
+    )
+
     # ── Load data for all watchlist tickers ───────────────────────────────────
     _wl_data: dict = {}
     with st.spinner(f"Loading analysis for {len(_wl)} watchlist ticker(s)…"):
@@ -7136,6 +7167,20 @@ elif page == "📋 Watchlist":
     for _wr in _wl_recs:
         _action   = _wr["action"]
         _priority = _wr["priority"]
+        _ticker   = _wr["ticker"]
+
+        # Override ENTER_NOW if ticker is already in the portfolio — buying again would
+        # blindly add to an existing position without checking current size or signal.
+        _already_held = _ticker in _wl_held
+        if _action == "ENTER_NOW" and _already_held:
+            st.warning(
+                f"**{_ticker} — Already in Portfolio** · "
+                "This watchlist recommendation says ENTER NOW, but you already hold this position. "
+                "Check My Portfolio → Today's Brief for the current add/hold/sell signal instead.",
+                icon="⚠️",
+            )
+            continue
+
         _a_icon   = {
             "ENTER_NOW":         "✅",
             "NEAR_ENTRY":        "🎯",
@@ -7158,7 +7203,6 @@ elif page == "📋 Watchlist":
         _stop     = _wr["stop"]
         _rr       = _wr["rr"]
         _earn_d   = _wr["earn_days"]
-        _ticker   = _wr["ticker"]
 
         # Position sizing for this watchlist candidate
         _pv_now = st.session_state.get("_portfolio_value") or 50_000
