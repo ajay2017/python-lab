@@ -4751,6 +4751,87 @@ if page == "🏠 Portfolio":
                         st.markdown("")
                         st.info(f"**Institutional Lens** · {_rec['institutional_lens']}")
 
+                    # Defensive picks — shown inside volatility and beta cards
+                    if _rtype in ("volatility", "beta"):
+                        st.markdown("")
+                        with st.expander("🔍 Find Defensive Picks — Implement This Recommendation", expanded=False):
+                            _def_sectors = {"Healthcare & Biotech", "Consumer Staples & Retail"}
+                            _sr = st.session_state.get("scanner_results")
+                            if _sr is None or _sr.empty:
+                                st.info(
+                                    "Run the **Market Scanner** first to populate defensive sector picks here. "
+                                    "The scanner covers Healthcare & Biotech and Consumer Staples & Retail "
+                                    "tickers — results will appear here automatically once it has run."
+                                )
+                            else:
+                                _def_picks = (
+                                    _sr[
+                                        _sr["Sector"].isin(_def_sectors) &
+                                        ~_sr["Ticker"].isin(set(held_tickers))
+                                    ]
+                                    .sort_values("Score", ascending=False)
+                                    .head(5)
+                                    .reset_index(drop=True)
+                                )
+                                if _def_picks.empty:
+                                    st.info(
+                                        "No unowned defensive picks found. "
+                                        "You may already hold the top-rated tickers in these sectors."
+                                    )
+                                else:
+                                    st.caption(
+                                        "Top-ranked Healthcare & Consumer Staples picks from the scanner — "
+                                        "not already in your portfolio. Low-beta sectors that reduce "
+                                        "overall portfolio volatility and beta. Ranked by momentum score."
+                                    )
+                                    for _, _dp in _def_picks.iterrows():
+                                        _dp_ticker  = str(_dp["Ticker"])
+                                        _dp_sector  = str(_dp.get("Sector", ""))
+                                        _dp_score   = float(_dp.get("Score", 0))
+                                        _dp_signal  = str(_dp.get("Signal", ""))
+                                        _dp_rsi     = _dp.get("RSI")
+                                        _dp_trend   = str(_dp.get("Trend", ""))
+                                        _dp_mom     = _dp.get("Momentum")
+
+                                        _sig_clr = (
+                                            "#00C851" if "Buy" in _dp_signal else
+                                            "#ff4444" if "Sell" in _dp_signal else "#888"
+                                        )
+                                        _sc_clr = (
+                                            "#00C851" if _dp_score >= 65 else
+                                            "#ffbb33" if _dp_score >= 50 else "#888"
+                                        )
+                                        _rsi_str  = f"RSI {_dp_rsi:.0f}" if _dp_rsi is not None else ""
+                                        _mom_str  = (f"  ·  Momentum {_dp_mom:+.1f}%" if _dp_mom is not None else "")
+                                        _detail   = "  ·  ".join(filter(None, [_rsi_str, _dp_trend])) + _mom_str
+
+                                        _dp_col1, _dp_col2 = st.columns([3, 1])
+                                        with _dp_col1:
+                                            st.markdown(
+                                                f"<div style='background:#111827;border-radius:6px;"
+                                                f"padding:10px 14px;margin-bottom:6px'>"
+                                                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>"
+                                                f"{_dp_ticker}</span>"
+                                                f"<span style='font-size:0.75em;color:#6b7280;margin-left:8px'>"
+                                                f"{_dp_sector}</span><br>"
+                                                f"<span style='font-size:0.8em;color:{_sc_clr}'>"
+                                                f"Score {_dp_score:.0f}/100</span>"
+                                                f"<span style='font-size:0.75em;color:{_sig_clr};"
+                                                f"margin-left:10px'>{_dp_signal}</span><br>"
+                                                f"<span style='font-size:0.73em;color:#6b7280'>{_detail}</span>"
+                                                f"</div>",
+                                                unsafe_allow_html=True,
+                                            )
+                                        with _dp_col2:
+                                            if st.button(
+                                                f"Analyze {_dp_ticker}",
+                                                key=f"_def_analyze_{_dp_ticker}_{_rtype}",
+                                                use_container_width=True,
+                                            ):
+                                                st.session_state["analysis_ticker"] = _dp_ticker
+                                                st.session_state["_nav_origin"] = "🏠 Portfolio"
+                                                nav_page("📈 Stock Analysis")
+
         # ── Stress Testing ────────────────────────────────────────────────────
         st.divider()
         st.markdown("### 🔥 Stress Testing & Scenario Analysis")
