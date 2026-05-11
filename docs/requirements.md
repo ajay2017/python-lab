@@ -51,17 +51,24 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 
 | ID | Requirement |
 |----|-------------|
-| F-20 | Show market tone header (bull / bear / flat) based on S&P 500 daily change (≥+0.5% bull, ≤-0.5% bear) |
+| F-20 | Show market tone header (bull / bear / flat) based on S&P 500 daily change (≥+0.5% bull, ≤-0.5% bear). Header date uses ET timezone; when market is closed, appends "data as of [last trading day]". |
 | F-21 | Display date, S&P 500 %, Nasdaq %, and top 2 leading sectors by 1-week return |
 | F-22 | Act Today (right column): prioritised list of urgent actions — stop triggers, sell signals, critical news, macro events |
 | F-23 | Grow Today (left column): market-tone-aware growth setups — new positions and add-to-winners on bull days; deferral message on bear days |
-| F-24 | Each Grow Today pick includes: ticker, sector, scanner score, thesis one-liner, suggested position size (shares, cost, stop) |
+| F-24 | Each Grow Today pick includes: ticker, sector, scanner score, thesis one-liner, suggested entry zone (lo–hi range), position size (shares, cost, stop) |
 | F-25 | Review Before Close (full width): approaching stops, near-term earnings, weakening large positions |
 | F-26 | Buy Candidates (full width): scanner picks cross-referenced across 5 layers with a confidence verdict (Confirmed / Mixed / Conflicted / Caution / Unverified) |
 | F-27 | Each Buy Candidate card shows: ticker, sector, score, verdict badge, technical summary, conflicts and agreed signals |
 | F-28 | Quick Research panel: user enters any ticker (e.g. from external news), app returns 4-bullet actionable summary with entry timing verdict |
 | F-29 | Entry timing verdicts: High Risk — Avoid Chasing (RSI>80 or 1D>15% or 5D>25%), Wait for Pullback, Oversold — Potential Entry, Normal Entry Conditions |
 | F-30 | All Analyze buttons navigate to Stock Analysis with a Back button returning to Today's Brief |
+| F-31 | On flat market days, Grow Today must output confirmed-verdict picks before unverified-verdict picks so highest-conviction ideas lead |
+| F-32 | Pre-Market Intel panel: visible 4:00–9:29 AM ET weekdays only; appears at top of Today's Brief tab |
+| F-33 | Pre-Market Intel shows US futures (S&P 500, Nasdaq 100, Dow, Russell 2000) with price and % change vs prior close |
+| F-34 | Pre-Market Intel shows overnight % change for major global indices (Nikkei, Hang Seng, DAX, FTSE, CAC 40) |
+| F-35 | Pre-Market Intel shows pre-market movers (≥0.5% change) for all held positions and watchlist tickers; held positions are visually distinguished |
+| F-36 | Pre-Market Intel shows today's HIGH and MEDIUM impact economic events as "catalysts" |
+| F-37 | Pre-market expected open tone (bull/bear/flat) is derived from ES=F futures % change (≥+0.4% bull, ≤-0.4% bear) |
 
 ### 3.3 Stock Analysis
 
@@ -74,7 +81,7 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 | F-44 | Analyst upside note shown only when it reinforces signal direction (upside on Buy; suppressed on Sell and when downside on Buy) |
 | F-45 | Trade Plan tab (Buy/Strong Buy): entry zone, stop loss, R:R, position sizing (shares, cost, max risk) |
 | F-46 | Exit Plan tab (Sell/Strong Sell): current price, shares held, position value, P&L if sold now; exit recommendation banner; ATR downside level |
-| F-47 | Position Monitor tab (Hold): stop loss, shares held, P&L; guidance to maintain with stop |
+| F-47 | Position Monitor tab (Hold): stop loss, shares held, P&L; guidance to maintain with stop; specific 7-day re-check date and two concrete action triggers (add if score ≥58; exit if price closes below stop) |
 | F-48 | Price scenarios chart (Bull / Base / Bear) in all signal modes; sell mode shows position $ impact per scenario |
 | F-49 | Chart tab: candlestick with Bollinger Bands, SMA 20/50, RSI panel, optional volume |
 | F-50 | Risk tab: Sharpe, Sortino, max drawdown, beta, volatility vs SPY |
@@ -106,7 +113,7 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 |----|-------------|
 | F-80 | Log all buy and sell trades with ticker, action, shares, price, notes, and trigger type |
 | F-81 | Persist trades to Supabase `trades` table |
-| F-82 | Decision Context capture on each trade: signal seen at time of trade, whether signal was followed (yes / no / discretionary), deviation reason, lesson learned |
+| F-82 | Decision Context capture on each trade: signal seen at time of trade (auto-filled from current portfolio signal; help text shows load-time timestamp so pre-fill is clearly dated), whether signal was followed (yes / no / discretionary), deviation reason, lesson learned |
 | F-83 | My Patterns section: analyse historical trades to compute signal accuracy vs override accuracy |
 | F-84 | Surface costly deviations (ignored signal, position lost money) and good overrides |
 | F-85 | Behavioural insight: compare signal-follow win rate vs override win rate; flag if ≥2 costly deviations |
@@ -156,6 +163,9 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 | NF-12 | Sector ETF returns cache TTL: 60 minutes (3600 seconds) |
 | NF-13 | Market indices cache TTL: not cached — fetched on each Daily Briefing load |
 | NF-14 | When market is closed, the app must display a context note indicating data reflects last close |
+| NF-15 | Pre-market intel cache TTL: 5 minutes (300 seconds); keyed on held tickers + watchlist to ensure correct data after holdings change |
+| NF-16 | Risk-free rate (^IRX) cache TTL: 24 hours (86400 seconds); fallback to 4.5% if Yahoo Finance unavailable |
+| NF-17 | All date comparisons must use America/New_York (ET) timezone via pytz to prevent midnight UTC rollover producing wrong calendar dates on Streamlit Cloud |
 
 ### 4.3 Reliability
 

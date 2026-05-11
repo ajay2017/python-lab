@@ -67,18 +67,19 @@ python-lab/
 │   └── architecture.md             This document
 └── stock_analyzer/                 Domain logic package
     ├── __init__.py
-    ├── data.py                     Data fetching (yfinance wrapper)
+    ├── data.py                     Data fetching (yfinance wrapper, risk-free rate)
     ├── indicators.py               Pure technical indicator calculations
     ├── technicals.py               Technical scoring from indicator output
-    ├── fundamentals.py             Fundamental scoring from company info
+    ├── fundamentals.py             Fundamental scoring — sector-relative benchmarks
     ├── sentiment.py                VADER-based news sentiment scoring
     ├── scoring.py                  Composite score weights and recommendation tiers
     ├── portfolio.py                Portfolio DataFrame construction from holdings
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
     ├── targets.py                  Price targets, support/resistance, entry zones
-    ├── ranking.py                  Cross-portfolio stock ranking
+    ├── ranking.py                  Cross-portfolio stock ranking (composite score sort)
     ├── scanner.py                  Market scanner (73-ticker universe)
     ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today / Buy Candidates)
+    ├── premarket.py                Pre-market intelligence (futures, global markets, movers)
     ├── quick_research.py           Ad-hoc ticker research with entry timing verdict
     ├── news_intelligence.py        News aggregation and attention flagging
     ├── sentiment_velocity.py       Sentiment trend tracking over time
@@ -87,7 +88,7 @@ python-lab/
     ├── macro_calendar.py           Economic calendar events
     ├── earnings_advisor.py         Earnings risk and playbook
     ├── perf_advisor.py             Performance attribution and recommendations
-    ├── risk_advisor.py             Risk flags and advisor recommendations
+    ├── risk_advisor.py             Risk flags and advisor recommendations (exact beta impact)
     ├── watchlist_advisor.py        Watchlist analysis and recommendations
     ├── trade_analytics.py          Trade history analytics
     ├── tax_advisor.py              Tax-lot and realised gain/loss analysis
@@ -95,7 +96,7 @@ python-lab/
     ├── stress_test.py              Macro stress scenario modelling
     ├── split_detector.py           Stock split detection and adjustment
     ├── decision_journal.py         Signal-vs-override pattern analysis
-    ├── db.py                       Supabase database operations
+    ├── db.py                       Supabase database operations (fractional shares)
     └── api_health.py               API call health event recording
 ```
 
@@ -147,7 +148,32 @@ data.fetch_ticker_bundle(ticker)   ← Yahoo Finance (single session per ticker)
         st.session_state["_port_df_enriched"] = port_df
 ```
 
-### 4.2 Daily Briefing (Today's Brief tab)
+### 4.2 Pre-Market Intel (Today's Brief tab, 4:00–9:29 AM ET only)
+
+```
+premarket.is_premarket()   ← True on weekdays 4:00–9:29 AM ET
+        │
+        ▼  (if True)
+_get_premarket_brief(held_tickers, watchlist)  [cached 5 min]
+        │
+        ├── fetch_futures()         ← ES=F, NQ=F, YM=F, RTY=F via yfinance fast_info
+        │                              % change vs previous_close → tone (bull/bear/flat)
+        │
+        ├── fetch_global_markets()  ← ^N225, ^HSI, ^GDAXI, ^FTSE, ^FCHI
+        │                              5-day history → 1-day overnight % change
+        │
+        └── fetch_premarket_movers() ← held + watchlist tickers, fast_info last_price
+                                       vs previous_close; |chg| >= 0.5% threshold
+
++ inject today's HIGH/MEDIUM macro events from already-computed _macro_events
+
+→ rendered as: tone banner, futures tiles, global markets, catalysts, movers
+```
+
+Tone logic: ES=F ≥ +0.4% → bull; ≤ -0.4% → bear; otherwise flat.
+During pre-market the tone banner overrides the regular (market-closed) tone with a forward-looking read.
+
+### 4.3 Daily Briefing (Today's Brief tab)
 
 ```
 port_df  +  scanner_results  +  news_items  +  held_data
@@ -161,6 +187,8 @@ daily_briefing.build_daily_briefing(
         ├── Act Today     ← stop triggers, sell signals, critical news, macro events
         ├── Buy Candidates ← scanner picks, each cross-referenced via _cross_reference()
         ├── Grow Today    ← market-tone-aware new picks + add-to-winners
+        │       ├── Bull day: score ≥ 65, up to 3 picks, confirmed + unverified allowed
+        │       └── Flat day: score ≥ 78, max 1 pick, confirmed picks shown before unverified
         └── Review Before Close ← approaching stops, earnings, weak large positions
 
 market_context = {
@@ -171,7 +199,7 @@ market_context = {
 }
 ```
 
-### 4.3 Signal Cross-Reference (Buy Candidates confidence verdict)
+### 4.4 Signal Cross-Reference (Buy Candidates confidence verdict)
 
 ```
 For each scanner pick:
@@ -186,7 +214,7 @@ Layer 5: Revisions  ← analyst upgrades minus downgrades 90d (held positions on
    (non-held positions are always "unverified" — composite signal not computed)
 ```
 
-### 4.4 Quick Research Flow
+### 4.5 Quick Research Flow
 
 ```
 User enters ticker → load_all(ticker) [cached 30 min]
@@ -351,6 +379,7 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 | `_port_df_enriched` | My Portfolio | Stock Analysis, Today's Brief |
 | `_live_prices` | Price strip fragment | Portfolio P&L table |
 | `_last_port_df` | My Portfolio | Trade Journal decision context |
+| `_signals_computed_at` | My Portfolio (after port_df build) | Portfolio table caption, Trade Journal signal pre-fill help |
 | `_portfolio_value` | My Portfolio | Sidebar display |
 | `scanner_results` | Market Scanner | Today's Brief buy candidates |
 | `_sidebar_news` | My Portfolio / Stock Analysis | Sidebar news slot |
@@ -361,11 +390,19 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 ## 8. Caching Strategy
 
 ```python
+@st.cache_data(ttl=300)    # 5 minutes
+def _get_premarket_brief(held_tickers, watchlist):
+    # Fetches US futures (ES=F, NQ=F, YM=F, RTY=F) via fast_info
+    # Fetches global index overnight moves (5-day history → 1-day return)
+    # Fetches pre-market movers for held + watchlist tickers
+    # Only called when is_premarket() is True (4:00–9:29 AM ET weekdays)
+
 @st.cache_data(ttl=1800)   # 30 minutes
 def load_all(ticker, period):
     # Fetches history, info, news, earnings, revisions
     # Computes all scores, targets, risk metrics
     # Returns complete analysis dict
+    # Uses live risk-free rate from _get_rfr() for Sharpe/Sortino
 
 @st.cache_data(ttl=3600)   # 60 minutes
 def _fetch_sector_returns():
@@ -376,7 +413,7 @@ def _fetch_sector_returns():
 def _get_rfr():
     # Fetches 13-week T-bill rate (^IRX) as annual decimal
     # Fallback: 0.045 (4.5%) if Yahoo Finance unavailable
-    # Used for Sharpe and Sortino calculations
+    # Used for Sharpe and Sortino calculations across all risk functions
 
 # Not cached (always fresh):
 fetch_market_indices()      # Called on Daily Briefing load
@@ -419,12 +456,31 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 
 ---
 
-## 10. External API Dependencies
+## 10. Known Behaviours and Design Decisions
+
+| Area | Behaviour | Rationale |
+|------|-----------|-----------|
+| Signal staleness | Portfolio table shows caption with signal load time (HH:MM). Signals do not update between page refreshes even though live prices update every 60s. | Recomputing all signals on every price tick would hit Yahoo Finance rate limits and degrade performance. |
+| Briefing date (ET) | All dates in Today's Brief use `_TODAY_ET` (America/New_York) not `datetime.now()`. When market is closed, header appends "data as of Fri May 09" to clarify the data source. | Streamlit Cloud runs on UTC servers; bare `datetime.now()` flips to the next calendar day after ~8 PM ET. |
+| Pre-market previous close | `fetch_premarket_movers()` prefers the known close from `held_data` history for the baseline. When `held_data` is empty (cached call), it falls back to `fast_info.previous_close`. | The cached pre-market fetch cannot accept non-hashable `held_data` as a parameter, so it uses fast_info as fallback. |
+| RSI in strong uptrends | When avg_loss EWM = 0 (no losing periods in window), RSI is set to 100.0 (if any gains) or 50.0 (flat). | Standard division by zero would produce NaN, which downstream signal logic treats as neutral — incorrectly suppressing strong Buy signals. |
+| Sortino in strong uptrends | When no negative excess-return days exist, Sortino returns 99.0 (not 0.0). | An empty downside series has std = NaN; treating that as 0.0 was showing worst-case Sortino for the best-performing stocks. |
+| Fractional shares | `db.load_holdings()` converts the `shares` column to `float` (not `int`). | Brokers increasingly support fractional shares; `astype(int)` was silently truncating e.g. 12.5 → 12. |
+| Earnings + conflict verdict | The earnings priority check runs before composite/sentiment checks. A near-earnings stock with any other conflicting signal escalates to "Conflicted" (red), not just "Caution" (amber). | Holding through earnings with mixed signals is higher risk than either condition alone. |
+| Entry zone (Grow Today) | `_suggest_size()` returns `entry_lo` (40% of stop-distance below price) and `entry_hi` (15% of stop-distance above price) as the actionable entry range. | A single "@ ~$X" price point implied precision that doesn't exist; a zone is more honest and practical. |
+| Position Monitor re-check | When signal is Hold for a held position, the info box shows a specific 7-day re-check date computed from `date.today() + 7`. Two triggers are given: add-on if score ≥ 58; exit if price closes below stop. | "Mixed signals — check back later" gives no actionable timeline. Specific dates and conditions prevent analysis paralysis. |
+| Rankings sort order | `ranking.py` sorts by Composite Score descending, Universe Rank as tiebreaker. | Sorting by Universe Rank ascending promoted lower-scoring stocks that happened to have a low ordinal rank. |
+| Beta recommendation | `risk_advisor.py` names the specific highest-beta ticker and computes the exact new portfolio beta using `(beta - w*b*f) / (1 - w*f)` where f = 50% sell fraction. | A generic "consider trimming high-beta names" gives no concrete action. Users need to know which ticker and what the outcome will be. |
+
+---
+
+## 11. External API Dependencies
 
 | API | Purpose | Rate Limits | Failure Handling |
 |-----|---------|-------------|-----------------|
-| Yahoo Finance (yfinance) | OHLCV prices, company info, news, analyst data, earnings | Informal; 429 responses possible | Retry with linear backoff (3 attempts, 3s base); `api_health` records events |
+| Yahoo Finance (yfinance) | OHLCV prices, company info, news, analyst data, earnings, futures, global indices | Informal; 429 responses possible | Retry with linear backoff (3 attempts, 3s base); `api_health` records events; pre-market failures caught and shown as caption |
 | Supabase REST API | Holdings, watchlist, trades CRUD | Generous free tier | Connection errors surface as UI warnings |
 | Anthropic / OpenAI / Google | AI Brief generation | Per-account | Errors surfaced in AI Brief tab; rest of app unaffected |
+| US Treasury / Yahoo `^IRX` | 13-week T-bill rate for risk-free rate | Daily cached | Falls back to 4.5% if unavailable |
 
-Yahoo Finance has no official public API SLA. All yfinance calls are wrapped in `_retry()` in `data.py` to handle transient 429 rate-limit responses.
+Yahoo Finance has no official public API SLA. All yfinance calls are wrapped in `_retry()` in `data.py` to handle transient 429 rate-limit responses. Pre-market `fast_info` calls in `premarket.py` are not retried (best-effort; panel silently omits unavailable tickers).
