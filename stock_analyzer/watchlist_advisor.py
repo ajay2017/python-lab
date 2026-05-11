@@ -64,6 +64,7 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
     port_beta    = portfolio_ctx.get("portfolio_beta")
     high_alerts  = portfolio_ctx.get("active_high_risk_alerts") or []
     sector_name  = portfolio_ctx.get("sector_of_ticker") or "this sector"
+    grow_sectors = portfolio_ctx.get("grow_today_sectors") or set()
 
     # ── Hard breach: sector ≥ 35% ────────────────────────────────────────────
     if sector_wt >= 35:
@@ -105,6 +106,13 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
         soft.append(
             f"Active HIGH risk alert{'s' if len(high_alerts) > 1 else ''} "
             f"({', '.join(high_alerts[:2])}) — resolve in Portfolio → Risk Advisor first."
+        )
+    # Same-sector overlap with Grow Today: following both stacks sector exposure.
+    if sector_name and sector_name in grow_sectors:
+        soft.append(
+            f"Daily Briefing → Grow Today is also recommending a **{sector_name}** pick today. "
+            "Opening both stacks sector exposure — pick the higher-conviction setup, "
+            "or wait a day so each sector trade gets evaluated on its own merits."
         )
 
     if soft:

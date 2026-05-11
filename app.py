@@ -1129,6 +1129,15 @@ if page == "🏠 Portfolio":
         _daily_brief    = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
         _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
 
+    # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
+    # can demote ENTER_NOW picks that would stack the same sector exposure.
+    _gt_today = _daily_brief.get("grow_today") or {}
+    st.session_state["_grow_today_sectors_cache"] = sorted({
+        str(p.get("sector", "")).strip()
+        for p in (_gt_today.get("new_picks") or []) + (_gt_today.get("add_positions") or [])
+        if str(p.get("sector", "")).strip()
+    })
+
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
@@ -7602,6 +7611,7 @@ elif page == "📋 Watchlist":
     _wl_port_df    = st.session_state.get("holdings_df", pd.DataFrame())
     _wl_port_risk  = st.session_state.get("_port_risk_cache", {}) or {}
     _wl_high_alerts = st.session_state.get("_risk_high_alerts_cache", []) or []
+    _wl_grow_sectors = set(st.session_state.get("_grow_today_sectors_cache", []) or [])
     _wl_port_beta  = _wl_port_risk.get("beta")
 
     # ── Build recommendations ─────────────────────────────────────────────────
@@ -7619,6 +7629,7 @@ elif page == "📋 Watchlist":
             "sector_weight_pct":       _wl_sec_wt,
             "portfolio_beta":          _wl_port_beta,
             "active_high_risk_alerts": _wl_high_alerts,
+            "grow_today_sectors":      _wl_grow_sectors,
         }
         try:
             _wl_recs.append(build_watchlist_recommendation(_wt, _wd, portfolio_ctx=_wl_pctx))
