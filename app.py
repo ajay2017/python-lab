@@ -1413,6 +1413,44 @@ if page == "🏠 My Portfolio":
             unsafe_allow_html=True,
         )
 
+        # ── Refresh Signals ───────────────────────────────────────────────────
+        _rb_col, _ri_col = st.columns([1, 4])
+        with _rb_col:
+            _do_refresh = st.button(
+                "🔄 Refresh Signals",
+                key="_db_refresh_signals",
+                use_container_width=True,
+                help="Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open.",
+            )
+        with _ri_col:
+            _sig_ts = st.session_state.get("_brief_signals_ts")
+            if _sig_ts:
+                _sig_age = int((datetime.now() - _sig_ts).total_seconds())
+                if _sig_age < 60:
+                    st.caption(f"Signals refreshed {_sig_age}s ago — live prices current")
+                elif _sig_age < 3600:
+                    st.caption(f"Signals refreshed {_sig_age // 60}m {_sig_age % 60}s ago — click to pull latest market data")
+                else:
+                    st.caption(f"Signals last refreshed {_sig_age // 3600}h ago — **stale, refresh recommended**")
+            else:
+                st.caption(
+                    "Signals reflect the last scanner run — click **Refresh Signals** ~15 min after open "
+                    "to score today's price action."
+                )
+        if _do_refresh:
+            st.cache_data.clear()
+            _total_scan_tickers = sum(len(v) for v in SECTOR_UNIVERSE.values())
+            with st.spinner(
+                f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
+            ):
+                _fresh_results = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
+            if not _fresh_results.empty:
+                st.session_state.scanner_results = _fresh_results
+                st.session_state._brief_signals_ts = datetime.now()
+                st.rerun()
+            else:
+                st.warning("Scanner returned no results — check your connection and try again.")
+
         # ── Quick Research ────────────────────────────────────────────────────
         st.markdown(
             "<div style='background:#111827;border:1px solid #374151;"
