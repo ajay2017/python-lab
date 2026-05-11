@@ -41,7 +41,8 @@ def _blank():
 
 _stats: dict = {
     "yahoo_finance": _blank(),
-    "fmp":           _blank(),
+    "fmp":           _blank(),   # kept for any legacy references
+    "fred":          _blank(),
     "supabase":      _blank(),
 }
 

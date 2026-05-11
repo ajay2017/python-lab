@@ -1018,15 +1018,15 @@ if page == "🏠 My Portfolio":
     else:
         _rag_label, _rag_color = "All Clear", "#00C851"
 
-    # Load macro calendar (cached per ET date — free tier FMP key optional)
+    # Load macro calendar (cached per ET date — FRED key optional but recommended)
     _mc_day_key = f"_macro_cal_{_TODAY_ET}"
     if _mc_day_key not in st.session_state:
-        _fmp_k = (
-            st.secrets.get("fmp", {}).get("api_key")
-            or os.environ.get("FMP_API_KEY", "")
+        _fred_k = (
+            st.secrets.get("fred", {}).get("api_key")
+            or os.environ.get("FRED_API_KEY", "")
         )
         st.session_state[_mc_day_key] = build_macro_calendar(
-            port_df, fmp_key=_fmp_k or None, days_ahead=45, days_behind=7,
+            port_df, fred_key=_fred_k or None, days_ahead=45, days_behind=7,
             today=_TODAY_ET,
         )
     _macro_events = st.session_state[_mc_day_key]
@@ -8002,47 +8002,45 @@ elif page == "📅 Economic Calendar":
     st.title("📅 Economic Calendar")
     st.caption(
         "High-impact macro events for the next 45 days — FOMC, CPI, NFP, GDP and more. "
-        "Static backbone (Fed/BLS/BEA schedules) enriched with live estimates from FMP when an API key is configured. "
+        "Static backbone (Fed/BLS/BEA schedules) enriched with official released values from FRED (St. Louis Fed). "
         "Holdings at risk column maps each event to your specific positions."
     )
 
-    # ── FMP key config ────────────────────────────────────────────────────────
-    _ec_fmp_key = (
-        st.secrets.get("fmp", {}).get("api_key")
-        or os.environ.get("FMP_API_KEY", "")
-        or st.session_state.get("_ec_fmp_key", "")
+    # ── FRED key config ───────────────────────────────────────────────────────
+    _ec_fred_key = (
+        st.secrets.get("fred", {}).get("api_key")
+        or os.environ.get("FRED_API_KEY", "")
+        or st.session_state.get("_ec_fred_key", "")
     )
-    with st.expander("⚙️ FMP API key (optional — adds live estimates & secondary events)", expanded=not _ec_fmp_key):
+    with st.expander("⚙️ FRED API key (optional — adds previous & actual released values)", expanded=not _ec_fred_key):
+        st.markdown(
+            "**FRED** (Federal Reserve Economic Data) is the official US economic data source.  \n"
+            "Free API key at [fred.stlouisfed.org/docs/api/api_key.html](https://fred.stlouisfed.org/docs/api/api_key.html) — takes ~2 minutes, no credit card.  \n"
+            "Adds **previous** and **actual** values to CPI, NFP, GDP, PPI, Retail Sales, and Fed Funds Rate events."
+        )
         _ec_key_input = st.text_input(
-            "Financial Modeling Prep API key",
-            value=st.session_state.get("_ec_fmp_key", ""),
+            "FRED API key",
+            value=st.session_state.get("_ec_fred_key", ""),
             type="password",
-            placeholder="your-fmp-key",
-            help="Free at financialmodelingprep.com — 250 calls/day, no credit card required",
+            placeholder="your-fred-api-key",
+            help="Free at fred.stlouisfed.org — 120 requests/minute, no credit card required",
         )
         if _ec_key_input:
-            st.session_state["_ec_fmp_key"] = _ec_key_input
-            _ec_fmp_key = _ec_key_input
-        if _ec_fmp_key:
-            _fmp_health = _ah.get_health("fmp")
-            _fmp_err    = _fmp_health.get("last_error", "")
-            if "403" in _fmp_err:
-                st.warning(
-                    "⚠️ **FMP key is valid but this endpoint requires a paid plan.**  \n"
-                    "The economic calendar (`/api/v3/economic_calendar`) is not available on the free tier.  \n"
-                    "👉 Upgrade to FMP Starter ($14.99/mo) at [financialmodelingprep.com](https://financialmodelingprep.com/developer/docs/pricing) "
-                    "to enable live estimates.  \n"
-                    "The app continues to work on the **static backbone** (FOMC, CPI, NFP, GDP, PPI, Retail Sales) — "
-                    "only live consensus estimates and secondary events are unavailable.",
-                )
-            elif "401" in _fmp_err:
-                st.error(
-                    "❌ **Invalid or expired FMP API key.** Check your key at financialmodelingprep.com."
-                )
+            st.session_state["_ec_fred_key"] = _ec_key_input
+            _ec_fred_key = _ec_key_input
+        if _ec_fred_key:
+            _fred_health = _ah.get_health("fred")
+            _fred_err    = _fred_health.get("last_error", "")
+            if _fred_err:
+                st.warning(f"⚠️ FRED last error: {_fred_err}")
             else:
-                st.success("FMP key active — live estimates enabled.")
+                st.success("FRED key active — previous & actual values enabled.")
         else:
-            st.info("Running on static backbone only (FOMC, CPI, NFP, GDP). Add FMP key for live estimates and consensus values.")
+            st.info(
+                "Running on static backbone only (FOMC dates, CPI, NFP, GDP, PPI, Retail Sales). "
+                "A free FRED key is required to show previous and actual released values next to each event "
+                "(e.g. CPI YoY: +2.4%, NFP Chg: +228K). Takes ~2 minutes to register at fred.stlouisfed.org."
+            )
 
     # ── Load / refresh calendar ───────────────────────────────────────────────
     # During market hours (8 AM–6 PM ET) the cache refreshes each hour so that
@@ -8050,12 +8048,12 @@ elif page == "📅 Economic Calendar":
     _ec_port_hash  = len(st.session_state.get("_port_df_enriched", pd.DataFrame()))
     _ec_now_et     = datetime.now(_pytz.timezone("America/New_York"))
     _ec_hour_slot  = str(_ec_now_et.hour) if 8 <= _ec_now_et.hour <= 18 else "off"
-    _ec_cache_key  = f"_ec_cal_{_TODAY_ET}_{bool(_ec_fmp_key)}_{_ec_port_hash}_{_ec_hour_slot}"
+    _ec_cache_key  = f"_ec_cal_{_TODAY_ET}_{bool(_ec_fred_key)}_{_ec_port_hash}_{_ec_hour_slot}"
     if _ec_cache_key not in st.session_state or st.button("🔄 Refresh calendar", key="_ec_refresh"):
         with st.spinner("Loading economic calendar…"):
             _ec_events = build_macro_calendar(
                 st.session_state.get("_port_df_enriched", pd.DataFrame()),
-                fmp_key=_ec_fmp_key or None,
+                fred_key=_ec_fred_key or None,
                 days_ahead=45,
                 days_behind=7,
                 today=_TODAY_ET,
@@ -8161,7 +8159,7 @@ elif page == "📅 Economic Calendar":
                 _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
 
                 with st.expander(
-                    f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev['time']} ET  ·  "
+                    f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev.get('time_et', _ev.get('time',''))} ET  ·  "
                     f"{_ev['category']}  ·  {_ev['days_label']}",
                     expanded=(0 <= _delta_days <= 2 and _ev["impact"] == MC_HIGH),
                 ):

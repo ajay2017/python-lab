@@ -1,11 +1,14 @@
 """
-Economic Calendar — static backbone + FMP live layer.
+Economic Calendar — static backbone + FRED live layer.
 
 Static backbone:  FOMC, CPI, NFP, GDP, PPI, Retail Sales 2025-2026
                   Published months in advance by Fed / BLS / BEA — 100% reliable.
-FMP live layer:   Financial Modeling Prep free tier (250 calls/day, no credit card).
-                  Enriches static events with estimate/previous/actual values and
-                  adds secondary events (PMI, housing, confidence surveys).
+FRED live layer:  Federal Reserve Economic Data (St. Louis Fed).
+                  Free API key required: fred.stlouisfed.org/docs/api/api_key.html
+                  (~2 minutes to register, no credit card).
+                  Enriches static events with previous and actual released values.
+                  No consensus estimates (FRED is official data only, not forecasts).
+                  120 requests/minute on free key.
 
 Portfolio impact: maps each event category to affected sectors, then to the
                   user's specific holdings — the key differentiator vs a plain
@@ -305,70 +308,187 @@ def _affected_tickers(category: str, port_df: _pd.DataFrame) -> list[str]:
     return result
 
 
-def _fetch_fmp(fmp_key: str, from_date: _date, to_date: _date) -> list[dict]:
-    """Fetch US economic calendar from FMP free tier."""
-    from stock_analyzer import api_health as _ah
-    try:
-        import requests as _req
-        resp = _req.get(
-            "https://financialmodelingprep.com/api/v3/economic_calendar",
-            params={"from": str(from_date), "to": str(to_date), "apikey": fmp_key},
-            timeout=10,
-        )
-        if resp.status_code == 429:
-            _ah.record("fmp", "rate_limit")
-            return []
-        if resp.status_code == 403:
-            _ah.record("fmp", "error", msg="403 — Economic calendar requires a paid FMP plan (Starter+). Free tier does not include this endpoint.")
-            return []
-        if resp.status_code == 401:
-            _ah.record("fmp", "error", msg="401 — Invalid or expired FMP API key. Check your key at financialmodelingprep.com.")
-            return []
-        if resp.status_code != 200:
-            _ah.record("fmp", "error", msg=f"HTTP {resp.status_code}")
-            return []
-        data = resp.json()
-        if not isinstance(data, list):
-            _ah.record("fmp", "empty")
-            return []
-        out = []
-        for item in data:
-            country = (item.get("country") or "").upper()
-            if country not in ("US", "USD", ""):
-                continue
-            impact = (item.get("impact") or "").upper()
-            if impact not in (HIGH, MEDIUM):
-                continue
-            date_str = str(item.get("date", ""))
-            out.append({
-                "date_str": date_str[:10],
-                "time":     date_str[11:16] if len(date_str) > 10 else "—",
-                "event":    (item.get("event") or "").strip(),
-                "impact":   impact,
-                "previous": item.get("previous"),
-                "estimate": item.get("estimate"),
-                "actual":   item.get("actual"),
-            })
-        _ah.record("fmp", "success" if out else "empty")
-        return out
-    except Exception as _e:
-        _ah.record("fmp", "error", msg=str(_e)[:120])
+# ── FRED series config ────────────────────────────────────────────────────────
+# Maps each static event name to a FRED series + how to format its value.
+# transform: "yoy_pct" needs 13 obs, "mom_pct"/"mom_diff" need 2, "level" needs 1.
+_FRED_MAP: dict[str, dict] = {
+    "CPI Inflation": {
+        "series": "CPIAUCSL",        # CPI All Urban, SA (index level)
+        "transform": "yoy_pct",
+        "label": "CPI YoY",
+        "unit": "%",
+        "limit": 13,
+    },
+    "Non-Farm Payrolls": {
+        "series": "PAYEMS",          # Total Nonfarm Employees (thousands)
+        "transform": "mom_diff",
+        "label": "NFP Chg",
+        "unit": "K",
+        "limit": 2,
+    },
+    "GDP Advance Estimate": {
+        "series": "A191RL1Q225SBEA", # Real GDP QoQ annualised % change (pre-computed)
+        "transform": "level",
+        "label": "GDP QoQ Ann.",
+        "unit": "%",
+        "limit": 2,
+    },
+    "PPI Producer Prices": {
+        "series": "PPIACO",          # PPI All Commodities (index level)
+        "transform": "mom_pct",
+        "label": "PPI MoM",
+        "unit": "%",
+        "limit": 2,
+    },
+    "Retail Sales": {
+        "series": "RSAFS",           # Advance Retail Sales, SA (millions)
+        "transform": "mom_pct",
+        "label": "Retail Sales MoM",
+        "unit": "%",
+        "limit": 2,
+    },
+    "FOMC Rate Decision": {
+        "series": "FEDFUNDS",        # Effective Fed Funds Rate (level)
+        "transform": "level",
+        "label": "Fed Funds Rate",
+        "unit": "%",
+        "limit": 2,
+    },
+}
+
+_FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+
+
+def _fred_obs(series_id: str, limit: int, api_key: str | None) -> list[float]:
+    """
+    Fetch the most recent `limit` observations for a FRED series.
+    Returns a list of floats [most_recent, ..., oldest], skipping missing values.
+    Requires a free FRED API key — returns [] immediately if no key provided.
+    Free key: fred.stlouisfed.org/docs/api/api_key.html (120 req/min).
+    """
+    if not api_key:
         return []
+    import requests as _req
+    params: dict = {
+        "series_id":    series_id,
+        "api_key":      api_key,
+        "file_type":    "json",
+        "sort_order":   "desc",
+        "limit":        limit + 4,   # fetch a few extra to skip any "." missing values
+    }
+    try:
+        resp = _req.get(_FRED_BASE, params=params, timeout=10)
+        if resp.status_code != 200:
+            return []
+        data = resp.json().get("observations", [])
+        vals = []
+        for obs in data:
+            v = obs.get("value", ".")
+            if v != ".":
+                try:
+                    vals.append(float(v))
+                except ValueError:
+                    pass
+            if len(vals) >= limit:
+                break
+        return vals
+    except Exception:
+        return []
+
+
+def _apply_transform(vals: list[float], transform: str, unit: str) -> str | None:
+    """Compute the formatted value string from raw observations."""
+    if not vals:
+        return None
+    try:
+        if transform == "level":
+            return f"{vals[0]:.2f}{unit}"
+        if transform == "yoy_pct" and len(vals) >= 13:
+            yoy = (vals[0] - vals[12]) / vals[12] * 100
+            return f"{yoy:+.2f}{unit}"
+        if transform == "mom_pct" and len(vals) >= 2:
+            mom = (vals[0] - vals[1]) / vals[1] * 100
+            return f"{mom:+.2f}{unit}"
+        if transform == "mom_diff" and len(vals) >= 2:
+            diff = vals[0] - vals[1]
+            return f"{diff:+,.0f}{unit}"
+    except (ZeroDivisionError, IndexError):
+        pass
+    return None
+
+
+def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
+    """
+    Enrich static event dicts in-place with FRED actual/previous values.
+    Uses official St. Louis Fed data — no consensus estimates (FRED is releases only).
+
+    For future events:  previous = last released value, actual = None
+    For past events:    actual   = most recent released value,
+                        previous = prior period value
+    """
+    from stock_analyzer import api_health as _ah
+
+    fetched: dict[str, list[float]] = {}
+
+    for ev in events:
+        name = ev.get("event", "")
+        cfg  = _FRED_MAP.get(name)
+        if cfg is None:
+            continue
+
+        series = cfg["series"]
+        if series not in fetched:
+            obs = _fred_obs(series, cfg["limit"], fred_key)
+            fetched[series] = obs
+            if obs:
+                _ah.record("fred", "success")
+            else:
+                _ah.record("fred", "empty")
+
+        obs = fetched.get(series, [])
+        if not obs:
+            continue
+
+        # Build a second set of observations shifted by one period for "previous"
+        obs_prev = obs[1:] if len(obs) > 1 else []
+
+        current_val  = _apply_transform(obs,      cfg["transform"], cfg["unit"])
+        previous_val = _apply_transform(obs_prev, cfg["transform"], cfg["unit"])
+
+        label = cfg["label"]
+        if ev["date"] > today:
+            # Event not yet released — most recent FRED value is the prior print
+            ev["previous"] = ev["previous"] or (f"{label}: {previous_val}" if previous_val else None)
+            ev["actual"]   = None
+        else:
+            # Event already happened — most recent FRED value is the released actual
+            ev["actual"]   = ev["actual"]   or (f"{label}: {current_val}"  if current_val  else None)
+            ev["previous"] = ev["previous"] or (f"{label}: {previous_val}" if previous_val else None)
+
+        ev["source"] = "static+fred" if ev.get("source") == "static" else ev.get("source", "static+fred")
 
 
 def build_macro_calendar(
     port_df: _pd.DataFrame,
-    fmp_key: str | None = None,
+    fred_key: str | None = None,
     days_ahead: int = 45,
     days_behind: int = 7,
     today: _date | None = None,
+    # kept for backward compatibility — ignored, FMP is no longer used
+    fmp_key: str | None = None,
 ) -> list[dict]:
     """
     Build merged calendar covering today - days_behind → today + days_ahead.
 
     Returns list sorted by date. Each event dict contains:
-      date, time, event, category, impact, days_label, description,
+      date, time_et, event, category, impact, days_label, description,
       context, affected_tickers, previous, estimate, actual, source
+
+    FRED live layer (optional):
+      Enriches static events with official released values from St. Louis Fed.
+      previous = prior period's released value (e.g. last month's CPI YoY %)
+      actual   = most recently released value (populated after release date)
+      estimate = always None — FRED publishes data, not forecasts
     """
     if today is None:
         today = _today_et()
@@ -387,7 +507,7 @@ def build_macro_calendar(
             continue
         rows.append({
             "date":             d,
-            "time":             tm,
+            "time_et":          tm,
             "event":            ev,
             "category":         cat,
             "impact":           imp,
@@ -401,45 +521,10 @@ def build_macro_calendar(
             "source":           "static",
         })
 
-    # ── FMP live layer ────────────────────────────────────────────────────────
-    if fmp_key:
-        fmp_items = _fetch_fmp(fmp_key, lookback, cutoff)
-        for fi in fmp_items:
-            try:
-                fd = _date.fromisoformat(fi["date_str"])
-            except ValueError:
-                continue
-            ev_name  = fi["event"]
-            ev_lower = ev_name.lower()
-            # Try to enrich an existing static event
-            matched = False
-            for r in rows:
-                if r["date"] == fd and any(
-                    kw in ev_lower for kw in r["event"].lower().split()[:2]
-                ):
-                    r["previous"] = r["previous"] or fi.get("previous")
-                    r["estimate"] = r["estimate"] or fi.get("estimate")
-                    r["actual"]   = r["actual"]   or fi.get("actual")
-                    r["source"]   = "static+fmp"
-                    matched = True
-                    break
-            if not matched:
-                cat = _infer_category(ev_name)
-                rows.append({
-                    "date":             fd,
-                    "time":             fi["time"],
-                    "event":            ev_name,
-                    "category":         cat,
-                    "impact":           fi["impact"],
-                    "days_label":       _days_label(fd, today),
-                    "description":      "",
-                    "context":          _EVENT_CONTEXT.get(ev_name, ""),
-                    "affected_tickers": _affected_tickers(cat, port_df),
-                    "previous":         fi.get("previous"),
-                    "estimate":         fi.get("estimate"),
-                    "actual":           fi.get("actual"),
-                    "source":           "fmp",
-                })
+    # ── FRED live layer ───────────────────────────────────────────────────────
+    # Works with or without a key. Without key FRED allows ~10 req/min (enough
+    # for 6 series fetched once per day). With a free key: 120 req/min.
+    _fetch_fred(fred_key, rows, today)
 
-    rows.sort(key=lambda x: (x["date"], x["time"]))
+    rows.sort(key=lambda x: (x["date"], x["time_et"]))
     return rows
