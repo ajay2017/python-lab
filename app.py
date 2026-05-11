@@ -4779,31 +4779,83 @@ if page == "🏠 Portfolio":
                                         "You may already hold the top-rated tickers in these sectors."
                                     )
                                 else:
+                                    # Composite scores for defensive picks — fetched on demand
+                                    _def_comp_key  = f"_def_composites_{_rtype}"
+                                    _def_comps     = st.session_state.get(_def_comp_key, {})
+                                    _comps_loaded  = bool(_def_comps)
+                                    _def_tickers   = _def_picks["Ticker"].tolist()
+
                                     st.caption(
                                         "Top-ranked Healthcare & Consumer Staples picks from the scanner — "
-                                        "not already in your portfolio. Low-beta sectors that reduce "
-                                        "overall portfolio volatility and beta. Ranked by momentum score."
+                                        "not already in your portfolio. Momentum score shown; "
+                                        "load composite scores to validate before acting."
                                     )
+
+                                    if not _comps_loaded:
+                                        if st.button(
+                                            "📊 Load Composite Scores",
+                                            key=f"_def_load_comp_{_rtype}",
+                                            help="Fetches full Technical + Fundamental + Sentiment scores for each pick",
+                                        ):
+                                            with st.spinner("Fetching composite scores…"):
+                                                for _tc in _def_tickers:
+                                                    if _tc not in _def_comps:
+                                                        try:
+                                                            _def_comps[_tc] = load_all(_tc)
+                                                        except Exception:
+                                                            pass
+                                            st.session_state[_def_comp_key] = _def_comps
+                                            st.rerun()
+
                                     for _, _dp in _def_picks.iterrows():
                                         _dp_ticker  = str(_dp["Ticker"])
                                         _dp_sector  = str(_dp.get("Sector", ""))
-                                        _dp_score   = float(_dp.get("Score", 0))
-                                        _dp_signal  = str(_dp.get("Signal", ""))
+                                        _dp_mom_sc  = float(_dp.get("Score", 0))
                                         _dp_rsi     = _dp.get("RSI")
                                         _dp_trend   = str(_dp.get("Trend", ""))
                                         _dp_mom     = _dp.get("Momentum")
 
+                                        # Composite data (if loaded)
+                                        _dp_comp    = _def_comps.get(_dp_ticker, {})
+                                        _dp_cscore  = float(_dp_comp.get("total", 0)) if _dp_comp else None
+                                        _dp_clabel  = str((_dp_comp.get("rec") or {}).get("label", "")) if _dp_comp else ""
+
+                                        # Skip Sell-rated composites — not suitable for defensive addition
+                                        if _dp_cscore is not None and _dp_cscore < 45:
+                                            continue
+
                                         _sig_clr = (
-                                            "#00C851" if "Buy" in _dp_signal else
-                                            "#ff4444" if "Sell" in _dp_signal else "#888"
+                                            "#00C851" if "Buy" in _dp_clabel else
+                                            "#ff4444" if "Sell" in _dp_clabel else "#888"
+                                        ) if _dp_clabel else (
+                                            "#00C851" if _dp_mom_sc >= 65 else "#888"
                                         )
                                         _sc_clr = (
-                                            "#00C851" if _dp_score >= 65 else
-                                            "#ffbb33" if _dp_score >= 50 else "#888"
+                                            "#00C851" if _dp_mom_sc >= 65 else
+                                            "#ffbb33" if _dp_mom_sc >= 50 else "#888"
                                         )
-                                        _rsi_str  = f"RSI {_dp_rsi:.0f}" if _dp_rsi is not None else ""
-                                        _mom_str  = (f"  ·  Momentum {_dp_mom:+.1f}%" if _dp_mom is not None else "")
-                                        _detail   = "  ·  ".join(filter(None, [_rsi_str, _dp_trend])) + _mom_str
+                                        _rsi_str = f"RSI {_dp_rsi:.0f}" if _dp_rsi is not None else ""
+                                        _mom_str = (f"  ·  1M {_dp_mom:+.1f}%" if _dp_mom is not None else "")
+                                        _detail  = "  ·  ".join(filter(None, [_rsi_str, _dp_trend])) + _mom_str
+
+                                        # Score line: show composite if loaded, momentum always
+                                        if _dp_cscore is not None:
+                                            _comp_sc_clr = (
+                                                "#00C851" if _dp_cscore >= 65 else
+                                                "#ffbb33" if _dp_cscore >= 55 else "#888"
+                                            )
+                                            _score_line = (
+                                                f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
+                                                f"<span style='color:#555;margin:0 6px'>·</span>"
+                                                f"<span style='color:{_comp_sc_clr}'>Composite {_dp_cscore:.0f}/100</span>"
+                                                f"<span style='font-size:0.78em;color:{_sig_clr};margin-left:8px'>{_dp_clabel}</span>"
+                                            )
+                                        else:
+                                            _score_line = (
+                                                f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
+                                                f"<span style='font-size:0.73em;color:#6b7280;margin-left:8px'>"
+                                                f"composite not loaded</span>"
+                                            )
 
                                         _dp_col1, _dp_col2 = st.columns([3, 1])
                                         with _dp_col1:
@@ -4814,10 +4866,7 @@ if page == "🏠 Portfolio":
                                                 f"{_dp_ticker}</span>"
                                                 f"<span style='font-size:0.75em;color:#6b7280;margin-left:8px'>"
                                                 f"{_dp_sector}</span><br>"
-                                                f"<span style='font-size:0.8em;color:{_sc_clr}'>"
-                                                f"Score {_dp_score:.0f}/100</span>"
-                                                f"<span style='font-size:0.75em;color:{_sig_clr};"
-                                                f"margin-left:10px'>{_dp_signal}</span><br>"
+                                                f"{_score_line}<br>"
                                                 f"<span style='font-size:0.73em;color:#6b7280'>{_detail}</span>"
                                                 f"</div>",
                                                 unsafe_allow_html=True,
