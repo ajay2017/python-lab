@@ -86,7 +86,11 @@ def rank_holdings_in_universe(
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values("Universe Rank", na_position="last").reset_index(drop=True)
+        df = df.sort_values(
+            ["Composite Score", "Universe Rank"],
+            ascending=[False, True],
+            na_position="last",
+        ).reset_index(drop=True)
     return df
 
 

@@ -809,7 +809,8 @@ if page == "🏠 My Portfolio":
 
     holdings = st.session_state.holdings_df.to_dict("records")
     port_df = build_portfolio_df(holdings, held_data)
-    st.session_state["_last_port_df"] = port_df   # used by Trade Journal decision context
+    st.session_state["_last_port_df"] = port_df          # used by Trade Journal decision context
+    st.session_state["_signals_computed_at"] = datetime.now().strftime("%I:%M %p")  # for staleness warning
 
     if port_df.empty:
         st.info("Enter your holdings above to see portfolio analytics.")
@@ -1400,8 +1401,9 @@ if page == "🏠 My Portfolio":
                     f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                     f"💡 <em>{_gp['thesis']}</em></div>"
                     + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
-                       f"📐 Suggested: {_sz.get('shares',0)} shares @ ~${_gp['price']:.2f} "
-                       f"= ${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
+                       f"📐 Suggested: {_sz.get('shares',0)} shares · "
+                       f"Entry zone ${_sz.get('entry_lo', _gp['price']):.2f}–${_sz.get('entry_hi', _gp['price']):.2f} "
+                       f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
                        f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
                        f"</div>" if _sz else "")
                     + f"</div>",
@@ -1721,6 +1723,12 @@ if page == "🏠 My Portfolio":
             })
         )
         st.dataframe(styled, use_container_width=True)
+        _sig_ts = st.session_state.get("_signals_computed_at", "")
+        st.caption(
+            f"Signals & scores computed at load time"
+            + (f" ({_sig_ts})" if _sig_ts else "")
+            + " · live prices refresh every 60s · scores do not update between refreshes"
+        )
 
         # Per-position drill-down
         st.subheader("Position Drill-Down")
@@ -6261,9 +6269,13 @@ elif page == "📈 Stock Analysis":
                         c4.metric("P&L",
                                   f"${_sa_holding.get('P&L ($)', 0):+,.0f}",
                                   f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
+                        from datetime import date, timedelta
+                        _recheck = (date.today() + timedelta(days=7)).strftime("%b %d")
                         st.info(
                             f"**Hold** your {int(_sa_holding.get('Shares', 0))} shares with stop at "
-                            f"**${r['stop']:.2f}**. Mixed signals — no new entry until conviction improves to Buy."
+                            f"**${r['stop']:.2f}**. Mixed signals — re-check {_recheck}. "
+                            f"Add to position if score ≥ 58 and price holds above stop. "
+                            f"Exit immediately if price closes below stop."
                         )
                     else:
                         c3.metric("Entry Zone",
@@ -7131,12 +7143,17 @@ elif page == "📒 Trade Journal":
                     key="_tj_followed",
                 )
             with _dc_c2:
+                _tj_sig_ts = st.session_state.get("_signals_computed_at", "")
                 st.text_input(
                     "Signal at time of trade",
                     value=_dc_signal_default,
                     key="_tj_signal_seen",
                     placeholder="e.g. Sell · Score 42",
-                    help="Auto-filled from current portfolio signal if held.",
+                    help=(
+                        f"Auto-filled from current portfolio signal if held"
+                        + (f" (as of {_tj_sig_ts})" if _tj_sig_ts else "")
+                        + ". Signals are computed at page load — refresh if stale."
+                    ),
                 )
             _tj_followed_val = st.session_state.get("_tj_followed", "— (skip)")
             if "No — overrode" in _tj_followed_val:

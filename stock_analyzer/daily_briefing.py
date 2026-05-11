@@ -244,6 +244,9 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
         return {}
     shares     = max(1, int(risk_dollars / risk_per_share))
     total_cost = round(shares * price, 0)
+    # Entry zone: buy anywhere from the stop buffer up to a small premium above current price
+    entry_lo   = round(price * (1 - stop_pct * 0.40), 2)   # 40% of stop-distance below current
+    entry_hi   = round(price * (1 + stop_pct * 0.15), 2)   # 15% of stop-distance above current
     return {
         "shares":      shares,
         "total_cost":  total_cost,
@@ -251,6 +254,8 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
         "stop_pct":    round(stop_pct * 100, 1),
         "port_pct":    round(total_cost / portfolio_value * 100, 1) if portfolio_value else 0,
         "risk_budget": round(risk_dollars, 0),
+        "entry_lo":    entry_lo,
+        "entry_hi":    entry_hi,
     }
 
 
@@ -303,6 +308,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         candidates["_rank"] = candidates.apply(_rank_score, axis=1)
         candidates = candidates.sort_values("_rank", ascending=False).head(max_picks * 2)
 
+        _confirmed_picks: list[dict] = []
+        _unverified_picks: list[dict] = []
+
         for _, row in candidates.iterrows():
             ticker   = str(row["Ticker"])
             price    = _f(row.get("Price", 0))
@@ -312,27 +320,35 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
             xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today)
 
-            # Skip hard conflicts on bull days; skip anything but confirmed on flat
-            if tone == "flat" and xref["verdict"] not in ("confirmed", "unverified"):
-                continue
+            # Skip hard conflicts; on flat days skip anything but confirmed/unverified
             if xref["verdict"] == "conflicted":
+                continue
+            if tone == "flat" and xref["verdict"] not in ("confirmed", "unverified"):
                 continue
 
             sizing = _suggest_size(price, trend, portfolio_value) if price > 0 and portfolio_value > 0 else {}
             thesis = _thesis(ticker, row.to_dict(), is_leader)
 
-            new_picks.append({
-                "ticker":       ticker,
-                "score":        _f(row.get("Score", 0)),
-                "sector":       sector,
-                "price":        price,
-                "trend":        trend,
+            pick = {
+                "ticker":         ticker,
+                "score":          _f(row.get("Score", 0)),
+                "sector":         sector,
+                "price":          price,
+                "trend":          trend,
                 "scanner_signal": str(row.get("Signal", "")),
-                "is_leader":    is_leader,
-                "thesis":       thesis,
-                "sizing":       sizing,
-                "xref":         xref,
-            })
+                "is_leader":      is_leader,
+                "thesis":         thesis,
+                "sizing":         sizing,
+                "xref":           xref,
+            }
+            if xref["verdict"] == "confirmed":
+                _confirmed_picks.append(pick)
+            else:
+                _unverified_picks.append(pick)
+
+        # On flat days, confirmed picks take priority over unverified
+        for _pick in _confirmed_picks + _unverified_picks:
+            new_picks.append(_pick)
             if len(new_picks) >= max_picks:
                 break
 
