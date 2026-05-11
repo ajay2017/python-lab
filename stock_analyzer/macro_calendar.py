@@ -540,3 +540,188 @@ def build_macro_calendar(
 
     rows.sort(key=lambda x: (x["date"], x["time_et"]))
     return rows
+
+
+# ── Macro regime detection ─────────────────────────────────────────────────────
+
+# Per-event, per-scenario regime notes.  Only defined where the rate_cut or
+# stagflation regime inverts (or meaningfully alters) the textbook reaction.
+_REGIME_NOTES: dict[str, dict[str, dict[str, str]]] = {
+    "rate_cut": {
+        "Non-Farm Payrolls": {
+            "bear": (
+                "Rate-cut regime: a jobs miss accelerates Fed easing expectations — "
+                "market reaction is typically positive for growth/tech. "
+                "Textbook bear call likely does not apply today."
+            ),
+            "bull": (
+                "Rate-cut regime: a strong jobs print may slow the pace of cuts — "
+                "growth stocks often sell off on a 'too-hot' jobs beat."
+            ),
+            "base": "In-line data unlikely to shift rate-cut expectations materially.",
+        },
+        "CPI Inflation": {
+            "bear": "Cool CPI reinforces the rate-cut path — typically bullish for growth/tech.",
+            "bull": (
+                "Hot CPI threatens the rate-cut timeline — "
+                "negative for growth stocks even if other signals are positive."
+            ),
+            "base": "CPI in-line; rate-cut path unchanged.",
+        },
+        "FOMC Rate Decision": {
+            "bear": "More cuts (or larger cut) than expected — strongly bullish in this regime.",
+            "bull": "Fewer cuts than expected — market disappointment likely.",
+            "base": "Decision as expected — muted reaction.",
+        },
+        "GDP Advance Estimate": {
+            "bear": (
+                "Weak GDP in a rate-cut regime = Fed cuts faster. "
+                "Mild positive for equities if cut expectations dominate recession fears."
+            ),
+            "bull": "Strong GDP = Fed may slow cuts — mixed reaction.",
+            "base": "In-line GDP — neutral.",
+        },
+    },
+    "stagflation_risk": {
+        "Non-Farm Payrolls": {
+            "bear": (
+                "Stagflation signal: weak jobs + elevated inflation = "
+                "Fed is trapped. Typically very negative — can't cut without re-igniting inflation."
+            ),
+            "bull": (
+                "Strong jobs with high inflation = Fed remains restricted. "
+                "Mixed: economy ok but rate relief unlikely."
+            ),
+            "base": "Mixed signals — watch Fed language for guidance.",
+        },
+        "CPI Inflation": {
+            "bear": "Disinflation with weak growth — positive if it opens the door to cuts.",
+            "bull": "Stagflation confirmed — strongly negative.",
+            "base": "Inflation sticky — rate relief remains distant.",
+        },
+    },
+    "inflation_fight": {
+        "Non-Farm Payrolls": {
+            "bear": (
+                "Jobs miss = less wage pressure — mild positive as it reduces hike urgency, "
+                "but recession risk begins to emerge."
+            ),
+            "bull": (
+                "Strong jobs = more wage inflation = more rate hikes likely. "
+                "Negative for growth and rate-sensitive sectors."
+            ),
+            "base": "In-line — Fed stays on its current path.",
+        },
+        "CPI Inflation": {
+            "bear": "Cooling CPI is the best possible outcome in this regime — expect a relief rally.",
+            "bull": "Hot CPI confirms more hikes — strongly negative.",
+            "base": "Inflation holding — Fed maintains restrictive stance.",
+        },
+    },
+}
+
+
+def detect_macro_regime(fred_key: str | None = None) -> dict:
+    """
+    Auto-detect the current macro regime from FRED data (FEDFUNDS + CPI).
+
+    Returns a dict with:
+      regime      : "rate_cut" | "inflation_fight" | "stagflation_risk" | "neutral"
+      label       : human-readable name
+      icon        : emoji
+      color       : hex colour for UI accents
+      bg          : hex background colour
+      fed_trend   : "cutting" | "hiking" | "holding" | "unknown"
+      cpi_yoy     : float or None
+      rationale   : one-sentence explanation
+      source      : "fred" | "fallback"
+    """
+    fed_obs = _fred_obs("FEDFUNDS", 4, fred_key)   # last 4 months
+    cpi_obs = _fred_obs("CPIAUCSL", 14, fred_key)  # need 13 for YoY
+
+    fed_trend = "unknown"
+    cpi_yoy   = None
+
+    if len(fed_obs) >= 3:
+        diff = fed_obs[0] - fed_obs[2]   # change over ~2 months
+        if diff < -0.05:
+            fed_trend = "cutting"
+        elif diff > 0.05:
+            fed_trend = "hiking"
+        else:
+            fed_trend = "holding"
+
+    if len(cpi_obs) >= 13:
+        cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
+
+    cpi_str = f"{cpi_yoy:.1f}% YoY" if cpi_yoy is not None else "unknown"
+    source  = "fred" if (fed_obs or cpi_obs) else "fallback"
+
+    # ── Regime classification ──────────────────────────────────────────────────
+    if fed_trend == "cutting" and (cpi_yoy is None or cpi_yoy <= 3.0):
+        return {
+            "regime":    "rate_cut",
+            "label":     "Rate-Cut Optimism",
+            "icon":      "✂️",
+            "color":     "#3b82f6",
+            "bg":        "#0a1628",
+            "fed_trend": fed_trend,
+            "cpi_yoy":   cpi_yoy,
+            "rationale": (
+                f"Fed actively cutting · CPI {cpi_str} (below 3% threshold). "
+                "Bad macro data = Fed eases faster = growth stocks typically rally. "
+                "Bad news is good news."
+            ),
+            "source": source,
+        }
+
+    if fed_trend == "hiking" or (cpi_yoy is not None and cpi_yoy > 4.0):
+        return {
+            "regime":    "inflation_fight",
+            "label":     "Inflation Fight",
+            "icon":      "🔥",
+            "color":     "#f59e0b",
+            "bg":        "#1a1200",
+            "fed_trend": fed_trend,
+            "cpi_yoy":   cpi_yoy,
+            "rationale": (
+                f"Fed {'hiking' if fed_trend == 'hiking' else 'holding at restrictive levels'} · "
+                f"CPI {cpi_str} (above 4%). "
+                "Weak data = less rate-hike pressure = mild positive; "
+                "strong data = more hikes = negative."
+            ),
+            "source": source,
+        }
+
+    if cpi_yoy is not None and cpi_yoy > 3.0:
+        return {
+            "regime":    "stagflation_risk",
+            "label":     "Stagflation Risk",
+            "icon":      "⚠️",
+            "color":     "#ef4444",
+            "bg":        "#1a0000",
+            "fed_trend": fed_trend,
+            "cpi_yoy":   cpi_yoy,
+            "rationale": (
+                f"CPI {cpi_str} still elevated while growth is slowing. "
+                "Fed is trapped — cutting risks re-igniting inflation; "
+                "holding keeps pressure on valuations."
+            ),
+            "source": source,
+        }
+
+    return {
+        "regime":    "neutral",
+        "label":     "Data-Dependent",
+        "icon":      "📊",
+        "color":     "#6b7280",
+        "bg":        "#111827",
+        "fed_trend": fed_trend,
+        "cpi_yoy":   cpi_yoy,
+        "rationale": (
+            f"Fed {fed_trend} · CPI {cpi_str}. "
+            "Market reactions follow the textbook: strong data = growth optimism = bullish; "
+            "weak data = growth concerns = bearish."
+        ),
+        "source": source,
+    }

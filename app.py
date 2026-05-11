@@ -34,7 +34,10 @@ from stock_analyzer.rebalancer import (
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
 from stock_analyzer.split_detector import detect_portfolio_splits
-from stock_analyzer.macro_calendar import build_macro_calendar, HIGH as MC_HIGH, MEDIUM as MC_MEDIUM
+from stock_analyzer.macro_calendar import (
+    build_macro_calendar, detect_macro_regime,
+    HIGH as MC_HIGH, MEDIUM as MC_MEDIUM, _REGIME_NOTES as _MC_REGIME_NOTES,
+)
 from stock_analyzer.macro_playbook import (
     build_event_playbooks, classify_scenario,
     build_post_event_analysis, get_scenario_conditions,
@@ -8483,6 +8486,32 @@ elif page == "📅 Economic Calendar":
                     icon="📭",
                 )
             else:
+                # ── Auto-detect macro regime ──────────────────────────────────
+                _regime_cache_key = f"_macro_regime_{_TODAY_ET}_{bool(_ec_fred_key)}"
+                if _regime_cache_key not in st.session_state:
+                    with st.spinner("Detecting macro regime…"):
+                        st.session_state[_regime_cache_key] = detect_macro_regime(
+                            _ec_fred_key or None
+                        )
+                _regime = st.session_state[_regime_cache_key]
+
+                # Regime banner
+                st.markdown(
+                    f"<div style='background:{_regime['bg']};border-left:4px solid "
+                    f"{_regime['color']};border-radius:8px;padding:12px 16px;margin-bottom:16px'>"
+                    f"<div style='font-size:0.72em;color:{_regime['color']};font-weight:700;"
+                    f"letter-spacing:0.08em'>CURRENT MACRO REGIME — AUTO-DETECTED"
+                    f"{'  ·  FRED' if _regime['source'] == 'fred' else '  ·  ESTIMATED'}</div>"
+                    f"<div style='font-size:1.05em;font-weight:700;color:#eee;margin-top:4px'>"
+                    f"{_regime['icon']}  {_regime['label']}"
+                    f"{'  ·  Fed ' + _regime['fed_trend'].title() if _regime['fed_trend'] != 'unknown' else ''}"
+                    f"{'  ·  CPI ' + f\"{_regime['cpi_yoy']:.1f}%\" if _regime['cpi_yoy'] is not None else ''}"
+                    f"</div>"
+                    f"<div style='font-size:0.82em;color:#bbb;margin-top:6px'>"
+                    f"{_regime['rationale']}</div></div>",
+                    unsafe_allow_html=True,
+                )
+
                 st.markdown(
                     "For each recently-released HIGH-impact event: select (or auto-detect) which "
                     "scenario played out and see the immediate impact on your holdings."
@@ -8586,6 +8615,24 @@ elif page == "📅 Economic Calendar":
                                 "📊 Base — " + _PB_SCEN_DEF[_pe_name]["base"]["label"],
                                 "🐻 Bear — " + _PB_SCEN_DEF[_pe_name]["bear"]["label"]]
                     _sc_map  = {o: k for o, k in zip(_sc_opts, ["bull", "base", "bear"])}
+
+                    # ── Regime-adjusted note ─────────────────────────────────
+                    _regime_note = (
+                        _MC_REGIME_NOTES
+                        .get(_regime["regime"], {})
+                        .get(_pe_name, {})
+                        .get(_auto_sc or "base")
+                    )
+                    if _regime_note and _regime["regime"] != "neutral":
+                        st.markdown(
+                            f"<div style='background:{_regime['bg']};border-left:3px solid "
+                            f"{_regime['color']};border-radius:6px;padding:8px 12px;"
+                            f"margin:8px 0;font-size:0.83em;color:#ddd'>"
+                            f"<span style='color:{_regime['color']};font-weight:700'>"
+                            f"{_regime['icon']} {_regime['label']} · Regime Note</span><br>"
+                            f"{_regime_note}</div>",
+                            unsafe_allow_html=True,
+                        )
 
                     if _auto_sc:
                         _default_idx = ["bull", "base", "bear"].index(_auto_sc)
