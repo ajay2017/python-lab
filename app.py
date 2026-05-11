@@ -8495,18 +8495,17 @@ elif page == "📅 Economic Calendar":
                         )
                 _regime = st.session_state[_regime_cache_key]
 
-                # Regime banner
+                # Regime banner — pre-compute dynamic parts to avoid nested f-string issues
+                _regime_src_tag  = "  ·  FRED" if _regime["source"] == "fred" else "  ·  ESTIMATED"
+                _regime_fed_tag  = ("  ·  Fed " + _regime["fed_trend"].title()) if _regime["fed_trend"] != "unknown" else ""
+                _regime_cpi_tag  = ("  ·  CPI " + f"{_regime['cpi_yoy']:.1f}%") if _regime["cpi_yoy"] is not None else ""
                 st.markdown(
                     f"<div style='background:{_regime['bg']};border-left:4px solid "
                     f"{_regime['color']};border-radius:8px;padding:12px 16px;margin-bottom:16px'>"
                     f"<div style='font-size:0.72em;color:{_regime['color']};font-weight:700;"
-                    f"letter-spacing:0.08em'>CURRENT MACRO REGIME — AUTO-DETECTED"
-                    f"{'  ·  FRED' if _regime['source'] == 'fred' else '  ·  ESTIMATED'}</div>"
+                    f"letter-spacing:0.08em'>CURRENT MACRO REGIME — AUTO-DETECTED{_regime_src_tag}</div>"
                     f"<div style='font-size:1.05em;font-weight:700;color:#eee;margin-top:4px'>"
-                    f"{_regime['icon']}  {_regime['label']}"
-                    f"{'  ·  Fed ' + _regime['fed_trend'].title() if _regime['fed_trend'] != 'unknown' else ''}"
-                    f"{'  ·  CPI ' + f\"{_regime['cpi_yoy']:.1f}%\" if _regime['cpi_yoy'] is not None else ''}"
-                    f"</div>"
+                    f"{_regime['icon']}  {_regime['label']}{_regime_fed_tag}{_regime_cpi_tag}</div>"
                     f"<div style='font-size:0.82em;color:#bbb;margin-top:6px'>"
                     f"{_regime['rationale']}</div></div>",
                     unsafe_allow_html=True,
