@@ -25,6 +25,12 @@ Verdict tiers:
 
 from datetime import date, timedelta
 
+from stock_analyzer.constants import (
+    COMPOSITE_BUY,
+    SINGLE_NAME_CEILING,
+    MACRO_IMMINENT_DAYS,
+)
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -230,13 +236,14 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         # "Confirmed." Surface the data gap as "verify" instead.
         verdict       = "unverified"
         verdict_label = "🔍 Verify — Composite Signal Missing"
-        verdict_color = "#60a5fa"
+        verdict_color = "#f59e0b"   # amber — action required, not a green light
     elif not is_held:
         # Not held — composite signal was never computed.
         # Technical momentum looks good but we cannot confirm without full analysis.
+        # Amber (not blue) so this reads as "action required," not "informational."
         verdict       = "unverified"
         verdict_label = "🔍 Verify — Run Stock Analysis First"
-        verdict_color = "#60a5fa"   # blue — informational, not alarm
+        verdict_color = "#f59e0b"
     else:
         verdict       = "confirmed"
         verdict_label = "✅ Confirmed — All Signals Aligned"
@@ -320,7 +327,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 act_today: list | None = None,
                 composites: dict | None = None,
                 risk_recs: list | None = None,
-                earnings_lookup: dict | None = None) -> dict:
+                earnings_lookup: dict | None = None,
+                macro_events: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -357,6 +365,44 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # Risk Advisor trim targets — used to suppress add-to-winner conflicts.
     _trim_set = _trim_targets(risk_recs)
 
+    # Drift-trim set: positions overweight enough that the equal-weight
+    # rebalancer would flag them for trim. Adding to a position the rebalance
+    # logic would trim creates a same-day contradiction. Default target =
+    # 100/N (equal weight); trim threshold = target + 5pp.
+    _drift_trim_set: set = set()
+    if port_df is not None and not port_df.empty:
+        _n_pos = len(port_df)
+        if _n_pos > 0:
+            _eq_target = 100.0 / _n_pos
+            _trim_floor = _eq_target + 5.0   # TOLERANCE_WATCH from rebalancer.py
+            for _, _row in port_df.iterrows():
+                if _f(_row.get("Weight (%)"), 0) > _trim_floor:
+                    _drift_trim_set.add(str(_row["Ticker"]).upper())
+
+    # Macro gate — hard-suppress new picks in sectors with imminent HIGH-impact
+    # macro events. Opening a fresh position into a known binary catalyst is
+    # exactly the institutional anti-pattern this gate prevents.
+    from stock_analyzer.macro_calendar import HIGH as _MC_HIGH, affected_sectors as _aff_sectors
+    _macro_blocked_sectors: set = set()
+    _macro_block_reasons:   dict = {}   # sector -> event description
+    for _ev in (macro_events or []):
+        if _ev.get("impact") != _MC_HIGH:
+            continue
+        _d = _days_until(_ev.get("date"), today)
+        if _d is None or _d < 0 or _d > MACRO_IMMINENT_DAYS:
+            continue
+        _affected = _aff_sectors(_ev.get("category", ""))
+        if "__ALL__" in _affected:
+            # All sectors affected — block every new pick (rare but intentional)
+            _macro_blocked_sectors = {"__ALL__"}
+            _macro_block_reasons["__ALL__"] = (
+                f"{_ev.get('event','')} ({_ev.get('date')}) — {_d}d away"
+            )
+            break
+        for _s in _affected:
+            _macro_blocked_sectors.add(_s)
+            _macro_block_reasons.setdefault(_s, f"{_ev.get('event','')} ({_ev.get('date')}) — {_d}d away")
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         return {
@@ -366,11 +412,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "Focus on protecting existing positions. "
                 "Defer new entries until conditions stabilise."
             ),
-            "new_picks":         [],
-            "add_positions":     [],
-            "risk_blocked_adds": [],
-            "deploy_note":       None,
-            "risk_banner":       risk_banner,
+            "new_picks":                  [],
+            "add_positions":              [],
+            "risk_blocked_adds":          [],
+            "concentration_blocked_adds": [],
+            "macro_blocked_picks":        [],
+            "deploy_note":                None,
+            "risk_banner":                risk_banner,
         }
 
     # Score threshold: higher bar on flat days, standard on bull days
@@ -396,6 +444,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
         _confirmed_picks: list[dict] = []
         _unverified_picks: list[dict] = []
+        macro_blocked_picks: list[dict] = []
 
         for _, row in candidates.iterrows():
             ticker   = str(row["Ticker"])
@@ -406,6 +455,22 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
             # Skip if Act Today already has an action on this ticker
             if ticker in _act_blocked:
+                continue
+
+            # Macro gate — hard-suppress if sector has an imminent HIGH-impact
+            # macro event. Opening into a known binary catalyst is the
+            # anti-pattern; surface the suppression so the user knows.
+            _macro_block = None
+            if "__ALL__" in _macro_blocked_sectors:
+                _macro_block = _macro_block_reasons.get("__ALL__")
+            elif sector in _macro_blocked_sectors:
+                _macro_block = _macro_block_reasons.get(sector)
+            if _macro_block:
+                macro_blocked_picks.append({
+                    "ticker": ticker, "sector": sector,
+                    "score":  _f(row.get("Score", 0)),
+                    "reason": _macro_block,
+                })
                 continue
 
             xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
@@ -477,15 +542,20 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if len(new_picks) >= max_picks:
                 break
 
-    # Add-to-winner: held Strong Buy, Score ≥ 68, Gap ≥ 8% — only on bull days
+    # Add-to-winner: held Strong Buy, Score ≥ COMPOSITE_BUY (65), Gap ≥ 8%
+    # — only on bull days. Composite bar aligned with new-pick threshold
+    # (was 68; raised the bar on adds and lowered the bar on new picks created
+    # an asymmetric system where it was easier to start a position than to add
+    # to one you'd already vetted — backwards from "press your winners.")
     add_positions:     list[dict] = []
     risk_blocked_adds: list[dict] = []
+    concentration_blocked_adds: list[dict] = []
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
             sig = str(row.get("Signal", ""))
             gap = _f(row.get("Gap to Stop (%)"), 0)
             scr = _f(row.get("Score"), 0)
-            if "Strong Buy" in sig and scr >= 68 and gap >= 8:
+            if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= 8:
                 ticker  = str(row["Ticker"])
                 # Skip if Act Today already flags this ticker for action
                 if ticker in _act_blocked:
@@ -501,6 +571,41 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         "score":    scr,
                         "pnl_pct":  _f(row.get("P&L (%)")),
                         "gap":      gap,
+                    })
+                    continue
+                # Single-name ceiling — hard suppress if current weight ≥ ceiling.
+                # No matter how strong the signal, additional concentration here
+                # creates asymmetric idiosyncratic risk that the institutional
+                # framework caps at SINGLE_NAME_CEILING.
+                _cur_wt = _f(row.get("Weight (%)"), 0)
+                if _cur_wt >= SINGLE_NAME_CEILING:
+                    concentration_blocked_adds.append({
+                        "ticker":    ticker,
+                        "weight":    _cur_wt,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "reason":    (
+                            f"Position already at {_cur_wt:.1f}% of portfolio "
+                            f"(≥ {SINGLE_NAME_CEILING:.0f}% single-name ceiling). "
+                            "Trim to target before adding."
+                        ),
+                    })
+                    continue
+                # Drift-trim conflict — Rebalancer would trim this position to
+                # target; the briefing must not simultaneously recommend adding.
+                if ticker.upper() in _drift_trim_set:
+                    concentration_blocked_adds.append({
+                        "ticker":    ticker,
+                        "weight":    _cur_wt,
+                        "score":     scr,
+                        "pnl_pct":   _f(row.get("P&L (%)")),
+                        "gap":       gap,
+                        "reason":    (
+                            f"Position at {_cur_wt:.1f}% — overweight vs equal-weight target "
+                            f"(would be flagged for drift-trim by Rebalancer). "
+                            "Don't add to a position you'd trim."
+                        ),
                     })
                     continue
                 price   = _f(row.get("Price", 0))
@@ -542,16 +647,18 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             )
 
     return {
-        "tone":              tone,
-        "message":           None,
-        "new_picks":         new_picks,
-        "add_positions":     add_positions,
-        "risk_blocked_adds": risk_blocked_adds,
-        "deploy_note":       deploy_note,
-        "risk_banner":       risk_banner,
-        "sp500_pct":         sp500_pct,
-        "nasdaq_pct":        nasdaq_pct,
-        "leading_sectors":   lead_secs,
+        "tone":                       tone,
+        "message":                    None,
+        "new_picks":                  new_picks,
+        "add_positions":              add_positions,
+        "risk_blocked_adds":          risk_blocked_adds,
+        "concentration_blocked_adds": concentration_blocked_adds,
+        "macro_blocked_picks":        macro_blocked_picks,
+        "deploy_note":                deploy_note,
+        "risk_banner":                risk_banner,
+        "sp500_pct":                  sp500_pct,
+        "nasdaq_pct":                 nasdaq_pct,
+        "leading_sectors":            lead_secs,
     }
 
 
@@ -684,6 +791,17 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
     # Risk Advisor trim targets — suppress same-ticker add-to-winner conflicts.
     _trim_set = _trim_targets(risk_recs)
 
+    # Drift-trim positions — same suppression as _grow_today
+    _drift_trim_set: set = set()
+    if port_df is not None and not port_df.empty:
+        _n_pos = len(port_df)
+        if _n_pos > 0:
+            _eq_target = 100.0 / _n_pos
+            _trim_floor = _eq_target + 5.0
+            for _, _row in port_df.iterrows():
+                if _f(_row.get("Weight (%)"), 0) > _trim_floor:
+                    _drift_trim_set.add(str(_row["Ticker"]).upper())
+
     # 1 — Scanner picks not in portfolio (Score ≥ 65)
     if scanner_results is not None and not scanner_results.empty:
         top_picks = scanner_results[
@@ -709,18 +827,25 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "xref":           xref,
             })
 
-    # 2 — Add-to-winner: held, Strong Buy composite signal, Score ≥ 68, Gap ≥ 8%
+    # 2 — Add-to-winner: held, Strong Buy composite, Score ≥ COMPOSITE_BUY (65),
+    # Gap ≥ 8%, and current weight below the single-name ceiling.
     for _, row in port_df.iterrows():
         sig = str(row.get("Signal", ""))
         gap = _f(row.get("Gap to Stop (%)"), 0)
         scr = _f(row.get("Score"), 0)
-        if "Strong Buy" in sig and scr >= 68 and gap >= 8:
+        if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= 8:
             ticker = str(row["Ticker"])
             # Skip if Act Today already flags this ticker for any action
             if ticker in _act_blocked:
                 continue
             # Skip if Risk Advisor is recommending trim — same-ticker conflict
             if ticker.upper() in _trim_set:
+                continue
+            # Single-name ceiling — hard suppress; concentration risk overrides signal
+            if _f(row.get("Weight (%)"), 0) >= SINGLE_NAME_CEILING:
+                continue
+            # Drift-trim conflict — position is drift-overweight; don't add
+            if ticker.upper() in _drift_trim_set:
                 continue
             # Build a minimal scanner_row from portfolio data for cross-reference
             _synthetic = {
@@ -903,5 +1028,5 @@ def build_daily_briefing(
     review = _review_list(port_df, news_items, macro_events, held_data, today)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
-                         earnings_lookup=earnings_lookup)
+                         earnings_lookup=earnings_lookup, macro_events=macro_events)
     return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}

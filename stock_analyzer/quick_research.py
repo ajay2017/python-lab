@@ -4,6 +4,14 @@ actionable summary for the Daily Briefing "Research a Stock" feature.
 """
 import pandas as pd
 
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_ELEVATED,
+    TICKER_BETA_HIGH,
+    TICKER_BETA_CRITICAL,
+    SECTOR_CEILING,
+    SECTOR_ELEVATED,
+)
+
 
 def _entry_timing(rsi_val: float | None, move_1d: float, move_5d: float) -> dict:
     rsi = rsi_val if rsi_val is not None else 50.0
@@ -104,11 +112,11 @@ def _portfolio_bullet(ticker: str, ctx: dict) -> str:
     sec    = ctx.get("sector_of_ticker", "")
     sec_wt = ctx.get("sector_weight_pct") or 0.0
     if sec:
-        if sec_wt >= 30:
+        if sec_wt >= SECTOR_CEILING:
             parts.append(
-                f"{sec} already at {sec_wt:.0f}% of portfolio — adding would over-concentrate; size down or skip."
+                f"{sec} already at {sec_wt:.0f}% of portfolio (≥ {SECTOR_CEILING:.0f}% ceiling) — adding would over-concentrate; size down or skip."
             )
-        elif sec_wt >= 20:
+        elif sec_wt >= SECTOR_ELEVATED:
             parts.append(
                 f"{sec} at {sec_wt:.0f}% — moderate concentration; consider a half-size entry."
             )
@@ -119,11 +127,11 @@ def _portfolio_bullet(ticker: str, ctx: dict) -> str:
     port_beta = ctx.get("portfolio_beta")
     tick_beta = ctx.get("ticker_beta")
     if tick_beta is not None and port_beta is not None:
-        if tick_beta > 1.8 and port_beta > 1.3:
+        if tick_beta > TICKER_BETA_CRITICAL and port_beta > PORTFOLIO_BETA_ELEVATED:
             parts.append(
                 f"Beta {tick_beta:.1f} would add to an already elevated portfolio beta of {port_beta:.1f} — use smaller position (≤ 5% weight)."
             )
-        elif tick_beta > 1.8:
+        elif tick_beta > TICKER_BETA_HIGH:
             parts.append(f"High beta {tick_beta:.1f} — volatile stock; use conservative sizing.")
 
     if not parts:

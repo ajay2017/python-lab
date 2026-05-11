@@ -8,6 +8,18 @@ the ticker because the thesis is broken.
 
 from datetime import date as _date, datetime as _datetime
 
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_CEILING,
+    PORTFOLIO_BETA_ELEVATED,
+    TICKER_BETA_HIGH,
+    TICKER_BETA_CRITICAL,
+    SECTOR_CEILING,
+    SECTOR_ELEVATED,
+    SINGLE_NAME_CEILING,
+    COMPOSITE_BUY,
+    COMPOSITE_HOLD,
+)
+
 
 def _f(val, default=0.0):
     if val is None:
@@ -66,26 +78,26 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
     sector_name  = portfolio_ctx.get("sector_of_ticker") or "this sector"
     grow_sectors = portfolio_ctx.get("grow_today_sectors") or set()
 
-    # ── Hard breach: sector ≥ 35% ────────────────────────────────────────────
-    if sector_wt >= 35:
+    # ── Hard breach: sector ≥ ceiling ────────────────────────────────────────
+    if sector_wt >= SECTOR_CEILING:
         return {
             "severity": "hard",
             "kind":     "sector",
             "reason": (
                 f"{sector_name} is already at **{sector_wt:.0f}%** of your portfolio. "
-                "Opening here would push concentration beyond the 35% institutional "
-                "single-sector ceiling — a single sector shock could swamp the rest of the book."
+                f"Opening here would push concentration beyond the {SECTOR_CEILING:.0f}% "
+                "institutional single-sector ceiling — a single sector shock could swamp the rest of the book."
             ),
         }
 
-    # ── Hard breach: high portfolio beta + high ticker beta ─────────────────
+    # ── Hard breach: high portfolio beta + critical ticker beta ─────────────
     if (port_beta is not None and ticker_beta is not None
-            and port_beta > 1.4 and ticker_beta > 1.8):
+            and port_beta > PORTFOLIO_BETA_CEILING and ticker_beta > TICKER_BETA_CRITICAL):
         return {
             "severity": "hard",
             "kind":     "beta",
             "reason": (
-                f"Portfolio beta is already **{port_beta:.2f}** (above the 1.4 risk-team ceiling). "
+                f"Portfolio beta is already **{port_beta:.2f}** (above the {PORTFOLIO_BETA_CEILING:.1f} risk-team ceiling). "
                 f"Adding a β **{ticker_beta:.2f}** name compounds market sensitivity — "
                 "in a 10% correction this position would amplify the existing drag, not diversify it."
             ),
@@ -93,12 +105,12 @@ def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None
 
     # ── Soft concerns: warn but keep ENTER_NOW ───────────────────────────────
     soft: list[str] = []
-    if sector_wt >= 25:
+    if sector_wt >= SECTOR_ELEVATED:
         soft.append(
             f"{sector_name} already at {sector_wt:.0f}% of portfolio — consider a half-size entry."
         )
     if (port_beta is not None and ticker_beta is not None
-            and port_beta > 1.3 and ticker_beta > 1.5):
+            and port_beta > PORTFOLIO_BETA_ELEVATED and ticker_beta > TICKER_BETA_HIGH):
         soft.append(
             f"Portfolio beta {port_beta:.2f} + ticker β {ticker_beta:.2f} — use conservative sizing."
         )

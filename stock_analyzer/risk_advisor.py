@@ -10,6 +10,12 @@ expected outcome, and a Institutional Lens teaching moment.
 import numpy as np
 import pandas as pd
 
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_CEILING,
+    PORTFOLIO_BETA_ELEVATED,
+    PORTFOLIO_BETA_TARGET,
+)
+
 
 def _f(val, default=0.0):
     """Safe float conversion — returns default for None / NaN."""
@@ -90,9 +96,9 @@ def build_risk_advisor_recommendations(
 
     # ── 1. BETA ───────────────────────────────────────────────────────────────
     if beta is not None:
-        if beta > 1.4:
+        if beta > PORTFOLIO_BETA_CEILING:
             beta_priority = "HIGH"
-        elif beta > 1.2:
+        elif beta > PORTFOLIO_BETA_ELEVATED:
             beta_priority = "MEDIUM"
         else:
             beta_priority = "OK"
@@ -114,7 +120,7 @@ def build_risk_advisor_recommendations(
             contribs.sort(key=lambda x: -x["_contrib"])
             top_beta = contribs[:3]
 
-            target  = 1.2
+            target  = PORTFOLIO_BETA_ELEVATED
             excess  = beta - target
             loss_10 = excess * pv * 0.10
             loss_20 = excess * pv * 0.20

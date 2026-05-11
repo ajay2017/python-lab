@@ -308,6 +308,19 @@ def _affected_tickers(category: str, port_df: _pd.DataFrame) -> list[str]:
     return result
 
 
+def affected_sectors(category: str, min_severity: int = 2) -> set[str]:
+    """
+    Return the set of sector names materially impacted by a macro event of the
+    given category, at or above min_severity (2 = moderate, 3 = direct).
+    The sentinel "__ALL__" indicates all sectors are impacted.
+    """
+    impact_map = _SECTOR_IMPACT.get(category, {})
+    if impact_map.get("__ALL__", 0) >= min_severity:
+        return {"__ALL__"}
+    return {sec for sec, sev in impact_map.items()
+            if sec != "__ALL__" and sev >= min_severity}
+
+
 # ── FRED series config ────────────────────────────────────────────────────────
 # Maps each static event name to a FRED series + how to format its value.
 # limit must be large enough to compute BOTH current and previous values:

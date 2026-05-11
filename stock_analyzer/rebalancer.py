@@ -9,6 +9,8 @@ when and how to rebalance.
 
 import pandas as pd
 
+from stock_analyzer.constants import COMPOSITE_HOLD, COMPOSITE_BUY
+
 
 def _f(val, default=0.0):
     if val is None:
@@ -92,6 +94,7 @@ def build_rebalance_plan(
     drift_df: pd.DataFrame,
     total_val: float,
     news_flags: dict | None = None,
+    risk_trim_set: set | None = None,
 ) -> dict:
     """
     Generates trim and add action lists with specific share counts,
@@ -99,28 +102,30 @@ def build_rebalance_plan(
 
     news_flags (optional): {ticker: {"level": "critical"|"warning",
                                      "headline": str, "compound": float}}
-       — when supplied, ADD actions on flagged tickers get a news_warning
-       attached so the rebalancer never tells the user to buy more of a
-       position that News Intelligence is currently flagging negative.
+       — ADD actions on flagged tickers get a news_warning attached so the
+       rebalancer never tells the user to buy more of a position that News
+       Intelligence is currently flagging negative.
+
+    risk_trim_set (optional): set of tickers Risk Advisor is recommending the
+       user trim (beta or Sharpe drag). ADD actions on these tickers are
+       suppressed entirely — drift-driven sizing must not override an active
+       investment-level recommendation to reduce exposure.
 
     Returns dict with:
-      trims: list of action dicts (overweight positions)
-      adds:  list of action dicts (underweight positions, each may carry
-             a `news_warning` dict if News Intelligence has flagged it)
-      ok:    list of ticker strings in tolerance
-      total_trim_value: sum of $ to trim
-      total_add_value:  sum of $ to add
-      rebalance_pct:    % of portfolio being touched
-      news_blocked_adds: count of ADD actions carrying a news_warning
+      trims, adds, ok, total_trim_value, total_add_value, rebalance_pct,
+      news_blocked_adds, risk_blocked_adds_count
     """
     if drift_df.empty:
         return {"trims": [], "adds": [], "ok": [], "total_trim_value": 0,
                 "total_add_value": 0, "rebalance_pct": 0,
-                "news_blocked_adds": 0}
+                "news_blocked_adds": 0, "risk_blocked_adds_count": 0,
+                "risk_blocked_adds": []}
 
-    news_flags = news_flags or {}
+    news_flags    = news_flags or {}
+    risk_trim_set = {str(t).upper() for t in (risk_trim_set or set())}
 
     trims, adds, ok_list = [], [], []
+    risk_blocked_adds_list: list[dict] = []
 
     for _, row in drift_df.iterrows():
         ticker    = row["Ticker"]
@@ -142,12 +147,14 @@ def build_rebalance_plan(
         shares_delta = abs(drift_val) / price if price > 0 else 0
         shares_delta = max(1, int(shares_delta))
 
-        # Trim urgency scoring
+        # Trim urgency scoring — score thresholds aligned with scoring.py
+        # signal boundaries so the rebalancer speaks the same vocabulary as
+        # the composite recommendation. Sell zone = score < COMPOSITE_HOLD.
         if drift_pp > 0:
             urgency = 0
             if "Sell" in signal or "Strong Sell" in signal:
                 urgency += 40   # broken thesis + overweight = highest priority
-            if score < 50:
+            if score < COMPOSITE_HOLD:
                 urgency += 20
             if abs(drift_pp) > TOLERANCE_WATCH:
                 urgency += 30
@@ -168,11 +175,11 @@ def build_rebalance_plan(
                     f"weight from {current:.1f}% → {target:.1f}%. "
                     "Priority: do this before considering any other trim."
                 )
-            elif score < 50:
+            elif score < COMPOSITE_HOLD:
                 rationale = (
-                    f"**{ticker}** is {drift_pp:+.1f}pp overweight with a weak composite score "
-                    f"({score:.0f}/100). You've drifted into a large position in a name where "
-                    f"conviction is fading."
+                    f"**{ticker}** is {drift_pp:+.1f}pp overweight with a score in the Sell zone "
+                    f"({score:.0f}/100, below {COMPOSITE_HOLD}). You've drifted into a large "
+                    f"position in a name where conviction is broken."
                 )
                 action_detail = (
                     f"Sell **{shares_delta:,} shares** (≈${abs(drift_val):,.0f}) to reduce "
@@ -219,6 +226,24 @@ def build_rebalance_plan(
             })
 
         else:  # underweight → ADD
+            # Risk Advisor TRIM gate: suppress ADD entirely if Risk Advisor is
+            # recommending the user reduce exposure to this ticker. Drift-driven
+            # sizing must not override an active investment-level reduce signal.
+            if str(ticker).upper() in risk_trim_set:
+                risk_blocked_adds_list.append({
+                    "ticker":      ticker,
+                    "current_pct": current,
+                    "target_pct":  target,
+                    "drift_pp":    drift_pp,
+                    "score":       score,
+                    "signal":      signal,
+                    "reason": (
+                        f"Risk Advisor recommends trimming **{ticker}** (beta or Sharpe drag). "
+                        "Rebalance ADD suppressed — resolve the investment-level trim first."
+                    ),
+                })
+                continue
+
             # Add urgency: high-conviction underweight names first
             urgency = 0
             if score >= 65:
@@ -327,11 +352,13 @@ def build_rebalance_plan(
     rebalance_pct = round(touched_val / total_val * 100, 1) if total_val > 0 else 0.0
 
     return {
-        "trims":              trims,
-        "adds":               adds,
-        "ok":                 ok_list,
-        "total_trim_value":   round(total_trim, 0),
-        "total_add_value":    round(total_add, 0),
-        "rebalance_pct":      rebalance_pct,
-        "news_blocked_adds":  sum(1 for a in adds if a.get("news_warning")),
+        "trims":                   trims,
+        "adds":                    adds,
+        "ok":                      ok_list,
+        "total_trim_value":        round(total_trim, 0),
+        "total_add_value":         round(total_add, 0),
+        "rebalance_pct":           rebalance_pct,
+        "news_blocked_adds":       sum(1 for a in adds if a.get("news_warning")),
+        "risk_blocked_adds":       risk_blocked_adds_list,
+        "risk_blocked_adds_count": len(risk_blocked_adds_list),
     }

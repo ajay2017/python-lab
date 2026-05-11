@@ -131,8 +131,20 @@ def build_tax_analysis(
             tax_ltcg_total += round(max(pnl, 0) * ltcg_rate, 0)
 
         # Action flag
+        # Tax tail does not wag the investment dog. A position currently rated
+        # Buy/Strong Buy is NOT eligible for HARVEST regardless of the unrealized
+        # loss — exiting a high-conviction view to capture a tax loss trades a
+        # known tax benefit for an unknown opportunity cost the investment view
+        # explicitly says is unfavourable.
+        _sig            = str(row.get("Signal", ""))
+        _is_conviction  = any(w in _sig for w in ("Strong Buy", "Buy"))
+        harvest_blocked = False
         if pnl < 0 and abs(pnl) > 500:
-            action = "HARVEST"
+            if _is_conviction:
+                action          = "HOLD_FOR_SIGNAL"
+                harvest_blocked = True
+            else:
+                action = "HARVEST"
         elif gain_type == "STCG" and pnl > 0 and days_to_ltcg is not None and days_to_ltcg <= 60:
             action = "WAIT"
         elif gain_type == "STCG" and pnl > 0 and days_to_ltcg is not None and days_to_ltcg > 60:
@@ -158,11 +170,13 @@ def build_tax_analysis(
             "tax_savings":        tax_savings,
             "harvestable":        harvestable,
             "action":             action,
+            "signal":             _sig,
+            "harvest_blocked":    harvest_blocked,
         })
 
-    # Sort: HARVEST first, then WAIT, then HOLD_FOR_LTCG, then rest
-    _order = {"HARVEST": 0, "WAIT": 1, "HOLD_FOR_LTCG": 2,
-              "LTCG_ELIGIBLE": 3, "MONITOR": 4}
+    # Sort: HARVEST first, then HOLD_FOR_SIGNAL, then WAIT, then HOLD_FOR_LTCG, then rest
+    _order = {"HARVEST": 0, "HOLD_FOR_SIGNAL": 1, "WAIT": 2, "HOLD_FOR_LTCG": 3,
+              "LTCG_ELIGIBLE": 4, "MONITOR": 5}
     rows.sort(key=lambda x: _order.get(x["action"], 5))
 
     return {

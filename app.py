@@ -31,6 +31,17 @@ from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
     TOLERANCE_OK, TOLERANCE_WATCH,
 )
+from stock_analyzer.constants import (
+    PORTFOLIO_BETA_CEILING,
+    PORTFOLIO_BETA_ELEVATED,
+    TICKER_BETA_HIGH,
+    TICKER_BETA_CRITICAL,
+    SECTOR_CEILING,
+    SINGLE_NAME_CEILING,
+    COMPOSITE_BUY,
+    COMPOSITE_HOLD,
+    MACRO_IMMINENT_DAYS,
+)
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
 from stock_analyzer.split_detector import detect_portfolio_splits
@@ -1139,17 +1150,28 @@ if page == "🏠 Portfolio":
             grow_composites = st.session_state.get("_grow_composites", {}),
         )
     except Exception:
-        _daily_brief    = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
+        _daily_brief    = None
         _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
 
     # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
     # can demote ENTER_NOW picks that would stack the same sector exposure.
-    _gt_today = _daily_brief.get("grow_today") or {}
-    st.session_state["_grow_today_sectors_cache"] = sorted({
-        str(p.get("sector", "")).strip()
-        for p in (_gt_today.get("new_picks") or []) + (_gt_today.get("add_positions") or [])
-        if str(p.get("sector", "")).strip()
-    })
+    # When Daily Briefing failed, cache is None (not empty list) so downstream
+    # features can detect "offline" vs. "computed and empty" and surface the
+    # state to the user instead of silently disabling coordination gates.
+    if _daily_brief is None:
+        st.session_state["_grow_today_sectors_cache"] = None
+        st.session_state["_daily_brief_offline"]      = True
+        # Provide a minimal empty dict so downstream code doesn't crash, but
+        # session_state flag tells consumers to render the offline UI state.
+        _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
+    else:
+        st.session_state["_daily_brief_offline"] = False
+        _gt_today = _daily_brief.get("grow_today") or {}
+        st.session_state["_grow_today_sectors_cache"] = sorted({
+            str(p.get("sector", "")).strip()
+            for p in (_gt_today.get("new_picks") or []) + (_gt_today.get("add_positions") or [])
+            if str(p.get("sector", "")).strip()
+        })
 
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
@@ -1690,7 +1712,9 @@ if page == "🏠 Portfolio":
             bear_msg     = grow.get("message")
             lead_secs_ui = grow.get("leading_sectors", [])
             risk_banner  = grow.get("risk_banner")
-            blocked_adds = grow.get("risk_blocked_adds", [])
+            blocked_adds  = grow.get("risk_blocked_adds", [])
+            conc_blocked  = grow.get("concentration_blocked_adds", [])
+            macro_blocked = grow.get("macro_blocked_picks", [])
 
             _g_label = (
                 "📈 Grow Today"      if tone == "bull" else
@@ -1715,6 +1739,28 @@ if page == "🏠 Portfolio":
             if bear_msg:
                 st.caption(f"🛡️ {bear_msg}")
                 return
+
+            # Macro-blocked picks — surface so user knows the gate is active.
+            if macro_blocked:
+                _mb_rows = "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                    f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
+                    for b in macro_blocked[:4]
+                )
+                st.markdown(
+                    "<div style='background:#422006;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event</div>"
+                    + _mb_rows
+                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These sectors have a HIGH-impact macro release within "
+                    f"{MACRO_IMMINENT_DAYS} days. Opening fresh positions into a known binary "
+                    "catalyst is the institutional anti-pattern this gate blocks. "
+                    "Revisit after the event resolves and the dust settles."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
 
             # Composite-fetch failure banner — shown when one or more of the
             # intended top picks couldn't get a composite score, so picks may be
@@ -1783,7 +1829,7 @@ if page == "🏠 Portfolio":
                     "high":       ("#22c55e", "✅ High Conviction"),
                     "moderate":   ("#f59e0b", "🟡 Moderate Setup"),
                     "low":        ("#ef4444", "⚠ Low Composite"),
-                    "unverified": ("#6b7280", "🔍 Verify — Run Stock Analysis First"),
+                    "unverified": ("#f59e0b", "🔍 Verify — Run Stock Analysis First"),
                 }
                 _conv_clr, _conv_txt = _conv_cfg.get(_conv, _conv_cfg["unverified"])
 
@@ -1851,6 +1897,29 @@ if page == "🏠 Portfolio":
                     st.session_state["_pending_page"]    = "📈 Stock Analysis"
                     st.session_state["_analysis_ticker"] = _ga["ticker"]
                     st.rerun()
+
+            # Single-name concentration ceiling suppressed an add — surface why
+            # so the user understands the position is capped, not signal-weak.
+            if conc_blocked:
+                _cn_rows = "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                    f"({b.get('weight',0):.1f}% weight · Score {b.get('score',0):.0f}) — "
+                    f"{b.get('reason','position at single-name ceiling')}</div>"
+                    for b in conc_blocked[:3]
+                )
+                st.markdown(
+                    "<div style='background:#422006;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    f"🔒 Add Suppressed — Single-Name Ceiling ({int(SINGLE_NAME_CEILING)}%)</div>"
+                    + _cn_rows
+                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These winners qualify on signal but already exceed the institutional "
+                    "single-name ceiling. Adding more would concentrate idiosyncratic risk. "
+                    "Trim back to target before considering further adds."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
 
             # Risk Advisor suppressed an add-to-winner — surface the conflict so the
             # user understands why a winning held position isn't on the add list.
@@ -2621,7 +2690,24 @@ if page == "🏠 Portfolio":
                 "compound": _alert.get("compound", 0.0),
             }
 
-        _rb_plan  = build_rebalance_plan(_drift_df, total_val, news_flags=_rb_news_flags)
+        # Build Risk Advisor trim set so Rebalancer ADD can never contradict
+        # an investment-level reduce-exposure recommendation.
+        _rb_risk_trim_set: set = set()
+        for _rrec in (_risk_advisor_recs or []):
+            if _rrec.get("priority") not in ("HIGH", "MEDIUM"):
+                continue
+            if _rrec.get("type") not in ("beta", "sharpe"):
+                continue
+            for _rt in _rrec.get("root_tickers", []):
+                _tk = _rt.get("ticker")
+                if _tk:
+                    _rb_risk_trim_set.add(str(_tk).upper())
+
+        _rb_plan  = build_rebalance_plan(
+            _drift_df, total_val,
+            news_flags=_rb_news_flags,
+            risk_trim_set=_rb_risk_trim_set,
+        )
 
         # KPI summary
         _rb_k1, _rb_k2, _rb_k3, _rb_k4 = st.columns(4)
@@ -2727,6 +2813,30 @@ if page == "🏠 Portfolio":
                         unsafe_allow_html=True,
                     )
                     st.info(f"**Institutional Lens** · {_tr['institutional_lens']}")
+
+        # Risk Advisor TRIM suppression — show before adds so the user sees
+        # the conflict before the un-suppressed adds.
+        _rb_risk_blocked = _rb_plan.get("risk_blocked_adds") or []
+        if _rb_risk_blocked:
+            _rba_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.82em'>• <b>{a['ticker']}</b> "
+                f"(currently {a.get('current_pct',0):.1f}% → target {a.get('target_pct',0):.1f}%, "
+                f"drift {a.get('drift_pp',0):+.1f}pp, Score {a.get('score',0):.0f}) — "
+                f"{a.get('reason','')}</div>"
+                for a in _rb_risk_blocked[:5]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:10px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.88em;margin-bottom:4px'>"
+                "🔒 Rebalance ADD Suppressed — Risk Advisor Conflict</div>"
+                + _rba_rows
+                + "<div style='color:#fde68a;font-size:0.78em;margin-top:6px;font-style:italic'>"
+                "Adding to a position the investment view is currently telling you to TRIM is a "
+                "direct contradiction. Resolve the trim in Risk Advisor first."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
 
         # Add recommendations
         if _rb_plan["adds"]:
@@ -3114,8 +3224,35 @@ if page == "🏠 Portfolio":
 
             # Action cards for notable situations
             _harvest_rows = [r for r in _tax["rows"] if r["action"] == "HARVEST"]
+            _blocked_rows = [r for r in _tax["rows"] if r["action"] == "HOLD_FOR_SIGNAL"]
             _wait_rows    = [r for r in _tax["rows"] if r["action"] == "WAIT"]
             _ltcg_rows    = [r for r in _tax["rows"] if r["action"] == "HOLD_FOR_LTCG"]
+
+            # Suppressed harvests — surface so the user knows a tax-loss-eligible
+            # position is intentionally NOT being recommended for harvest because
+            # the investment view is still Buy/Strong Buy on it.
+            if _blocked_rows:
+                _bh_rows = "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{r['ticker']}</b> "
+                    f"(loss ${r['pnl']:+,.0f}, signal: {r.get('signal','')}) — "
+                    f"investment view subordinates the tax opportunity.</div>"
+                    for r in _blocked_rows[:5]
+                )
+                st.markdown(
+                    "<div style='background:#1c1917;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "🔒 Harvest Suppressed — Investment View Holds</div>"
+                    + _bh_rows
+                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These positions have a harvestable loss, but the composite signal is "
+                    "still Buy or Strong Buy. The institutional principle is that tax savings "
+                    "do not override the investment view — taking the harvest here exits a "
+                    "high-conviction position to capture a tax benefit, trading known savings "
+                    "for unknown opportunity cost. Revisit if signal degrades to Hold or worse."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
 
             if _harvest_rows:
                 st.markdown("#### 🔵 Tax Loss Harvesting Opportunities")
@@ -7261,17 +7398,23 @@ elif page == "📈 Stock Analysis":
                         # Beta envelope check — warn when adding this position would push
                         # an already-elevated portfolio beta materially higher
                         _sa_port_risk = st.session_state.get("_port_risk_cache", {})
+                        if not _sa_port_risk:
+                            st.info(
+                                "ℹ️ **Portfolio context unavailable** — visit the Portfolio page first "
+                                "to enable beta-envelope checks on this Trade Plan. The size/stop suggestions "
+                                "below are based on the stock alone, not on how it fits your existing book."
+                            )
                         _sa_port_beta = _sa_port_risk.get("beta")
                         _sa_tick_beta = (r.get("risk_metrics") or {}).get("beta")
                         if _sa_tick_beta and _sa_port_beta:
-                            if _sa_tick_beta > 1.5 and _sa_port_beta > 1.3:
+                            if _sa_tick_beta > TICKER_BETA_HIGH and _sa_port_beta > PORTFOLIO_BETA_ELEVATED:
                                 st.warning(
                                     f"⚠ **Beta envelope:** Portfolio beta is already **{_sa_port_beta:.1f}** (elevated). "
                                     f"This stock's beta is **{_sa_tick_beta:.1f}** — a full-size position would "
                                     f"add meaningful market risk. Consider taking **50–60% of the suggested "
                                     f"{ps['shares']:,} shares** to keep portfolio beta in check."
                                 )
-                            elif _sa_tick_beta > 1.8:
+                            elif _sa_tick_beta > TICKER_BETA_CRITICAL:
                                 st.warning(
                                     f"⚠ **High-beta stock:** Beta **{_sa_tick_beta:.1f}** — volatile name. "
                                     f"Use a firm stop at **${r['stop']:.2f}** and consider a starter position "
@@ -7778,8 +7921,21 @@ elif page == "📋 Watchlist":
     _wl_port_df    = st.session_state.get("holdings_df", pd.DataFrame())
     _wl_port_risk  = st.session_state.get("_port_risk_cache", {}) or {}
     _wl_high_alerts = st.session_state.get("_risk_high_alerts_cache", []) or []
-    _wl_grow_sectors = set(st.session_state.get("_grow_today_sectors_cache", []) or [])
+    _wl_grow_sectors_raw = st.session_state.get("_grow_today_sectors_cache")
+    _wl_brief_offline = (
+        st.session_state.get("_daily_brief_offline", False)
+        or _wl_grow_sectors_raw is None
+    )
+    _wl_grow_sectors = set(_wl_grow_sectors_raw or [])
     _wl_port_beta  = _wl_port_risk.get("beta")
+
+    if _wl_brief_offline:
+        st.warning(
+            "⚠ **Daily Briefing offline** — sector-overlap and active-risk-alert gates "
+            "on ENTER_NOW recommendations cannot run. The Watchlist will still show "
+            "stock-level signals, but coordination with Grow Today / Risk Advisor is "
+            "currently disabled. Visit the Portfolio page first to rebuild the briefing."
+        )
 
     # ── Build recommendations ─────────────────────────────────────────────────
     _wl_recs: list[dict] = []
