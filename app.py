@@ -4828,9 +4828,10 @@ if page == "🏠 Portfolio":
                                                 key=f"_def_analyze_{_dp_ticker}_{_rtype}",
                                                 use_container_width=True,
                                             ):
-                                                st.session_state["analysis_ticker"] = _dp_ticker
-                                                st.session_state["_nav_origin"] = "🏠 Portfolio"
-                                                nav_page("📈 Stock Analysis")
+                                                st.session_state["_analysis_ticker"] = _dp_ticker
+                                                st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                                                st.session_state["_nav_origin"]      = "🏠 Portfolio"
+                                                st.rerun()
 
         # ── Stress Testing ────────────────────────────────────────────────────
         st.divider()
