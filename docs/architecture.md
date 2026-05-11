@@ -1,9 +1,10 @@
 # Architecture Document
 ## Personal Portfolio Intelligence App
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** May 2026  
-**Status:** Active Development
+**Status:** Active Development  
+**Operating Posture:** Decides, not informs (see §4.0)
 
 ---
 
@@ -67,38 +68,99 @@ python-lab/
 │   └── architecture.md             This document
 └── stock_analyzer/                 Domain logic package
     ├── __init__.py
+    ├── constants.py                Single source of truth for all decision thresholds (Phase 2)
     ├── data.py                     Data fetching (yfinance wrapper, risk-free rate)
     ├── indicators.py               Pure technical indicator calculations
     ├── technicals.py               Technical scoring from indicator output
     ├── fundamentals.py             Fundamental scoring — sector-relative benchmarks
     ├── sentiment.py                VADER-based news sentiment scoring
     ├── scoring.py                  Composite score weights and recommendation tiers
-    ├── portfolio.py                Portfolio DataFrame construction from holdings
+    ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
     ├── targets.py                  Price targets, support/resistance, entry zones
     ├── ranking.py                  Cross-portfolio stock ranking (composite score sort)
     ├── scanner.py                  Market scanner (73-ticker universe)
-    ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today / Buy Candidates)
+    ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today / Buy Candidates / Review)
     ├── premarket.py                Pre-market intelligence (futures, global markets, movers)
-    ├── quick_research.py           Ad-hoc ticker research with entry timing verdict
+    ├── quick_research.py           Ad-hoc ticker research with entry timing + portfolio-fit verdict
     ├── news_intelligence.py        News aggregation and attention flagging
     ├── sentiment_velocity.py       Sentiment trend tracking over time
     ├── macro.py                    Macro indicator fetching
     ├── macro_playbook.py           Macro scenario playbook
-    ├── macro_calendar.py           Economic calendar events
+    ├── macro_calendar.py           Economic calendar events; affected_sectors() helper
     ├── earnings_advisor.py         Earnings risk and playbook
     ├── perf_advisor.py             Performance attribution and recommendations
     ├── risk_advisor.py             Risk flags and advisor recommendations (exact beta impact)
-    ├── watchlist_advisor.py        Watchlist analysis and recommendations
+    ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
     ├── trade_analytics.py          Trade history analytics
-    ├── tax_advisor.py              Tax-lot and realised gain/loss analysis
-    ├── rebalancer.py               Portfolio rebalancing calculator
+    ├── trades.py                   Trade-record helpers (realised PnL, performance stats)
+    ├── tax_advisor.py              Tax-lot analysis; HARVEST subordinated to investment view
+    ├── rebalancer.py               Portfolio rebalancing; ADD cross-checks news + risk trim
     ├── stress_test.py              Macro stress scenario modelling
     ├── split_detector.py           Stock split detection and adjustment
     ├── decision_journal.py         Signal-vs-override pattern analysis
     ├── db.py                       Supabase database operations (fractional shares)
     └── api_health.py               API call health event recording
 ```
+
+---
+
+## 4.0 Operating Posture and Decision Framework
+
+The app is configured to **make decisions, not merely inform**. This is an explicit operating choice (May 2026) that drives the rest of the architecture:
+
+- **Higher bars to recommend.** Each gate is a hard suppression where the threshold fails, not a soft warning. The app would rather recommend nothing than recommend wrongly.
+- **Data integrity fails loud.** When a required input is missing (stop price, composite score, daily briefing) the dependent feature surfaces an explicit "offline" state instead of degrading gracefully with fabricated fallbacks.
+- **Coordination is mandatory.** Two features that make overlapping decisions never silently contradict each other. One publishes state; the other reads and gates.
+- **Subordination of secondary objectives.** Tax outcomes do not override investment view (HARVEST is suppressed on Buy/Strong Buy). Macro events override entry recommendations in affected sectors.
+
+### 4.0.1 Decision constants
+
+All decision thresholds live in `stock_analyzer/constants.py`. Changes to any value are investment-policy decisions, not code tuning.
+
+| Constant | Value | Role |
+|---|---|---|
+| `PORTFOLIO_BETA_TARGET` | 1.0 | Baseline equity-portfolio target |
+| `PORTFOLIO_BETA_ELEVATED` | 1.3 | Soft warn above this |
+| `PORTFOLIO_BETA_CEILING` | 1.4 | Hard breach — institutional managed-equity ceiling |
+| `TICKER_BETA_HIGH` | 1.5 | Soft warn when added to elevated portfolio |
+| `TICKER_BETA_CRITICAL` | 1.8 | Hard breach when added to breached portfolio |
+| `SECTOR_CEILING` | 35.0 | Hard cap — no entries when sector at this weight |
+| `SECTOR_ELEVATED` | 25.0 | Soft warn — consider half-size |
+| `SINGLE_NAME_CEILING` | 15.0 | Hard cap — no add-to-winner above this weight |
+| `COMPOSITE_BUY` | 65 | Buy boundary — used for entry AND add-to-winner (aligned) |
+| `COMPOSITE_STRONG_BUY` | 75 | Strong Buy boundary |
+| `COMPOSITE_HOLD` | 44 | Hold floor; below this = "Sell zone" |
+| `RISK_PCT_PER_TRADE` | 0.015 | 1.5% portfolio risk per trade (Moderate) |
+| `EARNINGS_IMMINENT_DAYS` | 7 | Trades within this window flagged caution |
+| `MACRO_IMMINENT_DAYS` | 3 | Hard suppress new picks in sectors with HIGH-impact macro within this window |
+
+### 4.0.2 Cross-feature coordination caches
+
+Features publish to `st.session_state` when they own a piece of decision state; downstream features read it. When the producer fails, the consumer treats the absence as an "offline" state — not as "no constraint."
+
+| Cache key | Producer | Consumers | Purpose |
+|---|---|---|---|
+| `_port_risk_cache` | Portfolio page (`compute_portfolio_risk_metrics`) | Stock Analysis Trade Plan, Watchlist `_portfolio_risk_gate` | Beta envelope checks across pages |
+| `_risk_high_alerts_cache` | Portfolio page (after `build_risk_advisor_recommendations`) | Watchlist | ENTER_NOW gates against active HIGH risk alerts |
+| `_grow_today_sectors_cache` | After `build_daily_briefing` | Watchlist `_portfolio_risk_gate` | Sector-overlap warning when both features pick the same sector |
+| `_grow_composites` | Portfolio page (top-5 scanner pre-fetch) | `_grow_today` composite gate | Validates new picks against composite score, not just momentum |
+| `_grow_composites_coverage` | Portfolio page | Grow Today UI | "Composite scores unavailable" banner when pre-fetch failed |
+| `_daily_brief_offline` | Portfolio page (on `build_daily_briefing` exception) | Watchlist | Surfaces explicit offline state instead of silently disabling gates |
+
+### 4.0.3 Coordination gates currently enforced
+
+| From → to | Gate | Behaviour when fired |
+|---|---|---|
+| Risk Advisor TRIM → Grow Today add-to-winner | Suppress add on trim-targeted ticker | Amber banner: "Add-to-Winner Suppressed — Risk Advisor Conflict" |
+| Risk Advisor TRIM → Rebalancer ADD | Suppress add on trim-targeted ticker | Amber banner: "Rebalance ADD Suppressed — Risk Advisor Conflict" |
+| News Intelligence alert → Rebalancer ADD | Attach news_warning; critical drops urgency | Banner inside the add card; critical labelled "Defer Add" |
+| Rebalancer drift-trim → Grow Today add-to-winner | Suppress add on drift-overweight ticker | Concentration-blocked banner |
+| Single-name ceiling (15%) → Grow Today add-to-winner | Suppress add | Concentration-blocked banner |
+| Sector ceiling (35%) → Watchlist ENTER_NOW | Downgrade to NEAR_ENTRY | "Portfolio Fit Blocks Entry" card |
+| Imminent macro event → Grow Today new picks | Suppress picks in affected sector | "Picks Suppressed — Imminent HIGH-Impact Macro Event" banner |
+| Held position composite Buy → Tax Advisor HARVEST | Suppress; action becomes `HOLD_FOR_SIGNAL` | "Harvest Suppressed — Investment View Holds" banner |
+| Grow Today sectors → Watchlist ENTER_NOW | Soft warn on same-sector overlap | Caution text in ENTER_NOW card |
 
 ---
 
@@ -205,14 +267,21 @@ market_context = {
 For each scanner pick:
 
 Layer 1: Technical  ← scanner score, RSI, trend (always available)
-Layer 2: Composite  ← port_df Signal column (held positions only)
+Layer 2: Composite  ← port_df Signal column. Held positions ONLY.
+                     If composite Signal is empty/missing, verdict is "unverified"
+                     (not "confirmed") — data integrity gate added Phase 1 H5.
 Layer 3: News       ← VADER sentiment on recent headlines
-Layer 4: Earnings   ← days until earnings date (held positions only)
+Layer 4: Earnings   ← days until earnings date. Looked up from a UNION of held_data
+                     + pre-fetched composites (`earnings_lookup`), so non-held new
+                     picks are also screened. Phase 1 C1 fix — previously this
+                     check was skipped silently for any ticker not in held_data.
 Layer 5: Revisions  ← analyst upgrades minus downgrades 90d (held positions only)
 
 → verdict: confirmed | mixed | conflicted | caution | unverified
    (non-held positions are always "unverified" — composite signal not computed)
 ```
+
+**Verdict UI:** "🔍 Verify — Run Stock Analysis First" badge renders in **amber** (`#f59e0b`) — not blue — so a tired user reads it as "action required" rather than "informational." Same colour applies to the Grow Today conviction tier when composite data is unavailable.
 
 ### 4.5 Quick Research Flow
 
@@ -220,19 +289,27 @@ Layer 5: Revisions  ← analyst upgrades minus downgrades 90d (held positions on
 User enters ticker → load_all(ticker) [cached 30 min]
         │
         ▼
-quick_research.research_ticker(ticker, data)
+quick_research.research_ticker(ticker, data, portfolio_ctx)
         │
         ├── move_1d, move_5d, move_1m from Close series
         ├── RSI from df["RSI"] column
         ├── entry timing verdict (_entry_timing)
-        └── 4 bullets: signal, momentum, entry timing, key context
+        ├── 4 bullets: signal, momentum, entry timing, key context
+        └── 5th bullet (when portfolio_ctx supplied): portfolio fit
+              ├── Act Today flag on THIS ticker      (highest priority)
+              ├── Act Today flags on OTHER tickers   (sector under stress)
+              │   in the same sector
+              ├── Already held position context
+              └── New position fit: sector concentration + beta envelope
 
-Entry Timing Verdict:
-  RSI > 80 or 1D > 15% or 5D > 25%  →  High Risk — Avoid Chasing
-  RSI > 68 or 1D > 5%  or 5D > 12%  →  Wait for Pullback
-  RSI < 35                            →  Oversold — Potential Entry
+Entry Timing Verdict (boundaries inclusive — Phase 1 H6 aligned):
+  RSI ≥ 80 or 1D ≥ 15% or 5D ≥ 25%  →  High Risk — Avoid Chasing
+  RSI ≥ 68 or 1D ≥ 5%  or 5D ≥ 12%  →  Wait for Pullback
+  RSI ≤ 35                            →  Oversold — Potential Entry
   else                                →  Normal Entry Conditions
 ```
+
+`portfolio_ctx` includes `sector_of_ticker`, `sector_weight_pct`, `portfolio_beta`, `ticker_beta`, `act_today_flags`, `sector_act_today`, and the user's holding data — populated at the Daily Briefing call site from the portfolio page state.
 
 ---
 
@@ -385,6 +462,18 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 | `_sidebar_news` | My Portfolio / Stock Analysis | Sidebar news slot |
 | `_qr_result` | Today's Brief quick research | Today's Brief (persists result) |
 
+**Decision-coordination caches (see §4.0.2 for the gates that consume each):**
+
+| Key | Set by | Read by |
+|-----|--------|---------|
+| `_port_risk_cache` | My Portfolio | Stock Analysis Trade Plan, Watchlist |
+| `_risk_high_alerts_cache` | My Portfolio | Watchlist |
+| `_grow_today_sectors_cache` | After `build_daily_briefing` | Watchlist |
+| `_grow_composites` | My Portfolio (top-5 scanner pre-fetch) | Daily Briefing `_grow_today` |
+| `_grow_composites_coverage` | My Portfolio (post-fetch) | Grow Today banner |
+| `_daily_brief_offline` | My Portfolio (on briefing exception) | Watchlist offline banner |
+| `_prefill_trade` | Watchlist "Log Planned Trade" | Trade Journal form prefill |
+
 ---
 
 ## 8. Caching Strategy
@@ -470,7 +559,19 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 | Entry zone (Grow Today) | `_suggest_size()` returns `entry_lo` (40% of stop-distance below price) and `entry_hi` (15% of stop-distance above price) as the actionable entry range. | A single "@ ~$X" price point implied precision that doesn't exist; a zone is more honest and practical. |
 | Position Monitor re-check | When signal is Hold for a held position, the info box shows a specific 7-day re-check date computed from `date.today() + 7`. Two triggers are given: add-on if score ≥ 58; exit if price closes below stop. | "Mixed signals — check back later" gives no actionable timeline. Specific dates and conditions prevent analysis paralysis. |
 | Rankings sort order | `ranking.py` sorts by Composite Score descending, Universe Rank as tiebreaker. | Sorting by Universe Rank ascending promoted lower-scoring stocks that happened to have a low ordinal rank. |
-| Beta recommendation | `risk_advisor.py` names the specific highest-beta ticker and computes the exact new portfolio beta using `(beta - w*b*f) / (1 - w*f)` where f = 50% sell fraction. | A generic "consider trimming high-beta names" gives no concrete action. Users need to know which ticker and what the outcome will be. |
+| Beta recommendation | `risk_advisor.py` names the specific highest-beta ticker and computes the exact new portfolio beta using `(beta - w*b*f) / (1 - w*f)` where f = 50% sell fraction. Explicit `if/else` guards against `w*f → 1` (Phase 1 H2). | A generic "consider trimming high-beta names" gives no concrete action. Users need to know which ticker and what the outcome will be. |
+| Stop data integrity | `portfolio.py` returns `Stop=None`, `Stop Type="Stop Unavailable"`, `Gap to Stop=None` when the upstream stop is missing or zero. Downstream consumers (Act Today SELL trigger, earnings advisor, alert builder, drill-down metrics, dataframe styler) all guard for None and surface "—" or a "stop unavailable" caption instead of fabricating a fallback. | Phase 1 C2. Silently substituting a fabricated 8% buffer let mechanical SELL rules fire on a number nobody chose. Fail loudly. |
+| Earnings risk for new picks | `_cross_reference` reads earnings from a UNION of `held_data + grow_composites` via `earnings_lookup`. Both held positions and new scanner picks are screened. | Phase 1 C1. Previously the earnings check ran only for held tickers, so a brand-new pick with earnings tomorrow could be marked "Confirmed." |
+| Composite gate | Grow Today new picks AND add-to-winner both require composite ≥ `COMPOSITE_BUY` (65). When composite pre-fetch failed for any of the top picks, an amber "Composite Scores Unavailable" banner is rendered above Grow Today so the user knows the gate didn't run for those tickers. | Phase 1 H3 + Phase 2. Asymmetric bars (65 new vs 68 add) were backwards from "press your winners." Silent gate bypass on fetch failure was a real risk. |
+| ENTER_NOW R:R requirement | Watchlist `ENTER_NOW` requires `rr is not None and rr >= 2.0`. Tickers without a validated R:R fall through to `NEAR_ENTRY`. | Phase 1 H4. "Unknown R:R" is incomplete homework, not a green light. |
+| Confirmed verdict guard | `_cross_reference` will NOT issue "Confirmed — All Signals Aligned" for a held position whose composite Signal is empty. `composite_available` becomes False; verdict routes to "🔍 Verify — Composite Signal Missing" (amber). | Phase 1 H5. Previously an empty signal silently fell through to the agreed list, producing a green light on missing data. |
+| Single-name ceiling | Grow Today and Buy Candidates suppress add-to-winner when the position is at or above `SINGLE_NAME_CEILING` (15%). A concentration banner explains the suppression. | Phase 2. Institutional standard. Concentration risk overrides signal strength. |
+| Tax HARVEST subordination | `tax_advisor.py` returns `HOLD_FOR_SIGNAL` (not `HARVEST`) when the position is rated Buy or Strong Buy. The UI renders a "Harvest Suppressed — Investment View Holds" banner with the conflicting positions. | Phase 2. Tax tail does not wag investment dog. Exiting a Buy-rated position to capture a tax loss trades known savings for unknown opportunity cost. |
+| Macro gate on new picks | `_grow_today` accepts `macro_events` and hard-suppresses new picks in any sector with a HIGH-impact macro event within `MACRO_IMMINENT_DAYS` (3 days). `macro_calendar.affected_sectors(category)` resolves which sectors are in scope. | Phase 2. Opening fresh positions into a known binary catalyst (FOMC, CPI) is the institutional anti-pattern this gate prevents. |
+| Daily Briefing offline state | When `build_daily_briefing()` raises, the Portfolio page sets `_grow_today_sectors_cache = None` and `_daily_brief_offline = True`. The Watchlist page detects this and shows an explicit warning: "Daily Briefing offline — sector-overlap and active-risk-alert gates cannot run." | Phase 2. Silent gate disable on producer failure was a real risk. |
+| Stock Analysis without Portfolio context | The Trade Plan beta-envelope warning depends on `_port_risk_cache`. When the cache is empty (user landed on Stock Analysis without first visiting Portfolio), a prominent "Portfolio context unavailable" info note renders above the Trade Plan. | Phase 2. Don't pretend the gate is active when it isn't. |
+| Entry-timing thresholds | `quick_research.py` boundaries use `>=` for upper bounds and `<=` for lower bounds (e.g. `move_1d >= 15` triggers "Avoid Chasing"). Previously strict `>` produced unintuitive cliffs where exactly-15% one-day moves slipped past the gate. | Phase 1 H6. Standard TA convention. |
+| Decision constants | All threshold values used to gate, suppress, or downgrade a recommendation live in `stock_analyzer/constants.py`. Features import from this module rather than hardcoding values. | Phase 2. Single source of truth; changes here are policy decisions, not code tuning. |
 
 ---
 

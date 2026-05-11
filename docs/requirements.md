@@ -1,9 +1,10 @@
 # Requirements Document
 ## Personal Portfolio Intelligence App
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** May 2026  
-**Status:** Active Development
+**Status:** Active Development  
+**Operating Posture:** Decides, not informs (see §2A)
 
 ---
 
@@ -11,7 +12,9 @@
 
 This application is a personal investment management and intelligence platform built for a retail investor managing a concentrated US equity portfolio. It replaces manual spreadsheet tracking and fragmented news/analysis tools with a single, always-current dashboard that surfaces actionable signals, manages risk, and builds a track record of decisions over time.
 
-The app is not a brokerage or order-execution system. It is a decision-support tool — it gathers, synthesises, and presents information to help the user decide when to buy, hold, add, trim, or exit positions.
+The app is configured to **make decisions, not merely inform**. Recommendations are presented as the call; suppressions are hard rather than soft. The app does not execute trades — the user retains all execution authority — but its recommendations are designed to be trusted and acted upon directly. See §2A for the operating-posture commitments that shape every requirement below.
+
+The app is not a brokerage or order-execution system.
 
 ---
 
@@ -22,6 +25,73 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 - **Experience level:** Active investor, growing familiarity with technical and fundamental analysis
 - **Usage pattern:** Daily briefing check before market open; ad-hoc analysis during trading hours; end-of-day journal entries
 - **Access:** Web browser via Streamlit Community Cloud; no mobile-specific UI required
+
+---
+
+## 2A. Operating Posture and Decision Policy
+
+This is an explicit operating-mode commitment that drives functional design. It is the most important policy section in this document because every gate, threshold, and suppression below derives from it.
+
+### 2A.1 Operating principles
+
+| ID | Principle |
+|---|---|
+| OP-01 | The app makes decisions. Recommendations are issued only when conditions warrant action. The app would rather recommend nothing than recommend wrongly. |
+| OP-02 | Gates are hard suppressions, not soft warnings. When a gate fires, the contradicting recommendation is removed from the UI with an explicit explanation, not appended as a caution badge. |
+| OP-03 | Data integrity failures fail loud. When a required input is missing (stop price, composite score, daily briefing, portfolio risk metrics) the dependent feature surfaces an explicit "offline" or "unavailable" state. Fabricated fallbacks are never used. |
+| OP-04 | Cross-feature coordination is mandatory. Two features that make overlapping decisions never silently contradict each other. The pattern is: one publishes state; downstream features read and gate. |
+| OP-05 | Secondary objectives subordinate to investment view. Tax outcomes do not override the investment thesis (HARVEST suppressed on Buy/Strong Buy). Drift-rebalancing does not override active risk reduction (Rebalancer ADD suppressed when Risk Advisor TRIMs the same ticker). |
+| OP-06 | All decision thresholds live in `stock_analyzer/constants.py`. Changes to any value are investment-policy decisions, not code tuning. |
+
+### 2A.2 Decision thresholds (policy)
+
+Single source of truth: `stock_analyzer/constants.py`.
+
+| Threshold | Value | Type |
+|---|---|---|
+| Portfolio beta — target | 1.0 | Baseline |
+| Portfolio beta — elevated (soft warn) | 1.3 | Soft |
+| Portfolio beta — ceiling (hard breach) | 1.4 | **Hard** |
+| Ticker beta — high (combines with elevated portfolio) | 1.5 | Soft |
+| Ticker beta — critical (combines with breached portfolio) | 1.8 | **Hard** |
+| Sector — ceiling | 35% | **Hard** |
+| Sector — elevated | 25% | Soft |
+| Single-name — ceiling | 15% | **Hard** |
+| Composite — Buy boundary (entry AND add-to-winner) | 65 | Gate |
+| Composite — Strong Buy boundary | 75 | Tier label |
+| Composite — Hold floor (below = Sell zone) | 44 | Tier label |
+| Risk per trade | 1.5% of portfolio | Sizing |
+| Earnings imminence window | 7 days | Caution |
+| Macro imminence window (HIGH-impact event in pick's sector) | 3 days | **Hard** |
+
+### 2A.3 Hard gates currently enforced
+
+| ID | Gate | Behaviour |
+|---|---|---|
+| G-01 | Risk Advisor TRIM → Grow Today add-to-winner | Suppress; banner explains |
+| G-02 | Risk Advisor TRIM → Rebalancer ADD | Suppress; banner explains |
+| G-03 | News Intelligence alert → Rebalancer ADD | Attach `news_warning`; critical drops urgency to bottom |
+| G-04 | Single-name ≥ 15% → Grow Today add-to-winner | Suppress; concentration banner |
+| G-05 | Sector ≥ 35% → Watchlist ENTER_NOW | Downgrade to NEAR_ENTRY with portfolio-fit card |
+| G-06 | Portfolio β > 1.4 AND ticker β > 1.8 → Watchlist ENTER_NOW | Downgrade to NEAR_ENTRY |
+| G-07 | Imminent HIGH macro (3d) → Grow Today new picks in affected sector | Suppress; macro banner |
+| G-08 | Composite Buy → Tax HARVEST | Suppress; `HOLD_FOR_SIGNAL` action with banner |
+| G-09 | Rebalancer drift-overweight → Grow Today add-to-winner | Suppress; banner |
+| G-10 | Earnings within 7 days → Buy Candidates verdict | Escalate to "Caution" or "Conflicted" depending on other signals |
+| G-11 | Stop data missing → Act Today SELL trigger | Skip mechanical SELL; show "stop unavailable" review item instead |
+| G-12 | Composite Signal empty on held position → Confirmed verdict | Route to "🔍 Verify — Composite Signal Missing" |
+| G-13 | ENTER_NOW without validated R:R (`rr is None`) | Downgrade to NEAR_ENTRY; R:R must be `≥ 2.0` |
+| G-14 | `build_daily_briefing` failure → coordination caches | Set to `None`; dependent features show explicit offline banner |
+
+### 2A.4 Soft warnings (kept in addition to gates)
+
+| ID | Warning | When |
+|---|---|---|
+| W-01 | Sector ≥ 25% concentration on a new entry | Soft caution in card |
+| W-02 | Portfolio β > 1.3 AND ticker β > 1.5 | Soft caution; sizing recommendation |
+| W-03 | Active HIGH risk alerts in portfolio | Resolve-first prompt in Watchlist |
+| W-04 | Grow Today and Watchlist same-sector overlap | Inform the user one sector trade is enough today |
+| W-05 | Trade Journal entry thesis missing on a weak-large-position review | Prompt user to log thesis on future entries |
 
 ---
 
@@ -42,10 +112,12 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 | F-09 | Show portfolio-level risk metrics: Sharpe ratio, Sortino ratio, max drawdown, beta, correlation matrix |
 | F-10 | Performance attribution: breakdown of return by position and sector |
 | F-11 | Earnings calendar: upcoming earnings dates for all held positions with days-to-date |
-| F-12 | Risk advisor: flag positions breaching stop-loss, concentration risk, correlation clusters |
-| F-13 | Rebalancer: suggest target weights and calculate trades needed to reach them |
+| F-12 | Risk advisor: flag positions breaching stop-loss, concentration risk, correlation clusters. Beta and Sharpe recommendations name specific trim targets, which downstream features (Grow Today add-to-winner, Rebalancer ADD) cross-check and suppress to avoid contradicting the active reduce-exposure recommendation. |
+| F-13 | Rebalancer: suggest target weights and trim/add trades. ADD actions cross-check News Intelligence alerts (suppressed for critical news; warned for negative) and Risk Advisor TRIM recommendations (ADD suppressed on tickers being trimmed). Suppressions render as explicit banners. |
 | F-14 | Stress test: model portfolio impact under defined macro scenarios (rate shock, recession, etc.) |
 | F-15 | Display market-closed context note in sidebar showing last close date when market is shut |
+| F-16 | Tax Advisor: per-position tax-lot analysis with HARVEST recommendations on harvestable losses. HARVEST is **suppressed** on positions rated Buy or Strong Buy (action becomes `HOLD_FOR_SIGNAL`) so the tax tail does not wag the investment dog. The UI explicitly surfaces every suppressed harvest with the position's current signal so the user can revisit if conviction degrades. |
+| F-17 | Stop data integrity: when a position's stop value is missing or zero, the portfolio table displays "—" for Stop and Gap, marks Stop Type as "Stop Unavailable", and the mechanical SELL trigger in Act Today is skipped (the user is prompted to set a manual stop). No fabricated fallback is substituted. |
 
 ### 3.2 Today's Brief (Daily Briefing)
 
@@ -57,10 +129,10 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 | F-23 | Grow Today (left column): market-tone-aware growth setups — new positions and add-to-winners on bull days; deferral message on bear days |
 | F-24 | Each Grow Today pick includes: ticker, sector, scanner score, thesis one-liner, suggested entry zone (lo–hi range), position size (shares, cost, stop) |
 | F-25 | Review Before Close (full width): approaching stops, near-term earnings, weakening large positions |
-| F-26 | Buy Candidates (full width): scanner picks cross-referenced across 5 layers with a confidence verdict (Confirmed / Mixed / Conflicted / Caution / Unverified) |
-| F-27 | Each Buy Candidate card shows: ticker, sector, score, verdict badge, technical summary, conflicts and agreed signals |
-| F-28 | Quick Research panel: user enters any ticker (e.g. from external news), app returns 4-bullet actionable summary with entry timing verdict |
-| F-29 | Entry timing verdicts: High Risk — Avoid Chasing (RSI>80 or 1D>15% or 5D>25%), Wait for Pullback, Oversold — Potential Entry, Normal Entry Conditions |
+| F-26 | Buy Candidates (full width): scanner picks cross-referenced across 5 layers (Technical, Composite, News, Earnings, Revisions) with a confidence verdict (Confirmed / Mixed / Conflicted / Caution / Unverified). Earnings risk is checked against a unified `earnings_lookup` derived from held positions AND pre-fetched composites, so non-held new picks are also screened. |
+| F-27 | Each Buy Candidate card shows: ticker, sector, score, verdict badge (amber for Verify, not blue), technical summary, conflicts and agreed signals |
+| F-28 | Quick Research panel: user enters any ticker (e.g. from external news), app returns up to 5-bullet actionable summary — signal, momentum, entry timing, key context, and (when portfolio_ctx is supplied) portfolio-fit including sector-level Act Today awareness |
+| F-29 | Entry timing verdicts (boundaries inclusive): High Risk — Avoid Chasing (RSI≥80 or 1D≥15% or 5D≥25%), Wait for Pullback (RSI≥68 or 1D≥5% or 5D≥12%), Oversold — Potential Entry (RSI≤35), Normal Entry Conditions otherwise |
 | F-30 | All Analyze buttons navigate to Stock Analysis with a Back button returning to Today's Brief |
 | F-31 | On flat market days, Grow Today must output confirmed-verdict picks before unverified-verdict picks so highest-conviction ideas lead |
 | F-32 | Pre-Market Intel panel: visible 4:00–9:29 AM ET weekdays only; appears at top of Today's Brief tab |
@@ -69,6 +141,11 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 | F-35 | Pre-Market Intel shows pre-market movers (≥0.5% change) for all held positions and watchlist tickers; held positions are visually distinguished |
 | F-36 | Pre-Market Intel shows today's HIGH and MEDIUM impact economic events as "catalysts" |
 | F-37 | Pre-market expected open tone (bull/bear/flat) is derived from ES=F futures % change (≥+0.4% bull, ≤-0.4% bear) |
+| F-38 | When `build_daily_briefing()` fails, the page must render an explicit "offline" state on dependent features (notably the Watchlist) rather than silently disabling coordination gates. The user must see that gates are inactive. (Implements G-14.) |
+| F-39 | Grow Today must surface a "Composite Scores Unavailable" banner when the composite pre-fetch failed for any of the intended top picks, so the user knows the multi-factor gate did not run for those tickers. |
+| F-39a | Grow Today must hard-suppress new picks in any sector with a HIGH-impact macro event scheduled within `MACRO_IMMINENT_DAYS` (3 days), and surface a "Picks Suppressed — Imminent HIGH-Impact Macro Event" banner with the affected sectors and event date. (Implements G-07.) |
+| F-39b | Grow Today and Buy Candidates add-to-winner blocks must suppress: (a) tickers Risk Advisor recommends trimming, (b) positions at or above the single-name ceiling (15%), and (c) positions drift-overweight beyond equal-weight + tolerance. Each suppression class renders a distinct banner with the conflict reason. (Implements G-01, G-04, G-09.) |
+| F-39c | Review Before Close items flagged as weak-large-positions must pull the entry thesis (most recent BUY notes) and up to two recent lessons from the Trade Journal for that ticker, rendered as an amber-bordered block below the mechanical assessment. When no journal entry exists, prompt the user to log thesis on future entries. |
 
 ### 3.3 Stock Analysis
 
@@ -132,7 +209,11 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 |----|-------------|
 | F-100 | Allow user to add tickers to a watchlist; persist to Supabase `watchlist` table |
 | F-101 | Show composite signal and key metrics for watched tickers |
-| F-102 | Provide advisor recommendations for watchlist entries |
+| F-102 | Provide advisor recommendations for watchlist entries: REMOVE / HOLD_OFF_EARNINGS / ENTER_NOW / NEAR_ENTRY / WAIT_ENTRY / WAIT_CATALYST |
+| F-103 | ENTER_NOW must require composite score ≥ `COMPOSITE_BUY` (65), price in/near entry zone, AND validated `R:R ≥ 2.0` (rr=None is NOT a green light). Tickers without R:R fall through to NEAR_ENTRY. (Implements G-13.) |
+| F-104 | ENTER_NOW must apply the portfolio-risk gate using `_port_risk_cache`, `_risk_high_alerts_cache`, and `_grow_today_sectors_cache`. Hard breaches (sector ≥ 35% OR portfolio β > 1.4 + ticker β > 1.8) downgrade to a "Setup Ready, But Portfolio Fit Blocks Entry" NEAR_ENTRY card. Soft concerns keep ENTER_NOW with an amber caution banner. |
+| F-105 | When `_daily_brief_offline` is True, the Watchlist must surface an explicit warning that coordination gates are disabled and instruct the user to revisit the Portfolio page. |
+| F-106 | "Log Planned Trade" button on an ENTER_NOW card must prefill the Trade Journal form with ticker, price, stop, and trigger=`WATCHLIST_ENTRY`, and route via `_pending_page` (never assign `nav_page` directly — that key is widget-bound and raises `StreamlitAPIException`). |
 
 ### 3.9 AI Brief
 
@@ -200,6 +281,9 @@ The app is not a brokerage or order-execution system. It is a decision-support t
 | NF-50 | All domain logic (scoring, signals, risk, briefing) must live in the `stock_analyzer/` package, not in `app.py` |
 | NF-51 | `app.py` is responsible for UI rendering and orchestration only |
 | NF-52 | New database columns must be backward-compatible: `load_trades()` must backfill None for missing columns in older rows |
+| NF-53 | Every decision threshold (beta tiers, sector limits, single-name ceiling, composite boundaries, risk-per-trade, imminence windows) must be defined in `stock_analyzer/constants.py`. Features import from this module — they never hardcode threshold values. Changes are policy decisions, not code tuning. |
+| NF-54 | Cross-feature coordination must use `st.session_state` caches. One feature publishes; downstream features read and gate. When a producer fails, the cache is set to `None` (not an empty container) so consumers can render an explicit "offline" state rather than silently disabling the gate. |
+| NF-55 | Data integrity failures (missing stop, missing composite, missing daily briefing) must surface visibly to the user rather than being masked with fabricated fallback values. |
 
 ---
 
