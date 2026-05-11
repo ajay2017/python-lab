@@ -576,7 +576,7 @@ with st.sidebar:
     with st.expander(f"{_ah_overall_icon} Data Health", expanded=_ah_auto_expand):
         for _ah_src, _ah_label in [
             ("yahoo_finance", "Yahoo Finance"),
-            ("fmp",           "FMP API"),
+            ("fred",          "FRED (St. Louis Fed)"),
             ("supabase",      "Supabase DB"),
         ]:
             _ah_h = _ah.get_health(_ah_src)
@@ -8187,7 +8187,7 @@ elif page == "📅 Economic Calendar":
 
         st.caption(
             f"Static backbone: FOMC · CPI/PPI/NFP/GDP/Retail Sales (Fed/BLS/BEA).  "
-            f"{'FMP live layer active — estimates included.' if _ec_fmp_key else 'Add FMP key for live consensus estimates.'}"
+            f"{'FRED live layer active — previous & actual values included.' if _ec_fred_key else 'Add a free FRED key above for previous & actual released values.'}"
         )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -8454,7 +8454,7 @@ elif page == "📅 Economic Calendar":
                     if _auto_sc:
                         _default_idx = ["bull", "base", "bear"].index(_auto_sc)
                         st.success(
-                            f"Scenario auto-detected from FMP data: **{_sc_opts[_default_idx]}**",
+                            f"Scenario auto-detected from FRED data: **{_sc_opts[_default_idx]}**",
                             icon="✅",
                         )
                         _sc_sel = st.selectbox(
@@ -8467,13 +8467,13 @@ elif page == "📅 Economic Calendar":
                             if _is_today:
                                 st.warning(
                                     f"Actual data not yet populated for today's **{_pe_name}**.  \n"
-                                    "Click **🔄 Refresh calendar** above (FMP key required for auto-population), "
+                                    "Click **🔄 Refresh calendar** above to pull the latest FRED data, "
                                     "or select the scenario manually based on news reports.",
                                     icon="⚠️",
                                 )
                             else:
                                 st.info(
-                                    "Actual value not available — add an FMP key for automatic population.  \n"
+                                    "Actual value not yet available from FRED — data populates automatically after the official release.  \n"
                                     "Select the scenario manually based on the reported result.",
                                     icon="ℹ️",
                                 )
