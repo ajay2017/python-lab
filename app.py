@@ -35,7 +35,8 @@ from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import (
-    build_macro_calendar, detect_macro_regime,
+    build_macro_calendar,
+    detect_macro_regime as detect_macro_regime_fred,
     HIGH as MC_HIGH, MEDIUM as MC_MEDIUM, _REGIME_NOTES as _MC_REGIME_NOTES,
 )
 from stock_analyzer.macro_playbook import (
@@ -8491,7 +8492,7 @@ elif page == "📅 Economic Calendar":
                 if _regime_cache_key not in st.session_state:
                     with st.spinner("Detecting macro regime…"):
                         try:
-                            _det_regime = detect_macro_regime(
+                            _det_regime = detect_macro_regime_fred(
                                 str(_ec_fred_key).strip() if _ec_fred_key else None
                             )
                         except Exception as _regime_err:
@@ -8501,14 +8502,41 @@ elif page == "📅 Economic Calendar":
                                 "fed_trend": "unknown", "cpi_yoy": None,
                                 "rationale": "Regime detection unavailable — using textbook scenario interpretation.",
                                 "source": "fallback",
+                                "confidence": 0, "scores": {}, "signals": [],
                             }
                         st.session_state[_regime_cache_key] = _det_regime
                 _regime = st.session_state[_regime_cache_key]
 
                 # Regime banner — pre-compute dynamic parts to avoid nested f-string issues
-                _regime_src_tag  = "  ·  FRED" if _regime["source"] == "fred" else "  ·  ESTIMATED"
-                _regime_fed_tag  = ("  ·  Fed " + _regime["fed_trend"].title()) if _regime["fed_trend"] != "unknown" else ""
-                _regime_cpi_tag  = ("  ·  CPI " + f"{_regime['cpi_yoy']:.1f}%") if _regime["cpi_yoy"] is not None else ""
+                _regime_src_tag  = (
+                    f"  ·  {_regime.get('confidence', 0)}% confidence"
+                    f"  ·  {'FRED+Market' if _regime.get('source') == 'fred+market' else 'ESTIMATED'}"
+                )
+                _regime_fed_tag  = ("  ·  Fed " + _regime.get("fed_trend", "unknown").title()) if _regime.get("fed_trend", "unknown") != "unknown" else ""
+                _regime_cpi_tag  = ("  ·  CPI " + f"{_regime['cpi_yoy']:.1f}%") if _regime.get("cpi_yoy") is not None else ""
+
+                # Build signal pills HTML
+                _PILL_STYLES = {
+                    "rate_cut":        ("background:#0a1628;border:1px solid #3b82f6;color:#93c5fd",),
+                    "recession_fear":  ("background:#1a0000;border:1px solid #ef4444;color:#fca5a5",),
+                    "inflation_fight": ("background:#1a1200;border:1px solid #f59e0b;color:#fcd34d",),
+                    "stagflation_risk":("background:#1a0a2e;border:1px solid #8b5cf6;color:#c4b5fd",),
+                }
+                _DEFAULT_PILL_STYLE = "background:#1f2937;border:1px solid #4b5563;color:#9ca3af"
+                _pill_html_parts = []
+                for _sig_label, _sig_reading, _sig_icon, _sig_hint in _regime.get("signals", []):
+                    _pstyle = _PILL_STYLES.get(_sig_hint, (_DEFAULT_PILL_STYLE,))[0] if _sig_hint else _DEFAULT_PILL_STYLE
+                    _pill_html_parts.append(
+                        f"<span style='{_pstyle};border-radius:12px;padding:3px 10px;"
+                        f"font-size:0.75em;font-weight:600;white-space:nowrap;display:inline-block;margin:2px'>"
+                        f"{_sig_icon} {_sig_label}: {_sig_reading}</span>"
+                    )
+                _pills_html = "".join(_pill_html_parts)
+                _pills_row = (
+                    f"<div style='margin-top:8px;display:flex;flex-wrap:wrap;gap:4px'>{_pills_html}</div>"
+                    if _pills_html else ""
+                )
+
                 st.markdown(
                     f"<div style='background:{_regime['bg']};border-left:4px solid "
                     f"{_regime['color']};border-radius:8px;padding:12px 16px;margin-bottom:16px'>"
@@ -8516,8 +8544,9 @@ elif page == "📅 Economic Calendar":
                     f"letter-spacing:0.08em'>CURRENT MACRO REGIME — AUTO-DETECTED{_regime_src_tag}</div>"
                     f"<div style='font-size:1.05em;font-weight:700;color:#eee;margin-top:4px'>"
                     f"{_regime['icon']}  {_regime['label']}{_regime_fed_tag}{_regime_cpi_tag}</div>"
+                    f"{_pills_row}"
                     f"<div style='font-size:0.82em;color:#bbb;margin-top:6px'>"
-                    f"{_regime['rationale']}</div></div>",
+                    f"{_regime.get('rationale', '')}</div></div>",
                     unsafe_allow_html=True,
                 )
 

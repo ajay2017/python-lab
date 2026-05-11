@@ -629,15 +629,28 @@ _NEUTRAL_REGIME: dict = {
         "A free FRED key (fred.stlouisfed.org) enables auto-detection."
     ),
     "source": "fallback",
+    "confidence": 0,
+    "scores": {},
+    "signals": [],
 }
 
 
 def detect_macro_regime(fred_key: str | None = None) -> dict:
     """
-    Auto-detect the current macro regime from FRED data (FEDFUNDS + CPI).
+    Auto-detect the current macro regime using 7-signal weighted scoring.
+
+    Signals:
+      1. Fed Funds trend          (FEDFUNDS, 4 obs monthly)
+      2. CPI YoY                  (CPIAUCSL, 14 obs monthly)
+      3. 2yr-10yr yield spread    (DGS2 + DGS10, 3 obs each daily)
+      4. Unemployment 3-month Δ   (UNRATE, 4 obs monthly)
+      5. HY credit spread         (BAMLH0A0HYM2, 3 obs daily)
+      6. SPY 20-day return        (yfinance)
+      7. VIX level                (yfinance, same download)
 
     Returns a dict with:
-      regime      : "rate_cut" | "inflation_fight" | "stagflation_risk" | "neutral"
+      regime      : "rate_cut" | "inflation_fight" | "recession_fear" |
+                    "stagflation_risk" | "neutral"
       label       : human-readable name
       icon        : emoji
       color       : hex colour for UI accents
@@ -645,105 +658,274 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
       fed_trend   : "cutting" | "hiking" | "holding" | "unknown"
       cpi_yoy     : float or None
       rationale   : one-sentence explanation
-      source      : "fred" | "fallback"
+      confidence  : int 0-100
+      scores      : dict of raw scores per regime
+      signals     : list of (label, reading, icon, regime_hint) tuples
+      source      : "fred+market" | "fallback"
     """
     try:
         _key = str(fred_key).strip() if fred_key else None
     except Exception:
         return _NEUTRAL_REGIME
 
-    try:
-        fed_obs = _fred_obs("FEDFUNDS", 4, _key)   # last 4 months
-        cpi_obs = _fred_obs("CPIAUCSL", 14, _key)  # need 13 for YoY
-    except Exception:
-        return _NEUTRAL_REGIME
+    scores: dict[str, int] = {
+        "rate_cut": 0,
+        "inflation_fight": 0,
+        "recession_fear": 0,
+        "stagflation_risk": 0,
+    }
+    signals: list[tuple] = []
+    any_success = False
 
     fed_trend = "unknown"
-    cpi_yoy   = None
+    cpi_yoy: float | None = None
 
+    # ── Signal 1: Fed Funds trend ──────────────────────────────────────────────
     try:
+        fed_obs = _fred_obs("FEDFUNDS", 4, _key)
         if len(fed_obs) >= 3:
+            any_success = True
             diff = fed_obs[0] - fed_obs[2]
             if diff < -0.05:
                 fed_trend = "cutting"
+                scores["rate_cut"] += 3
+                signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (cutting)", "✂️", "rate_cut"))
             elif diff > 0.05:
                 fed_trend = "hiking"
+                scores["inflation_fight"] += 3
+                signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (hiking)", "🔺", "inflation_fight"))
             else:
                 fed_trend = "holding"
-
-        if len(cpi_obs) >= 13:
-            cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
+                signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (holding)", "→", None))
     except Exception:
-        pass   # fed_trend and cpi_yoy remain at safe defaults
+        pass
 
-    cpi_str = f"{cpi_yoy:.1f}% YoY" if cpi_yoy is not None else "unknown"
-    source  = "fred" if (fed_obs or cpi_obs) else "fallback"
+    # ── Signal 2: CPI YoY ─────────────────────────────────────────────────────
+    try:
+        cpi_obs = _fred_obs("CPIAUCSL", 14, _key)
+        if len(cpi_obs) >= 13:
+            any_success = True
+            cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
+            if cpi_yoy > 4.0:
+                scores["inflation_fight"] += 3
+                scores["stagflation_risk"] += 2
+                scores["rate_cut"] -= 2
+                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "🔥", "inflation_fight"))
+            elif cpi_yoy >= 3.0:
+                scores["inflation_fight"] += 1
+                scores["stagflation_risk"] += 1
+                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "⚠️", "inflation_fight"))
+            elif cpi_yoy < 2.5:
+                scores["rate_cut"] += 2
+                scores["inflation_fight"] -= 2
+                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "✅", "rate_cut"))
+            else:
+                signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "→", None))
+    except Exception:
+        pass
 
-    # ── Regime classification ──────────────────────────────────────────────────
-    if fed_trend == "cutting" and (cpi_yoy is None or cpi_yoy <= 3.0):
-        return {
-            "regime":    "rate_cut",
+    # ── Signal 3: 2yr-10yr yield spread ───────────────────────────────────────
+    try:
+        dgs2_obs  = _fred_obs("DGS2",  3, _key)
+        dgs10_obs = _fred_obs("DGS10", 3, _key)
+        if dgs2_obs and dgs10_obs:
+            any_success = True
+            spread = dgs10_obs[0] - dgs2_obs[0]
+            spread_str = f"{spread:+.2f}%"
+            if spread < -0.25:
+                scores["recession_fear"] += 3
+                scores["rate_cut"] -= 1
+                signals.append(("2s10s Spread", spread_str + " (inverted)", "🔴", "recession_fear"))
+            elif spread < 0.0:
+                scores["recession_fear"] += 1
+                signals.append(("2s10s Spread", spread_str + " (flat/inv)", "⚠️", "recession_fear"))
+            elif spread > 0.75:
+                scores["rate_cut"] += 1
+                scores["recession_fear"] -= 1
+                signals.append(("2s10s Spread", spread_str + " (steep)", "🟢", "rate_cut"))
+            else:
+                signals.append(("2s10s Spread", spread_str, "→", None))
+    except Exception:
+        pass
+
+    # ── Signal 4: Unemployment 3-month delta ──────────────────────────────────
+    try:
+        unrate_obs = _fred_obs("UNRATE", 4, _key)
+        if len(unrate_obs) >= 4:
+            any_success = True
+            unemp_delta = unrate_obs[0] - unrate_obs[3]
+            delta_str = f"{unemp_delta:+.1f}pp"
+            if unemp_delta > 0.3:
+                scores["recession_fear"] += 2
+                scores["stagflation_risk"] += 1
+                signals.append(("Unemployment Δ3m", delta_str, "⚠️", "recession_fear"))
+            elif unemp_delta < -0.2:
+                scores["rate_cut"] -= 1
+                scores["inflation_fight"] += 1
+                scores["recession_fear"] -= 1
+                signals.append(("Unemployment Δ3m", delta_str, "🟢", "rate_cut"))
+            else:
+                signals.append(("Unemployment Δ3m", delta_str + " (stable)", "→", None))
+    except Exception:
+        pass
+
+    # ── Signal 5: HY credit spread ────────────────────────────────────────────
+    try:
+        hy_obs = _fred_obs("BAMLH0A0HYM2", 3, _key)
+        if hy_obs:
+            any_success = True
+            hy_spread = hy_obs[0]   # in basis points (percent)
+            # BAMLH0A0HYM2 is reported as a percent (e.g. 4.5 = 450 bps)
+            hy_bps = hy_spread * 100
+            hy_str = f"{hy_bps:.0f}bps"
+            if hy_bps > 600:
+                scores["recession_fear"] += 3
+                scores["rate_cut"] -= 2
+                signals.append(("HY Spread", hy_str, "🔴", "recession_fear"))
+            elif hy_bps >= 450:
+                scores["recession_fear"] += 1
+                scores["stagflation_risk"] += 1
+                signals.append(("HY Spread", hy_str, "⚠️", "recession_fear"))
+            elif hy_bps < 300:
+                scores["rate_cut"] += 2
+                scores["recession_fear"] -= 2
+                signals.append(("HY Spread", hy_str, "🟢", "rate_cut"))
+            else:
+                signals.append(("HY Spread", hy_str + " (normal)", "→", None))
+    except Exception:
+        pass
+
+    # ── Signals 6 & 7: SPY 20-day return + VIX ────────────────────────────────
+    try:
+        import yfinance as _yf
+        _mkt = _yf.download(["SPY", "^VIX"], period="25d", progress=False, auto_adjust=True)
+        # Handle both MultiIndex and flat column structures
+        if isinstance(_mkt.columns, _pd.MultiIndex):
+            _spy_close = _mkt["Close"]["SPY"].dropna()
+            _vix_close = _mkt["Close"]["^VIX"].dropna()
+        else:
+            _spy_close = _mkt.get("SPY", _pd.Series(dtype=float)).dropna()
+            _vix_close = _mkt.get("^VIX", _pd.Series(dtype=float)).dropna()
+
+        # Signal 6: SPY 20-day return
+        if len(_spy_close) >= 2:
+            any_success = True
+            _spy_ret = (_spy_close.iloc[-1] - _spy_close.iloc[0]) / _spy_close.iloc[0] * 100
+            _spy_str = f"{_spy_ret:+.1f}%"
+            if _spy_ret > 5.0:
+                scores["rate_cut"] += 2
+                scores["recession_fear"] -= 2
+                signals.append(("SPY 20d Return", _spy_str, "🟢", "rate_cut"))
+            elif _spy_ret < -5.0:
+                scores["recession_fear"] += 1
+                signals.append(("SPY 20d Return", _spy_str, "🔴", "recession_fear"))
+            else:
+                signals.append(("SPY 20d Return", _spy_str, "→", None))
+
+        # Signal 7: VIX level
+        if len(_vix_close) >= 1:
+            any_success = True
+            _vix = float(_vix_close.iloc[-1])
+            _vix_str = f"{_vix:.1f}"
+            if _vix > 30:
+                scores["recession_fear"] += 2
+                scores["rate_cut"] -= 1
+                signals.append(("VIX", _vix_str, "🔴", "recession_fear"))
+            elif _vix >= 20:
+                scores["recession_fear"] += 1
+                signals.append(("VIX", _vix_str, "⚠️", "recession_fear"))
+            elif _vix < 15:
+                scores["rate_cut"] += 1
+                scores["recession_fear"] -= 1
+                signals.append(("VIX", _vix_str, "🟢", "rate_cut"))
+            else:
+                signals.append(("VIX", _vix_str, "→", None))
+    except Exception:
+        pass
+
+    # ── Determine winner ───────────────────────────────────────────────────────
+    if not any_success:
+        return _NEUTRAL_REGIME
+
+    winner = max(scores, key=lambda k: scores[k])
+    winning_score = scores[winner]
+
+    # Confidence: winner's positive score share of total positive scores
+    pos_total = sum(max(0, v) for v in scores.values())
+    confidence = round(scores[winner] / pos_total * 100) if pos_total > 0 else 0
+
+    # Fall back to neutral if signal is too weak
+    if winning_score <= 1:
+        winner = "neutral"
+
+    source = "fred+market" if any_success else "fallback"
+
+    _REGIME_DEFS = {
+        "rate_cut": {
             "label":     "Rate-Cut Optimism",
             "icon":      "✂️",
             "color":     "#3b82f6",
             "bg":        "#0a1628",
-            "fed_trend": fed_trend,
-            "cpi_yoy":   cpi_yoy,
             "rationale": (
-                f"Fed actively cutting · CPI {cpi_str} (below 3% threshold). "
-                "Bad macro data = Fed eases faster = growth stocks typically rally. "
-                "Bad news is good news."
+                "Fed easing + controlled inflation + risk-on signals. "
+                "Weak macro data = faster cuts = growth stocks rally."
             ),
-            "source": source,
-        }
-
-    if fed_trend == "hiking" or (cpi_yoy is not None and cpi_yoy > 4.0):
-        return {
-            "regime":    "inflation_fight",
+        },
+        "inflation_fight": {
             "label":     "Inflation Fight",
             "icon":      "🔥",
             "color":     "#f59e0b",
             "bg":        "#1a1200",
-            "fed_trend": fed_trend,
-            "cpi_yoy":   cpi_yoy,
             "rationale": (
-                f"Fed {'hiking' if fed_trend == 'hiking' else 'holding at restrictive levels'} · "
-                f"CPI {cpi_str} (above 4%). "
-                "Weak data = less rate-hike pressure = mild positive; "
-                "strong data = more hikes = negative."
+                "Inflation and/or Fed hiking pressure dominant. "
+                "Strong data = more hikes = growth stocks under pressure."
             ),
-            "source": source,
-        }
-
-    if cpi_yoy is not None and cpi_yoy > 3.0:
-        return {
-            "regime":    "stagflation_risk",
-            "label":     "Stagflation Risk",
-            "icon":      "⚠️",
+        },
+        "recession_fear": {
+            "label":     "Recession Fear",
+            "icon":      "📉",
             "color":     "#ef4444",
             "bg":        "#1a0000",
-            "fed_trend": fed_trend,
-            "cpi_yoy":   cpi_yoy,
             "rationale": (
-                f"CPI {cpi_str} still elevated while growth is slowing. "
-                "Fed is trapped — cutting risks re-igniting inflation; "
-                "holding keeps pressure on valuations."
+                "Multiple signals flag growth slowdown risk. "
+                "Weak data confirms fears — expect defensive rotation."
             ),
-            "source": source,
-        }
+        },
+        "stagflation_risk": {
+            "label":     "Stagflation Risk",
+            "icon":      "⚠️",
+            "color":     "#8b5cf6",
+            "bg":        "#1a0a2e",
+            "rationale": (
+                "Elevated inflation + slowing growth = Fed is trapped. "
+                "Neither cutting nor holding resolves the problem."
+            ),
+        },
+        "neutral": {
+            "label":     "Data-Dependent",
+            "icon":      "📊",
+            "color":     "#6b7280",
+            "bg":        "#111827",
+            "rationale": (
+                "Mixed signals — no dominant regime. "
+                "Market reactions follow standard textbook patterns."
+            ),
+        },
+    }
+
+    defn = _REGIME_DEFS[winner]
 
     return {
-        "regime":    "neutral",
-        "label":     "Data-Dependent",
-        "icon":      "📊",
-        "color":     "#6b7280",
-        "bg":        "#111827",
-        "fed_trend": fed_trend,
-        "cpi_yoy":   cpi_yoy,
-        "rationale": (
-            f"Fed {fed_trend} · CPI {cpi_str}. "
-            "Market reactions follow the textbook: strong data = growth optimism = bullish; "
-            "weak data = growth concerns = bearish."
-        ),
-        "source": source,
+        "regime":     winner,
+        "label":      defn["label"],
+        "icon":       defn["icon"],
+        "color":      defn["color"],
+        "bg":         defn["bg"],
+        "fed_trend":  fed_trend,
+        "cpi_yoy":    cpi_yoy,
+        "rationale":  defn["rationale"],
+        "confidence": confidence,
+        "scores":     dict(scores),
+        "signals":    signals,
+        "source":     source,
     }
