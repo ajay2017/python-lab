@@ -6029,6 +6029,12 @@ elif page == "🔍 Market Scanner":
         df = st.session_state.scanner_results
         filtered = df[df["Score"] >= min_score].copy()
 
+        # Compute cache key early so Top 5 cards can show earnings badges
+        # when Signal Evidence has already been loaded
+        _top10 = filtered.head(10)
+        _ev_cache_key = f"_scanner_ev_{','.join(_top10['Ticker'].tolist())}"
+        _ev_bundle_map = st.session_state.get(_ev_cache_key, {})
+
         # Top 5 picks callout
         top5 = filtered.head(5)
         if not top5.empty:
@@ -6037,6 +6043,24 @@ elif page == "🔍 Market Scanner":
             for i, (_, row) in enumerate(top5.iterrows()):
                 with cols[i]:
                     score_color = "#00C851" if row["Score"] >= 70 else "#ffbb33"
+                    # Earnings badge — shown when Signal Evidence has been loaded
+                    _t5_earn_badge = ""
+                    _t5_bndl = _ev_bundle_map.get(row["Ticker"], {})
+                    if _t5_bndl.get("earnings"):
+                        try:
+                            _t5_ed = (date.fromisoformat(_t5_bndl["earnings"][:10]) - _TODAY_ET).days
+                            if 0 <= _t5_ed <= 7:
+                                _t5_earn_badge = (
+                                    f"<br><small style='color:#ef4444;font-weight:700'>"
+                                    f"⚠ Earnings in {_t5_ed}d</small>"
+                                )
+                            elif 0 <= _t5_ed <= 14:
+                                _t5_earn_badge = (
+                                    f"<br><small style='color:#f59e0b'>"
+                                    f"📅 Earnings in {_t5_ed}d</small>"
+                                )
+                        except Exception:
+                            pass
                     st.markdown(
                         f"<div style='padding:10px;border-radius:8px;"
                         f"border:1px solid {score_color};text-align:center'>"
@@ -6046,13 +6070,33 @@ elif page == "🔍 Market Scanner":
                         f"<small>{row['Sector']}</small><br>"
                         f"<small>{row['Signal']}</small><br>"
                         f"<small>1M: {row['1M Momentum']:+.1f}%</small>"
+                        f"{_t5_earn_badge}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
 
+            # Imminent earnings warning — only visible once Signal Evidence is loaded
+            if _ev_bundle_map:
+                _imm = []
+                for _, _r5 in top5.iterrows():
+                    _t5b = _ev_bundle_map.get(_r5["Ticker"], {})
+                    if _t5b.get("earnings"):
+                        try:
+                            _d5 = (date.fromisoformat(_t5b["earnings"][:10]) - _TODAY_ET).days
+                            if 0 <= _d5 <= 7:
+                                _imm.append(f"**{_r5['Ticker']}** (in {_d5}d)")
+                        except Exception:
+                            pass
+                if _imm:
+                    st.warning(
+                        f"⚠ **Earnings risk in top picks:** {', '.join(_imm)}. "
+                        "High momentum may be priced in ahead of the report. "
+                        "Avoid initiating a new position within 3–5 days of earnings — "
+                        "wait for post-report price confirmation instead."
+                    )
+
         # ── Signal Evidence — on-demand for top 10 ──────────────────────────
-        _top10 = filtered.head(10)
-        _ev_cache_key = f"_scanner_ev_{','.join(_top10['Ticker'].tolist())}"
+        # _top10 and _ev_cache_key already computed above
 
         _ev_btn_col, _ev_hint_col = st.columns([1, 3])
         with _ev_btn_col:
@@ -6233,12 +6277,22 @@ elif page == "🔍 Market Scanner":
                     return ("color:#00C851" if v >= 10 else
                             "color:#ff4444" if v <= -5  else "")
                 return ""
+            def _ev_earn_style(v):
+                if isinstance(v, str) and v.startswith("In "):
+                    try:
+                        days = int(v.split()[1].rstrip("d"))
+                        if days <= 7:  return "color:#ef4444;font-weight:bold"
+                        if days <= 14: return "color:#f59e0b;font-weight:bold"
+                    except Exception:
+                        pass
+                return ""
 
             st.dataframe(
                 _ev_tbl.style
                 .map(_ev_verdict_style, subset=["Verdict"])
                 .map(_ev_score_style,   subset=["Score"])
                 .map(_ev_upside_style,  subset=["Upside"])
+                .map(_ev_earn_style,    subset=["Earnings"])
                 .format({
                     "Score":  "{:.0f}",
                     "Upside": lambda x: f"{x:+.1f}%" if isinstance(x, (int, float)) else "—",
