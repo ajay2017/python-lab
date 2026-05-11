@@ -1555,8 +1555,29 @@ if page == "🏠 Portfolio":
             _t = _qr_ticker_in.strip().upper()
             with st.spinner(f"Analyzing {_t}..."):
                 try:
-                    _qr_raw  = load_all(_t)
-                    st.session_state["_qr_result"] = _qr_research(_t, _qr_raw)
+                    _qr_raw = load_all(_t)
+                    # Build portfolio context so the 5th bullet is portfolio-aware
+                    _qr_held_row = port_df[port_df["Ticker"] == _t]
+                    _qr_is_held  = not _qr_held_row.empty
+                    _qr_sector   = _qr_raw.get("sector", "")
+                    _qr_sec_wt   = (
+                        float(port_df[port_df["Sector"] == _qr_sector]["Weight (%)"].sum())
+                        if _qr_sector else 0.0
+                    )
+                    _qr_ctx = {
+                        "held":              _qr_is_held,
+                        "held_shares":       float(_qr_held_row["Shares"].iloc[0])   if _qr_is_held else None,
+                        "held_avg_cost":     float(_qr_held_row["Avg Cost"].iloc[0]) if _qr_is_held else None,
+                        "held_pnl_pct":      float(_qr_held_row["P&L (%)"].iloc[0])  if _qr_is_held else None,
+                        "held_signal":       str(_qr_held_row["Signal"].iloc[0])     if _qr_is_held else None,
+                        "sector_of_ticker":  _qr_sector,
+                        "sector_weight_pct": _qr_sec_wt,
+                        "portfolio_beta":    _port_risk.get("beta"),
+                        "ticker_beta":       (_qr_raw.get("risk_metrics") or {}).get("beta"),
+                        "act_today_flags":   [a for a in _daily_brief.get("act_today", [])
+                                              if a.get("ticker") == _t],
+                    }
+                    st.session_state["_qr_result"] = _qr_research(_t, _qr_raw, portfolio_ctx=_qr_ctx)
                 except Exception as _qr_e:
                     st.session_state["_qr_result"] = {"error": str(_qr_e), "ticker": _t}
 

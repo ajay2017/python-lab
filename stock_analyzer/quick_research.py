@@ -74,13 +74,72 @@ def _entry_timing(rsi_val: float | None, move_1d: float, move_5d: float) -> dict
         }
 
 
-def research_ticker(ticker: str, data: dict) -> dict:
+def _portfolio_bullet(ticker: str, ctx: dict) -> str:
+    """Build a portfolio-context bullet for the Quick Research panel."""
+    # 1 — Act Today flag takes highest priority
+    flags = ctx.get("act_today_flags", [])
+    if flags:
+        f = flags[0]
+        reason = f["reason"]
+        short = reason[:110].rstrip(".") + "…" if len(reason) > 110 else reason
+        return f"**⚠ Act Today — {ticker}:** {f['action']}. {short}"
+
+    # 2 — Already held
+    if ctx.get("held"):
+        shares = ctx.get("held_shares")
+        avg    = ctx.get("held_avg_cost")
+        pnl    = ctx.get("held_pnl_pct")
+        sig    = ctx.get("held_signal") or "—"
+        desc   = (f"{shares:.0f} shares @ avg ${avg:.2f}" if (shares and avg) else "Already held")
+        if pnl is not None:
+            desc += f" (P&L {pnl:+.1f}%)"
+        note = (
+            " Signal suggests reducing rather than adding." if any(w in sig for w in ("Sell", "Avoid")) else
+            " Hold-rated: monitor existing position; no new entry needed unless signal upgrades." if "Hold" in sig else ""
+        )
+        return f"**Your Position:** {desc}. Signal: **{sig}**.{note}"
+
+    # 3 — New position: sector concentration + beta fit
+    parts = []
+    sec    = ctx.get("sector_of_ticker", "")
+    sec_wt = ctx.get("sector_weight_pct") or 0.0
+    if sec:
+        if sec_wt >= 30:
+            parts.append(
+                f"{sec} already at {sec_wt:.0f}% of portfolio — adding would over-concentrate; size down or skip."
+            )
+        elif sec_wt >= 20:
+            parts.append(
+                f"{sec} at {sec_wt:.0f}% — moderate concentration; consider a half-size entry."
+            )
+        else:
+            wt_str = f"{sec_wt:.0f}%" if sec_wt > 0 else "not currently held"
+            parts.append(f"{sec} at {wt_str} of portfolio — room to add without over-concentrating.")
+
+    port_beta = ctx.get("portfolio_beta")
+    tick_beta = ctx.get("ticker_beta")
+    if tick_beta is not None and port_beta is not None:
+        if tick_beta > 1.8 and port_beta > 1.3:
+            parts.append(
+                f"Beta {tick_beta:.1f} would add to an already elevated portfolio beta of {port_beta:.1f} — use smaller position (≤ 5% weight)."
+            )
+        elif tick_beta > 1.8:
+            parts.append(f"High beta {tick_beta:.1f} — volatile stock; use conservative sizing.")
+
+    if not parts:
+        parts.append("No concentration or beta concerns — standard position sizing applies.")
+
+    return "**Portfolio Fit:** " + " ".join(parts)
+
+
+def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) -> dict:
     """
-    ticker: stock symbol (e.g. "RKLB")
-    data:   result dict from load_all(ticker)
+    ticker:        stock symbol (e.g. "RKLB")
+    data:          result dict from load_all(ticker)
+    portfolio_ctx: optional dict with held-position and portfolio-level context
 
     Returns a structured research summary with entry-timing verdict
-    and 4-bullet actionable summary.
+    and up to 5-bullet actionable summary (5th bullet injected when portfolio_ctx provided).
     """
     df    = data["df"]
     close = df["Close"]
@@ -159,6 +218,10 @@ def research_ticker(ticker: str, data: dict) -> dict:
         "; ".join(b4_parts) if b4_parts else "No additional signals available"
     )
 
+    bullets = [b1, b2, b3, b4]
+    if portfolio_ctx is not None:
+        bullets.append(_portfolio_bullet(ticker, portfolio_ctx))
+
     return {
         "ticker":         ticker,
         "name":           data.get("name", ticker),
@@ -169,7 +232,7 @@ def research_ticker(ticker: str, data: dict) -> dict:
         "signal_color":   rec["color"],
         "signal_icon":    rec["icon"],
         "entry":          entry,
-        "bullets":        [b1, b2, b3, b4],
+        "bullets":        bullets,
         "move_1d":        move_1d,
         "move_5d":        move_5d,
         "move_1m":        move_1m,
