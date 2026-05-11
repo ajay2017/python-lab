@@ -8490,9 +8490,19 @@ elif page == "📅 Economic Calendar":
                 _regime_cache_key = f"_macro_regime_{_TODAY_ET}_{bool(_ec_fred_key)}"
                 if _regime_cache_key not in st.session_state:
                     with st.spinner("Detecting macro regime…"):
-                        st.session_state[_regime_cache_key] = detect_macro_regime(
-                            _ec_fred_key or None
-                        )
+                        try:
+                            _det_regime = detect_macro_regime(
+                                str(_ec_fred_key).strip() if _ec_fred_key else None
+                            )
+                        except Exception as _regime_err:
+                            _det_regime = {
+                                "regime": "neutral", "label": "Data-Dependent",
+                                "icon": "📊", "color": "#6b7280", "bg": "#111827",
+                                "fed_trend": "unknown", "cpi_yoy": None,
+                                "rationale": "Regime detection unavailable — using textbook scenario interpretation.",
+                                "source": "fallback",
+                            }
+                        st.session_state[_regime_cache_key] = _det_regime
                 _regime = st.session_state[_regime_cache_key]
 
                 # Regime banner — pre-compute dynamic parts to avoid nested f-string issues

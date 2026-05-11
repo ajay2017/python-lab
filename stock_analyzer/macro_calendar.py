@@ -621,6 +621,17 @@ _REGIME_NOTES: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
+_NEUTRAL_REGIME: dict = {
+    "regime": "neutral", "label": "Data-Dependent", "icon": "📊",
+    "color": "#6b7280", "bg": "#111827", "fed_trend": "unknown", "cpi_yoy": None,
+    "rationale": (
+        "Regime detection unavailable — using textbook scenario interpretation. "
+        "A free FRED key (fred.stlouisfed.org) enables auto-detection."
+    ),
+    "source": "fallback",
+}
+
+
 def detect_macro_regime(fred_key: str | None = None) -> dict:
     """
     Auto-detect the current macro regime from FRED data (FEDFUNDS + CPI).
@@ -636,23 +647,34 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
       rationale   : one-sentence explanation
       source      : "fred" | "fallback"
     """
-    fed_obs = _fred_obs("FEDFUNDS", 4, fred_key)   # last 4 months
-    cpi_obs = _fred_obs("CPIAUCSL", 14, fred_key)  # need 13 for YoY
+    try:
+        _key = str(fred_key).strip() if fred_key else None
+    except Exception:
+        return _NEUTRAL_REGIME
+
+    try:
+        fed_obs = _fred_obs("FEDFUNDS", 4, _key)   # last 4 months
+        cpi_obs = _fred_obs("CPIAUCSL", 14, _key)  # need 13 for YoY
+    except Exception:
+        return _NEUTRAL_REGIME
 
     fed_trend = "unknown"
     cpi_yoy   = None
 
-    if len(fed_obs) >= 3:
-        diff = fed_obs[0] - fed_obs[2]   # change over ~2 months
-        if diff < -0.05:
-            fed_trend = "cutting"
-        elif diff > 0.05:
-            fed_trend = "hiking"
-        else:
-            fed_trend = "holding"
+    try:
+        if len(fed_obs) >= 3:
+            diff = fed_obs[0] - fed_obs[2]
+            if diff < -0.05:
+                fed_trend = "cutting"
+            elif diff > 0.05:
+                fed_trend = "hiking"
+            else:
+                fed_trend = "holding"
 
-    if len(cpi_obs) >= 13:
-        cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
+        if len(cpi_obs) >= 13:
+            cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
+    except Exception:
+        pass   # fed_trend and cpi_yoy remain at safe defaults
 
     cpi_str = f"{cpi_yoy:.1f}% YoY" if cpi_yoy is not None else "unknown"
     source  = "fred" if (fed_obs or cpi_obs) else "fallback"
