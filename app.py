@@ -5893,11 +5893,39 @@ elif page == "🔍 Market Scanner":
             from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _EV_VADER
             _ev_va = _EV_VADER()
 
+            _ev_composites = st.session_state.get("_grow_composites", {})
+
             _ev_rows: list[dict] = []
             for _, _ev_srow in _top10.iterrows():
                 _ev_t     = _ev_srow["Ticker"]
                 _ev_score = int(_ev_srow["Score"])
                 _ev_price = float(_ev_srow.get("Price") or 0)
+
+                # ── Scanner score component breakdown ──────────────────────
+                _ev_rsi    = float(_ev_srow.get("RSI")          or 0)
+                _ev_m1m    = float(_ev_srow.get("1M Momentum")  or 0)
+                _ev_m3m    = float(_ev_srow.get("3M Momentum")  or 0)
+                _ev_trend  = str(_ev_srow.get("Trend")          or "")
+
+                # Reproduce _quick_score() component points for transparency
+                _ev_rsi_pts = (30 if 40 <= _ev_rsi <= 65 else
+                               22 if _ev_rsi < 40 else
+                               12 if _ev_rsi < 75 else 2)
+                _ev_trend_pts = (35 if "Strong Uptrend" in _ev_trend else
+                                 20 if "Uptrend" in _ev_trend else
+                                 10 if "Mixed" in _ev_trend else 0)
+                _ev_m1m_pts = (20 if _ev_m1m > 8 else 14 if _ev_m1m > 3 else
+                               7  if _ev_m1m > 0 else 2  if _ev_m1m > -5 else 0)
+                _ev_m3m_pts = (15 if _ev_m3m > 15 else 10 if _ev_m3m > 5 else
+                               5  if _ev_m3m > 0  else 0)
+
+                # Composite score from pre-fetched data (may be None)
+                _ev_comp_data  = _ev_composites.get(_ev_t, {})
+                _ev_comp_score = float(_ev_comp_data.get("total") or 0) if _ev_comp_data else None
+                _ev_comp_label = str((_ev_comp_data.get("rec") or {}).get("label", "")) if _ev_comp_data else ""
+                _ev_tech_score = float(_ev_comp_data.get("t_total") or 0) if _ev_comp_data else None
+                _ev_fund_score = float(_ev_comp_data.get("f_total") or 0) if _ev_comp_data else None
+                _ev_sent_score = float(_ev_comp_data.get("sentiment_score") or 0) if _ev_comp_data else None
                 _bndl     = _ev_bundle_map.get(_ev_t, {})
                 _ev_info  = _bndl.get("info", {})
                 _ev_revs  = _bndl.get("revisions", {})
@@ -5960,17 +5988,26 @@ elif page == "🔍 Market Scanner":
                     _verdict, _v_color = "⚠️ Mixed", "#ffbb33"
 
                 _ev_rows.append({
-                    "ticker": _ev_t,        "score":     _ev_score,
-                    "price":  _ev_price,    "rec_label": _rec_label,
+                    "ticker": _ev_t,        "score":      _ev_score,
+                    "price":  _ev_price,    "rec_label":  _rec_label,
                     "rec_mean": _rec_mean,  "n_analysts": _n_analysts,
-                    "target": _ev_target,   "upside":    _ev_upside,
-                    "t_high": _ev_t_high,   "t_low":     _ev_t_low,  "t_med": _ev_t_med,
-                    "ups":    _ev_ups,      "downs":     _ev_downs,   "maint": _ev_maint,
-                    "net":    _ev_net,      "latest":    _ev_revs.get("latest", []),
-                    "earnings": _ev_earn,   "earn_days": _ev_earn_days,
-                    "avg_sent": _avg_sent,  "n_news":    len(_ev_compounds),
-                    "verdict":  _verdict,   "v_color":   _v_color,
+                    "target": _ev_target,   "upside":     _ev_upside,
+                    "t_high": _ev_t_high,   "t_low":      _ev_t_low,  "t_med": _ev_t_med,
+                    "ups":    _ev_ups,      "downs":      _ev_downs,   "maint": _ev_maint,
+                    "net":    _ev_net,      "latest":     _ev_revs.get("latest", []),
+                    "earnings": _ev_earn,   "earn_days":  _ev_earn_days,
+                    "avg_sent": _avg_sent,  "n_news":     len(_ev_compounds),
+                    "verdict":  _verdict,   "v_color":    _v_color,
                     "info":     _ev_info,
+                    # Scanner score breakdown
+                    "rsi": _ev_rsi, "rsi_pts": _ev_rsi_pts,
+                    "trend": _ev_trend, "trend_pts": _ev_trend_pts,
+                    "mom_1m": _ev_m1m, "mom_1m_pts": _ev_m1m_pts,
+                    "mom_3m": _ev_m3m, "mom_3m_pts": _ev_m3m_pts,
+                    # Composite score (None if not yet pre-fetched)
+                    "comp_score": _ev_comp_score, "comp_label": _ev_comp_label,
+                    "tech_score": _ev_tech_score, "fund_score": _ev_fund_score,
+                    "sent_score": _ev_sent_score,
                 })
 
             st.subheader("📊 Signal Evidence — Top 10")
@@ -6033,6 +6070,80 @@ elif page == "🔍 Market Scanner":
                     f"Score {_evr['score']}  ·  {_evr['rec_label']}"
                 )
                 with st.expander(_card_hdr):
+
+                    # ── Score breakdown panel ──────────────────────────────
+                    _comp_sc  = _evr.get("comp_score")
+                    _comp_lbl = _evr.get("comp_label", "")
+                    _t_sc     = _evr.get("tech_score")
+                    _f_sc     = _evr.get("fund_score")
+                    _s_sc     = _evr.get("sent_score")
+
+                    # Build composite line if available
+                    if _comp_sc is not None:
+                        _comp_clr = "#22c55e" if _comp_sc >= 68 else "#f59e0b" if _comp_sc >= 60 else "#ef4444"
+                        _comp_breakdown = ""
+                        if _t_sc is not None and _f_sc is not None and _s_sc is not None:
+                            _comp_breakdown = (
+                                f"<span style='color:#6b7280;font-size:0.78em'>"
+                                f" (Technical {_t_sc:.0f}×45% + "
+                                f"Fundamental {_f_sc:.0f}×40% + "
+                                f"Sentiment {_s_sc:.0f}×15%)</span>"
+                            )
+                        _comp_line = (
+                            f"<div style='margin-top:4px'>"
+                            f"<span style='color:#9ca3af;font-size:0.82em'>Composite: </span>"
+                            f"<span style='color:{_comp_clr};font-weight:700;font-size:0.9em'>"
+                            f"{_comp_sc:.1f}/100 — {_comp_lbl}</span>"
+                            f"{_comp_breakdown}</div>"
+                        )
+                    else:
+                        _comp_line = (
+                            "<div style='margin-top:4px;color:#6b7280;font-size:0.8em'>"
+                            "Composite: not yet fetched — click Refresh Signals to validate</div>"
+                        )
+
+                    st.markdown(
+                        "<div style='background:#0f172a;border:1px solid #334155;"
+                        "border-radius:8px;padding:10px 14px;margin-bottom:12px'>"
+                        "<div style='color:#94a3b8;font-size:0.72em;font-weight:600;"
+                        "letter-spacing:0.06em;margin-bottom:6px'>📊 HOW THE SCORE IS BUILT</div>"
+
+                        # Scanner score row
+                        f"<div style='color:#f9fafb;font-size:0.88em;font-weight:700;margin-bottom:4px'>"
+                        f"Momentum Score: {_evr['score']}/100"
+                        f"<span style='color:#6b7280;font-weight:400;font-size:0.85em'>"
+                        f" — technical setup only (RSI + trend + price momentum)</span></div>"
+
+                        # Component breakdown
+                        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:0.8em'>"
+
+                        f"<div><span style='color:#9ca3af'>RSI {_evr['rsi']:.1f}</span>"
+                        f"<span style='color:#6b7280'> → </span>"
+                        f"<span style='color:#fbbf24;font-weight:700'>{_evr['rsi_pts']}/30 pts</span>"
+                        f"<span style='color:#4b5563;font-size:0.85em'>"
+                        f" ({'sweet spot 40–65' if 40 <= _evr['rsi'] <= 65 else 'overbought' if _evr['rsi'] >= 75 else 'oversold'})</span></div>"
+
+                        f"<div><span style='color:#9ca3af'>1M momentum {_evr['mom_1m']:+.1f}%</span>"
+                        f"<span style='color:#6b7280'> → </span>"
+                        f"<span style='color:#fbbf24;font-weight:700'>{_evr['mom_1m_pts']}/20 pts</span></div>"
+
+                        f"<div><span style='color:#9ca3af'>Trend: {_evr['trend']}</span>"
+                        f"<span style='color:#6b7280'> → </span>"
+                        f"<span style='color:#fbbf24;font-weight:700'>{_evr['trend_pts']}/35 pts</span></div>"
+
+                        f"<div><span style='color:#9ca3af'>3M momentum {_evr['mom_3m']:+.1f}%</span>"
+                        f"<span style='color:#6b7280'> → </span>"
+                        f"<span style='color:#fbbf24;font-weight:700'>{_evr['mom_3m_pts']}/15 pts</span></div>"
+
+                        "</div>"
+
+                        # Composite score (vs momentum score)
+                        + _comp_line +
+
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+
                     _dc1, _dc2 = st.columns(2)
 
                     with _dc1:
