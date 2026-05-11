@@ -38,6 +38,7 @@ from stock_analyzer.macro_calendar import build_macro_calendar, HIGH as MC_HIGH,
 from stock_analyzer.macro_playbook import (
     build_event_playbooks, classify_scenario,
     build_post_event_analysis, get_scenario_conditions,
+    _SCENARIO_THRESHOLDS as _MC_THRESHOLDS, _parse_number as _mc_parse_number,
 )
 from stock_analyzer.targets import (
     support_resistance, entry_zone, compute_price_targets, risk_reward,
@@ -8512,21 +8513,72 @@ elif page == "📅 Economic Calendar":
                     _today_badge = "  ·  **TODAY**" if _is_today else ""
                     st.subheader(f"🔴 {_pe_name}  ·  {_date_lbl}{_today_badge}")
 
-                    # Actual / Estimate / Previous data row
-                    _pe_parts = []
-                    if _pe_prev    is not None: _pe_parts.append(f"Previous: **{_pe_prev}**")
-                    if _pe_est     is not None: _pe_parts.append(f"Estimate: **{_pe_est}**")
+                    # ── Consensus estimate input ──────────────────────────
+                    _thresh_cfg   = _MC_THRESHOLDS.get(_pe_name, {})
+                    _implied_base = _thresh_cfg.get("implied_base")
+                    _est_meta = {
+                        "Non-Farm Payrolls":    ("K",     1.0,  "%.0f"),
+                        "CPI Inflation":        ("% YoY", 0.1,  "%.2f"),
+                        "GDP Advance Estimate": ("% QoQ", 0.1,  "%.1f"),
+                        "PPI Producer Prices":  ("% MoM", 0.1,  "%.2f"),
+                        "Retail Sales":         ("% MoM", 0.1,  "%.2f"),
+                        "FOMC Rate Decision":   ("%",     0.25, "%.2f"),
+                    }
+                    _eu_lbl, _eu_step, _eu_fmt = _est_meta.get(_pe_name, ("", 1.0, "%.2f"))
+                    _est_sess_key = f"_est_v_{_pe_name}_{_pe_date}"
+                    # Start value: FRED estimate if provided, else model implied_base
+                    _est_start = (
+                        _mc_parse_number(_pe_est) if _pe_est is not None
+                        else (float(_implied_base) if _implied_base is not None else None)
+                    )
+                    _is_baseline = (_pe_est is None and _implied_base is not None)
 
-                    _auto_sc = classify_scenario(_pe_name, _pe_actual, _pe_est)
-                    if _pe_actual is not None:
-                        _beat_badge = (
-                            " 🟢 Beat"    if _auto_sc == "bull" else
-                            " 🔴 Missed"  if _auto_sc == "bear" else
-                            " ⬜ In-Line"
+                    # Render estimate input in right column first so its value
+                    # is available when we build the data row in the left column
+                    _dc1, _dc2 = st.columns([3, 2])
+                    with _dc2:
+                        _est_val = st.number_input(
+                            f"Consensus est. ({_eu_lbl})" if _eu_lbl else "Consensus est.",
+                            value=_est_start,
+                            step=_eu_step,
+                            format=_eu_fmt,
+                            key=_est_sess_key,
+                            help=(
+                                "Pre-filled with model baseline. "
+                                "Enter the real Wall St. consensus (Bloomberg / Reuters) "
+                                "to get an accurate Beat / Missed verdict."
+                            ) if _is_baseline else (
+                                "From FRED data." if _pe_est is not None
+                                else "Enter the consensus estimate from Bloomberg / Reuters."
+                            ),
                         )
-                        _pe_parts.append(f"Actual: **{_pe_actual}**{_beat_badge}")
-                    if _pe_parts:
-                        st.markdown("  ·  ".join(_pe_parts))
+                        if _is_baseline:
+                            st.caption("📌 Model baseline — update with real consensus if known")
+
+                    # Use entered estimate for classification
+                    _auto_sc = classify_scenario(_pe_name, _pe_actual, _est_val)
+
+                    # ── Previous · Est · Actual data row ─────────────────
+                    with _dc1:
+                        _pe_parts = []
+                        if _pe_prev is not None:
+                            _pe_parts.append(f"Previous: **{_pe_prev}**")
+                        if _est_val is not None:
+                            _est_disp = (
+                                f"~{_est_val:,.0f}K"    if _eu_lbl == "K"
+                                else f"~{_est_val:.2f}%" if _eu_lbl
+                                else f"~{_est_val}"
+                            )
+                            _pe_parts.append(f"Est: **{_est_disp}**")
+                        if _pe_actual is not None:
+                            _beat_badge = (
+                                " 🟢 Beat"   if _auto_sc == "bull" else
+                                " 🔴 Missed" if _auto_sc == "bear" else
+                                " ⬜ In-Line"
+                            ) if _auto_sc else ""
+                            _pe_parts.append(f"Actual: **{_pe_actual}**{_beat_badge}")
+                        if _pe_parts:
+                            st.markdown("  ·  ".join(_pe_parts))
 
                     # Scenario selector
                     _sc_key  = f"_post_sc_{_pe_name}_{_pe_date}"
@@ -8537,8 +8589,13 @@ elif page == "📅 Economic Calendar":
 
                     if _auto_sc:
                         _default_idx = ["bull", "base", "bear"].index(_auto_sc)
+                        _det_note = (
+                            "vs. your consensus estimate" if _pe_est is None and _est_val is not None and not _is_baseline
+                            else "vs. model baseline — update consensus above for a more accurate read" if _is_baseline
+                            else "from FRED data"
+                        )
                         st.success(
-                            f"Scenario auto-detected from FRED data: **{_sc_opts[_default_idx]}**",
+                            f"Scenario auto-detected ({_det_note}): **{_sc_opts[_default_idx]}**",
                             icon="✅",
                         )
                         _sc_sel = st.selectbox(
