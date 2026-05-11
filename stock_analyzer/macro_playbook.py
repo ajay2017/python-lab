@@ -600,10 +600,31 @@ _SCENARIO_THRESHOLDS: dict = {
 }
 
 
+def _parse_number(val) -> float | None:
+    """
+    Extract a float from either a raw numeric or a FRED-formatted string.
+    Handles strings like 'NFP Chg: +115K', 'CPI YoY: +2.45%', 'GDP QoQ Ann.: -1.6%'.
+    Strips commas, then searches for the first signed/unsigned number.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    import re as _re
+    m = _re.search(r'[+-]?\d+\.?\d*', str(val).replace(',', ''))
+    if m:
+        try:
+            return float(m.group())
+        except ValueError:
+            pass
+    return None
+
+
 def classify_scenario(event_name: str, actual, estimate=None) -> str | None:
     """
     Determine which scenario played out based on actual vs estimate.
     Returns 'bull', 'base', 'bear', or None if data is insufficient.
+    Accepts both raw floats and FRED-formatted strings (e.g. 'NFP Chg: +115K').
     Compares actual to estimate when available, or implied_base as fallback.
     """
     if actual is None:
@@ -611,16 +632,10 @@ def classify_scenario(event_name: str, actual, estimate=None) -> str | None:
     cfg = _SCENARIO_THRESHOLDS.get(event_name)
     if not cfg:
         return None
-    try:
-        a = float(actual)
-    except (TypeError, ValueError):
+    a = _parse_number(actual)
+    if a is None:
         return None
-    ref = None
-    if estimate is not None:
-        try:
-            ref = float(estimate)
-        except (TypeError, ValueError):
-            pass
+    ref = _parse_number(estimate)
     if ref is None:
         ref = cfg.get("implied_base")
     if ref is None:
