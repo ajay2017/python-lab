@@ -8031,8 +8031,15 @@ elif page == "📅 Economic Calendar":
         if _ec_fred_key:
             _fred_health = _ah.get_health("fred")
             _fred_err    = _fred_health.get("last_error", "")
+            _fred_calls  = _fred_health.get("calls", 0)
+            _fred_ok     = _fred_health.get("successes", 0)
             if _fred_err:
-                st.warning(f"⚠️ FRED last error: {_fred_err}")
+                st.warning(f"⚠️ FRED API error: {_fred_err}")
+                st.caption("Check your FRED key in Streamlit Secrets → [fred] api_key. "
+                           "Then click 🔄 Refresh calendar below.")
+            elif _fred_calls > 0 and _fred_ok == 0:
+                st.warning("⚠️ FRED key accepted but returned no data. "
+                           "Click 🔄 Refresh calendar to retry.")
             else:
                 st.success("FRED key active — previous & actual values enabled.")
         else:
@@ -8060,6 +8067,16 @@ elif page == "📅 Economic Calendar":
             )
             st.session_state[_ec_cache_key] = _ec_events
     _ec_events = st.session_state.get(_ec_cache_key, [])
+
+    # Warn if FRED key is set but none of the events got enriched (API may have failed)
+    if _ec_fred_key and _ec_events:
+        _fred_enriched = sum(1 for _e in _ec_events
+                             if _e.get("actual") is not None or _e.get("previous") is not None)
+        if _fred_enriched == 0:
+            st.warning(
+                "⚠️ FRED key is set but no actual/previous values were received. "
+                "The API call may have failed. Click **🔄 Refresh calendar** to retry."
+            )
 
     if not _ec_events:
         st.info("No events found in the calendar window.")

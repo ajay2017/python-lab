@@ -372,7 +372,9 @@ def _fred_obs(series_id: str, limit: int, api_key: str | None) -> list[float]:
     """
     if not api_key:
         return []
+    from stock_analyzer import api_health as _ah
     import requests as _req
+    api_key = api_key.strip()   # guard against accidental whitespace in secrets
     params: dict = {
         "series_id":    series_id,
         "api_key":      api_key,
@@ -383,6 +385,8 @@ def _fred_obs(series_id: str, limit: int, api_key: str | None) -> list[float]:
     try:
         resp = _req.get(_FRED_BASE, params=params, timeout=10)
         if resp.status_code != 200:
+            _ah.record("fred", "error",
+                       f"HTTP {resp.status_code} ({series_id}): {resp.text[:120]}")
             return []
         data = resp.json().get("observations", [])
         vals = []
@@ -396,7 +400,8 @@ def _fred_obs(series_id: str, limit: int, api_key: str | None) -> list[float]:
             if len(vals) >= limit:
                 break
         return vals
-    except Exception:
+    except Exception as exc:
+        _ah.record("fred", "error", f"{series_id}: {str(exc)[:120]}")
         return []
 
 
