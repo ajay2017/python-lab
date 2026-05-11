@@ -1214,6 +1214,24 @@ if page == "🏠 My Portfolio":
                 for ls in _market_context.get("leading_sectors", [])[:2]
             ) if _market_context.get("leading_sectors") else ""
         )
+        # Compute last trading day for the date label when market is closed
+        from datetime import timedelta as _dbtd
+        _db_now_et  = _dt.now(_pytz.timezone("America/New_York"))
+        _db_weekday = _db_now_et.weekday()
+        _db_hour_et = _db_now_et.hour + _db_now_et.minute / 60
+        if _db_weekday >= 5:
+            _db_last_close = _TODAY_ET - _dbtd(days=_db_weekday - 4)
+        elif _db_hour_et < 9.5:
+            _db_lc = _TODAY_ET - _dbtd(days=1)
+            while _db_lc.weekday() >= 5:
+                _db_lc -= _dbtd(days=1)
+            _db_last_close = _db_lc
+        else:
+            _db_last_close = _TODAY_ET
+        _db_date_str = _TODAY_ET.strftime("%A, %B %d %Y")
+        if not mkt["is_open"] and _db_last_close != _TODAY_ET:
+            _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
+
         st.markdown(
             f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
             f"border-radius:12px;padding:14px 20px;margin-bottom:12px'>"
@@ -1221,7 +1239,7 @@ if page == "🏠 My Portfolio":
             f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
             f"{_tone_label}</span>"
             f"<span style='color:#9ca3af;font-size:0.8em'>"
-            f"{_dt.now().strftime('%A, %B %d %Y')}</span>"
+            f"{_db_date_str}</span>"
             f"</div>"
             f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
             f"{_sp_str} · {_nq_str}{_lead_str}</div>"
