@@ -8201,7 +8201,9 @@ elif page == "📋 Watchlist":
                         "notes": f"Watchlist entry — score {_wr['score']:.0f}/100",
                     }
                     st.session_state["_prefill_trade"] = _new_trade
-                    st.session_state.nav_page = "📒 Trade Journal"
+                    # Use _pending_page pattern — nav_page is widget-bound and
+                    # cannot be set directly (raises StreamlitAPIException).
+                    st.session_state["_pending_page"] = "📒 Trade Journal"
                     st.rerun()
             with _qa_col2:
                 if _action == "REMOVE" and st.button(
