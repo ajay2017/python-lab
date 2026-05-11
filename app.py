@@ -1560,6 +1560,7 @@ if page == "🏠 My Portfolio":
             deploy_note  = grow.get("deploy_note")
             bear_msg     = grow.get("message")
             lead_secs_ui = grow.get("leading_sectors", [])
+            risk_banner  = grow.get("risk_banner")
 
             _g_label = (
                 "📈 Grow Today"      if tone == "bull" else
@@ -1584,6 +1585,21 @@ if page == "🏠 My Portfolio":
             if bear_msg:
                 st.caption(f"🛡️ {bear_msg}")
                 return
+
+            # Risk banner: shown when Act Today has active portfolio risk flags
+            if risk_banner:
+                st.markdown(
+                    "<div style='background:#422006;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "⚠️ Active Risk Alerts — resolve Act Today before deploying new capital</div>"
+                    + "".join(
+                        f"<div style='color:#fcd34d;font-size:0.79em'>• {flag}</div>"
+                        for flag in risk_banner
+                    )
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
 
             if not new_picks and not add_pos:
                 st.caption(

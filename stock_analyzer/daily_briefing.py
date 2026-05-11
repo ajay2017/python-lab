@@ -260,12 +260,15 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
 
 
 def _grow_today(port_df, scanner_results, news_items, held_data, today,
-                portfolio_value: float, market_context: dict) -> dict:
+                portfolio_value: float, market_context: dict,
+                act_today: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
     market_context keys: sp500_pct, nasdaq_pct, tone ('bull'|'bear'|'flat'),
                          leading_sectors [{"sector", "etf", "return_1w"}]
+    act_today: output of _act_today — used to cross-filter picks so Grow Today
+               never suggests buying a ticker that Act Today flags for action.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -274,18 +277,32 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     lead_names  = {ls.get("sector", "") for ls in lead_secs}
     held_tickers = set(port_df["Ticker"].tolist()) if port_df is not None else set()
 
+    # ── Cross-reference Act Today to block conflicting picks ─────────────────
+    # Any ticker already flagged in Act Today (sell, stop, risk reduce) must not
+    # appear in Grow Today — contradicting signals in the same briefing is dangerous.
+    _act_blocked: set = set()
+    _act_risk_flags: list[str] = []
+    for _ai in (act_today or []):
+        if _ai.get("ticker"):
+            _act_blocked.add(str(_ai["ticker"]).upper())
+        _action = str(_ai.get("action", ""))
+        if "RISK —" in _action:
+            _act_risk_flags.append(_action.replace("RISK — ", ""))
+    risk_banner = _act_risk_flags[:3] if _act_risk_flags else None
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         return {
-            "tone": "bear",
-            "message": (
+            "tone":          "bear",
+            "message":       (
                 f"S&P 500 {sp500_pct:+.2f}% today — market in risk-off mode. "
                 "Focus on protecting existing positions. "
                 "Defer new entries until conditions stabilise."
             ),
-            "new_picks":    [],
+            "new_picks":     [],
             "add_positions": [],
-            "deploy_note":  None,
+            "deploy_note":   None,
+            "risk_banner":   risk_banner,
         }
 
     # Score threshold: higher bar on flat days, standard on bull days
@@ -317,6 +334,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             sector   = str(row.get("Sector", ""))
             trend    = str(row.get("Trend", ""))
             is_leader = any(ls.get("sector","") in sector for ls in lead_secs)
+
+            # Skip if Act Today already has an action on this ticker
+            if ticker in _act_blocked:
+                continue
 
             xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today)
 
@@ -361,6 +382,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             scr = _f(row.get("Score"), 0)
             if "Strong Buy" in sig and scr >= 68 and gap >= 8:
                 ticker  = str(row["Ticker"])
+                # Skip if Act Today already flags this ticker for action
+                if ticker in _act_blocked:
+                    continue
                 price   = _f(row.get("Price", 0))
                 sector  = str(row.get("Sector", ""))
                 is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
@@ -387,19 +411,27 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     if portfolio_value > 0 and (new_picks or add_positions):
         n_trades = len(new_picks) + len(add_positions)
         deploy   = portfolio_value * 0.015 * n_trades
-        deploy_note = (
-            f"At 1.5% risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
-            f"consider deploying ~${deploy:,.0f} today."
-        )
+        if _act_risk_flags:
+            deploy_note = (
+                f"⚠️ Resolve Act Today risk alerts before deploying. "
+                f"If proceeding: 1.5% risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''} "
+                f"= ~${deploy:,.0f}."
+            )
+        else:
+            deploy_note = (
+                f"At 1.5% risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
+                f"consider deploying ~${deploy:,.0f} today."
+            )
 
     return {
-        "tone":          tone,
-        "message":       None,
-        "new_picks":     new_picks,
-        "add_positions": add_positions,
-        "deploy_note":   deploy_note,
-        "sp500_pct":     sp500_pct,
-        "nasdaq_pct":    nasdaq_pct,
+        "tone":            tone,
+        "message":         None,
+        "new_picks":       new_picks,
+        "add_positions":   add_positions,
+        "deploy_note":     deploy_note,
+        "risk_banner":     risk_banner,
+        "sp500_pct":       sp500_pct,
+        "nasdaq_pct":      nasdaq_pct,
         "leading_sectors": lead_secs,
     }
 
@@ -707,5 +739,7 @@ def build_daily_briefing(
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today)
     review = _review_list(port_df, news_items, macro_events, held_data, today)
-    grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx)
+    # act is passed so _grow_today can cross-filter conflicting tickers and warn
+    grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
+                         act_today=act)
     return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}
