@@ -483,7 +483,7 @@ if "scanner_results" not in st.session_state:
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
 if "nav_page" not in st.session_state:
-    st.session_state.nav_page = "🏠 My Portfolio"
+    st.session_state.nav_page = "🏠 Portfolio"
 # Apply any pending navigation set by mid-page buttons (must run before
 # the sidebar radio widget renders so the widget picks up the new value).
 if "_pending_page" in st.session_state:
@@ -537,7 +537,7 @@ with st.sidebar:
             "<div style='font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
             "text-transform:uppercase;opacity:0.8;margin-bottom:4px'>Portfolio Value</div>"
             "<div style='font-size:1.1em;font-weight:600;opacity:0.65'>Loading…</div>"
-            "<div style='font-size:0.74em;margin-top:6px;opacity:0.5'>Open My Portfolio tab</div>"
+            "<div style='font-size:0.74em;margin-top:6px;opacity:0.5'>Open Portfolio tab</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -545,7 +545,7 @@ with st.sidebar:
     st.header("📊 Portfolio Manager")
     page = st.radio(
         "Navigate",
-        ["🏠 My Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
+        ["🏠 Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -790,8 +790,8 @@ st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
 # ═════════════════════════════════════════════════════════════════════════════
-if page == "🏠 My Portfolio":
-    st.title("🏠 My Portfolio")
+if page == "🏠 Portfolio":
+    st.title("🏠 Portfolio")
 
 
     # Load data for all held tickers
@@ -3056,7 +3056,7 @@ if page == "🏠 My Portfolio":
                 ))
                 _perf_fig.add_trace(go.Scatter(
                     x=list(_common), y=list(_port_ret),
-                    name="My Portfolio",
+                    name="Portfolio",
                     line=dict(color=_port_clr, width=2.5),
                     fill="tonexty", fillcolor=_fill_clr,
                     hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>Portfolio</extra>",
@@ -6406,7 +6406,7 @@ elif page == "📈 Stock Analysis":
     _nav_origin = st.session_state.get("_nav_origin", "")
     if _nav_origin:
         _back_label = {
-            "🏠 My Portfolio":   "← Back to My Portfolio",
+            "🏠 Portfolio":   "← Back to Portfolio",
             "🔍 Market Scanner": "← Back to Market Scanner",
             "📋 Watchlist":      "← Back to Watchlist",
             "📋 Today's Brief":  "← Back to Today's Brief",
@@ -7318,7 +7318,7 @@ elif page == "📋 Watchlist":
     if not _wl:
         st.info(
             "Your watchlist is empty. "
-            "Add tickers using the sidebar, or use the Rankings tab on the My Portfolio page "
+            "Add tickers using the sidebar, or use the Rankings tab on the Portfolio page "
             "to scan the universe and add candidates."
         )
         st.stop()
@@ -7385,7 +7385,7 @@ elif page == "📋 Watchlist":
             st.warning(
                 f"**{_ticker} — Already in Portfolio** · "
                 "This watchlist recommendation says ENTER NOW, but you already hold this position. "
-                "Check My Portfolio → Today's Brief for the current add/hold/sell signal instead.",
+                "Check Portfolio → Today's Brief for the current add/hold/sell signal instead.",
                 icon="⚠️",
             )
             continue
@@ -8595,7 +8595,7 @@ elif page == "📅 Economic Calendar":
 
         if _pb_port.empty:
             st.info(
-                "Visit **My Portfolio** first so the playbook can map events to your specific holdings.",
+                "Visit **Portfolio** first so the playbook can map events to your specific holdings.",
                 icon="ℹ️",
             )
         else:
@@ -8768,7 +8768,7 @@ elif page == "📅 Economic Calendar":
 
         if _pb_port.empty:
             st.info(
-                "Visit **My Portfolio** first so the post-event analysis can map "
+                "Visit **Portfolio** first so the post-event analysis can map "
                 "outcomes to your specific holdings.",
                 icon="ℹ️",
             )
