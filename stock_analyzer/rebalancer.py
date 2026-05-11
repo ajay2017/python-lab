@@ -91,22 +91,34 @@ def compute_drift(
 def build_rebalance_plan(
     drift_df: pd.DataFrame,
     total_val: float,
+    news_flags: dict | None = None,
 ) -> dict:
     """
     Generates trim and add action lists with specific share counts,
     urgency ordering, and Institutional-style rationale.
 
+    news_flags (optional): {ticker: {"level": "critical"|"warning",
+                                     "headline": str, "compound": float}}
+       — when supplied, ADD actions on flagged tickers get a news_warning
+       attached so the rebalancer never tells the user to buy more of a
+       position that News Intelligence is currently flagging negative.
+
     Returns dict with:
       trims: list of action dicts (overweight positions)
-      adds:  list of action dicts (underweight positions)
+      adds:  list of action dicts (underweight positions, each may carry
+             a `news_warning` dict if News Intelligence has flagged it)
       ok:    list of ticker strings in tolerance
       total_trim_value: sum of $ to trim
       total_add_value:  sum of $ to add
       rebalance_pct:    % of portfolio being touched
+      news_blocked_adds: count of ADD actions carrying a news_warning
     """
     if drift_df.empty:
         return {"trims": [], "adds": [], "ok": [], "total_trim_value": 0,
-                "total_add_value": 0, "rebalance_pct": 0}
+                "total_add_value": 0, "rebalance_pct": 0,
+                "news_blocked_adds": 0}
+
+    news_flags = news_flags or {}
 
     trims, adds, ok_list = [], [], []
 
@@ -250,6 +262,43 @@ def build_rebalance_plan(
                 "Use proceeds from trims to fund adds — keeping total exposure stable."
             )
 
+            # Cross-check against active News Intelligence flags. Adding to a
+            # position while critical/warning news is live is a coordination bug
+            # the rebalancer cannot see on its own.
+            news_warning = None
+            nf = news_flags.get(ticker) or news_flags.get(str(ticker).upper())
+            if nf:
+                _level    = nf.get("level", "warning")
+                _headline = str(nf.get("headline", ""))[:140]
+                _compound = _f(nf.get("compound"))
+                if _level == "critical":
+                    # Drop urgency to bottom — rebalancing should not chase
+                    # a position currently absorbing a critical negative catalyst.
+                    urgency = min(urgency, 5)
+                    news_warning = {
+                        "level":    "critical",
+                        "headline": _headline,
+                        "compound": _compound,
+                        "message": (
+                            "⛔ **Active critical news flag** "
+                            f"(sentiment {_compound:+.2f}): \"{_headline}\". "
+                            "Defer this add until the impact is assessed — "
+                            "drift-driven sizing must not override an active negative catalyst."
+                        ),
+                    }
+                else:
+                    news_warning = {
+                        "level":    "warning",
+                        "headline": _headline,
+                        "compound": _compound,
+                        "message": (
+                            "⚠ **Negative news flag** "
+                            f"(sentiment {_compound:+.2f}): \"{_headline}\". "
+                            "Verify the original thesis is still intact before adding. "
+                            "If the negative driver is short-term, a smaller add or a delay is appropriate."
+                        ),
+                    }
+
             adds.append({
                 "ticker":        ticker,
                 "sector":        sector,
@@ -266,6 +315,7 @@ def build_rebalance_plan(
                 "rationale":     rationale,
                 "action_detail": action_detail,
                 "institutional_lens":       inst_lens,
+                "news_warning":  news_warning,
             })
 
     trims.sort(key=lambda x: x["urgency"], reverse=True)
@@ -283,4 +333,5 @@ def build_rebalance_plan(
         "total_trim_value":   round(total_trim, 0),
         "total_add_value":    round(total_add, 0),
         "rebalance_pct":      rebalance_pct,
+        "news_blocked_adds":  sum(1 for a in adds if a.get("news_warning")),
     }

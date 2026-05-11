@@ -2491,7 +2491,23 @@ if page == "🏠 Portfolio":
 
         # Compute drift
         _drift_df = compute_drift(port_df, _target_weights, total_val)
-        _rb_plan  = build_rebalance_plan(_drift_df, total_val)
+
+        # Cross-reference active negative-news flags on held tickers so the
+        # rebalancer never silently recommends adding to a position News
+        # Intelligence is currently flagging. Use the most negative recent flag
+        # per ticker (alerts are pre-sorted by severity in build_news_intelligence).
+        _rb_news_flags: dict = {}
+        for _alert in (_ni_alts or []):
+            _atk = str(_alert.get("ticker", "")).strip().upper()
+            if not _atk or _atk in _rb_news_flags:
+                continue
+            _rb_news_flags[_atk] = {
+                "level":    _alert.get("alert_level", "warning"),
+                "headline": _alert.get("headline", ""),
+                "compound": _alert.get("compound", 0.0),
+            }
+
+        _rb_plan  = build_rebalance_plan(_drift_df, total_val, news_flags=_rb_news_flags)
 
         # KPI summary
         _rb_k1, _rb_k2, _rb_k3, _rb_k4 = st.columns(4)
@@ -2600,14 +2616,29 @@ if page == "🏠 Portfolio":
 
         # Add recommendations
         if _rb_plan["adds"]:
-            st.markdown("#### ➕ Add Actions (Underweight)")
+            # Header summary — how many ADDs are competing with active news flags?
+            _n_news_blocked = _rb_plan.get("news_blocked_adds", 0)
+            _header = "#### ➕ Add Actions (Underweight)"
+            if _n_news_blocked:
+                _header += (
+                    f"  ·  <span style='color:#fbbf24;font-size:0.65em;font-weight:600'>"
+                    f"⚠ {_n_news_blocked} flagged by News Intelligence — review before executing</span>"
+                )
+                st.markdown(_header, unsafe_allow_html=True)
+            else:
+                st.markdown(_header)
             for _ad in _rb_plan["adds"]:
-                _ad_exp  = _ad["urgency"] >= 40
+                _ad_exp  = _ad["urgency"] >= 40 or bool(_ad.get("news_warning"))
                 _ad_icon = "💪" if _ad["score"] >= 65 else "👁️"
+                _nw      = _ad.get("news_warning")
+                # Title icon override — surface news flag in the collapsed header
+                if _nw:
+                    _ad_icon = "⛔" if _nw.get("level") == "critical" else "⚠️"
 
                 with st.expander(
                     f"{_ad_icon} **{_ad['ticker']}** — add {_ad['drift_pp']:+.1f}pp  "
-                    f"| buy ~{_ad['shares_delta']:,} shares ≈ ${_ad['drift_val']:,.0f}",
+                    f"| buy ~{_ad['shares_delta']:,} shares ≈ ${_ad['drift_val']:,.0f}"
+                    + ("  ·  ACTIVE NEWS FLAG" if _nw else ""),
                     expanded=_ad_exp,
                 ):
                     _ad_m = st.columns(4)
@@ -2615,6 +2646,28 @@ if page == "🏠 Portfolio":
                     _ad_m[1].metric("Target Weight",   f"{_ad['target_pct']:.1f}%")
                     _ad_m[2].metric("Drift",           f"{_ad['drift_pp']:+.1f}pp")
                     _ad_m[3].metric("$ to Add",        f"${_ad['drift_val']:,.0f}")
+
+                    # News Intelligence cross-flag — render above rationale so the
+                    # user sees the conflict before reading the buy thesis.
+                    if _nw:
+                        _nw_critical = _nw.get("level") == "critical"
+                        _nw_bg  = "#3f1d1d" if _nw_critical else "#3b2a0a"
+                        _nw_brd = "#ef4444" if _nw_critical else "#f59e0b"
+                        _nw_txt = "#fca5a5" if _nw_critical else "#fcd34d"
+                        _nw_lbl = (
+                            "🚨 News Intelligence Conflict — Defer Add"
+                            if _nw_critical else
+                            "📰 News Intelligence Caution"
+                        )
+                        st.markdown(
+                            f"<div style='padding:10px 14px;background:{_nw_bg};"
+                            f"border-radius:6px;border-left:4px solid {_nw_brd};margin:8px 0'>"
+                            f"<span style='font-size:0.72em;color:{_nw_brd};font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>{_nw_lbl}</span><br>"
+                            f"<span style='color:{_nw_txt};font-size:0.88em'>{_nw['message']}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
 
                     st.markdown(
                         f"<div style='padding:10px 14px;background:#1a1a1a;"
