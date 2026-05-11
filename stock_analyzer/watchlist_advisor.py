@@ -44,13 +44,96 @@ def _pct_from_entry(price: float, entry_hi: float) -> float | None:
     return (price - entry_hi) / entry_hi * 100
 
 
-def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
+def _portfolio_risk_gate(ticker_beta, portfolio_ctx: dict | None) -> dict | None:
+    """
+    Check whether portfolio risk state breaches limits for opening a new
+    position. ENTER_NOW from this advisor only sees the single stock; it must
+    also respect the portfolio it would be opened into.
+
+    Returns None if all clear, else:
+      {"severity": "hard"|"soft", "kind": "sector"|"beta"|"mixed",
+       "reason": <user-facing explanation>}
+
+    Hard breach → downgrade ENTER_NOW to NEAR_ENTRY.
+    Soft concern → keep ENTER_NOW but surface a caution banner.
+    """
+    if not portfolio_ctx:
+        return None
+
+    sector_wt    = _f(portfolio_ctx.get("sector_weight_pct"))
+    port_beta    = portfolio_ctx.get("portfolio_beta")
+    high_alerts  = portfolio_ctx.get("active_high_risk_alerts") or []
+    sector_name  = portfolio_ctx.get("sector_of_ticker") or "this sector"
+
+    # ── Hard breach: sector ≥ 35% ────────────────────────────────────────────
+    if sector_wt >= 35:
+        return {
+            "severity": "hard",
+            "kind":     "sector",
+            "reason": (
+                f"{sector_name} is already at **{sector_wt:.0f}%** of your portfolio. "
+                "Opening here would push concentration beyond the 35% institutional "
+                "single-sector ceiling — a single sector shock could swamp the rest of the book."
+            ),
+        }
+
+    # ── Hard breach: high portfolio beta + high ticker beta ─────────────────
+    if (port_beta is not None and ticker_beta is not None
+            and port_beta > 1.4 and ticker_beta > 1.8):
+        return {
+            "severity": "hard",
+            "kind":     "beta",
+            "reason": (
+                f"Portfolio beta is already **{port_beta:.2f}** (above the 1.4 risk-team ceiling). "
+                f"Adding a β **{ticker_beta:.2f}** name compounds market sensitivity — "
+                "in a 10% correction this position would amplify the existing drag, not diversify it."
+            ),
+        }
+
+    # ── Soft concerns: warn but keep ENTER_NOW ───────────────────────────────
+    soft: list[str] = []
+    if sector_wt >= 25:
+        soft.append(
+            f"{sector_name} already at {sector_wt:.0f}% of portfolio — consider a half-size entry."
+        )
+    if (port_beta is not None and ticker_beta is not None
+            and port_beta > 1.3 and ticker_beta > 1.5):
+        soft.append(
+            f"Portfolio beta {port_beta:.2f} + ticker β {ticker_beta:.2f} — use conservative sizing."
+        )
+    if high_alerts:
+        soft.append(
+            f"Active HIGH risk alert{'s' if len(high_alerts) > 1 else ''} "
+            f"({', '.join(high_alerts[:2])}) — resolve in Portfolio → Risk Advisor first."
+        )
+
+    if soft:
+        return {"severity": "soft", "kind": "mixed", "reason": " ".join(soft)}
+
+    return None
+
+
+def build_watchlist_recommendation(
+    ticker: str,
+    data: dict,
+    portfolio_ctx: dict | None = None,
+) -> dict:
     """
     Returns a recommendation dict for a single watchlist candidate.
 
+    portfolio_ctx (optional): {
+        "sector_of_ticker": str, "sector_weight_pct": float,
+        "portfolio_beta": float | None,
+        "active_high_risk_alerts": list[str],   # titles of HIGH risk recs
+    }
+    When supplied, ENTER_NOW is gated against portfolio-level risk state so the
+    advisor never blindly says "enter" while a hard concentration or beta limit
+    is breached.
+
     Keys: ticker, action, priority, score, signal, price, entry_lo, entry_hi,
           stop, rr, earn_days, ps, title, readiness_pct, summary, detail,
-          conditions_met, conditions_missing, institutional_lens
+          conditions_met, conditions_missing, institutional_lens,
+          portfolio_caution (str | None — soft warning rendered inside the card)
     """
     score       = _f(data.get("total"))
     rec_label   = str((data.get("rec") or {}).get("label", ""))
@@ -158,6 +241,53 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
 
     # ── ENTER NOW ─────────────────────────────────────────────────────────────
     if score >= 65 and (in_zone or near_zone) and (rr is None or rr >= 2.0):
+        # Portfolio risk gate: ENTER_NOW from this advisor only sees the single
+        # stock — it must also respect portfolio-level concentration and beta.
+        ticker_beta = (data.get("risk_metrics") or {}).get("beta")
+        gate        = _portfolio_risk_gate(ticker_beta, portfolio_ctx)
+
+        if gate and gate["severity"] == "hard":
+            # Hard breach — downgrade to NEAR_ENTRY with explicit portfolio-fit messaging
+            return _card(
+                ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
+                stop, rr, earn_days,
+                title=f"{ticker} — Setup Ready, But Portfolio Fit Blocks Entry",
+                summary=(
+                    f"Score {score:.0f}/100 and price in entry zone — the stock-level setup is a go. "
+                    "However, opening this position now would breach a portfolio risk limit."
+                ),
+                detail=(
+                    f"{gate['reason']} "
+                    "**Do not open the position at full size.** "
+                    "Either wait for the portfolio risk state to normalise "
+                    "(trim the over-concentrated sector, or reduce beta exposure first), "
+                    "or open with a deliberately small half/quarter position so the "
+                    "limit isn't pushed further out of band. "
+                    "The watchlist alert is right; the timing relative to your book is wrong."
+                ),
+                conditions_met=[
+                    f"Score {score:.0f}/100 — above 65 threshold",
+                    f"Signal: {rec_label}",
+                    f"Price {'in' if in_zone else 'near'} entry zone (${entry_lo:.2f}–${entry_hi:.2f})" if entry_lo else "Entry zone aligned",
+                    f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
+                ],
+                conditions_missing=[
+                    f"Portfolio fit: {gate['reason']}",
+                ],
+                institutional_lens=(
+                    "Stock-level signals and portfolio-level fit are two separate filters. "
+                    "A stock can be a perfect entry in isolation and a poor decision relative to "
+                    "what you already own. Institutional risk frameworks apply both gates: "
+                    "thesis confirmation first, portfolio fit second. "
+                    "When the fit gate fails, the discipline is to wait — or to size down enough "
+                    "that the position doesn't push the portfolio further out of risk tolerance. "
+                    "Skipping this check is how concentration and beta drift quietly accumulate."
+                ),
+                portfolio_caution=gate["reason"],
+            )
+
+        soft_caution = gate["reason"] if (gate and gate["severity"] == "soft") else None
+
         return _card(
             ticker, "ENTER_NOW", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
@@ -183,7 +313,9 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 f"R:R {rr:.1f}:1 — above 2:1 minimum" if rr else "Risk/reward acceptable",
                 f"No imminent earnings risk" if not earn_soon else "",
             ],
-            conditions_missing=[],
+            conditions_missing=(
+                [f"Portfolio fit caution: {soft_caution}"] if soft_caution else []
+            ),
             institutional_lens=(
                 "The hardest discipline in investing is not the analysis — it's the execution. "
                 "When a watchlist stock finally hits its entry zone with a confirmed thesis, "
@@ -192,6 +324,7 @@ def build_watchlist_recommendation(ticker: str, data: dict) -> dict:
                 "You did the work by building the watchlist. The setup you planned for is here. "
                 "Execute the plan. Adjust the stop as the position matures."
             ),
+            portfolio_caution=soft_caution,
         )
 
     # ── NEAR ENTRY ───────────────────────────────────────────────────────────
@@ -320,6 +453,7 @@ def _card(
     ticker, action, score, signal, price, entry_lo, entry_hi,
     stop, rr, earn_days, title, summary, detail,
     conditions_met, conditions_missing, institutional_lens,
+    portfolio_caution: str | None = None,
 ) -> dict:
     priority = _ACTION_PRIORITY.get(action, "MONITOR")
 
@@ -357,4 +491,5 @@ def _card(
         "conditions_met":     [c for c in conditions_met if c],
         "conditions_missing": [c for c in conditions_missing if c],
         "institutional_lens":       institutional_lens,
+        "portfolio_caution":  portfolio_caution,
     }

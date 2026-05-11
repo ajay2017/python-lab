@@ -1029,6 +1029,11 @@ if page == "🏠 Portfolio":
         )
     except Exception:
         _risk_advisor_recs = []
+    # Cache HIGH-priority alert titles so other pages (e.g. Watchlist) can gate
+    # ENTER_NOW recommendations against active portfolio risk state.
+    st.session_state["_risk_high_alerts_cache"] = [
+        r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
+    ]
 
     best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
     worst_row = port_df.loc[port_df["P&L (%)"].idxmin()]
@@ -7593,13 +7598,30 @@ elif page == "📋 Watchlist":
             except Exception as _we:
                 _wl_data[_wt] = None
 
+    # ── Build portfolio-fit context (consumed by ENTER_NOW risk gate) ─────────
+    _wl_port_df    = st.session_state.get("holdings_df", pd.DataFrame())
+    _wl_port_risk  = st.session_state.get("_port_risk_cache", {}) or {}
+    _wl_high_alerts = st.session_state.get("_risk_high_alerts_cache", []) or []
+    _wl_port_beta  = _wl_port_risk.get("beta")
+
     # ── Build recommendations ─────────────────────────────────────────────────
     _wl_recs: list[dict] = []
     for _wt, _wd in _wl_data.items():
         if _wd is None:
             continue
+        # Per-ticker portfolio fit: this ticker's sector weight in the book
+        _wl_sector = str(_wd.get("sector", "")) if isinstance(_wd, dict) else ""
+        _wl_sec_wt = 0.0
+        if _wl_sector and not _wl_port_df.empty and "Sector" in _wl_port_df.columns:
+            _wl_sec_wt = float(_wl_port_df[_wl_port_df["Sector"] == _wl_sector]["Weight (%)"].sum())
+        _wl_pctx = {
+            "sector_of_ticker":        _wl_sector,
+            "sector_weight_pct":       _wl_sec_wt,
+            "portfolio_beta":          _wl_port_beta,
+            "active_high_risk_alerts": _wl_high_alerts,
+        }
         try:
-            _wl_recs.append(build_watchlist_recommendation(_wt, _wd))
+            _wl_recs.append(build_watchlist_recommendation(_wt, _wd, portfolio_ctx=_wl_pctx))
         except Exception:
             pass
 
@@ -7714,6 +7736,29 @@ elif page == "📋 Watchlist":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+            # Portfolio fit caution — shown when ENTER_NOW (or downgraded NEAR_ENTRY)
+            # was issued but portfolio-level risk state warrants caution / blocking.
+            _pcaution = _wr.get("portfolio_caution")
+            if _pcaution:
+                _is_hard = _action == "NEAR_ENTRY" and "Portfolio Fit" in _wr.get("title", "")
+                _pc_bg   = "#3f1d1d" if _is_hard else "#3b2a0a"
+                _pc_brd  = "#ef4444" if _is_hard else "#f59e0b"
+                _pc_lbl  = (
+                    "🚫 Portfolio Fit — Hard Limit Breached"
+                    if _is_hard else
+                    "⚠️ Portfolio Fit — Caution"
+                )
+                _pc_txt_c = "#fca5a5" if _is_hard else "#fcd34d"
+                st.markdown(
+                    f"<div style='padding:10px 14px;background:{_pc_bg};"
+                    f"border-radius:6px;border-left:4px solid {_pc_brd};margin:6px 0 10px'>"
+                    f"<span style='font-size:0.72em;color:{_pc_brd};font-weight:700;"
+                    f"letter-spacing:0.09em;text-transform:uppercase'>{_pc_lbl}</span><br>"
+                    f"<span style='color:{_pc_txt_c};font-size:0.88em'>{_pcaution}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
             # Conditions + Position Sizing
             _wl_cl, _wl_cr = st.columns([1, 1])
