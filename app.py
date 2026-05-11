@@ -57,6 +57,7 @@ from stock_analyzer import db
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
 
@@ -626,6 +627,29 @@ def _get_rfr() -> float:
     return fetch_risk_free_rate()
 
 
+@st.cache_data(ttl=300)
+def _get_premarket_brief(held_tickers: tuple, watchlist: tuple) -> dict:
+    """5-minute cached pre-market intel (futures, global markets, movers).
+    Macro events are injected by the caller after this returns."""
+    from stock_analyzer.premarket import (
+        fetch_futures, futures_tone, fetch_global_markets, fetch_premarket_movers
+    )
+    import datetime as _dtt
+    fut  = fetch_futures()
+    glbl = fetch_global_markets()
+    mvrs = fetch_premarket_movers(list(held_tickers) + list(watchlist), {})
+    tone = futures_tone(fut)
+    now_et = _dtt.datetime.now(__import__("pytz").timezone("America/New_York"))
+    return {
+        "tone":           tone,
+        "futures":        fut,
+        "global_markets": glbl,
+        "movers":         mvrs,
+        "events":         [],          # caller fills this in from _macro_events
+        "as_of":          now_et.strftime("%I:%M %p ET"),
+    }
+
+
 # ── Shared data loader ────────────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def load_all(ticker: str, period: str = "6mo") -> dict:
@@ -1189,6 +1213,139 @@ if page == "🏠 My Portfolio":
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_daily:
         from datetime import datetime as _dt
+
+        # ── Pre-Market Intel panel (visible 4:00–9:29 AM ET weekdays) ─────────
+        if is_premarket():
+            try:
+                _pm = _get_premarket_brief(
+                    tuple(held_tickers),
+                    tuple(st.session_state.get("watchlist", [])),
+                )
+                # Inject today's HIGH/MEDIUM macro events (already computed above)
+                _pm["events"] = [
+                    e for e in _macro_events
+                    if e.get("date") == _TODAY_ET and e.get("impact") in ("HIGH", "MEDIUM")
+                ]
+                _pm_tone  = _pm["tone"]
+                _pm_color = "#14532d" if _pm_tone == "bull" else "#7f1d1d" if _pm_tone == "bear" else "#1c1917"
+                _pm_bdr   = "#22c55e" if _pm_tone == "bull" else "#ef4444" if _pm_tone == "bear" else "#4b5563"
+                _pm_icon  = "📈" if _pm_tone == "bull" else "📉" if _pm_tone == "bear" else "〰️"
+                _pm_label = (
+                    "Futures pointing HIGHER — bullish open expected"  if _pm_tone == "bull" else
+                    "Futures pointing LOWER — cautious open expected"   if _pm_tone == "bear" else
+                    "Futures mixed — direction unclear ahead of open"
+                )
+                es_row  = next((f for f in _pm["futures"] if f["symbol"] == "ES=F"), None)
+                es_str  = f"ES {es_row['chg_pct']:+.2f}%" if es_row else ""
+
+                st.markdown(
+                    f"<div style='background:{_pm_color};border:1px solid {_pm_bdr};"
+                    f"border-radius:12px;padding:14px 20px;margin-bottom:10px'>"
+                    f"<div style='display:flex;align-items:center;justify-content:space-between;"
+                    f"flex-wrap:wrap;gap:8px'>"
+                    f"<span style='font-size:1.05em;font-weight:700;color:#f9fafb'>"
+                    f"🌅 Pre-Market Intel</span>"
+                    f"<span style='color:#9ca3af;font-size:0.78em'>{_pm['as_of']}</span>"
+                    f"</div>"
+                    f"<div style='color:#d1d5db;font-size:0.85em;margin-top:4px'>"
+                    f"{_pm_icon} {_pm_label}"
+                    + (f" · <b style='color:#f9fafb'>{es_str}</b>" if es_str else "")
+                    + f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Row 1: US Futures tiles
+                if _pm["futures"]:
+                    _pm_cols = st.columns(len(_pm["futures"]))
+                    for _pmc, _fut in zip(_pm_cols, _pm["futures"]):
+                        _fc = "#22c55e" if _fut["chg_pct"] >= 0 else "#ef4444"
+                        _pmc.markdown(
+                            f"<div style='background:#111827;border:1px solid #374151;"
+                            f"border-radius:8px;padding:8px 10px;text-align:center'>"
+                            f"<div style='color:#9ca3af;font-size:0.72em'>{_fut['icon']} {_fut['name']}</div>"
+                            f"<div style='color:#f9fafb;font-weight:700'>{_fut['price']:,.0f}</div>"
+                            f"<div style='color:{_fc};font-size:0.85em;font-weight:600'>"
+                            f"{_fut['chg_pct']:+.2f}%</div></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                # Row 2: Global markets + movers + events
+                _pm_left, _pm_right = st.columns([1, 1])
+
+                with _pm_left:
+                    if _pm["global_markets"]:
+                        st.markdown(
+                            "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
+                            "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
+                            "🌍 GLOBAL MARKETS (OVERNIGHT)</div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _gm in _pm["global_markets"]:
+                            _gc = "#22c55e" if _gm["chg_pct"] >= 0 else "#ef4444"
+                            _garrow = "▲" if _gm["chg_pct"] >= 0 else "▼"
+                            st.markdown(
+                                f"<div style='display:flex;justify-content:space-between;"
+                                f"padding:2px 0;font-size:0.82em'>"
+                                f"<span style='color:#d1d5db'>{_gm['flag']} {_gm['name']}</span>"
+                                f"<span style='color:{_gc};font-weight:600'>"
+                                f"{_garrow} {_gm['chg_pct']:+.2f}%</span></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    if _pm["events"]:
+                        st.markdown(
+                            "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
+                            "letter-spacing:0.06em;margin-top:12px;margin-bottom:4px'>"
+                            "📅 TODAY'S CATALYSTS</div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _ev in _pm["events"][:4]:
+                            _eic = "#ef4444" if _ev.get("impact") == "HIGH" else "#f59e0b"
+                            _etime = _ev.get("time_et", "")
+                            _ename = _ev.get("event", _ev.get("name", ""))
+                            st.markdown(
+                                f"<div style='font-size:0.82em;padding:2px 0'>"
+                                f"<span style='color:{_eic};font-weight:700'>●</span> "
+                                f"<span style='color:#9ca3af'>{_etime} </span>"
+                                f"<span style='color:#d1d5db'>{_ename}</span></div>",
+                                unsafe_allow_html=True,
+                            )
+
+                with _pm_right:
+                    if _pm["movers"]:
+                        st.markdown(
+                            "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
+                            "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
+                            "⚡ PRE-MARKET MOVERS (YOUR STOCKS)</div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _mv in _pm["movers"][:8]:
+                            _mc = "#22c55e" if _mv["chg_pct"] >= 0 else "#ef4444"
+                            _marrow = "▲" if _mv["chg_pct"] >= 0 else "▼"
+                            _badge = (
+                                "<span style='background:#1e3a5f;color:#60a5fa;"
+                                "padding:0 5px;border-radius:4px;font-size:0.7em'>held</span> "
+                                if _mv["is_held"] else ""
+                            )
+                            st.markdown(
+                                f"<div style='display:flex;justify-content:space-between;"
+                                f"align-items:center;padding:3px 0;font-size:0.82em'>"
+                                f"<span style='color:#f9fafb;font-weight:600'>{_mv['ticker']}</span>"
+                                f"<span>{_badge}"
+                                f"<span style='color:#9ca3af;margin-right:6px'>"
+                                f"${_mv['pre_price']:.2f}</span>"
+                                f"<span style='color:{_mc};font-weight:700'>"
+                                f"{_marrow} {_mv['chg_pct']:+.2f}%</span></span></div>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        with _pm_right:
+                            st.caption("No significant pre-market moves in your holdings or watchlist yet.")
+
+                st.divider()
+
+            except Exception as _pm_err:
+                st.caption(f"Pre-market data unavailable: {_pm_err}")
 
         _db_act    = _daily_brief["act_today"]
         _db_buys   = _daily_brief["buy_candidates"]
