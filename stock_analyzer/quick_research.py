@@ -84,7 +84,7 @@ def _entry_timing(rsi_val: float | None, move_1d: float, move_5d: float) -> dict
 
 def _portfolio_bullet(ticker: str, ctx: dict) -> str:
     """Build a portfolio-context bullet for the Quick Research panel."""
-    # 1 — Act Today flag takes highest priority
+    # 1 — Act Today flag on THIS ticker takes highest priority
     flags = ctx.get("act_today_flags", [])
     if flags:
         f = flags[0]
@@ -92,7 +92,26 @@ def _portfolio_bullet(ticker: str, ctx: dict) -> str:
         short = reason[:110].rstrip(".") + "…" if len(reason) > 110 else reason
         return f"**⚠ Act Today — {ticker}:** {f['action']}. {short}"
 
-    # 2 — Already held
+    # 2 — Act Today flags on OTHER tickers in the SAME sector. If the user is
+    # already being told to act on multiple positions in this sector, the
+    # sector itself may be under stress — adding fresh exposure is the wrong
+    # signal even if the queried ticker looks individually fine.
+    sec        = ctx.get("sector_of_ticker", "")
+    sec_acts   = ctx.get("sector_act_today", [])
+    if sec and sec_acts:
+        _tickers = [str(a.get("ticker", "")) for a in sec_acts if a.get("ticker")]
+        _tickers = [t for t in _tickers if t and t != ticker]
+        if _tickers:
+            _short = ", ".join(_tickers[:3])
+            _more  = f" (+{len(_tickers)-3} more)" if len(_tickers) > 3 else ""
+            return (
+                f"**⚠ Sector Under Stress — {sec}:** Act Today flags on "
+                f"{_short}{_more} in the same sector. "
+                f"Even if {ticker} looks individually fine, the sector is rotating "
+                "out — defer new entries until the broader sector picture stabilises."
+            )
+
+    # 3 — Already held
     if ctx.get("held"):
         shares = ctx.get("held_shares")
         avg    = ctx.get("held_avg_cost")
@@ -107,7 +126,7 @@ def _portfolio_bullet(ticker: str, ctx: dict) -> str:
         )
         return f"**Your Position:** {desc}. Signal: **{sig}**.{note}"
 
-    # 3 — New position: sector concentration + beta fit
+    # 4 — New position: sector concentration + beta fit
     parts = []
     sec    = ctx.get("sector_of_ticker", "")
     sec_wt = ctx.get("sector_weight_pct") or 0.0

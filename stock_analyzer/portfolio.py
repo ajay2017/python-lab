@@ -155,8 +155,15 @@ def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[di
         signal = row["Signal"]
         ticker = row["Ticker"]
 
-        # Stop proximity
-        if gap < 3:
+        # Stop proximity — skip when stop data is unavailable (gap is None),
+        # otherwise the comparison crashes. Stop-unavailable is surfaced
+        # separately via the Stop Type column.
+        if gap is None:
+            result.append({
+                "level": "warning", "category": "stop",
+                "msg": f"🟡 **{ticker}** — stop data unavailable; set a manual stop in your broker",
+            })
+        elif gap < 3:
             result.append({
                 "level": "danger", "category": "stop",
                 "msg": f"🔴 **{ticker}** is within {gap:.1f}% of stop ${row['Stop']:.2f} — review immediately",
@@ -316,7 +323,10 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
             })
 
         if "Sell" in signal and pnl > 0:
-            urgency = "high" if (score < 30 or gap < 5) else "medium"
+            # Treat unknown gap as elevated urgency — without a stop in place,
+            # a profitable Sell signal needs manual review now, not later.
+            _gap_close = (gap is None) or (gap < 5)
+            urgency = "high" if (score < 30 or _gap_close) else "medium"
             half_shares = max(1, shares // 2)
             actions.append({
                 "type":       "review",

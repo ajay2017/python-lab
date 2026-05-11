@@ -12,6 +12,8 @@ from datetime import date as _date, datetime as _datetime
 import pandas as _pd
 import pytz as _pytz
 
+from stock_analyzer.constants import COMPOSITE_BUY
+
 def _today_et() -> _date:
     return _datetime.now(_pytz.timezone("America/New_York")).date()
 
@@ -696,7 +698,7 @@ def build_post_event_analysis(
         total_impact  += dollar_impact
 
         if scenario_key == "bull":
-            if sector_move >= 2.0 and score >= 65 and "Buy" in signal:
+            if sector_move >= 2.0 and score >= COMPOSITE_BUY and "Buy" in signal:
                 action = "ADD"
                 detail = (
                     f"High-conviction position in a sector with {sector_move:+.1f}% tailwind. "

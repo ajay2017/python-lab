@@ -29,6 +29,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY,
     SINGLE_NAME_CEILING,
     MACRO_IMMINENT_DAYS,
+    RISK_PCT_PER_TRADE,
 )
 
 
@@ -301,7 +302,7 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
     """Estimate position size using a trend-based stop approximation."""
     stop_pct = 0.05 if "Strong" in trend else 0.07 if "Uptrend" in trend else 0.08
     stop     = price * (1 - stop_pct)
-    risk_dollars  = portfolio_value * 0.015          # 1.5% portfolio risk per trade
+    risk_dollars  = portfolio_value * RISK_PCT_PER_TRADE
     risk_per_share = price - stop
     if risk_per_share <= 0:
         return {}
@@ -633,16 +634,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     deploy_note = None
     if portfolio_value > 0 and (new_picks or add_positions):
         n_trades = len(new_picks) + len(add_positions)
-        deploy   = portfolio_value * 0.015 * n_trades
+        deploy   = portfolio_value * RISK_PCT_PER_TRADE * n_trades
+        _risk_pct_str = f"{RISK_PCT_PER_TRADE * 100:.1f}%"
         if _act_risk_flags:
             deploy_note = (
                 f"⚠️ Resolve Act Today risk alerts before deploying. "
-                f"If proceeding: 1.5% risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''} "
+                f"If proceeding: {_risk_pct_str} risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''} "
                 f"= ~${deploy:,.0f}."
             )
         else:
             deploy_note = (
-                f"At 1.5% risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
+                f"At {_risk_pct_str} risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
                 f"consider deploying ~${deploy:,.0f} today."
             )
 

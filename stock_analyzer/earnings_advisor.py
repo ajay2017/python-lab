@@ -126,7 +126,7 @@ def _recommend(
     score: float,
     weight: float,
     pnl_pct: float,
-    gap_to_stop: float,
+    gap_to_stop: float | None,
     net_rev: int,
     signal: str,
     shares: int,
@@ -227,6 +227,25 @@ def _recommend(
             ),
         )
 
+    # ── MONITOR — stop unavailable (data integrity gap) ──────────────────────
+    if gap_to_stop is None:
+        return (
+            "MONITOR",
+            "MEDIUM",
+            (
+                "**Stop data unavailable** for this position — the earnings-risk gate "
+                f"cannot evaluate stop vs estimated ±{est_move:.0f}% earnings move. "
+                "Set a manual stop in your broker before the report and **be at your "
+                "terminal for the pre-market open**."
+            ),
+            (
+                "Earnings reports without a defined stop level is the worst combination of "
+                "binary event risk plus unstructured risk management. Institutional rule: "
+                "no position into earnings without a stop. If price feed is the issue, "
+                "treat it as an unscoped-risk position and reduce size on principle."
+            ),
+        )
+
     # ── MONITOR — stop close to estimated move ───────────────────────────────
     if gap_to_stop < est_move * 0.85:
         return (
@@ -272,12 +291,13 @@ def _recommend(
         )
 
     # ── HOLD — general case, score is decent ─────────────────────────────────
+    _gap_str = f"gap to stop {gap_to_stop:.1f}%" if gap_to_stop is not None else "stop unavailable"
     return (
         "HOLD",
         "OK",
         (
             f"No major pre-earnings risk flags. Score {score:.0f}/100, "
-            f"gap to stop {gap_to_stop:.1f}%, and revisions are neutral. "
+            f"{_gap_str}, and revisions are neutral. "
             "**Hold current position with stops in place.** "
             "The report is the next major thesis checkpoint — watch forward guidance closely."
         ),
@@ -313,8 +333,11 @@ def build_earnings_playbook(
         pnl_pct    = _f(row.get("P&L (%)"))
         score      = _f(row.get("Score"))
         signal     = str(row.get("Signal", ""))
-        gap        = _f(row.get("Gap to Stop (%)"))
-        stop_price = _f(row.get("Stop"))
+        # Preserve None when stop data is unavailable — defaulting to 0 here
+        # would falsely declare the position "at risk vs estimated move" when
+        # the real issue is that there's no stop to evaluate.
+        gap        = _f(row.get("Gap to Stop (%)"), None)
+        stop_price = _f(row.get("Stop"), None)
         stop_type  = str(row.get("Stop Type", "ATR Stop"))
         shares     = int(_f(row.get("Shares", 0)))
         sector     = str(row.get("Sector", "Other"))
@@ -394,7 +417,7 @@ def build_earnings_playbook(
             # Volatility
             "est_move":      est_move,
             "earn_risk":     earn_risk,
-            "stop_at_risk":  gap < est_move * 0.85,
+            "stop_at_risk":  (gap is not None and gap < est_move * 0.85),
             # Playbook
             "action":        action,
             "priority":      priority,

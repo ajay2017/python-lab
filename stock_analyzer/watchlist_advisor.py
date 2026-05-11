@@ -262,7 +262,7 @@ def build_watchlist_recommendation(
     # ── ENTER NOW ─────────────────────────────────────────────────────────────
     # R:R must be VALIDATED (>= 2:1), not merely "unknown." A missing R:R means
     # we don't have a target price — that's incomplete homework, not a green light.
-    if score >= 65 and (in_zone or near_zone) and rr is not None and rr >= 2.0:
+    if score >= COMPOSITE_BUY and (in_zone or near_zone) and rr is not None and rr >= 2.0:
         # Portfolio risk gate: ENTER_NOW from this advisor only sees the single
         # stock — it must also respect portfolio-level concentration and beta.
         ticker_beta = (data.get("risk_metrics") or {}).get("beta")
@@ -350,7 +350,7 @@ def build_watchlist_recommendation(
         )
 
     # ── NEAR ENTRY ───────────────────────────────────────────────────────────
-    if score >= 65 and pct_above is not None and pct_above <= 8:
+    if score >= COMPOSITE_BUY and pct_above is not None and pct_above <= 8:
         return _card(
             ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
             stop, rr, earn_days,
@@ -390,7 +390,7 @@ def build_watchlist_recommendation(
         )
 
     # ── WAIT FOR ENTRY ───────────────────────────────────────────────────────
-    if score >= 65:
+    if score >= COMPOSITE_BUY:
         dist_str = f"{abs(pct_above):.1f}% above entry zone" if pct_above is not None else "above entry zone"
         return _card(
             ticker, "WAIT_ENTRY", score, rec_label, price, entry_lo, entry_hi,
@@ -481,9 +481,9 @@ def _card(
 
     # Readiness score 0–100: how close is this to a full green-light?
     pts = 0
-    if score >= 65:    pts += 35
-    elif score >= 55:  pts += 20
-    elif score >= 44:  pts += 10
+    if score >= COMPOSITE_BUY:    pts += 35
+    elif score >= 55:             pts += 20
+    elif score >= COMPOSITE_HOLD: pts += 10
     if action in ("ENTER_NOW",):       pts += 35
     elif action in ("NEAR_ENTRY",):    pts += 25
     elif action in ("WAIT_ENTRY",):    pts += 15

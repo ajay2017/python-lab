@@ -80,7 +80,9 @@ from stock_analyzer.decision_journal import compute_patterns
 st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
 
 
-MODERATE_RISK_PCT = 0.015
+# Re-exported from constants module so existing callers continue to work; new
+# code should import RISK_PCT_PER_TRADE directly from stock_analyzer.constants.
+from stock_analyzer.constants import RISK_PCT_PER_TRADE as MODERATE_RISK_PCT
 
 
 def _time_ago(ts: int) -> str:
@@ -1614,6 +1616,21 @@ if page == "🏠 Portfolio":
                         float(port_df[port_df["Sector"] == _qr_sector]["Weight (%)"].sum())
                         if _qr_sector else 0.0
                     )
+                    # Sector-level Act Today awareness — when the user asks about
+                    # a ticker in a sector where OTHER positions are flagged for
+                    # action, that signals sector stress even if THIS ticker
+                    # looks individually fine. Tells the user to wait for the
+                    # broader sector picture to stabilise before adding.
+                    _qr_sector_acts = []
+                    if _qr_sector:
+                        _qr_held_tickers_in_sec = set(
+                            port_df[port_df["Sector"] == _qr_sector]["Ticker"].tolist()
+                        )
+                        _qr_sector_acts = [
+                            a for a in _daily_brief.get("act_today", [])
+                            if a.get("ticker") and a["ticker"] in _qr_held_tickers_in_sec
+                            and a["ticker"] != _t
+                        ]
                     _qr_ctx = {
                         "held":              _qr_is_held,
                         "held_shares":       float(_qr_held_row["Shares"].iloc[0])   if _qr_is_held else None,
@@ -1626,6 +1643,7 @@ if page == "🏠 Portfolio":
                         "ticker_beta":       (_qr_raw.get("risk_metrics") or {}).get("beta"),
                         "act_today_flags":   [a for a in _daily_brief.get("act_today", [])
                                               if a.get("ticker") == _t],
+                        "sector_act_today":  _qr_sector_acts,
                     }
                     st.session_state["_qr_result"] = _qr_research(_t, _qr_raw, portfolio_ctx=_qr_ctx)
                 except Exception as _qr_e:
@@ -2304,8 +2322,10 @@ if page == "🏠 Portfolio":
                     "Price":           "${:.2f}",
                     "P&L (%)":         "{:+.1f}%",
                     "Weight (%)":      "{:.1f}%",
-                    "Stop":            "${:.2f}",
-                    "Gap to Stop (%)": "{:.1f}%",
+                    # Stop/Gap may be None when stop data is unavailable —
+                    # show "—" rather than "nan" to surface the data gap clearly.
+                    "Stop":            lambda v: f"${v:.2f}"  if pd.notna(v) else "—",
+                    "Gap to Stop (%)": lambda v: f"{v:.1f}%" if pd.notna(v) else "—",
                     "Score":           "{:.0f}",
                 })
             )
@@ -2322,8 +2342,8 @@ if page == "🏠 Portfolio":
                     "P&L ($)":         "${:,.0f}",
                     "P&L (%)":         "{:+.1f}%",
                     "Weight (%)":      "{:.1f}%",
-                    "Stop":            "${:.2f}",
-                    "Gap to Stop (%)": "{:.1f}%",
+                    "Stop":            lambda v: f"${v:.2f}"  if pd.notna(v) else "—",
+                    "Gap to Stop (%)": lambda v: f"{v:.1f}%" if pd.notna(v) else "—",
                     "Score":           "{:.0f}",
                 })
             )
@@ -2345,10 +2365,17 @@ if page == "🏠 Portfolio":
             ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
 
             d1, d2, d3, d4 = st.columns(4)
+            # Stop and Gap may be None when stop data is unavailable (data
+                # integrity gate) — show "—" rather than crashing on .format.
+            _ps_stop = ps_row.get('Stop')
+            _ps_gap  = ps_row.get('Gap to Stop (%)')
             d1.metric("P&L",         _m(f"${ps_row['P&L ($)']:,.0f}"), f"{ps_row['P&L (%)']:+.1f}%")
-            d2.metric("Stop Loss",   f"${ps_row['Stop']:.2f}",     ps_row['Stop Type'],
+            d2.metric("Stop Loss",
+                      f"${_ps_stop:.2f}" if _ps_stop is not None else "—",
+                      ps_row['Stop Type'],
                       help=_tip("ATR Stop"))
-            d3.metric("Gap to Stop", f"{ps_row['Gap to Stop (%)']:.1f}%",
+            d3.metric("Gap to Stop",
+                      f"{_ps_gap:.1f}%" if _ps_gap is not None else "—",
                       help=_tip("Ratchet Stop"))
             d4.metric("Composite Score", f"{r['total']:.0f}/100",  r['rec']['label'],
                       help=_tip("Composite Score"))
@@ -3934,8 +3961,9 @@ if page == "🏠 Portfolio":
                             f"<span style='font-size:0.72em;color:#888;font-weight:700;"
                             f"letter-spacing:0.09em;text-transform:uppercase'>Stop vs Earnings Vol</span><br>"
                             f"<span style='color:#eee;font-size:0.88em'>"
-                            f"{_stop_label} · Gap: <b style='color:{_gap_color}'>{_pb['gap_to_stop']:.1f}%</b> "
-                            f"vs Est. move <b>±{_pb['est_move']:.0f}%</b>"
+                            f"{_stop_label} · Gap: <b style='color:{_gap_color}'>"
+                            + (f"{_pb['gap_to_stop']:.1f}%" if _pb.get('gap_to_stop') is not None else "—")
+                            + f"</b> vs Est. move <b>±{_pb['est_move']:.0f}%</b>"
                             f"{'  ⚠️ Stop may not protect against overnight gap' if _pb['stop_at_risk'] else ''}"
                             f"</span>"
                             f"</div>",
@@ -6255,8 +6283,8 @@ if page == "🏠 Portfolio":
                 "", "## HOLDINGS",
             ]
             for _, _pr in port_df.iterrows():
-                _gap   = _pr.get("Gap to Stop (%)", "—")
-                _gap_s = f"{_gap:.1f}%" if isinstance(_gap, float) else str(_gap)
+                _gap   = _pr.get("Gap to Stop (%)")
+                _gap_s = f"{_gap:.1f}%" if isinstance(_gap, (int, float)) and not pd.isna(_gap) else "—"
                 _ctx_lines.append(
                     f"  {_pr['Ticker']:6s} | Weight {_pr['Weight (%)']:.1f}% | "
                     f"P&L {_pr['P&L (%)']:+.1f}% (${_pr['P&L ($)']:,.0f}) | "

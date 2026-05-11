@@ -246,7 +246,7 @@ def build_rebalance_plan(
 
             # Add urgency: high-conviction underweight names first
             urgency = 0
-            if score >= 65:
+            if score >= COMPOSITE_BUY:
                 urgency += 30
             if "Buy" in signal or "Strong Buy" in signal:
                 urgency += 20
@@ -255,7 +255,7 @@ def build_rebalance_plan(
             elif abs(drift_pp) > TOLERANCE_OK:
                 urgency += 10
 
-            if score >= 65 and ("Buy" in signal):
+            if score >= COMPOSITE_BUY and ("Buy" in signal):
                 rationale = (
                     f"**{ticker}** is {abs(drift_pp):.1f}pp underweight vs target — "
                     f"score {score:.0f}/100 with a {signal} signal. "
