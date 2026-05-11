@@ -8103,7 +8103,7 @@ elif page == "📅 Economic Calendar":
     )
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 1 — CALENDAR
+    # TAB 1 — CALENDAR  (two-column: upcoming left, completed right)
     # ══════════════════════════════════════════════════════════════════════════
     with _cal_tab:
         _ef1, _ef2 = st.columns([3, 4])
@@ -8126,8 +8126,6 @@ elif page == "📅 Economic Calendar":
         if _ec_cat_filter:
             _ec_filtered = [e for e in _ec_filtered if e["category"] in _ec_cat_filter]
 
-        st.divider()
-
         _impact_cfg = {
             MC_HIGH:   ("#ef4444", "🔴", "#1a0000"),
             MC_MEDIUM: ("#f59e0b", "🟡", "#1a1200"),
@@ -8137,70 +8135,139 @@ elif page == "📅 Economic Calendar":
             "Growth": "📈", "Consumer": "🛒", "Activity": "🏭", "Other": "📋",
         }
 
+        # Split filtered events into upcoming and past
+        _ec_upcoming = [e for e in _ec_filtered if e["date"] >= _TODAY_ET]
+        _ec_past_rev = sorted(
+            [e for e in _ec_filtered if e["date"] < _TODAY_ET],
+            key=lambda x: x["date"], reverse=True,   # most recent at top
+        )
+
         from itertools import groupby as _groupby
-        for _ec_date, _ec_day_evs in _groupby(_ec_filtered, key=lambda x: x["date"]):
-            _ec_day_list = list(_ec_day_evs)
-            _delta_days  = (_ec_date - _TODAY_ET).days
-            _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ") if hasattr(_ec_date, "strftime") else str(_ec_date)
-            _urgency_tag = ""
-            if _delta_days < 0:
-                _urgency_tag = " — *completed*"
-            elif _delta_days == 0:
-                _urgency_tag = " — **TODAY**"
-            elif _delta_days == 1:
-                _urgency_tag = " — **TOMORROW**"
-            elif _delta_days <= 7:
-                _urgency_tag = " — *this week*"
 
-            st.markdown(f"#### {_date_label}{_urgency_tag}")
+        _col_up, _col_done = st.columns([11, 9])
 
-            for _ev in _ec_day_list:
-                _imp_color, _imp_icon, _imp_bg = _impact_cfg.get(
-                    _ev["impact"], ("#6b7280", "⚪", "#111")
-                )
-                _icon    = _cat_icons.get(_ev["category"], "📋")
-                _tix     = _ev["affected_tickers"]
-                _tix_str = ", ".join(f"**{t}**" for t in _tix[:5])
-                if len(_tix) > 5:
-                    _tix_str += f" +{len(_tix)-5} more"
-                if not _tix_str:
-                    _tix_str = "*No direct holdings*"
+        # ── Left: Upcoming ────────────────────────────────────────────────────
+        with _col_up:
+            st.markdown(f"**🗓️ Upcoming** — {len(_ec_upcoming)} event{'s' if len(_ec_upcoming) != 1 else ''}")
+            st.divider()
 
-                _data_parts = []
-                if _ev.get("previous") is not None:
-                    _data_parts.append(f"Prev: **{_ev['previous']}**")
-                if _ev.get("estimate") is not None:
-                    _data_parts.append(f"Est: **{_ev['estimate']}**")
-                if _ev.get("actual") is not None:
-                    _data_parts.append(f"Actual: **{_ev['actual']}**")
-                _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+            for _ec_date, _ec_day_evs in _groupby(_ec_upcoming, key=lambda x: x["date"]):
+                _ec_day_list = list(_ec_day_evs)
+                _delta_days  = (_ec_date - _TODAY_ET).days
+                _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ")
+                if _delta_days == 0:
+                    _urgency_tag = " — **TODAY**"
+                elif _delta_days == 1:
+                    _urgency_tag = " — **TOMORROW**"
+                elif _delta_days <= 7:
+                    _urgency_tag = " — *this week*"
+                else:
+                    _urgency_tag = ""
 
-                with st.expander(
-                    f"{_imp_icon} {_icon} **{_ev['event']}**  ·  {_ev.get('time_et', _ev.get('time',''))} ET  ·  "
-                    f"{_ev['category']}  ·  {_ev['days_label']}",
-                    expanded=(0 <= _delta_days <= 2 and _ev["impact"] == MC_HIGH),
-                ):
-                    _el, _er = st.columns([3, 2])
-                    with _el:
+                st.markdown(f"##### {_date_label}{_urgency_tag}")
+
+                for _ev in _ec_day_list:
+                    _imp_color, _imp_icon, _imp_bg = _impact_cfg.get(
+                        _ev["impact"], ("#6b7280", "⚪", "#111")
+                    )
+                    _icon    = _cat_icons.get(_ev["category"], "📋")
+                    _tix     = _ev["affected_tickers"]
+                    _tix_str = ", ".join(f"**{t}**" for t in _tix[:5])
+                    if len(_tix) > 5:
+                        _tix_str += f" +{len(_tix)-5} more"
+                    if not _tix_str:
+                        _tix_str = "*No direct holdings*"
+
+                    _data_parts = []
+                    if _ev.get("previous") is not None:
+                        _data_parts.append(f"Prev: **{_ev['previous']}**")
+                    if _ev.get("estimate") is not None:
+                        _data_parts.append(f"Est: **{_ev['estimate']}**")
+                    _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+
+                    with st.expander(
+                        f"{_imp_icon} {_icon} **{_ev['event']}**  ·  "
+                        f"{_ev.get('time_et', _ev.get('time',''))} ET  ·  {_ev['days_label']}",
+                        expanded=(_delta_days <= 2 and _ev["impact"] == MC_HIGH),
+                    ):
                         if _ev.get("description"):
                             st.caption(_ev["description"])
                         if _data_row:
                             st.markdown(_data_row)
-                        st.markdown(f"**Holdings at risk:** {_tix_str}")
-                    with _er:
                         st.markdown(
-                            f"<div style='background:{_imp_bg};border-left:3px solid {_imp_color};"
-                            f"border-radius:6px;padding:8px 12px;font-size:0.82em;color:#ddd'>"
-                            f"<span style='font-size:0.7em;color:{_imp_color};font-weight:700;"
-                            f"letter-spacing:0.08em'>IMPACT: {_ev['impact']}</span><br>"
-                            f"{_ev['category']}</div>",
+                            f"**Holdings at risk:** {_tix_str} "
+                            f"<span style='float:right;background:{_imp_bg};"
+                            f"border:1px solid {_imp_color};border-radius:4px;"
+                            f"padding:2px 8px;font-size:0.72em;color:{_imp_color};"
+                            f"font-weight:700;letter-spacing:0.06em'>"
+                            f"{_ev['impact']} · {_ev['category']}</span>",
                             unsafe_allow_html=True,
                         )
-                    if _ev.get("context"):
-                        st.markdown("")
-                        st.info(f"**Institutional Lens** · {_ev['context']}")
+                        if _ev.get("context"):
+                            st.info(f"**Institutional Lens** · {_ev['context']}")
 
-            st.markdown("")
+                st.markdown("")
+
+            if not _ec_upcoming:
+                st.info("No upcoming events match the current filters.")
+
+        # ── Right: Completed ──────────────────────────────────────────────────
+        with _col_done:
+            st.markdown(f"**✅ Completed** — past 7 days")
+            st.divider()
+
+            for _ec_date, _ec_day_evs in _groupby(_ec_past_rev, key=lambda x: x["date"]):
+                _ec_day_list = list(_ec_day_evs)
+                _delta_days  = (_ec_date - _TODAY_ET).days   # negative
+                _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ")
+                _ago_tag = " — *yesterday*" if _delta_days == -1 else f" — *{abs(_delta_days)}d ago*"
+
+                st.markdown(f"##### {_date_label}{_ago_tag}")
+
+                for _ev in _ec_day_list:
+                    _imp_color, _imp_icon, _imp_bg = _impact_cfg.get(
+                        _ev["impact"], ("#6b7280", "⚪", "#111")
+                    )
+                    _icon    = _cat_icons.get(_ev["category"], "📋")
+                    _tix     = _ev["affected_tickers"]
+                    _tix_str = ", ".join(f"**{t}**" for t in _tix[:5])
+                    if len(_tix) > 5:
+                        _tix_str += f" +{len(_tix)-5} more"
+                    if not _tix_str:
+                        _tix_str = "*No direct holdings*"
+
+                    _data_parts = []
+                    if _ev.get("previous") is not None:
+                        _data_parts.append(f"Prev: **{_ev['previous']}**")
+                    if _ev.get("actual") is not None:
+                        _data_parts.append(f"Actual: **{_ev['actual']}**")
+                    _data_row = "  ·  ".join(_data_parts) if _data_parts else ""
+
+                    with st.expander(
+                        f"{_imp_icon} {_icon} **{_ev['event']}**  ·  "
+                        f"{_ev.get('time_et', _ev.get('time',''))} ET",
+                        expanded=False,
+                    ):
+                        if _ev.get("description"):
+                            st.caption(_ev["description"])
+                        if _data_row:
+                            st.markdown(_data_row)
+                        st.markdown(
+                            f"**Holdings at risk:** {_tix_str} "
+                            f"<span style='float:right;background:{_imp_bg};"
+                            f"border:1px solid {_imp_color};border-radius:4px;"
+                            f"padding:2px 8px;font-size:0.72em;color:{_imp_color};"
+                            f"font-weight:700;letter-spacing:0.06em'>"
+                            f"{_ev['impact']} · {_ev['category']}</span>",
+                            unsafe_allow_html=True,
+                        )
+                        if _ev.get("context"):
+                            st.info(f"**Institutional Lens** · {_ev['context']}")
+
+                st.markdown("")
+
+            if not _ec_past_rev:
+                st.info("No completed events in the lookback window.")
 
         st.caption(
             f"Static backbone: FOMC · CPI/PPI/NFP/GDP/Retail Sales (Fed/BLS/BEA).  "
