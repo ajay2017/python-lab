@@ -414,7 +414,7 @@ def _tip(key: str) -> str:
 
 def _m(val_str: str) -> str:
     """Return masked placeholder when privacy mode is on, otherwise the value as-is."""
-    return "••••••" if st.session_state.get("_privacy") else val_str
+    return "••••••" if st.session_state.get("_privacy", True) else val_str
 
 
 def _fill_news_slot(slot, items: list) -> None:
@@ -503,13 +503,13 @@ with st.sidebar:
     # ── Portfolio value banner — always at the very top ──────────────────
     _pv = st.session_state.get("_portfolio_value", 0)
     # Privacy toggle — persists across reruns within the session
-    _priv_on = st.session_state.get("_privacy", False)
+    _priv_on = st.session_state.get("_privacy", True)
 
     if _pv > 0:
         _risk_val = _pv * MODERATE_RISK_PCT
         _pv_label    = _m(f"${_pv:,.0f}")
         _risk_label  = _m(f"${_risk_val:,.0f}")
-        _eye_icon    = "🙈" if not _priv_on else "👁"
+        _eye_icon    = "👁" if _priv_on else "🙈"
         st.markdown(
             f"<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
             f"margin-bottom:4px;color:#fff'>"
@@ -525,7 +525,7 @@ with st.sidebar:
             f"</div>",
             unsafe_allow_html=True,
         )
-        if st.button(f"{_eye_icon} {'Hide' if not _priv_on else 'Show'} values",
+        if st.button(f"{_eye_icon} {'Show' if _priv_on else 'Hide'} values",
                      key="_privacy_toggle", use_container_width=True,
                      help="Hide or show all dollar amounts — useful in public"):
             st.session_state["_privacy"] = not _priv_on
