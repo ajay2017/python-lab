@@ -552,7 +552,7 @@ if "scanner_results" not in st.session_state:
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
 if "nav_page" not in st.session_state:
-    st.session_state.nav_page = "🏠 Portfolio"
+    st.session_state.nav_page = "🏠 Home"
 # Apply any pending navigation set by mid-page buttons (must run before
 # the sidebar radio widget renders so the widget picks up the new value).
 if "_pending_page" in st.session_state:
@@ -614,7 +614,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -859,8 +859,8 @@ st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
 # ═════════════════════════════════════════════════════════════════════════════
-if page == "🏠 Portfolio":
-    st.title("🏠 Portfolio")
+if page == "🏠 Home":
+    st.title("🏠 Home")
 
 
     # Load data for all held tickers
@@ -5332,7 +5332,7 @@ if page == "🏠 Portfolio":
                                             ):
                                                 st.session_state["_analysis_ticker"] = _dp_ticker
                                                 st.session_state["_pending_page"]    = "📈 Stock Analysis"
-                                                st.session_state["_nav_origin"]      = "🏠 Portfolio"
+                                                st.session_state["_nav_origin"]      = "🏠 Home"
                                                 st.rerun()
 
         # ── Stress Testing ────────────────────────────────────────────────────
@@ -7044,7 +7044,7 @@ elif page == "📈 Stock Analysis":
     _nav_origin = st.session_state.get("_nav_origin", "")
     if _nav_origin:
         _back_label = {
-            "🏠 Portfolio":   "← Back to Portfolio",
+            "🏠 Home":   "← Back to Home",
             "🔍 Market Scanner": "← Back to Market Scanner",
             "📋 Watchlist":      "← Back to Watchlist",
             "📋 Today's Brief":  "← Back to Today's Brief",
