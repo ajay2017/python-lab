@@ -1,5 +1,6 @@
 # Architecture Document
-## Personal Portfolio Intelligence App
+## DRISHTA — Beyond Noise
+*Personal Portfolio Intelligence App*
 
 **Version:** 1.1  
 **Date:** May 2026  

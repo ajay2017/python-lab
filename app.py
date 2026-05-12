@@ -77,7 +77,12 @@ from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
 
-st.set_page_config(page_title="Portfolio Manager", page_icon="📊", layout="wide")
+# Brand: DRISHTA (Sanskrit for "vision/insight") — "Beyond Noise".
+# page_icon falls back to an emoji if the logo file isn't deployed yet so
+# the app continues to render in either state.
+_BRAND_LOGO_PATH = "assets/drishta_logo.png"
+_BRAND_PAGE_ICON = _BRAND_LOGO_PATH if os.path.exists(_BRAND_LOGO_PATH) else "👁"
+st.set_page_config(page_title="DRISHTA · Beyond Noise", page_icon=_BRAND_PAGE_ICON, layout="wide")
 
 
 # Re-exported from constants module so existing callers continue to work; new
@@ -476,7 +481,10 @@ def _check_password():
         expected = ""
     if not expected or st.session_state.get("auth_ok"):
         return
-    st.title("📊 Portfolio Manager")
+    if os.path.exists(_BRAND_LOGO_PATH):
+        st.image(_BRAND_LOGO_PATH, width=120)
+    st.title("DRISHTA")
+    st.caption("Beyond Noise")
     st.subheader("Sign In")
     pwd = st.text_input("Password", type="password")
     if st.button("Login", type="primary"):
@@ -555,7 +563,10 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.header("📊 Portfolio Manager")
+    if os.path.exists(_BRAND_LOGO_PATH):
+        st.image(_BRAND_LOGO_PATH, width=90)
+    st.header("DRISHTA")
+    st.caption("Beyond Noise")
     page = st.radio(
         "Navigate",
         ["🏠 Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
