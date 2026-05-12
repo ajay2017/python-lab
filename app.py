@@ -85,6 +85,57 @@ _BRAND_PAGE_ICON = _BRAND_LOGO_PATH if os.path.exists(_BRAND_LOGO_PATH) else "�
 st.set_page_config(page_title="DRISHTA · Beyond Noise", page_icon=_BRAND_PAGE_ICON, layout="wide")
 
 
+@st.cache_data(show_spinner=False)
+def _brand_logo_data_uri() -> str | None:
+    """Read the logo once per session and return as a data: URI for inline HTML.
+    Returns None if the file is missing or unreadable — caller falls back."""
+    if not os.path.exists(_BRAND_LOGO_PATH):
+        return None
+    try:
+        import base64 as _b64
+        with open(_BRAND_LOGO_PATH, "rb") as _f:
+            return "data:image/png;base64," + _b64.b64encode(_f.read()).decode()
+    except Exception:
+        return None
+
+
+def _render_brand(large: bool = False) -> None:
+    """Render the centered DRISHTA brand block (logo + name + tagline).
+    Pass large=True for the login screen (bigger logo/text); False for sidebar."""
+    _uri        = _brand_logo_data_uri()
+    _img_w      = 120 if large else 80
+    _name_size  = "2.0em" if large else "1.35em"
+    _tag_size   = "0.82em" if large else "0.66em"
+    _padding    = "20px 0 24px 0" if large else "10px 0 14px 0"
+    _name_track = "0.20em" if large else "0.18em"
+    _tag_track  = "0.30em" if large else "0.26em"
+    _name_mgn   = "12px 0 4px 0" if large else "10px 0 3px 0"
+
+    if _uri:
+        _img_html = (
+            f"<img src='{_uri}' width='{_img_w}' "
+            f"style='display:block; margin:0 auto'>"
+        )
+    else:
+        _img_html = (
+            f"<div style='font-size:{int(_img_w * 0.6)}px; "
+            f"text-align:center; line-height:1'>👁</div>"
+        )
+
+    st.markdown(
+        f"<div style='text-align:center; padding:{_padding}'>"
+        f"{_img_html}"
+        f"<div style='font-size:{_name_size}; font-weight:700; "
+        f"letter-spacing:{_name_track}; color:#f9fafb; margin:{_name_mgn}'>"
+        f"DRISHTA</div>"
+        f"<div style='font-size:{_tag_size}; color:#9ca3af; "
+        f"letter-spacing:{_tag_track}; text-transform:uppercase; font-weight:500'>"
+        f"Beyond Noise</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # Re-exported from constants module so existing callers continue to work; new
 # code should import RISK_PCT_PER_TRADE directly from stock_analyzer.constants.
 from stock_analyzer.constants import RISK_PCT_PER_TRADE as MODERATE_RISK_PCT
@@ -481,10 +532,7 @@ def _check_password():
         expected = ""
     if not expected or st.session_state.get("auth_ok"):
         return
-    if os.path.exists(_BRAND_LOGO_PATH):
-        st.image(_BRAND_LOGO_PATH, width=120)
-    st.title("DRISHTA")
-    st.caption("Beyond Noise")
+    _render_brand(large=True)
     st.subheader("Sign In")
     pwd = st.text_input("Password", type="password")
     if st.button("Login", type="primary"):
@@ -563,10 +611,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    if os.path.exists(_BRAND_LOGO_PATH):
-        st.image(_BRAND_LOGO_PATH, width=90)
-    st.header("DRISHTA")
-    st.caption("Beyond Noise")
+    _render_brand(large=False)
     page = st.radio(
         "Navigate",
         ["🏠 Portfolio", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
