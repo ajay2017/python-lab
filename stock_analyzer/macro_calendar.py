@@ -85,7 +85,7 @@ _STATIC: list[tuple] = [
     ("2026-02-11", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jan 2026 CPI"),
     ("2026-03-11", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Feb 2026 CPI"),
     ("2026-04-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Mar 2026 CPI"),
-    ("2026-05-13", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Apr 2026 CPI"),
+    ("2026-05-12", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Apr 2026 CPI"),
     ("2026-06-10", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "May 2026 CPI"),
     ("2026-07-14", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jun 2026 CPI"),
     ("2026-08-12", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Jul 2026 CPI"),
