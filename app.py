@@ -86,9 +86,8 @@ st.set_page_config(page_title="DRISHTA · Beyond Noise", page_icon=_BRAND_PAGE_I
 
 
 @st.cache_data(show_spinner=False)
-def _brand_logo_data_uri() -> str | None:
-    """Read the logo once per session and return as a data: URI for inline HTML.
-    Returns None if the file is missing or unreadable — caller falls back."""
+def _brand_logo_data_uri_cached(mtime: float) -> str | None:
+    """Cached by file mtime so replacing the logo PNG auto-invalidates."""
     if not os.path.exists(_BRAND_LOGO_PATH):
         return None
     try:
@@ -99,37 +98,41 @@ def _brand_logo_data_uri() -> str | None:
         return None
 
 
+def _brand_logo_data_uri() -> str | None:
+    if not os.path.exists(_BRAND_LOGO_PATH):
+        return None
+    return _brand_logo_data_uri_cached(os.path.getmtime(_BRAND_LOGO_PATH))
+
+
 def _render_brand(large: bool = False) -> None:
-    """Render the centered DRISHTA brand block (logo + name + tagline).
-    Pass large=True for the login screen (bigger logo/text); False for sidebar."""
-    _uri        = _brand_logo_data_uri()
-    _img_w      = 120 if large else 80
-    _name_size  = "2.0em" if large else "1.35em"
-    _tag_size   = "0.82em" if large else "0.66em"
-    _padding    = "20px 0 24px 0" if large else "10px 0 14px 0"
-    _name_track = "0.20em" if large else "0.18em"
-    _tag_track  = "0.30em" if large else "0.26em"
-    _name_mgn   = "12px 0 4px 0" if large else "10px 0 3px 0"
+    """Render the centered DRISHTA brand image.
+    The logo PNG is a single combined asset (mark + wordmark + tagline) so this
+    function just renders that one image — no separate HTML text. Falls back
+    to a text block if the file is missing."""
+    _uri     = _brand_logo_data_uri()
+    _img_w   = 300 if large else 220
+    _padding = "20px 0 16px 0" if large else "10px 0 12px 0"
 
     if _uri:
-        _img_html = (
+        st.markdown(
+            f"<div style='text-align:center; padding:{_padding}'>"
             f"<img src='{_uri}' width='{_img_w}' "
-            f"style='display:block; margin:0 auto'>"
+            f"style='display:block; margin:0 auto; max-width:100%; height:auto'>"
+            f"</div>",
+            unsafe_allow_html=True,
         )
-    else:
-        _img_html = (
-            f"<div style='font-size:{int(_img_w * 0.6)}px; "
-            f"text-align:center; line-height:1'>👁</div>"
-        )
+        return
 
+    # Fallback: combined-image not deployed yet → text-only brand block
+    _name_size = "2.0em" if large else "1.35em"
+    _tag_size  = "0.82em" if large else "0.66em"
     st.markdown(
         f"<div style='text-align:center; padding:{_padding}'>"
-        f"{_img_html}"
+        f"<div style='font-size:3em; line-height:1'>👁</div>"
         f"<div style='font-size:{_name_size}; font-weight:700; "
-        f"letter-spacing:{_name_track}; color:#f9fafb; margin:{_name_mgn}'>"
-        f"DRISHTA</div>"
+        f"letter-spacing:0.20em; color:#f9fafb; margin:10px 0 3px 0'>DRISHTA</div>"
         f"<div style='font-size:{_tag_size}; color:#9ca3af; "
-        f"letter-spacing:{_tag_track}; text-transform:uppercase; font-weight:500'>"
+        f"letter-spacing:0.28em; text-transform:uppercase; font-weight:500'>"
         f"Beyond Noise</div>"
         f"</div>",
         unsafe_allow_html=True,
