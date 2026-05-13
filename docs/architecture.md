@@ -381,7 +381,7 @@ Earnings growth and debt/equity retain universal thresholds; FCF Yield retains u
 ## 6. Database Schema
 
 **Database:** Supabase (hosted PostgreSQL)  
-**RLS:** Disabled on all tables (single-user app)
+**RLS:** **Enabled** on all public-schema tables with a single `FOR ALL TO service_role` policy per table. The Streamlit secret `[supabase] key` must be the service-role / secret key (bypasses RLS, server-side only). The anon/publishable key has no matching policy and is therefore denied — defense in depth in case the publishable key ever leaks.
 
 ### 6.1 `holdings` table
 

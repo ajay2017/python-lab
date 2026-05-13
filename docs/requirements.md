@@ -264,7 +264,7 @@ Single source of truth: `stock_analyzer/constants.py`.
 |----|-------------|
 | NF-30 | All secrets (Supabase URL, Supabase key, LLM API keys) must be stored in Streamlit Cloud Secrets, never in code or committed files |
 | NF-31 | No user authentication required (single-user personal app) |
-| NF-32 | Row Level Security is disabled on Supabase tables (single-user, no multi-tenancy) |
+| NF-32 | Row Level Security is **enabled** on all public-schema tables with `FOR ALL TO service_role` policies. The Streamlit secret `[supabase] key` must be the service-role / secret key (bypasses RLS); the publishable/anon key has no matching policy and is denied. This is defense-in-depth: a leaked publishable key cannot access portfolio data. |
 
 ### 4.5 Usability
 

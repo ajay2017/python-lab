@@ -1,11 +1,32 @@
 """
 Persistence layer — reads/writes holdings, watchlist, and trades to Supabase.
 
-IMPORTANT: Run this SQL once in the Supabase SQL Editor to disable RLS:
+SECURITY MODEL (single-user, server-side Streamlit Cloud):
+    - Streamlit secret `[supabase] key` MUST be the secret/service-role key
+      (sb_secret_* in the new key format, or the legacy service_role JWT),
+      NOT the publishable/anon key. The secret key bypasses RLS and stays
+      server-side only (Streamlit secrets are never sent to the browser).
+    - RLS is ENABLED on all three tables in the public schema with a single
+      policy per table that grants ALL operations to the service_role.
+      Anon/authenticated roles have no matching policy, so a leaked
+      publishable key cannot access data — defense in depth.
 
-    ALTER TABLE holdings  DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE watchlist DISABLE ROW LEVEL SECURITY;
-    ALTER TABLE trades    DISABLE ROW LEVEL SECURITY;
+One-time SQL to set up RLS (run in Supabase SQL Editor):
+
+    ALTER TABLE public.holdings  ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.watchlist ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.trades    ENABLE ROW LEVEL SECURITY;
+
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.holdings;
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.watchlist;
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.trades;
+
+    CREATE POLICY "Allow all (service role)" ON public.holdings
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow all (service role)" ON public.watchlist
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow all (service role)" ON public.trades
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 Table schema (run once if tables don't exist):
 
@@ -93,9 +114,11 @@ def load_holdings() -> pd.DataFrame:
             _ah.record("supabase", "error", msg=err[:120])
             if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
                 st.error(
-                    "⛔ Supabase RLS is blocking reads. "
-                    "Run `ALTER TABLE holdings DISABLE ROW LEVEL SECURITY;` "
-                    "in your Supabase SQL Editor, then refresh."
+                    "⛔ Supabase RLS is blocking reads. The Streamlit secret "
+                    "`[supabase] key` must be the **service-role / secret key** "
+                    "(starts with `sb_secret_` or is the legacy service_role JWT) — "
+                    "not the publishable/anon key. Update it in Streamlit Cloud → "
+                    "Settings → Secrets, then Reboot the app."
                 )
             else:
                 st.error(f"⛔ DB read error: {err}")
@@ -129,9 +152,9 @@ def save_holdings(df: pd.DataFrame) -> bool:
         _ah.record("supabase", "error", msg=err[:120])
         if "row-level security" in err.lower() or "42501" in err:
             st.error(
-                "⛔ Supabase RLS is blocking writes. "
-                "Run `ALTER TABLE holdings DISABLE ROW LEVEL SECURITY;` "
-                "in your Supabase SQL Editor."
+                "⛔ Supabase RLS is blocking writes. The Streamlit secret "
+                "`[supabase] key` must be the service-role / secret key "
+                "(bypasses RLS), not the publishable/anon key."
             )
         else:
             st.error(f"⛔ Failed to save holdings: {err}")
@@ -180,9 +203,9 @@ def load_trades() -> pd.DataFrame:
             err = str(e)
             if "row-level security" in err.lower() or "42501" in err:
                 st.error(
-                    "⛔ Supabase RLS is blocking trades table. "
-                    "Run `ALTER TABLE trades DISABLE ROW LEVEL SECURITY;` "
-                    "in your Supabase SQL Editor."
+                    "⛔ Supabase RLS is blocking the trades table. The Streamlit "
+                    "secret `[supabase] key` must be the service-role / secret "
+                    "key (bypasses RLS), not the publishable/anon key."
                 )
             else:
                 st.error(f"⛔ Trades read error: {err}")
