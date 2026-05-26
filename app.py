@@ -1270,24 +1270,49 @@ if page == "🏠 Home":
             "failures": _comp_failures,
         }
 
-    # Build Daily Briefing (synthesises all intelligence — computed once before tabs)
-    try:
-        _daily_brief = build_daily_briefing(
-            port_df         = port_df,
-            alert_list      = alert_list,
-            risk_recs       = _risk_advisor_recs,
-            news_items      = st.session_state.get("_sidebar_news", []),
-            macro_events    = _macro_events,
-            held_data       = held_data,
-            scanner_results = st.session_state.get("scanner_results"),
-            portfolio_value = total_val,
-            today           = _TODAY_ET,
-            market_context  = _market_context,
-            grow_composites = st.session_state.get("_grow_composites", {}),
-        )
-    except Exception:
-        _daily_brief    = None
-        _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+    # Build Daily Briefing (synthesises all intelligence — computed once before tabs).
+    #
+    # Lock semantics: when the user has clicked "Lock Today's Setup", we serve
+    # the cached snapshot instead of rebuilding. This freezes the AM read so
+    # mid-day data drift can't shift recommendations under the user after they
+    # already decided. Lock auto-expires next trading day (different _TODAY_ET).
+    _brief_locked_for = st.session_state.get("_brief_locked_for_date")
+    _brief_snapshot   = st.session_state.get("_brief_locked_snapshot")
+    _brief_use_lock   = (
+        st.session_state.get("_brief_locked", False)
+        and _brief_locked_for == _TODAY_ET
+        and _brief_snapshot is not None
+    )
+    if _brief_use_lock:
+        _daily_brief = _brief_snapshot
+        # _brief_built_at was set at the time of the original build (preserved)
+    else:
+        # Lock from a previous trading day — clear it so the new day's Brief builds fresh
+        if st.session_state.get("_brief_locked") and _brief_locked_for != _TODAY_ET:
+            st.session_state["_brief_locked"] = False
+            st.session_state.pop("_brief_locked_snapshot", None)
+            st.session_state.pop("_brief_locked_for_date", None)
+            st.session_state.pop("_brief_locked_at", None)
+        try:
+            _daily_brief = build_daily_briefing(
+                port_df         = port_df,
+                alert_list      = alert_list,
+                risk_recs       = _risk_advisor_recs,
+                news_items      = st.session_state.get("_sidebar_news", []),
+                macro_events    = _macro_events,
+                held_data       = held_data,
+                scanner_results = st.session_state.get("scanner_results"),
+                portfolio_value = total_val,
+                today           = _TODAY_ET,
+                market_context  = _market_context,
+                grow_composites = st.session_state.get("_grow_composites", {}),
+            )
+            # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
+            # the Brief header so the user can see how fresh the data is.
+            st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
+        except Exception:
+            _daily_brief    = None
+            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
 
     # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
     # can demote ENTER_NOW picks that would stack the same sector exposure.
@@ -1445,6 +1470,88 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_daily:
         from datetime import datetime as _dt
+
+        # ── Freshness strip — captured-at timestamp + Lock/Unlock control ─────
+        # The Brief is designed for one-time AM decision-making, not a streaming
+        # ticker. Surfacing the build time (and offering a freeze) closes the
+        # "I acted on a card that disappeared 30 min later" trust gap.
+        _b_built_at = st.session_state.get("_brief_built_at")
+        _b_locked   = bool(st.session_state.get("_brief_locked", False))
+        _b_locked_at = st.session_state.get("_brief_locked_at")
+        _b_now_et   = datetime.now(_pytz.timezone("America/New_York"))
+
+        def _fmt_et(_d):
+            if _d is None:
+                return "—"
+            try:
+                return _d.strftime("%-I:%M %p ET") if hasattr(_d, "strftime") else "—"
+            except ValueError:
+                # Windows strftime doesn't support %-I; fall back to %I and strip
+                return _d.strftime("%I:%M %p ET").lstrip("0")
+
+        def _fmt_age(_d):
+            if _d is None:
+                return ""
+            try:
+                _delta = _b_now_et - _d
+                _mins = int(_delta.total_seconds() // 60)
+                if _mins < 1:
+                    return "just now"
+                if _mins < 60:
+                    return f"{_mins} min ago"
+                _hrs = _mins // 60
+                return f"{_hrs}h {_mins % 60}m ago"
+            except Exception:
+                return ""
+
+        _fs_c1, _fs_c2 = st.columns([4, 1])
+        with _fs_c1:
+            if _b_locked and _b_locked_at:
+                st.markdown(
+                    f"<div style='background:#172554;border:1px solid #3b82f6;"
+                    f"border-radius:8px;padding:8px 14px;margin-bottom:8px;color:#bfdbfe'>"
+                    f"🔒 <b>Today's Setup Locked</b> at {_fmt_et(_b_locked_at)} "
+                    f"<span style='color:#93c5fd;font-size:0.85em'>({_fmt_age(_b_locked_at)})</span> — "
+                    f"recommendations are frozen for the day. Risk, holdings, and prices continue updating."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            elif _b_built_at:
+                st.markdown(
+                    f"<div style='background:#0f172a;border:1px solid #334155;"
+                    f"border-radius:8px;padding:8px 14px;margin-bottom:8px;color:#cbd5e1;font-size:0.92em'>"
+                    f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
+                    f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
+                    f"recommendations refresh when scanner reruns or composite cache expires (30 min)."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        with _fs_c2:
+            if _b_locked:
+                if st.button(
+                    "🔓 Unlock",
+                    key="_brief_unlock_btn",
+                    help="Resume live Brief updates. Recommendations will refresh on the next render.",
+                    use_container_width=True,
+                ):
+                    st.session_state["_brief_locked"] = False
+                    st.session_state.pop("_brief_locked_snapshot", None)
+                    st.session_state.pop("_brief_locked_for_date", None)
+                    st.session_state.pop("_brief_locked_at", None)
+                    st.rerun()
+            else:
+                if st.button(
+                    "🔒 Lock Setup",
+                    key="_brief_lock_btn",
+                    help="Freeze today's recommendations. Lock expires at end of trading day.",
+                    use_container_width=True,
+                    disabled=_daily_brief is None,
+                ):
+                    st.session_state["_brief_locked"]          = True
+                    st.session_state["_brief_locked_snapshot"] = _daily_brief
+                    st.session_state["_brief_locked_for_date"] = _TODAY_ET
+                    st.session_state["_brief_locked_at"]       = _b_now_et
+                    st.rerun()
 
         # ── Refresh macro data ────────────────────────────────────────────────
         # Bypasses the per-day _macro_cal_{date} session cache so the user can

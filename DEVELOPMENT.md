@@ -164,6 +164,22 @@ Pick up tomorrow morning during market validation, then batch.
 
 ---
 
+## Phase 5+ queued
+
+**Evening Debrief (PM read companion to Today's Brief):**
+- New section/tab rendered after 3:30 PM ET (or always with a "preview" mode before that)
+- Reviews the day's activity against the AM read:
+  - Which Go-verdict picks were actioned in Trade Journal · entry vs. close price
+  - Which Skip/Filtered-Out picks would have worked anyway (learning loop)
+  - Held positions that crossed stops or earnings windows during the day
+  - Tomorrow's macro events + sector exposure heatmap
+- Closing summary: "Today's P&L attribution," "Risk events tomorrow," "One thing to fix"
+- Should consume the locked AM snapshot (if present) as the "what I planned" baseline so the debrief is a true delta vs. the morning plan
+
+**Concept:** AM Brief = "today's playbook"; Evening Debrief = "how it went + what's tomorrow." Together they make the loop closed without needing the user to remember anything between sessions.
+
+---
+
 ## What NOT to do
 
 - **Don't disable RLS.** The current Supabase setup is secured with RLS + service-role-only policies. If you see "row-level security blocking" errors, the Streamlit secret is on the wrong key (anon instead of service_role). The fix is to swap secrets, not disable RLS.
