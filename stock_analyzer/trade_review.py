@@ -522,16 +522,46 @@ def sector_mix(trades_with_outcome: list[dict],
 # specific behavioural pattern. A diagnostic returns:
 #   None                 — sample too small or pattern doesn't apply
 #   dict with keys:
-#     pattern   : short name (e.g. "Holding-Period Imbalance")
-#     severity  : 'critical' | 'watch' | 'good'
-#     detection : prose explanation with the specific numbers
-#     action    : concrete next step (None for "good" severity)
-#     evidence  : raw numbers for transparency
+#     pattern_key    : slug used by the UI to dispatch to the right evidence
+#                       renderer (e.g. 'holding_period_imbalance')
+#     pattern        : human-readable name (e.g. "Holding-Period Imbalance")
+#     severity       : 'critical' | 'watch' | 'good'
+#     detection      : prose explanation with the specific numbers
+#     action         : concrete next step (None for "good" severity)
+#     evidence       : raw aggregate numbers for transparency
+#     related_trades : compact trade refs the UI can display when the user
+#                       clicks the "Show trades behind this" toggle. Shape
+#                       depends on pattern_key — each renderer knows what to
+#                       expect for its slug.
 #
 # build_recommendations() orchestrates them and returns the list, severity-
 # sorted (critical first). All diagnostics are sample-size-guarded — they
 # only fire when the underlying data supports a defensible conclusion.
 # ────────────────────────────────────────────────────────────────────────────
+
+
+def _compact_trade(t: dict) -> dict:
+    """
+    Compact trade dict for the Lens-3 evidence renderers. Strips the full
+    trade record down to the fields the inline display needs — keeps the
+    `related_trades` payload small and easy for the UI to consume.
+    """
+    return {
+        "id":           t.get("id"),
+        "ticker":       t.get("ticker", ""),
+        "action":       t.get("action", ""),
+        "date":         t.get("_trade_date"),
+        "shares":       _f(t.get("shares")),
+        "price":        _f(t.get("price")),
+        "outcome_pnl":  _f(t.get("outcome_pnl")),
+        "outcome_pct":  _f(t.get("outcome_pct")),
+        "hold_days":    t.get("hold_days"),
+        "vs_spy_pct":   t.get("vs_spy_pct"),
+        "signal_seen":  t.get("signal_seen", ""),
+        "panic_window": bool(t.get("panic_window", False)),
+        "is_win":       t.get("is_win"),
+        "category":     t.get("category", ""),
+    }
 
 
 def _diag_holding_period_imbalance(trades: list[dict]) -> dict | None:
@@ -594,16 +624,23 @@ def _diag_holding_period_imbalance(trades: list[dict]) -> dict | None:
         return None
 
     return {
-        "pattern":   "Holding-Period Imbalance",
-        "severity":  severity,
-        "detection": detection,
-        "action":    action,
+        "pattern_key":    "holding_period_imbalance",
+        "pattern":        "Holding-Period Imbalance",
+        "severity":       severity,
+        "detection":      detection,
+        "action":         action,
         "evidence":  {
             "avg_win_hold":  round(avg_win_hold,  1),
             "avg_loss_hold": round(avg_loss_hold, 1),
             "gap":           round(gap, 1),
             "n_wins":        len(wins),
             "n_losses":      len(losses),
+        },
+        "related_trades": {
+            "wins":   sorted([_compact_trade(t) for t in wins],
+                             key=lambda x: (x["hold_days"] or 0), reverse=True)[:6],
+            "losses": sorted([_compact_trade(t) for t in losses],
+                             key=lambda x: (x["hold_days"] or 0), reverse=True)[:6],
         },
     }
 
@@ -694,16 +731,23 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
             return None
 
     return {
-        "pattern":   "Signal-Defying Bias",
-        "severity":  severity,
-        "detection": detection,
-        "action":    action,
+        "pattern_key":    "signal_defying_bias",
+        "pattern":        "Signal-Defying Bias",
+        "severity":       severity,
+        "detection":      detection,
+        "action":         action,
         "evidence":  {
             "n_defying":   len(defying),
             "n_compliant": len(compliant),
             "avg_def_pnl": round(avg_def, 2),
             "avg_comp_pnl": round(avg_comp, 2) if avg_comp is not None else None,
             "def_win_rate": round(def_wr, 1),
+        },
+        "related_trades": {
+            "defying":   sorted([_compact_trade(t) for t in defying],
+                                key=lambda x: x["outcome_pnl"])[:8],   # worst defying first
+            "compliant": sorted([_compact_trade(t) for t in compliant],
+                                key=lambda x: -x["outcome_pnl"])[:4],  # best compliant for contrast
         },
     }
 
@@ -772,15 +816,21 @@ def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
         )
 
     return {
-        "pattern":   "vs-SPY Drag",
-        "severity":  severity,
-        "detection": detection,
-        "action":    action,
+        "pattern_key":    "vs_spy_drag",
+        "pattern":        "vs-SPY Drag",
+        "severity":       severity,
+        "detection":      detection,
+        "action":         action,
         "evidence":  {
             "n_closed":         len(closed),
             "beat_spy":         beat_spy,
             "beat_pct":         round(beat_pct, 1),
             "cumulative_alpha": round(cumulative_alpha, 2),
+        },
+        "related_trades": {
+            # Sorted worst-vs-SPY first so the user sees the biggest drags up top
+            "trades": sorted([_compact_trade(t) for t in closed],
+                             key=lambda x: x["vs_spy_pct"]),
         },
     }
 
@@ -809,6 +859,8 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
             "ticker":   tk,
             "n_trades": len(group),
             "net_pnl":  round(net, 2),
+            "trades":   sorted([_compact_trade(t) for t in group],
+                               key=lambda x: x["date"] or date.min),
         }
         if net < 0:
             repeated_negative.append(entry)
@@ -842,14 +894,19 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
             "re-read the journal entries for that ticker before the next attempt."
         )
         return {
-            "pattern":   "Re-Entered Tickers",
-            "severity":  severity,
-            "detection": detection,
-            "action":    action,
+            "pattern_key":    "re_entered_tickers",
+            "pattern":        "Re-Entered Tickers",
+            "severity":       severity,
+            "detection":      detection,
+            "action":         action,
             "evidence":  {
                 "n_repeated_negative": len(repeated_negative),
                 "total_negative_pnl":  round(total_neg, 2),
-                "top_negative":        top3,
+                "top_negative":        [{k: v for k, v in e.items() if k != "trades"} for e in top3],
+            },
+            "related_trades": {
+                "negative_groups": repeated_negative,
+                "positive_groups": repeated_positive,
             },
         }
 
@@ -860,16 +917,21 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
         for e in top3
     )
     return {
-        "pattern":   "Re-Entered Tickers",
-        "severity":  "good",
+        "pattern_key":    "re_entered_tickers",
+        "pattern":        "Re-Entered Tickers",
+        "severity":       "good",
         "detection": (
             f"Your repeated entries are working: {names}. Re-fishing names you've "
             "studied is paying off."
         ),
-        "action":    None,
+        "action":         None,
         "evidence":  {
             "n_repeated_positive": len(repeated_positive),
-            "top_positive":        top3,
+            "top_positive":        [{k: v for k, v in e.items() if k != "trades"} for e in top3],
+        },
+        "related_trades": {
+            "negative_groups": [],
+            "positive_groups": repeated_positive,
         },
     }
 

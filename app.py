@@ -10693,8 +10693,171 @@ elif page == "🪞 Trade Review":
         # ── 🎯 Course-Correction Recommendations (Lens 3) ─────────────────────
         # Each rec is a sample-size-guarded behavioural diagnostic — fires only
         # when YOUR data supports the conclusion. Severity-sorted (critical
-        # first) so the most important course correction is at the top.
+        # first) so the most important course correction is at the top. Each
+        # card has a toggle to expand the trades that triggered the finding.
         _tr_recs = build_recommendations(_tr_trades)
+
+        # ── Evidence-renderer helpers — one per pattern_key ─────────────────
+        # All render compact one-line-per-trade rows so the inline expansion
+        # stays scannable. Receive the `related_trades` payload from the rec.
+        def _tr_evidence_row(t: dict, *, show_vs_spy: bool = False,
+                             show_hold: bool = False, show_signal: bool = False,
+                             extra_chip: str = "") -> str:
+            _pnl_col   = "#86efac" if t["outcome_pnl"] > 0 else "#fca5a5" if t["outcome_pnl"] < 0 else "#cbd5e1"
+            _act_col   = "#22c55e" if "BUY" in t["action"].upper() else "#ef4444"
+            _dt_str    = t["date"].isoformat() if hasattr(t["date"], "isoformat") else str(t["date"])
+            _extras    = []
+            if show_hold and t.get("hold_days") is not None:
+                _extras.append(f"{t['hold_days']}d held")
+            if show_vs_spy and t.get("vs_spy_pct") is not None:
+                _vs_col = "#86efac" if t["vs_spy_pct"] >= 0 else "#fca5a5"
+                _extras.append(f"vs SPY <b style='color:{_vs_col}'>{t['vs_spy_pct']:+.2f}%</b>")
+            if show_signal and t.get("signal_seen"):
+                _extras.append(f"signal seen: <i>{_html.escape(t['signal_seen'][:32])}</i>")
+            if t.get("panic_window"):
+                _extras.append("🌪 panic day")
+            _extra_str = " · ".join(_extras)
+            if _extra_str:
+                _extra_str = f" · {_extra_str}"
+            _chip = f" {extra_chip}" if extra_chip else ""
+            return (
+                f"<div style='background:#0f172a;border-radius:4px;"
+                f"padding:6px 10px;margin-bottom:4px;color:#cbd5e1;font-size:0.82em'>"
+                f"<span style='color:{_act_col};font-weight:600'>{t['action']}</span> "
+                f"<b>{t['ticker']}</b> · "
+                f"{t['shares']:.0f}sh @ ${t['price']:.2f} · "
+                f"<b style='color:{_pnl_col}'>${t['outcome_pnl']:+,.0f} "
+                f"({t['outcome_pct']:+.2f}%)</b>"
+                f"{_extra_str}"
+                f" <span style='color:#64748b'>· {_dt_str}</span>{_chip}"
+                f"</div>"
+            )
+
+        def _tr_render_evidence(rec: dict):
+            pk = rec.get("pattern_key", "")
+            rt = rec.get("related_trades", {}) or {}
+
+            if pk == "holding_period_imbalance":
+                _wins   = rt.get("wins", [])
+                _losses = rt.get("losses", [])
+                _e1, _e2 = st.columns(2)
+                with _e1:
+                    st.markdown(
+                        f"<div style='color:#86efac;font-weight:700;font-size:0.85em;"
+                        f"margin-bottom:6px'>Winners — sorted by hold days (desc)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _wins:
+                        st.markdown(_tr_evidence_row(_t, show_hold=True),
+                                    unsafe_allow_html=True)
+                with _e2:
+                    st.markdown(
+                        f"<div style='color:#fca5a5;font-weight:700;font-size:0.85em;"
+                        f"margin-bottom:6px'>Losers — sorted by hold days (desc)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _losses:
+                        st.markdown(_tr_evidence_row(_t, show_hold=True),
+                                    unsafe_allow_html=True)
+
+            elif pk == "signal_defying_bias":
+                _def  = rt.get("defying",   [])
+                _comp = rt.get("compliant", [])
+                st.markdown(
+                    f"<div style='color:#fca5a5;font-weight:700;font-size:0.85em;"
+                    f"margin-bottom:6px'>Defying trades ({len(_def)})</div>",
+                    unsafe_allow_html=True,
+                )
+                for _t in _def:
+                    st.markdown(_tr_evidence_row(_t, show_signal=True),
+                                unsafe_allow_html=True)
+                if _comp:
+                    st.markdown(
+                        f"<div style='color:#86efac;font-weight:700;font-size:0.85em;"
+                        f"margin-top:10px;margin-bottom:6px'>Compliant comparison "
+                        f"({len(_comp)} top performers)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _comp:
+                        st.markdown(_tr_evidence_row(_t, show_signal=True),
+                                    unsafe_allow_html=True)
+
+            elif pk == "vs_spy_drag":
+                _trades = rt.get("trades", [])
+                _losers = [t for t in _trades if (t.get("vs_spy_pct") or 0) < 0]
+                _beats  = [t for t in _trades if (t.get("vs_spy_pct") or 0) >= 0]
+                if _losers:
+                    st.markdown(
+                        f"<div style='color:#fca5a5;font-weight:700;font-size:0.85em;"
+                        f"margin-bottom:6px'>Underperformed SPY ({len(_losers)})</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _losers:
+                        st.markdown(_tr_evidence_row(_t, show_vs_spy=True, show_hold=True),
+                                    unsafe_allow_html=True)
+                if _beats:
+                    st.markdown(
+                        f"<div style='color:#86efac;font-weight:700;font-size:0.85em;"
+                        f"margin-top:10px;margin-bottom:6px'>Beat SPY ({len(_beats)})</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _beats:
+                        st.markdown(_tr_evidence_row(_t, show_vs_spy=True, show_hold=True),
+                                    unsafe_allow_html=True)
+
+            elif pk == "re_entered_tickers":
+                _neg = rt.get("negative_groups", [])
+                _pos = rt.get("positive_groups", [])
+                if _neg:
+                    st.markdown(
+                        f"<div style='color:#fca5a5;font-weight:700;font-size:0.85em;"
+                        f"margin-bottom:6px'>Net-negative re-entries</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _g in _neg:
+                        st.markdown(
+                            f"<div style='color:#f9fafb;font-weight:700;font-size:0.88em;"
+                            f"margin:8px 0 4px'>{_g['ticker']} — "
+                            f"<span style='color:#fca5a5'>{_g['n_trades']}× = "
+                            f"${_g['net_pnl']:+,.0f}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _t in _g.get("trades", []):
+                            st.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)
+                if _pos:
+                    st.markdown(
+                        f"<div style='color:#86efac;font-weight:700;font-size:0.85em;"
+                        f"margin-top:10px;margin-bottom:6px'>Net-positive re-entries</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _g in _pos[:3]:    # cap positive at 3 for brevity
+                        st.markdown(
+                            f"<div style='color:#f9fafb;font-weight:700;font-size:0.88em;"
+                            f"margin:8px 0 4px'>{_g['ticker']} — "
+                            f"<span style='color:#86efac'>{_g['n_trades']}× = "
+                            f"${_g['net_pnl']:+,.0f}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _t in _g.get("trades", []):
+                            st.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)
+            else:
+                st.caption("No detail view registered for this diagnostic.")
+
+        def _tr_evidence_count(rec: dict) -> int:
+            """How many trades the 'Show trades' button surface for this rec."""
+            rt = rec.get("related_trades", {}) or {}
+            pk = rec.get("pattern_key", "")
+            if pk == "holding_period_imbalance":
+                return len(rt.get("wins", [])) + len(rt.get("losses", []))
+            if pk == "signal_defying_bias":
+                return len(rt.get("defying", [])) + len(rt.get("compliant", []))
+            if pk == "vs_spy_drag":
+                return len(rt.get("trades", []))
+            if pk == "re_entered_tickers":
+                return (sum(len(g.get("trades", [])) for g in rt.get("negative_groups", []))
+                        + sum(len(g.get("trades", [])) for g in rt.get("positive_groups", [])))
+            return 0
+
         with st.expander(
             f"🎯 Course-Correction Recommendations ({len(_tr_recs)} active)",
             expanded=True,
@@ -10712,7 +10875,7 @@ elif page == "🪞 Trade Review":
                     "watch":    ("🟡", "#f59e0b", "#3b2a0a", "Watch"),
                     "good":     ("🟢", "#22c55e", "#052e16", "Doing Well"),
                 }
-                for _rec in _tr_recs:
+                for _i, _rec in enumerate(_tr_recs):
                     _icon, _col, _bg, _sev_label = _sev_styles.get(
                         _rec["severity"], _sev_styles["watch"]
                     )
@@ -10726,7 +10889,7 @@ elif page == "🪞 Trade Review":
                         )
                     st.markdown(
                         f"<div style='background:{_bg};border-left:4px solid {_col};"
-                        f"border-radius:8px;padding:12px 16px;margin-bottom:10px'>"
+                        f"border-radius:8px;padding:12px 16px;margin-bottom:4px'>"
                         f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
                         f"<div style='color:#f9fafb;font-weight:700;font-size:1.0em'>"
                         f"{_icon} {_rec['pattern']}</div>"
@@ -10739,6 +10902,30 @@ elif page == "🪞 Trade Review":
                         "</div>",
                         unsafe_allow_html=True,
                     )
+                    # Evidence toggle — session-state-backed because nesting
+                    # st.expander inside an outer expander isn't allowed.
+                    _n_evidence = _tr_evidence_count(_rec)
+                    if _n_evidence > 0:
+                        _ev_key   = f"_tr_rec_show_{_rec['pattern_key']}_{_i}"
+                        _is_open  = st.session_state.get(_ev_key, False)
+                        _btn_label = (
+                            f"▾ Hide trades ({_n_evidence})" if _is_open
+                            else f"🔍 Show trades behind this ({_n_evidence})"
+                        )
+                        if st.button(_btn_label, key=_ev_key + "_btn"):
+                            st.session_state[_ev_key] = not _is_open
+                            st.rerun()
+                        if _is_open:
+                            st.markdown(
+                                f"<div style='background:#020617;border-left:2px solid {_col};"
+                                f"border-radius:6px;padding:10px 14px;margin:0 0 10px 14px'>",
+                                unsafe_allow_html=True,
+                            )
+                            _tr_render_evidence(_rec)
+                            st.markdown("</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<div style='margin-bottom:10px'></div>",
+                                    unsafe_allow_html=True)
 
         # ── 📜 Per-Trade Scorecard — detail view, collapsed by default ───────
         # Lives at the bottom of the page because the page-level question
