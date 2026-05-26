@@ -245,6 +245,166 @@ def _bucket_metrics(trades_with_outcome: list[dict], bucket_filter) -> dict:
     }
 
 
+def build_insights(metrics: dict, trades: list[dict]) -> dict:
+    """
+    Derive a rule-based summary of what the trade data shows.
+
+    Returns:
+      verdict        : 'on_track' | 'mixed' | 'correct' (course-correct)
+      verdict_label  : display chip text
+      verdict_color  : hex for the verdict chip
+      verdict_msg    : one-sentence framing
+      findings       : list of bullet-point strings (auto-generated, only the
+                       ones with enough underlying data — never speculative)
+      next_move      : one-sentence action keyed off the strongest finding
+      data_thin      : bool — True when window has too few judged trades to
+                       draw conclusions; UI should soften the verdict
+    """
+    af = metrics.get("app_followed", {}) or {}
+    dv = metrics.get("deviated", {})     or {}
+    pw = metrics.get("panic_window", {}) or {}
+    ov = metrics.get("overall", {})      or {}
+
+    findings: list[str] = []
+    actions:  list[str] = []   # ordered by strength; we pick the top one
+
+    af_judged = af.get("n_judged", 0)
+    dv_judged = dv.get("n_judged", 0)
+    pw_n      = pw.get("n_trades", 0)
+    ov_judged = ov.get("n_judged", 0)
+    af_wr     = af.get("win_rate") or 0
+    dv_wr     = dv.get("win_rate") or 0
+    pw_wr     = pw.get("win_rate") or 0
+    pw_pnl    = pw.get("net_pnl",  0.0)
+    af_pnl    = af.get("net_pnl",  0.0)
+    dv_pnl    = dv.get("net_pnl",  0.0)
+    ov_pnl    = ov.get("net_pnl",  0.0)
+
+    # ── Finding 1: signal-compliance comparison ──────────────────────────────
+    if af_judged >= 3 and dv_judged >= 2:
+        spread = af_wr - dv_wr
+        if spread >= 15:
+            findings.append(
+                f"App-followed trades win <b>{af_wr:.0f}%</b> vs deviated "
+                f"<b>{dv_wr:.0f}%</b> — system is outperforming your external "
+                f"calls by <b>{spread:.0f}pp</b>."
+            )
+            actions.append(
+                "Trust app signals on the next entry; revisit the deviation_reason "
+                "before acting on external info next time."
+            )
+        elif spread <= -15:
+            findings.append(
+                f"Deviated trades win <b>{dv_wr:.0f}%</b> vs app-followed "
+                f"<b>{af_wr:.0f}%</b> — your discretionary calls are doing better "
+                f"({abs(spread):.0f}pp gap)."
+            )
+            actions.append(
+                "Your judgment is adding alpha — keep documenting deviation_reason "
+                "in the journal so the pattern stays reproducible."
+            )
+        else:
+            findings.append(
+                f"App-followed and deviated win rates are similar "
+                f"(<b>{af_wr:.0f}%</b> vs <b>{dv_wr:.0f}%</b>) — no clear edge "
+                "from either approach yet."
+            )
+
+    # ── Finding 2: panic-window cost/benefit ─────────────────────────────────
+    if pw_n >= 2:
+        if pw_pnl <= -50:
+            findings.append(
+                f"Trades on panic days (S&P ≤ -1.5%) cost "
+                f"<b style='color:#fca5a5'>${abs(pw_pnl):,.0f}</b> across "
+                f"<b>{pw_n}</b> trades."
+            )
+            actions.append(
+                "Defer entries on red-tape days — wait for S&P to stabilise before "
+                "opening new positions."
+            )
+        elif pw_pnl >= 50 and pw_wr >= 60:
+            findings.append(
+                f"Panic-day trades won <b>{pw_wr:.0f}%</b> for net "
+                f"<b style='color:#86efac'>+${pw_pnl:,.0f}</b> — you bought "
+                "weakness well."
+            )
+            actions.append(
+                "Buying panic-day weakness is working — but size disciplined; "
+                "high-volatility entries amplify both directions."
+            )
+
+    # ── Finding 3: best & worst trade highlight ──────────────────────────────
+    judged = [t for t in trades if t.get("is_win") is not None]
+    if judged:
+        best  = max(judged, key=lambda t: t["outcome_pnl"])
+        worst = min(judged, key=lambda t: t["outcome_pnl"])
+        if best["outcome_pnl"] > 0 or worst["outcome_pnl"] < 0:
+            findings.append(
+                f"Best: <b>{best['ticker']}</b> {best['action']} "
+                f"<b style='color:#86efac'>${best['outcome_pnl']:+,.0f}</b> · "
+                f"Worst: <b>{worst['ticker']}</b> {worst['action']} "
+                f"<b style='color:#fca5a5'>${worst['outcome_pnl']:+,.0f}</b>."
+            )
+
+    # ── Verdict tier ─────────────────────────────────────────────────────────
+    data_thin = ov_judged < 3
+
+    if data_thin:
+        verdict       = "thin"
+        verdict_label = "⏳ Not enough data yet"
+        verdict_color = "#94a3b8"
+        verdict_msg   = (
+            f"Only {ov_judged} judged trade{'s' if ov_judged != 1 else ''} in this "
+            "window. Findings will sharpen as you accumulate more history — try a "
+            "longer look-back or keep logging."
+        )
+    elif ov_pnl > 0 and af_wr >= 60:
+        verdict       = "on_track"
+        verdict_label = "🟢 On Track"
+        verdict_color = "#22c55e"
+        verdict_msg   = "Profitable window with strong signal compliance. Keep going."
+    elif ov_pnl < 0 or (af_judged >= 3 and af_wr < 40):
+        verdict       = "correct"
+        verdict_label = "🔴 Course Correction"
+        verdict_color = "#ef4444"
+        verdict_msg   = (
+            "Losing window or weak signal compliance — the findings below show "
+            "where the bleed is. One concrete fix in the Next Move."
+        )
+    else:
+        verdict       = "mixed"
+        verdict_label = "🟡 Mixed Signals"
+        verdict_color = "#f59e0b"
+        verdict_msg   = (
+            "Not catastrophic, not a clear winning streak either. Small "
+            "adjustments below should tighten it up."
+        )
+
+    next_move = actions[0] if actions else None
+    # Provide a generic action when no rule fired but data isn't thin
+    if next_move is None and not data_thin:
+        if ov_pnl < 0:
+            next_move = (
+                "Pause new entries for one session; review the losing trades' "
+                "deviation_reason / lesson columns for the common thread."
+            )
+        else:
+            next_move = (
+                "Keep the current cadence — sample size is still building. "
+                "Stay disciplined on the signal-compliance log."
+            )
+
+    return {
+        "verdict":       verdict,
+        "verdict_label": verdict_label,
+        "verdict_color": verdict_color,
+        "verdict_msg":   verdict_msg,
+        "findings":      findings,
+        "next_move":     next_move,
+        "data_thin":     data_thin,
+    }
+
+
 def build_trade_review(
     trades_df,
     current_prices: dict[str, float] | None,

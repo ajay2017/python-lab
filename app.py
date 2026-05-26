@@ -74,7 +74,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.evening_debrief import build_evening_debrief
-from stock_analyzer.trade_review import build_trade_review
+from stock_analyzer.trade_review import build_trade_review, build_insights
 from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
@@ -10224,13 +10224,56 @@ elif page == "🪞 Trade Review":
         _tr_trades = _tr_data["trades"]
         _tr_m      = _tr_data["metrics"]
 
-        # ── Headline cards ────────────────────────────────────────────────────
+        # ── Window context strip ──────────────────────────────────────────────
         st.markdown(
             f"<div style='color:#94a3b8;font-size:0.85em;margin:8px 0 12px'>"
             f"Window: <b>{_tr_data['window_start']}</b> → <b>{_tr_data['window_end']}</b> · "
             f"{_tr_m['overall']['n_trades']} trades · {_tr_m['overall']['n_judged']} judged "
             f"({_tr_m['overall']['n_trades'] - _tr_m['overall']['n_judged']} still open and unpriced)"
             f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── 💡 What the Data Says — rule-based synthesis ──────────────────────
+        # Turns the raw numbers into a verdict + concrete findings + one next
+        # move. Designed to answer the user's "what should I make of this?" — no
+        # interpretation required.
+        _tr_insights = build_insights(_tr_m, _tr_trades)
+
+        _ins_findings_html = ""
+        if _tr_insights["findings"]:
+            _ins_findings_html = "".join(
+                f"<li style='margin:4px 0;color:#e2e8f0;font-size:0.9em'>{f}</li>"
+                for f in _tr_insights["findings"]
+            )
+            _ins_findings_html = (
+                f"<ul style='margin:8px 0 6px 18px;padding:0'>{_ins_findings_html}</ul>"
+            )
+
+        _ins_next_html = ""
+        if _tr_insights["next_move"]:
+            _ins_next_html = (
+                f"<div style='background:#1e293b;border-radius:6px;padding:8px 12px;"
+                f"margin-top:8px;color:#cbd5e1;font-size:0.88em'>"
+                f"<b style='color:{_tr_insights['verdict_color']}'>➡ Next move:</b> "
+                f"{_tr_insights['next_move']}"
+                f"</div>"
+            )
+
+        st.markdown(
+            f"<div style='background:#0f172a;border-left:4px solid {_tr_insights['verdict_color']};"
+            f"border-radius:8px;padding:12px 18px;margin-bottom:14px'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+            f"<div style='color:#f9fafb;font-size:1.0em;font-weight:700'>"
+            f"💡 What the Data Says</div>"
+            f"<div style='color:{_tr_insights['verdict_color']};font-weight:700;font-size:0.95em'>"
+            f"{_tr_insights['verdict_label']}</div>"
+            f"</div>"
+            f"<div style='color:#94a3b8;font-size:0.85em;margin-top:4px;font-style:italic'>"
+            f"{_tr_insights['verdict_msg']}</div>"
+            + _ins_findings_html
+            + _ins_next_html
+            + "</div>",
             unsafe_allow_html=True,
         )
 
