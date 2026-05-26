@@ -27,10 +27,19 @@ Pure logic — no Streamlit, no API calls. Caller supplies:
 from datetime import date, timedelta
 from collections import defaultdict
 
-from stock_analyzer.constants import SINGLE_NAME_CEILING, SECTOR_ELEVATED
+from stock_analyzer.constants import (
+    SINGLE_NAME_CEILING,
+    SECTOR_ELEVATED,
+    PANIC_DAY_SPY_PCT,
+)
 
+# Aliased so the rest of this module reads cleanly without touching the
+# imported constant name. PANIC_DAY_SPY_PCT is a behavioural decision
+# threshold and lives in constants.py with the rest of the policy knobs.
+_PANIC_THRESHOLD_PCT = PANIC_DAY_SPY_PCT
 
-_PANIC_THRESHOLD_PCT = -1.5   # S&P daily return ≤ this = panic day
+# Internal analytics tuning — not user-facing gates. Window length and
+# trailing-vs-overall trend spread are visualisation choices.
 _ROLLING_WINDOW      = 5      # trailing N-trade rolling win-rate window
 _TREND_SPREAD_PP     = 15.0   # trailing-vs-overall spread that counts as a trend
 

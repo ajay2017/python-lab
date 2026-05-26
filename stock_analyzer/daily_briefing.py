@@ -27,9 +27,16 @@ from datetime import date, timedelta
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
+    COMPOSITE_STRONG_BUY,
+    COMPOSITE_HIGH_CONVICTION,
+    COMPOSITE_BUY_FLAT_DAY,
     SINGLE_NAME_CEILING,
     MACRO_IMMINENT_DAYS,
     RISK_PCT_PER_TRADE,
+    ADD_WINNER_MIN_GAP_PCT,
+    APPROACHING_STOP_GAP_PCT,
+    LARGE_POSITION_WEIGHT_PCT,
+    WEAK_CONVICTION_SCORE,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -455,7 +462,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         }
 
     # Score threshold: higher bar on flat days, standard on bull days
-    min_score   = 65 if tone == "bull" else 78
+    min_score   = COMPOSITE_BUY if tone == "bull" else COMPOSITE_BUY_FLAT_DAY
     max_picks   = 3  if tone == "bull" else 1
 
     new_picks: list[dict] = []
@@ -526,16 +533,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _composite_score = _f(_comp_data.get("total")) if _comp_data else None
             _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
 
-            # Exclude picks where composite is known and below the Buy threshold (65).
+            # Exclude picks where composite is known and below the Buy threshold.
             # Scanner score measures momentum only — composite (technical + fundamental
             # + sentiment) is the authoritative signal. A 100/100 momentum score with
-            # a 63 composite is not a high-conviction entry.
+            # a sub-COMPOSITE_BUY composite is not a high-conviction entry.
             #
             # Record the rejection so the Brief can render a visible "Filtered Out"
             # bucket — silent drops leave the user wondering why a hot momentum
             # ticker isn't being recommended. This is the TSLA case: Momentum 90
             # but composite 48.8 Hold.
-            if _composite_score is not None and _composite_score < 65:
+            if _composite_score is not None and _composite_score < COMPOSITE_BUY:
                 composite_skipped.append({
                     "ticker":          ticker,
                     "sector":          sector,
@@ -545,12 +552,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 })
                 continue
 
-            # Conviction tier: drives the label shown on the card
+            # Conviction tier: drives the label shown on the card.
+            # "high" requires the same bar as Strong Buy (no looser tier here —
+            # previously a custom 68 magic number existed that called scores
+            # 68-74 "high conviction" even though they don't clear COMPOSITE_
+            # STRONG_BUY=75; that asymmetry contradicted scoring.py's label).
             if _composite_score is None:
                 conviction = "unverified"
-            elif _composite_score >= 68:
+            elif _composite_score >= COMPOSITE_HIGH_CONVICTION:
                 conviction = "high"
-            elif _composite_score >= 65:
+            elif _composite_score >= COMPOSITE_BUY:
                 conviction = "moderate"
             else:
                 conviction = "low"
@@ -601,7 +612,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             sig = str(row.get("Signal", ""))
             gap = _f(row.get("Gap to Stop (%)"), 0)
             scr = _f(row.get("Score"), 0)
-            if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= 8:
+            if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= ADD_WINNER_MIN_GAP_PCT:
                 ticker  = str(row["Ticker"])
                 # Skip if Act Today already flags this ticker for action
                 if ticker in _act_blocked:
@@ -883,7 +894,7 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
         sig = str(row.get("Signal", ""))
         gap = _f(row.get("Gap to Stop (%)"), 0)
         scr = _f(row.get("Score"), 0)
-        if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= 8:
+        if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= ADD_WINNER_MIN_GAP_PCT:
             ticker = str(row["Ticker"])
             # Skip if Act Today already flags this ticker for any action
             if ticker in _act_blocked:
@@ -937,7 +948,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
         gap = _f(row.get("Gap to Stop (%)"), None)
         if gap is None:
             continue
-        if 0 < gap <= 8:
+        if 0 < gap <= APPROACHING_STOP_GAP_PCT:
             items.append({
                 "priority": "medium" if gap > 3 else "low",
                 "icon":     "📍",
@@ -976,7 +987,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
 
     # 3 — Weak large positions (weight ≥ 10%, Score < 55)
     for _, row in port_df.iterrows():
-        if _f(row.get("Weight (%)")) >= 10 and _f(row.get("Score")) < 55:
+        if (_f(row.get("Weight (%)")) >= LARGE_POSITION_WEIGHT_PCT
+                and _f(row.get("Score")) < WEAK_CONVICTION_SCORE):
             items.append({
                 "priority": "medium",
                 "icon":     "🔍",
