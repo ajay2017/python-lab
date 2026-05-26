@@ -9037,10 +9037,27 @@ elif page == "📋 Watchlist":
             elif _t in st.session_state.watchlist:
                 st.warning(f"**{_t}** is already on the watchlist.")
             else:
-                st.session_state.watchlist.append(_t)
-                db.save_watchlist(st.session_state.watchlist)
-                st.success(f"Added **{_t}**")
-                st.rerun()
+                # Verify the ticker resolves to a real price before adding —
+                # otherwise typos sit in the watchlist forever and cause silent
+                # load failures on every downstream page that iterates over it.
+                _wl_verify_px = None
+                try:
+                    _wl_px = fetch_live_prices([_t])
+                    if _t in _wl_px:
+                        _wl_verify_px = float(_wl_px[_t].get("price") or 0)
+                except Exception:
+                    _wl_verify_px = None
+                if not _wl_verify_px or _wl_verify_px <= 0:
+                    st.warning(
+                        f"Couldn't resolve a market price for **{_t}** — verify the "
+                        "spelling. If you're sure the ticker is correct (e.g. a "
+                        "newly listed name), retry in a few minutes."
+                    )
+                else:
+                    st.session_state.watchlist.append(_t)
+                    db.save_watchlist(st.session_state.watchlist)
+                    st.success(f"Added **{_t}** (last price ${_wl_verify_px:,.2f})")
+                    st.rerun()
         if st.session_state.watchlist:
             _wl_remove = st.multiselect(
                 "Remove from watchlist",
@@ -9581,6 +9598,55 @@ elif page == "📒 Trade Journal":
             "Add your Supabase credentials in `.streamlit/secrets.toml` to persist trades permanently."
         )
 
+    # ── Defensive drift check ────────────────────────────────────────────────
+    # Replay the trade history once per session to catch realized_pnl rows
+    # whose stored value disagrees with the chronologically-replayed value,
+    # or SELL rows with no prior BUY in history. This is the same bug class
+    # behind the NFLX +$177 incident — bad holdings state silently
+    # contaminated the realized_pnl on a later legitimate SELL. The check
+    # itself is read-only; we surface a banner pointing the user at the
+    # 🔄 Rebuild flow below, but never auto-mutate on page load.
+    if (db.has_db()
+            and not st.session_state.get("_tj_drift_checked")
+            and not st.session_state.get("trades_df", pd.DataFrame()).empty):
+        try:
+            _drift_check = db.recalculate_from_trades(st.session_state["trades_df"])
+            st.session_state["_tj_drift_state"] = {
+                "n_pnl_corrections": len(_drift_check.get("realized_pnl_corrections", {})),
+                "n_warnings":        len(_drift_check.get("warnings", [])),
+                "warnings":          list(_drift_check.get("warnings", []))[:5],
+            }
+        except Exception:
+            st.session_state["_tj_drift_state"] = {}
+        st.session_state["_tj_drift_checked"] = True
+
+    _tj_drift = st.session_state.get("_tj_drift_state") or {}
+    if _tj_drift.get("n_pnl_corrections", 0) or _tj_drift.get("n_warnings", 0):
+        _n_corr = _tj_drift.get("n_pnl_corrections", 0)
+        _n_warn = _tj_drift.get("n_warnings", 0)
+        _drift_lines = []
+        if _n_corr:
+            _drift_lines.append(
+                f"<b>{_n_corr}</b> SELL row{'s' if _n_corr != 1 else ''} "
+                "with stored realized P&amp;L that disagrees with the trade-history replay"
+            )
+        if _n_warn:
+            _drift_lines.append(
+                f"<b>{_n_warn}</b> SELL row{'s' if _n_warn != 1 else ''} "
+                "with no prior BUY in history (cost basis can't be computed)"
+            )
+        st.markdown(
+            "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
+            "border-left:4px solid #f59e0b;border-radius:8px;"
+            "padding:12px 16px;margin:8px 0;color:#fde68a'>"
+            "⚠️ <b>Drift detected between trades and holdings.</b><br>"
+            "<span style='font-size:0.92em'>"
+            + " · ".join(_drift_lines)
+            + ".<br>Scroll down to <b>🔄 Rebuild holdings &amp; realized P&amp;L</b> "
+            "to preview and apply the corrections.</span></div>",
+            unsafe_allow_html=True,
+        )
+
     # ── Pre-fill from recommendation card ────────────────────────────────────
     # IMPORTANT: use get() not pop() here. Streamlit forms reset their
     # widgets to the `value=` parameter whenever ANY widget OUTSIDE the form
@@ -9670,13 +9736,15 @@ elif page == "📒 Trade Journal":
         # ── Sanity-check override (outside the form so it persists if the user
         # has to re-submit after a validation block) ─────────────────────────
         st.checkbox(
-            "⚠ Allow unusual price (skip the market-price sanity check)",
+            "⚠ Allow unusual price / unrecognized ticker (skip sanity checks)",
             key="_tj_override_price_check",
             help=(
                 "By default the form blocks trades where the entered price is "
                 "more than ±50% off the current market price (catches typos like "
-                "$0.01 vs $565). Tick this only if you're recording a backfill, "
-                "split-adjusted price, or other intentional unusual transaction."
+                "$0.01 vs $565), or where the ticker can't be resolved at all "
+                "(catches typos like NFLZ vs NFLX). Tick this only if you're "
+                "recording a backfill, split-adjusted price, delisted symbol, "
+                "or other intentional unusual transaction."
             ),
         )
 
@@ -9864,6 +9932,47 @@ elif page == "📒 Trade Journal":
                         "form (e.g. for a historical backfill) and resubmit."
                     )
 
+            # ── Ticker existence check ───────────────────────────────────────
+            # _market_price_for returns None when no source (held positions,
+            # scanner results, or yfinance) can resolve a price. For a real
+            # ticker that's just not in the scanner universe, yfinance still
+            # provides a fallback price; persistent None almost always means
+            # the symbol is a typo (e.g. "NFLZ" vs "NFLX"). Block unless the
+            # user explicitly overrides — same override covers price sanity,
+            # since both checks reduce to "I know what I'm doing."
+            _ticker_block_reason: str | None = None
+            if ticker_input and _mp_check is None and not _override:
+                _ticker_block_reason = (
+                    f"Couldn't resolve a market price for <b>{ticker_input}</b> — "
+                    "likely a typo or a delisted symbol. Verify the spelling, or "
+                    "tick <b>'Allow unusual price'</b> above the form if you're "
+                    "intentionally recording a historical / unlisted trade."
+                )
+
+            # ── SELL-shares sanity check ──────────────────────────────────────
+            # Block "SELL 100 NFLX" when only 5 are held — without this guard
+            # the row was being accepted, holdings.Shares went negative, and the
+            # recalculate_from_trades replay flagged it as "SELL with no prior
+            # BUY". Caught the bad row but only after data was already in.
+            #
+            # A SELL with NO holding row at all is intentionally allowed (the
+            # "logged as historical trade" path below) so users can backfill
+            # closed trades from before they started using the app.
+            _shares_block_reason: str | None = None
+            if action == "SELL" and ticker_input:
+                _h_match = st.session_state.holdings_df[
+                    st.session_state.holdings_df["Ticker"] == ticker_input
+                ]
+                if not _h_match.empty:
+                    _held_shares = float(_h_match.iloc[0]["Shares"])
+                    if shares_val > _held_shares + 1e-6:
+                        _shares_block_reason = (
+                            f"You're trying to sell <b>{shares_val:g} shares</b> of "
+                            f"<b>{ticker_input}</b> but only hold <b>{_held_shares:g}</b>. "
+                            "Correct the share count, or trim the holding directly on the "
+                            "Portfolio page if your records disagree with the app's."
+                        )
+
             if not ticker_input:
                 st.error("Enter a ticker symbol.")
                 st.session_state["_prefill_trade"] = _stash_failed_entry
@@ -9872,6 +9981,26 @@ elif page == "📒 Trade Journal":
                 st.session_state["_prefill_trade"] = _stash_failed_entry
             elif price_val <= 0:
                 st.error("Price must be greater than 0.")
+                st.session_state["_prefill_trade"] = _stash_failed_entry
+            elif _shares_block_reason:
+                st.markdown(
+                    f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
+                    f"border-radius:8px;padding:12px 16px;margin:8px 0;color:#fecaca'>"
+                    f"⛔ <b>Trade not recorded — sell exceeds your current holding.</b><br>"
+                    f"<span style='font-size:0.92em'>{_shares_block_reason}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                st.session_state["_prefill_trade"] = _stash_failed_entry
+            elif _ticker_block_reason:
+                st.markdown(
+                    f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
+                    f"border-radius:8px;padding:12px 16px;margin:8px 0;color:#fecaca'>"
+                    f"⛔ <b>Trade not recorded — ticker not recognized.</b><br>"
+                    f"<span style='font-size:0.92em'>{_ticker_block_reason}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
                 st.session_state["_prefill_trade"] = _stash_failed_entry
             elif _price_block_reason:
                 st.markdown(
@@ -10484,6 +10613,9 @@ elif page == "📒 Trade Journal":
                     for _w in recalc["warnings"][:3]:
                         st.warning(f"⚠ {_w}")
                 st.session_state.trades_df = db.load_trades()
+                # Invalidate the page-load drift banner — we just resolved it.
+                st.session_state.pop("_tj_drift_checked", None)
+                st.session_state.pop("_tj_drift_state", None)
                 st.rerun()
 
         # ── 🔄 Manual rebuild — fixes any pre-existing corrupted state ─────
@@ -10547,6 +10679,9 @@ elif page == "📒 Trade Journal":
                             "Trade Review to see the corrected numbers."
                         )
                         st.session_state.trades_df = db.load_trades()
+                        # Invalidate the page-load drift banner — we just resolved it.
+                        st.session_state.pop("_tj_drift_checked", None)
+                        st.session_state.pop("_tj_drift_state", None)
 
     if not db.has_db():
         st.info(
