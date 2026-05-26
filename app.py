@@ -1654,9 +1654,14 @@ if page == "🏠 Home":
                     "data": _tr_strip_data,
                 }
                 _tr_strip_cache = st.session_state["_tr_strip_cache"]
-            except Exception:
-                # Don't let Trade Review compute failure block the Brief
-                st.session_state["_tr_strip_cache"] = {"key": _tr_strip_key, "data": None}
+            except Exception as _tr_strip_err:
+                # Don't let Trade Review compute failure block the Brief, but
+                # leave a fingerprint so silent failures are at least visible.
+                st.session_state["_tr_strip_cache"] = {
+                    "key":   _tr_strip_key,
+                    "data":  None,
+                    "error": str(_tr_strip_err)[:120],
+                }
                 _tr_strip_cache = st.session_state["_tr_strip_cache"]
 
         _tr_strip_summary = _tr_strip_cache.get("data")
@@ -1707,6 +1712,14 @@ if page == "🏠 Home":
                              help="Jump to Trade Review for the full diagnosis and the trades behind each finding."):
                     st.session_state["_pending_page"] = "🪞 Trade Review"
                     st.rerun()
+        elif _tr_strip_cache.get("error"):
+            # Trade Review failed to compute — surface a tiny caption so the
+            # absence isn't silent. Previously the strip just disappeared and
+            # the user had no way to know it had errored.
+            st.caption(
+                f"🪞 Trade Review verdict unavailable — compute failed "
+                f"({_tr_strip_cache['error']}). Open the Trade Review page to retry."
+            )
 
         # Build act_today lookup once — used by pre-market movers and the main sections below
         _act_today_map: dict = {
@@ -6416,7 +6429,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                             _hist = fetch_price_history(_etf, period="6mo")
                         if not _hist.empty and "Close" in _hist.columns:
                             _cl = _hist["Close"].dropna()
-                            if len(_cl) >= 5:
+                            if len(_cl) >= 5 and float(_cl.iloc[0]) > 0:
                                 _etf_rets[_etf] = round(float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1)
                     except Exception:
                         pass
@@ -6536,7 +6549,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                         if len(_cl) >= 2:
                             if _sym == "^VIX":
                                 _macro_raw["vix"] = float(_cl.iloc[-1])
-                            else:
+                            elif float(_cl.iloc[0]) > 0:
                                 _macro_raw[_sym.lower() + "_ret"] = round(
                                     float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1
                                 )

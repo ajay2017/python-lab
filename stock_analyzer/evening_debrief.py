@@ -195,7 +195,15 @@ def _today_summary(trades_today_list: list[dict]) -> dict:
         for t in trades_today_list
         if "BUY" in t["action"].upper()
     )
-    realized = sum(t["realized_pnl"] for t in trades_today_list)
+    # Realized P&L is only meaningful on SELL rows. BUYs SHOULD have
+    # realized_pnl = None / 0, but defensively filter — a stray non-zero on
+    # a BUY (e.g. legacy row, manual DB edit) would otherwise inflate the
+    # daily total without warning.
+    realized = sum(
+        t["realized_pnl"]
+        for t in trades_today_list
+        if "SELL" in t["action"].upper()
+    )
     followed = [t for t in trades_today_list if t.get("followed_signal") is True]
     deviated = [t for t in trades_today_list if t.get("followed_signal") is False]
     return {
@@ -209,13 +217,34 @@ def _today_summary(trades_today_list: list[dict]) -> dict:
     }
 
 
+def _next_trading_day(d: date) -> date:
+    """
+    Return the next U.S. equity-market trading day after `d`.
+
+    Friday → Monday (skip Saturday/Sunday). Saturday → Monday.
+    Sunday → Monday. Other weekdays → next day.
+
+    Doesn't handle market holidays — those are rare enough that "Tomorrow's
+    Setup" pointing at e.g. Thanksgiving will just show an empty macro list,
+    which is fine (the visible "no events" rendering is honest).
+    """
+    nxt = d + timedelta(days=1)
+    while nxt.weekday() >= 5:    # 5=Sat, 6=Sun
+        nxt += timedelta(days=1)
+    return nxt
+
+
 def _tomorrow_setup(macro_events: list | None, held_data: dict | None,
                     today: date) -> dict:
     """
-    Compose tomorrow's playbook: macro events on tomorrow's date + held names
-    with earnings inside the next 1–7 days.
+    Compose tomorrow's playbook: macro events on the next trading day +
+    held names with earnings inside the next 1–7 days.
+
+    Uses next-trading-day rather than literal calendar tomorrow so the
+    Friday-PM debrief surfaces Monday's macro events rather than an
+    empty Saturday list.
     """
-    tomorrow = today + timedelta(days=1)
+    tomorrow = _next_trading_day(today)
     macro_tomorrow: list[dict] = []
     for ev in (macro_events or []):
         ev_date = ev.get("date")

@@ -380,6 +380,11 @@ def holding_returns(held_data: dict) -> dict[str, float]:
         closes = hist["Close"].dropna()
         if len(closes) < 5:
             continue
+        # Guard against a zero opening close — rare but possible with stale
+        # yfinance data for delisted / pre-IPO tickers. Returning 0 quietly
+        # is preferable to a ZeroDivisionError that takes down the page.
+        if float(closes.iloc[0]) <= 0:
+            continue
         ret = (closes.iloc[-1] / closes.iloc[0] - 1) * 100
         result[ticker] = round(float(ret), 1)
     return result
