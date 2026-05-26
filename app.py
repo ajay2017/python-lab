@@ -75,6 +75,10 @@ from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
+from stock_analyzer.premarket_stance import (
+    assemble_inputs as pms_assemble_inputs,
+    generate_stance as pms_generate_stance,
+)
 from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
 
@@ -1448,6 +1452,110 @@ if page == "🏠 Home":
                     e for e in _macro_events
                     if e.get("date") == _TODAY_ET and e.get("impact") in ("HIGH", "MEDIUM")
                 ]
+
+                # ── Pre-Market Stance (AI narrative + verdict) ────────────
+                # Renders ABOVE the deterministic Pre-Market Intel banner so the
+                # interpretive stance is the first thing the user sees pre-open.
+                # Card hides silently when no Anthropic key is configured —
+                # graceful degradation so the rest of Today's Brief is unaffected.
+                _pms_key = (
+                    st.secrets.get("anthropic", {}).get("api_key")
+                    or st.secrets.get("ANTHROPIC_API_KEY")
+                    or os.environ.get("ANTHROPIC_API_KEY", "")
+                )
+                if _pms_key:
+                    _pms_model     = "claude-haiku-4-5-20251001"
+                    _pms_today_key = str(_TODAY_ET)
+                    _pms_cache_key = f"_pm_stance__{_pms_today_key}__{_pms_model}"
+                    _pms_cached    = st.session_state.get(_pms_cache_key)
+
+                    _pms_hc1, _pms_hc2 = st.columns([5, 1])
+                    with _pms_hc1:
+                        st.markdown(
+                            f"<div style='font-size:1.05em;font-weight:700;"
+                            f"color:#f9fafb;margin-top:4px'>"
+                            f"🔭 Pre-Market Stance "
+                            f"<span style='color:#9ca3af;font-size:0.72em;font-weight:400'>"
+                            f"· {_pm['as_of']}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    with _pms_hc2:
+                        _pms_refresh = st.button(
+                            "🔄 Refresh",
+                            key="_pms_refresh_btn",
+                            use_container_width=True,
+                            help="Re-runs the AI stance with the latest pre-market data.",
+                        )
+
+                    if _pms_refresh or _pms_cached is None:
+                        with st.spinner("Generating stance narrative…"):
+                            # Pull the current regime from the cached FRED detector
+                            # if a key is available; otherwise skip — the stance
+                            # still has futures / events / portfolio to work with.
+                            _pms_regime = None
+                            try:
+                                _pms_fred_key = (
+                                    st.secrets.get("fred", {}).get("api_key")
+                                    or os.environ.get("FRED_API_KEY", "")
+                                )
+                                if _pms_fred_key:
+                                    _pms_regime = detect_macro_regime_fred(_pms_fred_key)
+                            except Exception:
+                                _pms_regime = None
+
+                            _pms_inputs = pms_assemble_inputs(
+                                premarket_brief = _pm,
+                                regime          = _pms_regime,
+                                port_df         = port_df,
+                                news_headlines  = [
+                                    n.get("headline", "")
+                                    for n in st.session_state.get("_sidebar_news", [])[:5]
+                                    if n.get("headline")
+                                ],
+                            )
+                            _pms_result = pms_generate_stance(
+                                inputs  = _pms_inputs,
+                                api_key = _pms_key,
+                                model   = _pms_model,
+                            )
+                            if _pms_result:
+                                st.session_state[_pms_cache_key] = _pms_result
+                                _pms_cached = _pms_result
+
+                    if _pms_cached:
+                        _stance        = _pms_cached.get("stance", "neutral")
+                        _stance_label  = _pms_cached.get("stance_label", "Neutral at open")
+                        _narrative     = _pms_cached.get("narrative", "")
+                        _stance_color  = {
+                            "defensive":    "#ef4444",
+                            "constructive": "#22c55e",
+                        }.get(_stance, "#f59e0b")
+                        _stance_icon   = {
+                            "defensive":    "🛡️",
+                            "constructive": "🟢",
+                        }.get(_stance, "⚖️")
+                        st.markdown(
+                            f"<div style='background:#0f172a;border:1px solid {_stance_color};"
+                            f"border-left:5px solid {_stance_color};border-radius:8px;"
+                            f"padding:14px 18px;margin-bottom:12px'>"
+                            f"<div style='color:#e5e7eb;font-size:0.95em;line-height:1.55'>"
+                            f"{_narrative}</div>"
+                            f"<div style='margin-top:10px;padding-top:10px;"
+                            f"border-top:1px solid #1f2937'>"
+                            f"<span style='color:{_stance_color};font-weight:800;"
+                            f"letter-spacing:0.05em;text-transform:uppercase;font-size:0.85em'>"
+                            f"{_stance_icon} Stance: {_stance_label}</span>"
+                            f"<span style='color:#6b7280;font-size:0.75em;margin-left:10px'>"
+                            f"Model: {_pms_cached.get('model','?').split('-')[1].title()}</span>"
+                            f"</div></div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.warning(
+                            "Pre-Market Stance unavailable — Anthropic API call failed. "
+                            "Click 🔄 Refresh to retry or check your key in Streamlit secrets."
+                        )
+
                 _pm_tone  = _pm["tone"]
                 _pm_color = "#14532d" if _pm_tone == "bull" else "#7f1d1d" if _pm_tone == "bear" else "#1c1917"
                 _pm_bdr   = "#22c55e" if _pm_tone == "bull" else "#ef4444" if _pm_tone == "bear" else "#4b5563"
