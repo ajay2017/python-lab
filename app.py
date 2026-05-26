@@ -9441,6 +9441,64 @@ elif page == "📒 Trade Journal":
         _live_action = st.session_state.get("_tj_action", "BUY")
         _live_ticker = (st.session_state.get("_tj_ticker") or "").strip().upper()
 
+        # ── Live market price lookup for the sanity check ─────────────────────
+        # Fetches the latest known price from (1) port_df if held, (2) scanner
+        # results if in the universe, (3) yfinance as a fallback. Cached so
+        # this is cheap on repeated reruns. Used both to display a "Current
+        # market: $X" reference under the price input and to validate the
+        # submitted price against reality.
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _tj_market_price(_ticker: str) -> float | None:
+            if not _ticker:
+                return None
+            try:
+                px = fetch_live_prices([_ticker])
+                if _ticker in px:
+                    p = float(px[_ticker].get("price") or 0)
+                    return p if p > 0 else None
+            except Exception:
+                pass
+            return None
+
+        def _market_price_for(ticker: str) -> float | None:
+            """
+            Resolve the latest known market price without making a network call
+            when possible. Held positions are the cheapest source; the cached
+            live fetch is the fallback.
+            """
+            if not ticker:
+                return None
+            _pf = st.session_state.get("_last_port_df")
+            if _pf is not None and not _pf.empty and "Price" in _pf.columns:
+                _row = _pf[_pf["Ticker"] == ticker]
+                if not _row.empty:
+                    _p = float(_row.iloc[0].get("Price") or 0)
+                    if _p > 0:
+                        return _p
+            _sr = st.session_state.get("scanner_results")
+            if _sr is not None and not _sr.empty and "Price" in _sr.columns:
+                _row = _sr[_sr["Ticker"] == ticker]
+                if not _row.empty:
+                    _p = float(_row.iloc[0].get("Price") or 0)
+                    if _p > 0:
+                        return _p
+            return _tj_market_price(ticker)
+
+        _market_price = _market_price_for(_live_ticker) if _live_ticker else None
+
+        # ── Sanity-check override (outside the form so it persists if the user
+        # has to re-submit after a validation block) ─────────────────────────
+        st.checkbox(
+            "⚠ Allow unusual price (skip the market-price sanity check)",
+            key="_tj_override_price_check",
+            help=(
+                "By default the form blocks trades where the entered price is "
+                "more than ±50% off the current market price (catches typos like "
+                "$0.01 vs $565). Tick this only if you're recording a backfill, "
+                "split-adjusted price, or other intentional unusual transaction."
+            ),
+        )
+
         # ── Decision Context — outside form so followed_signal can gate fields ──
         # Pre-fill signal_seen from current portfolio signal if ticker is held
         _dc_signal_default = ""
@@ -9541,6 +9599,23 @@ elif page == "📒 Trade Journal":
                     value=float(prefill.get("price", 0.01)),
                     step=0.01, format="%.2f",
                 )
+                if _market_price:
+                    _mp_delta_str = ""
+                    try:
+                        _mp_ratio = price_val / _market_price
+                        if _mp_ratio < 0.5 or _mp_ratio > 2.0:
+                            _mp_delta_str = (
+                                f" <span style='color:#fca5a5'>· ⚠ {(_mp_ratio-1)*100:+.0f}% off market</span>"
+                            )
+                    except Exception:
+                        pass
+                    st.markdown(
+                        f"<div style='color:#94a3b8;font-size:0.78em;margin-top:-8px'>"
+                        f"💵 Current market: <b style='color:#cbd5e1'>${_market_price:,.2f}</b>"
+                        f"{_mp_delta_str}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
             # Cost basis: shown for SELL (pre-filled); hidden for BUY (auto = buy price)
             if _live_action == "SELL":
@@ -9568,12 +9643,65 @@ elif page == "📒 Trade Journal":
 
         # Process submission outside the form block
         if submitted:
+            # Stash everything entered into prefill so the form re-renders pre-
+            # filled on validation failure (otherwise clear_on_submit=True wipes
+            # the user's input on every error and they'd have to retype).
+            _stash_failed_entry = {
+                "ticker":   ticker_input,
+                "action":   action,
+                "shares":   shares_val,
+                "price":    price_val,
+                "trigger":  trigger_type,
+                "notes":    notes_val,
+            }
+
+            # ── Price sanity check ────────────────────────────────────────────
+            # Catches the $0.01-vs-$565 typo class. Two-tier validation:
+            #  1. Hard floor — sub-$0.10 prices are almost always a fat-finger
+            #     error. Even penny stocks rarely trade that low.
+            #  2. Market-relative — if the entered price is < 50% or > 200% of
+            #     the latest known market price, it's most likely a typo. The
+            #     user can override by ticking the "Allow unusual price"
+            #     checkbox outside the form (persists across reruns).
+            _override   = st.session_state.get("_tj_override_price_check", False)
+            _mp_check   = _market_price_for(ticker_input) if ticker_input else None
+            _price_block_reason: str | None = None
+            if price_val < 0.10 and not _override:
+                _price_block_reason = (
+                    f"Entered price <b>${price_val:.2f}</b> is below $0.10 — almost "
+                    "always a typo. Confirm the price, or tick "
+                    "<b>'Allow unusual price'</b> above the form and resubmit."
+                )
+            elif _mp_check and _mp_check > 0 and not _override:
+                _ratio = price_val / _mp_check
+                if _ratio < 0.5 or _ratio > 2.0:
+                    _price_block_reason = (
+                        f"Entered price <b>${price_val:.2f}</b> is "
+                        f"<b>{(_ratio-1)*100:+.0f}%</b> off the current market price "
+                        f"<b>${_mp_check:,.2f}</b> — looks like a typo. Confirm "
+                        "the price, or tick <b>'Allow unusual price'</b> above the "
+                        "form (e.g. for a historical backfill) and resubmit."
+                    )
+
             if not ticker_input:
                 st.error("Enter a ticker symbol.")
+                st.session_state["_prefill_trade"] = _stash_failed_entry
             elif shares_val <= 0:
                 st.error("Shares must be greater than 0.")
+                st.session_state["_prefill_trade"] = _stash_failed_entry
             elif price_val <= 0:
                 st.error("Price must be greater than 0.")
+                st.session_state["_prefill_trade"] = _stash_failed_entry
+            elif _price_block_reason:
+                st.markdown(
+                    f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
+                    f"border-radius:8px;padding:12px 16px;margin:8px 0;color:#fecaca'>"
+                    f"⛔ <b>Trade not recorded — price sanity check failed.</b><br>"
+                    f"<span style='font-size:0.92em'>{_price_block_reason}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                st.session_state["_prefill_trade"] = _stash_failed_entry
             else:
                 realized_pnl = (
                     compute_realized_pnl(shares_val, price_val, cost_basis_val)
@@ -9683,6 +9811,9 @@ elif page == "📒 Trade Journal":
                     # any future visit to this page should start with a clean
                     # form. Paired with the get() at the top of the page.
                     st.session_state.pop("_prefill_trade", None)
+                    # Clear the price-sanity override so the next trade is
+                    # checked by default — overrides shouldn't be sticky.
+                    st.session_state["_tj_override_price_check"] = False
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
