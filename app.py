@@ -74,6 +74,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.evening_debrief import build_evening_debrief
+from stock_analyzer.trade_review import build_trade_review
 from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
@@ -681,7 +682,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -10151,6 +10152,267 @@ elif page == "📒 Trade Journal":
             "📌 To create the trades table in Supabase, run the SQL in "
             "<code>stock_analyzer/db.py</code> → Supabase SQL Editor → New Query</div>",
             unsafe_allow_html=True,
+        )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — TRADE REVIEW (behavioural retrospective)
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🪞 Trade Review":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("🪞 Trade Review")
+    st.caption(
+        "Behavioural retrospective on every trade you've recorded. The system infers "
+        "categories from the Journal columns (signal compliance) and market context "
+        "(panic-day overlay) — no manual tagging. Use this to answer: *are app-followed "
+        "trades outperforming the ones I made off external info?*"
+    )
+
+    # ── Look-back toggle ──────────────────────────────────────────────────────
+    _tr_options = {"Last 2 weeks": 14, "Last 30 days": 30, "Last 60 days": 60, "Last 90 days": 90, "All time": 0}
+    _tr_choice  = st.radio(
+        "Look-back window",
+        list(_tr_options.keys()),
+        horizontal=True,
+        index=0,
+        key="_tr_lookback",
+    )
+    _tr_days = _tr_options[_tr_choice]
+
+    # ── Pull data ─────────────────────────────────────────────────────────────
+    _tr_trades_df = st.session_state.get("trades_df")
+    if _tr_trades_df is None:
+        _tr_trades_df = db.load_trades()
+        st.session_state.trades_df = _tr_trades_df
+
+    if _tr_trades_df is None or _tr_trades_df.empty:
+        st.info(
+            "No trades recorded yet. Once you've logged a few trades in the Journal, "
+            "this page will analyze them."
+        )
+    else:
+        # SPY history for panic-day flag + vs-SPY benchmark. Cached at the fetch_spy
+        # level (data.py @ st.cache_data) so this is cheap on repeated renders.
+        _tr_spy_period = "6mo" if _tr_days >= 90 or _tr_days == 0 else "3mo"
+        try:
+            _tr_spy_df = fetch_spy(period=_tr_spy_period)
+        except Exception:
+            _tr_spy_df = None
+
+        # Current prices for open-position MTM. Reuse the Evening Debrief cache pattern.
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _tr_fetch_prices(_tickers_key: tuple) -> dict:
+            if not _tickers_key:
+                return {}
+            try:
+                px = fetch_live_prices(list(_tickers_key))
+                return {t: float(d.get("price", 0)) for t, d in px.items()}
+            except Exception:
+                return {}
+
+        _tr_tickers = sorted({str(t).upper() for t in _tr_trades_df["ticker"].dropna().tolist()})
+        _tr_prices  = _tr_fetch_prices(tuple(_tr_tickers))
+
+        # Build the review payload
+        _tr_data = build_trade_review(
+            trades_df       = _tr_trades_df,
+            current_prices  = _tr_prices,
+            spy_history_df  = _tr_spy_df,
+            today           = _TODAY_ET,
+            lookback_days   = _tr_days,
+        )
+
+        _tr_trades = _tr_data["trades"]
+        _tr_m      = _tr_data["metrics"]
+
+        # ── Headline cards ────────────────────────────────────────────────────
+        st.markdown(
+            f"<div style='color:#94a3b8;font-size:0.85em;margin:8px 0 12px'>"
+            f"Window: <b>{_tr_data['window_start']}</b> → <b>{_tr_data['window_end']}</b> · "
+            f"{_tr_m['overall']['n_trades']} trades · {_tr_m['overall']['n_judged']} judged "
+            f"({_tr_m['overall']['n_trades'] - _tr_m['overall']['n_judged']} still open and unpriced)"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        if not _tr_data["spy_available"]:
+            st.warning(
+                "⚠ SPY history unavailable right now — panic-day flags and vs-SPY "
+                "benchmarks will be missing. Try refreshing in a minute."
+            )
+
+        def _fmt_win_rate(m):
+            if m["n_judged"] == 0:
+                return "—"
+            return f"{m['win_rate']:.0f}% · {m['n_wins']}/{m['n_judged']}"
+
+        _hc1, _hc2, _hc3 = st.columns(3)
+        with _hc1:
+            _m = _tr_m["app_followed"]
+            _color = "#22c55e" if (_m["win_rate"] or 0) >= 60 else "#f59e0b" if (_m["win_rate"] or 0) >= 40 else "#94a3b8"
+            st.markdown(
+                f"<div style='background:#052e16;border-left:4px solid {_color};"
+                f"border-radius:8px;padding:12px 16px;margin-bottom:8px'>"
+                f"<div style='color:#86efac;font-size:0.78em;font-weight:700;letter-spacing:0.06em;text-transform:uppercase'>"
+                f"✓ App-Followed</div>"
+                f"<div style='color:#f9fafb;font-size:1.7em;font-weight:700;margin-top:4px'>{_fmt_win_rate(_m)}</div>"
+                f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:4px'>"
+                f"Net P&L: <b style='color:{'#86efac' if _m['net_pnl'] >= 0 else '#fca5a5'}'>"
+                f"${_m['net_pnl']:+,.0f}</b> · {_m['n_trades']} total</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with _hc2:
+            _m = _tr_m["deviated"]
+            _color = "#22c55e" if (_m["win_rate"] or 0) >= 60 else "#f59e0b" if (_m["win_rate"] or 0) >= 40 else "#ef4444"
+            st.markdown(
+                f"<div style='background:#1c1917;border-left:4px solid {_color};"
+                f"border-radius:8px;padding:12px 16px;margin-bottom:8px'>"
+                f"<div style='color:#fca5a5;font-size:0.78em;font-weight:700;letter-spacing:0.06em;text-transform:uppercase'>"
+                f"✗ Deviated (external)</div>"
+                f"<div style='color:#f9fafb;font-size:1.7em;font-weight:700;margin-top:4px'>{_fmt_win_rate(_m)}</div>"
+                f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:4px'>"
+                f"Net P&L: <b style='color:{'#86efac' if _m['net_pnl'] >= 0 else '#fca5a5'}'>"
+                f"${_m['net_pnl']:+,.0f}</b> · {_m['n_trades']} total</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with _hc3:
+            _m = _tr_m["panic_window"]
+            if _m["n_trades"] == 0:
+                st.markdown(
+                    f"<div style='background:#0f172a;border-left:4px solid #334155;"
+                    f"border-radius:8px;padding:12px 16px;margin-bottom:8px'>"
+                    f"<div style='color:#94a3b8;font-size:0.78em;font-weight:700;letter-spacing:0.06em;text-transform:uppercase'>"
+                    f"🌪 Panic-Window Trades</div>"
+                    f"<div style='color:#cbd5e1;font-size:1.05em;font-weight:600;margin-top:6px'>None in window</div>"
+                    f"<div style='color:#94a3b8;font-size:0.78em;margin-top:4px'>Trades made on days S&P ≤ -1.5%.</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                _color = "#22c55e" if (_m["win_rate"] or 0) >= 60 else "#f59e0b" if (_m["win_rate"] or 0) >= 40 else "#ef4444"
+                st.markdown(
+                    f"<div style='background:#3f1d1d;border-left:4px solid {_color};"
+                    f"border-radius:8px;padding:12px 16px;margin-bottom:8px'>"
+                    f"<div style='color:#fca5a5;font-size:0.78em;font-weight:700;letter-spacing:0.06em;text-transform:uppercase'>"
+                    f"🌪 Panic-Window Trades</div>"
+                    f"<div style='color:#f9fafb;font-size:1.7em;font-weight:700;margin-top:4px'>{_fmt_win_rate(_m)}</div>"
+                    f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:4px'>"
+                    f"Net P&L: <b style='color:{'#86efac' if _m['net_pnl'] >= 0 else '#fca5a5'}'>"
+                    f"${_m['net_pnl']:+,.0f}</b> · {_m['n_trades']} total · S&P ≤ -1.5% days</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        # ── Per-trade scorecard ───────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📜 Per-Trade Scorecard")
+
+        if not _tr_trades:
+            st.caption("No trades in this window. Widen the look-back if you traded earlier.")
+        else:
+            _cat_labels = {
+                "app_followed":  ("✓ App-Followed",  "#22c55e", "#052e16"),
+                "deviated":      ("✗ Deviated",     "#ef4444", "#3f1d1d"),
+                "discretionary": ("— Discretionary", "#94a3b8", "#1c1917"),
+            }
+            for t in _tr_trades:
+                _cat_label, _cat_col, _cat_bg = _cat_labels.get(t["category"], _cat_labels["discretionary"])
+                _action_chip_col = "#22c55e" if "BUY" in t["action"].upper() else "#ef4444"
+
+                _pnl     = t["outcome_pnl"]
+                _pct     = t["outcome_pct"]
+                _pnl_col = "#86efac" if _pnl > 0 else "#fca5a5" if _pnl < 0 else "#cbd5e1"
+
+                _hold = t["hold_days"]
+                _hold_str = f"{_hold}d held" if _hold is not None else "—"
+
+                _vs_spy = t["vs_spy_pct"]
+                _vs_spy_str = ""
+                if _vs_spy is not None:
+                    _vs_col = "#86efac" if _vs_spy >= 0 else "#fca5a5"
+                    _vs_spy_str = (
+                        f" · vs SPY <b style='color:{_vs_col}'>{_vs_spy:+.2f}%</b>"
+                    )
+
+                _panic_chip = ""
+                if t["panic_window"]:
+                    _sp = t.get("spy_pct_on_date")
+                    _sp_str = f" (S&P {_sp:+.2f}%)" if _sp is not None else ""
+                    _panic_chip = (
+                        f"<span style='background:#7f1d1d;color:#fecaca;padding:1px 8px;"
+                        f"border-radius:4px;font-size:0.74em;margin-left:6px'>"
+                        f"🌪 Panic day{_sp_str}</span>"
+                    )
+
+                _status_chip = (
+                    f"<span style='color:#fbbf24;font-size:0.78em;font-weight:600'>OPEN</span>"
+                    if t["outcome_status"] == "open"
+                    else f"<span style='color:#94a3b8;font-size:0.78em'>CLOSED</span>"
+                )
+
+                _win_chip = ""
+                if t["is_win"] is True:
+                    _win_chip = "<span style='color:#86efac;font-weight:700'>✓ WIN</span>"
+                elif t["is_win"] is False:
+                    _win_chip = "<span style='color:#fca5a5;font-weight:700'>✗ LOSS</span>"
+
+                _exit_str = ""
+                if t["outcome_status"] == "open" and t["exit_price"]:
+                    _exit_str = f" · MTM ${t['exit_price']:.2f}"
+                elif t["outcome_status"] == "closed" and t["exit_price"]:
+                    _exit_str = f" · Exit ${t['exit_price']:.2f}"
+
+                _dev_note = ""
+                if t["category"] == "deviated" and t.get("deviation_reason"):
+                    _dev_note = (
+                        f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px;font-style:italic'>"
+                        f"Why deviated: {_html.escape(t['deviation_reason'][:140])}"
+                        f"</div>"
+                    )
+                _lesson_note = ""
+                if t.get("lesson"):
+                    _lesson_note = (
+                        f"<div style='color:#fde68a;font-size:0.78em;margin-top:4px;font-style:italic'>"
+                        f"💡 Lesson: {_html.escape(t['lesson'][:140])}"
+                        f"</div>"
+                    )
+
+                st.markdown(
+                    f"<div style='background:{_cat_bg};border-left:3px solid {_cat_col};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+                    f"<div style='color:#f9fafb;font-weight:700;font-size:1.0em'>"
+                    f"<span style='color:{_action_chip_col}'>{t['action']}</span> "
+                    f"<b>{t['ticker']}</b> "
+                    f"<span style='color:#94a3b8;font-weight:400;font-size:0.86em'>"
+                    f"· {t['shares']:.0f} sh @ ${t['price']:.2f}{_exit_str}</span>"
+                    f"{_panic_chip}"
+                    f"</div>"
+                    f"<div style='font-size:0.84em'>{_status_chip}</div>"
+                    f"</div>"
+                    f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:6px'>"
+                    f"P&L: <b style='color:{_pnl_col}'>${_pnl:+,.0f} ({_pct:+.2f}%)</b> · "
+                    f"{_hold_str}{_vs_spy_str} · "
+                    f"<span style='color:{_cat_col}'>{_cat_label}</span> · {_win_chip}"
+                    f"</div>"
+                    + _dev_note
+                    + _lesson_note
+                    + f"<div style='color:#64748b;font-size:0.74em;margin-top:4px'>"
+                    f"Traded {t['_trade_date'].isoformat() if t.get('_trade_date') else '—'}"
+                    + (f" · Signal seen: {_html.escape(t['signal_seen'])}" if t.get("signal_seen") else "")
+                    + "</div>"
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("---")
+        st.caption(
+            "**Categories:** *App-Followed* = `followed_signal=True` · *Deviated* = `followed_signal=False` "
+            "(external info / discretionary call) · *Discretionary* = neither recorded. "
+            "**Panic-window** = trade made on a day S&P 500 closed ≤ -1.5%. "
+            "**vs-SPY** = trade's % return minus SPY's % over the same holding period (closed trades only). "
+            "Open positions are marked-to-market against current price."
         )
 
 # ═════════════════════════════════════════════════════════════════════════════
