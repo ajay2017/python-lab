@@ -8823,6 +8823,13 @@ elif page == "⚖️ Compare":
 
     # Auto-run when triggered by a quick-pick or by direct button press
     _cmp_should_run = _cmp_go or st.session_state.pop("_cmp_auto_run", False)
+
+    # ── Compute (and cache) the comparison when the user requests it ────────
+    # The result MUST be cached in session_state so it survives reruns from
+    # downstream buttons (Deep Dive, etc.). Without this, clicking any button
+    # in the rendered comparison would re-enter the page with _cmp_should_run
+    # = False and the whole result block would disappear — including the
+    # button the user just clicked, which silently swallows the click.
     if _cmp_should_run and _cmp_a_in and _cmp_b_in:
         if _cmp_a_in == _cmp_b_in:
             st.warning("Pick two different tickers to compare.")
@@ -8852,7 +8859,21 @@ elif page == "⚖️ Compare":
                 ticker_b = _cmp_b_in,
                 port_df  = _cmp_port_df,
             )
+            st.session_state["_cmp_result_cache"] = {
+                "key":  (_cmp_a_in, _cmp_b_in),
+                "data": _cmp_result,
+            }
 
+    # ── Render from the cached result whenever inputs match ─────────────────
+    # Survives reruns triggered by Deep Dive (or any other) buttons.
+    _cmp_cached = st.session_state.get("_cmp_result_cache")
+    if (
+        _cmp_a_in and _cmp_b_in
+        and _cmp_cached
+        and _cmp_cached.get("key") == (_cmp_a_in, _cmp_b_in)
+    ):
+        _cmp_result = _cmp_cached["data"]
+        if True:
             # ── Verdict block ──────────────────────────────────────────────
             _v = _cmp_result["verdict"]
             _v_preferred = _v["preferred"]
@@ -8947,9 +8968,9 @@ elif page == "⚖️ Compare":
                     st.session_state["_analysis_ticker"] = _cmp_b_in
                     st.rerun()
 
-    elif _cmp_should_run:
+    elif _cmp_should_run and not (_cmp_a_in and _cmp_b_in):
         st.info("Enter both Ticker A and Ticker B to run a comparison.")
-    else:
+    elif not _cmp_cached:
         st.info(
             "Pick two tickers above (or use a quick-pick) and click **⚖️ Compare**. "
             "The verdict block highlights which composite is stronger, with sub-factor "
