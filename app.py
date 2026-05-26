@@ -10520,136 +10520,11 @@ elif page == "🪞 Trade Review":
                     unsafe_allow_html=True,
                 )
 
-        # ── Per-trade scorecard ───────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### 📜 Per-Trade Scorecard")
-
-        if not _tr_trades:
-            st.caption("No trades in this window. Widen the look-back if you traded earlier.")
-        else:
-            _cat_labels = {
-                "app_followed":  ("✓ App-Followed",  "#22c55e", "#052e16"),
-                "deviated":      ("✗ Deviated",     "#ef4444", "#3f1d1d"),
-                "discretionary": ("— Discretionary", "#94a3b8", "#1c1917"),
-            }
-            for t in _tr_trades:
-                _cat_label, _cat_col, _cat_bg = _cat_labels.get(t["category"], _cat_labels["discretionary"])
-                _action_chip_col = "#22c55e" if "BUY" in t["action"].upper() else "#ef4444"
-
-                _pnl     = t["outcome_pnl"]
-                _pct     = t["outcome_pct"]
-                _pnl_col = "#86efac" if _pnl > 0 else "#fca5a5" if _pnl < 0 else "#cbd5e1"
-
-                _hold = t["hold_days"]
-                _hold_str = f"{_hold}d held" if _hold is not None else "—"
-
-                _vs_spy = t["vs_spy_pct"]
-                _vs_spy_str = ""
-                if _vs_spy is not None:
-                    _vs_col = "#86efac" if _vs_spy >= 0 else "#fca5a5"
-                    _vs_spy_str = (
-                        f" · vs SPY <b style='color:{_vs_col}'>{_vs_spy:+.2f}%</b>"
-                    )
-
-                _panic_chip = ""
-                if t["panic_window"]:
-                    _sp = t.get("spy_pct_on_date")
-                    _sp_str = f" (S&P {_sp:+.2f}%)" if _sp is not None else ""
-                    _panic_chip = (
-                        f"<span style='background:#7f1d1d;color:#fecaca;padding:1px 8px;"
-                        f"border-radius:4px;font-size:0.74em;margin-left:6px'>"
-                        f"🌪 Panic day{_sp_str}</span>"
-                    )
-
-                if t["outcome_status"] == "open":
-                    _status_chip = "<span style='color:#fbbf24;font-size:0.78em;font-weight:600'>OPEN</span>"
-                elif t["outcome_status"] == "partial":
-                    _ss = t.get("shares_sold", 0) or 0
-                    _sr = t.get("shares_remaining", 0) or 0
-                    _status_chip = (
-                        f"<span style='color:#a78bfa;font-size:0.78em;font-weight:600'>"
-                        f"PARTIAL · {_ss:.0f}/{_ss + _sr:.0f} sold</span>"
-                    )
-                else:
-                    _status_chip = "<span style='color:#94a3b8;font-size:0.78em'>CLOSED</span>"
-
-                _win_chip = ""
-                if t["is_win"] is True:
-                    _win_chip = "<span style='color:#86efac;font-weight:700'>✓ WIN</span>"
-                elif t["is_win"] is False:
-                    _win_chip = "<span style='color:#fca5a5;font-weight:700'>✗ LOSS</span>"
-
-                _exit_str = ""
-                if t["outcome_status"] == "open" and t["exit_price"]:
-                    _exit_str = f" · MTM ${t['exit_price']:.2f}"
-                elif t["outcome_status"] == "closed" and t["exit_price"]:
-                    _exit_str = f" · Exit avg ${t['exit_price']:.2f}"
-                elif t["outcome_status"] == "partial" and t["exit_price"]:
-                    _exit_str = f" · last sold ${t['exit_price']:.2f}"
-
-                # For partial closes, break out realized vs unrealized so the user can
-                # see why the total P&L is what it is (audit trail for the new math).
-                _split_note = ""
-                if t["outcome_status"] == "partial":
-                    _real = t.get("realized_pnl", 0.0)
-                    _unr  = t["outcome_pnl"] - _real
-                    _real_col = "#86efac" if _real >= 0 else "#fca5a5"
-                    _unr_col  = "#86efac" if _unr  >= 0 else "#fca5a5"
-                    _split_note = (
-                        f"<div style='color:#a78bfa;font-size:0.78em;margin-top:3px'>"
-                        f"📦 Realized <b style='color:{_real_col}'>${_real:+,.0f}</b> "
-                        f"on {t['shares_sold']:.0f} sh "
-                        f"+ Unrealized <b style='color:{_unr_col}'>${_unr:+,.0f}</b> "
-                        f"on {t['shares_remaining']:.0f} sh held"
-                        f"</div>"
-                    )
-
-                _dev_note = ""
-                if t["category"] == "deviated" and t.get("deviation_reason"):
-                    _dev_note = (
-                        f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px;font-style:italic'>"
-                        f"Why deviated: {_html.escape(t['deviation_reason'][:140])}"
-                        f"</div>"
-                    )
-                _lesson_note = ""
-                if t.get("lesson"):
-                    _lesson_note = (
-                        f"<div style='color:#fde68a;font-size:0.78em;margin-top:4px;font-style:italic'>"
-                        f"💡 Lesson: {_html.escape(t['lesson'][:140])}"
-                        f"</div>"
-                    )
-
-                st.markdown(
-                    f"<div style='background:{_cat_bg};border-left:3px solid {_cat_col};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
-                    f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
-                    f"<div style='color:#f9fafb;font-weight:700;font-size:1.0em'>"
-                    f"<span style='color:{_action_chip_col}'>{t['action']}</span> "
-                    f"<b>{t['ticker']}</b> "
-                    f"<span style='color:#94a3b8;font-weight:400;font-size:0.86em'>"
-                    f"· {t['shares']:.0f} sh @ ${t['price']:.2f}{_exit_str}</span>"
-                    f"{_panic_chip}"
-                    f"</div>"
-                    f"<div style='font-size:0.84em'>{_status_chip}</div>"
-                    f"</div>"
-                    f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:6px'>"
-                    f"P&L: <b style='color:{_pnl_col}'>${_pnl:+,.0f} ({_pct:+.2f}%)</b> · "
-                    f"{_hold_str}{_vs_spy_str} · "
-                    f"<span style='color:{_cat_col}'>{_cat_label}</span> · {_win_chip}"
-                    f"</div>"
-                    + _split_note
-                    + _dev_note
-                    + _lesson_note
-                    + f"<div style='color:#64748b;font-size:0.74em;margin-top:4px'>"
-                    f"Traded {t['_trade_date'].isoformat() if t.get('_trade_date') else '—'}"
-                    + (f" · Signal seen: {_html.escape(t['signal_seen'])}" if t.get("signal_seen") else "")
-                    + "</div>"
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-
         # ── 📈 Performance Trends — visual answer to "right direction?" ──────
-        with st.expander("📈 Performance Trends", expanded=False):
+        # Default-expanded so the user sees the trajectory at a glance without
+        # having to scroll past the per-trade list. The detailed scorecard
+        # lives at the bottom of the page in a collapsed expander.
+        with st.expander("📈 Performance Trends", expanded=True):
             if len(_tr_cum_series) < 2:
                 st.caption(
                     "Need at least 2 judged trades in this window to plot the trend. "
@@ -10717,7 +10592,7 @@ elif page == "🪞 Trade Review":
                     )
 
         # ── ⚖ Risk Discipline — well-managed risk? ───────────────────────────
-        with st.expander("⚖ Risk Discipline", expanded=False):
+        with st.expander("⚖ Risk Discipline", expanded=True):
             if _tr_pos_disc["n_trades"] == 0:
                 st.caption(
                     "Position-size discipline requires a portfolio value (open the "
@@ -10813,6 +10688,139 @@ elif page == "🪞 Trade Review":
                         f"⚠ **{_tr_sec_mix['top_sector']}** is above the "
                         f"{_tr_sec_mix['elevated_threshold']:.0f}% concentration warn level. "
                         "Over-fishing one sector means a single regime shift hits multiple positions."
+                    )
+
+        # ── 📜 Per-Trade Scorecard — detail view, collapsed by default ───────
+        # Lives at the bottom of the page because the page-level question
+        # ("how am I doing?") is answered by the synthesis card + trends above.
+        # The scorecard is for drilling into individual trades — open when you
+        # need to audit a specific entry/exit.
+        with st.expander(
+            f"📜 Per-Trade Scorecard ({len(_tr_trades) if _tr_trades else 0} trades) — click to expand",
+            expanded=False,
+        ):
+            if not _tr_trades:
+                st.caption("No trades in this window. Widen the look-back if you traded earlier.")
+            else:
+                _cat_labels = {
+                    "app_followed":  ("✓ App-Followed",  "#22c55e", "#052e16"),
+                    "deviated":      ("✗ Deviated",     "#ef4444", "#3f1d1d"),
+                    "discretionary": ("— Discretionary", "#94a3b8", "#1c1917"),
+                }
+                for t in _tr_trades:
+                    _cat_label, _cat_col, _cat_bg = _cat_labels.get(t["category"], _cat_labels["discretionary"])
+                    _action_chip_col = "#22c55e" if "BUY" in t["action"].upper() else "#ef4444"
+
+                    _pnl     = t["outcome_pnl"]
+                    _pct     = t["outcome_pct"]
+                    _pnl_col = "#86efac" if _pnl > 0 else "#fca5a5" if _pnl < 0 else "#cbd5e1"
+
+                    _hold = t["hold_days"]
+                    _hold_str = f"{_hold}d held" if _hold is not None else "—"
+
+                    _vs_spy = t["vs_spy_pct"]
+                    _vs_spy_str = ""
+                    if _vs_spy is not None:
+                        _vs_col = "#86efac" if _vs_spy >= 0 else "#fca5a5"
+                        _vs_spy_str = (
+                            f" · vs SPY <b style='color:{_vs_col}'>{_vs_spy:+.2f}%</b>"
+                        )
+
+                    _panic_chip = ""
+                    if t["panic_window"]:
+                        _sp = t.get("spy_pct_on_date")
+                        _sp_str = f" (S&P {_sp:+.2f}%)" if _sp is not None else ""
+                        _panic_chip = (
+                            f"<span style='background:#7f1d1d;color:#fecaca;padding:1px 8px;"
+                            f"border-radius:4px;font-size:0.74em;margin-left:6px'>"
+                            f"🌪 Panic day{_sp_str}</span>"
+                        )
+
+                    if t["outcome_status"] == "open":
+                        _status_chip = "<span style='color:#fbbf24;font-size:0.78em;font-weight:600'>OPEN</span>"
+                    elif t["outcome_status"] == "partial":
+                        _ss = t.get("shares_sold", 0) or 0
+                        _sr = t.get("shares_remaining", 0) or 0
+                        _status_chip = (
+                            f"<span style='color:#a78bfa;font-size:0.78em;font-weight:600'>"
+                            f"PARTIAL · {_ss:.0f}/{_ss + _sr:.0f} sold</span>"
+                        )
+                    else:
+                        _status_chip = "<span style='color:#94a3b8;font-size:0.78em'>CLOSED</span>"
+
+                    _win_chip = ""
+                    if t["is_win"] is True:
+                        _win_chip = "<span style='color:#86efac;font-weight:700'>✓ WIN</span>"
+                    elif t["is_win"] is False:
+                        _win_chip = "<span style='color:#fca5a5;font-weight:700'>✗ LOSS</span>"
+
+                    _exit_str = ""
+                    if t["outcome_status"] == "open" and t["exit_price"]:
+                        _exit_str = f" · MTM ${t['exit_price']:.2f}"
+                    elif t["outcome_status"] == "closed" and t["exit_price"]:
+                        _exit_str = f" · Exit avg ${t['exit_price']:.2f}"
+                    elif t["outcome_status"] == "partial" and t["exit_price"]:
+                        _exit_str = f" · last sold ${t['exit_price']:.2f}"
+
+                    # For partial closes, break out realized vs unrealized so the user can
+                    # see why the total P&L is what it is (audit trail for the new math).
+                    _split_note = ""
+                    if t["outcome_status"] == "partial":
+                        _real = t.get("realized_pnl", 0.0)
+                        _unr  = t["outcome_pnl"] - _real
+                        _real_col = "#86efac" if _real >= 0 else "#fca5a5"
+                        _unr_col  = "#86efac" if _unr  >= 0 else "#fca5a5"
+                        _split_note = (
+                            f"<div style='color:#a78bfa;font-size:0.78em;margin-top:3px'>"
+                            f"📦 Realized <b style='color:{_real_col}'>${_real:+,.0f}</b> "
+                            f"on {t['shares_sold']:.0f} sh "
+                            f"+ Unrealized <b style='color:{_unr_col}'>${_unr:+,.0f}</b> "
+                            f"on {t['shares_remaining']:.0f} sh held"
+                            f"</div>"
+                        )
+
+                    _dev_note = ""
+                    if t["category"] == "deviated" and t.get("deviation_reason"):
+                        _dev_note = (
+                            f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px;font-style:italic'>"
+                            f"Why deviated: {_html.escape(t['deviation_reason'][:140])}"
+                            f"</div>"
+                        )
+                    _lesson_note = ""
+                    if t.get("lesson"):
+                        _lesson_note = (
+                            f"<div style='color:#fde68a;font-size:0.78em;margin-top:4px;font-style:italic'>"
+                            f"💡 Lesson: {_html.escape(t['lesson'][:140])}"
+                            f"</div>"
+                        )
+
+                    st.markdown(
+                        f"<div style='background:{_cat_bg};border-left:3px solid {_cat_col};"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+                        f"<div style='color:#f9fafb;font-weight:700;font-size:1.0em'>"
+                        f"<span style='color:{_action_chip_col}'>{t['action']}</span> "
+                        f"<b>{t['ticker']}</b> "
+                        f"<span style='color:#94a3b8;font-weight:400;font-size:0.86em'>"
+                        f"· {t['shares']:.0f} sh @ ${t['price']:.2f}{_exit_str}</span>"
+                        f"{_panic_chip}"
+                        f"</div>"
+                        f"<div style='font-size:0.84em'>{_status_chip}</div>"
+                        f"</div>"
+                        f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:6px'>"
+                        f"P&L: <b style='color:{_pnl_col}'>${_pnl:+,.0f} ({_pct:+.2f}%)</b> · "
+                        f"{_hold_str}{_vs_spy_str} · "
+                        f"<span style='color:{_cat_col}'>{_cat_label}</span> · {_win_chip}"
+                        f"</div>"
+                        + _split_note
+                        + _dev_note
+                        + _lesson_note
+                        + f"<div style='color:#64748b;font-size:0.74em;margin-top:4px'>"
+                        f"Traded {t['_trade_date'].isoformat() if t.get('_trade_date') else '—'}"
+                        + (f" · Signal seen: {_html.escape(t['signal_seen'])}" if t.get("signal_seen") else "")
+                        + "</div>"
+                        + "</div>",
+                        unsafe_allow_html=True,
                     )
 
         st.markdown("---")
