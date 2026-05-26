@@ -74,6 +74,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
+from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.premarket_stance import (
     assemble_inputs as pms_assemble_inputs,
@@ -679,7 +680,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -8764,6 +8765,196 @@ elif page == "📋 Watchlist":
                         db.save_watchlist(st.session_state.watchlist)
                         st.success(f"{_ticker} removed.")
                         st.rerun()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — COMPARE (2-ticker side-by-side)
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "⚖️ Compare":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("⚖️ Compare")
+    st.caption(
+        "Side-by-side comparison of two tickers. Useful for deciding between "
+        "similar candidates (e.g. OKTA vs CRWD for cybersecurity, or two "
+        "watchlist names competing for the same allocation slot)."
+    )
+
+    # ── Defaults: try watchlist first two, else session memory, else blank ──
+    _cmp_wl = list(st.session_state.get("watchlist", []) or [])
+    _cmp_default_a = st.session_state.get("_cmp_last_a", _cmp_wl[0] if len(_cmp_wl) >= 1 else "")
+    _cmp_default_b = st.session_state.get("_cmp_last_b", _cmp_wl[1] if len(_cmp_wl) >= 2 else "")
+
+    _cmp_c1, _cmp_c2, _cmp_c3 = st.columns([2, 2, 1])
+    with _cmp_c1:
+        _cmp_a_in = st.text_input(
+            "Ticker A", value=_cmp_default_a, key="_cmp_a_input",
+            placeholder="e.g. OKTA",
+        ).strip().upper()
+    with _cmp_c2:
+        _cmp_b_in = st.text_input(
+            "Ticker B", value=_cmp_default_b, key="_cmp_b_input",
+            placeholder="e.g. CRWD",
+        ).strip().upper()
+    with _cmp_c3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        _cmp_go = st.button("⚖️ Compare", type="primary", use_container_width=True)
+
+    # Quick-pick row from watchlist + holdings
+    _cmp_qp_options = []
+    _cmp_wl_clean   = [t for t in _cmp_wl if t]
+    if len(_cmp_wl_clean) >= 2:
+        _cmp_qp_options.append(("Watchlist top 2", _cmp_wl_clean[0], _cmp_wl_clean[1]))
+    _cmp_hold_tickers = list(st.session_state.get("holdings_df", pd.DataFrame()).get("Ticker", []))
+    if len(_cmp_hold_tickers) >= 2:
+        _cmp_qp_options.append(("Portfolio top 2 by weight", _cmp_hold_tickers[0], _cmp_hold_tickers[1]))
+
+    if _cmp_qp_options:
+        _qp_cols = st.columns(len(_cmp_qp_options) + 1)
+        for _qpi, (_lbl, _qpa, _qpb) in enumerate(_cmp_qp_options):
+            with _qp_cols[_qpi]:
+                if st.button(f"🎯 {_lbl}: {_qpa} vs {_qpb}", key=f"_cmp_qp_{_qpi}",
+                             use_container_width=True):
+                    st.session_state["_cmp_a_input"] = _qpa
+                    st.session_state["_cmp_b_input"] = _qpb
+                    st.session_state["_cmp_last_a"] = _qpa
+                    st.session_state["_cmp_last_b"] = _qpb
+                    st.session_state["_cmp_auto_run"] = True
+                    st.rerun()
+
+    # Auto-run when triggered by a quick-pick or by direct button press
+    _cmp_should_run = _cmp_go or st.session_state.pop("_cmp_auto_run", False)
+    if _cmp_should_run and _cmp_a_in and _cmp_b_in:
+        if _cmp_a_in == _cmp_b_in:
+            st.warning("Pick two different tickers to compare.")
+            st.stop()
+
+        st.session_state["_cmp_last_a"] = _cmp_a_in
+        st.session_state["_cmp_last_b"] = _cmp_b_in
+
+        with st.spinner(f"Loading {_cmp_a_in} and {_cmp_b_in}…"):
+            _cmp_bundle_a = None
+            _cmp_bundle_b = None
+            try:
+                _cmp_bundle_a = load_all(_cmp_a_in)
+            except Exception as _ea:
+                st.error(f"Could not load {_cmp_a_in}: {_ea}")
+            try:
+                _cmp_bundle_b = load_all(_cmp_b_in)
+            except Exception as _eb:
+                st.error(f"Could not load {_cmp_b_in}: {_eb}")
+
+        if _cmp_bundle_a and _cmp_bundle_b:
+            _cmp_port_df = st.session_state.get("_port_df_enriched", pd.DataFrame())
+            _cmp_result = build_comparison(
+                bundle_a = _cmp_bundle_a,
+                bundle_b = _cmp_bundle_b,
+                ticker_a = _cmp_a_in,
+                ticker_b = _cmp_b_in,
+                port_df  = _cmp_port_df,
+            )
+
+            # ── Verdict block ──────────────────────────────────────────────
+            _v = _cmp_result["verdict"]
+            _v_preferred = _v["preferred"]
+            _v_color = {
+                "a":   "#22c55e",
+                "b":   "#22c55e",
+                "tie": "#f59e0b",
+            }.get(_v_preferred, "#6b7280")
+            _v_icon = "🏆" if _v_preferred in ("a", "b") else "⚖️"
+            _v_conf_label = {"high": "High confidence", "medium": "Medium confidence",
+                             "low":  "Low confidence — close call"}.get(_v["confidence"], "")
+
+            st.markdown(
+                f"<div style='background:#0f172a;border:1px solid {_v_color};"
+                f"border-left:5px solid {_v_color};border-radius:8px;"
+                f"padding:14px 18px;margin:14px 0'>"
+                f"<div style='display:flex;align-items:baseline;gap:14px;flex-wrap:wrap'>"
+                f"<span style='color:{_v_color};font-weight:800;font-size:1.1em'>"
+                f"{_v_icon} Verdict</span>"
+                f"<span style='color:#9ca3af;font-size:0.78em'>{_v_conf_label}</span>"
+                f"</div>"
+                f"<div style='color:#e5e7eb;font-size:0.95em;margin-top:6px;line-height:1.5'>"
+                f"{_v['reason']}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # ── Portfolio fit (if any concerns) ────────────────────────────
+            _pf = _cmp_result.get("portfolio_fit", {})
+            if _pf.get("a") or _pf.get("b"):
+                _pf_c1, _pf_c2 = st.columns(2)
+                with _pf_c1:
+                    if _pf.get("a"):
+                        st.warning(f"**{_cmp_a_in}** · {_pf['a']}", icon="📋")
+                with _pf_c2:
+                    if _pf.get("b"):
+                        st.warning(f"**{_cmp_b_in}** · {_pf['b']}", icon="📋")
+
+            # ── Sectioned comparison tables ─────────────────────────────────
+            # Each section uses a custom 3-col HTML table so we can highlight
+            # the winner cell with a green background — st.dataframe doesn't
+            # support per-cell conditional styling cleanly for mixed types.
+            for _sec in _cmp_result["sections"]:
+                st.markdown(f"#### {_sec['name']}")
+                _table_html_rows = []
+                for _r in _sec["rows"]:
+                    _w   = _r["winner"]
+                    _bga = "background:#052e16" if _w == "a" else "background:transparent"
+                    _bgb = "background:#052e16" if _w == "b" else "background:transparent"
+                    _ca  = "#86efac" if _w == "a" else "#e5e7eb"
+                    _cb  = "#86efac" if _w == "b" else "#e5e7eb"
+                    _table_html_rows.append(
+                        f"<tr>"
+                        f"<td style='padding:6px 10px;color:#9ca3af;font-size:0.85em'>"
+                        f"{_r['label']}</td>"
+                        f"<td style='padding:6px 10px;color:{_ca};font-weight:600;{_bga}'>"
+                        f"{_r['value_a']}</td>"
+                        f"<td style='padding:6px 10px;color:{_cb};font-weight:600;{_bgb}'>"
+                        f"{_r['value_b']}</td>"
+                        f"</tr>"
+                    )
+                st.markdown(
+                    f"<table style='width:100%;border-collapse:collapse;"
+                    f"background:#111827;border:1px solid #1f2937;border-radius:6px;"
+                    f"margin-bottom:8px'>"
+                    f"<thead><tr>"
+                    f"<th style='padding:6px 10px;color:#6b7280;font-weight:700;"
+                    f"text-align:left;font-size:0.72em;letter-spacing:0.05em;"
+                    f"text-transform:uppercase;width:40%'>Metric</th>"
+                    f"<th style='padding:6px 10px;color:#f9fafb;font-weight:700;"
+                    f"text-align:left'>{_cmp_a_in}</th>"
+                    f"<th style='padding:6px 10px;color:#f9fafb;font-weight:700;"
+                    f"text-align:left'>{_cmp_b_in}</th>"
+                    f"</tr></thead>"
+                    f"<tbody>{''.join(_table_html_rows)}</tbody></table>",
+                    unsafe_allow_html=True,
+                )
+
+            # ── Quick navigation to deep-dive on either ticker ──────────────
+            st.markdown("---")
+            _da, _db_ = st.columns(2)
+            with _da:
+                if st.button(f"📈 Deep dive on {_cmp_a_in}",
+                             key=f"_cmp_dd_a_{_cmp_a_in}", use_container_width=True):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _cmp_a_in
+                    st.rerun()
+            with _db_:
+                if st.button(f"📈 Deep dive on {_cmp_b_in}",
+                             key=f"_cmp_dd_b_{_cmp_b_in}", use_container_width=True):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _cmp_b_in
+                    st.rerun()
+
+    elif _cmp_should_run:
+        st.info("Enter both Ticker A and Ticker B to run a comparison.")
+    else:
+        st.info(
+            "Pick two tickers above (or use a quick-pick) and click **⚖️ Compare**. "
+            "The verdict block highlights which composite is stronger, with sub-factor "
+            "tie-breakers when scores are close."
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
