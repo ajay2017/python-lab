@@ -73,6 +73,7 @@ from stock_analyzer import db
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.evening_debrief import build_evening_debrief
 from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
@@ -1450,8 +1451,9 @@ if page == "🏠 Home":
     _db_act_n   = len(_daily_brief["act_today"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
-    tab_daily, tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
+    tab_daily, tab_evening, tab_ov, tab_perf, tab_earn, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
         f"📋 Today's Brief{_db_icon}",
+        "🌙 Evening Debrief",
         "📊 Overview",
         "📈 Performance",
         "📅 Earnings",
@@ -2632,7 +2634,265 @@ if page == "🏠 Home":
                     st.rerun()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 1 — OVERVIEW
+    # TAB 1 — EVENING DEBRIEF
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab_evening:
+        _ed_now_et = datetime.now(_pytz.timezone("America/New_York"))
+        _ed_hour   = _ed_now_et.hour + _ed_now_et.minute / 60
+        _ed_full   = _ed_hour >= 15.5   # 3:30 PM ET — switch from preview to full debrief
+
+        # ── Choose AM baseline: prefer the locked snapshot ──────────────────────
+        _ed_baseline_brief: dict | None
+        _ed_baseline_source = "none"
+        _ed_baseline_at     = None
+        if st.session_state.get("_brief_locked_snapshot") and \
+                st.session_state.get("_brief_locked_for_date") == _TODAY_ET:
+            _ed_baseline_brief  = st.session_state.get("_brief_locked_snapshot")
+            _ed_baseline_source = "locked"
+            _ed_baseline_at     = st.session_state.get("_brief_locked_at")
+        elif _daily_brief and not st.session_state.get("_daily_brief_offline"):
+            _ed_baseline_brief  = _daily_brief
+            _ed_baseline_source = "live"
+            _ed_baseline_at     = st.session_state.get("_brief_built_at")
+        else:
+            _ed_baseline_brief  = None
+
+        # ── Fetch intraday % for all tickers mentioned in plan + skip picks ─────
+        # Cached for 5 min so repeated tab opens don't hammer yfinance.
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _ed_fetch_intraday(_tickers_key: tuple) -> dict:
+            if not _tickers_key:
+                return {}
+            try:
+                px = fetch_live_prices(list(_tickers_key))
+                return {t: float(d.get("change_pct", 0)) for t, d in px.items()}
+            except Exception:
+                return {}
+
+        _ed_tickers_needed: set[str] = set()
+        if _ed_baseline_brief:
+            _ed_grow = _ed_baseline_brief.get("grow_today") or {}
+            for p in (_ed_grow.get("new_picks") or []):
+                _ed_tickers_needed.add(str(p.get("ticker", "")))
+            for p in (_ed_grow.get("add_positions") or []):
+                _ed_tickers_needed.add(str(p.get("ticker", "")))
+            for s in (_ed_grow.get("composite_skipped") or []):
+                _ed_tickers_needed.add(str(s.get("ticker", "")))
+            for b in (_ed_baseline_brief.get("buy_candidates") or []):
+                _ed_tickers_needed.add(str(b.get("ticker", "")))
+        _ed_tickers_needed.discard("")
+        _ed_intraday_pct = _ed_fetch_intraday(tuple(sorted(_ed_tickers_needed)))
+
+        # ── Build the debrief payload ───────────────────────────────────────────
+        try:
+            _ed_data = build_evening_debrief(
+                brief               = _ed_baseline_brief,
+                trades_df           = st.session_state.get("trades_df"),
+                port_df             = port_df,
+                held_data           = held_data,
+                macro_events        = _macro_events,
+                today               = _TODAY_ET,
+                intraday_pct        = _ed_intraday_pct,
+                am_baseline_source  = _ed_baseline_source,
+                am_baseline_at      = _ed_baseline_at,
+            )
+        except Exception as _ed_e:
+            st.error(f"Could not build Evening Debrief: {_ed_e}")
+            _ed_data = None
+
+        # ── Header strip ────────────────────────────────────────────────────────
+        _ed_mode_label  = "🌙 Full Debrief" if _ed_full else "👀 Preview Mode"
+        _ed_mode_bg     = "#1e1b4b" if _ed_full else "#1c1917"
+        _ed_mode_bdr    = "#8b5cf6" if _ed_full else "#6b7280"
+        _ed_mode_text   = (
+            f"Market closes at 4:00 PM ET. This is the day's closing review."
+            if _ed_full else
+            f"Preview — full debrief unlocks at 3:30 PM ET ({(15.5 - _ed_hour):.1f}h from now). "
+            "Numbers below are mid-day snapshots."
+        )
+
+        _ed_source_chip = {
+            "locked": "🔒 AM plan: <b>Locked snapshot</b> — your actual baseline",
+            "live":   "📌 AM plan: <b>Live Brief</b> (no lock) — may have drifted from open",
+            "none":   "⚠ AM plan: <b>Unavailable</b> — no Brief built today",
+        }.get(_ed_baseline_source, "")
+
+        st.markdown(
+            f"<div style='background:{_ed_mode_bg};border-left:4px solid {_ed_mode_bdr};"
+            f"border-radius:8px;padding:12px 18px;margin-bottom:12px'>"
+            f"<div style='color:#f9fafb;font-size:1.05em;font-weight:700'>{_ed_mode_label}</div>"
+            f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:2px'>{_ed_mode_text}</div>"
+            f"<div style='color:#a5b4fc;font-size:0.82em;margin-top:6px'>{_ed_source_chip}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        if _ed_data is None or _ed_baseline_brief is None:
+            st.info(
+                "No AM Brief available — open Today's Brief first to seed the debrief. "
+                "The Evening Debrief reconciles your AM plan against the day's outcomes."
+            )
+        else:
+            # ── Section 1: Plan vs Reality ──────────────────────────────────────
+            _ed_pvr   = _ed_data["plan_vs_reality"]
+            _ed_gos   = _ed_pvr["go_picks"]
+            _ed_skips = _ed_pvr["skip_picks"]
+
+            st.markdown("### 📋 Plan vs Reality")
+            _ed_pvr_c1, _ed_pvr_c2 = st.columns(2)
+
+            with _ed_pvr_c1:
+                st.markdown("**✅ Go-verdict picks (AM)**")
+                if not _ed_gos:
+                    st.caption("No Go-verdict picks in the AM read.")
+                else:
+                    for g in _ed_gos:
+                        _tp     = g.get("today_pct")
+                        _tp_str = f"{_tp:+.2f}%" if _tp is not None else "—"
+                        _comp   = g.get("composite")
+                        _comp_s = f"{_comp:.0f}" if isinstance(_comp, (int, float)) else "—"
+                        _card_bg = "#052e16" if g["action_taken"] else "#1e293b"
+                        _card_bdr = "#22c55e" if g["action_taken"] else "#475569"
+                        st.markdown(
+                            f"<div style='background:{_card_bg};border-left:3px solid {_card_bdr};"
+                            f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
+                            f"<div style='color:#f9fafb;font-weight:700'>{g['ticker']} "
+                            f"<span style='color:#94a3b8;font-size:0.82em;font-weight:400'>"
+                            f"· {g.get('sector','—')} · Momentum {g['momentum']:.0f} · Composite {_comp_s}</span></div>"
+                            f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:3px'>{g['outcome']}</div>"
+                            f"<div style='color:#94a3b8;font-size:0.78em;margin-top:2px'>"
+                            f"Today: <b>{_tp_str}</b></div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            with _ed_pvr_c2:
+                st.markdown("**⛔ Skipped / Filtered Out (AM)**")
+                if not _ed_skips:
+                    st.caption("Nothing was filtered out today.")
+                else:
+                    for s in _ed_skips:
+                        _tp     = s.get("today_pct")
+                        _tp_str = f"{_tp:+.2f}%" if _tp is not None else "—"
+                        _v      = s.get("verdict", "unknown")
+                        _card_bdr = {
+                            "validated": "#22c55e",
+                            "missed":    "#f59e0b",
+                            "flat":      "#475569",
+                            "unknown":   "#475569",
+                        }.get(_v, "#475569")
+                        st.markdown(
+                            f"<div style='background:#1e1b4b;border-left:3px solid {_card_bdr};"
+                            f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
+                            f"<div style='color:#f9fafb;font-weight:700'>{s['ticker']} "
+                            f"<span style='color:#94a3b8;font-size:0.82em;font-weight:400'>"
+                            f"· {s.get('sector','—')} · Mom {s['momentum']:.0f} · "
+                            f"Comp {s['composite']:.0f} {s.get('composite_label','')}</span></div>"
+                            f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:3px'>{s['outcome']}</div>"
+                            f"<div style='color:#94a3b8;font-size:0.78em;margin-top:2px'>"
+                            f"Today: <b>{_tp_str}</b></div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            st.markdown("---")
+
+            # ── Section 2: Today's Trades ───────────────────────────────────────
+            _ed_trades = _ed_data["today_trades"]
+            _ed_sum    = _ed_data["today_summary"]
+
+            st.markdown("### 💼 Today's Trades")
+            if not _ed_trades:
+                st.caption("No trades recorded today.")
+            else:
+                _ed_sm_c1, _ed_sm_c2, _ed_sm_c3, _ed_sm_c4 = st.columns(4)
+                _ed_sm_c1.metric("Trades", _ed_sum["n_trades"])
+                _ed_sm_c2.metric("Capital Deployed",
+                                 f"${_ed_sum['deployed']:,.0f}" if _ed_sum["deployed"] else "—")
+                _ed_sm_c3.metric(
+                    "Realized P&L",
+                    f"${_ed_sum['realized_pnl']:+,.0f}",
+                    delta=None,
+                )
+                _ed_sm_c4.metric(
+                    "Signal Compliance",
+                    f"{_ed_sum['n_followed']} ✓ / {_ed_sum['n_deviated']} ✗",
+                )
+
+                # Trade rows
+                for t in _ed_trades:
+                    _act_color = "#22c55e" if "BUY" in t["action"].upper() else "#ef4444"
+                    _comp_chip = ""
+                    if t.get("followed_signal") is True:
+                        _comp_chip = "<span style='color:#86efac;font-size:0.78em'>✓ followed signal</span>"
+                    elif t.get("followed_signal") is False:
+                        _comp_chip = "<span style='color:#fca5a5;font-size:0.78em'>✗ deviated from signal</span>"
+                    _rpnl_str = (
+                        f" · Realized <b>${t['realized_pnl']:+,.0f}</b>"
+                        if abs(t["realized_pnl"]) > 0 else ""
+                    )
+                    st.markdown(
+                        f"<div style='background:#0f172a;border-left:3px solid {_act_color};"
+                        f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
+                        f"<div style='color:#f9fafb;font-weight:600'>{t['action']} <b>{t['ticker']}</b> "
+                        f"<span style='color:#94a3b8;font-weight:400'>· {t['shares']:.0f} sh @ ${t['price']:.2f}"
+                        f"{_rpnl_str}</span></div>"
+                        f"<div style='margin-top:3px'>{_comp_chip}</div>"
+                        + (f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:3px;font-style:italic'>"
+                           f"{t['notes']}</div>" if t.get('notes') else "")
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("---")
+
+            # ── Section 3: Tomorrow's Setup ─────────────────────────────────────
+            _ed_tom    = _ed_data["tomorrow_setup"]
+            _ed_macros = _ed_tom["macro_tomorrow"]
+            _ed_earns  = _ed_tom["earnings_imminent"]
+
+            st.markdown(f"### 🌅 Tomorrow's Setup — {_ed_tom['tomorrow_date']}")
+
+            _ed_t_c1, _ed_t_c2 = st.columns(2)
+            with _ed_t_c1:
+                st.markdown("**Macro events tomorrow**")
+                if not _ed_macros:
+                    st.caption("No scheduled macro releases tomorrow.")
+                else:
+                    for ev in _ed_macros:
+                        _imp_color = {"HIGH": "#ef4444", "MEDIUM": "#f59e0b", "LOW": "#94a3b8"}.get(
+                            ev["impact"].upper(), "#94a3b8"
+                        )
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid {_imp_color};"
+                            f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
+                            f"<div style='color:#f9fafb;font-weight:600'>{ev['event']} "
+                            f"<span style='color:#94a3b8;font-weight:400'>· {ev['time']} · "
+                            f"<span style='color:{_imp_color}'>{ev['impact']}</span></span></div>"
+                            + (f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:3px'>"
+                               f"{ev['playbook']}</div>" if ev["playbook"] else "")
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+            with _ed_t_c2:
+                st.markdown("**Held positions with earnings ≤ 7 days**")
+                if not _ed_earns:
+                    st.caption("No held positions reporting in the next week.")
+                else:
+                    for e in _ed_earns:
+                        _days_color = "#ef4444" if e["days"] <= 2 else "#f59e0b" if e["days"] <= 4 else "#94a3b8"
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid {_days_color};"
+                            f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
+                            f"<div style='color:#f9fafb;font-weight:600'>{e['ticker']} "
+                            f"<span style='color:#94a3b8;font-weight:400'>· "
+                            f"<span style='color:{_days_color}'>{e['days']}d</span> · {e['date']}</span></div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — OVERVIEW
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_ov:
         # Charts row
