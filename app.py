@@ -7229,6 +7229,14 @@ elif page == "🔍 Market Scanner":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                    if st.button(
+                        f"▶ Analyze",
+                        key=f"_sc_top_analyze_{row['Ticker']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = row["Ticker"]
+                        st.rerun()
 
             # Imminent earnings warning — only visible once Signal Evidence is loaded
             if _ev_bundle_map:
@@ -7469,6 +7477,19 @@ elif page == "🔍 Market Scanner":
                     f"Score {_evr['score']}  ·  {_evr['rec_label']}"
                 )
                 with st.expander(_card_hdr):
+
+                    # ── Jump to Analysis — visible at the top so the user
+                    # doesn't have to scroll through the evidence to act.
+                    _btn_c1, _btn_c2 = st.columns([1, 4])
+                    with _btn_c1:
+                        if st.button(
+                            f"▶ Analyze {_evr['ticker']}",
+                            key=f"_sc_ev_analyze_{_evr['ticker']}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_pending_page"]    = "📈 Analysis"
+                            st.session_state["_analysis_ticker"] = _evr["ticker"]
+                            st.rerun()
 
                     # ── Score breakdown panel ──────────────────────────────
                     _comp_sc  = _evr.get("comp_score")
@@ -7737,6 +7758,29 @@ elif page == "🔍 Market Scanner":
             .hide(axis="index")
         )
         st.dataframe(styled, use_container_width=True)
+
+        # ── Quick Analyze — pick any ticker from filtered results ─────────────
+        # Complements the per-card Analyze buttons above. Lets the user jump
+        # from any row in the table (not just top 5 / top 10) straight to the
+        # Analysis page without having to type the ticker manually.
+        st.divider()
+        _qa_c1, _qa_c2 = st.columns([3, 1])
+        with _qa_c1:
+            _qa_options = filtered["Ticker"].tolist()
+            _qa_pick = st.selectbox(
+                "Quick Analyze — pick any ticker from these results",
+                options=_qa_options,
+                index=0 if _qa_options else None,
+                key="_sc_quick_analyze_pick",
+            )
+        with _qa_c2:
+            st.write("")
+            st.write("")
+            if st.button("▶ Analyze", key="_sc_quick_analyze_go",
+                         disabled=not _qa_pick, use_container_width=True):
+                st.session_state["_pending_page"]    = "📈 Analysis"
+                st.session_state["_analysis_ticker"] = _qa_pick
+                st.rerun()
 
         # Add to watchlist
         st.divider()
