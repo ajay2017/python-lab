@@ -330,7 +330,7 @@ def affected_sectors(category: str, min_severity: int = 2) -> set[str]:
 #   level    : needs  1 obs for current → fetch  2 so obs[1]  is available
 _FRED_MAP: dict[str, dict] = {
     "CPI Inflation": {
-        "series": "CPIAUCSL",        # CPI All Urban, SA (index level)
+        "series": "CPIAUCNS",        # CPI All Urban, NSA — matches the headline number quoted in media
         "transform": "yoy_pct",
         "label": "CPI YoY",
         "unit": "%",
@@ -654,7 +654,7 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
 
     Signals:
       1. Fed Funds trend          (FEDFUNDS, 4 obs monthly)
-      2. CPI YoY                  (CPIAUCSL, 14 obs monthly)
+      2. CPI YoY                  (CPIAUCNS, 14 obs monthly)
       3. 2yr-10yr yield spread    (DGS2 + DGS10, 3 obs each daily)
       4. Unemployment 3-month Δ   (UNRATE, 4 obs monthly)
       5. HY credit spread         (BAMLH0A0HYM2, 3 obs daily)
@@ -715,7 +715,7 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
 
     # ── Signal 2: CPI YoY ─────────────────────────────────────────────────────
     try:
-        cpi_obs = _fred_obs("CPIAUCSL", 14, _key)
+        cpi_obs = _fred_obs("CPIAUCNS", 14, _key)
         if len(cpi_obs) >= 13:
             any_success = True
             cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
@@ -862,6 +862,21 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
 
     winner = max(scores, key=lambda k: scores[k])
     winning_score = scores[winner]
+
+    # Hard gate: "Rate-Cut Optimism" claims "controlled inflation" in its
+    # rationale, so it must not be selected when CPI > 2.5% YoY even if other
+    # risk-on signals (low VIX, strong SPY) push the score that way. Without
+    # this, a 3.95% CPI print could still land in the rate-cut regime — a
+    # direct contradiction of the label.
+    if (
+        winner == "rate_cut"
+        and cpi_yoy is not None
+        and cpi_yoy > 2.5
+    ):
+        _alt_scores = {k: v for k, v in scores.items() if k != "rate_cut"}
+        if _alt_scores:
+            winner = max(_alt_scores, key=lambda k: _alt_scores[k])
+            winning_score = scores[winner]
 
     # Confidence: winner's positive score share of total positive scores
     pos_total = sum(max(0, v) for v in scores.values())

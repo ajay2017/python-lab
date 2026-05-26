@@ -560,7 +560,7 @@ if "nav_page" not in st.session_state:
 # the sidebar radio widget renders so the widget picks up the new value).
 if "_pending_page" in st.session_state:
     _dest = st.session_state.pop("_pending_page")
-    if _dest == "📈 Stock Analysis":
+    if _dest == "📈 Analysis":
         # Remember where we came from so a Back button can return us there
         st.session_state["_nav_origin"] = st.session_state.get("nav_page", "")
     st.session_state["nav_page"] = _dest
@@ -617,7 +617,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Stock Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "📋 Watchlist", "📒 Trade Journal", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -1092,7 +1092,7 @@ if page == "🏠 Home":
         _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
     except Exception:
         _port_risk = {}
-    st.session_state["_port_risk_cache"] = _port_risk  # available to Stock Analysis page
+    st.session_state["_port_risk_cache"] = _port_risk  # available to Analysis page
 
     # Risk Advisor recommendations — generated from portfolio risk metrics
     try:
@@ -1336,10 +1336,13 @@ if page == "🏠 Home":
     _c5.metric("Avg Conviction",   f"{avg_score:.0f}/100")
     _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
                _div_label, delta_color="off")
+    # Value = $ amount (masked under privacy); delta = % with explicit sign so
+    # Streamlit's arrow/color parser sees the minus (a "$-450" delta string is
+    # mis-parsed as positive because the $ prefix hides the sign).
     _c7.metric(f"Best: {best_row['Ticker']}",
-               f"{best_row['P&L (%)']:+.1f}%", _m(f"${best_row['P&L ($)']:,.0f}"), delta_color="normal")
+               _m(f"${best_row['P&L ($)']:,.0f}"), f"{best_row['P&L (%)']:+.1f}%", delta_color="normal")
     _c8.metric(f"Worst: {worst_row['Ticker']}",
-               f"{worst_row['P&L (%)']:+.1f}%", _m(f"${worst_row['P&L ($)']:,.0f}"), delta_color="normal")
+               _m(f"${worst_row['P&L ($)']:,.0f}"), f"{worst_row['P&L (%)']:+.1f}%", delta_color="normal")
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
@@ -1768,7 +1771,7 @@ if page == "🏠 Home":
                 _qr_bc1, _qr_bc2 = st.columns([3, 1])
                 with _qr_bc1:
                     if st.button(f"▶ Full Analysis — {_qr_res['ticker']}", key="_qr_full_btn"):
-                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _qr_res["ticker"]
                         st.session_state["_nav_origin"]      = "📋 Today's Brief"
                         st.rerun()
@@ -1842,7 +1845,7 @@ if page == "🏠 Home":
             # Composite-fetch failure banner — shown when one or more of the
             # intended top picks couldn't get a composite score, so picks may be
             # listed without the full multi-factor signal. Surfacing this lets
-            # the user know to manually run Stock Analysis before acting.
+            # the user know to manually run Analysis before acting.
             _comp_cov = st.session_state.get("_grow_composites_coverage") or {}
             _missing_comp_ui = _comp_cov.get("missing") or []
             if _missing_comp_ui:
@@ -1857,7 +1860,7 @@ if page == "🏠 Home":
                     + "</div>"
                     "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
                     "These picks are shown with momentum data only — the full multi-factor "
-                    "composite gate did not run. Open Stock Analysis on each before acting."
+                    "composite gate did not run. Open Analysis on each before acting."
                     "</div></div>",
                     unsafe_allow_html=True,
                 )
@@ -1906,7 +1909,7 @@ if page == "🏠 Home":
                     "high":       ("#22c55e", "✅ High Conviction"),
                     "moderate":   ("#f59e0b", "🟡 Moderate Setup"),
                     "low":        ("#ef4444", "⚠ Low Composite"),
-                    "unverified": ("#f59e0b", "🔍 Verify — Run Stock Analysis First"),
+                    "unverified": ("#f59e0b", "🔍 Verify — Run Analysis First"),
                 }
                 _conv_clr, _conv_txt = _conv_cfg.get(_conv, _conv_cfg["unverified"])
 
@@ -1944,7 +1947,7 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
                 if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
-                    st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                    st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _gp["ticker"]
                     st.rerun()
 
@@ -1971,7 +1974,7 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
                 if st.button(f"▶ Analyze {_ga['ticker']}", key=f"_db_grow_add_{_ga['ticker']}"):
-                    st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                    st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _ga["ticker"]
                     st.rerun()
 
@@ -2077,7 +2080,7 @@ if page == "🏠 Home":
                     if _db_ticker:
                         if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
                                      use_container_width=False):
-                            st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                            st.session_state["_pending_page"]    = "📈 Analysis"
                             st.session_state["_analysis_ticker"] = _db_ticker
                             st.rerun()
 
@@ -2191,7 +2194,7 @@ if page == "🏠 Home":
                 if _db_ticker:
                     if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
                                  use_container_width=False):
-                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _db_ticker
                         st.rerun()
 
@@ -2217,7 +2220,7 @@ if page == "🏠 Home":
         )
         st.caption(
             "📊 **Scanner = technical momentum only** (RSI, trend, price momentum). "
-            "🔍 **Verify** picks via Stock Analysis before acting — composite signal adds "
+            "🔍 **Verify** picks via Analysis before acting — composite signal adds "
             "sentiment, analyst revisions, earnings risk and fundamentals."
         )
         if not _db_buys:
@@ -2273,7 +2276,7 @@ if page == "🏠 Home":
                 )
                 if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
                              use_container_width=False):
-                    st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                    st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _db_buy["ticker"]
                     st.rerun()
 
@@ -2600,7 +2603,7 @@ if page == "🏠 Home":
                         unsafe_allow_html=True,
                     )
                     if st.button(f"▶ Analyze {_al['ticker']}", key=f"_ni_analyze_{_al['ticker']}_{_al.get('ts',0)}"):
-                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _al["ticker"]
                         st.rerun()
 
@@ -2638,7 +2641,7 @@ if page == "🏠 Home":
                         unsafe_allow_html=True,
                     )
                     if st.button(f"▶ Analyze {_op['ticker']}", key=f"_ni_opp_{_op['ticker']}_{_op.get('ts',0)}"):
-                        st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                        st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _op["ticker"]
                         st.rerun()
 
@@ -5101,6 +5104,33 @@ if page == "🏠 Home":
                 "an exact recommendation, and the institutional perspective behind it."
             )
 
+            with st.expander(
+                f"ℹ️ Why portfolio beta target is {PORTFOLIO_BETA_ELEVATED:.1f} (soft) / "
+                f"{PORTFOLIO_BETA_CEILING:.1f} (hard)?",
+                expanded=False,
+            ):
+                st.markdown(
+                    f"""
+**Two thresholds, both static** — defined in `stock_analyzer/constants.py`:
+
+| Threshold | Value | Meaning |
+|---|---|---|
+| `PORTFOLIO_BETA_ELEVATED` | **{PORTFOLIO_BETA_ELEVATED:.1f}** | Soft warning — Risk Advisor recommends trimming |
+| `PORTFOLIO_BETA_CEILING`  | **{PORTFOLIO_BETA_CEILING:.1f}** | Hard ceiling — trim required, do not add high-beta names |
+
+**Why these specific numbers?**
+
+- **{PORTFOLIO_BETA_ELEVATED:.1f}** is the point at which the asymmetric-loss math starts to materially eat into risk-adjusted returns. A 10% market correction costs you proportionally more than the corresponding rally pays — Sharpe-adjusted, you stop being compensated for the extra volatility.
+- **{PORTFOLIO_BETA_CEILING:.1f}** is the conventional institutional cap for managed equity accounts. Above this, professional risk teams require active mitigation regardless of conviction in individual names. The PM's job is not to eliminate beta — it's to ensure you're being paid for it through Sharpe.
+
+**Why static, not regime-adjusted?**
+
+The app deliberately keeps target beta fixed across regimes. In risk-off conditions, the response is to **trim harder toward the same target**, not to lower the target itself. A moving target makes it impossible to evaluate whether trades improved the risk profile. Investment policy, not market-timing.
+
+**To change these values**, edit `stock_analyzer/constants.py` and update `project_decision_thresholds.md` with the rationale — they are treated as policy decisions, not code tuning.
+"""
+                )
+
             _n_high = sum(1 for r in _risk_advisor_recs if r["priority"] == "HIGH")
             _n_med  = sum(1 for r in _risk_advisor_recs if r["priority"] == "MEDIUM")
             _n_ok   = sum(1 for r in _risk_advisor_recs if r["priority"] == "OK")
@@ -5334,7 +5364,7 @@ if page == "🏠 Home":
                                                 use_container_width=True,
                                             ):
                                                 st.session_state["_analysis_ticker"] = _dp_ticker
-                                                st.session_state["_pending_page"]    = "📈 Stock Analysis"
+                                                st.session_state["_pending_page"]    = "📈 Analysis"
                                                 st.session_state["_nav_origin"]      = "🏠 Home"
                                                 st.rerun()
 
@@ -6427,7 +6457,7 @@ elif page == "🔍 Market Scanner":
         "**How to read this:** The scanner uses a **Momentum Score** (RSI + Trend + 1M/3M price momentum). "
         "It is a fast filter, not a buy signal. A high momentum score means the stock is moving — "
         "**not** that fundamentals or sentiment support the move.  \n"
-        "For any ticker that catches your eye, run a full analysis on the **Stock Analysis** page, "
+        "For any ticker that catches your eye, run a full analysis on the **Analysis** page, "
         "which adds Fundamental (40%) and Sentiment (15%) data to form a composite score. "
         "A stock can score 85 on momentum and 52 composite — both numbers are correct; they answer different questions.",
         icon="ℹ️",
@@ -7042,7 +7072,7 @@ elif page == "🔍 Market Scanner":
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 3 — STOCK ANALYSIS
 # ═════════════════════════════════════════════════════════════════════════════
-elif page == "📈 Stock Analysis":
+elif page == "📈 Analysis":
     # ── Back button — shown when navigated here via an Analyze button ─────────
     _nav_origin = st.session_state.get("_nav_origin", "")
     if _nav_origin:
@@ -7057,7 +7087,7 @@ elif page == "📈 Stock Analysis":
             del st.session_state["_nav_origin"]
             st.rerun()
 
-    st.title("📈 Stock Analysis")
+    st.title("📈 Analysis")
 
     # Consume any ticker pre-selection set by navigation buttons (News Intelligence, etc.)
     _preselect_ticker = st.session_state.pop("_analysis_ticker", None)
@@ -9672,11 +9702,20 @@ elif page == "📅 Economic Calendar":
                             )
                             _pe_parts.append(f"Est: **{_est_disp}**")
                         if _pe_actual is not None:
-                            _beat_badge = (
-                                " 🟢 Beat"   if _auto_sc == "bull" else
-                                " 🔴 Missed" if _auto_sc == "bear" else
-                                " ⬜ In-Line"
-                            ) if _auto_sc else ""
+                            # Suppress the "In-Line" badge when no real consensus was
+                            # supplied — calling a print "in-line" against a synthetic
+                            # baseline is misleading (the actual headline beat or
+                            # missed by an amount we cannot verify without consensus).
+                            if _auto_sc == "bull":
+                                _beat_badge = " 🟢 Beat"
+                            elif _auto_sc == "bear":
+                                _beat_badge = " 🔴 Missed"
+                            elif _auto_sc == "base" and not _is_baseline:
+                                _beat_badge = " ⬜ In-Line"
+                            elif _auto_sc == "base" and _is_baseline:
+                                _beat_badge = " ⬜ vs baseline (no consensus)"
+                            else:
+                                _beat_badge = ""
                             _pe_parts.append(f"Actual: **{_pe_actual}**{_beat_badge}")
                         if _pe_parts:
                             st.markdown("  ·  ".join(_pe_parts))
@@ -9689,12 +9728,20 @@ elif page == "📅 Economic Calendar":
                     _sc_map  = {o: k for o, k in zip(_sc_opts, ["bull", "base", "bear"])}
 
                     # ── Regime-adjusted note ─────────────────────────────────
+                    # Only show a regime note when scenario classification is real —
+                    # i.e. either actual+consensus produced an explicit bull/base/bear,
+                    # or we have a baseline-derived classification but it's not the
+                    # base case (beat/missed against baseline is still informative,
+                    # but auto-claiming "in-line" against a synthetic baseline isn't).
+                    _show_regime_note = bool(_auto_sc) and not (
+                        _auto_sc == "base" and _is_baseline
+                    )
                     _regime_note = (
                         _MC_REGIME_NOTES
                         .get(_regime["regime"], {})
                         .get(_pe_name, {})
-                        .get(_auto_sc or "base")
-                    )
+                        .get(_auto_sc)
+                    ) if _show_regime_note else None
                     if _regime_note and _regime["regime"] != "neutral":
                         st.markdown(
                             f"<div style='background:{_regime['bg']};border-left:3px solid "

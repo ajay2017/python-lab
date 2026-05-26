@@ -243,7 +243,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         # Technical momentum looks good but we cannot confirm without full analysis.
         # Amber (not blue) so this reads as "action required," not "informational."
         verdict       = "unverified"
-        verdict_label = "🔍 Verify — Run Stock Analysis First"
+        verdict_label = "🔍 Verify — Run Analysis First"
         verdict_color = "#f59e0b"
     else:
         verdict       = "confirmed"
