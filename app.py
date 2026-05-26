@@ -8391,7 +8391,7 @@ elif page == "📈 Analysis":
                         st.info(
                             f"**Hold** your {int(_sa_holding.get('Shares', 0))} shares with stop at "
                             f"**${r['stop']:.2f}**. Mixed signals — re-check {_recheck}. "
-                            f"Add to position if score ≥ 58 and price holds above stop. "
+                            f"Add to position if score ≥ {COMPOSITE_BUY:.0f} and price holds above stop. "
                             f"Exit immediately if price closes below stop."
                         )
                     else:
