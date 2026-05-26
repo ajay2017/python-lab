@@ -13,19 +13,23 @@ SECURITY MODEL (single-user, server-side Streamlit Cloud):
 
 One-time SQL to set up RLS (run in Supabase SQL Editor):
 
-    ALTER TABLE public.holdings  ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE public.watchlist ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE public.trades    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.holdings        ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.watchlist       ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.trades          ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.recommendations ENABLE ROW LEVEL SECURITY;
 
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.holdings;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.watchlist;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.trades;
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.recommendations;
 
     CREATE POLICY "Allow all (service role)" ON public.holdings
         FOR ALL TO service_role USING (true) WITH CHECK (true);
     CREATE POLICY "Allow all (service role)" ON public.watchlist
         FOR ALL TO service_role USING (true) WITH CHECK (true);
     CREATE POLICY "Allow all (service role)" ON public.trades
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow all (service role)" ON public.recommendations
         FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 Table schema (run once if tables don't exist):
@@ -67,6 +71,29 @@ If trades table already exists, run this once to add the decision-journal column
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS followed_signal  text;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS deviation_reason text;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS lesson           text;
+
+Recommendations log (added 2026-05-26 — first-seen capture of every pick
+surfaced by Today's Brief so you can audit the App's recommendation
+history over time):
+
+    create table if not exists recommendations (
+        id              bigint primary key generated always as identity,
+        ticker          text not null,
+        rec_date        date not null,
+        rec_type        text not null,          -- 'new_pick' | 'add_winner' | 'buy_candidate'
+        surfaced_at     timestamptz default now(),
+        composite_score numeric,
+        momentum_score  numeric,
+        sector          text,
+        conviction      text,                   -- 'high' | 'moderate' | 'unverified' | NULL
+        verdict         text,                   -- 'confirmed' | 'mixed' | 'caution' | 'unverified' | NULL
+        thesis          text,
+        constraint recommendations_unique_per_day
+            unique (ticker, rec_date, rec_type)
+    );
+
+    create index if not exists recommendations_rec_date_idx
+        on public.recommendations (rec_date desc);
 """
 
 import streamlit as st
@@ -364,6 +391,98 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
         "realized_pnl_corrections": corrections,
         "warnings":                 warnings,
     }
+
+
+# ── Recommendations log ──────────────────────────────────────────────────────
+#
+# Every pick surfaced by Today's Brief (new_picks, add_positions, buy_candidates)
+# is first-seen-captured here so we can answer questions like "how often did the
+# App recommend X over the last month" and "which recs got acted on." Stored
+# with a unique constraint on (ticker, rec_date, rec_type) so re-renders of the
+# Brief during the same day don't create duplicates — only the first surface
+# of each (ticker, type) on a given date is recorded.
+
+_REC_COLS = ["id", "ticker", "rec_date", "rec_type", "surfaced_at",
+             "composite_score", "momentum_score", "sector", "conviction",
+             "verdict", "thesis"]
+
+
+def save_recommendations(records: list[dict]) -> int:
+    """
+    Persist new recommendations. Returns the count of rows successfully sent
+    to the DB (which may include rows that were silently dropped by the unique
+    constraint — we use ignore_duplicates so the same ticker re-surfacing the
+    same day is a no-op rather than an error).
+
+    Each record dict needs at minimum: ticker, rec_date (date or ISO str),
+    rec_type. Optional: composite_score, momentum_score, sector, conviction,
+    verdict, thesis. The DB defaults surfaced_at to now() — don't set it
+    client-side so the first-seen timestamp is server-authoritative.
+    """
+    if not records or not has_db():
+        return 0
+    # Normalize: drop keys we don't write, coerce date to ISO, drop None tickers
+    payload = []
+    for r in records:
+        tk = str(r.get("ticker", "")).strip().upper()
+        rt = str(r.get("rec_type", "")).strip()
+        rd = r.get("rec_date")
+        if not tk or not rt or rd is None:
+            continue
+        rd_str = rd.isoformat() if hasattr(rd, "isoformat") else str(rd)[:10]
+        payload.append({
+            "ticker":          tk,
+            "rec_date":        rd_str,
+            "rec_type":        rt,
+            "composite_score": r.get("composite_score"),
+            "momentum_score":  r.get("momentum_score"),
+            "sector":          r.get("sector"),
+            "conviction":      r.get("conviction"),
+            "verdict":         r.get("verdict"),
+            "thesis":          (str(r.get("thesis") or "")[:600]) or None,
+        })
+    if not payload:
+        return 0
+    try:
+        # ignore_duplicates=True → INSERT...ON CONFLICT DO NOTHING semantics.
+        # First-seen surfaced_at wins; subsequent surfaces in the same day
+        # leave the original row untouched.
+        _client().table("recommendations").upsert(
+            payload,
+            on_conflict="ticker,rec_date,rec_type",
+            ignore_duplicates=True,
+        ).execute()
+        return len(payload)
+    except Exception as e:
+        # Don't let recommendation logging break the Brief. Most common
+        # failure: table doesn't exist yet (user hasn't run the migration);
+        # surface a one-time hint via the api_health cache rather than a
+        # red error block.
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=f"rec_log: {str(e)[:100]}")
+        return 0
+
+
+def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
+    """
+    Read recommendation history. Defaults to last 30 days when no range given.
+    Returns a DataFrame ordered by surfaced_at descending.
+    """
+    empty = pd.DataFrame(columns=_REC_COLS)
+    if not has_db():
+        return empty
+    try:
+        q = _client().table("recommendations").select("*")
+        if start_date is not None:
+            sd = start_date.isoformat() if hasattr(start_date, "isoformat") else str(start_date)[:10]
+            q = q.gte("rec_date", sd)
+        if end_date is not None:
+            ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
+            q = q.lte("rec_date", ed)
+        rows = q.order("surfaced_at", desc=True).execute().data
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return empty
 
 
 def save_watchlist(tickers: list[str]) -> bool:

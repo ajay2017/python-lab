@@ -1340,6 +1340,94 @@ if page == "🏠 Home":
             if str(p.get("sector", "")).strip()
         })
 
+        # ── Recommendations log (persist + decorate with first-seen) ─────────
+        # Capture every pick surfaced today so the user can audit the App's
+        # recommendation history over time. Unique-constraint on
+        # (ticker, rec_date, rec_type) means the same ticker re-surfacing
+        # across Brief rebuilds within the same day is a no-op — only the
+        # first surface gets a row, and that row's surfaced_at is what we
+        # display on the card. Locked Briefs skip the write (the snapshot's
+        # surfaced_at was captured at lock time) but still get decorated
+        # on read.
+        if (db.has_db()
+                and not st.session_state.get("_rec_log_done_today") == _TODAY_ET
+                and not _brief_use_lock):
+            try:
+                _rec_rows: list[dict] = []
+                for _p in (_gt_today.get("new_picks") or []):
+                    _rec_rows.append({
+                        "ticker":          str(_p.get("ticker", "")),
+                        "rec_date":        _TODAY_ET,
+                        "rec_type":        "new_pick",
+                        "composite_score": _p.get("composite_score"),
+                        "momentum_score":  _p.get("score"),
+                        "sector":          _p.get("sector", ""),
+                        "conviction":      _p.get("conviction", ""),
+                        "verdict":         ((_p.get("xref") or {}).get("verdict") or ""),
+                        "thesis":          _p.get("thesis", ""),
+                    })
+                for _p in (_gt_today.get("add_positions") or []):
+                    _rec_rows.append({
+                        "ticker":          str(_p.get("ticker", "")),
+                        "rec_date":        _TODAY_ET,
+                        "rec_type":        "add_winner",
+                        "composite_score": _p.get("score"),
+                        "momentum_score":  _p.get("score"),
+                        "sector":          _p.get("sector", ""),
+                        "conviction":      "high",   # add-to-winner only fires on Strong Buy
+                        "verdict":         "confirmed",
+                        "thesis":          _p.get("thesis", ""),
+                    })
+                for _p in (_daily_brief.get("buy_candidates") or []):
+                    _bx = _p.get("xref") or {}
+                    _rec_rows.append({
+                        "ticker":          str(_p.get("ticker", "")),
+                        "rec_date":        _TODAY_ET,
+                        "rec_type":        "buy_candidate",
+                        "composite_score": None,
+                        "momentum_score":  _p.get("score"),
+                        "sector":          _p.get("sector", ""),
+                        "conviction":      "",
+                        "verdict":         str(_bx.get("verdict") or ""),
+                        "thesis":          "",
+                    })
+                if _rec_rows:
+                    db.save_recommendations(_rec_rows)
+            except Exception:
+                # Logging must never block the Brief itself
+                pass
+            st.session_state["_rec_log_done_today"] = _TODAY_ET
+
+        # Decorate each pick with its first-seen surfaced_at so the card
+        # render can show "Recommended at HH:MM ET" without an extra round-trip
+        # per card. Single fetch for today; build (ticker, rec_type) → ts map.
+        if db.has_db() and not _brief_use_lock:
+            try:
+                _rec_today_df = db.load_recommendations(start_date=_TODAY_ET, end_date=_TODAY_ET)
+                _rec_first_seen: dict[tuple[str, str], str] = {}
+                if not _rec_today_df.empty:
+                    for _, _r in _rec_today_df.iterrows():
+                        _key = (str(_r.get("ticker", "")).upper(),
+                                str(_r.get("rec_type", "")))
+                        _ts = _r.get("surfaced_at")
+                        if _ts is not None and _key not in _rec_first_seen:
+                            _rec_first_seen[_key] = str(_ts)
+                # Attach to each pick dict for downstream render to read
+                for _p in (_gt_today.get("new_picks") or []):
+                    _p["_first_seen_at"] = _rec_first_seen.get(
+                        (str(_p.get("ticker", "")).upper(), "new_pick")
+                    )
+                for _p in (_gt_today.get("add_positions") or []):
+                    _p["_first_seen_at"] = _rec_first_seen.get(
+                        (str(_p.get("ticker", "")).upper(), "add_winner")
+                    )
+                for _p in (_daily_brief.get("buy_candidates") or []):
+                    _p["_first_seen_at"] = _rec_first_seen.get(
+                        (str(_p.get("ticker", "")).upper(), "buy_candidate")
+                    )
+            except Exception:
+                pass
+
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
@@ -2239,6 +2327,26 @@ if page == "🏠 Home":
         st.markdown("</div>", unsafe_allow_html=True)
 
         # ── Grow Today (before Act Today on bull days, after on bear/flat) ────
+        def _fmt_first_seen(ts_val) -> str:
+            """Render '_first_seen_at' from the recommendations log as a small
+            'Recommended HH:MM ET' chip. Returns empty string when no value
+            is present (e.g. logging table not yet provisioned)."""
+            if not ts_val:
+                return ""
+            try:
+                _dt = pd.to_datetime(ts_val, utc=True, errors="coerce")
+                if pd.isna(_dt):
+                    return ""
+                _et = _dt.tz_convert("America/New_York")
+                return _et.strftime("%-I:%M %p ET").lstrip("0") if hasattr(_et, "strftime") else ""
+            except Exception:
+                try:
+                    # Windows strftime doesn't support %-I; fall back to %I and strip
+                    _et = pd.to_datetime(ts_val, utc=True).tz_convert("America/New_York")
+                    return _et.strftime("%I:%M %p ET").lstrip("0")
+                except Exception:
+                    return ""
+
         def _render_grow_today(grow: dict, tone: str):
             if not grow:
                 return
@@ -2397,6 +2505,9 @@ if page == "🏠 Home":
                        f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
                        f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
                        f"</div>" if _sz else "")
+                    + (f"<div style='color:#64748b;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                       f"⏱ First surfaced: {_fmt_first_seen(_gp.get('_first_seen_at'))}"
+                       f"</div>" if _gp.get("_first_seen_at") else "")
                     + f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -2424,6 +2535,9 @@ if page == "🏠 Home":
                     + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
                        f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
                        f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
+                    + (f"<div style='color:#64748b;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                       f"⏱ First surfaced: {_fmt_first_seen(_ga.get('_first_seen_at'))}"
+                       f"</div>" if _ga.get("_first_seen_at") else "")
                     + f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -2785,6 +2899,9 @@ if page == "🏠 Home":
                        f"✓ {' · '.join(_vagreed[:3])}"
                        + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
                        + f"</div>" if _vagreed else "")
+                    + (f"<div style='color:#64748b;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                       f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
+                       f"</div>" if _db_buy.get("_first_seen_at") else "")
                     + f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -2900,6 +3017,14 @@ if page == "🏠 Home":
             _ed_skips = _ed_pvr["skip_picks"]
 
             st.markdown("### 📋 Plan vs Reality")
+            st.caption(
+                "⏱ These verdicts reflect the AM snapshot — the composite, momentum, "
+                "and sector context as of when the Brief was built (Lock the Brief in "
+                "the morning to freeze this read deterministically). "
+                "**A Go-pick here doesn't mean the signal still holds now** — composites "
+                "drift through the day. Always re-run Analysis on a pick before acting "
+                "post-AM."
+            )
             _ed_pvr_c1, _ed_pvr_c2 = st.columns(2)
 
             with _ed_pvr_c1:
