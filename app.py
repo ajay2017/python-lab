@@ -3039,6 +3039,7 @@ if page == "🏠 Home":
                         _comp_s = f"{_comp:.0f}" if isinstance(_comp, (int, float)) else "—"
                         _card_bg = "#052e16" if g["action_taken"] else "#1e293b"
                         _card_bdr = "#22c55e" if g["action_taken"] else "#475569"
+                        _ed_fs   = _fmt_first_seen(g.get("_first_seen_at"))
                         st.markdown(
                             f"<div style='background:{_card_bg};border-left:3px solid {_card_bdr};"
                             f"border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
@@ -3048,7 +3049,9 @@ if page == "🏠 Home":
                             f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:3px'>{g['outcome']}</div>"
                             f"<div style='color:#94a3b8;font-size:0.78em;margin-top:2px'>"
                             f"Today: <b>{_tp_str}</b></div>"
-                            f"</div>",
+                            + (f"<div style='color:#64748b;font-size:0.74em;margin-top:3px;font-style:italic'>"
+                               f"⏱ First surfaced: {_ed_fs}</div>" if _ed_fs else "")
+                            + f"</div>",
                             unsafe_allow_html=True,
                         )
 

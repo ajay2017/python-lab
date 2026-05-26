@@ -88,31 +88,37 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
     }
 
     # Go-verdict picks: union of new_picks (high/moderate conviction) + adds +
-    # buy_candidates with confirmed verdict. Dedupe by ticker.
+    # buy_candidates with confirmed verdict. Dedupe by ticker. `_first_seen_at`
+    # is plumbed through from the source dict so the Evening Debrief Go-pick
+    # cards can render the same "⏱ First surfaced" chip the Today's Brief cards
+    # show. App.py attaches it from the recommendations table at brief-build
+    # time before this function is called.
     go_set: dict[str, dict] = {}
     for p in new_picks:
         tk = str(p.get("ticker", ""))
         if not tk:
             continue
         go_set.setdefault(tk, {
-            "ticker":     tk,
-            "sector":     p.get("sector", ""),
-            "momentum":   _f(p.get("score")),
-            "composite":  p.get("composite_score"),
-            "source":     "new_pick",
-            "thesis":     p.get("thesis", ""),
+            "ticker":          tk,
+            "sector":          p.get("sector", ""),
+            "momentum":        _f(p.get("score")),
+            "composite":       p.get("composite_score"),
+            "source":          "new_pick",
+            "thesis":          p.get("thesis", ""),
+            "_first_seen_at":  p.get("_first_seen_at"),
         })
     for p in adds:
         tk = str(p.get("ticker", ""))
         if not tk:
             continue
         go_set.setdefault(tk, {
-            "ticker":    tk,
-            "sector":    p.get("sector", ""),
-            "momentum":  _f(p.get("score")),
-            "composite": _f(p.get("score")),
-            "source":    "add_winner",
-            "thesis":    p.get("thesis", ""),
+            "ticker":          tk,
+            "sector":          p.get("sector", ""),
+            "momentum":        _f(p.get("score")),
+            "composite":       _f(p.get("score")),
+            "source":          "add_winner",
+            "thesis":          p.get("thesis", ""),
+            "_first_seen_at":  p.get("_first_seen_at"),
         })
     for p in buys:
         xref = p.get("xref") or {}
@@ -122,12 +128,13 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         if not tk:
             continue
         go_set.setdefault(tk, {
-            "ticker":    tk,
-            "sector":    p.get("sector", ""),
-            "momentum":  _f(p.get("score")),
-            "composite": None,
-            "source":    "buy_candidate",
-            "thesis":    "",
+            "ticker":          tk,
+            "sector":          p.get("sector", ""),
+            "momentum":        _f(p.get("score")),
+            "composite":       None,
+            "source":          "buy_candidate",
+            "thesis":          "",
+            "_first_seen_at":  p.get("_first_seen_at"),
         })
 
     go_picks: list[dict] = []
