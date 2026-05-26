@@ -74,7 +74,11 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.evening_debrief import build_evening_debrief
-from stock_analyzer.trade_review import build_trade_review, build_insights
+from stock_analyzer.trade_review import (
+    build_trade_review, build_insights,
+    cumulative_pnl_series, rolling_win_rate,
+    position_size_discipline, sector_mix,
+)
 from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
@@ -10365,11 +10369,49 @@ elif page == "🪞 Trade Review":
             unsafe_allow_html=True,
         )
 
+        # ── Compute Batch 2 analytics (trends, risk discipline, sector mix) ───
+        # Cumulative P&L and rolling win rate over time — trend visibility
+        _tr_cum_series = cumulative_pnl_series(_tr_trades)
+        _tr_roll_wr    = rolling_win_rate(_tr_trades, window=5)
+
+        # Position-size discipline vs SINGLE_NAME_CEILING using CURRENT portfolio
+        # value as the budget reference. Approximation — see function docstring.
+        # Pulled from session_state because the Home page is what computes it;
+        # Trade Review is a different page and doesn't recompute total_val.
+        _tr_port_val = float(st.session_state.get("_portfolio_value", 0) or 0)
+        _tr_pos_disc = position_size_discipline(_tr_trades, _tr_port_val)
+
+        # Sector mix from a {ticker: sector} map assembled from any source the
+        # app already has handy (port_df → scanner_results → fallback "Other").
+        _tr_t2s: dict[str, str] = {}
+        try:
+            _pf = st.session_state.get("_last_port_df")
+            if _pf is not None and not _pf.empty and "Sector" in _pf.columns:
+                for _, _r in _pf.iterrows():
+                    _tr_t2s[str(_r["Ticker"]).upper()] = str(_r.get("Sector", "") or "Other")
+        except Exception:
+            pass
+        try:
+            _sr = st.session_state.get("scanner_results")
+            if _sr is not None and not _sr.empty and "Sector" in _sr.columns:
+                for _, _r in _sr.iterrows():
+                    _tk = str(_r["Ticker"]).upper()
+                    if _tk not in _tr_t2s:
+                        _tr_t2s[_tk] = str(_r.get("Sector", "") or "Other")
+        except Exception:
+            pass
+        _tr_sec_mix = sector_mix(_tr_trades, _tr_t2s)
+
         # ── 💡 What the Data Says — rule-based synthesis ──────────────────────
         # Turns the raw numbers into a verdict + concrete findings + one next
         # move. Designed to answer the user's "what should I make of this?" — no
         # interpretation required.
-        _tr_insights = build_insights(_tr_m, _tr_trades)
+        _tr_insights = build_insights(
+            _tr_m, _tr_trades,
+            position_discipline = _tr_pos_disc,
+            sector_mix_data     = _tr_sec_mix,
+            rolling_wr_series   = _tr_roll_wr,
+        )
 
         _ins_findings_html = ""
         if _tr_insights["findings"]:
@@ -10606,13 +10648,181 @@ elif page == "🪞 Trade Review":
                     unsafe_allow_html=True,
                 )
 
+        # ── 📈 Performance Trends — visual answer to "right direction?" ──────
+        with st.expander("📈 Performance Trends", expanded=False):
+            if len(_tr_cum_series) < 2:
+                st.caption(
+                    "Need at least 2 judged trades in this window to plot the trend. "
+                    "Charts will populate as you accumulate more history."
+                )
+            else:
+                # Cumulative P&L line chart
+                st.markdown("**Cumulative P&L over window**")
+                _fig_cum = go.Figure()
+                _fig_cum.add_trace(go.Scatter(
+                    x = [p["date"] for p in _tr_cum_series],
+                    y = [p["cumulative_pnl"] for p in _tr_cum_series],
+                    mode = "lines+markers",
+                    line = dict(color="#a78bfa", width=2),
+                    marker = dict(size=7),
+                    hovertemplate = (
+                        "<b>%{customdata[0]}</b> %{customdata[1]}<br>"
+                        "Trade P&L: $%{customdata[2]:+,.0f}<br>"
+                        "Cumulative: $%{y:+,.0f}<extra></extra>"
+                    ),
+                    customdata = [
+                        [p["ticker"], p["action"], p["outcome_pnl"]]
+                        for p in _tr_cum_series
+                    ],
+                    name = "Cumulative P&L",
+                ))
+                _fig_cum.add_hline(y=0, line_dash="dot", line_color="#64748b")
+                _fig_cum.update_layout(
+                    height=260, margin=dict(l=10, r=10, t=10, b=10),
+                    paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+                    font=dict(color="#cbd5e1"),
+                    xaxis=dict(gridcolor="#1e293b"),
+                    yaxis=dict(gridcolor="#1e293b", title="Cumulative $ P&L"),
+                    showlegend=False,
+                )
+                st.plotly_chart(_fig_cum, use_container_width=True)
+
+                # Rolling win rate
+                if _tr_roll_wr:
+                    st.markdown(f"**Rolling {_tr_roll_wr[0]['window']}-trade win rate**")
+                    _fig_wr = go.Figure()
+                    _fig_wr.add_trace(go.Scatter(
+                        x = [p["date"] for p in _tr_roll_wr],
+                        y = [p["win_rate"] for p in _tr_roll_wr],
+                        mode = "lines+markers",
+                        line = dict(color="#22c55e", width=2),
+                        marker = dict(size=7),
+                        hovertemplate = "Win rate: %{y:.0f}%<extra></extra>",
+                    ))
+                    _fig_wr.add_hline(y=50, line_dash="dot", line_color="#64748b",
+                                      annotation_text="50%", annotation_position="right")
+                    _fig_wr.update_layout(
+                        height=220, margin=dict(l=10, r=10, t=10, b=10),
+                        paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+                        font=dict(color="#cbd5e1"),
+                        xaxis=dict(gridcolor="#1e293b"),
+                        yaxis=dict(gridcolor="#1e293b", title="Win rate %", range=[0, 100]),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_fig_wr, use_container_width=True)
+                else:
+                    st.caption(
+                        "Rolling 5-trade win rate needs at least 5 judged trades — "
+                        "currently below threshold."
+                    )
+
+        # ── ⚖ Risk Discipline — well-managed risk? ───────────────────────────
+        with st.expander("⚖ Risk Discipline", expanded=False):
+            if _tr_pos_disc["n_trades"] == 0:
+                st.caption(
+                    "Position-size discipline requires a portfolio value (open the "
+                    "Home page first to seed it) and at least one BUY trade in the "
+                    "window."
+                )
+            else:
+                _pd_c1, _pd_c2, _pd_c3 = st.columns(3)
+                _pd_c1.metric(
+                    "Trades over ceiling",
+                    f"{_tr_pos_disc['n_over_ceiling']} / {_tr_pos_disc['n_trades']}",
+                    help=f"Trades where cost exceeded {_tr_pos_disc['ceiling_threshold']:.0f}% of current portfolio",
+                )
+                _pd_c2.metric("Avg position size", f"{_tr_pos_disc['avg_size_pct']:.1f}%")
+                _pd_c3.metric("Max position size", f"{_tr_pos_disc['max_size_pct']:.1f}%")
+
+                st.markdown("**Per-trade position sizes** (sorted largest first)")
+                for _r in _tr_pos_disc["trades"][:10]:
+                    _bar_pct = min(100.0, _r["size_pct"] / max(_tr_pos_disc["ceiling_threshold"] * 1.5, 1) * 100)
+                    _bar_color = "#ef4444" if _r["over_ceiling"] else "#64748b"
+                    _flag = (
+                        f" <span style='color:#fca5a5;font-size:0.78em;font-weight:700'>"
+                        f"⚠ OVER {_tr_pos_disc['ceiling_threshold']:.0f}% CEILING</span>"
+                        if _r["over_ceiling"] else ""
+                    )
+                    _dt_str = _r["date"].isoformat() if hasattr(_r["date"], "isoformat") else str(_r["date"])
+                    st.markdown(
+                        f"<div style='margin-bottom:6px'>"
+                        f"<div style='display:flex;justify-content:space-between'>"
+                        f"<span style='color:#cbd5e1;font-size:0.85em'>"
+                        f"<b>{_r['ticker']}</b> · {_dt_str} · ${_r['size_dollars']:,.0f}{_flag}</span>"
+                        f"<span style='color:#cbd5e1;font-size:0.85em;font-weight:600'>{_r['size_pct']:.1f}%</span>"
+                        f"</div>"
+                        f"<div style='height:6px;background:#1e293b;border-radius:3px;margin-top:2px;overflow:hidden'>"
+                        f"<div style='height:6px;width:{_bar_pct:.1f}%;background:{_bar_color}'></div>"
+                        f"</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("---")
+            st.markdown("**Sector concentration of trades**")
+            if _tr_sec_mix["n_sectors"] == 0:
+                st.caption("No BUY trades to analyze sector concentration.")
+            elif _tr_sec_mix["n_sectors"] == 1:
+                _s = _tr_sec_mix["sectors"][0]
+                st.warning(
+                    f"All {_s['n_trades']} BUY trades are in **{_s['sector']}** "
+                    f"(100% concentration). Consider diversifying entries across sectors."
+                )
+            else:
+                _fig_sec = go.Figure()
+                _fig_sec.add_trace(go.Bar(
+                    x=[s["pct_of_trades"] for s in _tr_sec_mix["sectors"]],
+                    y=[s["sector"] for s in _tr_sec_mix["sectors"]],
+                    orientation="h",
+                    marker_color=[
+                        "#ef4444" if s["over_elevated"] else "#3b82f6"
+                        for s in _tr_sec_mix["sectors"]
+                    ],
+                    text=[
+                        f"{s['n_trades']} ({s['pct_of_trades']:.0f}%)"
+                        for s in _tr_sec_mix["sectors"]
+                    ],
+                    textposition="auto",
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "%{customdata[0]} trades · $%{customdata[1]:,.0f}<extra></extra>"
+                    ),
+                    customdata=[
+                        [s["n_trades"], s["dollars"]]
+                        for s in _tr_sec_mix["sectors"]
+                    ],
+                ))
+                _fig_sec.add_vline(
+                    x=_tr_sec_mix["elevated_threshold"],
+                    line_dash="dot", line_color="#f59e0b",
+                    annotation_text=f"{_tr_sec_mix['elevated_threshold']:.0f}% warn",
+                    annotation_position="top",
+                )
+                _fig_sec.update_layout(
+                    height=max(180, 35 * len(_tr_sec_mix["sectors"])),
+                    margin=dict(l=10, r=10, t=20, b=10),
+                    paper_bgcolor="#0f172a", plot_bgcolor="#0f172a",
+                    font=dict(color="#cbd5e1"),
+                    xaxis=dict(gridcolor="#1e293b", title="% of trades", range=[0, 100]),
+                    yaxis=dict(gridcolor="#1e293b"),
+                    showlegend=False,
+                )
+                st.plotly_chart(_fig_sec, use_container_width=True)
+                if _tr_sec_mix.get("top_sector_pct") and _tr_sec_mix["top_sector_pct"] > _tr_sec_mix["elevated_threshold"]:
+                    st.caption(
+                        f"⚠ **{_tr_sec_mix['top_sector']}** is above the "
+                        f"{_tr_sec_mix['elevated_threshold']:.0f}% concentration warn level. "
+                        "Over-fishing one sector means a single regime shift hits multiple positions."
+                    )
+
         st.markdown("---")
         st.caption(
             "**Categories:** *App-Followed* = `followed_signal=True` · *Deviated* = `followed_signal=False` "
             "(external info / discretionary call) · *Discretionary* = neither recorded. "
             "**Panic-window** = trade made on a day S&P 500 closed ≤ -1.5%. "
             "**vs-SPY** = trade's % return minus SPY's % over the same holding period (closed trades only). "
-            "Open positions are marked-to-market against current price."
+            "Open positions are marked-to-market against current price. "
+            "**Position size** measured against current portfolio value as a proxy (journal doesn't store historical portfolio snapshots)."
         )
 
 # ═════════════════════════════════════════════════════════════════════════════

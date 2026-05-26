@@ -27,8 +27,12 @@ Pure logic — no Streamlit, no API calls. Caller supplies:
 from datetime import date, timedelta
 from collections import defaultdict
 
+from stock_analyzer.constants import SINGLE_NAME_CEILING, SECTOR_ELEVATED
+
 
 _PANIC_THRESHOLD_PCT = -1.5   # S&P daily return ≤ this = panic day
+_ROLLING_WINDOW      = 5      # trailing N-trade rolling win-rate window
+_TREND_SPREAD_PP     = 15.0   # trailing-vs-overall spread that counts as a trend
 
 
 def _f(v, default=0.0):
@@ -344,7 +348,177 @@ def _bucket_metrics(trades_with_outcome: list[dict], bucket_filter) -> dict:
     }
 
 
-def build_insights(metrics: dict, trades: list[dict]) -> dict:
+def cumulative_pnl_series(trades_with_outcome: list[dict]) -> list[dict]:
+    """
+    Chronological cumulative P&L for the trend chart. Skips deduped SELLs so
+    the realized portion of partial-fill positions isn't double-counted.
+
+    Returns list of {date, ticker, outcome_pnl, cumulative_pnl} in trade order.
+    """
+    judged = [
+        t for t in trades_with_outcome
+        if t.get("is_win") is not None and not t.get("_sell_dedup", False)
+    ]
+    judged.sort(key=lambda t: (t["_trade_date"] or date.min, t.get("id") or 0))
+
+    series: list[dict] = []
+    cum = 0.0
+    for t in judged:
+        cum += t.get("outcome_pnl", 0.0)
+        series.append({
+            "date":           t["_trade_date"],
+            "ticker":         t["ticker"],
+            "action":         t["action"],
+            "outcome_pnl":    round(t["outcome_pnl"], 2),
+            "cumulative_pnl": round(cum, 2),
+        })
+    return series
+
+
+def rolling_win_rate(trades_with_outcome: list[dict],
+                     window: int = _ROLLING_WINDOW) -> list[dict]:
+    """
+    Trailing-N rolling win-rate series. Returns empty when fewer than `window`
+    judged trades exist (no plotting a single-point line on thin data).
+
+    Returns list of {trade_idx, date, win_rate, window, n_wins}.
+    """
+    judged = [
+        t for t in trades_with_outcome
+        if t.get("is_win") is not None and not t.get("_sell_dedup", False)
+    ]
+    judged.sort(key=lambda t: (t["_trade_date"] or date.min, t.get("id") or 0))
+
+    if len(judged) < window:
+        return []
+
+    series: list[dict] = []
+    for i in range(window - 1, len(judged)):
+        chunk = judged[i - window + 1: i + 1]
+        wins  = sum(1 for t in chunk if t["is_win"])
+        series.append({
+            "trade_idx": i + 1,
+            "date":      judged[i]["_trade_date"],
+            "win_rate":  round(wins / window * 100.0, 1),
+            "window":    window,
+            "n_wins":    wins,
+        })
+    return series
+
+
+def position_size_discipline(trades_with_outcome: list[dict],
+                              portfolio_value: float) -> dict:
+    """
+    Per-BUY position size as % of current portfolio. Flags trades whose cost
+    exceeded the single-name ceiling (15%).
+
+    Only BUYs are scored — entry decisions are what's being judged here. SELLs
+    are exits and have already been counted as part of the BUY's lifecycle in
+    the partial-fill outcome math.
+
+    Note: uses *current* portfolio_value as the budget reference rather than
+    portfolio_value at trade-time (the journal doesn't store historical
+    portfolio snapshots). For a freshly opened account this is fine; for a
+    portfolio that's grown or shrunk significantly during the window, treat
+    the size_pct numbers as approximations.
+
+    Returns:
+      trades             — list of {ticker, action, date, size_dollars, size_pct, over_ceiling}
+      n_trades           — count of BUYs measured
+      n_over_ceiling     — count of trades that breached SINGLE_NAME_CEILING
+      avg_size_pct       — mean position size %
+      max_size_pct       — largest position size %
+      ceiling_threshold  — SINGLE_NAME_CEILING (15.0) for display
+    """
+    rows: list[dict] = []
+    for t in trades_with_outcome:
+        if "BUY" not in t["action"].upper():
+            continue
+        cost = _f(t.get("price")) * _f(t.get("shares"))
+        if cost <= 0 or portfolio_value <= 0:
+            continue
+        size_pct = cost / portfolio_value * 100.0
+        rows.append({
+            "ticker":       t["ticker"],
+            "action":       t["action"],
+            "date":         t["_trade_date"],
+            "size_dollars": round(cost, 2),
+            "size_pct":     round(size_pct, 2),
+            "over_ceiling": size_pct > SINGLE_NAME_CEILING,
+        })
+    rows.sort(key=lambda r: -r["size_pct"])
+
+    return {
+        "trades":            rows,
+        "n_trades":          len(rows),
+        "n_over_ceiling":    sum(1 for r in rows if r["over_ceiling"]),
+        "avg_size_pct":      round(sum(r["size_pct"] for r in rows) / len(rows), 2) if rows else None,
+        "max_size_pct":      round(max(r["size_pct"] for r in rows),            2) if rows else None,
+        "ceiling_threshold": SINGLE_NAME_CEILING,
+    }
+
+
+def sector_mix(trades_with_outcome: list[dict],
+               ticker_to_sector: dict[str, str]) -> dict:
+    """
+    Distribution of BUY trades by sector. Flags sectors taking more than
+    SECTOR_ELEVATED (25%) of the trade activity — same threshold used for
+    portfolio sector concentration warnings elsewhere in the app.
+
+    Returns:
+      sectors            — list of {sector, n_trades, dollars, pct_of_trades, over_elevated}
+      n_sectors          — distinct sector count
+      top_sector         — name of the largest-share sector
+      top_sector_pct     — that sector's share of trades
+      elevated_threshold — SECTOR_ELEVATED (25.0) for display
+    """
+    sector_count:    dict[str, int]   = defaultdict(int)
+    sector_dollars:  dict[str, float] = defaultdict(float)
+    total_trades = 0
+
+    for t in trades_with_outcome:
+        if "BUY" not in t["action"].upper():
+            continue
+        sector = ticker_to_sector.get(t["ticker"], "") or "Other"
+        cost   = _f(t.get("price")) * _f(t.get("shares"))
+        sector_count[sector]   += 1
+        sector_dollars[sector] += cost
+        total_trades           += 1
+
+    if total_trades == 0:
+        return {
+            "sectors":            [],
+            "n_sectors":          0,
+            "top_sector":         None,
+            "top_sector_pct":     None,
+            "elevated_threshold": SECTOR_ELEVATED,
+        }
+
+    sectors: list[dict] = []
+    for s, n in sector_count.items():
+        pct = n / total_trades * 100.0
+        sectors.append({
+            "sector":         s,
+            "n_trades":       n,
+            "dollars":        round(sector_dollars[s], 2),
+            "pct_of_trades":  round(pct, 1),
+            "over_elevated":  pct > SECTOR_ELEVATED,
+        })
+    sectors.sort(key=lambda x: -x["pct_of_trades"])
+
+    return {
+        "sectors":            sectors,
+        "n_sectors":          len(sectors),
+        "top_sector":         sectors[0]["sector"],
+        "top_sector_pct":     sectors[0]["pct_of_trades"],
+        "elevated_threshold": SECTOR_ELEVATED,
+    }
+
+
+def build_insights(metrics: dict, trades: list[dict],
+                   position_discipline: dict | None = None,
+                   sector_mix_data:     dict | None = None,
+                   rolling_wr_series:   list | None = None) -> dict:
     """
     Derive a rule-based summary of what the trade data shows.
 
@@ -449,6 +623,64 @@ def build_insights(metrics: dict, trades: list[dict]) -> dict:
                 f"<b style='color:#86efac'>${best['outcome_pnl']:+,.0f}</b> · "
                 f"Worst: <b>{worst['ticker']}</b> {worst['action']} "
                 f"<b style='color:#fca5a5'>${worst['outcome_pnl']:+,.0f}</b>."
+            )
+
+    # ── Finding 4: position-size discipline (single-name ceiling 15%) ────────
+    if position_discipline and position_discipline.get("n_trades", 0) >= 3:
+        n_over = position_discipline.get("n_over_ceiling", 0)
+        max_pct = position_discipline.get("max_size_pct") or 0
+        ceil   = position_discipline.get("ceiling_threshold", SINGLE_NAME_CEILING)
+        if n_over >= 1:
+            findings.append(
+                f"<b>{n_over}</b> trade{'s' if n_over != 1 else ''} exceeded the "
+                f"<b>{ceil:.0f}%</b> single-name ceiling — largest position size "
+                f"was <b>{max_pct:.1f}%</b> of portfolio."
+            )
+            actions.append(
+                f"Trim position sizes below the {ceil:.0f}% single-name ceiling — "
+                "concentration above this amplifies idiosyncratic risk."
+            )
+
+    # ── Finding 5: sector concentration of trade activity ────────────────────
+    if sector_mix_data and sector_mix_data.get("n_sectors", 0) >= 1:
+        top_pct = sector_mix_data.get("top_sector_pct") or 0
+        top_sec = sector_mix_data.get("top_sector")
+        n_secs  = sector_mix_data.get("n_sectors", 0)
+        elev    = sector_mix_data.get("elevated_threshold", SECTOR_ELEVATED)
+        # Need ≥4 trades total before sector-concentration finding is meaningful
+        total_trades = sum(s.get("n_trades", 0) for s in sector_mix_data.get("sectors", []))
+        if total_trades >= 4 and top_pct > elev and top_sec:
+            findings.append(
+                f"<b>{top_pct:.0f}%</b> of your trades are in <b>{top_sec}</b> "
+                f"({n_secs} sector{'s' if n_secs != 1 else ''} total) — above "
+                f"the <b>{elev:.0f}%</b> concentration warn level."
+            )
+            actions.append(
+                "Broaden trade entries across sectors — over-concentration in one "
+                "sector means a single regime shift hits multiple positions."
+            )
+
+    # ── Finding 6: win-rate trend direction (trailing vs. overall) ───────────
+    if rolling_wr_series and len(rolling_wr_series) >= 1 and ov_judged >= 6:
+        # Compare the most recent trailing-N win rate to the overall
+        latest_trailing = rolling_wr_series[-1].get("win_rate", 0)
+        overall_wr      = ov.get("win_rate") or 0
+        spread          = latest_trailing - overall_wr
+        if spread >= _TREND_SPREAD_PP:
+            findings.append(
+                f"Win rate trending <b style='color:#86efac'>up</b>: trailing-"
+                f"{rolling_wr_series[-1]['window']} is <b>{latest_trailing:.0f}%</b> "
+                f"vs overall <b>{overall_wr:.0f}%</b> ({spread:+.0f}pp)."
+            )
+        elif spread <= -_TREND_SPREAD_PP:
+            findings.append(
+                f"Win rate trending <b style='color:#fca5a5'>down</b>: trailing-"
+                f"{rolling_wr_series[-1]['window']} is <b>{latest_trailing:.0f}%</b> "
+                f"vs overall <b>{overall_wr:.0f}%</b> ({spread:+.0f}pp)."
+            )
+            actions.append(
+                "Recent decision quality has slipped — pause and re-read your "
+                "last few `deviation_reason`/`lesson` notes for the common thread."
             )
 
     # ── Verdict tier ─────────────────────────────────────────────────────────
