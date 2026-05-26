@@ -490,6 +490,63 @@ def _m(val_str: str) -> str:
     return "••••••" if st.session_state.get("_privacy", True) else val_str
 
 
+def _render_trade_button(
+    ticker: str,
+    suggested_action: str = "BUY",
+    signal_context: str = "",
+    price: float | None = None,
+    shares: float | None = None,
+    trigger: str = "RECOMMENDATION",
+    followed_intent: str | None = None,
+    notes: str = "",
+    key_suffix: str = "",
+    label: str | None = None,
+    use_container_width: bool = False,
+) -> None:
+    """
+    Render a "📒 Trade {ticker}" button that, on click, stages prefill values
+    into session_state and navigates to the Trade Journal page.
+
+    The Trade Journal form reads these keys on its next render:
+      _prefill_trade   — ticker / action / shares / price / trigger / notes
+      _tj_signal_seen  — the reconciled verdict at point of click (e.g.
+                         "Composite Sell · 42/100"), so the Decision Context
+                         block becomes passive capture instead of typing work
+      _tj_followed     — "Yes / No / Discretionary" radio default
+
+    followed_intent values: 'yes', 'no', 'discretionary' — maps to the radio
+    label strings expected by the form. Leave as None to skip the auto-set
+    (user will pick manually).
+    """
+    _label = label or f"📒 Trade {ticker}"
+    _key   = f"_trade_btn_{ticker}_{key_suffix or 'default'}"
+    if st.button(_label, key=_key, use_container_width=use_container_width):
+        _prefill: dict = {
+            "ticker":  ticker.upper(),
+            "action":  suggested_action.upper(),
+            "trigger": trigger,
+            "notes":   notes,
+        }
+        if price is not None and price > 0:
+            _prefill["price"]  = float(price)
+        if shares is not None and shares > 0:
+            _prefill["shares"] = float(shares)
+        st.session_state["_prefill_trade"] = _prefill
+        if signal_context:
+            st.session_state["_tj_signal_seen"] = signal_context
+        if followed_intent:
+            _followed_map = {
+                "yes":           "Yes — followed signal",
+                "no":            "No — overrode signal",
+                "discretionary": "No signal — discretionary",
+            }
+            st.session_state["_tj_followed"] = _followed_map.get(
+                followed_intent, "— (skip)"
+            )
+        st.session_state["_pending_page"] = "📒 Trade Journal"
+        st.rerun()
+
+
 def _fill_news_slot(slot, items: list) -> None:
     """Render curated news items into a sidebar container slot."""
     with slot:
@@ -2434,6 +2491,54 @@ if page == "🏠 Home":
             price = r["current_price"]
             targets = r["targets"]
             ps_row = port_df[port_df["Ticker"] == sel].iloc[0]
+
+            # ── Trade actions ────────────────────────────────────────────────
+            # Two buttons so the user can transact either side from this surface
+            # (the user explicitly asked for sell/buy from the position table).
+            # Defaults are signal-aware: composite Sell → SELL primary, composite
+            # Buy → BUY primary. signal_context pre-fills the Trade Journal's
+            # Decision Context block so we capture *why* the trade was made.
+            _ps_sig   = str(ps_row.get("Signal", "")).strip()
+            _ps_score = ps_row.get("Score")
+            _ps_shares = float(ps_row.get("Shares", 0))
+            _ps_signal_ctx = (
+                f"{_ps_sig} · Score {_ps_score:.0f}/100"
+                if _ps_sig and _ps_score is not None and pd.notna(_ps_score)
+                else _ps_sig or ""
+            )
+            _ps_is_sell_signal = "Sell" in _ps_sig or "Avoid" in _ps_sig
+            _trc1, _trc2, _trc3 = st.columns([1, 1, 2])
+            with _trc1:
+                _render_trade_button(
+                    ticker=sel,
+                    suggested_action="SELL",
+                    signal_context=_ps_signal_ctx,
+                    price=price,
+                    shares=_ps_shares,
+                    trigger="MANUAL",
+                    followed_intent=("yes" if _ps_is_sell_signal else None),
+                    key_suffix="drill_sell",
+                    label=f"📒 Sell {sel}",
+                    use_container_width=True,
+                )
+            with _trc2:
+                _render_trade_button(
+                    ticker=sel,
+                    suggested_action="BUY",
+                    signal_context=_ps_signal_ctx,
+                    price=price,
+                    trigger="MANUAL",
+                    followed_intent=("yes" if "Buy" in _ps_sig else None),
+                    key_suffix="drill_buy",
+                    label=f"📒 Add to {sel}",
+                    use_container_width=True,
+                )
+            with _trc3:
+                st.caption(
+                    f"Current signal: **{_ps_sig or '—'}**"
+                    + (f" · {_ps_score:.0f}/100" if _ps_score is not None and pd.notna(_ps_score) else "")
+                    + " — pre-fills the Trade Journal's Decision Context so you don't re-type it."
+                )
 
             d1, d2, d3, d4 = st.columns(4)
             # Stop and Gap may be None when stop data is unavailable (data
@@ -7651,6 +7756,96 @@ elif page == "📈 Analysis":
                         for lvl in sr.get("supports", []):
                             st.markdown(f"🟢 `${lvl:.2f}`")
 
+                # ── Trade actions ─────────────────────────────────────────
+                # One-click path into the Trade Journal with the signal context
+                # already filled in. Defaults reflect the composite verdict —
+                # the user can still override action / shares / price in the form.
+                st.markdown("---")
+                _ap_signal_ctx = (
+                    f"{rec['label']} · Composite {r['total']:.0f}/100"
+                )
+                _ap_held_shares = (
+                    float(_sa_holding.get("Shares", 0)) if _sa_holding else None
+                )
+                _ap_followed_buy  = "yes" if "Buy"  in rec["label"] else None
+                _ap_followed_sell = "yes" if "Sell" in rec["label"] else None
+
+                _ap_c1, _ap_c2, _ap_c3 = st.columns([1, 1, 2])
+                if _sa_is_sell:
+                    # Sell signal — primary action is SELL (exit/trim)
+                    with _ap_c1:
+                        _render_trade_button(
+                            ticker=ticker,
+                            suggested_action="SELL",
+                            signal_context=_ap_signal_ctx,
+                            price=price,
+                            shares=_ap_held_shares,
+                            trigger="RECOMMENDATION",
+                            followed_intent=_ap_followed_sell,
+                            key_suffix=f"plan_sell_{ticker}",
+                            label=f"📒 Sell {ticker}",
+                            use_container_width=True,
+                        )
+                elif _sa_is_hold:
+                    # Hold — surface both sides so user picks
+                    with _ap_c1:
+                        _render_trade_button(
+                            ticker=ticker,
+                            suggested_action="SELL",
+                            signal_context=_ap_signal_ctx,
+                            price=price,
+                            shares=_ap_held_shares,
+                            trigger="MANUAL",
+                            key_suffix=f"plan_sell_{ticker}",
+                            label=f"📒 Trim {ticker}",
+                            use_container_width=True,
+                        )
+                    with _ap_c2:
+                        _render_trade_button(
+                            ticker=ticker,
+                            suggested_action="BUY",
+                            signal_context=_ap_signal_ctx,
+                            price=price,
+                            shares=(ps["shares"] if ps else None),
+                            trigger="MANUAL",
+                            key_suffix=f"plan_buy_{ticker}",
+                            label=f"📒 Add {ticker}",
+                            use_container_width=True,
+                        )
+                else:
+                    # Buy signal — primary action is BUY (new or add)
+                    with _ap_c1:
+                        _render_trade_button(
+                            ticker=ticker,
+                            suggested_action="BUY",
+                            signal_context=_ap_signal_ctx,
+                            price=price,
+                            shares=(ps["shares"] if ps else None),
+                            trigger="RECOMMENDATION",
+                            followed_intent=_ap_followed_buy,
+                            key_suffix=f"plan_buy_{ticker}",
+                            label=(f"📒 Add {ticker}" if _sa_holding else f"📒 Buy {ticker}"),
+                            use_container_width=True,
+                        )
+                    if _sa_holding:
+                        with _ap_c2:
+                            _render_trade_button(
+                                ticker=ticker,
+                                suggested_action="SELL",
+                                signal_context=_ap_signal_ctx,
+                                price=price,
+                                shares=_ap_held_shares,
+                                trigger="MANUAL",
+                                key_suffix=f"plan_sell_{ticker}",
+                                label=f"📒 Sell {ticker}",
+                                use_container_width=True,
+                            )
+                with _ap_c3:
+                    st.caption(
+                        f"Opens Trade Journal pre-filled with **{rec['label']} · "
+                        f"{r['total']:.0f}/100** as the signal context."
+                    )
+
             # ── Chart ─────────────────────────────────────────────────────
             with chart_tab:
                 rows_n = 3 if show_volume else 2
@@ -8311,25 +8506,29 @@ elif page == "📋 Watchlist":
             st.markdown("")
             _qa_col1, _qa_col2 = st.columns([1, 3])
             with _qa_col1:
-                if _action == "ENTER_NOW" and st.button(
-                    "📒 Log planned trade", key=f"_wl_log_{_ticker}"
-                ):
-                    _new_trade = {
-                        "ticker": _ticker,
-                        "action": "BUY",
-                        "date": str(date.today()),
-                        "shares": _wl_ps["shares"] if _wl_ps else 0,
-                        "price": round(_entry_hi, 2) if _entry_hi else round(_price, 2),
-                        "stop": round(_stop, 2) if _stop else 0.0,
-                        "target": 0.0,
-                        "trigger": "WATCHLIST_ENTRY",
-                        "notes": f"Watchlist entry — score {_wr['score']:.0f}/100",
-                    }
-                    st.session_state["_prefill_trade"] = _new_trade
-                    # Use _pending_page pattern — nav_page is widget-bound and
-                    # cannot be set directly (raises StreamlitAPIException).
-                    st.session_state["_pending_page"] = "📒 Trade Journal"
-                    st.rerun()
+                if _action == "ENTER_NOW":
+                    # Use the shared trade-button helper so the Decision Context
+                    # block (signal_seen + followed_signal) is auto-populated
+                    # consistent with the same flow on Position Details / Analysis.
+                    _wl_signal_ctx = (
+                        f"{_wr['signal']} · Score {_wr['score']:.0f}/100"
+                        + (f" · Readiness {_wr['readiness_pct']}%" if _wr.get("readiness_pct") is not None else "")
+                    )
+                    _wl_entry_price = (
+                        round(_entry_hi, 2) if _entry_hi else (round(_price, 2) if _price else None)
+                    )
+                    _render_trade_button(
+                        ticker=_ticker,
+                        suggested_action="BUY",
+                        signal_context=_wl_signal_ctx,
+                        price=_wl_entry_price,
+                        shares=(_wl_ps["shares"] if _wl_ps else None),
+                        trigger="WATCHLIST_ENTRY",
+                        followed_intent="yes",
+                        notes=f"Watchlist entry — score {_wr['score']:.0f}/100",
+                        key_suffix=f"wl_{_ticker}",
+                        label=f"📒 Log buy for {_ticker}",
+                    )
             with _qa_col2:
                 if _action == "REMOVE" and st.button(
                     "🗑️ Remove from watchlist", key=f"_wl_del_{_ticker}"
