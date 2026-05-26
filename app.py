@@ -1584,6 +1584,111 @@ if page == "🏠 Home":
             )
             st.caption(f"Macro data source: **{_macro_src}** · cache invalidates at midnight ET.")
 
+        # ── 🪞 Trade Review verdict strip ─────────────────────────────────────
+        # Surfaces the top finding from Trade Review's Course-Correction engine
+        # so behavioural patterns don't get stranded on one page. Cached in
+        # session_state (keyed on trade count + date) to avoid recomputing on
+        # every Brief render — invalidates when a trade is added or date rolls.
+        _tr_strip_td   = st.session_state.get("trades_df")
+        _tr_strip_n    = len(_tr_strip_td) if _tr_strip_td is not None else 0
+        _tr_strip_key  = f"{_tr_strip_n}_{_TODAY_ET}"
+        _tr_strip_cache = st.session_state.get("_tr_strip_cache") or {}
+
+        if _tr_strip_n > 0 and _tr_strip_cache.get("key") != _tr_strip_key:
+            try:
+                _tr_strip_tickers = sorted({
+                    str(_t).upper() for _t in _tr_strip_td["ticker"].dropna().tolist()
+                })
+                _tr_strip_prices: dict = {}
+                if _tr_strip_tickers:
+                    try:
+                        _px = fetch_live_prices(_tr_strip_tickers)
+                        _tr_strip_prices = {
+                            _t: float(_d.get("price", 0)) for _t, _d in _px.items()
+                        }
+                    except Exception:
+                        _tr_strip_prices = {}
+                _tr_strip_spy = None
+                try:
+                    _tr_strip_spy = fetch_spy(period="3mo")
+                except Exception:
+                    _tr_strip_spy = None
+                _tr_data = build_trade_review(
+                    trades_df       = _tr_strip_td,
+                    current_prices  = _tr_strip_prices,
+                    spy_history_df  = _tr_strip_spy,
+                    today           = _TODAY_ET,
+                    lookback_days   = 30,
+                )
+                _tr_strip_recs = build_recommendations(_tr_data["trades"])
+                _tr_strip_data = None
+                if _tr_strip_recs:
+                    _tr_strip_data = {
+                        "top":        _tr_strip_recs[0],
+                        "n_critical": sum(1 for r in _tr_strip_recs if r["severity"] == "critical"),
+                        "n_watch":    sum(1 for r in _tr_strip_recs if r["severity"] == "watch"),
+                        "n_good":     sum(1 for r in _tr_strip_recs if r["severity"] == "good"),
+                        "n_total":    len(_tr_strip_recs),
+                    }
+                st.session_state["_tr_strip_cache"] = {
+                    "key":  _tr_strip_key,
+                    "data": _tr_strip_data,
+                }
+                _tr_strip_cache = st.session_state["_tr_strip_cache"]
+            except Exception:
+                # Don't let Trade Review compute failure block the Brief
+                st.session_state["_tr_strip_cache"] = {"key": _tr_strip_key, "data": None}
+                _tr_strip_cache = st.session_state["_tr_strip_cache"]
+
+        _tr_strip_summary = _tr_strip_cache.get("data")
+        if _tr_strip_summary:
+            _tr_top    = _tr_strip_summary["top"]
+            _tr_n_crit = _tr_strip_summary["n_critical"]
+            _tr_n_watch = _tr_strip_summary["n_watch"]
+            _tr_n_total = _tr_strip_summary["n_total"]
+            _tr_sev_styles = {
+                "critical": ("🔴", "#ef4444", "#3f1d1d", "#fecaca"),
+                "watch":    ("🟡", "#f59e0b", "#3b2a0a", "#fde68a"),
+                "good":     ("🟢", "#22c55e", "#052e16", "#86efac"),
+            }
+            _tr_icon, _tr_bdr, _tr_bg, _tr_text_col = _tr_sev_styles.get(
+                _tr_top["severity"], _tr_sev_styles["watch"]
+            )
+            # Build a count summary line — "+N other findings"
+            _tr_other_bits = []
+            if _tr_top["severity"] == "critical":
+                _remaining_crit = max(0, _tr_n_crit - 1)
+                if _remaining_crit:
+                    _tr_other_bits.append(f"{_remaining_crit} more 🔴")
+                if _tr_n_watch:
+                    _tr_other_bits.append(f"{_tr_n_watch} 🟡")
+            elif _tr_top["severity"] == "watch":
+                _remaining_watch = max(0, _tr_n_watch - 1)
+                if _remaining_watch:
+                    _tr_other_bits.append(f"{_remaining_watch} more 🟡")
+            _tr_other_text = (
+                f" · <span style='color:#94a3b8;font-size:0.85em'>"
+                f"+{', '.join(_tr_other_bits)}</span>" if _tr_other_bits else ""
+            )
+
+            _tr_c1, _tr_c2 = st.columns([5, 1])
+            with _tr_c1:
+                st.markdown(
+                    f"<div style='background:{_tr_bg};border-left:3px solid {_tr_bdr};"
+                    f"border-radius:6px;padding:8px 14px;margin-bottom:8px;color:#cbd5e1'>"
+                    f"🪞 <b>Trade Review</b> · {_tr_icon} "
+                    f"<b style='color:{_tr_text_col}'>{_tr_top['pattern']}</b>"
+                    f"{_tr_other_text}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            with _tr_c2:
+                if st.button("▶ Open", key="_tr_strip_open_btn",
+                             use_container_width=True,
+                             help="Jump to Trade Review for the full diagnosis and the trades behind each finding."):
+                    st.session_state["_pending_page"] = "🪞 Trade Review"
+                    st.rerun()
+
         # Build act_today lookup once — used by pre-market movers and the main sections below
         _act_today_map: dict = {
             str(i["ticker"]).upper(): i
