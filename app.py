@@ -7572,52 +7572,86 @@ elif page == "📈 Analysis":
             # market cap / 1-line business summary. Sourced from yfinance .info
             # (already in the load_all() cache, no extra network call).
             _co_name     = r.get("name", "") or ticker
-            _co_sector   = r.get("sector", "") or "—"
-            _co_industry = r.get("industry", "") or "—"
+            _co_sector_raw   = (r.get("sector") or "").strip()
+            _co_industry_raw = (r.get("industry") or "").strip()
             _co_mcap     = r.get("market_cap")
             _co_summary  = (r.get("business_summary") or "").strip()
+
             # Format market cap as $X.YT / $XYZB / $XYZM
             def _fmt_mcap(v):
                 try:
                     v = float(v)
                 except (TypeError, ValueError):
-                    return "—"
+                    return None
                 if v >= 1e12: return f"${v/1e12:.2f}T"
                 if v >= 1e9:  return f"${v/1e9:.1f}B"
                 if v >= 1e6:  return f"${v/1e6:.0f}M"
                 return f"${v:,.0f}"
-            _co_mcap_str = _fmt_mcap(_co_mcap) if _co_mcap is not None else "—"
-            # Trim summary to first sentence(s) up to ~280 chars so the block
-            # stays compact — full summary is one click away on Yahoo/Finviz.
-            if _co_summary:
-                _sentences = _co_summary.replace("\n", " ").split(". ")
-                _co_one_liner = _sentences[0]
-                if len(_co_one_liner) < 200 and len(_sentences) > 1:
-                    _co_one_liner = ". ".join(_sentences[:2])
-                if not _co_one_liner.endswith("."):
-                    _co_one_liner += "."
-                _co_one_liner = _co_one_liner[:320]
-            else:
-                _co_one_liner = "Business description unavailable."
+            _co_mcap_str = _fmt_mcap(_co_mcap) if _co_mcap is not None else None
 
-            st.markdown(
-                f"<div style='background:#111827;border:1px solid #374151;"
-                f"border-radius:8px;padding:10px 14px;margin:8px 0 12px'>"
-                f"<div style='display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;"
-                f"margin-bottom:6px'>"
-                f"<span style='color:#9ca3af;font-size:0.72em;font-weight:700;"
-                f"letter-spacing:0.08em;text-transform:uppercase'>"
-                f"🏢 Company Overview</span>"
-                f"<span style='color:#f9fafb;font-weight:700'>{_co_name}</span>"
-                f"<span style='color:#9ca3af;font-size:0.82em'>{_co_sector} · {_co_industry}</span>"
-                f"<span style='color:#9ca3af;font-size:0.82em'>· Market cap "
-                f"<b style='color:#e5e7eb'>{_co_mcap_str}</b></span>"
-                f"</div>"
-                f"<div style='color:#d1d5db;font-size:0.85em;line-height:1.5'>"
-                f"{_co_one_liner}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
+            _has_any_data = bool(
+                _co_sector_raw or _co_industry_raw or _co_mcap_str or _co_summary
             )
+
+            if not _has_any_data:
+                # Sparse yfinance .info — render a clean placeholder pointing
+                # the user at the Yahoo Finance link instead of dashes.
+                st.markdown(
+                    f"<div style='background:#111827;border:1px solid #374151;"
+                    f"border-radius:8px;padding:8px 14px;margin:8px 0 12px;"
+                    f"font-size:0.82em;color:#9ca3af'>"
+                    f"🏢 <b style='color:#e5e7eb'>{_co_name}</b> — company info "
+                    f"unavailable from Yahoo Finance right now. Try the "
+                    f"<a href='https://finance.yahoo.com/quote/{ticker}/profile' "
+                    f"style='color:#60a5fa' target='_blank'>Yahoo profile page</a> "
+                    f"or refresh the Analysis page in a minute."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                # Build the metadata line from whatever fields ARE populated —
+                # missing values are skipped rather than rendered as dashes.
+                _meta_parts = []
+                if _co_sector_raw and _co_industry_raw:
+                    _meta_parts.append(f"{_co_sector_raw} · {_co_industry_raw}")
+                elif _co_sector_raw:
+                    _meta_parts.append(_co_sector_raw)
+                elif _co_industry_raw:
+                    _meta_parts.append(_co_industry_raw)
+                if _co_mcap_str:
+                    _meta_parts.append(f"Market cap <b style='color:#e5e7eb'>{_co_mcap_str}</b>")
+                _meta_line = " · ".join(_meta_parts) if _meta_parts else ""
+
+                # Trim summary to first sentence(s) up to ~280 chars so the block
+                # stays compact — full summary is one click away on Yahoo/Finviz.
+                if _co_summary:
+                    _sentences = _co_summary.replace("\n", " ").split(". ")
+                    _co_one_liner = _sentences[0]
+                    if len(_co_one_liner) < 200 and len(_sentences) > 1:
+                        _co_one_liner = ". ".join(_sentences[:2])
+                    if not _co_one_liner.endswith("."):
+                        _co_one_liner += "."
+                    _co_one_liner = _co_one_liner[:320]
+                else:
+                    _co_one_liner = ""
+
+                st.markdown(
+                    f"<div style='background:#111827;border:1px solid #374151;"
+                    f"border-radius:8px;padding:10px 14px;margin:8px 0 12px'>"
+                    f"<div style='display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;"
+                    f"margin-bottom:6px'>"
+                    f"<span style='color:#9ca3af;font-size:0.72em;font-weight:700;"
+                    f"letter-spacing:0.08em;text-transform:uppercase'>"
+                    f"🏢 Company Overview</span>"
+                    f"<span style='color:#f9fafb;font-weight:700'>{_co_name}</span>"
+                    + (f"<span style='color:#9ca3af;font-size:0.82em'>{_meta_line}</span>"
+                       if _meta_line else "")
+                    + f"</div>"
+                    + (f"<div style='color:#d1d5db;font-size:0.85em;line-height:1.5'>"
+                       f"{_co_one_liner}</div>" if _co_one_liner else "")
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
 
             # Signal-aware tab label and portfolio lookup
             _sa_is_sell = rec["label"] in ("Sell", "Strong Sell")

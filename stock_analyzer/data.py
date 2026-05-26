@@ -53,6 +53,17 @@ def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
         info = {}
         try:
             info = t.info or {}
+            # yfinance's .info is lazy-loaded and occasionally returns a sparse
+            # dict on the first call (missing industry / marketCap / longBusinessSummary).
+            # A single retry against a fresh Ticker handle resolves this for most
+            # tickers without forcing a slow retry on every call.
+            if info and not info.get("longBusinessSummary") and not info.get("industry"):
+                try:
+                    info_retry = yf.Ticker(ticker).info or {}
+                    if info_retry.get("longBusinessSummary") or info_retry.get("industry"):
+                        info = info_retry
+                except Exception:
+                    pass
         except Exception:
             pass
         news = []
