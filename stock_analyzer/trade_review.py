@@ -515,6 +515,392 @@ def sector_mix(trades_with_outcome: list[dict],
     }
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Lens 3 — Course-Correction Recommendations
+#
+# Each diagnostic is an independent rule that inspects the trade data for a
+# specific behavioural pattern. A diagnostic returns:
+#   None                 — sample too small or pattern doesn't apply
+#   dict with keys:
+#     pattern   : short name (e.g. "Holding-Period Imbalance")
+#     severity  : 'critical' | 'watch' | 'good'
+#     detection : prose explanation with the specific numbers
+#     action    : concrete next step (None for "good" severity)
+#     evidence  : raw numbers for transparency
+#
+# build_recommendations() orchestrates them and returns the list, severity-
+# sorted (critical first). All diagnostics are sample-size-guarded — they
+# only fire when the underlying data supports a defensible conclusion.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _diag_holding_period_imbalance(trades: list[dict]) -> dict | None:
+    """
+    Are winners cut short while losers are held longer? The classic retail
+    pattern — sells on the first dip into green, holds losers hoping they
+    recover. Detected by comparing avg hold_days for wins vs losses.
+
+    Sample-size guard: needs ≥3 wins AND ≥3 losses, each with a hold_days.
+    """
+    judged = [
+        t for t in trades
+        if t.get("is_win") is not None
+        and not t.get("_sell_dedup", False)
+        and t.get("hold_days") is not None
+    ]
+    wins   = [t for t in judged if t["is_win"]]
+    losses = [t for t in judged if not t["is_win"]]
+    if len(wins) < 3 or len(losses) < 3:
+        return None
+
+    avg_win_hold  = sum(t["hold_days"] for t in wins)   / len(wins)
+    avg_loss_hold = sum(t["hold_days"] for t in losses) / len(losses)
+    gap           = avg_loss_hold - avg_win_hold        # positive = imbalance
+
+    if gap >= 5:
+        severity  = "critical"
+        detection = (
+            f"You're cutting winners short. Winning trades held "
+            f"<b>{avg_win_hold:.0f}d</b> on average vs <b>{avg_loss_hold:.0f}d</b> "
+            f"for losers — a <b>{gap:.0f}-day gap</b>. The classic retail trap: "
+            "selling at the first sign of green while letting losers run hoping "
+            "they recover."
+        )
+        action = (
+            "Let winners run. Move stops up (trailing) rather than booking the "
+            "first +5% gain. Asymmetric hold time = lost compounding."
+        )
+    elif gap >= 2:
+        severity  = "watch"
+        detection = (
+            f"Slight winner-cut tendency: winners held <b>{avg_win_hold:.0f}d</b> "
+            f"vs losers <b>{avg_loss_hold:.0f}d</b> ({gap:.0f}-day gap). Not yet "
+            "a clear pattern but worth watching."
+        )
+        action = (
+            "On the next winner, set a trailing stop and resist the urge to "
+            "exit at the first round-number target."
+        )
+    elif gap <= -2:
+        severity  = "good"
+        detection = (
+            f"Winners held <b>{avg_win_hold:.0f}d</b> vs losers <b>{avg_loss_hold:.0f}d</b> "
+            f"— you're letting winners run and exiting losers promptly. Asymmetric hold "
+            "discipline is intact."
+        )
+        action = None
+    else:
+        # Neutral — within ±2 days, not enough signal to flag either way
+        return None
+
+    return {
+        "pattern":   "Holding-Period Imbalance",
+        "severity":  severity,
+        "detection": detection,
+        "action":    action,
+        "evidence":  {
+            "avg_win_hold":  round(avg_win_hold,  1),
+            "avg_loss_hold": round(avg_loss_hold, 1),
+            "gap":           round(gap, 1),
+            "n_wins":        len(wins),
+            "n_losses":      len(losses),
+        },
+    }
+
+
+def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
+    """
+    Trades where the recorded signal_seen pointed one way but the action went
+    the other. More specific than "deviated %" — that field captures self-
+    declared deviation, this one catches the actual signal-vs-action mismatch
+    from the journal text.
+
+    A BUY against "Hold"/"Sell"/"Avoid"/"Weak" signal = defying.
+    A SELL against "Buy"/"Strong Buy" signal = defying.
+    """
+    _bearish_words = ("hold", "sell", "avoid", "weak")
+    _bullish_words = ("buy",)
+
+    defying:  list[dict] = []
+    compliant: list[dict] = []
+    for t in trades:
+        if t.get("is_win") is None or t.get("_sell_dedup", False):
+            continue
+        sig = (t.get("signal_seen") or "").lower()
+        if not sig:
+            continue
+        action_buy = "BUY" in t.get("action", "").upper()
+        signal_bearish = any(w in sig for w in _bearish_words)
+        signal_bullish = any(w in sig for w in _bullish_words) and not signal_bearish
+        if (action_buy and signal_bearish) or (not action_buy and signal_bullish):
+            defying.append(t)
+        elif (action_buy and signal_bullish) or (not action_buy and signal_bearish):
+            compliant.append(t)
+
+    if len(defying) < 3:
+        return None
+
+    def _avg_pnl(ts):
+        return sum(t["outcome_pnl"] for t in ts) / len(ts) if ts else 0.0
+
+    avg_def  = _avg_pnl(defying)
+    avg_comp = _avg_pnl(compliant) if compliant else None
+    def_wins = sum(1 for t in defying if t["is_win"])
+    def_wr   = def_wins / len(defying) * 100.0
+
+    if avg_comp is not None and len(compliant) >= 3:
+        spread = avg_comp - avg_def
+        if spread >= 100:   # compliant outperforms by ≥$100 avg
+            severity  = "critical"
+            detection = (
+                f"<b>{len(defying)}</b> trades went against the signal you saw "
+                f"in the journal — avg outcome <b style='color:#fca5a5'>"
+                f"${avg_def:+,.0f}</b> vs <b style='color:#86efac'>"
+                f"${avg_comp:+,.0f}</b> on the {len(compliant)} compliant trades "
+                f"(<b>${spread:,.0f}</b> per-trade gap)."
+            )
+            action = (
+                "When the app says Hold/Sell, take that as authoritative even if "
+                "external info disagrees. Record deviation_reason every time and "
+                "review weekly — repeating the same deviation pattern is the leak."
+            )
+        elif spread <= -100:
+            severity  = "watch"
+            detection = (
+                f"Interestingly, defying the signal worked better in your sample: "
+                f"avg <b>${avg_def:+,.0f}</b> vs <b>${avg_comp:+,.0f}</b> compliant "
+                f"({len(defying)} defied · {len(compliant)} compliant)."
+            )
+            action = (
+                "Small sample — don't over-extrapolate. Keep documenting "
+                "deviation_reason so we can validate whether this holds over more trades."
+            )
+        else:
+            return None
+    else:
+        if avg_def < 0:
+            severity  = "watch"
+            detection = (
+                f"<b>{len(defying)}</b> signal-defying trades averaged "
+                f"<b style='color:#fca5a5'>${avg_def:+,.0f}</b> "
+                f"(win rate {def_wr:.0f}%). Insufficient compliant trades in window "
+                "to compare directly."
+            )
+            action = (
+                "Defying trades are losing on average. Capture deviation_reason on "
+                "every one so the pattern is visible the next time you're tempted."
+            )
+        else:
+            return None
+
+    return {
+        "pattern":   "Signal-Defying Bias",
+        "severity":  severity,
+        "detection": detection,
+        "action":    action,
+        "evidence":  {
+            "n_defying":   len(defying),
+            "n_compliant": len(compliant),
+            "avg_def_pnl": round(avg_def, 2),
+            "avg_comp_pnl": round(avg_comp, 2) if avg_comp is not None else None,
+            "def_win_rate": round(def_wr, 1),
+        },
+    }
+
+
+def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
+    """
+    For closed trades, what fraction actually beat SPY over the same window?
+    Translates the per-trade vs_spy_pct into an aggregate alpha estimate.
+
+    Sample-size guard: needs ≥3 closed trades with a vs_spy_pct (i.e. SPY data
+    was available for those windows).
+    """
+    closed = [
+        t for t in trades
+        if t.get("vs_spy_pct") is not None
+        and not t.get("_sell_dedup", False)
+        and t.get("outcome_status") == "closed"
+    ]
+    if len(closed) < 3:
+        return None
+
+    beat_spy = sum(1 for t in closed if t["vs_spy_pct"] >= 0)
+    beat_pct = beat_spy / len(closed) * 100.0
+
+    # $ alpha estimate: per-trade vs_spy_pct * cost_basis (approximation —
+    # vs_spy_pct is computed against entry price, not cost basis with fees)
+    cumulative_alpha = 0.0
+    for t in closed:
+        cost = _f(t.get("price")) * _f(t.get("shares"))
+        if cost > 0:
+            cumulative_alpha += cost * (t["vs_spy_pct"] / 100.0)
+
+    if beat_pct >= 65:
+        severity  = "good"
+        detection = (
+            f"<b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
+            f"(<b>{beat_pct:.0f}%</b>) — net alpha "
+            f"<b style='color:#86efac'>${cumulative_alpha:+,.0f}</b>. "
+            "Active trading is earning its keep vs just holding the index."
+        )
+        action = None
+    elif beat_pct >= 50:
+        severity  = "watch"
+        detection = (
+            f"<b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
+            f"(<b>{beat_pct:.0f}%</b>) — net alpha "
+            f"<b style='color:{'#86efac' if cumulative_alpha >= 0 else '#fca5a5'}'>"
+            f"${cumulative_alpha:+,.0f}</b>. Barely beating buy-and-hold."
+        )
+        action = (
+            "Tighten entry discipline — only act on high-conviction setups "
+            "(composite ≥ 70). Marginal trades are eating the alpha."
+        )
+    else:
+        severity  = "critical"
+        detection = (
+            f"Only <b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
+            f"(<b>{beat_pct:.0f}%</b>) — net alpha "
+            f"<b style='color:#fca5a5'>${cumulative_alpha:+,.0f}</b>. You'd be "
+            "ahead just holding the index over the same windows."
+        )
+        action = (
+            "Active trading is destroying value vs. SPY. Pause for one week, "
+            "review what went wrong on the underperformers, then return with "
+            "stricter entry criteria."
+        )
+
+    return {
+        "pattern":   "vs-SPY Drag",
+        "severity":  severity,
+        "detection": detection,
+        "action":    action,
+        "evidence":  {
+            "n_closed":         len(closed),
+            "beat_spy":         beat_spy,
+            "beat_pct":         round(beat_pct, 1),
+            "cumulative_alpha": round(cumulative_alpha, 2),
+        },
+    }
+
+
+def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
+    """
+    Tickers you've traded multiple times. Surface the ones with negative net
+    P&L across ≥2 entries — that's "doubling down on a name that isn't
+    working" in concrete form.
+    """
+    ticker_groups: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        if t.get("is_win") is None or t.get("_sell_dedup", False):
+            continue
+        if "BUY" not in t.get("action", "").upper():
+            continue
+        ticker_groups[t["ticker"]].append(t)
+
+    repeated_negative: list[dict] = []
+    repeated_positive: list[dict] = []
+    for tk, group in ticker_groups.items():
+        if len(group) < 2:
+            continue
+        net = sum(t["outcome_pnl"] for t in group)
+        entry = {
+            "ticker":   tk,
+            "n_trades": len(group),
+            "net_pnl":  round(net, 2),
+        }
+        if net < 0:
+            repeated_negative.append(entry)
+        else:
+            repeated_positive.append(entry)
+
+    repeated_negative.sort(key=lambda x: x["net_pnl"])      # worst first
+    repeated_positive.sort(key=lambda x: -x["net_pnl"])     # best first
+
+    if not repeated_negative and not repeated_positive:
+        return None
+
+    if repeated_negative:
+        top3      = repeated_negative[:3]
+        total_neg = sum(e["net_pnl"] for e in repeated_negative)
+        names     = " · ".join(
+            f"<b>{e['ticker']}</b> ({e['n_trades']}× = ${e['net_pnl']:+,.0f})"
+            for e in top3
+        )
+        severity  = "critical" if total_neg <= -200 else "watch"
+        detection = (
+            f"<b>{len(repeated_negative)}</b> ticker"
+            f"{'s' if len(repeated_negative) != 1 else ''} you've re-entered "
+            "are net-negative: " + names
+            + (f". Net drag <b style='color:#fca5a5'>${total_neg:+,.0f}</b>."
+               if total_neg < 0 else ".")
+        )
+        action = (
+            "Pause re-entries on losing names. If a ticker has failed you twice, "
+            "the thesis may be broken or the entry timing is consistently wrong — "
+            "re-read the journal entries for that ticker before the next attempt."
+        )
+        return {
+            "pattern":   "Re-Entered Tickers",
+            "severity":  severity,
+            "detection": detection,
+            "action":    action,
+            "evidence":  {
+                "n_repeated_negative": len(repeated_negative),
+                "total_negative_pnl":  round(total_neg, 2),
+                "top_negative":        top3,
+            },
+        }
+
+    # Only positive re-entries — that's a "good" finding
+    top3 = repeated_positive[:3]
+    names = " · ".join(
+        f"<b>{e['ticker']}</b> ({e['n_trades']}× = ${e['net_pnl']:+,.0f})"
+        for e in top3
+    )
+    return {
+        "pattern":   "Re-Entered Tickers",
+        "severity":  "good",
+        "detection": (
+            f"Your repeated entries are working: {names}. Re-fishing names you've "
+            "studied is paying off."
+        ),
+        "action":    None,
+        "evidence":  {
+            "n_repeated_positive": len(repeated_positive),
+            "top_positive":        top3,
+        },
+    }
+
+
+_SEVERITY_RANK = {"critical": 0, "watch": 1, "good": 2}
+
+
+def build_recommendations(trades: list[dict]) -> list[dict]:
+    """
+    Run every Lens-3 diagnostic and return the populated recommendations,
+    sorted critical → watch → good. Empty list when data is too thin for any
+    diagnostic to fire — UI should soft-fail with a "keep logging" caption.
+    """
+    diagnostics = (
+        _diag_holding_period_imbalance,
+        _diag_signal_defying_bias,
+        _diag_vs_spy_drag,
+        _diag_re_entered_tickers,
+    )
+    out: list[dict] = []
+    for fn in diagnostics:
+        try:
+            rec = fn(trades)
+        except Exception:
+            rec = None
+        if rec:
+            out.append(rec)
+    out.sort(key=lambda r: _SEVERITY_RANK.get(r["severity"], 99))
+    return out
+
+
 def build_insights(metrics: dict, trades: list[dict],
                    position_discipline: dict | None = None,
                    sector_mix_data:     dict | None = None,

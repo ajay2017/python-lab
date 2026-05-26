@@ -75,7 +75,7 @@ from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.evening_debrief import build_evening_debrief
 from stock_analyzer.trade_review import (
-    build_trade_review, build_insights,
+    build_trade_review, build_insights, build_recommendations,
     cumulative_pnl_series, rolling_win_rate,
     position_size_discipline, sector_mix,
 )
@@ -10688,6 +10688,56 @@ elif page == "🪞 Trade Review":
                         f"⚠ **{_tr_sec_mix['top_sector']}** is above the "
                         f"{_tr_sec_mix['elevated_threshold']:.0f}% concentration warn level. "
                         "Over-fishing one sector means a single regime shift hits multiple positions."
+                    )
+
+        # ── 🎯 Course-Correction Recommendations (Lens 3) ─────────────────────
+        # Each rec is a sample-size-guarded behavioural diagnostic — fires only
+        # when YOUR data supports the conclusion. Severity-sorted (critical
+        # first) so the most important course correction is at the top.
+        _tr_recs = build_recommendations(_tr_trades)
+        with st.expander(
+            f"🎯 Course-Correction Recommendations ({len(_tr_recs)} active)",
+            expanded=True,
+        ):
+            if not _tr_recs:
+                st.caption(
+                    "No behavioural patterns detected yet — each diagnostic needs a "
+                    "minimum sample size before it fires (e.g. holding-period imbalance "
+                    "needs ≥3 wins and ≥3 losses). Keep logging trades and these will "
+                    "populate over time."
+                )
+            else:
+                _sev_styles = {
+                    "critical": ("🔴", "#ef4444", "#3f1d1d", "Fix Now"),
+                    "watch":    ("🟡", "#f59e0b", "#3b2a0a", "Watch"),
+                    "good":     ("🟢", "#22c55e", "#052e16", "Doing Well"),
+                }
+                for _rec in _tr_recs:
+                    _icon, _col, _bg, _sev_label = _sev_styles.get(
+                        _rec["severity"], _sev_styles["watch"]
+                    )
+                    _action_block = ""
+                    if _rec.get("action"):
+                        _action_block = (
+                            f"<div style='background:#1e293b;border-radius:6px;"
+                            f"padding:8px 12px;margin-top:8px;color:#cbd5e1;font-size:0.86em'>"
+                            f"<b style='color:{_col}'>➡ Action:</b> {_rec['action']}"
+                            f"</div>"
+                        )
+                    st.markdown(
+                        f"<div style='background:{_bg};border-left:4px solid {_col};"
+                        f"border-radius:8px;padding:12px 16px;margin-bottom:10px'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+                        f"<div style='color:#f9fafb;font-weight:700;font-size:1.0em'>"
+                        f"{_icon} {_rec['pattern']}</div>"
+                        f"<div style='color:{_col};font-size:0.78em;font-weight:700;"
+                        f"letter-spacing:0.06em;text-transform:uppercase'>{_sev_label}</div>"
+                        f"</div>"
+                        f"<div style='color:#e2e8f0;font-size:0.9em;margin-top:6px'>"
+                        f"{_rec['detection']}</div>"
+                        + _action_block +
+                        "</div>",
+                        unsafe_allow_html=True,
                     )
 
         # ── 📜 Per-Trade Scorecard — detail view, collapsed by default ───────
