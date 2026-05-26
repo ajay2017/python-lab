@@ -1349,9 +1349,13 @@ if page == "🏠 Home":
         # display on the card. Locked Briefs skip the write (the snapshot's
         # surfaced_at was captured at lock time) but still get decorated
         # on read.
-        if (db.has_db()
-                and not st.session_state.get("_rec_log_done_today") == _TODAY_ET
-                and not _brief_use_lock):
+        #
+        # No once-per-session guard: db.save_recommendations is idempotent
+        # via the unique constraint + ignore_duplicates, so writing on every
+        # Brief build is cheap (single upsert round-trip) and avoids the
+        # sticky-flag failure mode where an early failed save permanently
+        # blocked retries for the rest of the session.
+        if db.has_db() and not _brief_use_lock:
             _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
             try:
                 _rec_rows: list[dict] = []
@@ -1397,8 +1401,7 @@ if page == "🏠 Home":
             except Exception as _rec_save_err:
                 _rec_save_result = {"attempted": 0, "saved": 0,
                                     "error": str(_rec_save_err)[:200]}
-            st.session_state["_rec_log_done_today"]    = _TODAY_ET
-            st.session_state["_rec_log_save_result"]   = _rec_save_result
+            st.session_state["_rec_log_save_result"] = _rec_save_result
 
         # Decorate each pick with its first-seen surfaced_at so the card
         # render can show "Recommended at HH:MM ET" without an extra round-trip
