@@ -8996,7 +8996,15 @@ elif page == "📒 Trade Journal":
         )
 
     # ── Pre-fill from recommendation card ────────────────────────────────────
-    prefill = st.session_state.pop("_prefill_trade", {})
+    # IMPORTANT: use get() not pop() here. Streamlit forms reset their
+    # widgets to the `value=` parameter whenever ANY widget OUTSIDE the form
+    # triggers a rerun (Action radio, Decision Context expander, etc.). If
+    # we pop the prefill on first render, those resets read `value=1`
+    # instead of the original prefilled shares — silently blanking out the
+    # pre-filled shares while the user is mid-edit. We keep the prefill
+    # around until the trade is successfully recorded (popped below in the
+    # submit handler), so every form reset re-applies the same values.
+    prefill = st.session_state.get("_prefill_trade", {})
 
     # ── Log a Trade form ──────────────────────────────────────────────────────
     _prefill_ticker = prefill.get("ticker", "").strip().upper()
@@ -9265,6 +9273,11 @@ elif page == "📒 Trade Journal":
                             )
                         db.save_holdings(h_df)
                         st.session_state.holdings_df = h_df
+
+                    # Consume the prefill now that the trade was recorded —
+                    # any future visit to this page should start with a clean
+                    # form. Paired with the get() at the top of the page.
+                    st.session_state.pop("_prefill_trade", None)
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
