@@ -2245,58 +2245,6 @@ if page == "🏠 Home":
                 st.caption(f"🛡️ {bear_msg}")
                 return
 
-            # Macro-blocked picks — surface so user knows the gate is active.
-            if macro_blocked:
-                _mb_rows = "".join(
-                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                    f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
-                    for b in macro_blocked[:4]
-                )
-                st.markdown(
-                    "<div style='background:#422006;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    "🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event</div>"
-                    + _mb_rows
-                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "These sectors have a HIGH-impact macro release within "
-                    f"{MACRO_IMMINENT_DAYS} days. Opening fresh positions into a known binary "
-                    "catalyst is the institutional anti-pattern this gate blocks. "
-                    "Revisit after the event resolves and the dust settles."
-                    "</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-            # Composite-conflict suppression — picks whose momentum was hot but
-            # whose full composite (Technical + Fundamental + Sentiment) is below
-            # the Buy threshold. Surfaces what was considered AND rejected so the
-            # user makes the decision on the Brief itself (no Analysis click needed).
-            if comp_skipped:
-                _cs_rows = "".join(
-                    f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
-                    f"• <b>{c['ticker']}</b> ({c.get('sector','—')}) — "
-                    f"Momentum <b>{c.get('momentum_score',0):.0f}/100</b> "
-                    f"but composite <b>{c.get('composite_label','Hold')} "
-                    f"{c.get('composite_score',0):.1f}/100</b> "
-                    "→ skip (composite contradicts momentum)."
-                    "</div>"
-                    for c in comp_skipped[:5]
-                )
-                st.markdown(
-                    "<div style='background:#3f1d1d;border:1px solid #ef4444;"
-                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
-                    "<div style='color:#fca5a5;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    f"⛔ Screened but Filtered Out ({len(comp_skipped)}) — Composite Says No</div>"
-                    + _cs_rows
-                    + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "Momentum (a single-factor breakout signal) caught these names, "
-                    "but the full composite — Technical + Fundamental + Sentiment — "
-                    "is below the Buy threshold (65). Decision: skip until composite "
-                    "recovers. Track on the Watchlist for a re-look."
-                    "</div></div>",
-                    unsafe_allow_html=True,
-                )
-
             # Composite-fetch failure banner — shown when one or more of the
             # intended top picks couldn't get a composite score, so picks may be
             # listed without the full multi-factor signal. Surfacing this lets
@@ -2336,16 +2284,27 @@ if page == "🏠 Home":
                 )
 
             if not new_picks and not add_pos:
+                # No actionable setups — show the empty-state message, but
+                # DON'T early-return. Filtered-out / macro-blocked candidates
+                # are still rendered below so the user understands WHY there
+                # are no recommendations today (composite said no, sector had
+                # a macro event, etc.) rather than wondering "did anything
+                # even get screened?"
+                _below_count = len(macro_blocked) + len(comp_skipped)
+                _below_hint  = (
+                    f" {_below_count} candidate{'s' if _below_count != 1 else ''} "
+                    "considered but rejected — see details below."
+                ) if _below_count else ""
                 st.caption(
-                    "No high-confidence setups meet today's criteria. "
-                    "Run Market Scanner to refresh candidates." if tone == "bull"
-                    else "Flat market — waiting for clearer direction before adding new positions."
+                    ("No high-confidence setups meet today's criteria. "
+                     "Run Market Scanner to refresh candidates." if tone == "bull"
+                     else "Flat market — waiting for clearer direction before adding new positions.")
+                    + _below_hint
                 )
                 if tone == "bull":
                     if st.button("🔍 Run Market Scanner", key="_db_grow_scanner"):
                         st.session_state["_pending_page"] = "🔍 Market Scanner"
                         st.rerun()
-                return
 
             # New picks
             if new_picks:
@@ -2494,6 +2453,66 @@ if page == "🏠 Home":
 
             if deploy_note:
                 st.info(f"💰 {deploy_note}")
+
+            # ─────────────────────────────────────────────────────────────────
+            # BELOW THE FOLD — "Here's what we considered but didn't recommend"
+            # These blocks are informational, not actionable, so they live
+            # below the action items. They tell the user WHY a hot ticker
+            # didn't make the cut (composite said no, macro event imminent,
+            # etc.) — important context but lower priority than what to act on.
+            # ─────────────────────────────────────────────────────────────────
+
+            # Macro-blocked picks — sector has imminent HIGH-impact catalyst.
+            if macro_blocked:
+                _mb_rows = "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                    f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
+                    for b in macro_blocked[:4]
+                )
+                st.markdown(
+                    "<div style='background:#422006;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin-top:12px;margin-bottom:8px'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event</div>"
+                    + _mb_rows
+                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These sectors have a HIGH-impact macro release within "
+                    f"{MACRO_IMMINENT_DAYS} days. Opening fresh positions into a known binary "
+                    "catalyst is the institutional anti-pattern this gate blocks. "
+                    "Revisit after the event resolves and the dust settles."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Composite-conflict suppression — momentum was hot but the full
+            # composite (Technical + Fundamental + Sentiment) was below the
+            # Buy threshold. Surfaces what was considered AND rejected so the
+            # user makes the decision on the Brief itself.
+            if comp_skipped:
+                _cs_rows = "".join(
+                    f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
+                    f"• <b>{c['ticker']}</b> ({c.get('sector','—')}) — "
+                    f"Momentum <b>{c.get('momentum_score',0):.0f}/100</b> "
+                    f"but composite <b>{c.get('composite_label','Hold')} "
+                    f"{c.get('composite_score',0):.1f}/100</b> "
+                    "→ skip (composite contradicts momentum)."
+                    "</div>"
+                    for c in comp_skipped[:5]
+                )
+                st.markdown(
+                    "<div style='background:#3f1d1d;border:1px solid #ef4444;"
+                    "border-radius:8px;padding:8px 14px;margin-top:8px;margin-bottom:4px'>"
+                    "<div style='color:#fca5a5;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    f"⛔ Screened but Filtered Out ({len(comp_skipped)}) — Composite Says No</div>"
+                    + _cs_rows
+                    + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "Momentum (a single-factor breakout signal) caught these names, "
+                    "but the full composite — Technical + Fundamental + Sentiment — "
+                    "is below the Buy threshold (65). Decision: skip until composite "
+                    "recovers. Track on the Watchlist for a re-look."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
 
         # ── Two-column layout: Grow Today (left) | Act Today (right) ────────
         _db_col_left, _db_col_right = st.columns([1, 1])
