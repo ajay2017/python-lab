@@ -10388,11 +10388,17 @@ elif page == "🪞 Trade Review":
                         f"🌪 Panic day{_sp_str}</span>"
                     )
 
-                _status_chip = (
-                    f"<span style='color:#fbbf24;font-size:0.78em;font-weight:600'>OPEN</span>"
-                    if t["outcome_status"] == "open"
-                    else f"<span style='color:#94a3b8;font-size:0.78em'>CLOSED</span>"
-                )
+                if t["outcome_status"] == "open":
+                    _status_chip = "<span style='color:#fbbf24;font-size:0.78em;font-weight:600'>OPEN</span>"
+                elif t["outcome_status"] == "partial":
+                    _ss = t.get("shares_sold", 0) or 0
+                    _sr = t.get("shares_remaining", 0) or 0
+                    _status_chip = (
+                        f"<span style='color:#a78bfa;font-size:0.78em;font-weight:600'>"
+                        f"PARTIAL · {_ss:.0f}/{_ss + _sr:.0f} sold</span>"
+                    )
+                else:
+                    _status_chip = "<span style='color:#94a3b8;font-size:0.78em'>CLOSED</span>"
 
                 _win_chip = ""
                 if t["is_win"] is True:
@@ -10404,7 +10410,26 @@ elif page == "🪞 Trade Review":
                 if t["outcome_status"] == "open" and t["exit_price"]:
                     _exit_str = f" · MTM ${t['exit_price']:.2f}"
                 elif t["outcome_status"] == "closed" and t["exit_price"]:
-                    _exit_str = f" · Exit ${t['exit_price']:.2f}"
+                    _exit_str = f" · Exit avg ${t['exit_price']:.2f}"
+                elif t["outcome_status"] == "partial" and t["exit_price"]:
+                    _exit_str = f" · last sold ${t['exit_price']:.2f}"
+
+                # For partial closes, break out realized vs unrealized so the user can
+                # see why the total P&L is what it is (audit trail for the new math).
+                _split_note = ""
+                if t["outcome_status"] == "partial":
+                    _real = t.get("realized_pnl", 0.0)
+                    _unr  = t["outcome_pnl"] - _real
+                    _real_col = "#86efac" if _real >= 0 else "#fca5a5"
+                    _unr_col  = "#86efac" if _unr  >= 0 else "#fca5a5"
+                    _split_note = (
+                        f"<div style='color:#a78bfa;font-size:0.78em;margin-top:3px'>"
+                        f"📦 Realized <b style='color:{_real_col}'>${_real:+,.0f}</b> "
+                        f"on {t['shares_sold']:.0f} sh "
+                        f"+ Unrealized <b style='color:{_unr_col}'>${_unr:+,.0f}</b> "
+                        f"on {t['shares_remaining']:.0f} sh held"
+                        f"</div>"
+                    )
 
                 _dev_note = ""
                 if t["category"] == "deviated" and t.get("deviation_reason"):
@@ -10439,6 +10464,7 @@ elif page == "🪞 Trade Review":
                     f"{_hold_str}{_vs_spy_str} · "
                     f"<span style='color:{_cat_col}'>{_cat_label}</span> · {_win_chip}"
                     f"</div>"
+                    + _split_note
                     + _dev_note
                     + _lesson_note
                     + f"<div style='color:#64748b;font-size:0.74em;margin-top:4px'>"

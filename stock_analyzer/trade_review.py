@@ -116,105 +116,196 @@ def _spy_return_between(spy_history_df, start_d: date, end_d: date) -> float | N
 
 def _pair_sells_to_buys(trades_in_window: list[dict]) -> dict:
     """
-    Build a {buy_id: closing_sell_dict | None} map by FIFO-matching SELL rows
-    to prior BUY rows for the same ticker.
+    Share-aware FIFO matching with partial-fill support.
 
-    Greedy: walk chronologically; each SELL closes the oldest open BUY of the
-    same ticker first. Partial closes are not modeled — a sell fully closes
-    the next-in-line buy regardless of share count. This is a pragmatic
-    simplification for the review surface (the actual realized_pnl column in
-    the journal is authoritative for $ figures).
+    Walks the trades chronologically. Each SELL eats shares from the oldest
+    open BUY of the same ticker first; if the SELL has more shares than that
+    BUY's remaining lot, it spills onto the next BUY. If the SELL has fewer,
+    the BUY stays partially open with `shares_remaining`.
+
+    Returns:
+      {
+        "matches": {buy_id: {
+            "matched":          [{"sell_id", "sell_price", "sell_date", "shares"}, ...],
+            "shares_remaining": float — shares not yet sold (0 if fully closed),
+            "buy_shares":       float — original purchase quantity (echoed for convenience),
+        }},
+        "matched_sell_ids": set of SELL ids that consumed shares from any
+                             in-window BUY (used downstream to dedup aggregate
+                             metrics so realized P&L isn't double-counted).
+      }
+
+    This replaces the batch-1 simplification that pretended every SELL fully
+    closed the matching BUY regardless of share count — that over-attributed
+    losses on partial sells (e.g. the NFLX 5-buy / 1-sell case).
     """
     by_ticker_open: dict[str, list] = defaultdict(list)
-    closing: dict[int, dict] = {}
+    matches: dict[int, dict] = {}
+    matched_sell_ids: set = set()   # SELLs that hit an in-window BUY (any portion)
 
-    sorted_trades = sorted(trades_in_window, key=lambda t: (t["_trade_date"] or date.min, t["id"] or 0))
+    sorted_trades = sorted(
+        trades_in_window,
+        key=lambda t: (t["_trade_date"] or date.min, t["id"] or 0),
+    )
     for t in sorted_trades:
         if "BUY" in t["action"].upper():
-            by_ticker_open[t["ticker"]].append(t)
-        elif "SELL" in t["action"].upper() and by_ticker_open[t["ticker"]]:
-            buy = by_ticker_open[t["ticker"]].pop(0)   # FIFO
-            closing[buy["id"]] = t
-    return closing
+            buy_shares = _f(t["shares"])
+            entry = {"buy": t, "shares_remaining": buy_shares}
+            by_ticker_open[t["ticker"]].append(entry)
+            matches[t["id"]] = {
+                "matched":          [],
+                "shares_remaining": buy_shares,
+                "buy_shares":       buy_shares,
+            }
+        elif "SELL" in t["action"].upper():
+            sell_remaining = _f(t["shares"])
+            while sell_remaining > 0 and by_ticker_open[t["ticker"]]:
+                buy_entry = by_ticker_open[t["ticker"]][0]
+                matched_shares = min(buy_entry["shares_remaining"], sell_remaining)
+                if matched_shares <= 0:
+                    by_ticker_open[t["ticker"]].pop(0)
+                    continue
+                buy_id = buy_entry["buy"]["id"]
+                matches[buy_id]["matched"].append({
+                    "sell_id":    t["id"],
+                    "sell_price": _f(t["price"]),
+                    "sell_date":  t["_trade_date"],
+                    "shares":     matched_shares,
+                })
+                matched_sell_ids.add(t["id"])
+                buy_entry["shares_remaining"]      -= matched_shares
+                matches[buy_id]["shares_remaining"] = buy_entry["shares_remaining"]
+                sell_remaining                     -= matched_shares
+                if buy_entry["shares_remaining"] <= 1e-9:   # fully closed (epsilon for floats)
+                    by_ticker_open[t["ticker"]].pop(0)
+    return {"matches": matches, "matched_sell_ids": matched_sell_ids}
 
 
-def _per_trade_outcome(t: dict, closing_sell: dict | None, current_price: float | None,
+def _per_trade_outcome(t: dict, match_info: dict | None, current_price: float | None,
                        today: date, spy_history_df) -> dict:
     """
     Build the outcome record for a single trade row.
+
+    For SELL rows: outcome = realized_pnl from the journal (authoritative).
+
+    For BUY rows: outcome = realized P&L from any partial sells (share-weighted)
+    PLUS mark-to-market on the unsold remainder. Three sub-states:
+      - fully open       : no shares sold yet → pure MTM
+      - partially closed : some shares sold → realized + MTM on remainder
+      - fully closed     : all shares sold → pure realized
+
     Returns:
-      outcome_status : 'open' | 'closed'
-      outcome_pnl    : float ($), positive = gain
-      outcome_pct    : float (%), w.r.t. entry cost basis
-      hold_days      : int — days held (open: to today; closed: to sell date)
-      exit_price     : float | None
-      exit_date      : date | None
-      vs_spy_pct     : float | None — trade % return − SPY % return over same period (closed only)
-      is_win         : bool | None — None when outcome can't be determined
+      outcome_status   : 'open' | 'partial' | 'closed'
+      outcome_pnl      : float ($), realized + (MTM on remaining if open/partial)
+      outcome_pct      : float (%), w.r.t. cost basis of full BUY position
+      hold_days        : int — entry to latest sell (closed) or to today (open/partial)
+      exit_price       : float | None — share-weighted avg sell price (closed),
+                          most recent sell price (partial), MTM (open)
+      exit_date        : date | None — last sell date (closed/partial only)
+      vs_spy_pct       : float | None — closed trades only
+      is_win           : bool | None — None when outcome can't be priced
+      realized_pnl     : float — realized portion only (informational)
+      shares_sold      : float — shares sold so far (0 for open)
+      shares_remaining : float — shares still held (0 for closed)
     """
     entry_price = _f(t["price"])
     shares      = _f(t["shares"])
     entry_date  = t["_trade_date"]
 
+    # ── SELL row — authoritative from journal ────────────────────────────────
     if "SELL" in t["action"].upper():
-        # SELL rows are inherently closed — realized_pnl is the truth
-        outcome_pnl = _f(t["realized_pnl"])
-        outcome_pct = (outcome_pnl / (_f(t["cost_basis"]) or (entry_price * shares))) * 100.0 \
-                      if entry_price > 0 else 0.0
+        realized = _f(t["realized_pnl"])
+        cost_b   = _f(t["cost_basis"]) or (entry_price * shares)
+        pct      = (realized / cost_b) * 100.0 if cost_b > 0 else 0.0
         return {
-            "outcome_status": "closed",
-            "outcome_pnl":    round(outcome_pnl, 2),
-            "outcome_pct":    round(outcome_pct, 2),
-            "hold_days":      None,           # not meaningful on a sell row in isolation
-            "exit_price":     entry_price,
-            "exit_date":      entry_date,
-            "vs_spy_pct":     None,
-            "is_win":         outcome_pnl > 0,
+            "outcome_status":   "closed",
+            "outcome_pnl":      round(realized, 2),
+            "outcome_pct":      round(pct, 2),
+            "hold_days":        None,
+            "exit_price":       entry_price,
+            "exit_date":        entry_date,
+            "vs_spy_pct":       None,
+            "is_win":           realized > 0,
+            "realized_pnl":     round(realized, 2),
+            "shares_sold":      shares,
+            "shares_remaining": 0.0,
         }
 
-    # BUY row: either still open or matched to a later SELL via FIFO
-    if closing_sell:
-        sell_price = _f(closing_sell["price"])
-        sell_date  = closing_sell["_trade_date"]
-        pnl        = (sell_price - entry_price) * shares
-        pct        = (sell_price - entry_price) / entry_price * 100.0 if entry_price > 0 else 0.0
-        hold_days  = (sell_date - entry_date).days if (sell_date and entry_date) else None
-        spy_ret    = _spy_return_between(spy_history_df, entry_date, sell_date) if (entry_date and sell_date) else None
-        vs_spy     = round(pct - spy_ret, 2) if spy_ret is not None else None
-        return {
-            "outcome_status": "closed",
-            "outcome_pnl":    round(pnl, 2),
-            "outcome_pct":    round(pct, 2),
-            "hold_days":      hold_days,
-            "exit_price":     round(sell_price, 2),
-            "exit_date":      sell_date,
-            "vs_spy_pct":     vs_spy,
-            "is_win":         pnl > 0,
-        }
+    # ── BUY row — partial-fill aware ─────────────────────────────────────────
+    matched          = (match_info or {}).get("matched", []) or []
+    shares_remaining = (match_info or {}).get("shares_remaining", shares)
+    shares_sold      = shares - shares_remaining
 
-    # Open position — mark to market
-    if current_price is None or current_price <= 0 or entry_price <= 0:
-        return {
-            "outcome_status": "open",
-            "outcome_pnl":    0.0,
-            "outcome_pct":    0.0,
-            "hold_days":      (today - entry_date).days if entry_date else None,
-            "exit_price":     None,
-            "exit_date":      None,
-            "vs_spy_pct":     None,
-            "is_win":         None,           # can't judge until closed or priced
-        }
-    pnl = (current_price - entry_price) * shares
-    pct = (current_price - entry_price) / entry_price * 100.0
+    # Realized P&L: sum of (sell - entry) × shares_matched across all partial sells
+    realized = sum(
+        (_f(m["sell_price"]) - entry_price) * _f(m["shares"])
+        for m in matched
+    )
+
+    # Unrealized P&L on the unsold remainder
+    unrealized = 0.0
+    can_mtm    = current_price is not None and current_price > 0 and shares_remaining > 0
+    if can_mtm:
+        unrealized = (current_price - entry_price) * shares_remaining
+
+    total_pnl = realized + unrealized
+
+    # Cost basis on the FULL position (shares × entry_price) — % of capital risked
+    cost_basis = entry_price * shares
+    pct        = (total_pnl / cost_basis) * 100.0 if cost_basis > 0 else 0.0
+
+    # Status
+    if shares_remaining <= 1e-9:
+        status = "closed"
+    elif shares_sold <= 1e-9:
+        status = "open"
+    else:
+        status = "partial"
+
+    # Display fields keyed off status
+    if status == "closed" and matched:
+        total_proceeds = sum(_f(m["sell_price"]) * _f(m["shares"]) for m in matched)
+        total_matched  = sum(_f(m["shares"])                       for m in matched)
+        weighted_exit  = total_proceeds / total_matched if total_matched > 0 else entry_price
+        last_sell_date = max((m["sell_date"] for m in matched if m.get("sell_date")), default=None)
+        hold_days      = (last_sell_date - entry_date).days if (last_sell_date and entry_date) else None
+        spy_ret        = _spy_return_between(spy_history_df, entry_date, last_sell_date) \
+                         if (entry_date and last_sell_date) else None
+        vs_spy         = round(pct - spy_ret, 2) if spy_ret is not None else None
+        exit_price     = round(weighted_exit, 2)
+        exit_date      = last_sell_date
+    elif status == "partial":
+        # Most recent sell price as the "exit reference"; vs-SPY not yet meaningful
+        # because remainder is still open. Hold-days runs to today.
+        last_sell      = matched[-1]
+        exit_price     = round(_f(last_sell["sell_price"]), 2)
+        exit_date      = last_sell.get("sell_date")
+        hold_days      = (today - entry_date).days if entry_date else None
+        vs_spy         = None
+    else:    # open
+        exit_price     = round(current_price, 2) if can_mtm else None
+        exit_date      = None
+        hold_days      = (today - entry_date).days if entry_date else None
+        vs_spy         = None
+
+    # is_win only meaningful when we can actually price the outcome
+    if status == "open" and not can_mtm:
+        is_win = None
+    else:
+        is_win = total_pnl > 0
+
     return {
-        "outcome_status": "open",
-        "outcome_pnl":    round(pnl, 2),
-        "outcome_pct":    round(pct, 2),
-        "hold_days":      (today - entry_date).days if entry_date else None,
-        "exit_price":     round(current_price, 2),    # current MTM
-        "exit_date":      None,
-        "vs_spy_pct":     None,                       # not meaningful until closed
-        "is_win":         pnl > 0,
+        "outcome_status":   status,
+        "outcome_pnl":      round(total_pnl, 2),
+        "outcome_pct":      round(pct, 2),
+        "hold_days":        hold_days,
+        "exit_price":       exit_price,
+        "exit_date":        exit_date,
+        "vs_spy_pct":       vs_spy,
+        "is_win":           is_win,
+        "realized_pnl":     round(realized,   2),
+        "shares_sold":      round(shares_sold, 4),
+        "shares_remaining": round(shares_remaining, 4),
     }
 
 
@@ -228,8 +319,16 @@ def _bucket_metrics(trades_with_outcome: list[dict], bucket_filter) -> dict:
       avg_gain  — mean PnL of wins
       avg_loss  — mean PnL of losses (negative)
       net_pnl   — sum of all judged PnL
+
+    SELLs whose realized portion is already counted in a matching in-window
+    BUY's outcome are filtered out via the `_sell_dedup` flag — otherwise the
+    same economic event would be counted twice (once on the SELL row's
+    realized_pnl, once embedded in the BUY's position-level outcome).
     """
-    bucket = [t for t in trades_with_outcome if bucket_filter(t)]
+    bucket = [
+        t for t in trades_with_outcome
+        if bucket_filter(t) and not t.get("_sell_dedup", False)
+    ]
     judged = [t for t in bucket if t.get("is_win") is not None]
     wins   = [t for t in judged if t["is_win"]]
     losses = [t for t in judged if not t["is_win"]]
@@ -334,7 +433,13 @@ def build_insights(metrics: dict, trades: list[dict]) -> dict:
             )
 
     # ── Finding 3: best & worst trade highlight ──────────────────────────────
-    judged = [t for t in trades if t.get("is_win") is not None]
+    # Dedup SELLs whose realized portion is already embedded in a matching BUY
+    # so we don't surface "Worst: NFLX SELL -$91" when the BUY position-level
+    # outcome (-$391) is the more honest answer.
+    judged = [
+        t for t in trades
+        if t.get("is_win") is not None and not t.get("_sell_dedup", False)
+    ]
     if judged:
         best  = max(judged, key=lambda t: t["outcome_pnl"])
         worst = min(judged, key=lambda t: t["outcome_pnl"])
@@ -454,7 +559,9 @@ def build_trade_review(
             })
 
     # ── FIFO-pair sells against buys (for closed-buy outcomes) ───────────────
-    closing_map = _pair_sells_to_buys(rows)
+    pairing          = _pair_sells_to_buys(rows)
+    match_map        = pairing["matches"]
+    matched_sell_ids = pairing["matched_sell_ids"]
 
     # ── Build outcome + category + panic-flag per trade ──────────────────────
     spy_daily_returns = _build_spy_returns(spy_history_df)
@@ -464,7 +571,7 @@ def build_trade_review(
     for r in rows:
         outcome      = _per_trade_outcome(
             r,
-            closing_map.get(r["id"]) if "BUY" in r["action"].upper() else None,
+            match_map.get(r["id"]) if "BUY" in r["action"].upper() else None,
             current_prices.get(r["ticker"]),
             today,
             spy_history_df,
@@ -472,12 +579,19 @@ def build_trade_review(
         category     = _classify(r["followed_signal"])
         sp_ret_today = spy_daily_returns.get(r["_trade_date"])
         panic_flag   = sp_ret_today is not None and sp_ret_today <= _PANIC_THRESHOLD_PCT
+        # Mark SELL rows whose realized P&L is already captured in a matching BUY
+        # row's outcome — those are deduped out of bucket aggregates to avoid
+        # double-counting the realized portion of the same economic event.
+        sell_matched_to_in_window_buy = (
+            "SELL" in r["action"].upper() and r["id"] in matched_sell_ids
+        )
         trades_with_outcome.append({
             **r,
             **outcome,
-            "category":           category,
-            "panic_window":       panic_flag,
-            "spy_pct_on_date":    sp_ret_today,
+            "category":              category,
+            "panic_window":          panic_flag,
+            "spy_pct_on_date":       sp_ret_today,
+            "_sell_dedup":           sell_matched_to_in_window_buy,
         })
 
     # ── Sort chronologically (newest first for display) ──────────────────────
