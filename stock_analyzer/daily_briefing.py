@@ -31,6 +31,10 @@ from stock_analyzer.constants import (
     MACRO_IMMINENT_DAYS,
     RISK_PCT_PER_TRADE,
 )
+from stock_analyzer.signal_reconciliation import (
+    reconcile_signals,
+    lookup_composite,
+)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -87,24 +91,34 @@ def _trim_targets(risk_recs: list | None) -> dict[str, dict]:
 
 def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
                      held_data: dict, today: date,
-                     earnings_lookup: dict | None = None) -> dict:
+                     earnings_lookup: dict | None = None,
+                     composites: dict | None = None) -> dict:
     """
     Cross-check a buy candidate across all available signal layers.
 
     earnings_lookup (optional): {ticker: earnings_date_str}. Sourced from BOTH
        held_data and pre-fetched composites, so the earnings risk check applies
-       to non-held new picks too — the previous behaviour was to skip the check
-       silently if a candidate wasn't in held_data, which could have the app
-       recommend buying a stock the day before its earnings call.
+       to non-held new picks too.
+    composites (optional): {ticker: load_all() bundle} for pre-fetched scanner
+       picks. When present, lets the composite signal participate in the verdict
+       for non-held candidates too — without this, every new pick collapses to
+       "Verify — Run Analysis First" even when the composite already exists in
+       session_state (the TSLA-shows-as-buy-but-Stock-Analysis-says-sell case).
 
     Returns a dict with:
-      verdict        — 'confirmed' | 'mixed' | 'conflicted' | 'caution' | 'unverified'
-      verdict_label  — display string
-      verdict_color  — hex colour
-      agreed         — list of supporting signals
-      conflicts      — list of conflicting signals
-      layers_checked — int (how many independent layers evaluated)
-      is_held        — bool (composite signal available only for held positions)
+      verdict             — 'confirmed' | 'mixed' | 'conflicted' | 'caution' | 'unverified'
+      verdict_label       — display string (the legacy tier badge)
+      verdict_color       — hex colour
+      verdict_one_liner   — explicit resolution sentence (NEW — surfaces should
+                            render this prominently; the central reconciliation
+                            engine populates it consistently across all callers)
+      verdict_reconciled  — full dict from reconcile_signals() — has its own
+                            verdict tier ('go'/'verify'/'caution'/'skip')
+      agreed              — list of supporting signals
+      conflicts           — list of conflicting signals
+      layers_checked      — int
+      is_held             — bool
+      composite_available — bool (now True whenever ANY source has composite)
     """
     agreed:    list[str] = []
     conflicts: list[str] = []
@@ -121,33 +135,28 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     trend      = str(scanner_row.get("Trend", ""))
     agreed.append(f"Technical: {scan_sig} ({scan_score:.0f}/100) · {trend} · RSI {rsi:.0f}")
 
-    # ── Layer 2: Composite signal (held positions only) ───────────────────────
+    # ── Layer 2: Composite signal — held OR pre-fetched scanner pick ─────────
+    # Previously this only consulted port_df (held positions). That left every
+    # non-held candidate falling through to "Verify First" even when composite
+    # was pre-fetched into composites dict. Now we look at both sources.
+    comp_sig, comp_scr = lookup_composite(ticker, port_df, composites)
     composite_conflict   = False
-    composite_available  = False
-    if is_held:
-        pm = port_df[port_df["Ticker"] == ticker]
-        comp_sig = str(pm.iloc[0].get("Signal", "")).strip()
-        comp_scr = _f(pm.iloc[0].get("Score", 0))
+    composite_available  = comp_sig is not None or comp_scr is not None
+    if composite_available:
         buy_words       = ("Strong Buy", "Buy")
         hold_sell_words = ("Hold", "Sell", "Avoid", "Weak")
-        # Empty/missing Signal is a DATA gap — must not be coerced into agreement.
-        # Treat it as "composite not available" so the verdict falls through to
-        # "unverified" rather than "Confirmed — All Signals Aligned."
-        if not comp_sig:
-            composite_available = False
+        _sig_disp = comp_sig or "n/a"
+        _scr_disp = f"{comp_scr:.0f}/100" if comp_scr is not None else "—"
+        if comp_sig and any(w in comp_sig for w in buy_words):
+            agreed.append(f"Composite signal: {_sig_disp} ({_scr_disp})")
+        elif comp_sig and any(w in comp_sig for w in hold_sell_words):
+            conflicts.append(
+                f"Composite signal: {_sig_disp} ({_scr_disp}) — "
+                "technicals say Buy but full multi-factor analysis is more cautious"
+            )
+            composite_conflict = True
         else:
-            composite_available = True
-            if any(w in comp_sig for w in buy_words):
-                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
-            elif any(w in comp_sig for w in hold_sell_words):
-                conflicts.append(
-                    f"Composite signal: {comp_sig} ({comp_scr:.0f}/100) — "
-                    "technicals say Buy but full multi-factor analysis is more cautious"
-                )
-                composite_conflict = True
-            else:
-                agreed.append(f"Composite signal: {comp_sig} ({comp_scr:.0f}/100)")
-    # Non-held: composite signal NOT available — must not issue "Confirmed"
+            agreed.append(f"Composite signal: {_sig_disp} ({_scr_disp})")
 
     # ── Layer 3: News sentiment ───────────────────────────────────────────────
     ticker_news = [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == ticker]
@@ -250,10 +259,32 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict_label = "✅ Confirmed — All Signals Aligned"
         verdict_color = "#22c55e"
 
+    # ── Central reconciliation — populates the explicit one-liner the UI ─────
+    # surfaces render alongside the tier badge. Calling reconcile_signals here
+    # keeps the resolution copy consistent everywhere: same wording in Daily
+    # Briefing, Grow Today, Market Scanner, and Watchlist.
+    _ticker_news = [n for n in (news_items or []) if str(n.get("ticker", "")).upper() == ticker]
+    _news_compound = (
+        sum(n.get("compound", 0) for n in _ticker_news) / len(_ticker_news)
+        if _ticker_news else None
+    )
+    _reconciled = reconcile_signals(
+        ticker=ticker,
+        momentum_score=scan_score,
+        momentum_signal=scan_sig,
+        composite_score=comp_scr,
+        composite_signal=comp_sig,
+        is_held=is_held,
+        earnings_days=earn_days,
+        news_sentiment=_news_compound,
+    )
+
     return {
         "verdict":             verdict,
         "verdict_label":       verdict_label,
         "verdict_color":       verdict_color,
+        "verdict_one_liner":   _reconciled["one_liner"],
+        "verdict_reconciled":  _reconciled,
         "agreed":              agreed,
         "conflicts":           conflicts,
         "layers_checked":      layers,
@@ -475,7 +506,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 continue
 
             xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
-                                    earnings_lookup=earnings_lookup)
+                                    earnings_lookup=earnings_lookup, composites=composites)
 
             # Skip hard conflicts; on flat days skip anything but confirmed/unverified
             if xref["verdict"] == "conflicted":
@@ -774,7 +805,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
 def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     act_today: list | None = None,
                     risk_recs: list | None = None,
-                    earnings_lookup: dict | None = None) -> list[dict]:
+                    earnings_lookup: dict | None = None,
+                    composites: dict | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
@@ -814,7 +846,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 
         for _, row in top_picks.iterrows():
             ticker = str(row["Ticker"])
-            xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today)
+            xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
+                                      composites=composites)
             items.append({
                 "type":           "new_pick",
                 "icon":           "🆕",
@@ -855,7 +888,7 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "RSI": 0, "1M Momentum": 0, "Trend": sig,
             }
             xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today,
-                                    earnings_lookup=earnings_lookup)
+                                    earnings_lookup=earnings_lookup, composites=composites)
             items.append({
                 "type":           "add_winner",
                 "icon":           "➕",
@@ -1026,7 +1059,8 @@ def build_daily_briefing(
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                              act_today=act, risk_recs=risk_recs,
-                             earnings_lookup=earnings_lookup)
+                             earnings_lookup=earnings_lookup,
+                             composites=grow_composites or {})
     review = _review_list(port_df, news_items, macro_events, held_data, today)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,

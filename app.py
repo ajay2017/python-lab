@@ -73,6 +73,7 @@ from stock_analyzer import db
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
@@ -1897,8 +1898,12 @@ if page == "🏠 Home":
                 st.markdown("**🆕 New Positions to Initiate**")
             for _gp in new_picks:
                 _gx         = _gp.get("xref", {})
-                _vc         = _gx.get("verdict_color", "#22c55e")
-                _vl         = _gx.get("verdict_label", "")
+                _reconciled = _gx.get("verdict_reconciled", {}) or {}
+                # Prefer the central reconciliation engine's color/label/one-liner.
+                # Falls back to the legacy verdict_* fields if the engine didn't run.
+                _vc         = _reconciled.get("color") or _gx.get("verdict_color", "#22c55e")
+                _vl         = _reconciled.get("label") or _gx.get("verdict_label", "")
+                _v_one      = _reconciled.get("one_liner") or _gx.get("verdict_one_liner", "")
                 _sz         = _gp.get("sizing", {})
                 _conv       = _gp.get("conviction", "unverified")
                 _comp_sc    = _gp.get("composite_score")   # None if not yet fetched
@@ -1935,7 +1940,11 @@ if page == "🏠 Home":
                     f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
                     f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_conv_txt}</span>"
                     f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
+                    # Resolution one-liner — explicit verdict that reconciles
+                    # momentum vs composite vs news vs earnings into one sentence.
+                    + (f"<div style='color:{_vc};font-size:0.85em;margin-top:6px;"
+                       f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
+                    + f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                     f"💡 <em>{_gp['thesis']}</em></div>"
                     + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
                        f"📐 Suggested: {_sz.get('shares',0)} shares · "
@@ -2231,8 +2240,10 @@ if page == "🏠 Home":
         else:
             for _db_buy in _db_buys:
                 _xref       = _db_buy.get("xref", {})
-                _vcolor     = _xref.get("verdict_color", "#86efac")
-                _vlabel     = _xref.get("verdict_label", "")
+                _reconciled = _xref.get("verdict_reconciled", {}) or {}
+                _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
+                _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
+                _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
                 _vagreed    = _xref.get("agreed", [])
                 _vconflicts = _xref.get("conflicts", [])
                 _vlayers    = _xref.get("layers_checked", 0)
@@ -2251,18 +2262,16 @@ if page == "🏠 Home":
                     f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
                     f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
                     f"</div>"
+                    # Resolution one-liner — replaces the diffuse "Verify" guidance
+                    # block with the explicit reconciled verdict for this ticker.
+                    + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
+                       f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
                     + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
                        f"📊 {_db_buy.get('scanner_signal','')} · "
                        f"RSI {_db_buy.get('rsi',0):.0f} · "
                        f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
                        f"{_db_buy.get('trend','')}"
                        f"</div>" if _db_buy.get("rsi") else "")
-                    + (f"<div style='color:#93c5fd;font-size:0.8em;margin-top:4px'>"
-                       f"ℹ Composite signal not yet computed — scanner measures technical "
-                       f"momentum only. Click Analyze to run full multi-factor assessment "
-                       f"(sentiment · analyst revisions · earnings · fundamentals) before acting."
-                       f"</div>"
-                       if _xref.get("verdict") == "unverified" else "")
                     + ("".join(
                         f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
                         for c in _vconflicts
@@ -6501,6 +6510,13 @@ elif page == "🔍 Market Scanner":
 
         # Top 5 picks callout
         top5 = filtered.head(5)
+        # Composite cache populated by the Daily Briefing pre-fetch loop — if
+        # available, lets each top pick render an explicit reconciliation badge
+        # (e.g. "❌ Skip — Composite Sell contradicts Momentum 90") without
+        # making the user click into Analysis first. Scanner picks are by
+        # definition non-held, so we don't need port_df — composites cache is
+        # the only source we consult here.
+        _sc_composites = st.session_state.get("_grow_composites", {}) or {}
         if not top5.empty:
             st.subheader("🏆 Top Picks")
             cols = st.columns(min(5, len(top5)))
@@ -6510,21 +6526,40 @@ elif page == "🔍 Market Scanner":
                     # Earnings badge — shown when Signal Evidence has been loaded
                     _t5_earn_badge = ""
                     _t5_bndl = _ev_bundle_map.get(row["Ticker"], {})
+                    _t5_ed_val = None
                     if _t5_bndl.get("earnings"):
                         try:
-                            _t5_ed = (date.fromisoformat(_t5_bndl["earnings"][:10]) - _TODAY_ET).days
-                            if 0 <= _t5_ed <= 7:
+                            _t5_ed_val = (date.fromisoformat(_t5_bndl["earnings"][:10]) - _TODAY_ET).days
+                            if 0 <= _t5_ed_val <= 7:
                                 _t5_earn_badge = (
                                     f"<br><small style='color:#ef4444;font-weight:700'>"
-                                    f"⚠ Earnings in {_t5_ed}d</small>"
+                                    f"⚠ Earnings in {_t5_ed_val}d</small>"
                                 )
-                            elif 0 <= _t5_ed <= 14:
+                            elif 0 <= _t5_ed_val <= 14:
                                 _t5_earn_badge = (
                                     f"<br><small style='color:#f59e0b'>"
-                                    f"📅 Earnings in {_t5_ed}d</small>"
+                                    f"📅 Earnings in {_t5_ed_val}d</small>"
                                 )
                         except Exception:
                             pass
+
+                    # Reconciliation badge — pulls composite from Daily Briefing's
+                    # pre-fetch cache; renders the verdict label inline so the
+                    # Top Picks view never disagrees with Analysis on the same name.
+                    _sc_sig, _sc_scr = lookup_composite(row["Ticker"], None, _sc_composites)
+                    _sc_recon = reconcile_signals(
+                        ticker=row["Ticker"],
+                        momentum_score=float(row["Score"]),
+                        momentum_signal=str(row.get("Signal", "")),
+                        composite_score=_sc_scr,
+                        composite_signal=_sc_sig,
+                        earnings_days=_t5_ed_val,
+                    )
+                    _sc_badge = (
+                        f"<br><small style='color:{_sc_recon['color']};font-weight:700'>"
+                        f"{_sc_recon['label']}</small>"
+                    )
+
                     st.markdown(
                         f"<div style='padding:10px;border-radius:8px;"
                         f"border:1px solid {score_color};text-align:center'>"
@@ -6535,6 +6570,7 @@ elif page == "🔍 Market Scanner":
                         f"<small>{row['Signal']}</small><br>"
                         f"<small>1M: {row['1M Momentum']:+.1f}%</small>"
                         f"{_t5_earn_badge}"
+                        f"{_sc_badge}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
