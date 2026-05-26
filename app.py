@@ -1352,6 +1352,7 @@ if page == "🏠 Home":
         if (db.has_db()
                 and not st.session_state.get("_rec_log_done_today") == _TODAY_ET
                 and not _brief_use_lock):
+            _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
             try:
                 _rec_rows: list[dict] = []
                 for _p in (_gt_today.get("new_picks") or []):
@@ -1392,16 +1393,19 @@ if page == "🏠 Home":
                         "thesis":          "",
                     })
                 if _rec_rows:
-                    db.save_recommendations(_rec_rows)
-            except Exception:
-                # Logging must never block the Brief itself
-                pass
-            st.session_state["_rec_log_done_today"] = _TODAY_ET
+                    _rec_save_result = db.save_recommendations(_rec_rows)
+            except Exception as _rec_save_err:
+                _rec_save_result = {"attempted": 0, "saved": 0,
+                                    "error": str(_rec_save_err)[:200]}
+            st.session_state["_rec_log_done_today"]    = _TODAY_ET
+            st.session_state["_rec_log_save_result"]   = _rec_save_result
 
         # Decorate each pick with its first-seen surfaced_at so the card
         # render can show "Recommended at HH:MM ET" without an extra round-trip
         # per card. Single fetch for today; build (ticker, rec_type) → ts map.
         if db.has_db() and not _brief_use_lock:
+            _rec_load_count = 0
+            _rec_load_error: str | None = None
             try:
                 _rec_today_df = db.load_recommendations(start_date=_TODAY_ET, end_date=_TODAY_ET)
                 _rec_first_seen: dict[tuple[str, str], str] = {}
@@ -1412,6 +1416,7 @@ if page == "🏠 Home":
                         _ts = _r.get("surfaced_at")
                         if _ts is not None and _key not in _rec_first_seen:
                             _rec_first_seen[_key] = str(_ts)
+                _rec_load_count = len(_rec_today_df)
                 # Attach to each pick dict for downstream render to read
                 for _p in (_gt_today.get("new_picks") or []):
                     _p["_first_seen_at"] = _rec_first_seen.get(
@@ -1425,8 +1430,12 @@ if page == "🏠 Home":
                     _p["_first_seen_at"] = _rec_first_seen.get(
                         (str(_p.get("ticker", "")).upper(), "buy_candidate")
                     )
-            except Exception:
-                pass
+            except Exception as _rec_load_err:
+                _rec_load_error = str(_rec_load_err)[:200]
+            st.session_state["_rec_log_load_state"] = {
+                "rows_today": _rec_load_count,
+                "error":      _rec_load_error,
+            }
 
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
@@ -2132,6 +2141,53 @@ if page == "🏠 Home":
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # ── 🛠️ Recommendations log diagnostic (temporary, while we verify) ────
+        # Surfaces the actual state of the save/load round-trip so we can
+        # diagnose why the first-surfaced chip isn't appearing. Removable
+        # once the feature is confirmed working end-to-end.
+        _rec_save_state = st.session_state.get("_rec_log_save_result") or {}
+        _rec_load_state = st.session_state.get("_rec_log_load_state") or {}
+        _rec_save_err   = _rec_save_state.get("error")
+        _rec_load_err   = _rec_load_state.get("error")
+        _rec_attempted  = _rec_save_state.get("attempted", 0)
+        _rec_saved      = _rec_save_state.get("saved",     0)
+        _rec_rows_today = _rec_load_state.get("rows_today", 0)
+        with st.expander("🛠️ Recommendations log status (debug)", expanded=False):
+            st.caption(
+                f"**Save** — attempted: `{_rec_attempted}`  · saved: `{_rec_saved}`  · "
+                f"error: `{_rec_save_err or 'none'}`"
+            )
+            st.caption(
+                f"**Load** — rows for today: `{_rec_rows_today}`  · "
+                f"error: `{_rec_load_err or 'none'}`"
+            )
+            if _rec_save_err:
+                st.warning(
+                    "Save failed — the chip won't appear until this is resolved. "
+                    "Most common causes: the `recommendations` table doesn't exist "
+                    "(re-run the SQL migration), or RLS policy isn't service_role "
+                    "(check the policy in Supabase dashboard)."
+                )
+            elif _rec_attempted > 0 and _rec_saved == 0:
+                st.warning(
+                    "Saved 0 rows despite attempting some — possible silent failure "
+                    "on the supabase-py client. Check Streamlit Cloud logs."
+                )
+            elif _rec_load_err:
+                st.warning(
+                    f"Load failed — table reachable but query errored: {_rec_load_err}"
+                )
+            elif _rec_attempted == 0 and _rec_rows_today == 0:
+                st.caption(
+                    "_No picks surfaced yet (or recommendation log already wrote earlier "
+                    "this session and there were no rows to capture)._"
+                )
+            else:
+                st.success(
+                    f"Healthy — saved {_rec_saved}, table has {_rec_rows_today} row(s) "
+                    "for today. Chips should be visible on pick cards below."
+                )
 
         # ── Refresh Signals ───────────────────────────────────────────────────
         _rb_col, _ri_col = st.columns([1, 4])

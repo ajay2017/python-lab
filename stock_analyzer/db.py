@@ -407,21 +407,24 @@ _REC_COLS = ["id", "ticker", "rec_date", "rec_type", "surfaced_at",
              "verdict", "thesis"]
 
 
-def save_recommendations(records: list[dict]) -> int:
+def save_recommendations(records: list[dict]) -> dict:
     """
-    Persist new recommendations. Returns the count of rows successfully sent
-    to the DB (which may include rows that were silently dropped by the unique
-    constraint — we use ignore_duplicates so the same ticker re-surfacing the
-    same day is a no-op rather than an error).
+    Persist new recommendations.
 
-    Each record dict needs at minimum: ticker, rec_date (date or ISO str),
-    rec_type. Optional: composite_score, momentum_score, sector, conviction,
-    verdict, thesis. The DB defaults surfaced_at to now() — don't set it
-    client-side so the first-seen timestamp is server-authoritative.
+    Returns a diagnostic dict:
+      {"attempted": N, "saved": M, "error": str | None}
+
+    `attempted` counts records that passed normalization (had a ticker, date,
+    and rec_type). `saved` is len(attempted) on success — supabase-py with
+    ignore_duplicates=True doesn't tell us how many rows were actual inserts
+    vs ignored, but a non-zero number here means the request didn't error
+    out. `error` is a short string on failure (None on success).
+
+    The DB defaults `surfaced_at` to now() — don't set it client-side so the
+    first-seen timestamp is server-authoritative.
     """
     if not records or not has_db():
-        return 0
-    # Normalize: drop keys we don't write, coerce date to ISO, drop None tickers
+        return {"attempted": 0, "saved": 0, "error": None}
     payload = []
     for r in records:
         tk = str(r.get("ticker", "")).strip().upper()
@@ -442,25 +445,31 @@ def save_recommendations(records: list[dict]) -> int:
             "thesis":          (str(r.get("thesis") or "")[:600]) or None,
         })
     if not payload:
-        return 0
+        return {"attempted": 0, "saved": 0, "error": None}
+    # Try the modern upsert path first. Some older supabase-py versions don't
+    # accept ignore_duplicates as a kwarg; if that's the case, fall back to a
+    # plain insert and rely on the unique constraint to reject dups.
     try:
-        # ignore_duplicates=True → INSERT...ON CONFLICT DO NOTHING semantics.
-        # First-seen surfaced_at wins; subsequent surfaces in the same day
-        # leave the original row untouched.
         _client().table("recommendations").upsert(
             payload,
             on_conflict="ticker,rec_date,rec_type",
             ignore_duplicates=True,
         ).execute()
-        return len(payload)
+        return {"attempted": len(payload), "saved": len(payload), "error": None}
+    except TypeError:
+        pass  # ignore_duplicates kwarg unsupported on this version
     except Exception as e:
-        # Don't let recommendation logging break the Brief. Most common
-        # failure: table doesn't exist yet (user hasn't run the migration);
-        # surface a one-time hint via the api_health cache rather than a
-        # red error block.
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=f"rec_log: {str(e)[:100]}")
-        return 0
+        _ah.record("supabase", "error", msg=f"rec_log_upsert: {str(e)[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": str(e)[:200]}
+    # Fallback path — older client
+    try:
+        _client().table("recommendations").insert(payload).execute()
+        return {"attempted": len(payload), "saved": len(payload), "error": None}
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=f"rec_log_insert: {str(e)[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": str(e)[:200]}
 
 
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
