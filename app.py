@@ -1235,6 +1235,10 @@ if page == "🏠 Home":
 
     # Auto-fetch composite scores for top scanner picks so Grow Today conviction
     # labels are accurate without requiring a manual Refresh Signals click.
+    # Pool size matches _grow_today's full candidate window (max_picks × 4 = 12
+    # on bull days) so every candidate the Brief evaluates has a composite —
+    # otherwise picks beyond slot 5 fall back to "Verify — Run Analysis First"
+    # even when the user just wants a Skip/Go verdict on the Brief itself.
     # load_all() is cached (30-min TTL) so this is instant if picks were recently
     # analyzed; only the first fetch per ticker per session takes network time.
     _sr_for_comp = st.session_state.get("scanner_results")
@@ -1242,7 +1246,7 @@ if page == "🏠 Home":
         _existing_comp = st.session_state.get("_grow_composites", {})
         _top_for_comp  = (
             _sr_for_comp[~_sr_for_comp["Ticker"].isin(set(held_tickers))]
-            .head(5)["Ticker"].tolist()
+            .head(12)["Ticker"].tolist()
         )
         _missing_comp  = [t for t in _top_for_comp if t not in _existing_comp]
         # Track tickers where the composite fetch failed so the Grow Today UI
@@ -1823,11 +1827,13 @@ if page == "🏠 Home":
                 _fresh_results = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
             if not _fresh_results.empty:
                 st.session_state.scanner_results = _fresh_results
-                # Pre-fetch full composite analysis for top 5 non-held scanner picks so
-                # Grow Today can show composite score and gate the conviction label accurately.
+                # Pre-fetch full composite analysis for top 12 non-held scanner picks.
+                # Pool size matches _grow_today's candidate window (max_picks × 4)
+                # so every candidate the Brief considers gets a composite verdict
+                # rather than falling back to "Verify — Run Analysis First."
                 _top_candidates = _fresh_results[
                     ~_fresh_results["Ticker"].isin(set(held_tickers))
-                ].head(5)["Ticker"].tolist()
+                ].head(12)["Ticker"].tolist()
                 _grow_composites: dict = {}
                 if _top_candidates:
                     with st.spinner(
@@ -1994,6 +2000,7 @@ if page == "🏠 Home":
             blocked_adds  = grow.get("risk_blocked_adds", [])
             conc_blocked  = grow.get("concentration_blocked_adds", [])
             macro_blocked = grow.get("macro_blocked_picks", [])
+            comp_skipped  = grow.get("composite_skipped", [])
 
             _g_label = (
                 "📈 Grow Today"      if tone == "bull" else
@@ -2037,6 +2044,36 @@ if page == "🏠 Home":
                     f"{MACRO_IMMINENT_DAYS} days. Opening fresh positions into a known binary "
                     "catalyst is the institutional anti-pattern this gate blocks. "
                     "Revisit after the event resolves and the dust settles."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Composite-conflict suppression — picks whose momentum was hot but
+            # whose full composite (Technical + Fundamental + Sentiment) is below
+            # the Buy threshold. Surfaces what was considered AND rejected so the
+            # user makes the decision on the Brief itself (no Analysis click needed).
+            if comp_skipped:
+                _cs_rows = "".join(
+                    f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
+                    f"• <b>{c['ticker']}</b> ({c.get('sector','—')}) — "
+                    f"Momentum <b>{c.get('momentum_score',0):.0f}/100</b> "
+                    f"but composite <b>{c.get('composite_label','Hold')} "
+                    f"{c.get('composite_score',0):.1f}/100</b> "
+                    "→ skip (composite contradicts momentum)."
+                    "</div>"
+                    for c in comp_skipped[:5]
+                )
+                st.markdown(
+                    "<div style='background:#3f1d1d;border:1px solid #ef4444;"
+                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                    "<div style='color:#fca5a5;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    f"⛔ Screened but Filtered Out ({len(comp_skipped)}) — Composite Says No</div>"
+                    + _cs_rows
+                    + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "Momentum (a single-factor breakout signal) caught these names, "
+                    "but the full composite — Technical + Fundamental + Sentiment — "
+                    "is below the Buy threshold (65). Decision: skip until composite "
+                    "recovers. Track on the Watchlist for a re-look."
                     "</div></div>",
                     unsafe_allow_html=True,
                 )

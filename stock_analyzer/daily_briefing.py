@@ -449,6 +449,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "risk_blocked_adds":          [],
             "concentration_blocked_adds": [],
             "macro_blocked_picks":        [],
+            "composite_skipped":          [],
             "deploy_note":                None,
             "risk_banner":                risk_banner,
         }
@@ -477,6 +478,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _confirmed_picks: list[dict] = []
         _unverified_picks: list[dict] = []
         macro_blocked_picks: list[dict] = []
+        composite_skipped:  list[dict] = []
 
         for _, row in candidates.iterrows():
             ticker   = str(row["Ticker"])
@@ -528,7 +530,19 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             # Scanner score measures momentum only — composite (technical + fundamental
             # + sentiment) is the authoritative signal. A 100/100 momentum score with
             # a 63 composite is not a high-conviction entry.
+            #
+            # Record the rejection so the Brief can render a visible "Filtered Out"
+            # bucket — silent drops leave the user wondering why a hot momentum
+            # ticker isn't being recommended. This is the TSLA case: Momentum 90
+            # but composite 48.8 Hold.
             if _composite_score is not None and _composite_score < 65:
+                composite_skipped.append({
+                    "ticker":          ticker,
+                    "sector":          sector,
+                    "momentum_score":  _f(row.get("Score", 0)),
+                    "composite_score": _composite_score,
+                    "composite_label": _composite_label or "Hold",
+                })
                 continue
 
             # Conviction tier: drives the label shown on the card
@@ -687,6 +701,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "risk_blocked_adds":          risk_blocked_adds,
         "concentration_blocked_adds": concentration_blocked_adds,
         "macro_blocked_picks":        macro_blocked_picks,
+        "composite_skipped":          composite_skipped,
         "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
