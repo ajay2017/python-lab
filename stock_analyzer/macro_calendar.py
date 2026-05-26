@@ -439,6 +439,41 @@ def _apply_transform(vals: list[float], transform: str, unit: str) -> str | None
     return None
 
 
+def _fred_series_last_updated(series_id: str, api_key: str | None) -> _date | None:
+    """
+    Return the date FRED last updated this series (proxy for the actual release
+    date), or None if unavailable. Used by the drift-detection pass to flag
+    when a static _STATIC date is out-of-sync with the real release schedule.
+    """
+    if not api_key:
+        return None
+    from stock_analyzer import api_health as _ah
+    import requests as _req
+    api_key = api_key.strip()
+    params = {"series_id": series_id, "api_key": api_key, "file_type": "json"}
+    try:
+        resp = _req.get(
+            "https://api.stlouisfed.org/fred/series",
+            params=params, timeout=10,
+        )
+        if resp.status_code != 200:
+            _ah.record("fred", "error",
+                       f"series meta {series_id}: HTTP {resp.status_code}")
+            return None
+        data = resp.json().get("seriess", [])
+        if not data:
+            return None
+        lu = (data[0].get("last_updated") or "").strip()
+        if not lu:
+            return None
+        # Format: "YYYY-MM-DD HH:MM:SS-HH"
+        return _date.fromisoformat(lu.split(" ")[0])
+    except Exception as exc:
+        _ah.record("fred", "error",
+                   f"series meta {series_id}: {str(exc)[:120]}")
+        return None
+
+
 def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
     """
     Enrich static event dicts in-place with FRED actual/previous values.
@@ -447,10 +482,19 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
     For future events:  previous = last released value, actual = None
     For past events:    actual   = most recent released value,
                         previous = prior period value
+
+    Also populates three drift/release-tracking fields on every FRED-mapped event:
+      released_at  : date FRED last updated the series (release proxy), or None
+      released     : True if a past event has a populated actual value
+      drift_days   : ev["date"] - released_at; positive means the static date
+                     trails the actual release (e.g. static May 13 but FRED
+                     released May 12 → drift_days = 1). Set only when both
+                     dates are known and the event is past or today.
     """
     from stock_analyzer import api_health as _ah
 
     fetched: dict[str, list[float]] = {}
+    fetched_meta: dict[str, _date | None] = {}
 
     for ev in events:
         name = ev.get("event", "")
@@ -491,6 +535,22 @@ def _fetch_fred(fred_key: str | None, events: list[dict], today: _date) -> None:
             ev["previous"] = ev["previous"] or (f"{label}: {previous_val}" if previous_val else None)
 
         ev["source"] = "static+fred" if ev.get("source") == "static" else ev.get("source", "static+fred")
+
+        # ── Drift / release tracking ─────────────────────────────────────────
+        # One series-meta fetch per unique series — cached in fetched_meta so a
+        # CPI calendar entry and a CPI macro signal don't both pay for it.
+        if series not in fetched_meta:
+            fetched_meta[series] = _fred_series_last_updated(series, fred_key)
+        last_updated = fetched_meta[series]
+        if last_updated:
+            ev["released_at"] = last_updated.isoformat()
+            if ev["date"] <= today:
+                # Drift sign convention: positive = static date trails the real
+                # release (e.g. static = May 13, release = May 12 → +1).
+                ev["drift_days"] = (ev["date"] - last_updated).days
+        # released flag — True iff a past event has a FRED-populated actual.
+        # Future events stay False (release hasn't happened yet).
+        ev["released"] = bool(ev["date"] <= today and ev.get("actual"))
 
 
 def build_macro_calendar(
@@ -544,6 +604,11 @@ def build_macro_calendar(
             "estimate":         None,
             "actual":           None,
             "source":           "static",
+            # Release/drift fields populated by _fetch_fred when a FRED series
+            # is mapped for this event; non-FRED events keep these defaults.
+            "released":         False,
+            "released_at":      None,
+            "drift_days":       None,
         })
 
     # ── FRED live layer ───────────────────────────────────────────────────────

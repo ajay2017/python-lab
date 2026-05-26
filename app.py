@@ -835,6 +835,12 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     _info  = bundle.get("info", {})
     name   = _info.get("shortName") or _info.get("longName") or ticker
     sector = _info.get("sector", "")
+    # Company Overview fields — sourced from yfinance .info, exposed so the
+    # Analysis page can render a "Company Overview" block before the Trade Plan
+    # without a second network call.
+    industry          = _info.get("industry", "")
+    market_cap        = _info.get("marketCap")
+    business_summary  = _info.get("longBusinessSummary", "")
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
         "f_score": f_score, "f_signals": f_signals,
@@ -847,6 +853,8 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
         "revisions": bundle.get("revisions", {}),
         "name": name, "sector": sector,
+        "industry": industry, "market_cap": market_cap,
+        "business_summary": business_summary,
     }
 
 # ── Sector ETF multi-period returns (for heatmap) ────────────────────────────
@@ -1432,6 +1440,30 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_daily:
         from datetime import datetime as _dt
+
+        # ── Refresh macro data ────────────────────────────────────────────────
+        # Bypasses the per-day _macro_cal_{date} session cache so the user can
+        # force a fresh FRED pull mid-day (e.g. right after CPI prints when the
+        # static date and the actual release time disagree). Cache otherwise
+        # only invalidates at midnight ET.
+        _rmd_c1, _rmd_c2 = st.columns([1, 5])
+        with _rmd_c1:
+            if st.button(
+                "🔄 Refresh macro",
+                key="_refresh_macro_home",
+                help="Re-fetch FRED actuals + release dates. Use mid-day when the calendar looks stale.",
+                use_container_width=True,
+            ):
+                _mc_clear_key = f"_macro_cal_{_TODAY_ET}"
+                if _mc_clear_key in st.session_state:
+                    del st.session_state[_mc_clear_key]
+                st.rerun()
+        with _rmd_c2:
+            _macro_src = (
+                "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
+                else "Static only (add FRED key in Economic Calendar)"
+            )
+            st.caption(f"Macro data source: **{_macro_src}** · cache invalidates at midnight ET.")
 
         # Build act_today lookup once — used by pre-market movers and the main sections below
         _act_today_map: dict = {
@@ -7535,6 +7567,58 @@ elif page == "📈 Analysis":
                 f"[🔍 News](https://finance.yahoo.com/quote/{ticker}/news/)"
             )
 
+            # ── Company Overview ──────────────────────────────────────────
+            # Small block right before the Trade Plan: sector / industry /
+            # market cap / 1-line business summary. Sourced from yfinance .info
+            # (already in the load_all() cache, no extra network call).
+            _co_name     = r.get("name", "") or ticker
+            _co_sector   = r.get("sector", "") or "—"
+            _co_industry = r.get("industry", "") or "—"
+            _co_mcap     = r.get("market_cap")
+            _co_summary  = (r.get("business_summary") or "").strip()
+            # Format market cap as $X.YT / $XYZB / $XYZM
+            def _fmt_mcap(v):
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    return "—"
+                if v >= 1e12: return f"${v/1e12:.2f}T"
+                if v >= 1e9:  return f"${v/1e9:.1f}B"
+                if v >= 1e6:  return f"${v/1e6:.0f}M"
+                return f"${v:,.0f}"
+            _co_mcap_str = _fmt_mcap(_co_mcap) if _co_mcap is not None else "—"
+            # Trim summary to first sentence(s) up to ~280 chars so the block
+            # stays compact — full summary is one click away on Yahoo/Finviz.
+            if _co_summary:
+                _sentences = _co_summary.replace("\n", " ").split(". ")
+                _co_one_liner = _sentences[0]
+                if len(_co_one_liner) < 200 and len(_sentences) > 1:
+                    _co_one_liner = ". ".join(_sentences[:2])
+                if not _co_one_liner.endswith("."):
+                    _co_one_liner += "."
+                _co_one_liner = _co_one_liner[:320]
+            else:
+                _co_one_liner = "Business description unavailable."
+
+            st.markdown(
+                f"<div style='background:#111827;border:1px solid #374151;"
+                f"border-radius:8px;padding:10px 14px;margin:8px 0 12px'>"
+                f"<div style='display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;"
+                f"margin-bottom:6px'>"
+                f"<span style='color:#9ca3af;font-size:0.72em;font-weight:700;"
+                f"letter-spacing:0.08em;text-transform:uppercase'>"
+                f"🏢 Company Overview</span>"
+                f"<span style='color:#f9fafb;font-weight:700'>{_co_name}</span>"
+                f"<span style='color:#9ca3af;font-size:0.82em'>{_co_sector} · {_co_industry}</span>"
+                f"<span style='color:#9ca3af;font-size:0.82em'>· Market cap "
+                f"<b style='color:#e5e7eb'>{_co_mcap_str}</b></span>"
+                f"</div>"
+                f"<div style='color:#d1d5db;font-size:0.85em;line-height:1.5'>"
+                f"{_co_one_liner}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
             # Signal-aware tab label and portfolio lookup
             _sa_is_sell = rec["label"] in ("Sell", "Strong Sell")
             _sa_is_hold = rec["label"] == "Hold"
@@ -9547,6 +9631,45 @@ elif page == "📅 Economic Calendar":
             "Growth": "📈", "Consumer": "🛒", "Activity": "🏭", "Other": "📋",
         }
 
+        # Release-status / drift badge helper — surfaces FRED's
+        # last_updated date vs the static schedule so the user sees
+        # immediately when the calendar is out of sync with FRED.
+        def _release_status_html(_ev: dict) -> str:
+            _badges = []
+            _drift  = _ev.get("drift_days")
+            _rel_at = _ev.get("released_at")
+            # ⚠ Drift: static date trails FRED's last_updated by 1+ days
+            if isinstance(_drift, int) and _drift >= 1:
+                _rel_disp = ""
+                if _rel_at:
+                    try:
+                        _rel_disp = date.fromisoformat(_rel_at).strftime("%b %d").replace(" 0", " ")
+                    except Exception:
+                        _rel_disp = str(_rel_at)
+                _badges.append(
+                    f"<span style='background:#422006;border:1px solid #f59e0b;"
+                    f"color:#fbbf24;padding:2px 8px;border-radius:10px;"
+                    f"font-size:0.72em;font-weight:700'>"
+                    f"⚠ Drift {_drift}d — FRED released {_rel_disp}</span>"
+                )
+            # ⏳ Awaiting: past event but no actual yet — FRED hasn't received it
+            if _ev["date"] <= _TODAY_ET and not _ev.get("released") and not _ev.get("actual"):
+                _badges.append(
+                    f"<span style='background:#1f2937;border:1px solid #6b7280;"
+                    f"color:#d1d5db;padding:2px 8px;border-radius:10px;"
+                    f"font-size:0.72em;font-weight:700'>"
+                    f"⏳ Awaiting FRED update</span>"
+                )
+            # ✓ Released: past event with FRED actual populated
+            elif _ev.get("released"):
+                _badges.append(
+                    f"<span style='background:#052e16;border:1px solid #22c55e;"
+                    f"color:#86efac;padding:2px 8px;border-radius:10px;"
+                    f"font-size:0.72em;font-weight:700'>"
+                    f"✓ Released</span>"
+                )
+            return " ".join(_badges)
+
         # Split filtered events into upcoming and past
         _ec_upcoming = [e for e in _ec_filtered if e["date"] >= _TODAY_ET]
         _ec_past_rev = sorted(
@@ -9606,6 +9729,12 @@ elif page == "📅 Economic Calendar":
                             st.caption(_ev["description"])
                         if _data_row:
                             st.markdown(_data_row)
+                        _rel_badges = _release_status_html(_ev)
+                        if _rel_badges:
+                            st.markdown(
+                                f"<div style='margin:4px 0 6px'>{_rel_badges}</div>",
+                                unsafe_allow_html=True,
+                            )
                         st.markdown(
                             f"**Holdings at risk:** {_tix_str} "
                             f"<span style='float:right;background:{_imp_bg};"
@@ -9664,6 +9793,12 @@ elif page == "📅 Economic Calendar":
                             st.caption(_ev["description"])
                         if _data_row:
                             st.markdown(_data_row)
+                        _rel_badges = _release_status_html(_ev)
+                        if _rel_badges:
+                            st.markdown(
+                                f"<div style='margin:4px 0 6px'>{_rel_badges}</div>",
+                                unsafe_allow_html=True,
+                            )
                         st.markdown(
                             f"**Holdings at risk:** {_tix_str} "
                             f"<span style='float:right;background:{_imp_bg};"
