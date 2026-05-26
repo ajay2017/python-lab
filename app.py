@@ -5493,7 +5493,7 @@ if page == "🏠 Home":
                                 "trigger": "RECOMMENDATION",
                                 "notes":   f"Based on advisor recommendation: {act['title']}",
                             }
-                            st.session_state.nav_page = "📒 Trade Journal"
+                            st.session_state["_pending_page"] = "📒 Trade Journal"
                             st.rerun()
                     with note_col:
                         st.caption(
@@ -9023,14 +9023,23 @@ elif page == "📋 Watchlist":
     with st.sidebar:
         st.divider()
         st.markdown("**Manage Watchlist**")
-        _wl_add = st.text_input("Add ticker", "", key="_wl_add_input",
-                                placeholder="e.g. NVDA")
-        if _wl_add:
-            _t = _wl_add.strip().upper()
-            if _t and _t not in st.session_state.watchlist:
+        # Use a form so the input clears on submit (text_input outside a form
+        # keeps its value across reruns, which made the previous version
+        # silently no-op every keystroke after the first add — confusing UX).
+        with st.form("_wl_add_form", clear_on_submit=True):
+            _wl_add = st.text_input("Add ticker", "",
+                                    placeholder="e.g. NVDA")
+            _wl_submit = st.form_submit_button("Add")
+        if _wl_submit:
+            _t = (_wl_add or "").strip().upper()
+            if not _t:
+                st.warning("Enter a ticker symbol to add.")
+            elif _t in st.session_state.watchlist:
+                st.warning(f"**{_t}** is already on the watchlist.")
+            else:
                 st.session_state.watchlist.append(_t)
                 db.save_watchlist(st.session_state.watchlist)
-                st.success(f"Added {_t}")
+                st.success(f"Added **{_t}**")
                 st.rerun()
         if st.session_state.watchlist:
             _wl_remove = st.multiselect(
@@ -10405,19 +10414,25 @@ elif page == "📒 Trade Journal":
                       "cost_basis", "realized_pnl", "trigger_type", "notes"]
                      if c in display_df.columns]
 
+        # Only the Delete? column is interactive — every other column is
+        # disabled so the table can't be silently edited. Streamlit's
+        # data_editor returns the edited DataFrame, but code only reads the
+        # Delete? column; making the rest editable used to look possible to
+        # the user but the edits never persisted. Mark them read-only to
+        # match actual behaviour.
         edited_trades = st.data_editor(
             display_df[show_cols],
             column_config={
                 "Delete?":      st.column_config.CheckboxColumn("Delete?", default=False),
-                "traded_at":    st.column_config.TextColumn("Date / Time"),
-                "ticker":       st.column_config.TextColumn("Ticker"),
-                "action":       st.column_config.TextColumn("Action"),
-                "shares":       st.column_config.NumberColumn("Shares", format="%.0f"),
-                "price":        st.column_config.NumberColumn("Price ($)", format="$%.2f"),
-                "cost_basis":   st.column_config.NumberColumn("Cost Basis ($)", format="$%.2f"),
-                "realized_pnl": st.column_config.NumberColumn("Realized P&L ($)", format="$%+,.2f"),
-                "trigger_type": st.column_config.TextColumn("Reason"),
-                "notes":        st.column_config.TextColumn("Notes"),
+                "traded_at":    st.column_config.TextColumn("Date / Time",     disabled=True),
+                "ticker":       st.column_config.TextColumn("Ticker",          disabled=True),
+                "action":       st.column_config.TextColumn("Action",          disabled=True),
+                "shares":       st.column_config.NumberColumn("Shares",            format="%.0f",    disabled=True),
+                "price":        st.column_config.NumberColumn("Price ($)",         format="$%.2f",   disabled=True),
+                "cost_basis":   st.column_config.NumberColumn("Cost Basis ($)",    format="$%.2f",   disabled=True),
+                "realized_pnl": st.column_config.NumberColumn("Realized P&L ($)",  format="$%+,.2f", disabled=True),
+                "trigger_type": st.column_config.TextColumn("Reason",           disabled=True),
+                "notes":        st.column_config.TextColumn("Notes",            disabled=True),
             },
             hide_index=True,
             use_container_width=True,
