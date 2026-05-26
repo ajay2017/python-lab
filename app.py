@@ -10272,8 +10272,98 @@ elif page == "📒 Trade Journal":
                     st.success(f"✅ Deleted {n} trade{'s' if n > 1 else ''}.")
                 else:
                     st.warning(f"Deleted {n - failed} of {n}. {failed} failed — check logs.")
+
+                # ── Auto-rebuild holdings from the remaining trade history ─────
+                # When a trade is deleted, holdings_df has already absorbed its
+                # incremental effect at save time but the deletion doesn't roll
+                # that back. Replaying all remaining trades gives the truthful
+                # state and corrects any realized_pnl that was computed from the
+                # corrupted basis (the NFLX +$177-when-it-should-have-been-
+                # negative class of bug).
+                fresh_trades = db.load_trades()
+                recalc = db.recalculate_from_trades(fresh_trades)
+                db.save_holdings(recalc["holdings_df"])
+                st.session_state.holdings_df = recalc["holdings_df"]
+                _n_corrected = 0
+                for _tid, _c in recalc["realized_pnl_corrections"].items():
+                    if db.update_trade_realized_pnl(
+                        _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
+                    ):
+                        _n_corrected += 1
+                if _n_corrected:
+                    st.info(
+                        f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
+                        f"Also corrected realized_pnl on **{_n_corrected}** SELL "
+                        "row(s) whose stored figures were computed from a stale "
+                        "cost basis."
+                    )
+                if recalc["warnings"]:
+                    for _w in recalc["warnings"][:3]:
+                        st.warning(f"⚠ {_w}")
                 st.session_state.trades_df = db.load_trades()
                 st.rerun()
+
+        # ── 🔄 Manual rebuild — fixes any pre-existing corrupted state ─────
+        # Auto-rebuild on delete protects new workflows, but trades already
+        # saved with wrong realized_pnl (because holdings_df was stale at
+        # save-time) need a one-shot recalc against the full trade history.
+        with st.expander(
+            "🔄 Rebuild holdings & realized P&L from trade history",
+            expanded=False,
+        ):
+            st.caption(
+                "Replays every trade chronologically to derive truthful holdings "
+                "(shares + weighted avg cost) and recompute the realized P&L on "
+                "every SELL. Use this once after fixing bad trade data — or any "
+                "time the holdings table looks out of sync with the trade log."
+            )
+            if st.button("Run rebuild now", key="_tj_rebuild_holdings_btn"):
+                fresh = db.load_trades()
+                if fresh.empty:
+                    st.warning("No trades to replay.")
+                else:
+                    res = db.recalculate_from_trades(fresh)
+                    # Preview the corrections so the user knows what's about to change
+                    new_h     = res["holdings_df"]
+                    corrs     = res["realized_pnl_corrections"]
+                    warns     = res["warnings"]
+                    st.markdown("**Recomputed holdings**")
+                    st.dataframe(new_h, hide_index=True, use_container_width=True)
+                    if corrs:
+                        st.markdown(f"**Realized-P&L corrections to apply ({len(corrs)})**")
+                        _corr_rows = []
+                        for _tid, _c in corrs.items():
+                            _match = fresh[fresh["id"] == _tid]
+                            _ticker = str(_match.iloc[0]["ticker"]) if not _match.empty else "?"
+                            _corr_rows.append({
+                                "Trade ID":      _tid,
+                                "Ticker":        _ticker,
+                                "Stored P&L":    f"${(_c['stored_pnl'] or 0):+,.2f}",
+                                "Corrected P&L": f"${_c['realized_pnl']:+,.2f}",
+                                "Corrected basis": f"${_c['cost_basis']:.2f}",
+                            })
+                        st.dataframe(pd.DataFrame(_corr_rows), hide_index=True,
+                                     use_container_width=True)
+                    else:
+                        st.caption("No realized_pnl corrections needed — all SELL rows are accurate.")
+                    if warns:
+                        for _w in warns[:5]:
+                            st.warning(f"⚠ {_w}")
+                    # Apply
+                    if db.save_holdings(new_h):
+                        st.session_state.holdings_df = new_h
+                        _applied = 0
+                        for _tid, _c in corrs.items():
+                            if db.update_trade_realized_pnl(
+                                _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
+                            ):
+                                _applied += 1
+                        st.success(
+                            f"✅ Holdings saved · {_applied}/{len(corrs)} realized-P&L "
+                            "corrections applied. Refresh the Evening Debrief and "
+                            "Trade Review to see the corrected numbers."
+                        )
+                        st.session_state.trades_df = db.load_trades()
 
     if not db.has_db():
         st.info(

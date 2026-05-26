@@ -234,6 +234,138 @@ def delete_trade(trade_id: int) -> bool:
         return False
 
 
+def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
+                               cost_basis: float | None = None) -> bool:
+    """
+    Update an existing SELL trade's realized_pnl (and optionally cost_basis).
+    Used by recalculate_from_trades() to correct stale figures stored on rows
+    that were saved when holdings_df was in a corrupted state.
+    """
+    if not has_db():
+        return False
+    try:
+        update_record = {"realized_pnl": float(realized_pnl)}
+        if cost_basis is not None:
+            update_record["cost_basis"] = float(cost_basis)
+        _client().table("trades").update(update_record).eq("id", int(trade_id)).execute()
+        return True
+    except Exception as e:
+        st.error(f"⛔ Failed to update trade {trade_id}: {e}")
+        return False
+
+
+def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
+    """
+    Replay every trade chronologically to derive the truthful holdings table
+    plus the correct realized_pnl for each SELL row. Use this whenever the
+    trades table has been modified in a way that could put holdings out of
+    sync — most commonly after deleting trades, since holdings updates are
+    incremental and don't auto-revert on delete.
+
+    The bug this catches: bad SELL rows reduce holdings_df.Shares at save
+    time. Deleting those SELLs removes the trade row but leaves Shares in
+    the corrupted state — and the next legitimate SELL then auto-fills its
+    cost_basis from the wrong avg_cost, producing wrong realized_pnl (e.g.
+    NFLX +$177 when it should have been negative).
+
+    Returns:
+      {
+        "holdings_df":             pd.DataFrame with columns
+                                    [Ticker, Shares, Avg Cost ($)],
+        "realized_pnl_corrections": dict mapping trade_id → corrected
+                                    realized_pnl for SELL rows whose stored
+                                    value differs from the replay result,
+        "warnings":                 list[str] — SELLs encountered with no
+                                    prior BUY in the trades table (history
+                                    gap, can't compute correct cost basis),
+      }
+    """
+    holdings: dict[str, dict] = {}                # ticker → {shares, avg_cost}
+    corrections: dict[int, dict] = {}             # trade_id → {realized_pnl, cost_basis}
+    warnings: list[str] = []
+
+    if trades_df is None or trades_df.empty:
+        return {
+            "holdings_df":              pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost ($)"]),
+            "realized_pnl_corrections": {},
+            "warnings":                 [],
+        }
+
+    # Chronological replay — oldest first so cost basis builds up correctly.
+    df = trades_df.copy()
+    df["_sort_ts"] = pd.to_datetime(df["traded_at"], errors="coerce")
+    df = df.sort_values(["_sort_ts", "id"], ascending=True, na_position="last")
+
+    for _, row in df.iterrows():
+        ticker = str(row.get("ticker", "")).upper().strip()
+        action = str(row.get("action", "")).upper()
+        try:
+            shares = float(row.get("shares") or 0)
+            price  = float(row.get("price")  or 0)
+        except (TypeError, ValueError):
+            continue
+        if not ticker or shares <= 0 or price <= 0:
+            continue
+
+        if "BUY" in action:
+            if ticker in holdings:
+                h = holdings[ticker]
+                new_shares = h["shares"] + shares
+                if new_shares > 0:
+                    h["avg_cost"] = (h["shares"] * h["avg_cost"] + shares * price) / new_shares
+                    h["shares"]   = new_shares
+            else:
+                holdings[ticker] = {"shares": shares, "avg_cost": price}
+
+        elif "SELL" in action:
+            trade_id = row.get("id")
+            if ticker in holdings:
+                h               = holdings[ticker]
+                correct_basis   = h["avg_cost"]
+                correct_pnl     = round((price - correct_basis) * shares, 2)
+                stored_pnl      = None
+                try:
+                    stored_pnl  = float(row.get("realized_pnl") or 0)
+                except (TypeError, ValueError):
+                    stored_pnl  = None
+                stored_basis    = None
+                try:
+                    stored_basis = float(row.get("cost_basis") or 0)
+                except (TypeError, ValueError):
+                    stored_basis = None
+                # Record a correction only when the stored figures actually differ —
+                # avoid no-op DB writes on already-correct rows.
+                needs_pnl_fix   = stored_pnl   is None or abs(stored_pnl   - correct_pnl)   > 0.01
+                needs_basis_fix = stored_basis is None or abs(stored_basis - correct_basis) > 0.01
+                if trade_id is not None and (needs_pnl_fix or needs_basis_fix):
+                    corrections[int(trade_id)] = {
+                        "realized_pnl":     correct_pnl,
+                        "cost_basis":       round(correct_basis, 4),
+                        "stored_pnl":       stored_pnl,
+                        "stored_basis":     stored_basis,
+                    }
+                h["shares"] -= shares
+                if h["shares"] <= 1e-6:
+                    del holdings[ticker]
+            else:
+                warnings.append(
+                    f"SELL {ticker} {shares:.0f}sh @ ${price:.2f} has no prior BUY "
+                    "in the trade history — cost basis can't be computed."
+                )
+
+    holdings_list = [
+        {"Ticker": tk, "Shares": h["shares"], "Avg Cost ($)": round(h["avg_cost"], 4)}
+        for tk, h in holdings.items()
+    ]
+    holdings_df = pd.DataFrame(holdings_list, columns=["Ticker", "Shares", "Avg Cost ($)"])
+
+    return {
+        "holdings_df":              holdings_df,
+        "realized_pnl_corrections": corrections,
+        "warnings":                 warnings,
+    }
+
+
 def save_watchlist(tickers: list[str]) -> bool:
     tickers = [t.strip().upper() for t in tickers if t.strip()]
     if not has_db():
