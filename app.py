@@ -1587,11 +1587,30 @@ if page == "🏠 Home":
         # ── 🪞 Trade Review verdict strip ─────────────────────────────────────
         # Surfaces the top finding from Trade Review's Course-Correction engine
         # so behavioural patterns don't get stranded on one page. Cached in
-        # session_state (keyed on trade count + date) to avoid recomputing on
-        # every Brief render — invalidates when a trade is added or date rolls.
+        # session_state to avoid recomputing on every Brief render — invalidates
+        # when trade data changes (add, delete, Rebuild correction) or the
+        # date rolls. Key includes a hash of the realized_pnl + cost_basis
+        # tuples so a Rebuild that corrects existing rows (without changing
+        # the row count) still busts the cache.
         _tr_strip_td   = st.session_state.get("trades_df")
         _tr_strip_n    = len(_tr_strip_td) if _tr_strip_td is not None else 0
-        _tr_strip_key  = f"{_tr_strip_n}_{_TODAY_ET}"
+        _tr_strip_sig: int = 0
+        if _tr_strip_n > 0:
+            try:
+                # Cheap stable fingerprint of the financial state of the journal.
+                # pandas itertuples is far faster than building dicts; using
+                # builtin hash is enough because we just need change-detection,
+                # not cryptographic uniqueness.
+                _tr_strip_sig = hash(tuple(
+                    (int(r.id) if r.id is not None else 0,
+                     round(float(r.realized_pnl or 0), 4),
+                     round(float(r.cost_basis or 0),   4))
+                    for r in _tr_strip_td.itertuples(index=False)
+                    if hasattr(r, "id")
+                ))
+            except Exception:
+                _tr_strip_sig = 0
+        _tr_strip_key  = f"{_tr_strip_n}_{_TODAY_ET}_{_tr_strip_sig}"
         _tr_strip_cache = st.session_state.get("_tr_strip_cache") or {}
 
         if _tr_strip_n > 0 and _tr_strip_cache.get("key") != _tr_strip_key:

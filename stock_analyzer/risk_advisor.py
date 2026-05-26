@@ -10,10 +10,14 @@ expected outcome, and a Institutional Lens teaching moment.
 import numpy as np
 import pandas as pd
 
+from collections import defaultdict
+
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_TARGET,
+    SECTOR_CEILING,
+    SECTOR_ELEVATED,
 )
 
 
@@ -483,6 +487,107 @@ def build_risk_advisor_recommendations(
                     "Institutional risk desks use CVaR as the primary stress metric precisely because "
                     "it captures what happens when correlations spike to 1.0 and diversification "
                     "disappears exactly when you need it most."
+                ),
+            })
+
+    # ── 6. SECTOR CONCENTRATION ──────────────────────────────────────────────
+    # Same thresholds Trade Review uses for sector-mix flagging and Grow Today
+    # uses for add-to-winner suppression — Risk Advisor now also surfaces them
+    # as a first-class portfolio risk so the user gets a coherent story.
+    sector_weights: dict[str, float]      = defaultdict(float)
+    sector_holdings: dict[str, list[dict]] = defaultdict(list)
+    for t, tr in tr_map.items():
+        sec = tr.get("sector") or "Other"
+        sector_weights[sec]  += tr["weight"]
+        sector_holdings[sec].append({
+            "ticker":       t,
+            "weight":       tr["weight"],
+            "market_value": tr["market_value"],
+            "pnl_pct":      tr["pnl_pct"],
+        })
+
+    if sector_weights:
+        top_sec, top_wt = max(sector_weights.items(), key=lambda x: x[1])
+        if top_wt >= SECTOR_CEILING:
+            sec_priority = "HIGH"
+        elif top_wt >= SECTOR_ELEVATED:
+            sec_priority = "MEDIUM"
+        else:
+            sec_priority = None
+
+        if sec_priority:
+            sec_top_holdings = sorted(
+                sector_holdings[top_sec],
+                key=lambda h: -h["weight"],
+            )[:3]
+            root_tickers = [
+                {
+                    "ticker":       h["ticker"],
+                    "value":        round(h["weight"], 1),
+                    "weight":       h["weight"],
+                    "market_value": h["market_value"],
+                    "label":        f"{h['weight']:.1f}% weight  ·  P&L {h['pnl_pct']:+.1f}%",
+                }
+                for h in sec_top_holdings
+            ]
+            top_names_str = "  ·  ".join(
+                f"**{h['ticker']}** ({h['weight']:.1f}%)"
+                for h in sec_top_holdings
+            )
+            # Excess over the elevated threshold = how much weight needs to move
+            excess_pp     = top_wt - SECTOR_ELEVATED
+            excess_dollar = round(excess_pp / 100.0 * pv)
+            # Other sectors with low weight — natural redeployment targets
+            under_sectors = sorted(
+                [(s, w) for s, w in sector_weights.items() if s != top_sec and w < SECTOR_ELEVATED],
+                key=lambda x: x[1],
+            )[:3]
+            under_str = (
+                "  ·  ".join(f"{s} ({w:.1f}%)" for s, w in under_sectors)
+                if under_sectors else "no under-represented sectors detected"
+            )
+
+            recs.append({
+                "priority": sec_priority,
+                "type":     "sector_concentration",
+                "title": (
+                    f"{top_sec} {top_wt:.1f}% — "
+                    + ("Hard Cap Breach" if sec_priority == "HIGH"
+                       else "Elevated Sector Concentration")
+                ),
+                "problem": (
+                    f"**{top_wt:.1f}% of your portfolio sits in {top_sec}** — "
+                    f"{'above' if sec_priority == 'HIGH' else 'approaching'} the "
+                    f"{SECTOR_CEILING:.0f}% institutional sector ceiling "
+                    f"(elevated warn level {SECTOR_ELEVATED:.0f}%). "
+                    f"A single sector-wide shock (regulatory action, earnings cycle, "
+                    f"macro regime change) hits roughly **${top_wt / 100.0 * pv:,.0f}** of "
+                    f"capital at once — diversification breaks down precisely when you need it."
+                ),
+                "root_cause": f"Largest {top_sec} positions: {top_names_str}.",
+                "root_tickers": root_tickers,
+                "recommendation": (
+                    f"Trim {top_sec} exposure by approximately "
+                    f"**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** to bring the sector under "
+                    f"the {SECTOR_ELEVATED:.0f}% warn level. Redeploy into under-represented sectors: "
+                    f"{under_str}. Trim the lowest-conviction {top_sec} names first — keep your "
+                    "best ideas, prune the marginal ones."
+                ),
+                "expected_outcome": (
+                    f"Pulling {top_sec} from {top_wt:.1f}% to {SECTOR_ELEVATED:.0f}% cuts your "
+                    f"single-sector exposure by roughly **${excess_dollar:,.0f}** while preserving "
+                    f"capital deployment. Sector-shock loss in a -10% {top_sec} move drops "
+                    f"by ~${round(excess_pp / 100.0 * pv * 0.10):,.0f}."
+                ),
+                "institutional_lens": (
+                    "Sector concentration is the most under-priced risk in retail portfolios. "
+                    "Single-stock risk gets attention via the 15% single-name ceiling, but "
+                    "five names in the same sector creates the same correlated-loss exposure "
+                    "without tripping any single-name alarm. Institutional mandates cap sector "
+                    f"exposure at {SECTOR_CEILING:.0f}% precisely because correlations within "
+                    "a sector spike to 0.7-0.9 in stress, while inter-sector correlations stay "
+                    "near 0.4 — diversification across sectors is what actually pays off when "
+                    "things go wrong."
                 ),
             })
 
