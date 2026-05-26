@@ -2145,53 +2145,6 @@ if page == "🏠 Home":
             unsafe_allow_html=True,
         )
 
-        # ── 🛠️ Recommendations log diagnostic (temporary, while we verify) ────
-        # Surfaces the actual state of the save/load round-trip so we can
-        # diagnose why the first-surfaced chip isn't appearing. Removable
-        # once the feature is confirmed working end-to-end.
-        _rec_save_state = st.session_state.get("_rec_log_save_result") or {}
-        _rec_load_state = st.session_state.get("_rec_log_load_state") or {}
-        _rec_save_err   = _rec_save_state.get("error")
-        _rec_load_err   = _rec_load_state.get("error")
-        _rec_attempted  = _rec_save_state.get("attempted", 0)
-        _rec_saved      = _rec_save_state.get("saved",     0)
-        _rec_rows_today = _rec_load_state.get("rows_today", 0)
-        with st.expander("🛠️ Recommendations log status (debug)", expanded=False):
-            st.caption(
-                f"**Save** — attempted: `{_rec_attempted}`  · saved: `{_rec_saved}`  · "
-                f"error: `{_rec_save_err or 'none'}`"
-            )
-            st.caption(
-                f"**Load** — rows for today: `{_rec_rows_today}`  · "
-                f"error: `{_rec_load_err or 'none'}`"
-            )
-            if _rec_save_err:
-                st.warning(
-                    "Save failed — the chip won't appear until this is resolved. "
-                    "Most common causes: the `recommendations` table doesn't exist "
-                    "(re-run the SQL migration), or RLS policy isn't service_role "
-                    "(check the policy in Supabase dashboard)."
-                )
-            elif _rec_attempted > 0 and _rec_saved == 0:
-                st.warning(
-                    "Saved 0 rows despite attempting some — possible silent failure "
-                    "on the supabase-py client. Check Streamlit Cloud logs."
-                )
-            elif _rec_load_err:
-                st.warning(
-                    f"Load failed — table reachable but query errored: {_rec_load_err}"
-                )
-            elif _rec_attempted == 0 and _rec_rows_today == 0:
-                st.caption(
-                    "_No picks surfaced yet (or recommendation log already wrote earlier "
-                    "this session and there were no rows to capture)._"
-                )
-            else:
-                st.success(
-                    f"Healthy — saved {_rec_saved}, table has {_rec_rows_today} row(s) "
-                    "for today. Chips should be visible on pick cards below."
-                )
-
         # ── Refresh Signals ───────────────────────────────────────────────────
         _rb_col, _ri_col = st.columns([1, 4])
         with _rb_col:
@@ -2564,7 +2517,7 @@ if page == "🏠 Home":
                        f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
                        f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
                        f"</div>" if _sz else "")
-                    + (f"<div style='color:#64748b;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
                        f"⏱ First surfaced: {_fmt_first_seen(_gp.get('_first_seen_at'))}"
                        f"</div>" if _gp.get("_first_seen_at") else "")
                     + f"</div>",
@@ -2594,7 +2547,7 @@ if page == "🏠 Home":
                     + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
                        f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
                        f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
-                    + (f"<div style='color:#64748b;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
                        f"⏱ First surfaced: {_fmt_first_seen(_ga.get('_first_seen_at'))}"
                        f"</div>" if _ga.get("_first_seen_at") else "")
                     + f"</div>",
@@ -2958,7 +2911,7 @@ if page == "🏠 Home":
                        f"✓ {' · '.join(_vagreed[:3])}"
                        + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
                        + f"</div>" if _vagreed else "")
-                    + (f"<div style='color:#64748b;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
                        f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
                        f"</div>" if _db_buy.get("_first_seen_at") else "")
                     + f"</div>",
@@ -3108,7 +3061,9 @@ if page == "🏠 Home":
                             f"<div style='color:#cbd5e1;font-size:0.85em;margin-top:3px'>{g['outcome']}</div>"
                             f"<div style='color:#94a3b8;font-size:0.78em;margin-top:2px'>"
                             f"Today: <b>{_tp_str}</b></div>"
-                            + (f"<div style='color:#64748b;font-size:0.74em;margin-top:3px;font-style:italic'>"
+                            + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;"
+                               f"background:#0f172a;border:1px solid #334155;border-radius:999px;"
+                               f"padding:2px 10px;display:inline-block'>"
                                f"⏱ First surfaced: {_ed_fs}</div>" if _ed_fs else "")
                             + f"</div>",
                             unsafe_allow_html=True,
