@@ -936,6 +936,283 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
     }
 
 
+def _diag_trigger_type_effectiveness(trades: list[dict]) -> dict | None:
+    """
+    Outcomes broken down by trigger_type (MANUAL / RECOMMENDATION /
+    WATCHLIST_ENTRY / STOP_HIT / REBALANCE). Which entry source is actually
+    earning its keep? Flags trigger types with notably worse win rates so
+    the user can lean toward what's working.
+
+    Sample-size guards:
+      - ≥6 judged trades with a trigger_type set
+      - ≥2 distinct trigger types each with ≥3 trades
+      - Spread between best and worst win-rate ≥20pp before firing
+    """
+    by_trigger: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        if t.get("is_win") is None or t.get("_sell_dedup", False):
+            continue
+        trig = (t.get("trigger_type") or "").strip().upper()
+        if not trig:
+            continue
+        by_trigger[trig].append(t)
+
+    eligible = {tr: ts for tr, ts in by_trigger.items() if len(ts) >= 3}
+    total    = sum(len(ts) for ts in eligible.values())
+    if len(eligible) < 2 or total < 6:
+        return None
+
+    stats: dict[str, dict] = {}
+    for tr, ts in eligible.items():
+        wins = sum(1 for t in ts if t["is_win"])
+        net  = sum(t["outcome_pnl"] for t in ts)
+        stats[tr] = {
+            "n_trades": len(ts),
+            "n_wins":   wins,
+            "win_rate": wins / len(ts) * 100.0,
+            "net_pnl":  round(net, 2),
+            "avg_pnl":  round(net / len(ts), 2),
+        }
+    sorted_triggers = sorted(stats.items(), key=lambda x: x[1]["win_rate"], reverse=True)
+    best_trig,  best_stat  = sorted_triggers[0]
+    worst_trig, worst_stat = sorted_triggers[-1]
+    spread = best_stat["win_rate"] - worst_stat["win_rate"]
+    if spread < 20:
+        return None
+
+    if spread >= 35 and worst_stat["net_pnl"] < 0:
+        severity = "critical"
+        action = (
+            f"Pause new entries via <b>{worst_trig}</b> until you've reviewed "
+            f"why those trades fail more often. <b>{best_trig}</b> entries are "
+            "clearly the more reliable source right now."
+        )
+    elif spread >= 30:
+        severity = "watch"
+        action = (
+            f"Lean toward <b>{best_trig}</b> entries; tighten criteria when "
+            f"sourcing trades via <b>{worst_trig}</b>."
+        )
+    else:
+        severity = "watch"
+        action = (
+            f"<b>{best_trig}</b> is outperforming — when discretion allows, "
+            "prefer that entry source."
+        )
+
+    detection = (
+        f"<b>{best_trig}</b> entries win <b>{best_stat['win_rate']:.0f}%</b> "
+        f"({best_stat['n_wins']}/{best_stat['n_trades']}) vs <b>{worst_trig}</b> "
+        f"at <b>{worst_stat['win_rate']:.0f}%</b> "
+        f"({worst_stat['n_wins']}/{worst_stat['n_trades']}) — "
+        f"<b>{spread:.0f}pp gap</b> across {len(eligible)} trigger types."
+    )
+
+    return {
+        "pattern_key":    "trigger_type_effectiveness",
+        "pattern":        "Trigger-Type Effectiveness",
+        "severity":       severity,
+        "detection":      detection,
+        "action":         action,
+        "evidence":       {
+            "stats":         stats,
+            "best_trigger":  best_trig,
+            "worst_trigger": worst_trig,
+            "spread_pp":     round(spread, 1),
+        },
+        "related_trades": {
+            "by_trigger": {
+                tr: sorted([_compact_trade(t) for t in eligible[tr]],
+                           key=lambda x: x["outcome_pnl"])[:8]
+                for tr in eligible
+            },
+            "best_trigger":  best_trig,
+            "worst_trigger": worst_trig,
+            "stats":         stats,
+        },
+    }
+
+
+def _diag_lesson_capture_rate(trades: list[dict]) -> dict | None:
+    """
+    Fraction of trades that have a `lesson` recorded. The lesson column is
+    the single best behavioural-learning signal in the journal — writing
+    one forces reflection on what worked. Surfaces low capture rates as a
+    discipline gap; flags high capture + outperformance as good.
+
+    Sample-size guard: ≥6 judged trades total before firing.
+    """
+    judged = [
+        t for t in trades
+        if t.get("is_win") is not None and not t.get("_sell_dedup", False)
+    ]
+    if len(judged) < 6:
+        return None
+
+    def _has_lesson(t):
+        return bool((t.get("lesson") or "").strip())
+
+    with_lesson    = [t for t in judged if _has_lesson(t)]
+    without_lesson = [t for t in judged if not _has_lesson(t)]
+    capture_rate   = len(with_lesson) / len(judged) * 100.0
+
+    severity:   str
+    detection:  str
+    action:     str | None
+
+    if capture_rate < 25:
+        severity = "watch"
+        detection = (
+            f"Only <b>{len(with_lesson)}/{len(judged)}</b> trades "
+            f"(<b>{capture_rate:.0f}%</b>) have a lesson recorded. The "
+            "<code>lesson</code> column is the single best behavioural-learning "
+            "signal — writing forces reflection on what worked and what didn't."
+        )
+        action = (
+            "Add a lesson on every trade going forward — even one sentence. "
+            "Patterns only emerge when the data is captured."
+        )
+    elif capture_rate >= 60:
+        # If both buckets have ≥3, do a win-rate comparison
+        if len(with_lesson) >= 3 and len(without_lesson) >= 3:
+            wl_wins  = sum(1 for t in with_lesson    if t["is_win"])
+            wol_wins = sum(1 for t in without_lesson if t["is_win"])
+            wl_wr    = wl_wins  / len(with_lesson)    * 100.0
+            wol_wr   = wol_wins / len(without_lesson) * 100.0
+            if (wl_wr - wol_wr) >= 15:
+                severity = "good"
+                detection = (
+                    f"<b>{capture_rate:.0f}%</b> capture rate — and trades "
+                    f"with lessons win <b>{wl_wr:.0f}%</b> vs <b>{wol_wr:.0f}%</b> "
+                    "without. Reflection is paying off in measurable outperformance."
+                )
+                action = None
+            else:
+                severity = "good"
+                detection = (
+                    f"Strong reflection discipline: <b>{capture_rate:.0f}%</b> of "
+                    "trades have a lesson recorded. Win-rate gap with/without is "
+                    "small but the habit is the right one."
+                )
+                action = None
+        else:
+            severity = "good"
+            detection = (
+                f"Strong reflection discipline: <b>{capture_rate:.0f}%</b> of "
+                "trades have a lesson recorded."
+            )
+            action = None
+    else:
+        # 25–60% range — middling, no clear pattern yet
+        return None
+
+    return {
+        "pattern_key":    "lesson_capture_rate",
+        "pattern":        "Lesson-Capture Rate",
+        "severity":       severity,
+        "detection":      detection,
+        "action":         action,
+        "evidence":       {
+            "n_with_lesson":    len(with_lesson),
+            "n_without_lesson": len(without_lesson),
+            "capture_rate":     round(capture_rate, 1),
+        },
+        "related_trades": {
+            "with_lesson":    sorted([_compact_trade(t) for t in with_lesson],
+                                     key=lambda x: x["date"] or date.min, reverse=True)[:6],
+            "without_lesson": sorted([_compact_trade(t) for t in without_lesson],
+                                     key=lambda x: x["date"] or date.min, reverse=True)[:6],
+        },
+    }
+
+
+_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _diag_day_of_week_timing(trades: list[dict]) -> dict | None:
+    """
+    Outcomes broken down by trade-execution weekday. Flags days where the
+    win rate is materially worse than other days — useful when a calendar
+    pattern is hurting (e.g. Friday entries dying on weekend gaps).
+
+    Sample-size guards:
+      - ≥10 judged trades total
+      - ≥2 distinct weekdays each with ≥2 trades
+      - Spread between best and worst weekday ≥30pp before firing
+    """
+    by_wd: dict[int, list[dict]] = defaultdict(list)
+    for t in trades:
+        if t.get("is_win") is None or t.get("_sell_dedup", False):
+            continue
+        d = t.get("_trade_date")
+        if d is None or not hasattr(d, "weekday"):
+            continue
+        by_wd[d.weekday()].append(t)
+
+    total    = sum(len(g) for g in by_wd.values())
+    eligible = {wd: ts for wd, ts in by_wd.items() if len(ts) >= 2}
+    if total < 10 or len(eligible) < 2:
+        return None
+
+    stats: dict[int, dict] = {}
+    for wd, ts in eligible.items():
+        wins = sum(1 for t in ts if t["is_win"])
+        net  = sum(t["outcome_pnl"] for t in ts)
+        stats[wd] = {
+            "n_trades": len(ts),
+            "n_wins":   wins,
+            "win_rate": wins / len(ts) * 100.0,
+            "net_pnl":  round(net, 2),
+        }
+    sorted_days = sorted(stats.items(), key=lambda x: x[1]["win_rate"])
+    worst_wd, worst_stat = sorted_days[0]
+    best_wd,  best_stat  = sorted_days[-1]
+    spread = best_stat["win_rate"] - worst_stat["win_rate"]
+    if spread < 30:
+        return None
+
+    worst_name = _WEEKDAY_NAMES[worst_wd]
+    best_name  = _WEEKDAY_NAMES[best_wd]
+    severity   = "critical" if worst_stat["net_pnl"] < 0 else "watch"
+
+    detection = (
+        f"<b>{worst_name}</b> trades win <b>{worst_stat['win_rate']:.0f}%</b> "
+        f"({worst_stat['n_wins']}/{worst_stat['n_trades']}) vs <b>{best_name}</b> "
+        f"<b>{best_stat['win_rate']:.0f}%</b> "
+        f"({best_stat['n_wins']}/{best_stat['n_trades']}) — "
+        f"<b>{spread:.0f}pp gap</b> by weekday."
+    )
+    action = (
+        f"Consider deferring new entries on <b>{worst_name}</b>s — at minimum, "
+        "raise the conviction bar (composite ≥ 75) before acting that day. "
+        "Calendar timing may be a hidden drag."
+    )
+
+    return {
+        "pattern_key":    "day_of_week_timing",
+        "pattern":        "Day-of-Week Timing",
+        "severity":       severity,
+        "detection":      detection,
+        "action":         action,
+        "evidence":       {
+            "by_weekday": {_WEEKDAY_NAMES[wd]: s for wd, s in stats.items()},
+            "worst_day":  worst_name,
+            "best_day":   best_name,
+            "spread_pp":  round(spread, 1),
+        },
+        "related_trades": {
+            "by_weekday": {
+                _WEEKDAY_NAMES[wd]: sorted([_compact_trade(t) for t in eligible[wd]],
+                                            key=lambda x: x["outcome_pnl"])[:6]
+                for wd in eligible
+            },
+            "worst_day": worst_name,
+            "best_day":  best_name,
+            "stats":     {_WEEKDAY_NAMES[wd]: s for wd, s in stats.items()},
+        },
+    }
+
+
 _SEVERITY_RANK = {"critical": 0, "watch": 1, "good": 2}
 
 
@@ -950,6 +1227,9 @@ def build_recommendations(trades: list[dict]) -> list[dict]:
         _diag_signal_defying_bias,
         _diag_vs_spy_drag,
         _diag_re_entered_tickers,
+        _diag_trigger_type_effectiveness,
+        _diag_lesson_capture_rate,
+        _diag_day_of_week_timing,
     )
     out: list[dict] = []
     for fn in diagnostics:

@@ -10939,6 +10939,104 @@ elif page == "🪞 Trade Review":
                         st.markdown(_tr_evidence_row(_t, show_vs_spy=True, show_hold=True),
                                     unsafe_allow_html=True)
 
+            elif pk == "trigger_type_effectiveness":
+                _by_trig = rt.get("by_trigger", {}) or {}
+                _best    = rt.get("best_trigger")
+                _worst   = rt.get("worst_trigger")
+                _stats   = rt.get("stats", {}) or {}
+                # Order: worst first (so the problem is at the top), best last
+                _order = []
+                if _worst and _worst in _by_trig:
+                    _order.append(_worst)
+                for _tr in _by_trig:
+                    if _tr not in (_worst, _best):
+                        _order.append(_tr)
+                if _best and _best != _worst and _best in _by_trig:
+                    _order.append(_best)
+                for _tr in _order:
+                    _ts = _by_trig.get(_tr, [])
+                    if not _ts:
+                        continue
+                    _s = _stats.get(_tr, {})
+                    _chip_col = ("#ef4444" if _tr == _worst else
+                                 "#86efac" if _tr == _best  else "#94a3b8")
+                    _wr   = _s.get("win_rate", 0)
+                    _n    = _s.get("n_trades", len(_ts))
+                    _w    = _s.get("n_wins", 0)
+                    _net  = _s.get("net_pnl", 0)
+                    _net_col = "#86efac" if _net >= 0 else "#fca5a5"
+                    st.markdown(
+                        f"<div style='color:{_chip_col};font-weight:700;font-size:0.85em;"
+                        f"margin:10px 0 4px'>{_tr} — "
+                        f"<span style='font-weight:400'>{_w}/{_n} wins · "
+                        f"<b>{_wr:.0f}%</b> win rate · net "
+                        f"<b style='color:{_net_col}'>${_net:+,.0f}</b></span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _ts:
+                        st.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)
+
+            elif pk == "lesson_capture_rate":
+                _wl  = rt.get("with_lesson",    [])
+                _wol = rt.get("without_lesson", [])
+                _e1, _e2 = st.columns(2)
+                with _e1:
+                    st.markdown(
+                        f"<div style='color:#86efac;font-weight:700;font-size:0.85em;"
+                        f"margin-bottom:6px'>With lesson ({len(_wl)})</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if not _wl:
+                        st.caption("None in window.")
+                    for _t in _wl:
+                        st.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)
+                with _e2:
+                    st.markdown(
+                        f"<div style='color:#94a3b8;font-weight:700;font-size:0.85em;"
+                        f"margin-bottom:6px'>Without lesson ({len(_wol)})</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if not _wol:
+                        st.caption("None in window.")
+                    for _t in _wol:
+                        st.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)
+
+            elif pk == "day_of_week_timing":
+                _by_wd = rt.get("by_weekday", {}) or {}
+                _best_d  = rt.get("best_day")
+                _worst_d = rt.get("worst_day")
+                _stats_d = rt.get("stats", {}) or {}
+                _order_d = []
+                if _worst_d and _worst_d in _by_wd:
+                    _order_d.append(_worst_d)
+                for _day in _by_wd:
+                    if _day not in (_worst_d, _best_d):
+                        _order_d.append(_day)
+                if _best_d and _best_d != _worst_d and _best_d in _by_wd:
+                    _order_d.append(_best_d)
+                for _day in _order_d:
+                    _ts = _by_wd.get(_day, [])
+                    if not _ts:
+                        continue
+                    _s = _stats_d.get(_day, {})
+                    _chip_col = ("#ef4444" if _day == _worst_d else
+                                 "#86efac" if _day == _best_d  else "#94a3b8")
+                    _wr   = _s.get("win_rate", 0)
+                    _n    = _s.get("n_trades", len(_ts))
+                    _w    = _s.get("n_wins", 0)
+                    _net  = _s.get("net_pnl", 0)
+                    _net_col = "#86efac" if _net >= 0 else "#fca5a5"
+                    st.markdown(
+                        f"<div style='color:{_chip_col};font-weight:700;font-size:0.85em;"
+                        f"margin:10px 0 4px'>{_day} — "
+                        f"<span style='font-weight:400'>{_w}/{_n} wins · "
+                        f"<b>{_wr:.0f}%</b> win rate · net "
+                        f"<b style='color:{_net_col}'>${_net:+,.0f}</b></span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _t in _ts:
+                        st.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)
+
             elif pk == "re_entered_tickers":
                 _neg = rt.get("negative_groups", [])
                 _pos = rt.get("positive_groups", [])
@@ -10990,6 +11088,12 @@ elif page == "🪞 Trade Review":
             if pk == "re_entered_tickers":
                 return (sum(len(g.get("trades", [])) for g in rt.get("negative_groups", []))
                         + sum(len(g.get("trades", [])) for g in rt.get("positive_groups", [])))
+            if pk == "trigger_type_effectiveness":
+                return sum(len(ts) for ts in rt.get("by_trigger", {}).values())
+            if pk == "lesson_capture_rate":
+                return len(rt.get("with_lesson", [])) + len(rt.get("without_lesson", []))
+            if pk == "day_of_week_timing":
+                return sum(len(ts) for ts in rt.get("by_weekday", {}).values())
             return 0
 
         with st.expander(
