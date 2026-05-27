@@ -16,6 +16,12 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     SINGLE_NAME_CEILING,
+    MACRO_PROTECT_PNL_PCT,
+    MACRO_WATCH_LOW_SCORE,
+    MACRO_WATCH_LOW_WEIGHT,
+    MACRO_EXPOSURE_CRITICAL_PCT,
+    MACRO_EXPOSURE_HIGH_PCT,
+    MACRO_EXPOSURE_MEDIUM_PCT,
 )
 
 def _today_et() -> _date:
@@ -315,7 +321,7 @@ def _pre_event_action(row, event_name: str, days_until: int) -> tuple:
         return "PROTECT", "HIGH"
     if weight > _PROTECT_WEIGHT and bear_move >= _PROTECT_BEAR:
         return "PROTECT", "HIGH"
-    if pnl_pct < -15.0 and bear_move >= _PROTECT_BEAR and days_until <= 7:
+    if pnl_pct < MACRO_PROTECT_PNL_PCT and bear_move >= _PROTECT_BEAR and days_until <= 7:
         return "PROTECT", "MEDIUM"
 
     if (score >= _OPP_SCORE and
@@ -325,7 +331,7 @@ def _pre_event_action(row, event_name: str, days_until: int) -> tuple:
 
     if bear_move >= _PROTECT_BEAR and weight >= _WATCH_WEIGHT:
         return "WATCH", "MEDIUM"
-    if bear_move >= _WATCH_BEAR and (score < 55.0 or weight >= 12.0):
+    if bear_move >= _WATCH_BEAR and (score < MACRO_WATCH_LOW_SCORE or weight >= MACRO_WATCH_LOW_WEIGHT):
         return "WATCH", "LOW"
 
     return "HOLD", "OK"
@@ -361,7 +367,7 @@ def _build_rationale(row, event_name: str, action: str) -> str:
         if weight > _PROTECT_WEIGHT:
             return (
                 f"**{ticker}** is {weight:.0f}% of your portfolio — the institutional rule: "
-                f"no single position above 15-18% going into a binary event regardless of conviction. "
+                f"no single position above {_PROTECT_WEIGHT:.0f}% going into a binary event regardless of conviction. "
                 f"A ~{bear_move:.0f}% sector move on a miss creates asymmetric downside at this size."
             )
         return (
@@ -551,14 +557,14 @@ def build_event_playbooks(
         positions.sort(key=lambda x: (_order.get(x["action"], 4), -x["weight"]))
 
         # Portfolio exposure = % of portfolio in sectors with high bear sensitivity
-        exposed_val  = sum(p["market_value"] for p in positions if abs(p["bear_move_pct"]) >= 1.5)
+        exposed_val  = sum(p["market_value"] for p in positions if abs(p["bear_move_pct"]) >= _PROTECT_BEAR)
         exposure_pct = round(exposed_val / total_val * 100, 1) if total_val > 0 else 0.0
 
-        if exposure_pct >= 55:
+        if exposure_pct >= MACRO_EXPOSURE_CRITICAL_PCT:
             exp_level, exp_color = "CRITICAL", "#ef4444"
-        elif exposure_pct >= 35:
+        elif exposure_pct >= MACRO_EXPOSURE_HIGH_PCT:
             exp_level, exp_color = "HIGH",     "#f59e0b"
-        elif exposure_pct >= 15:
+        elif exposure_pct >= MACRO_EXPOSURE_MEDIUM_PCT:
             exp_level, exp_color = "MEDIUM",   "#3b82f6"
         else:
             exp_level, exp_color = "LOW",      "#22c55e"

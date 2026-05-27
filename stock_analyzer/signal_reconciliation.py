@@ -112,7 +112,7 @@ def reconcile_signals(
         }
 
     # ── SKIP: strong negative news regardless of other signals ──────────────
-    if negative_news and momentum_score >= 65:
+    if negative_news and momentum_score >= COMPOSITE_BUY:
         return {
             "verdict":   "skip",
             "label":     "❌ Skip — Negative News",

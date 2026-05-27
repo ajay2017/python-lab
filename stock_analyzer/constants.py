@@ -90,3 +90,16 @@ COMPOSITE_WEIGHTS = {
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS = 7       # any trade within this window = caution
 MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = suppress new picks in affected sector
+
+# ── Macro-event playbook gates (macro_playbook.py) ───────────────────────────
+# Pre-event PROTECT / WATCH classification thresholds. Values surfaced here
+# so future changes are policy decisions, not hidden literals.
+MACRO_PROTECT_PNL_PCT    = -15.0  # already-underwater + bear-move = MEDIUM PROTECT
+MACRO_WATCH_LOW_SCORE    = 55.0   # weak score gating WATCH-LOW
+MACRO_WATCH_LOW_WEIGHT   = 12.0   # min weight gating WATCH-LOW
+
+# Portfolio bear-exposure tier cutoffs for the macro-event playbook header
+# (% of portfolio sitting in sectors with high bear-move sensitivity).
+MACRO_EXPOSURE_CRITICAL_PCT = 55
+MACRO_EXPOSURE_HIGH_PCT     = 35
+MACRO_EXPOSURE_MEDIUM_PCT   = 15
