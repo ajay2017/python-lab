@@ -36,11 +36,18 @@ Table schema (run once if tables don't exist):
 
     create table if not exists holdings (
         id         bigint primary key generated always as identity,
-        ticker     text    not null,
+        ticker     text    not null unique,
         shares     numeric not null check (shares > 0),
         avg_cost   numeric not null check (avg_cost > 0),
         updated_at timestamptz default now()
     );
+
+If the holdings table predates the unique constraint, run this once to
+add it (required for save_holdings' upsert path — without the constraint
+the atomic upsert + sweep pattern degrades to delete-then-insert):
+
+    ALTER TABLE public.holdings
+        ADD CONSTRAINT holdings_ticker_unique UNIQUE (ticker);
 
     create table if not exists watchlist (
         id       bigint primary key generated always as identity,
@@ -161,24 +168,45 @@ def load_holdings() -> pd.DataFrame:
 
 
 def save_holdings(df: pd.DataFrame) -> bool:
-    """Persist the holdings DataFrame to Supabase. Returns True on success."""
+    """Persist the holdings DataFrame to Supabase. Returns True on success.
+
+    Atomic-ish replace: upsert every current row on the ticker unique key,
+    then sweep tickers no longer in the DataFrame. Order matters — upsert
+    first so a transient failure leaves the prior data intact, never wipes.
+    Requires UNIQUE(ticker) on holdings (see one-time SQL at module top).
+    """
     from stock_analyzer import api_health as _ah
     if not has_db():
         return False
 
-    try:
-        client = _client()
-        # Delete all existing rows then re-insert
-        client.table("holdings").delete().neq("ticker", "").execute()
-        records = []
-        for _, row in df.iterrows():
-            ticker   = str(row.get("Ticker", "")).strip().upper()
+    # Build + validate records up front. Failure here never touches the DB.
+    records = []
+    seen: set[str] = set()
+    for _, row in df.iterrows():
+        ticker   = str(row.get("Ticker", "")).strip().upper()
+        try:
             shares   = float(row.get("Shares", 0) or 0)
             avg_cost = float(row.get("Avg Cost ($)", 0) or 0)
-            if ticker and shares > 0 and avg_cost > 0:
-                records.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
+        except (TypeError, ValueError):
+            continue
+        if ticker and shares > 0 and avg_cost > 0 and ticker not in seen:
+            records.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
+            seen.add(ticker)
+
+    try:
+        client = _client()
         if records:
-            client.table("holdings").insert(records).execute()
+            client.table("holdings").upsert(records, on_conflict="ticker").execute()
+        # Sweep tickers no longer present. Idempotent — a partial failure here
+        # leaves stale rows (recoverable on next save) but never destroys the
+        # current truth.
+        kept = list(seen)
+        sweep = client.table("holdings").delete()
+        if kept:
+            sweep = sweep.not_.in_("ticker", kept)
+        else:
+            sweep = sweep.neq("ticker", "")
+        sweep.execute()
         _ah.record("supabase", "success")
         return True
     except Exception as e:
@@ -524,16 +552,33 @@ def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
 
 
 def save_watchlist(tickers: list[str]) -> bool:
-    tickers = [t.strip().upper() for t in tickers if t.strip()]
+    """Atomic-ish replace via upsert + sweep — same pattern as save_holdings.
+
+    The watchlist table already has UNIQUE(ticker), so the upsert is safe.
+    Building the deduped list first means malformed input never reaches the
+    DB; the sweep at the end is idempotent.
+    """
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for t in tickers:
+        u = t.strip().upper()
+        if u and u not in seen:
+            cleaned.append(u)
+            seen.add(u)
     if not has_db():
         return False
     try:
         client = _client()
-        client.table("watchlist").delete().neq("ticker", "").execute()
-        if tickers:
-            client.table("watchlist").insert(
-                [{"ticker": t} for t in tickers]
+        if cleaned:
+            client.table("watchlist").upsert(
+                [{"ticker": t} for t in cleaned], on_conflict="ticker"
             ).execute()
+        sweep = client.table("watchlist").delete()
+        if cleaned:
+            sweep = sweep.not_.in_("ticker", cleaned)
+        else:
+            sweep = sweep.neq("ticker", "")
+        sweep.execute()
         return True
     except Exception as e:
         st.error(f"⛔ Failed to save watchlist: {e}")
