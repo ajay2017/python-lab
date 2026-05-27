@@ -543,15 +543,20 @@ def _render_trade_button(
         if shares is not None and shares > 0:
             _prefill["shares"] = float(shares)
         st.session_state["_tj_prefill"] = _prefill
+        # Stash into non-widget-bound _pending keys. Direct writes to
+        # widget-bound session_state keys (_tj_signal_seen, _tj_followed)
+        # raise StreamlitAPIException once those widgets have rendered in a
+        # previous run — which would silently abort this click handler and
+        # skip the navigation. Trade Journal page consumes these on next render.
         if signal_context:
-            st.session_state["_tj_signal_seen"] = signal_context
+            st.session_state["_tj_signal_seen_pending"] = signal_context
         if followed_intent:
             _followed_map = {
                 "yes":           "Yes — followed signal",
                 "no":            "No — overrode signal",
                 "discretionary": "No signal — discretionary",
             }
-            st.session_state["_tj_followed"] = _followed_map.get(
+            st.session_state["_tj_followed_pending"] = _followed_map.get(
                 followed_intent, "— (skip)"
             )
         st.session_state["_pending_page"] = "📒 Trade Journal"
@@ -10083,6 +10088,15 @@ elif page == "📒 Trade Journal":
     # around until the trade is successfully recorded (popped below in the
     # submit handler), so every form reset re-applies the same values.
     prefill = st.session_state.get("_tj_prefill", {})
+
+    # ── Consume _pending values stashed by _render_trade_button ──────────────
+    # These flow Analysis → Trade Journal across navigation. Writing to the
+    # widget-bound keys here is safe because the widgets haven't rendered yet
+    # in this run.
+    if "_tj_signal_seen_pending" in st.session_state:
+        st.session_state["_tj_signal_seen"] = st.session_state.pop("_tj_signal_seen_pending")
+    if "_tj_followed_pending" in st.session_state:
+        st.session_state["_tj_followed"] = st.session_state.pop("_tj_followed_pending")
 
     # ── Log a Trade form ──────────────────────────────────────────────────────
     _prefill_ticker = prefill.get("ticker", "").strip().upper()
