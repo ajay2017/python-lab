@@ -9688,10 +9688,17 @@ elif page == "⚖️ Compare":
             with _qp_cols[_qpi]:
                 if st.button(f"🎯 {_lbl}: {_qpa} vs {_qpb}", key=f"_cmp_qp_{_qpi}",
                              use_container_width=True):
-                    st.session_state["_cmp_a_input"] = _qpa
-                    st.session_state["_cmp_b_input"] = _qpb
+                    # The text_input widgets are bound to _cmp_a_input /
+                    # _cmp_b_input via the key= arg — writing to those keys
+                    # directly raises StreamlitAPIException. Instead, set the
+                    # _cmp_last_* defaults (read by the value= parameter on
+                    # next render) and POP the widget-bound keys so the next
+                    # render re-instantiates the widget from its default
+                    # rather than the cached previous value.
                     st.session_state["_cmp_last_a"] = _qpa
                     st.session_state["_cmp_last_b"] = _qpb
+                    st.session_state.pop("_cmp_a_input", None)
+                    st.session_state.pop("_cmp_b_input", None)
                     st.session_state["_cmp_auto_run"] = True
                     st.rerun()
 
@@ -10394,7 +10401,12 @@ elif page == "📒 Trade Journal":
                     st.session_state.pop("_prefill_trade", None)
                     # Clear the price-sanity override so the next trade is
                     # checked by default — overrides shouldn't be sticky.
-                    st.session_state["_tj_override_price_check"] = False
+                    # Pop the widget-bound key rather than assigning to it;
+                    # direct writes to a widget's key after the widget has
+                    # been instantiated in the current run raise
+                    # StreamlitAPIException. Popping lets the checkbox
+                    # re-init to its default (unchecked) on the next render.
+                    st.session_state.pop("_tj_override_price_check", None)
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
