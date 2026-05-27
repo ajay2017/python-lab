@@ -1,0 +1,311 @@
+"""
+Recommendations History — retrospective on every pick Today's Brief has surfaced.
+
+Reads the `recommendations` table (populated at brief-build time by app.py) and
+cross-references it with the `trades` table to compute:
+  - which recs got acted on (same-day trade with trigger_type='RECOMMENDATION')
+  - realized + MTM outcome for acted recs (lifted from Trade Review's accounting)
+  - "would-have-gained" outcome for missed recs (price_at_surface → current_price)
+  - rollup metrics: action rate by period, by rec_type, by sector
+  - composite-at-rec vs eventual outcome (the substrate for the eventual AI
+    predictive layer — see project_ai_integration_strategy memory)
+
+Pure logic — no Streamlit, no DB or API calls. Caller supplies:
+  - recs_df         (pandas DataFrame from db.load_recommendations)
+  - trades_df       (pandas DataFrame from db.load_trades)
+  - current_prices  ({ticker: latest_price})
+  - today           date — for marking still-open recs
+
+All match windows are SAME-DAY: a rec is "acted" only when a trade with the
+same ticker exists on the same calendar date in NY ET with
+trigger_type='RECOMMENDATION'. Looser windows risk overstating action rate
+and conflating distinct decisions.
+"""
+
+from datetime import date
+from collections import defaultdict
+
+
+def _f(v, default=0.0):
+    if v is None:
+        return default
+    try:
+        x = float(v)
+        return default if x != x else x
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_date(v) -> date | None:
+    if v is None:
+        return None
+    try:
+        return v.date() if hasattr(v, "date") else date.fromisoformat(str(v)[:10])
+    except Exception:
+        return None
+
+
+# ── Match recs to trades ────────────────────────────────────────────────────
+
+def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
+    """
+    For each recommendation, find a same-day trade with the same ticker and
+    trigger_type='RECOMMENDATION'. Returns a list of dicts (one per rec)
+    enriched with `acted_on`, `acted_trade` (the matching trade row or None),
+    and normalized fields suitable for downstream consumption.
+
+    SAME-DAY semantics: rec_date must equal traded_at::date in NY ET. Acting
+    a day later is treated as a distinct decision, not as following the
+    recommendation.
+    """
+    if recs_df is None or len(recs_df) == 0:
+        return []
+
+    # Build a lookup: (ticker, date) → trade dict, restricted to RECOMMENDATION trigger
+    trade_lookup: dict[tuple[str, date], dict] = {}
+    if trades_df is not None and len(trades_df) > 0:
+        for _, t in trades_df.iterrows():
+            trig = str(t.get("trigger_type", "") or "").strip().upper()
+            if trig != "RECOMMENDATION":
+                continue
+            td = _to_date(t.get("traded_at"))
+            tk = str(t.get("ticker", "")).strip().upper()
+            if td is None or not tk:
+                continue
+            key = (tk, td)
+            # Same-day, same-ticker, multiple RECOMMENDATION trades: keep the
+            # first one (chronologically earliest by id, since trades_df is
+            # ordered by traded_at desc — reverse to get earliest first).
+            trade_lookup.setdefault(key, {
+                "id":            t.get("id"),
+                "action":        str(t.get("action", "") or ""),
+                "shares":        _f(t.get("shares")),
+                "price":         _f(t.get("price")),
+                "cost_basis":    _f(t.get("cost_basis")),
+                "realized_pnl":  _f(t.get("realized_pnl")),
+                "traded_at":     t.get("traded_at"),
+            })
+
+    matched: list[dict] = []
+    for _, r in recs_df.iterrows():
+        rd  = _to_date(r.get("rec_date"))
+        tk  = str(r.get("ticker", "")).strip().upper()
+        key = (tk, rd) if rd is not None else None
+        trade = trade_lookup.get(key) if key else None
+        matched.append({
+            "id":               r.get("id"),
+            "ticker":           tk,
+            "rec_date":         rd,
+            "rec_type":         str(r.get("rec_type", "") or ""),
+            "surfaced_at":      r.get("surfaced_at"),
+            "price_at_surface": _f(r.get("price_at_surface"), None) if r.get("price_at_surface") is not None else None,
+            "composite_score":  r.get("composite_score"),
+            "momentum_score":   r.get("momentum_score"),
+            "sector":           str(r.get("sector", "") or ""),
+            "conviction":       str(r.get("conviction", "") or ""),
+            "verdict":          str(r.get("verdict", "") or ""),
+            "thesis":           str(r.get("thesis", "") or ""),
+            "acted_on":         trade is not None,
+            "acted_trade":      trade,
+        })
+    return matched
+
+
+# ── Outcome computation ─────────────────────────────────────────────────────
+
+def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | None,
+                     today: date) -> list[dict]:
+    """
+    Add outcome fields to each matched rec:
+      - outcome_pct      : float | None
+                            • Acted BUY:  (current - trade.price) / trade.price * 100
+                            • Acted SELL: realized_pnl / cost_basis * 100
+                            • Missed:    (current - price_at_surface) / price_at_surface * 100
+                            • None when no price reference
+      - outcome_dollars  : float | None — share-aware where possible (acted) or
+                            normalized to $1000 notional for missed (so cross-ticker
+                            comparison isn't dominated by price level)
+      - outcome_label    : 'win' | 'loss' | 'flat' | 'unknown'
+      - days_since       : int — days from rec_date to today
+
+    Pure read of current_prices; no fetches. Caller is responsible for
+    ensuring current_prices has every relevant ticker.
+    """
+    current_prices = current_prices or {}
+    out: list[dict] = []
+    for r in matched:
+        rec = dict(r)   # don't mutate caller's data
+        cur = current_prices.get(rec["ticker"])
+        cur = float(cur) if (cur is not None and float(cur) > 0) else None
+
+        if rec["acted_on"] and rec["acted_trade"]:
+            t = rec["acted_trade"]
+            t_action = t["action"].upper()
+            if "SELL" in t_action:
+                # Realized P&L authoritative from journal
+                cost_b = t["cost_basis"] or (t["price"] * t["shares"])
+                rec["outcome_pct"]     = (t["realized_pnl"] / cost_b * 100.0) if cost_b > 0 else None
+                rec["outcome_dollars"] = round(t["realized_pnl"], 2)
+            else:
+                # BUY — mark to market on actual position
+                if cur is not None and t["price"] > 0:
+                    pct  = (cur - t["price"]) / t["price"] * 100.0
+                    rec["outcome_pct"]     = pct
+                    rec["outcome_dollars"] = round((cur - t["price"]) * t["shares"], 2)
+                else:
+                    rec["outcome_pct"]     = None
+                    rec["outcome_dollars"] = None
+        else:
+            # Missed — what would-have-gained against price_at_surface
+            pas = rec.get("price_at_surface")
+            if pas is not None and pas > 0 and cur is not None:
+                pct = (cur - pas) / pas * 100.0
+                rec["outcome_pct"]     = pct
+                # Normalize to $1000 notional so cross-ticker comparison is meaningful
+                rec["outcome_dollars"] = round(pct / 100.0 * 1000.0, 2)
+            else:
+                rec["outcome_pct"]     = None
+                rec["outcome_dollars"] = None
+
+        # Label
+        op = rec["outcome_pct"]
+        if op is None:
+            rec["outcome_label"] = "unknown"
+        elif op > 0.5:
+            rec["outcome_label"] = "win"
+        elif op < -0.5:
+            rec["outcome_label"] = "loss"
+        else:
+            rec["outcome_label"] = "flat"
+
+        # Days since rec_date
+        rd = rec["rec_date"]
+        rec["days_since"] = (today - rd).days if rd is not None else None
+
+        out.append(rec)
+    return out
+
+
+# ── Rollup metrics ──────────────────────────────────────────────────────────
+
+def summary_stats(enriched: list[dict]) -> dict:
+    """
+    Headline metrics across the supplied recs (already filtered by caller for
+    the desired date range / rec_type / etc.):
+
+      n_total          : int
+      n_acted          : int
+      action_rate      : float (0–100) — n_acted / n_total
+      n_wins / losses  : among priced outcomes
+      best_pct / worst : largest gain / largest loss outcome
+      avg_acted_pct    : mean outcome_pct for acted with priced outcome
+      avg_missed_pct   : mean outcome_pct for missed with priced outcome
+      missed_alpha     : avg_missed_pct - avg_acted_pct (positive = leaving money on table)
+    """
+    n_total  = len(enriched)
+    n_acted  = sum(1 for r in enriched if r.get("acted_on"))
+    priced   = [r for r in enriched if r.get("outcome_pct") is not None]
+    wins     = [r for r in priced if r["outcome_label"] == "win"]
+    losses   = [r for r in priced if r["outcome_label"] == "loss"]
+    acted_priced  = [r for r in priced if r["acted_on"]]
+    missed_priced = [r for r in priced if not r["acted_on"]]
+
+    def _mean(items, key="outcome_pct"):
+        if not items:
+            return None
+        return round(sum(it[key] for it in items) / len(items), 2)
+
+    avg_acted   = _mean(acted_priced)
+    avg_missed  = _mean(missed_priced)
+    missed_alpha = (
+        round(avg_missed - avg_acted, 2)
+        if (avg_missed is not None and avg_acted is not None) else None
+    )
+
+    best  = max(priced, key=lambda r: r["outcome_pct"]) if priced else None
+    worst = min(priced, key=lambda r: r["outcome_pct"]) if priced else None
+
+    return {
+        "n_total":      n_total,
+        "n_acted":      n_acted,
+        "action_rate":  round(n_acted / n_total * 100.0, 1) if n_total else None,
+        "n_priced":     len(priced),
+        "n_wins":       len(wins),
+        "n_losses":     len(losses),
+        "avg_acted_pct":  avg_acted,
+        "avg_missed_pct": avg_missed,
+        "missed_alpha":   missed_alpha,
+        "best":  {
+            "ticker":      best["ticker"],
+            "rec_date":    best["rec_date"],
+            "outcome_pct": round(best["outcome_pct"], 2),
+            "acted_on":    best["acted_on"],
+        } if best else None,
+        "worst": {
+            "ticker":      worst["ticker"],
+            "rec_date":    worst["rec_date"],
+            "outcome_pct": round(worst["outcome_pct"], 2),
+            "acted_on":    worst["acted_on"],
+        } if worst else None,
+    }
+
+
+def by_rec_type(enriched: list[dict]) -> dict:
+    """
+    Action-rate + avg-outcome rollup keyed by rec_type
+    ('new_pick' | 'add_winner' | 'buy_candidate').
+    """
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in enriched:
+        groups[r["rec_type"]].append(r)
+    out = {}
+    for rt, items in groups.items():
+        out[rt] = summary_stats(items)
+    return out
+
+
+def by_composite_band(enriched: list[dict]) -> list[dict]:
+    """
+    Bucket recs by composite_score band (Strong Buy / Buy / Hold-ish / None)
+    so the user can see whether higher-composite recs actually convert and
+    perform better than lower-composite ones.
+
+    Bands: ≥75 (Strong Buy), 65–74 (Buy), 44–64 (Hold-zone), <44 (Sell-zone),
+    None (not scored).
+    """
+    bands = [
+        ("Strong Buy (≥75)",   lambda c: c is not None and c >= 75),
+        ("Buy (65–74)",        lambda c: c is not None and 65 <= c < 75),
+        ("Hold zone (44–64)",  lambda c: c is not None and 44 <= c < 65),
+        ("Sell zone (<44)",    lambda c: c is not None and c < 44),
+        ("Unscored",           lambda c: c is None),
+    ]
+    out: list[dict] = []
+    for label, pred in bands:
+        bucket = [r for r in enriched if pred(r.get("composite_score"))]
+        if not bucket:
+            continue
+        stats = summary_stats(bucket)
+        out.append({"band": label, **stats})
+    return out
+
+
+def daily_volume(enriched: list[dict]) -> list[dict]:
+    """
+    For the recs-per-day chart: count of recs surfaced per rec_date, split
+    by acted vs not. Returns list of {date, total, acted, missed} sorted by date.
+    """
+    by_day: dict[date, dict] = defaultdict(lambda: {"total": 0, "acted": 0, "missed": 0})
+    for r in enriched:
+        d = r.get("rec_date")
+        if d is None:
+            continue
+        by_day[d]["total"] += 1
+        if r["acted_on"]:
+            by_day[d]["acted"] += 1
+        else:
+            by_day[d]["missed"] += 1
+    return [
+        {"date": d, **counts}
+        for d, counts in sorted(by_day.items(), key=lambda x: x[0])
+    ]

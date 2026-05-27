@@ -77,23 +77,30 @@ surfaced by Today's Brief so you can audit the App's recommendation
 history over time):
 
     create table if not exists recommendations (
-        id              bigint primary key generated always as identity,
-        ticker          text not null,
-        rec_date        date not null,
-        rec_type        text not null,          -- 'new_pick' | 'add_winner' | 'buy_candidate'
-        surfaced_at     timestamptz default now(),
-        composite_score numeric,
-        momentum_score  numeric,
-        sector          text,
-        conviction      text,                   -- 'high' | 'moderate' | 'unverified' | NULL
-        verdict         text,                   -- 'confirmed' | 'mixed' | 'caution' | 'unverified' | NULL
-        thesis          text,
+        id               bigint primary key generated always as identity,
+        ticker           text not null,
+        rec_date         date not null,
+        rec_type         text not null,          -- 'new_pick' | 'add_winner' | 'buy_candidate'
+        surfaced_at      timestamptz default now(),
+        price_at_surface numeric,                -- price snapshot at first-surface (for would-have-gained math)
+        composite_score  numeric,
+        momentum_score   numeric,
+        sector           text,
+        conviction       text,                   -- 'high' | 'moderate' | 'unverified' | NULL
+        verdict          text,                   -- 'confirmed' | 'mixed' | 'caution' | 'unverified' | NULL
+        thesis           text,
         constraint recommendations_unique_per_day
             unique (ticker, rec_date, rec_type)
     );
 
     create index if not exists recommendations_rec_date_idx
         on public.recommendations (rec_date desc);
+
+If recommendations table already exists (created before 2026-05-26), run
+this once to add the price_at_surface column for the History page:
+
+    alter table public.recommendations
+        add column if not exists price_at_surface numeric;
 """
 
 import streamlit as st
@@ -403,8 +410,8 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
 # of each (ticker, type) on a given date is recorded.
 
 _REC_COLS = ["id", "ticker", "rec_date", "rec_type", "surfaced_at",
-             "composite_score", "momentum_score", "sector", "conviction",
-             "verdict", "thesis"]
+             "price_at_surface", "composite_score", "momentum_score",
+             "sector", "conviction", "verdict", "thesis"]
 
 
 def save_recommendations(records: list[dict]) -> dict:
@@ -433,16 +440,27 @@ def save_recommendations(records: list[dict]) -> dict:
         if not tk or not rt or rd is None:
             continue
         rd_str = rd.isoformat() if hasattr(rd, "isoformat") else str(rd)[:10]
+        # price_at_surface is what the rec was priced at when first seen.
+        # Coerce defensively — a zero or negative price isn't useful, store
+        # NULL in that case so downstream "would-have-gained" math can skip it.
+        _pas = r.get("price_at_surface")
+        try:
+            _pas = float(_pas) if _pas is not None else None
+            if _pas is not None and _pas <= 0:
+                _pas = None
+        except (TypeError, ValueError):
+            _pas = None
         payload.append({
-            "ticker":          tk,
-            "rec_date":        rd_str,
-            "rec_type":        rt,
-            "composite_score": r.get("composite_score"),
-            "momentum_score":  r.get("momentum_score"),
-            "sector":          r.get("sector"),
-            "conviction":      r.get("conviction"),
-            "verdict":         r.get("verdict"),
-            "thesis":          (str(r.get("thesis") or "")[:600]) or None,
+            "ticker":           tk,
+            "rec_date":         rd_str,
+            "rec_type":         rt,
+            "price_at_surface": _pas,
+            "composite_score":  r.get("composite_score"),
+            "momentum_score":   r.get("momentum_score"),
+            "sector":           r.get("sector"),
+            "conviction":       r.get("conviction"),
+            "verdict":          r.get("verdict"),
+            "thesis":           (str(r.get("thesis") or "")[:600]) or None,
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}

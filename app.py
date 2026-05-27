@@ -686,7 +686,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -1358,43 +1358,82 @@ if page == "🏠 Home":
         if db.has_db() and not _brief_use_lock:
             _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
             try:
+                # Price snapshot resolver: each pick type stores price differently,
+                # and some buy_candidates don't carry one. Fall back to held-position
+                # avg_cost (via port_df) or live-prices cache before giving up. The
+                # column is nullable in the DB so None is safe — but a populated
+                # value makes "would-have-gained" math possible later.
+                _live_px_map = st.session_state.get("_live_prices", {}) or {}
+                _port_px_map: dict = {}
+                if port_df is not None and not port_df.empty and "Price" in port_df.columns:
+                    _port_px_map = {
+                        str(_r["Ticker"]).upper(): float(_r["Price"] or 0)
+                        for _, _r in port_df.iterrows()
+                        if _r.get("Ticker")
+                    }
+                def _price_for(_tk: str, _pick_price=None):
+                    if _pick_price:
+                        try:
+                            _v = float(_pick_price)
+                            if _v > 0:
+                                return _v
+                        except (TypeError, ValueError):
+                            pass
+                    _u = str(_tk).upper()
+                    _lp = _live_px_map.get(_u, {})
+                    if isinstance(_lp, dict):
+                        try:
+                            _v = float(_lp.get("price") or 0)
+                            if _v > 0:
+                                return _v
+                        except (TypeError, ValueError):
+                            pass
+                    _pv = _port_px_map.get(_u, 0)
+                    return _pv if _pv > 0 else None
+
                 _rec_rows: list[dict] = []
                 for _p in (_gt_today.get("new_picks") or []):
+                    _tk = str(_p.get("ticker", ""))
                     _rec_rows.append({
-                        "ticker":          str(_p.get("ticker", "")),
-                        "rec_date":        _TODAY_ET,
-                        "rec_type":        "new_pick",
-                        "composite_score": _p.get("composite_score"),
-                        "momentum_score":  _p.get("score"),
-                        "sector":          _p.get("sector", ""),
-                        "conviction":      _p.get("conviction", ""),
-                        "verdict":         ((_p.get("xref") or {}).get("verdict") or ""),
-                        "thesis":          _p.get("thesis", ""),
+                        "ticker":           _tk,
+                        "rec_date":         _TODAY_ET,
+                        "rec_type":         "new_pick",
+                        "price_at_surface": _price_for(_tk, _p.get("price")),
+                        "composite_score":  _p.get("composite_score"),
+                        "momentum_score":   _p.get("score"),
+                        "sector":           _p.get("sector", ""),
+                        "conviction":       _p.get("conviction", ""),
+                        "verdict":          ((_p.get("xref") or {}).get("verdict") or ""),
+                        "thesis":           _p.get("thesis", ""),
                     })
                 for _p in (_gt_today.get("add_positions") or []):
+                    _tk = str(_p.get("ticker", ""))
                     _rec_rows.append({
-                        "ticker":          str(_p.get("ticker", "")),
-                        "rec_date":        _TODAY_ET,
-                        "rec_type":        "add_winner",
-                        "composite_score": _p.get("score"),
-                        "momentum_score":  _p.get("score"),
-                        "sector":          _p.get("sector", ""),
-                        "conviction":      "high",   # add-to-winner only fires on Strong Buy
-                        "verdict":         "confirmed",
-                        "thesis":          _p.get("thesis", ""),
+                        "ticker":           _tk,
+                        "rec_date":         _TODAY_ET,
+                        "rec_type":         "add_winner",
+                        "price_at_surface": _price_for(_tk),  # add-to-winner doesn't carry an explicit price
+                        "composite_score":  _p.get("score"),
+                        "momentum_score":   _p.get("score"),
+                        "sector":           _p.get("sector", ""),
+                        "conviction":       "high",   # add-to-winner only fires on Strong Buy
+                        "verdict":          "confirmed",
+                        "thesis":           _p.get("thesis", ""),
                     })
                 for _p in (_daily_brief.get("buy_candidates") or []):
                     _bx = _p.get("xref") or {}
+                    _tk = str(_p.get("ticker", ""))
                     _rec_rows.append({
-                        "ticker":          str(_p.get("ticker", "")),
-                        "rec_date":        _TODAY_ET,
-                        "rec_type":        "buy_candidate",
-                        "composite_score": None,
-                        "momentum_score":  _p.get("score"),
-                        "sector":          _p.get("sector", ""),
-                        "conviction":      "",
-                        "verdict":         str(_bx.get("verdict") or ""),
-                        "thesis":          "",
+                        "ticker":           _tk,
+                        "rec_date":         _TODAY_ET,
+                        "rec_type":         "buy_candidate",
+                        "price_at_surface": _price_for(_tk),
+                        "composite_score":  None,
+                        "momentum_score":   _p.get("score"),
+                        "sector":           _p.get("sector", ""),
+                        "conviction":       "",
+                        "verdict":          str(_bx.get("verdict") or ""),
+                        "thesis":           "",
                     })
                 if _rec_rows:
                     _rec_save_result = db.save_recommendations(_rec_rows)
@@ -11755,6 +11794,285 @@ elif page == "🪞 Trade Review":
             "Open positions are marked-to-market against current price. "
             "**Position size** measured against current portfolio value as a proxy (journal doesn't store historical portfolio snapshots)."
         )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — RECOMMENDATIONS HISTORY
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "📜 Recommendations History":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("📜 Recommendations History")
+    st.caption(
+        "Every pick Today's Brief has surfaced — captured at first sight. "
+        "Cross-referenced with the Trade Journal to show what got acted on, "
+        "what was missed, and how each played out. The substrate for spotting "
+        "trends in your action discipline and the App's hit rate over time."
+    )
+
+    if not db.has_db():
+        st.warning(
+            "🟡 Supabase not connected — recommendations history requires the "
+            "`recommendations` table. Run the SQL migration in `stock_analyzer/db.py` "
+            "and set credentials in `.streamlit/secrets.toml`."
+        )
+        st.stop()
+
+    from stock_analyzer.recommendations_history import (
+        match_recs_to_trades,
+        compute_outcomes,
+        summary_stats,
+        by_rec_type,
+        by_composite_band,
+        daily_volume,
+    )
+    import pandas as _rh_pd
+    from datetime import date as _rh_date, timedelta as _rh_td
+
+    # ── Filter bar ──────────────────────────────────────────────────────────
+    _rh_c1, _rh_c2, _rh_c3 = st.columns([1.4, 1.2, 1.2])
+    with _rh_c1:
+        _rh_range_label = st.selectbox(
+            "Date range",
+            ["Last 7 days", "Last 30 days", "Last 90 days", "All time", "Custom"],
+            index=1,
+            key="_rh_range",
+        )
+    _rh_end   = _TODAY_ET
+    if _rh_range_label == "Last 7 days":
+        _rh_start = _rh_end - _rh_td(days=7)
+    elif _rh_range_label == "Last 30 days":
+        _rh_start = _rh_end - _rh_td(days=30)
+    elif _rh_range_label == "Last 90 days":
+        _rh_start = _rh_end - _rh_td(days=90)
+    elif _rh_range_label == "All time":
+        _rh_start = _rh_date(2020, 1, 1)
+    else:   # Custom
+        with _rh_c1:
+            _rh_custom_range = st.date_input(
+                "Custom range",
+                value=(_rh_end - _rh_td(days=30), _rh_end),
+                key="_rh_custom_range",
+            )
+        if isinstance(_rh_custom_range, (tuple, list)) and len(_rh_custom_range) == 2:
+            _rh_start, _rh_end = _rh_custom_range[0], _rh_custom_range[1]
+        else:
+            _rh_start = _rh_end - _rh_td(days=30)
+    with _rh_c2:
+        _rh_type_filter = st.multiselect(
+            "Rec type",
+            ["new_pick", "add_winner", "buy_candidate"],
+            default=["new_pick", "add_winner", "buy_candidate"],
+            key="_rh_type_filter",
+        )
+    with _rh_c3:
+        _rh_status_filter = st.selectbox(
+            "Status",
+            ["All", "Acted only", "Missed only"],
+            index=0,
+            key="_rh_status_filter",
+        )
+
+    # ── Load data ───────────────────────────────────────────────────────────
+    with st.spinner("Loading recommendations history…"):
+        _rh_recs_df   = db.load_recommendations(start_date=_rh_start, end_date=_rh_end)
+        _rh_trades_df = st.session_state.get("trades_df")
+        if _rh_trades_df is None:
+            _rh_trades_df = db.load_trades()
+
+    if _rh_recs_df is None or _rh_recs_df.empty:
+        st.info(
+            "No recommendations recorded for this range yet. As Today's Brief "
+            "surfaces picks day after day, this page will fill in. "
+            "(If you only set up the `recommendations` table recently, you'll "
+            "have a few days of history at most.)"
+        )
+        st.stop()
+
+    # Apply type filter at the DataFrame level for efficiency
+    if _rh_type_filter:
+        _rh_recs_df = _rh_recs_df[_rh_recs_df["rec_type"].isin(_rh_type_filter)]
+
+    # ── Match against trades + compute outcomes ─────────────────────────────
+    # Fetch live prices for every ticker in the filtered set so missed-rec
+    # would-have-gained math has data to work with.
+    _rh_tickers = sorted({
+        str(t).strip().upper()
+        for t in _rh_recs_df["ticker"].dropna().tolist()
+        if str(t).strip()
+    })
+    _rh_prices: dict = {}
+    if _rh_tickers:
+        try:
+            _px = fetch_live_prices(_rh_tickers)
+            _rh_prices = {
+                t: float(d.get("price", 0))
+                for t, d in (_px or {}).items()
+                if d and d.get("price")
+            }
+        except Exception:
+            _rh_prices = {}
+
+    _rh_matched   = match_recs_to_trades(_rh_recs_df, _rh_trades_df)
+    _rh_enriched  = compute_outcomes(_rh_matched, _rh_prices, today=_TODAY_ET)
+
+    # Status filter (after enrichment so the dropdown shows the right counts)
+    if _rh_status_filter == "Acted only":
+        _rh_enriched = [r for r in _rh_enriched if r["acted_on"]]
+    elif _rh_status_filter == "Missed only":
+        _rh_enriched = [r for r in _rh_enriched if not r["acted_on"]]
+
+    if not _rh_enriched:
+        st.info("No recommendations match the current filters.")
+        st.stop()
+
+    # ── Headline metrics ────────────────────────────────────────────────────
+    _rh_stats = summary_stats(_rh_enriched)
+    _rh_m1, _rh_m2, _rh_m3, _rh_m4 = st.columns(4)
+    _rh_m1.metric(
+        "Total recs",
+        f"{_rh_stats['n_total']:,}",
+        help="Distinct picks surfaced in the selected range.",
+    )
+    _rh_m2.metric(
+        "Action rate",
+        f"{_rh_stats['action_rate']:.0f}%" if _rh_stats['action_rate'] is not None else "—",
+        f"{_rh_stats['n_acted']:,} acted",
+        help="Acted = same-day trade with trigger_type='RECOMMENDATION'.",
+    )
+    _rh_m3.metric(
+        "Avg acted outcome",
+        f"{_rh_stats['avg_acted_pct']:+.1f}%" if _rh_stats['avg_acted_pct'] is not None else "—",
+        help="Mean outcome_pct across acted recs with priced outcomes (BUY MTM, SELL realized).",
+    )
+    _rh_m4.metric(
+        "Missed alpha",
+        f"{_rh_stats['missed_alpha']:+.1f}pp" if _rh_stats['missed_alpha'] is not None else "—",
+        help=(
+            "Avg missed-rec would-have-gained minus avg acted-rec outcome. "
+            "Positive = you'd have done better acting more often. "
+            "Negative = your discretion to skip was earning its keep."
+        ),
+    )
+
+    # Best / Worst banner
+    _best  = _rh_stats.get("best")
+    _worst = _rh_stats.get("worst")
+    if _best and _worst:
+        st.markdown(
+            f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
+            f"padding:10px 14px;margin:8px 0;color:#cbd5e1;font-size:0.92em'>"
+            f"🏆 <b>Best:</b> {_best['ticker']} on {_best['rec_date']} → "
+            f"<span style='color:#86efac'>{_best['outcome_pct']:+.2f}%</span> "
+            f"({'acted' if _best['acted_on'] else 'missed'})"
+            f"  ·  💔 <b>Worst:</b> {_worst['ticker']} on {_worst['rec_date']} → "
+            f"<span style='color:#fca5a5'>{_worst['outcome_pct']:+.2f}%</span> "
+            f"({'acted' if _worst['acted_on'] else 'missed'})"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Trends ──────────────────────────────────────────────────────────────
+    with st.expander("📈 Trends — recs over time & action discipline", expanded=True):
+        _rh_daily = daily_volume(_rh_enriched)
+        if _rh_daily:
+            _rh_dv_df = _rh_pd.DataFrame(_rh_daily)
+            _rh_dv_df["date"] = _rh_pd.to_datetime(_rh_dv_df["date"])
+            _rh_dv_df = _rh_dv_df.set_index("date")[["acted", "missed"]]
+            st.bar_chart(_rh_dv_df, height=240)
+            st.caption(
+                "Daily recs surfaced — green slice = same-day acted, "
+                "grey slice = missed. Use this to spot stretches where action "
+                "discipline slipped (lots of grey) or the App got chatty (tall bars)."
+            )
+        else:
+            st.caption("Not enough data to draw the daily-volume chart yet.")
+
+    # ── By composite band ───────────────────────────────────────────────────
+    with st.expander("🎯 Action rate & outcome by composite band", expanded=False):
+        _rh_band = by_composite_band(_rh_enriched)
+        if _rh_band:
+            _rh_band_df = _rh_pd.DataFrame([
+                {
+                    "Composite band":  b["band"],
+                    "Total":           b["n_total"],
+                    "Acted":           b["n_acted"],
+                    "Action rate":     f"{b['action_rate']:.0f}%" if b['action_rate'] is not None else "—",
+                    "Avg acted":       f"{b['avg_acted_pct']:+.1f}%" if b['avg_acted_pct'] is not None else "—",
+                    "Avg missed":      f"{b['avg_missed_pct']:+.1f}%" if b['avg_missed_pct'] is not None else "—",
+                }
+                for b in _rh_band
+            ])
+            st.dataframe(_rh_band_df, hide_index=True, use_container_width=True)
+            st.caption(
+                "Higher-composite bands should ideally have higher action rate "
+                "*and* better outcomes — that confirms the composite gate is "
+                "doing its job. Inverted ordering (e.g. Hold-zone outperforming "
+                "Buy) is a signal to recalibrate."
+            )
+        else:
+            st.caption("No composite-banded data in this range yet.")
+
+    # ── By rec type ─────────────────────────────────────────────────────────
+    with st.expander("🧭 Breakdown by rec type", expanded=False):
+        _rh_types = by_rec_type(_rh_enriched)
+        if _rh_types:
+            _rh_t_df = _rh_pd.DataFrame([
+                {
+                    "Type":         rt,
+                    "Total":        st_["n_total"],
+                    "Acted":        st_["n_acted"],
+                    "Action rate":  f"{st_['action_rate']:.0f}%" if st_["action_rate"] is not None else "—",
+                    "Avg acted":    f"{st_['avg_acted_pct']:+.1f}%" if st_['avg_acted_pct'] is not None else "—",
+                    "Avg missed":   f"{st_['avg_missed_pct']:+.1f}%" if st_['avg_missed_pct'] is not None else "—",
+                }
+                for rt, st_ in _rh_types.items()
+            ])
+            st.dataframe(_rh_t_df, hide_index=True, use_container_width=True)
+
+    # ── Detailed table ──────────────────────────────────────────────────────
+    st.markdown("### 📋 All recommendations")
+    _rh_rows = []
+    for r in sorted(_rh_enriched, key=lambda x: (x["rec_date"] or _rh_date.min, x["ticker"]), reverse=True):
+        _outcome_disp = (
+            f"{r['outcome_pct']:+.2f}%" if r["outcome_pct"] is not None else "—"
+        )
+        _status_disp = "✅ Acted" if r["acted_on"] else "⏭ Missed"
+        _label_disp  = {
+            "win":  "🟢 Win",
+            "loss": "🔴 Loss",
+            "flat": "⚪ Flat",
+            "unknown": "—",
+        }.get(r["outcome_label"], "—")
+        _rh_rows.append({
+            "Date":      r["rec_date"].isoformat() if r["rec_date"] else "—",
+            "Ticker":    r["ticker"],
+            "Type":      r["rec_type"],
+            "Sector":    r["sector"] or "—",
+            "Composite": (
+                f"{r['composite_score']:.0f}" if r["composite_score"] is not None else "—"
+            ),
+            "Momentum":  (
+                f"{r['momentum_score']:.0f}" if r["momentum_score"] is not None else "—"
+            ),
+            "Verdict":   r["verdict"] or "—",
+            "Status":    _status_disp,
+            "Outcome":   _outcome_disp,
+            "Result":    _label_disp,
+        })
+    if _rh_rows:
+        st.dataframe(
+            _rh_pd.DataFrame(_rh_rows),
+            hide_index=True,
+            use_container_width=True,
+            height=min(560, 60 + 35 * len(_rh_rows)),
+        )
+
+    st.caption(
+        "_Outcome math — Acted BUY: mark-to-market vs entry price; Acted SELL: "
+        "realized P&L from the journal; Missed: % change from price-at-surface "
+        "(when stored) to current. Older recs surfaced before price_at_surface "
+        "was captured will show '—' for missed outcomes._"
+    )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 6 — ECONOMIC CALENDAR
