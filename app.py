@@ -7591,9 +7591,12 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
             _model_label = _model_opts.get(_sel_model, _sel_model)
 
             # Render into the brief slot near the top of the tab.
+            # IMPORTANT: the f-string MUST start with the HTML tag at column 0
+            # (no leading newline + indentation). Otherwise Streamlit's markdown
+            # parser sees indented content and renders the whole block as a
+            # <pre><code> indented-code-block — which shows raw HTML on screen.
             _brief_slot.markdown(
-                f"""
-                <style>
+                f"""<style>
                 .ai-brief {{ margin-top:10px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }}
                 .ai-brief-head {{
                     background:linear-gradient(135deg,#1e3a5f 0%,#0f2747 100%);
