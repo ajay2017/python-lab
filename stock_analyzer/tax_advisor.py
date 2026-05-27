@@ -30,11 +30,15 @@ def _f(val, default=0.0):
 
 
 def _earliest_buy(ticker: str, trades_df: pd.DataFrame) -> _date | None:
-    """Return the earliest BUY date for a ticker from the trade journal."""
+    """Return the earliest BUY date for a ticker from the trade journal.
+
+    Kept for callers that only need the oldest acquisition date. New tax
+    logic should prefer _build_open_lots, which is tax-lot aware.
+    """
     if trades_df is None or trades_df.empty:
         return None
     buys = trades_df[
-        (trades_df["ticker"].str.upper() == ticker.upper()) &
+        (trades_df["ticker"].astype(str).str.upper() == ticker.upper()) &
         (trades_df["action"] == "BUY")
     ]
     if buys.empty:
@@ -43,6 +47,64 @@ def _earliest_buy(ticker: str, trades_df: pd.DataFrame) -> _date | None:
     if dates.empty:
         return None
     return dates.min().date()
+
+
+def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list[dict]:
+    """FIFO-replay the trade journal and return the currently-open tax lots.
+
+    Each returned dict: {shares, buy_date, days_held}. SELLs consume from
+    the oldest open lot first (FIFO). SPLIT rows pro-rata adjust each lot's
+    share count so the post-split total matches the SPLIT row's shares,
+    preserving each lot's original acquisition date (IRS rule: a split
+    inherits the holding period of the pre-split shares).
+
+    Without this lot-level reconstruction, a multi-lot position is
+    incorrectly classified by `_earliest_buy` — recently-added shares get
+    treated as LTCG once the oldest lot matures.
+    """
+    if trades_df is None or trades_df.empty:
+        return []
+    rows = trades_df[trades_df["ticker"].astype(str).str.upper() == ticker.upper()].copy()
+    if rows.empty:
+        return []
+    rows["_ts"] = pd.to_datetime(rows["traded_at"], errors="coerce")
+    rows = rows.dropna(subset=["_ts"]).sort_values(["_ts", "id"], ascending=True)
+
+    lots: list[list] = []  # each entry: mutable [shares, buy_date]
+    for _, r in rows.iterrows():
+        action = str(r.get("action", "")).upper()
+        try:
+            sh = float(r.get("shares") or 0)
+        except (TypeError, ValueError):
+            continue
+        if sh <= 0:
+            continue
+        d = r["_ts"].date()
+        if "SPLIT" in action:
+            old_total = sum(lot[0] for lot in lots)
+            if old_total > 1e-6 and sh > 0:
+                ratio = sh / old_total
+                for lot in lots:
+                    lot[0] *= ratio
+            else:
+                # No prior lots (rebuild from a SPLIT seed) — synthesize one.
+                lots = [[sh, d]]
+        elif "BUY" in action:
+            lots.append([sh, d])
+        elif "SELL" in action:
+            remaining = sh
+            while remaining > 1e-6 and lots:
+                if lots[0][0] <= remaining + 1e-6:
+                    remaining -= lots[0][0]
+                    lots.pop(0)
+                else:
+                    lots[0][0] -= remaining
+                    remaining = 0.0
+
+    return [
+        {"shares": s, "buy_date": d, "days_held": (today - d).days}
+        for s, d in lots if s > 1e-6
+    ]
 
 
 def build_tax_analysis(
@@ -83,36 +145,75 @@ def build_tax_analysis(
         pnl         = _f(row.get("P&L ($)"))
         cost_total  = round(avg_cost * shares, 2)
 
-        # Holding period from trade journal
-        acq_date  = _earliest_buy(ticker, trades_df)
-        days_held = (today - acq_date).days if acq_date else None
+        # Tax-lot-aware holding period reconstruction. A multi-lot position
+        # (added shares to an existing one) has a mix of STCG and LTCG-aged
+        # shares; the legacy logic classified the whole position by the
+        # oldest lot's date, mis-rating the recently-added shares.
+        lots = _build_open_lots(ticker, trades_df, today)
+        total_lot_shares = sum(l["shares"] for l in lots)
 
-        if days_held is None:
+        if not lots or total_lot_shares <= 1e-6:
+            acq_date     = _earliest_buy(ticker, trades_df)
+            days_held    = (today - acq_date).days if acq_date else None
             gain_type    = "Unknown"
             days_to_ltcg = None
-        elif days_held >= _STCG_THRESHOLD_DAYS:
-            gain_type    = "LTCG"
-            days_to_ltcg = 0
+            ltcg_frac    = 0.0
+            stcg_frac    = 0.0
         else:
-            gain_type    = "STCG"
-            days_to_ltcg = _STCG_THRESHOLD_DAYS - days_held
+            ltcg_shares = sum(l["shares"] for l in lots if l["days_held"] >= _STCG_THRESHOLD_DAYS)
+            stcg_shares = total_lot_shares - ltcg_shares
+            ltcg_frac   = ltcg_shares / total_lot_shares
+            stcg_frac   = 1.0 - ltcg_frac
+            acq_date    = min(l["buy_date"] for l in lots)
+            # Display "days held" as the share-weighted average across lots
+            # so a 90/10 fresh/old split doesn't claim a 2-year hold time.
+            days_held   = int(round(
+                sum(l["days_held"] * l["shares"] for l in lots) / total_lot_shares
+            ))
+            if stcg_shares <= 1e-6:
+                gain_type    = "LTCG"
+                days_to_ltcg = 0
+            elif ltcg_shares <= 1e-6:
+                gain_type    = "STCG"
+                # Wait time = earliest STCG lot's days to maturity
+                days_to_ltcg = max(
+                    0,
+                    min(
+                        _STCG_THRESHOLD_DAYS - l["days_held"]
+                        for l in lots
+                        if l["days_held"] < _STCG_THRESHOLD_DAYS
+                    ),
+                )
+            else:
+                gain_type    = "MIXED"
+                days_to_ltcg = max(
+                    0,
+                    min(
+                        _STCG_THRESHOLD_DAYS - l["days_held"]
+                        for l in lots
+                        if l["days_held"] < _STCG_THRESHOLD_DAYS
+                    ),
+                )
 
-        # Tax estimates (only on gains; losses are harvestable)
+        # Tax estimates — apportion PnL by the share fractions actually
+        # eligible for each rate today vs. after waiting STCG lots out.
         if pnl > 0:
-            if gain_type == "STCG":
-                tax_if_sold_today = round(pnl * stcg_rate, 0)
+            if gain_type == "Unknown":
+                tax_if_sold_today = round(pnl * stcg_rate, 0)   # worst case
                 tax_if_ltcg       = round(pnl * ltcg_rate, 0)
                 tax_savings       = round(tax_if_sold_today - tax_if_ltcg, 0)
-                total_stcg_gain  += pnl
-            elif gain_type == "LTCG":
-                tax_if_sold_today = round(pnl * ltcg_rate, 0)
-                tax_if_ltcg       = tax_if_sold_today
-                tax_savings       = 0.0
-                total_ltcg_gain  += pnl
-            else:  # Unknown — show range
-                tax_if_sold_today = round(pnl * stcg_rate, 0)  # worst case
+            else:
+                stcg_pnl = pnl * stcg_frac
+                ltcg_pnl = pnl * ltcg_frac
+                tax_if_sold_today = round(stcg_pnl * stcg_rate + ltcg_pnl * ltcg_rate, 0)
+                # Waited-out case: every share that's still STCG eventually
+                # becomes LTCG-rated. Upper bound on savings; see M-14.
                 tax_if_ltcg       = round(pnl * ltcg_rate, 0)
                 tax_savings       = round(tax_if_sold_today - tax_if_ltcg, 0)
+                if stcg_pnl > 0:
+                    total_stcg_gain += stcg_pnl
+                if ltcg_pnl > 0:
+                    total_ltcg_gain += ltcg_pnl
         else:
             tax_if_sold_today = 0.0
             tax_if_ltcg       = 0.0
@@ -145,9 +246,9 @@ def build_tax_analysis(
                 harvest_blocked = True
             else:
                 action = "HARVEST"
-        elif gain_type == "STCG" and pnl > 0 and days_to_ltcg is not None and days_to_ltcg <= 60:
+        elif gain_type in ("STCG", "MIXED") and pnl > 0 and days_to_ltcg is not None and days_to_ltcg <= 60:
             action = "WAIT"
-        elif gain_type == "STCG" and pnl > 0 and days_to_ltcg is not None and days_to_ltcg > 60:
+        elif gain_type in ("STCG", "MIXED") and pnl > 0 and days_to_ltcg is not None and days_to_ltcg > 60:
             action = "HOLD_FOR_LTCG"
         elif gain_type == "LTCG" and pnl > 0:
             action = "LTCG_ELIGIBLE"
@@ -165,6 +266,8 @@ def build_tax_analysis(
             "days_held":          days_held,
             "gain_type":          gain_type,
             "days_to_ltcg":       days_to_ltcg,
+            "ltcg_frac":          round(ltcg_frac, 4),
+            "stcg_frac":          round(stcg_frac, 4),
             "tax_if_sold_today":  tax_if_sold_today,
             "tax_if_ltcg":        tax_if_ltcg,
             "tax_savings":        tax_savings,
