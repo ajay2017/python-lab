@@ -7271,12 +7271,6 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
     with tab_brief:
         import os, re as _re
 
-        st.markdown("### 🤖 AI Monitoring Brief")
-        st.caption(
-            "Generates an institutional-style morning brief from your live portfolio data. "
-            "Choose any supported AI provider — key is read from Streamlit secrets or entered below."
-        )
-
         # ── Provider / model config ───────────────────────────────────────────
         _AI_PROVIDERS = {
             "Claude (Anthropic)": {
@@ -7321,45 +7315,68 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
             },
         }
 
-        # ── Provider + model selectors ────────────────────────────────────────
-        _bp1, _bp2 = st.columns([3, 3])
-        with _bp1:
-            _sel_provider = st.selectbox(
-                "AI Provider", list(_AI_PROVIDERS.keys()), key="_brief_provider"
+        # ── Header row: title + action button slot, then brief slot ──────────
+        _hdr_l, _hdr_r = st.columns([5, 2])
+        with _hdr_l:
+            st.markdown("### AI Monitoring Brief")
+            st.caption(
+                "Institutional-style morning brief generated from your live portfolio data, "
+                "active alerts, market indices and news."
             )
-        _prov_cfg   = _AI_PROVIDERS[_sel_provider]
-        _model_opts = _prov_cfg["models"]
-        with _bp2:
-            _sel_model = st.selectbox(
-                "Model",
-                list(_model_opts.keys()),
-                format_func=lambda m: _model_opts[m],
-                key="_brief_model",
-            )
+        _action_slot = _hdr_r.empty()
+        _info_slot   = st.empty()
+        _brief_slot  = st.empty()
 
-        # ── API key resolution: secrets → env → manual entry ─────────────────
-        _sec_section, _sec_field = _prov_cfg["secrets_path"]
-        _resolved_key = (
-            st.secrets.get(_sec_section, {}).get(_sec_field)
-            or os.environ.get(_prov_cfg["env_var"])
-            or ""
+        # ── Provider settings (collapsible, at the bottom of the page) ───────
+        # Auto-collapse when at least one provider key is configured.
+        _any_key_configured = any(
+            (st.secrets.get(_p["secrets_path"][0], {}).get(_p["secrets_path"][1])
+             or os.environ.get(_p["env_var"]))
+            for _p in _AI_PROVIDERS.values()
         )
-        _ss_key_store = f"_brief_key_{_sel_provider}"
-        if _resolved_key:
-            st.session_state[_ss_key_store] = _resolved_key
-            st.caption(f"🔑 API key loaded from secrets / environment.")
-        else:
-            _manual_key = st.text_input(
-                f"{_sel_provider} API key",
-                value=st.session_state.get(_ss_key_store, ""),
-                type="password",
-                placeholder=_prov_cfg["key_hint"],
-                help=f"Get a key at {_prov_cfg['key_url']}",
-                key=f"_brief_key_input_{_sel_provider}",
-            )
-            if _manual_key:
-                st.session_state[_ss_key_store] = _manual_key
-        _active_key = st.session_state.get(_ss_key_store, "")
+        # Defer rendering the expander until after we resolve everything,
+        # so the button + brief render first. We use a placeholder.
+        _settings_slot = st.empty()
+        with _settings_slot.container():
+            with st.expander("⚙️ Provider settings", expanded=not _any_key_configured):
+                _bp1, _bp2 = st.columns([3, 3])
+                with _bp1:
+                    _sel_provider = st.selectbox(
+                        "AI Provider", list(_AI_PROVIDERS.keys()), key="_brief_provider"
+                    )
+                _prov_cfg   = _AI_PROVIDERS[_sel_provider]
+                _model_opts = _prov_cfg["models"]
+                with _bp2:
+                    _sel_model = st.selectbox(
+                        "Model",
+                        list(_model_opts.keys()),
+                        format_func=lambda m: _model_opts[m],
+                        key="_brief_model",
+                    )
+
+                # ── API key resolution: secrets → env → manual entry ─────────
+                _sec_section, _sec_field = _prov_cfg["secrets_path"]
+                _resolved_key = (
+                    st.secrets.get(_sec_section, {}).get(_sec_field)
+                    or os.environ.get(_prov_cfg["env_var"])
+                    or ""
+                )
+                _ss_key_store = f"_brief_key_{_sel_provider}"
+                if _resolved_key:
+                    st.session_state[_ss_key_store] = _resolved_key
+                    st.caption(f"🔑 API key loaded from secrets / environment.")
+                else:
+                    _manual_key = st.text_input(
+                        f"{_sel_provider} API key",
+                        value=st.session_state.get(_ss_key_store, ""),
+                        type="password",
+                        placeholder=_prov_cfg["key_hint"],
+                        help=f"Get a key at {_prov_cfg['key_url']}",
+                        key=f"_brief_key_input_{_sel_provider}",
+                    )
+                    if _manual_key:
+                        st.session_state[_ss_key_store] = _manual_key
+                _active_key = st.session_state.get(_ss_key_store, "")
 
         # ── Unified AI call ───────────────────────────────────────────────────
         def _call_ai_brief(provider, model, api_key, sys_prompt, usr_prompt):
@@ -7401,12 +7418,9 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
         _brief_cached    = st.session_state.get(_brief_cache_key)
         _brief_ts        = st.session_state.get(f"{_brief_cache_key}__ts", "")
 
-        # ── Generate / refresh controls ───────────────────────────────────────
-        _bctl1, _bctl2 = st.columns([6, 2])
-        with _bctl1:
-            if _brief_ts:
-                st.caption(f"Generated: {_brief_ts}  ·  {_sel_provider} / {_sel_model}")
-        with _bctl2:
+        # ── Fill the action-button slot in the top header row ───────────────
+        with _action_slot.container():
+            st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
             _gen_btn = st.button(
                 "🔄 Refresh Brief" if _brief_cached else "✨ Generate Brief",
                 key="_gen_brief_btn",
@@ -7416,11 +7430,12 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
             )
 
         if not _active_key:
-            st.info(
-                f"Enter your **{_sel_provider}** API key above to generate the brief.  "
-                f"Get one at {_prov_cfg['key_url']}",
-                icon="🔑",
-            )
+            with _info_slot.container():
+                st.info(
+                    f"Open **⚙️ Provider settings** below to enter your "
+                    f"**{_sel_provider}** API key. Get one at {_prov_cfg['key_url']}",
+                    icon="🔑",
+                )
 
         if _gen_btn and _active_key:
             # Build portfolio context (same for all providers)
@@ -7461,18 +7476,20 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                 "Write a concise, professional morning monitoring brief. "
                 "Be specific: name tickers, cite numbers. Short structured sections. "
                 "Tone: confident, analytical, no fluff. Maximum 450 words. "
-                "End with 3 concrete action items ranked by urgency."
+                "End with 3 concrete action items ranked by urgency. "
+                "Output format: use '## SECTION NAME' on its own line for each section header. "
+                "Do NOT emit a top-level title or a date line — start directly with '## EXECUTIVE SUMMARY'."
             )
             _usr_prompt = (
                 f"Generate a morning monitoring brief for this portfolio:\n\n"
                 f"{chr(10).join(_ctx_lines)}\n\n"
-                "Structure:\n"
-                "**EXECUTIVE SUMMARY** (2-3 sentences)\n"
-                "**MARKET CONTEXT** (1-2 sentences)\n"
-                "**PORTFOLIO HIGHLIGHTS** (top movers, key risks)\n"
-                "**RISK FLAGS** (alerts — what needs attention)\n"
-                "**KEY NEWS CATALYSTS** (material news affecting holdings)\n"
-                "**ACTION ITEMS** (3 prioritised, specific)\n"
+                "Required sections (use '## HEADING' on its own line — no title, no date):\n"
+                "## EXECUTIVE SUMMARY (2-3 sentences)\n"
+                "## MARKET CONTEXT (1-2 sentences)\n"
+                "## PORTFOLIO HIGHLIGHTS (top movers, key risks)\n"
+                "## RISK FLAGS (alerts — what needs attention)\n"
+                "## KEY NEWS CATALYSTS (material news affecting holdings)\n"
+                "## ACTION ITEMS (3 prioritised, specific)\n"
             )
 
             with st.spinner(f"Generating brief with {_sel_provider}…"):
@@ -7492,7 +7509,15 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
         if _brief_cached:
             # Minimal markdown → HTML converter for the section structure the LLM produces.
             def _md_to_html(md: str) -> str:
-                lines = md.split("\n")
+                # Defensive: strip any leading title block before the first '## ' section.
+                # (Older briefs may have '# MORNING PORTFOLIO BRIEF' + date line + '---'.)
+                _all_lines = md.split("\n")
+                _first_section = next(
+                    (i for i, ln in enumerate(_all_lines)
+                     if ln.strip().startswith("## ")),
+                    None,
+                )
+                lines = _all_lines[_first_section:] if _first_section is not None else _all_lines
                 out, in_list = [], None  # in_list: None | "ul" | "ol"
                 def _inline(s: str) -> str:
                     s = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
@@ -7534,7 +7559,8 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
             _today_str = datetime.now().strftime("%A · %B %d, %Y")
             _model_label = _model_opts.get(_sel_model, _sel_model)
 
-            st.markdown(
+            # Render into the brief slot near the top of the tab.
+            _brief_slot.markdown(
                 f"""
                 <style>
                 .ai-brief {{ margin-top:10px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }}
