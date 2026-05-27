@@ -7503,8 +7503,39 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                     _brief_cached = _brief_text
                     _brief_ts     = _ts_now
                 except Exception as _e:
-                    st.error(f"Brief generation failed: {_e}")
-                    _brief_cached = None
+                    _emsg = str(_e)
+                    _ecode = getattr(_e, "status_code", None)
+                    # Friendlier mapping for common transient + auth errors.
+                    if _ecode == 529 or "overloaded" in _emsg.lower():
+                        _hint = (
+                            f"**{_sel_provider}** is temporarily overloaded "
+                            "(server-side traffic spike). Try again in a moment, "
+                            "or switch provider in **⚙️ Provider settings** below."
+                        )
+                        _icon = "⏳"
+                    elif _ecode == 429 or "rate_limit" in _emsg.lower():
+                        _hint = (
+                            f"Rate limit hit on **{_sel_provider}**. Wait a minute "
+                            "and try again, or switch to a different provider/model."
+                        )
+                        _icon = "⏳"
+                    elif _ecode in (401, 403) or "auth" in _emsg.lower() or "api key" in _emsg.lower():
+                        _hint = (
+                            f"**{_sel_provider}** rejected the API key. Re-check it "
+                            "in **⚙️ Provider settings** below."
+                        )
+                        _icon = "🔑"
+                    elif _ecode and _ecode >= 500:
+                        _hint = (
+                            f"**{_sel_provider}** server error ({_ecode}). "
+                            "Usually transient — retry in a moment."
+                        )
+                        _icon = "⚠️"
+                    else:
+                        _hint = f"Generation failed: {_emsg}"
+                        _icon = "⚠️"
+                    st.error(_hint, icon=_icon)
+                    # Keep any previously-cached brief intact — do not clobber.
 
         if _brief_cached:
             # Minimal markdown → HTML converter for the section structure the LLM produces.
