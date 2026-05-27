@@ -10198,13 +10198,15 @@ elif page == "📒 Trade Journal":
         # ── Sanity-check override (outside the form so it persists if the user
         # has to re-submit after a validation block) ─────────────────────────
         st.checkbox(
-            "⚠ Allow unusual price / unrecognized ticker (skip sanity checks)",
+            "⚠ Allow unusual price / unrecognized ticker / SELL without holding (skip sanity checks)",
             key="_tj_override_price_check",
             help=(
-                "By default the form blocks trades where the entered price is "
-                "more than ±50% off the current market price (catches typos like "
-                "$0.01 vs $565), or where the ticker can't be resolved at all "
-                "(catches typos like NFLZ vs NFLX). Tick this only if you're "
+                "By default the form blocks trades where: (1) the entered price "
+                "is more than ±50% off the current market price (catches typos "
+                "like $0.01 vs $565); (2) the ticker can't be resolved at all "
+                "(catches typos like NFLZ vs NFLX); or (3) you're selling a "
+                "ticker you don't currently hold (catches data-entry errors "
+                "that produce unmatched SELL rows). Tick this only if you're "
                 "recording a backfill, split-adjusted price, delisted symbol, "
                 "or other intentional unusual transaction."
             ),
@@ -10412,26 +10414,39 @@ elif page == "📒 Trade Journal":
                 )
 
             # ── SELL-shares sanity check ──────────────────────────────────────
-            # Block "SELL 100 NFLX" when only 5 are held — without this guard
-            # the row was being accepted, holdings.Shares went negative, and the
-            # recalculate_from_trades replay flagged it as "SELL with no prior
-            # BUY". Caught the bad row but only after data was already in.
+            # Block "SELL 100 NFLX" when only 5 are held, AND block "SELL X" when
+            # the ticker isn't held at all. Without these guards a SELL of an
+            # unheld ticker was accepted, creating an unmatched SELL row in
+            # history with no prior BUY for replay — the exact data-corruption
+            # mode behind the May 2026 "SELL NET 5sh has no prior BUY" drift.
             #
-            # A SELL with NO holding row at all is intentionally allowed (the
-            # "logged as historical trade" path below) so users can backfill
-            # closed trades from before they started using the app.
+            # Backfills of pre-app trades remain possible via the "Allow
+            # unusual price" override checkbox, which already gates the price/
+            # ticker sanity checks above.
             _shares_block_reason: str | None = None
-            if action == "SELL" and ticker_input:
+            if action == "SELL" and ticker_input and not _override:
                 _h_match = st.session_state.holdings_df[
                     st.session_state.holdings_df["Ticker"] == ticker_input
                 ]
-                if not _h_match.empty:
+                if _h_match.empty:
+                    _shares_block_reason = (
+                        f"You're trying to sell <b>{shares_val:g} shares</b> of "
+                        f"<b>{ticker_input}</b> but don't currently hold any "
+                        "shares of this ticker. If this is a historical "
+                        "backfill (a trade you executed before using the app), "
+                        "tick <b>'Allow unusual price'</b> above the form to "
+                        "override. Otherwise, verify the ticker — you may "
+                        "have a typo."
+                    )
+                else:
                     _held_shares = float(_h_match.iloc[0]["Shares"])
                     if shares_val > _held_shares + 1e-6:
                         _shares_block_reason = (
                             f"You're trying to sell <b>{shares_val:g} shares</b> of "
                             f"<b>{ticker_input}</b> but only hold <b>{_held_shares:g}</b>. "
-                            "Correct the share count, or trim the holding directly on the "
+                            "Correct the share count, tick <b>'Allow unusual "
+                            "price'</b> above the form if this is a historical "
+                            "backfill, or trim the holding directly on the "
                             "Portfolio page if your records disagree with the app's."
                         )
 
