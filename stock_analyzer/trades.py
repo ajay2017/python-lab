@@ -13,11 +13,15 @@ def performance_stats(df: pd.DataFrame) -> dict:
     if df is None or df.empty:
         return empty
 
-    sells = df[df["action"] == "SELL"].copy()
-    buys  = df[df["action"] == "BUY"].copy()
+    # Exclude synthetic SPLIT rows (stock-split adjustments recorded so
+    # recalculate_from_trades can replay the post-split holdings). They're
+    # not trades and shouldn't inflate total_trades or any BUY/SELL aggregate.
+    real_trades = df[~df["action"].astype(str).str.upper().str.contains("SPLIT")]
+    sells = real_trades[real_trades["action"] == "SELL"].copy()
+    buys  = real_trades[real_trades["action"] == "BUY"].copy()
 
     if sells.empty:
-        return {**empty, "total_trades": len(df), "buy_trades": len(buys)}
+        return {**empty, "total_trades": len(real_trades), "buy_trades": len(buys)}
 
     with_pnl  = sells.dropna(subset=["realized_pnl"])
     winners   = with_pnl[with_pnl["realized_pnl"] > 0]
@@ -35,7 +39,7 @@ def performance_stats(df: pd.DataFrame) -> dict:
     )
 
     return {
-        "total_trades":       len(df),
+        "total_trades":       len(real_trades),
         "sell_trades":        len(sells),
         "buy_trades":         len(buys),
         "total_realized_pnl": round(total_pnl, 2),

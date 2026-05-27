@@ -1503,11 +1503,19 @@ def build_trade_review(
         window_start = today - timedelta(days=lookback_days)
 
     # ── Normalize journal rows in window ─────────────────────────────────────
+    # Excludes synthetic SPLIT rows — they're holdings-adjustment records, not
+    # trades, and Trade Review's behavioural analysis only cares about real
+    # BUY/SELL decisions. The FIFO matcher would ignore them anyway (its
+    # action check is "BUY in" / "SELL in"), but filtering at source keeps
+    # bucket counts (panic_window, etc.) honest.
     rows: list[dict] = []
     if trades_df is not None and len(trades_df) > 0:
         for _, r in trades_df.iterrows():
             td = _to_date(r.get("traded_at"))
             if td is None or td < window_start:
+                continue
+            _act = str(r.get("action", "") or "").upper()
+            if "SPLIT" in _act:
                 continue
             rows.append({
                 "id":               r.get("id"),

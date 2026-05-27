@@ -1063,10 +1063,41 @@ if page == "🏠 Home":
                 _hdf.loc[_mask, "Avg Cost ($)"] = _sp["adj_avg_cost"]
                 st.session_state.holdings_df = _hdf
                 if db.save_holdings(_hdf):
+                    # Record a synthetic SPLIT row in the trades table so the
+                    # Rebuild flow (recalculate_from_trades) can reproduce the
+                    # post-split holdings on replay. Without this, a future
+                    # Rebuild would replay the pre-split BUYs and silently
+                    # overwrite the user's approved post-split state.
+                    # action='SPLIT' is special-cased in recalculate_from_trades
+                    # to overwrite (not accumulate) the holding.
+                    try:
+                        db.save_trade({
+                            "ticker":       str(_sp["ticker"]).upper(),
+                            "action":       "SPLIT",
+                            "shares":       float(_sp["adj_shares"]),
+                            "price":        float(_sp["adj_avg_cost"]),
+                            "cost_basis":   None,
+                            "realized_pnl": None,
+                            "notes":        (
+                                f"{_sp.get('ratio_str','')} {_sp.get('split_type','')} split — "
+                                f"adjusted from {_sp['orig_shares']:g}sh @ ${_sp['orig_avg_cost']:,.2f} "
+                                f"to {_sp['adj_shares']:g}sh @ ${_sp['adj_avg_cost']:,.2f}"
+                            ),
+                            "trigger_type": "REBALANCE",
+                        })
+                        st.session_state.trades_df = db.load_trades()
+                    except Exception:
+                        # Don't block the split adjustment on the synthetic-row write;
+                        # the user has already approved the holdings change.
+                        pass
                     # Invalidate caches so portfolio rebuilds with new values
                     for _k in list(st.session_state.keys()):
                         if _k.startswith("_split_check_") or _k.startswith("_live_prices"):
                             del st.session_state[_k]
+                    # Also invalidate the Trade Journal drift-detection flag so
+                    # next visit re-checks against the new synthetic SPLIT row
+                    st.session_state.pop("_tj_drift_checked", None)
+                    st.session_state.pop("_tj_drift_state",  None)
                     st.success(
                         f"{_sp['ticker']} adjusted: {_sp['orig_shares']:g} shares @ "
                         f"${_sp['orig_avg_cost']:,.2f} → {_sp['adj_shares']:g} shares @ "

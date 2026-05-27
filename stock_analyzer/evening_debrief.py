@@ -33,6 +33,11 @@ def _trades_today(trades_df, today: date) -> list[dict]:
     """
     Filter trades_df to entries with traded_at date == today. Returns list of
     dicts with normalized keys for downstream rendering.
+
+    Excludes action='SPLIT' synthetic rows — those are stock-split adjustments
+    inserted by the Apply-Split handler so recalculate_from_trades can replay
+    the post-split holdings; they're not trades and shouldn't surface in the
+    "Today's Trades" list or get counted in BUY/SELL aggregates.
     """
     if trades_df is None or trades_df.empty:
         return []
@@ -46,6 +51,9 @@ def _trades_today(trades_df, today: date) -> list[dict]:
         except Exception:
             continue
         if ta_date != today:
+            continue
+        _act = str(row.get("action", "") or "").upper()
+        if "SPLIT" in _act:
             continue
         out.append({
             "id":               row.get("id"),

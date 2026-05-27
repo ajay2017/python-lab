@@ -341,6 +341,17 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
         if not ticker or shares <= 0 or price <= 0:
             continue
 
+        # Stock-split adjustment rows OVERWRITE the holding state rather than
+        # accumulating. The Apply-Split handler in the Portfolio page inserts a
+        # row with action='SPLIT', shares=adjusted_total_shares, price=
+        # adjusted_avg_cost — exactly the new state of the holding after the
+        # split. Without this branch, a Rebuild after a split would replay the
+        # pre-split BUYs and overwrite the user's approved post-split holdings.
+        if "SPLIT" in action:
+            if shares > 0 and price > 0:
+                holdings[ticker] = {"shares": shares, "avg_cost": price}
+            continue
+
         if "BUY" in action:
             if ticker in holdings:
                 h = holdings[ticker]
