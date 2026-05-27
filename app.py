@@ -7490,16 +7490,136 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                     _brief_cached = None
 
         if _brief_cached:
+            # Minimal markdown → HTML converter for the section structure the LLM produces.
+            def _md_to_html(md: str) -> str:
+                lines = md.split("\n")
+                out, in_list = [], None  # in_list: None | "ul" | "ol"
+                def _inline(s: str) -> str:
+                    s = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+                    s = _re.sub(r"__(.+?)__", r"<strong>\1</strong>", s)
+                    s = _re.sub(r"(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)", r"<em>\1</em>", s)
+                    s = _re.sub(r"`([^`]+?)`", r"<code>\1</code>", s)
+                    return s
+                for ln in lines:
+                    s = ln.rstrip()
+                    is_ul = s.startswith("- ") or s.startswith("* ")
+                    is_ol = bool(_re.match(r"^\d+\.\s", s))
+                    if in_list and not (is_ul or is_ol):
+                        out.append(f"</{in_list}>"); in_list = None
+                    if not s:
+                        continue
+                    m = _re.match(r"^(#{1,6})\s+(.+)$", s)
+                    if m:
+                        lvl = len(m.group(1))
+                        out.append(f"<h{lvl}>{_inline(m.group(2))}</h{lvl}>"); continue
+                    if s in ("---", "***", "___"):
+                        out.append("<hr>"); continue
+                    if is_ul:
+                        if in_list != "ul":
+                            if in_list: out.append(f"</{in_list}>")
+                            out.append("<ul>"); in_list = "ul"
+                        out.append(f"<li>{_inline(s[2:])}</li>"); continue
+                    mo = _re.match(r"^\d+\.\s+(.+)$", s)
+                    if mo:
+                        if in_list != "ol":
+                            if in_list: out.append(f"</{in_list}>")
+                            out.append("<ol>"); in_list = "ol"
+                        out.append(f"<li>{_inline(mo.group(1))}</li>"); continue
+                    out.append(f"<p>{_inline(s)}</p>")
+                if in_list:
+                    out.append(f"</{in_list}>")
+                return "\n".join(out)
+
+            _body_html = _md_to_html(_brief_cached)
+            _today_str = datetime.now().strftime("%A · %B %d, %Y")
+            _model_label = _model_opts.get(_sel_model, _sel_model)
+
             st.markdown(
-                f"<div style='background:#0d1117;border:1px solid #1f2937;border-radius:10px;"
-                f"padding:20px 24px;margin-top:6px;line-height:1.65'>"
-                f"{_brief_cached.replace(chr(10), '<br>')}"
-                f"</div>",
+                f"""
+                <style>
+                .ai-brief {{ margin-top:10px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }}
+                .ai-brief-head {{
+                    background:linear-gradient(135deg,#1e3a5f 0%,#0f2747 100%);
+                    border:1px solid #334155; border-bottom:none;
+                    border-left:4px solid #f59e0b;
+                    border-radius:10px 10px 0 0;
+                    padding:14px 22px;
+                    display:flex; align-items:center; justify-content:space-between;
+                    flex-wrap:wrap; gap:10px;
+                }}
+                .ai-brief-head .eyebrow {{
+                    color:#fbbf24; font-size:0.7em; letter-spacing:0.16em;
+                    font-weight:700; text-transform:uppercase;
+                }}
+                .ai-brief-head .title {{
+                    color:#f1f5f9; font-size:1.18em; font-weight:600; margin-top:3px;
+                }}
+                .ai-brief-head .meta {{
+                    text-align:right; color:#94a3b8; font-size:0.78em; line-height:1.55;
+                }}
+                .ai-brief-head .meta .chip {{
+                    background:#0f172a; color:#cbd5e1; font-weight:600;
+                    padding:2px 10px; border-radius:999px; border:1px solid #334155;
+                    font-size:0.95em;
+                }}
+                .ai-brief-body {{
+                    background:#0f172a; border:1px solid #334155; border-top:none;
+                    border-radius:0 0 10px 10px;
+                    padding:6px 26px 22px 26px;
+                    color:#e2e8f0; font-size:0.95em; line-height:1.65;
+                }}
+                .ai-brief-body h1 {{ display:none; }}
+                .ai-brief-body h2 {{
+                    color:#fbbf24; font-size:0.78em; letter-spacing:0.14em;
+                    font-weight:700; text-transform:uppercase;
+                    margin:22px 0 8px 0; padding-bottom:6px;
+                    border-bottom:1px solid #1e293b;
+                }}
+                .ai-brief-body h3 {{
+                    color:#f1f5f9; font-size:0.95em; font-weight:600;
+                    margin:14px 0 6px 0;
+                }}
+                .ai-brief-body p {{ margin:6px 0; color:#e2e8f0; }}
+                .ai-brief-body strong {{ color:#fde68a; font-weight:600; }}
+                .ai-brief-body em {{ color:#cbd5e1; }}
+                .ai-brief-body ul, .ai-brief-body ol {{
+                    padding-left:22px; margin:6px 0; color:#e2e8f0;
+                }}
+                .ai-brief-body li {{ margin:3px 0; }}
+                .ai-brief-body code {{
+                    background:#1e293b; color:#fbbf24;
+                    padding:1px 6px; border-radius:4px;
+                    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+                    font-size:0.9em;
+                }}
+                .ai-brief-body hr {{
+                    border:none; border-top:1px solid #1e293b; margin:14px 0;
+                }}
+                .ai-brief-foot {{
+                    color:#64748b; font-size:0.78em; margin-top:6px; padding:0 4px;
+                }}
+                </style>
+                <div class="ai-brief">
+                  <div class="ai-brief-head">
+                    <div>
+                      <div class="eyebrow">📊 Institutional Monitoring Brief</div>
+                      <div class="title">{_today_str}</div>
+                    </div>
+                    <div class="meta">
+                      <div><span class="chip">{_sel_provider}</span></div>
+                      <div style="margin-top:4px;">{_model_label}</div>
+                      <div style="margin-top:2px;color:#64748b;">Generated {_brief_ts}</div>
+                    </div>
+                  </div>
+                  <div class="ai-brief-body">
+                    {_body_html}
+                  </div>
+                </div>
+                <div class="ai-brief-foot">
+                  Based on live portfolio + market data at generation time — refresh for latest.
+                </div>
+                """,
                 unsafe_allow_html=True,
-            )
-            st.caption(
-                f"Provider: {_sel_provider} · Model: {_sel_model} · Generated {_brief_ts} · "
-                "Based on live data at generation time — refresh for latest."
             )
 
 
