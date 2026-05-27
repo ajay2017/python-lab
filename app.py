@@ -7590,97 +7590,65 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
             _today_str = datetime.now().strftime("%A · %B %d, %Y")
             _model_label = _model_opts.get(_sel_model, _sel_model)
 
-            # Render into the brief slot near the top of the tab.
-            # IMPORTANT: the f-string MUST start with the HTML tag at column 0
-            # (no leading newline + indentation). Otherwise Streamlit's markdown
-            # parser sees indented content and renders the whole block as a
-            # <pre><code> indented-code-block — which shows raw HTML on screen.
-            _brief_slot.markdown(
-                f"""<style>
-                .ai-brief {{ margin-top:10px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }}
-                .ai-brief-head {{
-                    background:linear-gradient(135deg,#1e3a5f 0%,#0f2747 100%);
-                    border:1px solid #334155; border-bottom:none;
-                    border-left:4px solid #f59e0b;
-                    border-radius:10px 10px 0 0;
-                    padding:14px 22px;
-                    display:flex; align-items:center; justify-content:space-between;
-                    flex-wrap:wrap; gap:10px;
-                }}
-                .ai-brief-head .eyebrow {{
-                    color:#fbbf24; font-size:0.7em; letter-spacing:0.16em;
-                    font-weight:700; text-transform:uppercase;
-                }}
-                .ai-brief-head .title {{
-                    color:#f1f5f9; font-size:1.18em; font-weight:600; margin-top:3px;
-                }}
-                .ai-brief-head .meta {{
-                    text-align:right; color:#94a3b8; font-size:0.78em; line-height:1.55;
-                }}
-                .ai-brief-head .meta .chip {{
-                    background:#0f172a; color:#cbd5e1; font-weight:600;
-                    padding:2px 10px; border-radius:999px; border:1px solid #334155;
-                    font-size:0.95em;
-                }}
-                .ai-brief-body {{
-                    background:#0f172a; border:1px solid #334155; border-top:none;
-                    border-radius:0 0 10px 10px;
-                    padding:6px 26px 22px 26px;
-                    color:#e2e8f0; font-size:0.95em; line-height:1.65;
-                }}
-                .ai-brief-body h1 {{ display:none; }}
-                .ai-brief-body h2 {{
-                    color:#fbbf24; font-size:0.78em; letter-spacing:0.14em;
-                    font-weight:700; text-transform:uppercase;
-                    margin:22px 0 8px 0; padding-bottom:6px;
-                    border-bottom:1px solid #1e293b;
-                }}
-                .ai-brief-body h3 {{
-                    color:#f1f5f9; font-size:0.95em; font-weight:600;
-                    margin:14px 0 6px 0;
-                }}
-                .ai-brief-body p {{ margin:6px 0; color:#e2e8f0; }}
-                .ai-brief-body strong {{ color:#fde68a; font-weight:600; }}
-                .ai-brief-body em {{ color:#cbd5e1; }}
-                .ai-brief-body ul, .ai-brief-body ol {{
-                    padding-left:22px; margin:6px 0; color:#e2e8f0;
-                }}
-                .ai-brief-body li {{ margin:3px 0; }}
-                .ai-brief-body code {{
-                    background:#1e293b; color:#fbbf24;
-                    padding:1px 6px; border-radius:4px;
-                    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-                    font-size:0.9em;
-                }}
-                .ai-brief-body hr {{
-                    border:none; border-top:1px solid #1e293b; margin:14px 0;
-                }}
-                .ai-brief-foot {{
-                    color:#64748b; font-size:0.78em; margin-top:6px; padding:0 4px;
-                }}
-                </style>
-                <div class="ai-brief">
-                  <div class="ai-brief-head">
-                    <div>
-                      <div class="eyebrow">📊 Institutional Monitoring Brief</div>
-                      <div class="title">{_today_str}</div>
-                    </div>
-                    <div class="meta">
-                      <div><span class="chip">{_sel_provider}</span></div>
-                      <div style="margin-top:4px;">{_model_label}</div>
-                      <div style="margin-top:2px;color:#64748b;">Generated {_brief_ts}</div>
-                    </div>
-                  </div>
-                  <div class="ai-brief-body">
-                    {_body_html}
-                  </div>
-                </div>
-                <div class="ai-brief-foot">
-                  Based on live portfolio + market data at generation time — refresh for latest.
-                </div>
-                """,
-                unsafe_allow_html=True,
+            # Render the brief card.
+            # CRITICAL: every line of the HTML template MUST be at column 0 in
+            # the rendered string — otherwise Streamlit's markdown parser
+            # applies the indented-code-block rule (≥4 leading spaces = code)
+            # and shows the raw HTML on screen. The template is therefore
+            # written at column 0 in the source, despite the surrounding
+            # function call being indented.
+            _css = (
+                "<style>"
+                ".ai-brief{margin-top:10px;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Inter,sans-serif;}"
+                ".ai-brief-head{background:linear-gradient(135deg,#1e3a5f 0%,#0f2747 100%);"
+                "border:1px solid #334155;border-bottom:none;border-left:4px solid #f59e0b;"
+                "border-radius:10px 10px 0 0;padding:14px 22px;"
+                "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}"
+                ".ai-brief-head .eyebrow{color:#fbbf24;font-size:0.7em;letter-spacing:0.16em;"
+                "font-weight:700;text-transform:uppercase;}"
+                ".ai-brief-head .title{color:#f1f5f9;font-size:1.18em;font-weight:600;margin-top:3px;}"
+                ".ai-brief-head .meta{text-align:right;color:#94a3b8;font-size:0.78em;line-height:1.55;}"
+                ".ai-brief-head .meta .chip{background:#0f172a;color:#cbd5e1;font-weight:600;"
+                "padding:2px 10px;border-radius:999px;border:1px solid #334155;font-size:0.95em;}"
+                ".ai-brief-body{background:#0f172a;border:1px solid #334155;border-top:none;"
+                "border-radius:0 0 10px 10px;padding:6px 26px 22px 26px;"
+                "color:#e2e8f0;font-size:0.95em;line-height:1.65;}"
+                ".ai-brief-body h1{display:none;}"
+                ".ai-brief-body h2{color:#fbbf24;font-size:0.78em;letter-spacing:0.14em;"
+                "font-weight:700;text-transform:uppercase;margin:22px 0 8px 0;padding-bottom:6px;"
+                "border-bottom:1px solid #1e293b;}"
+                ".ai-brief-body h3{color:#f1f5f9;font-size:0.95em;font-weight:600;margin:14px 0 6px 0;}"
+                ".ai-brief-body p{margin:6px 0;color:#e2e8f0;}"
+                ".ai-brief-body strong{color:#fde68a;font-weight:600;}"
+                ".ai-brief-body em{color:#cbd5e1;}"
+                ".ai-brief-body ul,.ai-brief-body ol{padding-left:22px;margin:6px 0;color:#e2e8f0;}"
+                ".ai-brief-body li{margin:3px 0;}"
+                ".ai-brief-body code{background:#1e293b;color:#fbbf24;padding:1px 6px;border-radius:4px;"
+                "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.9em;}"
+                ".ai-brief-body hr{border:none;border-top:1px solid #1e293b;margin:14px 0;}"
+                ".ai-brief-foot{color:#64748b;font-size:0.78em;margin-top:6px;padding:0 4px;}"
+                "</style>"
             )
+            _card = (
+                f'<div class="ai-brief">'
+                f'<div class="ai-brief-head">'
+                f'<div>'
+                f'<div class="eyebrow">📊 Institutional Monitoring Brief</div>'
+                f'<div class="title">{_today_str}</div>'
+                f'</div>'
+                f'<div class="meta">'
+                f'<div><span class="chip">{_sel_provider}</span></div>'
+                f'<div style="margin-top:4px;">{_model_label}</div>'
+                f'<div style="margin-top:2px;color:#64748b;">Generated {_brief_ts}</div>'
+                f'</div>'
+                f'</div>'
+                f'<div class="ai-brief-body">{_body_html}</div>'
+                f'</div>'
+                f'<div class="ai-brief-foot">'
+                f'Based on live portfolio + market data at generation time — refresh for latest.'
+                f'</div>'
+            )
+            _brief_slot.markdown(_css + _card, unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
