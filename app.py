@@ -1451,6 +1451,33 @@ if page == "🏠 Home":
                         "verdict":          "confirmed",
                         "thesis":           _p.get("thesis", ""),
                     })
+                # Composite lookup helper for buy_candidates — neither dict
+                # branch carries composite directly. For held names port_df
+                # has the composite as Score; for non-held names the pre-fetched
+                # _grow_composites cache has it under .total. This is the same
+                # source-of-truth chain lookup_composite uses internally; we
+                # inline it here to avoid plumbing yet another argument through.
+                _grow_comp_cache = st.session_state.get("_grow_composites", {}) or {}
+                _port_score_map: dict = {}
+                if port_df is not None and not port_df.empty and "Score" in port_df.columns:
+                    _port_score_map = {
+                        str(_r["Ticker"]).upper(): float(_r.get("Score") or 0)
+                        for _, _r in port_df.iterrows()
+                        if _r.get("Ticker")
+                    }
+                def _composite_for(_tk: str):
+                    _u = str(_tk).upper()
+                    _comp = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk)
+                    if _comp:
+                        try:
+                            _v = float(_comp.get("total") or 0)
+                            if _v > 0:
+                                return _v
+                        except (TypeError, ValueError):
+                            pass
+                    _ps = _port_score_map.get(_u, 0)
+                    return _ps if _ps > 0 else None
+
                 for _p in (_daily_brief.get("buy_candidates") or []):
                     _bx = _p.get("xref") or {}
                     _tk = str(_p.get("ticker", ""))
@@ -1459,7 +1486,7 @@ if page == "🏠 Home":
                         "rec_date":         _TODAY_ET,
                         "rec_type":         "buy_candidate",
                         "price_at_surface": _price_for(_tk),
-                        "composite_score":  None,
+                        "composite_score":  _composite_for(_tk),
                         "momentum_score":   _p.get("score"),
                         "sector":           _p.get("sector", ""),
                         "conviction":       "",
@@ -12103,6 +12130,28 @@ elif page == "📜 Recommendations History":
         "(when stored) to current. Older recs surfaced before price_at_surface "
         "was captured will show '—' for missed outcomes._"
     )
+    with st.expander("ℹ️ How to read this table", expanded=False):
+        st.markdown(
+            """
+**Verdict** — the App's confidence at the moment the rec was first surfaced:
+- **✅ Confirmed** — composite cleared the Buy gate (≥ 65) AND no conflicts. Highest signal weight; these are the "the App tells you to act" rows.
+- **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within 7 days, etc.). The App surfaced the pick but flagged a watch-out.
+- **❌ Conflicted** — hard conflict (composite says Hold/Sell while momentum says Buy, or earnings + signal conflict). Don't act on these.
+- **🔍 Unverified** — composite wasn't loaded for the ticker at surface time, so the App couldn't verify the multi-factor signal. *Treat these as momentum-only suggestions* — they need an Analysis page check before acting.
+
+**Composite / Momentum** — Momentum is the scanner's technical-only score; Composite is the full multi-factor score (technical + fundamentals + sentiment). A Composite of NaN means it wasn't loaded at surface time — usually because it was a buy_candidate row from before we started populating composites for that surface (commit before today's fix), or because the pre-fetch failed for that ticker.
+
+**Outcome** — meaningful when the rec had a priced reference. NaN composite + Unverified verdict + low outcome usually means "the App showed it on momentum alone, you correctly skipped, market moved against the momentum signal anyway." That's a *good* skip even though the row looks unimpressive.
+
+**Pre-2026-05-27 rows** carry the old verdict logic (every non-held pick was forced to "Unverified" regardless of composite availability — fixed today). New rows going forward will have richer verdicts.
+
+To clear out the early sparse rows, run this in Supabase SQL Editor:
+
+```sql
+delete from recommendations where rec_date < '2026-05-27';
+```
+"""
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -252,20 +252,25 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict       = "mixed"
         verdict_label = "⚠️ Mixed"
         verdict_color = "#f59e0b"
-    elif is_held and not composite_available:
-        # Held position but composite Signal is missing — must not issue
-        # "Confirmed." Surface the data gap as "verify" instead.
+    elif not composite_available:
+        # Composite signal isn't loaded for this ticker — can't issue
+        # "Confirmed" regardless of held status. The "Verify" amber treatment
+        # surfaces the data gap. Held vs non-held only changes the message
+        # (the user knows whether they own it or not), not the verdict tier.
         verdict       = "unverified"
-        verdict_label = "🔍 Verify — Composite Signal Missing"
+        verdict_label = (
+            "🔍 Verify — Composite Signal Missing"
+            if is_held else "🔍 Verify — Run Analysis First"
+        )
         verdict_color = "#f59e0b"   # amber — action required, not a green light
-    elif not is_held:
-        # Not held — composite signal was never computed.
-        # Technical momentum looks good but we cannot confirm without full analysis.
-        # Amber (not blue) so this reads as "action required," not "informational."
-        verdict       = "unverified"
-        verdict_label = "🔍 Verify — Run Analysis First"
-        verdict_color = "#f59e0b"
     else:
+        # Composite IS available, no conflicts above — full Confirmed regardless
+        # of whether the user already holds the position. Previously this branch
+        # only fired for is_held=True, leaving non-held picks at "Unverified"
+        # even when the pre-fetched composite cleared the gate. That made every
+        # new scanner pick look amber on the Brief and stored an "Unverified"
+        # verdict in the recommendations log for things that were actually
+        # fully confirmed.
         verdict       = "confirmed"
         verdict_label = "✅ Confirmed — All Signals Aligned"
         verdict_color = "#22c55e"
