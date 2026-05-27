@@ -8401,25 +8401,42 @@ elif page == "📈 Analysis":
             if t not in name_to_ticker.values():
                 name_to_ticker[t] = t
 
-        # If navigated here from an Analyze button, add that ticker and pre-select it
+        # If navigated here from an Analyze button, add that ticker and pre-select it.
+        # We write directly into the multiselect's session_state key so the selection
+        # *persists across reruns*. Without this, any rerun on the Analysis page
+        # (e.g. caused by a Trim/Add button click) loses the preselect: _analysis_ticker
+        # has already been popped, options drop the navigated ticker, and Streamlit
+        # treats the multiselect as a new widget — resetting it to the watchlist
+        # default and re-rendering the page WITHOUT the original ticker's tab. The
+        # button the user just clicked then no longer exists in the new render, so
+        # its click event is silently dropped.
         if _preselect_ticker:
             _pt = _preselect_ticker.strip().upper()
-            # Find the display-name key for this ticker (may already exist as "Company (TICK)")
             _pt_key = next((k for k, v in name_to_ticker.items() if v == _pt), None)
             if _pt_key is None:
-                # Not yet in options — add with ticker as both key and value
                 name_to_ticker[_pt] = _pt
                 _pt_key = _pt
-            _sa_default = [_pt_key]
-        else:
+            # Force-select this ticker — overrides any prior multiselect state.
+            st.session_state["_analysis_companies"] = [_pt_key]
+        elif "_analysis_companies" not in st.session_state:
+            # First-ever visit to Analysis in this session — seed with watchlist.
             watchlist_names = [
                 k for k, v in name_to_ticker.items() if v in st.session_state.watchlist
             ] + [t for t in st.session_state.watchlist if t not in name_to_ticker.values()]
-            _sa_default = [n for n in watchlist_names if n in name_to_ticker][:4]
+            st.session_state["_analysis_companies"] = [
+                n for n in watchlist_names if n in name_to_ticker
+            ][:4]
+
+        # Drop any prior-session selections that aren't in this run's options
+        # (e.g. watchlist changed) so the widget doesn't crash on render.
+        _valid_opts = set(name_to_ticker.keys())
+        st.session_state["_analysis_companies"] = [
+            n for n in st.session_state.get("_analysis_companies", []) if n in _valid_opts
+        ]
 
         selected_names = st.multiselect(
             "Companies", options=list(name_to_ticker.keys()),
-            default=_sa_default,
+            key="_analysis_companies",
         )
         custom = st.text_input("Add ticker", "")
         if custom:
