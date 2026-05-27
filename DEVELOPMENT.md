@@ -178,6 +178,13 @@ Pick up tomorrow morning during market validation, then batch.
 
 **Concept:** AM Brief = "today's playbook"; Evening Debrief = "how it went + what's tomorrow." Together they make the loop closed without needing the user to remember anything between sessions.
 
+**Brokerage sync (eliminate manual journaling + the drift class of bugs):**
+- One-way pull from brokerage API → `trades` + `holdings` tables. Brokerage state is canonical for shares and cost basis; app retains the decision-context columns (`signal_seen`, `followed_signal`, `deviation_reason`, `lesson`).
+- Auto-detect drift between brokerage truth and app state; surface a side-by-side diff for user approval before applying.
+- Triggered: on-demand "🔁 Sync brokerage" button + optional scheduled pull at market close.
+- Removes the manual-entry path that produced the May 2026 drift mess (15 unmatched SELLs, multi-round SQL backfill, eventual full rebaseline on 2026-05-27). Drift recovery is documented in memory `feedback_trade_drift_recovery`.
+- Brokers to scope: Fidelity, Schwab/TD, IBKR, Robinhood (varying API quality). Auth via OAuth + token storage in Streamlit secrets.
+
 ---
 
 ## What NOT to do
