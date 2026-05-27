@@ -7,8 +7,13 @@ from plotly.subplots import make_subplots
 from datetime import datetime, date
 import pytz as _pytz
 
-# All date comparisons use ET so the calendar never flips at midnight UTC
-_TODAY_ET = datetime.now(_pytz.timezone("America/New_York")).date()
+# All date comparisons use ET so the calendar never flips at midnight UTC.
+# Wrapped in a function so each rerun resolves "today" fresh — a long-lived
+# Streamlit Cloud worker that survived past midnight ET would otherwise hold
+# yesterday's date in a module-level variable until the worker restarted.
+_ET_TZ = _pytz.timezone("America/New_York")
+def _today_et():
+    return datetime.now(_ET_TZ).date()
 
 import html as _html
 from stock_analyzer.data import (
@@ -728,14 +733,14 @@ with st.sidebar:
         _weekday  = _now_et.weekday()          # 0=Mon … 6=Sun
         _hour_et  = _now_et.hour + _now_et.minute / 60
         if _weekday >= 5:                       # weekend → back to Friday
-            _last_close = _TODAY_ET - _td(days=_weekday - 4)
+            _last_close = _today_et() - _td(days=_weekday - 4)
         elif _hour_et < 9.5:                    # pre-market → previous trading day
-            _prev = _TODAY_ET - _td(days=1)
+            _prev = _today_et() - _td(days=1)
             while _prev.weekday() >= 5:
                 _prev -= _td(days=1)
             _last_close = _prev
         else:                                   # after-hours / overnight → today
-            _last_close = _TODAY_ET
+            _last_close = _today_et()
         st.caption(
             f"📊 Showing end-of-day data as of "
             f"{_last_close.strftime('%a %b %d')}. "
@@ -1037,7 +1042,7 @@ if page == "🏠 Home":
     st.session_state["_port_df_enriched"] = port_df
 
     # ── Stock split detection ─────────────────────────────────────────────────
-    _sp_check_key = f"_split_check_{_TODAY_ET}"
+    _sp_check_key = f"_split_check_{_today_et()}"
     if _sp_check_key not in st.session_state:
         _dismissed_sp = st.session_state.get("_dismissed_splits", set())
         with st.spinner("Checking for unaccounted stock splits…"):
@@ -1249,7 +1254,7 @@ if page == "🏠 Home":
         _rag_label, _rag_color = "All Clear", "#00C851"
 
     # Load macro calendar (cached per ET date — FRED key optional but recommended)
-    _mc_day_key = f"_macro_cal_{_TODAY_ET}"
+    _mc_day_key = f"_macro_cal_{_today_et()}"
     if _mc_day_key not in st.session_state:
         _fred_k = (
             st.secrets.get("fred", {}).get("api_key")
@@ -1257,7 +1262,7 @@ if page == "🏠 Home":
         )
         st.session_state[_mc_day_key] = build_macro_calendar(
             port_df, fred_key=_fred_k or None, days_ahead=45, days_behind=7,
-            today=_TODAY_ET,
+            today=_today_et(),
         )
     _macro_events = st.session_state[_mc_day_key]
 
@@ -1334,12 +1339,12 @@ if page == "🏠 Home":
     # Lock semantics: when the user has clicked "Lock Today's Setup", we serve
     # the cached snapshot instead of rebuilding. This freezes the AM read so
     # mid-day data drift can't shift recommendations under the user after they
-    # already decided. Lock auto-expires next trading day (different _TODAY_ET).
+    # already decided. Lock auto-expires next trading day (different _today_et()).
     _brief_locked_for = st.session_state.get("_brief_locked_for_date")
     _brief_snapshot   = st.session_state.get("_brief_locked_snapshot")
     _brief_use_lock   = (
         st.session_state.get("_brief_locked", False)
-        and _brief_locked_for == _TODAY_ET
+        and _brief_locked_for == _today_et()
         and _brief_snapshot is not None
     )
     if _brief_use_lock:
@@ -1347,7 +1352,7 @@ if page == "🏠 Home":
         # _brief_built_at was set at the time of the original build (preserved)
     else:
         # Lock from a previous trading day — clear it so the new day's Brief builds fresh
-        if st.session_state.get("_brief_locked") and _brief_locked_for != _TODAY_ET:
+        if st.session_state.get("_brief_locked") and _brief_locked_for != _today_et():
             st.session_state["_brief_locked"] = False
             st.session_state.pop("_brief_locked_snapshot", None)
             st.session_state.pop("_brief_locked_for_date", None)
@@ -1362,7 +1367,7 @@ if page == "🏠 Home":
                 held_data       = held_data,
                 scanner_results = st.session_state.get("scanner_results"),
                 portfolio_value = total_val,
-                today           = _TODAY_ET,
+                today           = _today_et(),
                 market_context  = _market_context,
                 grow_composites = st.session_state.get("_grow_composites", {}),
             )
@@ -1449,7 +1454,7 @@ if page == "🏠 Home":
                     _tk = str(_p.get("ticker", ""))
                     _rec_rows.append({
                         "ticker":           _tk,
-                        "rec_date":         _TODAY_ET,
+                        "rec_date":         _today_et(),
                         "rec_type":         "new_pick",
                         "price_at_surface": _price_for(_tk, _p.get("price")),
                         "composite_score":  _p.get("composite_score"),
@@ -1463,7 +1468,7 @@ if page == "🏠 Home":
                     _tk = str(_p.get("ticker", ""))
                     _rec_rows.append({
                         "ticker":           _tk,
-                        "rec_date":         _TODAY_ET,
+                        "rec_date":         _today_et(),
                         "rec_type":         "add_winner",
                         "price_at_surface": _price_for(_tk),  # add-to-winner doesn't carry an explicit price
                         "composite_score":  _p.get("score"),
@@ -1505,7 +1510,7 @@ if page == "🏠 Home":
                     _tk = str(_p.get("ticker", ""))
                     _rec_rows.append({
                         "ticker":           _tk,
-                        "rec_date":         _TODAY_ET,
+                        "rec_date":         _today_et(),
                         "rec_type":         "buy_candidate",
                         "price_at_surface": _price_for(_tk),
                         "composite_score":  _composite_for(_tk),
@@ -1529,7 +1534,7 @@ if page == "🏠 Home":
             _rec_load_count = 0
             _rec_load_error: str | None = None
             try:
-                _rec_today_df = db.load_recommendations(start_date=_TODAY_ET, end_date=_TODAY_ET)
+                _rec_today_df = db.load_recommendations(start_date=_today_et(), end_date=_today_et())
                 _rec_first_seen: dict[tuple[str, str], str] = {}
                 if not _rec_today_df.empty:
                     for _, _r in _rec_today_df.iterrows():
@@ -1562,7 +1567,7 @@ if page == "🏠 Home":
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
-        if e["impact"] == MC_HIGH and e["date"] >= _TODAY_ET
+        if e["impact"] == MC_HIGH and e["date"] >= _today_et()
     ][:3]
 
     # Compute price alert triggers here so they surface in the Command Center
@@ -1775,7 +1780,7 @@ if page == "🏠 Home":
                 ):
                     st.session_state["_brief_locked"]          = True
                     st.session_state["_brief_locked_snapshot"] = _daily_brief
-                    st.session_state["_brief_locked_for_date"] = _TODAY_ET
+                    st.session_state["_brief_locked_for_date"] = _today_et()
                     st.session_state["_brief_locked_at"]       = _b_now_et
                     st.rerun()
 
@@ -1792,7 +1797,7 @@ if page == "🏠 Home":
                 help="Re-fetch FRED actuals + release dates. Use mid-day when the calendar looks stale.",
                 use_container_width=True,
             ):
-                _mc_clear_key = f"_macro_cal_{_TODAY_ET}"
+                _mc_clear_key = f"_macro_cal_{_today_et()}"
                 if _mc_clear_key in st.session_state:
                     del st.session_state[_mc_clear_key]
                 st.rerun()
@@ -1829,7 +1834,7 @@ if page == "🏠 Home":
                 ))
             except Exception:
                 _tr_strip_sig = 0
-        _tr_strip_key  = f"{_tr_strip_n}_{_TODAY_ET}_{_tr_strip_sig}"
+        _tr_strip_key  = f"{_tr_strip_n}_{_today_et()}_{_tr_strip_sig}"
         _tr_strip_cache = st.session_state.get("_tr_strip_cache") or {}
 
         if _tr_strip_n > 0 and _tr_strip_cache.get("key") != _tr_strip_key:
@@ -1855,7 +1860,7 @@ if page == "🏠 Home":
                     trades_df       = _tr_strip_td,
                     current_prices  = _tr_strip_prices,
                     spy_history_df  = _tr_strip_spy,
-                    today           = _TODAY_ET,
+                    today           = _today_et(),
                     lookback_days   = 30,
                 )
                 _tr_strip_recs = build_recommendations(_tr_data["trades"])
@@ -1957,7 +1962,7 @@ if page == "🏠 Home":
                 # Inject today's HIGH/MEDIUM macro events (already computed above)
                 _pm["events"] = [
                     e for e in _macro_events
-                    if e.get("date") == _TODAY_ET and e.get("impact") in ("HIGH", "MEDIUM")
+                    if e.get("date") == _today_et() and e.get("impact") in ("HIGH", "MEDIUM")
                 ]
 
                 # ── Pre-Market Stance (AI narrative + verdict) ────────────
@@ -1972,7 +1977,7 @@ if page == "🏠 Home":
                 )
                 if _pms_key:
                     _pms_model     = "claude-haiku-4-5-20251001"
-                    _pms_today_key = str(_TODAY_ET)
+                    _pms_today_key = str(_today_et())
                     _pms_cache_key = f"_pm_stance__{_pms_today_key}__{_pms_model}"
                     _pms_cached    = st.session_state.get(_pms_cache_key)
 
@@ -2233,16 +2238,16 @@ if page == "🏠 Home":
         _db_weekday = _db_now_et.weekday()
         _db_hour_et = _db_now_et.hour + _db_now_et.minute / 60
         if _db_weekday >= 5:
-            _db_last_close = _TODAY_ET - _dbtd(days=_db_weekday - 4)
+            _db_last_close = _today_et() - _dbtd(days=_db_weekday - 4)
         elif _db_hour_et < 9.5:
-            _db_lc = _TODAY_ET - _dbtd(days=1)
+            _db_lc = _today_et() - _dbtd(days=1)
             while _db_lc.weekday() >= 5:
                 _db_lc -= _dbtd(days=1)
             _db_last_close = _db_lc
         else:
-            _db_last_close = _TODAY_ET
-        _db_date_str = _TODAY_ET.strftime("%A, %B %d %Y")
-        if not mkt["is_open"] and _db_last_close != _TODAY_ET:
+            _db_last_close = _today_et()
+        _db_date_str = _today_et().strftime("%A, %B %d %Y")
+        if not mkt["is_open"] and _db_last_close != _today_et():
             _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
 
         st.markdown(
@@ -3051,7 +3056,7 @@ if page == "🏠 Home":
         _ed_baseline_source = "none"
         _ed_baseline_at     = None
         if st.session_state.get("_brief_locked_snapshot") and \
-                st.session_state.get("_brief_locked_for_date") == _TODAY_ET:
+                st.session_state.get("_brief_locked_for_date") == _today_et():
             _ed_baseline_brief  = st.session_state.get("_brief_locked_snapshot")
             _ed_baseline_source = "locked"
             _ed_baseline_at     = st.session_state.get("_brief_locked_at")
@@ -3096,7 +3101,7 @@ if page == "🏠 Home":
                 port_df             = port_df,
                 held_data           = held_data,
                 macro_events        = _macro_events,
-                today               = _TODAY_ET,
+                today               = _today_et(),
                 intraday_pct        = _ed_intraday_pct,
                 am_baseline_source  = _ed_baseline_source,
                 am_baseline_at      = _ed_baseline_at,
@@ -7731,7 +7736,7 @@ elif page == "🔍 Market Scanner":
                     _t5_ed_val = None
                     if _t5_bndl.get("earnings"):
                         try:
-                            _t5_ed_val = (date.fromisoformat(_t5_bndl["earnings"][:10]) - _TODAY_ET).days
+                            _t5_ed_val = (date.fromisoformat(_t5_bndl["earnings"][:10]) - _today_et()).days
                             if 0 <= _t5_ed_val <= 7:
                                 _t5_earn_badge = (
                                     f"<br><small style='color:#ef4444;font-weight:700'>"
@@ -7792,7 +7797,7 @@ elif page == "🔍 Market Scanner":
                     _t5b = _ev_bundle_map.get(_r5["Ticker"], {})
                     if _t5b.get("earnings"):
                         try:
-                            _d5 = (date.fromisoformat(_t5b["earnings"][:10]) - _TODAY_ET).days
+                            _d5 = (date.fromisoformat(_t5b["earnings"][:10]) - _today_et()).days
                             if 0 <= _d5 <= 7:
                                 _imm.append(f"**{_r5['Ticker']}** (in {_d5}d)")
                         except Exception:
@@ -7903,7 +7908,7 @@ elif page == "🔍 Market Scanner":
                 _ev_earn_days = None
                 if _ev_earn:
                     try:
-                        _ev_earn_days = (date.fromisoformat(_ev_earn[:10]) - _TODAY_ET).days
+                        _ev_earn_days = (date.fromisoformat(_ev_earn[:10]) - _today_et()).days
                     except Exception:
                         pass
 
@@ -11247,7 +11252,7 @@ elif page == "🪞 Trade Review":
             trades_df       = _tr_trades_df,
             current_prices  = _tr_prices,
             spy_history_df  = _tr_spy_df,
-            today           = _TODAY_ET,
+            today           = _today_et(),
             lookback_days   = _tr_days,
         )
 
@@ -12122,7 +12127,7 @@ elif page == "📜 Recommendations History":
             index=1,
             key="_rh_range",
         )
-    _rh_end   = _TODAY_ET
+    _rh_end   = _today_et()
     if _rh_range_label == "Last 7 days":
         _rh_start = _rh_end - _rh_td(days=7)
     elif _rh_range_label == "Last 30 days":
@@ -12198,7 +12203,7 @@ elif page == "📜 Recommendations History":
             _rh_prices = {}
 
     _rh_matched   = match_recs_to_trades(_rh_recs_df, _rh_trades_df)
-    _rh_enriched  = compute_outcomes(_rh_matched, _rh_prices, today=_TODAY_ET)
+    _rh_enriched  = compute_outcomes(_rh_matched, _rh_prices, today=_today_et())
 
     # Status filter (after enrichment so the dropdown shows the right counts)
     if _rh_status_filter == "Acted only":
@@ -12443,7 +12448,7 @@ elif page == "📅 Economic Calendar":
     _ec_port_hash  = len(st.session_state.get("_port_df_enriched", pd.DataFrame()))
     _ec_now_et     = datetime.now(_pytz.timezone("America/New_York"))
     _ec_hour_slot  = str(_ec_now_et.hour) if 8 <= _ec_now_et.hour <= 18 else "off"
-    _ec_cache_key  = f"_ec_cal_{_TODAY_ET}_{bool(_ec_fred_key)}_{_ec_port_hash}_{_ec_hour_slot}"
+    _ec_cache_key  = f"_ec_cal_{_today_et()}_{bool(_ec_fred_key)}_{_ec_port_hash}_{_ec_hour_slot}"
     if _ec_cache_key not in st.session_state or st.button("🔄 Refresh calendar", key="_ec_refresh"):
         with st.spinner("Loading economic calendar…"):
             _ec_events = build_macro_calendar(
@@ -12451,7 +12456,7 @@ elif page == "📅 Economic Calendar":
                 fred_key=_ec_fred_key or None,
                 days_ahead=45,
                 days_behind=7,
-                today=_TODAY_ET,
+                today=_today_et(),
             )
             st.session_state[_ec_cache_key] = _ec_events
     _ec_events = st.session_state.get(_ec_cache_key, [])
@@ -12471,9 +12476,9 @@ elif page == "📅 Economic Calendar":
         st.stop()
 
     # ── KPI strip (forward-looking counts only) ───────────────────────────────
-    _ec_fwd  = [e for e in _ec_events if e["date"] >= _TODAY_ET]
+    _ec_fwd  = [e for e in _ec_events if e["date"] >= _today_et()]
     _ec_high = [e for e in _ec_fwd if e["impact"] == MC_HIGH]
-    _ec_week = [e for e in _ec_fwd if (e["date"] - _TODAY_ET).days <= 7]
+    _ec_week = [e for e in _ec_fwd if (e["date"] - _today_et()).days <= 7]
     _ec_next = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
     _ek1.metric("Events next 45d",  len(_ec_fwd))
@@ -12545,7 +12550,7 @@ elif page == "📅 Economic Calendar":
                     f"⚠ Drift {_drift}d — FRED released {_rel_disp}</span>"
                 )
             # ⏳ Awaiting: past event but no actual yet — FRED hasn't received it
-            if _ev["date"] <= _TODAY_ET and not _ev.get("released") and not _ev.get("actual"):
+            if _ev["date"] <= _today_et() and not _ev.get("released") and not _ev.get("actual"):
                 _badges.append(
                     f"<span style='background:#1f2937;border:1px solid #6b7280;"
                     f"color:#d1d5db;padding:2px 8px;border-radius:10px;"
@@ -12563,9 +12568,9 @@ elif page == "📅 Economic Calendar":
             return " ".join(_badges)
 
         # Split filtered events into upcoming and past
-        _ec_upcoming = [e for e in _ec_filtered if e["date"] >= _TODAY_ET]
+        _ec_upcoming = [e for e in _ec_filtered if e["date"] >= _today_et()]
         _ec_past_rev = sorted(
-            [e for e in _ec_filtered if e["date"] < _TODAY_ET],
+            [e for e in _ec_filtered if e["date"] < _today_et()],
             key=lambda x: x["date"], reverse=True,   # most recent at top
         )
 
@@ -12580,7 +12585,7 @@ elif page == "📅 Economic Calendar":
 
             for _ec_date, _ec_day_evs in _groupby(_ec_upcoming, key=lambda x: x["date"]):
                 _ec_day_list = list(_ec_day_evs)
-                _delta_days  = (_ec_date - _TODAY_ET).days
+                _delta_days  = (_ec_date - _today_et()).days
                 _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ")
                 if _delta_days == 0:
                     _urgency_tag = " — **TODAY**"
@@ -12651,7 +12656,7 @@ elif page == "📅 Economic Calendar":
 
             for _ec_date, _ec_day_evs in _groupby(_ec_past_rev, key=lambda x: x["date"]):
                 _ec_day_list = list(_ec_day_evs)
-                _delta_days  = (_ec_date - _TODAY_ET).days   # negative
+                _delta_days  = (_ec_date - _today_et()).days   # negative
                 _date_label  = _ec_date.strftime("%A, %B %d").replace(" 0", " ")
                 _ago_tag = " — *yesterday*" if _delta_days == -1 else f" — *{abs(_delta_days)}d ago*"
 
@@ -12906,7 +12911,7 @@ elif page == "📅 Economic Calendar":
             _past_events = sorted(
                 [
                     e for e in _ec_events
-                    if e["date"] <= _TODAY_ET
+                    if e["date"] <= _today_et()
                     and e["impact"] == MC_HIGH
                     and e["event"] in _PB_SCEN_DEF
                 ],
@@ -12922,7 +12927,7 @@ elif page == "📅 Economic Calendar":
                 )
             else:
                 # ── Auto-detect macro regime ──────────────────────────────────
-                _regime_cache_key = f"_macro_regime_{_TODAY_ET}_{bool(_ec_fred_key)}"
+                _regime_cache_key = f"_macro_regime_{_today_et()}_{bool(_ec_fred_key)}"
                 if _regime_cache_key not in st.session_state:
                     with st.spinner("Detecting macro regime…"):
                         try:
@@ -13004,7 +13009,7 @@ elif page == "📅 Economic Calendar":
                     _pe_actual  = _pe.get("actual")
                     _pe_est     = _pe.get("estimate")
                     _pe_prev    = _pe.get("previous")
-                    _is_today   = (_pe_date == _TODAY_ET)
+                    _is_today   = (_pe_date == _today_et())
                     _conds      = get_scenario_conditions(_pe_name)
 
                     _date_lbl = (
