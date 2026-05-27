@@ -170,6 +170,25 @@ def _time_ago(ts: int) -> str:
     return f"{delta // 86400}d"
 
 
+def _safe_link(url: str | None, title: str, max_len: int = 90, style: str = "color:#ddd;text-decoration:none") -> str:
+    """Render an untrusted news headline as a safe anchor.
+
+    Why: titles + URLs come from yfinance / RSS feeds. Without escaping a
+    title can break out of the anchor (`</a><script>...`) and without scheme
+    validation a `javascript:` URL would execute in the user's session —
+    which has access to Supabase-side-effecting buttons. Both surfaces are
+    rendered with unsafe_allow_html=True so the escaping has to happen here.
+    """
+    raw = "" if title is None else str(title)
+    truncated = raw[:max_len] + ("…" if len(raw) > max_len else "")
+    safe_title = _html.escape(truncated)
+    u = "" if url is None else str(url).strip()
+    if u.lower().startswith(("http://", "https://")):
+        safe_url = _html.escape(u, quote=True)
+        return f"<a href=\"{safe_url}\" target=\"_blank\" rel=\"noopener noreferrer\" style='{style}'>{safe_title}</a>"
+    return f"<span style='{style}'>{safe_title}</span>"
+
+
 # ── Glossary tooltips ─────────────────────────────────────────────────────────
 _TIPS = {
     "P/E Ratio": (
@@ -577,13 +596,11 @@ def _fill_news_slot(slot, items: list) -> None:
             _badge = "✅ " if _ni["tier"] == 1 else ""
             _pub   = _ni["publisher"][:18]
             _ago   = _time_ago(_ni["ts"])
-            _raw   = _ni["title"]
-            _head  = _html.escape(_raw[:72] + ("…" if len(_raw) > 72 else ""))
-            _url   = _ni["url"]
-            _link  = (
-                f"<a href='{_url}' target='_blank' "
-                f"style='color:#bbb;text-decoration:none;line-height:1.3'>{_head}</a>"
-                if _url else f"<span style='color:#bbb'>{_head}</span>"
+            _link  = _safe_link(
+                _ni.get("url"),
+                _ni.get("title", ""),
+                max_len=72,
+                style="color:#bbb;text-decoration:none;line-height:1.3",
             )
             st.markdown(
                 f"<div style='margin-bottom:7px;padding:5px 7px;"
@@ -2410,21 +2427,17 @@ if page == "🏠 Home":
                             "🟢" if _qr_h.get("label") == "Positive" else
                             "🔴" if _qr_h.get("label") == "Negative" else "⚪"
                         )
-                        _qr_url   = _qr_h.get("url", "")
-                        _qr_title = _qr_h.get("headline", "")
-                        if _qr_url:
-                            st.markdown(
-                                f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
-                                f"{_qr_dot} <a href='{_qr_url}' target='_blank' "
-                                f"style='color:#60a5fa'>{_qr_title}</a></div>",
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.markdown(
-                                f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
-                                f"{_qr_dot} {_qr_title}</div>",
-                                unsafe_allow_html=True,
-                            )
+                        _qr_link = _safe_link(
+                            _qr_h.get("url", ""),
+                            _qr_h.get("headline", ""),
+                            max_len=200,
+                            style="color:#60a5fa",
+                        )
+                        st.markdown(
+                            f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
+                            f"{_qr_dot} {_qr_link}</div>",
+                            unsafe_allow_html=True,
+                        )
                 # Action buttons
                 _qr_bc1, _qr_bc2 = st.columns([3, 1])
                 with _qr_bc1:
@@ -3641,14 +3654,7 @@ if page == "🏠 Home":
                     _al_border = "#ef4444" if _al["alert_level"] == "critical" else "#f59e0b"
                     _al_bg     = "#1a0000" if _al["alert_level"] == "critical" else "#1a1000"
                     _al_tag    = "🔴 CRITICAL" if _al["alert_level"] == "critical" else "🟡 WATCH"
-                    _al_url    = _al.get("url", "")
-                    _al_link   = (
-                        f"<a href='{_al_url}' target='_blank' "
-                        f"style='color:#ddd;text-decoration:none'>{_html.escape(_al['title'][:90])}"
-                        f"{'…' if len(_al['title']) > 90 else ''}</a>"
-                        if _al_url else
-                        f"<span style='color:#ddd'>{_html.escape(_al['title'][:90])}</span>"
-                    )
+                    _al_link   = _safe_link(_al.get("url", ""), _al.get("title", ""), max_len=90)
                     st.markdown(
                         f"<div style='background:{_al_bg};border-left:4px solid {_al_border};"
                         f"border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:8px'>"
@@ -3679,14 +3685,7 @@ if page == "🏠 Home":
                     "These may support adding on a pullback — not a signal to chase the gap."
                 )
                 for _op in _ni_opps[:5]:
-                    _op_url  = _op.get("url", "")
-                    _op_link = (
-                        f"<a href='{_op_url}' target='_blank' "
-                        f"style='color:#ddd;text-decoration:none'>{_html.escape(_op['title'][:90])}"
-                        f"{'…' if len(_op['title']) > 90 else ''}</a>"
-                        if _op_url else
-                        f"<span style='color:#ddd'>{_html.escape(_op['title'][:90])}</span>"
-                    )
+                    _op_link = _safe_link(_op.get("url", ""), _op.get("title", ""), max_len=90)
                     st.markdown(
                         f"<div style='background:#001a08;border-left:4px solid #00C851;"
                         f"border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:8px'>"
