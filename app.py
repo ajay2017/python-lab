@@ -8427,12 +8427,17 @@ elif page == "📈 Analysis":
                 n for n in watchlist_names if n in name_to_ticker
             ][:4]
 
-        # Drop any prior-session selections that aren't in this run's options
-        # (e.g. watchlist changed) so the widget doesn't crash on render.
-        _valid_opts = set(name_to_ticker.keys())
-        st.session_state["_analysis_companies"] = [
-            n for n in st.session_state.get("_analysis_companies", []) if n in _valid_opts
-        ]
+        # Re-add any persisted selections to the options list so they don't
+        # silently disappear on rerun. Example: user arrives via "Analyze GS"
+        # — GS is added to name_to_ticker only because _preselect_ticker is set.
+        # On the next rerun (e.g. caused by a Trim button click) _preselect_ticker
+        # is None, so GS isn't added by the block above. Without this loop, GS
+        # would vanish from options, the multiselect would drop it from
+        # selection, the GS tab wouldn't render, and the Trim button click
+        # would target a non-existent widget (silently dropped by Streamlit).
+        for _n in st.session_state.get("_analysis_companies", []):
+            if _n not in name_to_ticker:
+                name_to_ticker[_n] = _n
 
         selected_names = st.multiselect(
             "Companies", options=list(name_to_ticker.keys()),
