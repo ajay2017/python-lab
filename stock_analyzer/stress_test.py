@@ -177,8 +177,17 @@ def run_scenario(
 
         # Determine the estimated move for this position
         if sector in sector_map:
-            # Use historical sector drawdown for this scenario
-            est_move = sector_map[sector]
+            # Use historical sector drawdown for this scenario, but scale it
+            # proportionally with any custom SPY shock. Without this scaling
+            # the UI's "Custom SPY shock" control silently has no effect on
+            # any sector listed in _SECTOR_SHOCKS — which covers most held
+            # sectors — so the user sees "Custom shock: -15%" and runs the
+            # canned numbers from the 2022/COVID table instead.
+            base_spy = scenario.get("spy_move") or spy_move
+            if base_spy:
+                est_move = sector_map[sector] * (spy_move / base_spy)
+            else:
+                est_move = sector_map[sector]
         else:
             # Fall back to beta × SPY move
             pos_beta = None
