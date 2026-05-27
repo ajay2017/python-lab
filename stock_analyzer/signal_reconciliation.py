@@ -20,7 +20,11 @@ The one_liner is intentionally surface-agnostic so it reads the same in Daily
 Briefing, Grow Today, Market Scanner, and Watchlist.
 """
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_HOLD
+from stock_analyzer.constants import (
+    COMPOSITE_BUY,
+    COMPOSITE_HOLD,
+    NEWS_SENTIMENT_NEGATIVE,
+)
 
 
 # Composite signal categorisation — string-match because the producer
@@ -89,10 +93,10 @@ def reconcile_signals(
         f"in {earnings_days}d" if earnings_imminent else None
     )
 
-    negative_news = news_sentiment is not None and news_sentiment <= -0.15
+    negative_news = news_sentiment is not None and news_sentiment <= NEWS_SENTIMENT_NEGATIVE
 
     # ── SKIP: composite contradicts momentum ────────────────────────────────
-    if composite_available and comp_class in ("sell", "hold") and momentum_score >= 65:
+    if composite_available and comp_class in ("sell", "hold") and momentum_score >= COMPOSITE_BUY:
         verb = "Sell" if comp_class == "sell" else "Hold"
         return {
             "verdict":   "skip",

@@ -871,10 +871,10 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 if _f(_row.get("Weight (%)"), 0) > _trim_floor:
                     _drift_trim_set.add(str(_row["Ticker"]).upper())
 
-    # 1 — Scanner picks not in portfolio (Score ≥ 65)
+    # 1 — Scanner picks not in portfolio (Score ≥ COMPOSITE_BUY)
     if scanner_results is not None and not scanner_results.empty:
         top_picks = scanner_results[
-            (scanner_results["Score"] >= 65) &
+            (scanner_results["Score"] >= COMPOSITE_BUY) &
             (~scanner_results["Ticker"].isin(held_tickers)) &
             (~scanner_results["Ticker"].isin(_act_blocked))
         ].copy().sort_values("Score", ascending=False).head(5)

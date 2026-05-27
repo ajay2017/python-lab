@@ -12,7 +12,11 @@ from datetime import date as _date, datetime as _datetime
 import pandas as _pd
 import pytz as _pytz
 
-from stock_analyzer.constants import COMPOSITE_BUY
+from stock_analyzer.constants import (
+    COMPOSITE_BUY,
+    COMPOSITE_HOLD,
+    SINGLE_NAME_CEILING,
+)
 
 def _today_et() -> _date:
     return _datetime.now(_pytz.timezone("America/New_York")).date()
@@ -281,8 +285,12 @@ _SCENARIOS: dict = {
 }
 
 # Action thresholds
-_PROTECT_WEIGHT  = 18.0   # % — oversized position
-_PROTECT_SCORE   = 44.0   # composite score — weak fundamentals
+# PROTECT weight + score gates reconcile with constants.py — the previous
+# literal 18.0 contradicted SINGLE_NAME_CEILING (15.0), letting the playbook
+# tolerate more concentration than the rest of the app. Similarly 44.0
+# matched COMPOSITE_HOLD by coincidence; importing makes the link explicit.
+_PROTECT_WEIGHT  = SINGLE_NAME_CEILING   # % — oversized position (hard single-name cap)
+_PROTECT_SCORE   = COMPOSITE_HOLD        # composite score — weak fundamentals (below Hold floor)
 _PROTECT_BEAR    = 1.5    # min % sector bear-move to flag PROTECT
 _WATCH_WEIGHT    = 8.0    # min weight to flag WATCH
 _WATCH_BEAR      = 1.0    # min sector bear-move to flag WATCH
@@ -397,7 +405,7 @@ def _action_detail(row, event_name: str, action: str) -> str:
 
     if action == "PROTECT":
         if weight > _PROTECT_WEIGHT:
-            target_w   = 15.0
+            target_w   = SINGLE_NAME_CEILING
             trim_frac  = (weight - target_w) / weight
             trim_sh    = max(1, int(shares * trim_frac))
             trim_val   = round(trim_frac * mval)
