@@ -519,7 +519,7 @@ def _render_trade_button(
     into session_state and navigates to the Trade Journal page.
 
     The Trade Journal form reads these keys on its next render:
-      _prefill_trade   — ticker / action / shares / price / trigger / notes
+      _tj_prefill   — ticker / action / shares / price / trigger / notes
       _tj_signal_seen  — the reconciled verdict at point of click (e.g.
                          "Composite Sell · 42/100"), so the Decision Context
                          block becomes passive capture instead of typing work
@@ -542,7 +542,7 @@ def _render_trade_button(
             _prefill["price"]  = float(price)
         if shares is not None and shares > 0:
             _prefill["shares"] = float(shares)
-        st.session_state["_prefill_trade"] = _prefill
+        st.session_state["_tj_prefill"] = _prefill
         if signal_context:
             st.session_state["_tj_signal_seen"] = signal_context
         if followed_intent:
@@ -5756,7 +5756,7 @@ if page == "🏠 Home":
                             key=f"log_btn_{ticker}_{act['type']}",
                             use_container_width=True,
                         ):
-                            st.session_state["_prefill_trade"] = {
+                            st.session_state["_tj_prefill"] = {
                                 "ticker":  ticker,
                                 "action":  _default_action,
                                 "shares":  _default_shares,
@@ -9934,7 +9934,7 @@ elif page == "📒 Trade Journal":
     # pre-filled shares while the user is mid-edit. We keep the prefill
     # around until the trade is successfully recorded (popped below in the
     # submit handler), so every form reset re-applies the same values.
-    prefill = st.session_state.get("_prefill_trade", {})
+    prefill = st.session_state.get("_tj_prefill", {})
 
     # ── Log a Trade form ──────────────────────────────────────────────────────
     _prefill_ticker = prefill.get("ticker", "").strip().upper()
@@ -10253,13 +10253,13 @@ elif page == "📒 Trade Journal":
 
             if not ticker_input:
                 st.error("Enter a ticker symbol.")
-                st.session_state["_prefill_trade"] = _stash_failed_entry
+                st.session_state["_tj_prefill"] = _stash_failed_entry
             elif shares_val <= 0:
                 st.error("Shares must be greater than 0.")
-                st.session_state["_prefill_trade"] = _stash_failed_entry
+                st.session_state["_tj_prefill"] = _stash_failed_entry
             elif price_val <= 0:
                 st.error("Price must be greater than 0.")
-                st.session_state["_prefill_trade"] = _stash_failed_entry
+                st.session_state["_tj_prefill"] = _stash_failed_entry
             elif _shares_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -10269,7 +10269,7 @@ elif page == "📒 Trade Journal":
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                st.session_state["_prefill_trade"] = _stash_failed_entry
+                st.session_state["_tj_prefill"] = _stash_failed_entry
             elif _ticker_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -10279,7 +10279,7 @@ elif page == "📒 Trade Journal":
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                st.session_state["_prefill_trade"] = _stash_failed_entry
+                st.session_state["_tj_prefill"] = _stash_failed_entry
             elif _price_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -10289,7 +10289,7 @@ elif page == "📒 Trade Journal":
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-                st.session_state["_prefill_trade"] = _stash_failed_entry
+                st.session_state["_tj_prefill"] = _stash_failed_entry
             else:
                 realized_pnl = (
                     compute_realized_pnl(shares_val, price_val, cost_basis_val)
@@ -10398,7 +10398,7 @@ elif page == "📒 Trade Journal":
                     # Consume the prefill now that the trade was recorded —
                     # any future visit to this page should start with a clean
                     # form. Paired with the get() at the top of the page.
-                    st.session_state.pop("_prefill_trade", None)
+                    st.session_state.pop("_tj_prefill", None)
                     # Clear the price-sanity override so the next trade is
                     # checked by default — overrides shouldn't be sticky.
                     # Pop the widget-bound key rather than assigning to it;
@@ -11734,6 +11734,18 @@ elif page == "🪞 Trade Review":
             if not _tr_trades:
                 st.caption("No trades in this window. Widen the look-back if you traded earlier.")
             else:
+                # Outcome semantics — same trade can show a different P&L on
+                # Trade Journal (stored realized), P&L tab (pure MTM), and here
+                # (realized + MTM for open/partial). Surface the math so the
+                # cross-page differences read as "different lenses on the same
+                # truth" rather than as inconsistency.
+                st.caption(
+                    "💡 **Reading the Outcome math:** "
+                    "• **CLOSED** trades show pure realized P&L from the journal. "
+                    "• **OPEN** trades show mark-to-market vs entry (live price × shares − cost). "
+                    "• **PARTIAL** trades split realized (on shares sold) + MTM (on shares still held). "
+                    "Trade Journal shows only realized; the P&L tab shows only MTM — this view combines both for an honest per-trade scorecard."
+                )
                 _cat_labels = {
                     "app_followed":  ("✓ App-Followed",  "#22c55e", "#052e16"),
                     "deviated":      ("✗ Deviated",     "#ef4444", "#3f1d1d"),

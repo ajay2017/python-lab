@@ -473,7 +473,7 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 | `_grow_composites` | My Portfolio (top-5 scanner pre-fetch) | Daily Briefing `_grow_today` |
 | `_grow_composites_coverage` | My Portfolio (post-fetch) | Grow Today banner |
 | `_daily_brief_offline` | My Portfolio (on briefing exception) | Watchlist offline banner |
-| `_prefill_trade` | Watchlist "Log Planned Trade" | Trade Journal form prefill |
+| `_tj_prefill` | Watchlist "Log Planned Trade" | Trade Journal form prefill |
 
 ---
 
