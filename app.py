@@ -560,12 +560,6 @@ def _render_trade_button(
                 followed_intent, "— (skip)"
             )
         st.session_state["_pending_page"] = "📒 Trade Journal"
-        # Diagnostic — surfaces what state was set when the click is captured.
-        # Persisted across the rerun via session_state and shown on next render.
-        st.session_state["_nav_debug"] = (
-            f"Trade button clicked: {ticker} {suggested_action} → 📒 Trade Journal "
-            f"(prefill: {_prefill})"
-        )
         st.rerun()
 
 
@@ -644,11 +638,6 @@ if "_pending_page" in st.session_state:
         # Remember where we came from so a Back button can return us there
         st.session_state["_nav_origin"] = st.session_state.get("nav_page", "")
     st.session_state["nav_page"] = _dest
-    # Diagnostic — record that the consumer block actually ran.
-    _prev = st.session_state.get("_nav_debug", "")
-    st.session_state["_nav_debug"] = (
-        (_prev + " | " if _prev else "") + f"Consumer ran: nav_page set to {_dest}"
-    )
 if not st.session_state.get("db_loaded"):
     st.session_state.holdings_df = db.load_holdings()
     st.session_state.watchlist   = db.load_watchlist()
@@ -951,13 +940,6 @@ def _index_strip():
 
 _index_strip()
 st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
-
-# ── DIAGNOSTIC: show navigation debug message if set ──────────────────────────
-# Temporary debug banner to trace the Trim/Add/Sell button click flow.
-# Remove once the navigation bug is resolved.
-_nav_debug_msg = st.session_state.pop("_nav_debug", None)
-if _nav_debug_msg:
-    st.info(f"🧭 NAV DEBUG: {_nav_debug_msg}  ·  current page: **{page}**", icon="🧭")
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 1 — MY PORTFOLIO
