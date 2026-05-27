@@ -18,6 +18,8 @@ testable and decoupled from yfinance.
 
 from datetime import date, timedelta
 
+from stock_analyzer.constants import MEANINGFUL_INTRADAY_PCT
+
 
 def _f(v, default=0.0):
     if v is None:
@@ -153,9 +155,9 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
             outcome = "✅ Acted — see today's trades for entry/PnL"
         elif today_pct_val is None:
             outcome = "—  No action taken (intraday data unavailable)"
-        elif today_pct_val >= 1.0:
+        elif today_pct_val >= MEANINGFUL_INTRADAY_PCT:
             outcome = f"💸 Missed — would have gained {today_pct_val:+.2f}% today"
-        elif today_pct_val <= -1.0:
+        elif today_pct_val <= -MEANINGFUL_INTRADAY_PCT:
             outcome = f"🛡 Dodged — would have lost {today_pct_val:+.2f}% today"
         else:
             outcome = f"⚖ Flat — {today_pct_val:+.2f}% today; no meaningful move"
@@ -171,10 +173,10 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         if today_pct_val is None:
             outcome = "—  Intraday data unavailable"
             verdict = "unknown"
-        elif today_pct_val >= 1.0:
+        elif today_pct_val >= MEANINGFUL_INTRADAY_PCT:
             outcome = f"💭 Would have worked — {today_pct_val:+.2f}% today (composite still says wait)"
             verdict = "missed"
-        elif today_pct_val <= -1.0:
+        elif today_pct_val <= -MEANINGFUL_INTRADAY_PCT:
             outcome = f"✅ Skip validated — {today_pct_val:+.2f}% today (composite was right)"
             verdict = "validated"
         else:

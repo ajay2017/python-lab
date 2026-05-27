@@ -61,6 +61,32 @@ WEAK_CONVICTION_SCORE     = 55
 # such days bucketed for retrospective behavioural analysis.
 PANIC_DAY_SPY_PCT = -1.5
 
+# ── News-sentiment compound-score cutoffs (VADER scale, -1 to +1) ────────────
+# These gate where news shows up in the briefing:
+#   compound ≤ NEWS_SENTIMENT_CRITICAL  → critical-news Act Today (held only)
+#   compound ≤ NEWS_SENTIMENT_NEGATIVE  → mark as conflict in cross-reference
+#   compound ≤ NEWS_SENTIMENT_WARN      → low-priority Review Before Close
+#   compound ≥ NEWS_SENTIMENT_POSITIVE  → counted as supporting signal
+NEWS_SENTIMENT_CRITICAL =  -0.25   # critical-news Act Today threshold
+NEWS_SENTIMENT_NEGATIVE =  -0.15   # cross-reference "negative news" conflict
+NEWS_SENTIMENT_WARN     =  -0.05   # warning-news Review Before Close
+NEWS_SENTIMENT_POSITIVE =   0.10   # treat as supporting signal in xref
+
+# ── Evening Debrief "meaningful intraday move" cutoff ────────────────────────
+# Picks moving more than this in absolute % today get a verdict
+# (Missed / Dodged / Skip validated). Smaller moves are "flat" — no signal.
+MEANINGFUL_INTRADAY_PCT = 1.0
+
+# ── Composite-score weights (scoring.combined_score) ─────────────────────────
+# How much each layer contributes to the composite score. Tuning these is a
+# policy decision — heavier technical = more momentum-driven, heavier
+# fundamental = more value-driven. Must sum to 1.0.
+COMPOSITE_WEIGHTS = {
+    "technical":   0.45,
+    "fundamental": 0.40,
+    "sentiment":   0.15,
+}
+
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS = 7       # any trade within this window = caution
 MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = suppress new picks in affected sector

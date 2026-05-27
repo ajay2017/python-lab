@@ -3,13 +3,13 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     COMPOSITE_SELL,
+    COMPOSITE_WEIGHTS,
 )
 
-WEIGHTS = {
-    "technical": 0.45,
-    "fundamental": 0.40,
-    "sentiment": 0.15,
-}
+# Backwards-compat alias — external imports `from stock_analyzer.scoring
+# import WEIGHTS` keep working. Source of truth lives in constants.py so
+# tuning the layer weighting is a policy decision, not a hidden module knob.
+WEIGHTS = COMPOSITE_WEIGHTS
 
 
 def combined_score(

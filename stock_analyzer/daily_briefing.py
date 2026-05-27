@@ -37,6 +37,10 @@ from stock_analyzer.constants import (
     APPROACHING_STOP_GAP_PCT,
     LARGE_POSITION_WEIGHT_PCT,
     WEAK_CONVICTION_SCORE,
+    NEWS_SENTIMENT_CRITICAL,
+    NEWS_SENTIMENT_NEGATIVE,
+    NEWS_SENTIMENT_WARN,
+    NEWS_SENTIMENT_POSITIVE,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -171,13 +175,13 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
     if ticker_news:
         avg_compound  = sum(n.get("compound", 0) for n in ticker_news) / len(ticker_news)
         best_headline = max(ticker_news, key=lambda n: abs(n.get("compound", 0)))
-        if avg_compound <= -0.15:
+        if avg_compound <= NEWS_SENTIMENT_NEGATIVE:
             conflicts.append(
                 f"News sentiment: Negative (avg {avg_compound:+.2f}) — "
                 f"\"{best_headline.get('headline','')[:60]}\""
             )
             sentiment_conflict = True
-        elif avg_compound >= 0.1:
+        elif avg_compound >= NEWS_SENTIMENT_POSITIVE:
             agreed.append(f"News sentiment: Positive (avg {avg_compound:+.2f})")
         else:
             agreed.append(f"News sentiment: Neutral (avg {avg_compound:+.2f})")
@@ -770,7 +774,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
     for item in (news_items or []):
         ticker = str(item.get("ticker", "")).upper()
         if (ticker in held_tickers
-                and item.get("compound", 0) <= -0.25
+                and item.get("compound", 0) <= NEWS_SENTIMENT_CRITICAL
                 and item.get("tier", 3) <= 2):
             if ticker not in {i["ticker"] for i in items}:
                 pm = port_df[port_df["Ticker"] == ticker]
@@ -1006,7 +1010,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
     for item in (news_items or []):
         ticker = str(item.get("ticker", "")).upper()
         if (ticker in held_tickers
-                and -0.25 < item.get("compound", 0) <= -0.05
+                and NEWS_SENTIMENT_CRITICAL < item.get("compound", 0) <= NEWS_SENTIMENT_WARN
                 and ticker not in warned):
             warned.add(ticker)
             items.append({

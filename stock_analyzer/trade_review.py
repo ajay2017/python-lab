@@ -33,15 +33,31 @@ from stock_analyzer.constants import (
     PANIC_DAY_SPY_PCT,
 )
 
-# Aliased so the rest of this module reads cleanly without touching the
-# imported constant name. PANIC_DAY_SPY_PCT is a behavioural decision
-# threshold and lives in constants.py with the rest of the policy knobs.
+# ── Module-local analytics tuning ────────────────────────────────────────────
+# Distinct from constants.py decision thresholds: the values below tune how
+# Lens 3 diagnostics *present* findings, not whether the App acts on them.
+# Adjust freely without it being an investment-policy decision; the user is
+# not expected to need to think about them.
+#
+#   _ROLLING_WINDOW            : trailing N-trade window for the rolling
+#                                win-rate chart. Too small = jittery, too
+#                                large = lags the regime change.
+#   _TREND_SPREAD_PP           : trailing-vs-overall spread (percentage
+#                                points) that counts as a "trend" finding.
+#                                Below this, the rolling chart's slope is
+#                                noise, not signal.
+#
+# Diagnostic-specific severity & sample-size cutoffs (inline in each
+# _diag_* function) are similarly tuning, not policy — search the file
+# for `severity =` / `if len(...) <`  to enumerate them.
+#
+# PANIC_DAY_SPY_PCT is aliased here because the rest of the module reads
+# more naturally with `_PANIC_THRESHOLD_PCT`, but the source of truth lives
+# in constants.py — adjusting the threshold IS a policy decision.
 _PANIC_THRESHOLD_PCT = PANIC_DAY_SPY_PCT
 
-# Internal analytics tuning — not user-facing gates. Window length and
-# trailing-vs-overall trend spread are visualisation choices.
-_ROLLING_WINDOW      = 5      # trailing N-trade rolling win-rate window
-_TREND_SPREAD_PP     = 15.0   # trailing-vs-overall spread that counts as a trend
+_ROLLING_WINDOW      = 5
+_TREND_SPREAD_PP     = 15.0
 
 
 def _f(v, default=0.0):
