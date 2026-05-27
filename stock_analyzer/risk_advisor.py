@@ -68,13 +68,17 @@ def build_risk_advisor_recommendations(
 
     recs: list[dict] = []
 
+    # Use None-preserving coercion for every metric that gates a recommendation.
+    # Coercing missing data to 0.0 produces confidently-wrong HIGH-priority
+    # panels (e.g. "Sharpe 0.00 — Risk Taken Is Not Being Rewarded" when the
+    # cache is cold). Each downstream branch now gates on `is not None`.
     beta    = _beta_ok(port_risk.get("beta"))
-    ann_vol = _f(port_risk.get("ann_volatility"))
-    sharpe  = _f(port_risk.get("sharpe"))
-    sortino = _f(port_risk.get("sortino"))
-    var_pct = _f(port_risk.get("var_95_pct"))    # negative %
-    cvar_pct = _f(port_risk.get("cvar_95_pct"))  # negative %
-    max_dd  = _f(port_risk.get("max_drawdown"))   # negative %
+    ann_vol = _beta_ok(port_risk.get("ann_volatility"))
+    sharpe  = _beta_ok(port_risk.get("sharpe"))
+    sortino = _beta_ok(port_risk.get("sortino"))
+    var_pct  = _beta_ok(port_risk.get("var_95_pct"))    # negative %
+    cvar_pct = _beta_ok(port_risk.get("cvar_95_pct"))   # negative %
+    max_dd   = _beta_ok(port_risk.get("max_drawdown"))  # negative %
 
     pv = portfolio_value if portfolio_value > 0 else 50_000.0
 
@@ -220,7 +224,7 @@ def build_risk_advisor_recommendations(
             })
 
     # ── 2. SHARPE / RISK-ADJUSTED RETURN ─────────────────────────────────────
-    if sharpe < 0.8:
+    if sharpe is not None and sharpe < 0.8:
         sh_priority = "HIGH" if sharpe < 0.4 else "MEDIUM"
 
         drags = []
@@ -253,7 +257,7 @@ def build_risk_advisor_recommendations(
             "problem": (
                 f"A Sharpe of **{sharpe:.2f}** means you earn **{sharpe:.2f} units of return "
                 f"per unit of risk**. The S&P 500 historically delivers ~0.9–1.0 Sharpe "
-                f"at far lower volatility ({ann_vol:.0f}% annualised). "
+                f"at far lower volatility ({f'{ann_vol:.0f}%' if ann_vol is not None else 'unavailable'} annualised). "
                 "You're carrying more risk than the index without earning proportionate returns for it."
             ),
             "root_cause": (
@@ -282,7 +286,7 @@ def build_risk_advisor_recommendations(
                 "a position's value to the portfolio. This is the mindset shift from retail to professional."
             ),
         })
-    elif sharpe >= 1.0:
+    elif sharpe is not None and sharpe >= 1.0:
         recs.append({
             "priority": "OK",
             "type":     "ok_sharpe",
@@ -298,7 +302,9 @@ def build_risk_advisor_recommendations(
         })
 
     # ── 3. PORTFOLIO VOLATILITY ───────────────────────────────────────────────
-    if ann_vol > 30:
+    if ann_vol is None:
+        vol_priority = None
+    elif ann_vol > 30:
         vol_priority = "HIGH"
     elif ann_vol > 25:
         vol_priority = "MEDIUM"
@@ -365,7 +371,7 @@ def build_risk_advisor_recommendations(
         })
 
     # ── 4. MAX DRAWDOWN ───────────────────────────────────────────────────────
-    if max_dd < -20:
+    if max_dd is not None and max_dd < -20:
         dd_priority = "HIGH" if max_dd < -30 else "MEDIUM"
 
         dd_contribs = []
@@ -426,7 +432,7 @@ def build_risk_advisor_recommendations(
                 "mistake in portfolio management."
             ),
         })
-    elif max_dd > -10:
+    elif max_dd is not None and max_dd > -10:
         recs.append({
             "priority": "OK",
             "type":     "ok_drawdown",
@@ -442,7 +448,7 @@ def build_risk_advisor_recommendations(
         })
 
     # ── 5. TAIL RISK (CVaR / VaR ratio) ──────────────────────────────────────
-    if var_pct < 0 and cvar_pct < 0 and abs(var_pct) > 0:
+    if var_pct is not None and cvar_pct is not None and var_pct < 0 and cvar_pct < 0 and abs(var_pct) > 0:
         tail_ratio  = abs(cvar_pct) / abs(var_pct)
         var_dollar  = abs(var_pct  / 100 * pv)
         cvar_dollar = abs(cvar_pct / 100 * pv)
