@@ -10606,6 +10606,12 @@ elif page == "📒 Trade Journal":
                     # StreamlitAPIException. Popping lets the checkbox
                     # re-init to its default (unchecked) on the next render.
                     st.session_state.pop("_tj_override_price_check", None)
+                    # Force the page-load drift check to re-run on next
+                    # render. Without this, any drift introduced by an
+                    # override-permitted save (e.g. backfill SELL) would
+                    # only surface in the NEXT session, not immediately.
+                    st.session_state.pop("_tj_drift_checked", None)
+                    st.session_state.pop("_tj_drift_state",   None)
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
