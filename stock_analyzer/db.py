@@ -354,13 +354,17 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
         }
 
     # Chronological replay — oldest first so cost basis builds up correctly.
-    # utc=True normalises mixed timestamp formats — raw-SQL inserts (e.g.
-    # rebaseline rows with '+00') and Python-SDK inserts (default `now()`
-    # returning '+00:00' with microseconds) can otherwise produce NaT for
-    # the SQL-inserted rows, which sort last via na_position='last' and
-    # then trigger spurious "no prior BUY" drift warnings on later SELLs.
+    # format='ISO8601' + utc=True handles mixed-precision timestamp strings
+    # in the same column: raw-SQL inserts (rebaseline rows, no microseconds)
+    # vs Python-SDK inserts (default `now()`, microsecond precision). Without
+    # format='ISO8601', pandas infers format from the first row only, and
+    # errors='coerce' silently turns the non-matching rows into NaT — which
+    # then sort last via na_position='last' and trigger spurious "no prior
+    # BUY" drift warnings on later SELLs.
     df = trades_df.copy()
-    df["_sort_ts"] = pd.to_datetime(df["traded_at"], errors="coerce", utc=True)
+    df["_sort_ts"] = pd.to_datetime(
+        df["traded_at"], errors="coerce", utc=True, format="ISO8601"
+    )
     df = df.sort_values(["_sort_ts", "id"], ascending=True, na_position="last")
 
     for _, row in df.iterrows():

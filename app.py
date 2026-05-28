@@ -11024,7 +11024,7 @@ elif page == "📒 Trade Journal":
             _dbg = trades_df[["id", "ticker", "action", "traded_at"]].head(20).copy()
             _dbg["raw_repr"]   = _dbg["traded_at"].apply(lambda v: repr(v))
             _dbg["py_type"]    = _dbg["traded_at"].apply(lambda v: type(v).__name__)
-            _dbg["parsed"]     = pd.to_datetime(_dbg["traded_at"], errors="coerce", utc=True)
+            _dbg["parsed"]     = pd.to_datetime(_dbg["traded_at"], errors="coerce", utc=True, format="ISO8601")
             _dbg["parsed_str"] = _dbg["parsed"].astype(str)
             st.dataframe(_dbg, hide_index=True, use_container_width=True)
             st.caption(
@@ -11042,13 +11042,15 @@ elif page == "📒 Trade Journal":
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
         if "traded_at" in display_df.columns:
-            # utc=True normalises mixed timestamp formats (raw-SQL inserts use
-            # '+00' offset and second precision; Python-SDK inserts use
-            # '+00:00' with microseconds). Without it, pandas can silently
-            # coerce the SQL-inserted rows to NaT — which then renders as
-            # 'None' in the Date/Time column.
+            # format='ISO8601' tells pandas to accept any valid ISO 8601 input
+            # (with or without microseconds, '+00' or '+00:00' offset). Without
+            # this, pandas infers the format from the first row only — and
+            # rows that don't match (e.g. raw-SQL rebaseline BUYs lack the
+            # microsecond component that the Python-SDK inserts have) get
+            # silently coerced to NaT by errors='coerce', rendering as 'None'
+            # in the Date / Time column. utc=True normalises to UTC.
             display_df["traded_at"] = pd.to_datetime(
-                display_df["traded_at"], errors="coerce", utc=True
+                display_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
             ).dt.strftime("%Y-%m-%d %H:%M")
 
         # Add delete checkbox column

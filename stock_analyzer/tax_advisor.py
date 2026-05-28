@@ -43,7 +43,7 @@ def _earliest_buy(ticker: str, trades_df: pd.DataFrame) -> _date | None:
     ]
     if buys.empty:
         return None
-    dates = pd.to_datetime(buys["traded_at"], errors="coerce", utc=True).dropna()
+    dates = pd.to_datetime(buys["traded_at"], errors="coerce", utc=True, format="ISO8601").dropna()
     if dates.empty:
         return None
     return dates.min().date()
@@ -67,7 +67,7 @@ def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list
     rows = trades_df[trades_df["ticker"].astype(str).str.upper() == ticker.upper()].copy()
     if rows.empty:
         return []
-    rows["_ts"] = pd.to_datetime(rows["traded_at"], errors="coerce", utc=True)
+    rows["_ts"] = pd.to_datetime(rows["traded_at"], errors="coerce", utc=True, format="ISO8601")
     rows = rows.dropna(subset=["_ts"]).sort_values(["_ts", "id"], ascending=True)
 
     lots: list[list] = []  # each entry: mutable [shares, buy_date]
