@@ -7,7 +7,15 @@ earnings volatility, a specific pre-earnings action, and what to watch
 during the report itself.
 """
 
+import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
+
+_ET = _pytz.timezone("America/New_York")
+
+
+def _today_et() -> _date:
+    """ET-localized today (Streamlit Cloud runs UTC)."""
+    return _datetime.now(_ET).date()
 
 
 def _f(val, default=0.0):
@@ -322,7 +330,7 @@ def build_earnings_playbook(
     within the next `lookahead_days` days, sorted by urgency.
     """
     if today is None:
-        today = _date.today()
+        today = _today_et()
 
     playbook = []
 

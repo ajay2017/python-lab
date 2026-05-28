@@ -14,7 +14,18 @@ Tax rates are configurable; defaults to US high-bracket (37% STCG / 20% LTCG).
 """
 
 import pandas as pd
+import pytz as _pytz
 from datetime import date as _date, datetime as _dt
+
+_ET = _pytz.timezone("America/New_York")
+
+
+def _today_et() -> _date:
+    """ET-localized "today" — Streamlit Cloud runs UTC so plain date.today()
+    is up to ~5 hours ahead of the user's calendar after 7 PM ET, which would
+    classify positions in the wrong tax-year window."""
+    return _dt.now(_ET).date()
+
 
 _STCG_THRESHOLD_DAYS = 366   # IRS: > 1 year = long-term
 
@@ -139,7 +150,7 @@ def build_tax_analysis(
       stcg_rate, ltcg_rate
     """
     if today is None:
-        today = _date.today()
+        today = _today_et()
 
     rows = []
     total_stcg_gain   = 0.0

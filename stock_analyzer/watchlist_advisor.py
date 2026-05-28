@@ -6,7 +6,16 @@ when conditions are right to open a position, when to wait, and when to remove
 the ticker because the thesis is broken.
 """
 
+import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
+
+_ET = _pytz.timezone("America/New_York")
+
+
+def _today_et() -> _date:
+    """ET-localized today (Streamlit Cloud runs UTC)."""
+    return _datetime.now(_ET).date()
+
 
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_CEILING,
@@ -45,7 +54,7 @@ def _earn_days_until(earn_str: str | None) -> int | None:
     if not earn_str:
         return None
     try:
-        return (_datetime.strptime(earn_str, "%Y-%m-%d").date() - _date.today()).days
+        return (_datetime.strptime(earn_str, "%Y-%m-%d").date() - _today_et()).days
     except Exception:
         return None
 
