@@ -2599,21 +2599,21 @@ if page == "🏠 Home":
                         "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
                         "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
                         f"<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                        f"🔍 {len(comp_unavail)} candidate{'s' if len(comp_unavail) != 1 else ''} "
-                        "couldn't be verified (composite data load failed)</div>"
+                        f"🔍 Couldn't score {len(comp_unavail)} candidate"
+                        f"{'s' if len(comp_unavail) != 1 else ''} — data source returned an error</div>"
                         f"<div style='color:#fcd34d;font-size:0.78em'>"
-                        f"Pending: <b>{', '.join(_unavail_tickers[:5])}</b>"
+                        f"Affected: <b>{', '.join(_unavail_tickers[:5])}</b>"
                         + (f" (+{len(_unavail_tickers)-5} more)" if len(_unavail_tickers) > 5 else "")
                         + "</div>"
                         "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
-                        "Held out of the actionable list — momentum alone isn't enough. "
-                        "Click Retry to re-fetch composite data."
+                        "Set aside until data loads — momentum alone isn't enough to recommend. "
+                        "Click Retry to try the data fetch again."
                         "</div></div>",
                         unsafe_allow_html=True,
                     )
                 with _bn_c2:
                     if st.button("🔁 Retry", key="_db_grow_retry_comp",
-                                 help="Clear cache and re-fetch composite data for failed tickers"):
+                                 help="Clear cache and re-fetch composite data for the affected tickers"):
                         st.cache_data.clear()
                         st.session_state.pop("_grow_composites", None)
                         st.session_state.pop("_grow_composites_coverage", None)
@@ -2641,17 +2641,41 @@ if page == "🏠 Home":
                 # are no recommendations today (composite said no, sector had
                 # a macro event, etc.) rather than wondering "did anything
                 # even get screened?"
-                _below_count = len(macro_blocked) + len(comp_skipped)
-                _below_hint  = (
-                    f" {_below_count} candidate{'s' if _below_count != 1 else ''} "
-                    "considered but rejected — see details below."
-                ) if _below_count else ""
-                st.caption(
-                    ("No high-confidence setups meet today's criteria. "
-                     "Run Market Scanner to refresh candidates." if tone == "bull"
-                     else "Flat market — waiting for clearer direction before adding new positions.")
-                    + _below_hint
-                )
+                #
+                # Make the funnel explicit: "of X scanned, Y rejected, Z
+                # couldn't be scored" — without this, the unverified banner
+                # above and the empty-state message below look contradictory
+                # (banner says "2 candidates...", body says "no setups",
+                # and the user has no way to know those are different things).
+                _comp_cov     = st.session_state.get("_grow_composites_coverage") or {}
+                _scanned_n    = len(_comp_cov.get("intended", []) or [])
+                _rejected_n   = len(comp_skipped) + len(macro_blocked)
+                _couldnt_n    = len(comp_unavail)
+                if _scanned_n > 0 and tone == "bull":
+                    _funnel_parts = []
+                    if _rejected_n:
+                        _funnel_parts.append(
+                            f"{_rejected_n} didn't meet criteria"
+                        )
+                    if _couldnt_n:
+                        _funnel_parts.append(
+                            f"{_couldnt_n} couldn't be scored (see banner above)"
+                        )
+                    _funnel = f" ({'; '.join(_funnel_parts)})" if _funnel_parts else ""
+                    st.caption(
+                        f"Today's scan: of {_scanned_n} candidates evaluated, "
+                        f"none cleared the buy threshold{_funnel}. "
+                        "Run Market Scanner for a fresh pass."
+                    )
+                elif tone == "bull":
+                    st.caption(
+                        "No high-confidence setups meet today's criteria. "
+                        "Run Market Scanner to refresh candidates."
+                    )
+                else:
+                    st.caption(
+                        "Flat market — waiting for clearer direction before adding new positions."
+                    )
                 if tone == "bull":
                     if st.button("🔍 Run Market Scanner", key="_db_grow_scanner"):
                         st.session_state["_pending_page"] = "🔍 Market Scanner"
