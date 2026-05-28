@@ -1373,10 +1373,23 @@ if page == "🏠 Home":
         # silently letting picks bypass the composite-score gate.
         _comp_failures: list[str] = []
         for _tc in _top_for_comp:
-            try:
-                _grow_composites[_tc] = load_all(_tc)
-            except Exception:
-                _comp_failures.append(_tc)
+            # Single retry on failure — yfinance frequently throws transient
+            # errors on individual tickers (rate limits, momentary 5xx) that
+            # clear on a second call. Without the retry the pick falls into
+            # the composite_unavailable bucket and only re-tries on the next
+            # full Brief render. Cheap to retry inline since load_all is
+            # cache_data-decorated; the second call is a no-op cache lookup.
+            _bundle = None
+            for _attempt in range(2):
+                try:
+                    _bundle = load_all(_tc)
+                    break
+                except Exception:
+                    if _attempt == 1:
+                        # Final attempt failed — record for the banner.
+                        _comp_failures.append(_tc)
+            if _bundle is not None:
+                _grow_composites[_tc] = _bundle
         st.session_state._grow_composites = _grow_composites
         # Compute coverage = fraction of intended top picks that have composite data
         _intended = set(_top_for_comp)
@@ -2545,6 +2558,7 @@ if page == "🏠 Home":
             conc_blocked  = grow.get("concentration_blocked_adds", [])
             macro_blocked = grow.get("macro_blocked_picks", [])
             comp_skipped  = grow.get("composite_skipped", [])
+            comp_unavail  = grow.get("composite_unavailable", [])
 
             _g_label = (
                 "📈 Grow Today"      if tone == "bull" else
@@ -2570,28 +2584,40 @@ if page == "🏠 Home":
                 st.caption(f"🛡️ {bear_msg}")
                 return
 
-            # Composite-fetch failure banner — shown when one or more of the
-            # intended top picks couldn't get a composite score, so picks may be
-            # listed without the full multi-factor signal. Surfacing this lets
-            # the user know to manually run Analysis before acting.
-            _comp_cov = st.session_state.get("_grow_composites_coverage") or {}
-            _missing_comp_ui = _comp_cov.get("missing") or []
-            if _missing_comp_ui:
-                st.markdown(
-                    "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    "⚠️ Composite Scores Unavailable for Some Picks</div>"
-                    f"<div style='color:#fcd34d;font-size:0.78em'>"
-                    f"Composite data missing for: <b>{', '.join(_missing_comp_ui[:5])}</b>"
-                    + (f" (+{len(_missing_comp_ui)-5} more)" if len(_missing_comp_ui) > 5 else "")
-                    + "</div>"
-                    "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
-                    "These picks are shown with momentum data only — the full multi-factor "
-                    "composite gate did not run. Open Analysis on each before acting."
-                    "</div></div>",
-                    unsafe_allow_html=True,
-                )
+            # Composite-fetch failure banner — picks where load_all() couldn't
+            # fetch composite data (yfinance transient errors, etc) are held
+            # OUT of new_picks entirely (see daily_briefing.composite_unavailable).
+            # We surface them here as one aggregate notice with a Refresh button
+            # rather than as half-validated cards inside the actionable list.
+            # The "decides, not informs" posture: we don't recommend what we
+            # can't validate. The user gets one obvious recovery action.
+            if comp_unavail:
+                _unavail_tickers = [p.get("ticker", "") for p in comp_unavail]
+                _bn_c1, _bn_c2 = st.columns([5, 1])
+                with _bn_c1:
+                    st.markdown(
+                        "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
+                        "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                        f"<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                        f"🔍 {len(comp_unavail)} candidate{'s' if len(comp_unavail) != 1 else ''} "
+                        "couldn't be verified (composite data load failed)</div>"
+                        f"<div style='color:#fcd34d;font-size:0.78em'>"
+                        f"Pending: <b>{', '.join(_unavail_tickers[:5])}</b>"
+                        + (f" (+{len(_unavail_tickers)-5} more)" if len(_unavail_tickers) > 5 else "")
+                        + "</div>"
+                        "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                        "Held out of the actionable list — momentum alone isn't enough. "
+                        "Click Retry to re-fetch composite data."
+                        "</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                with _bn_c2:
+                    if st.button("🔁 Retry", key="_db_grow_retry_comp",
+                                 help="Clear cache and re-fetch composite data for failed tickers"):
+                        st.cache_data.clear()
+                        st.session_state.pop("_grow_composites", None)
+                        st.session_state.pop("_grow_composites_coverage", None)
+                        st.rerun()
 
             # Risk banner: shown when Act Today has active portfolio risk flags
             if risk_banner:
@@ -8553,7 +8579,7 @@ elif page == "📈 Analysis":
         if _sc_held:
             _sc_shares = f"{int(_sc_held.get('Shares', 0))} held"
         elif ps:
-            _sc_shares = f"→ {ps['shares']} sugg"
+            _sc_shares = f"→ {ps['shares']} suggested"
         else:
             _sc_shares = "—"
 

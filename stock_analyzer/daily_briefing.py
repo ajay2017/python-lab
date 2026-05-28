@@ -466,6 +466,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "concentration_blocked_adds": [],
             "macro_blocked_picks":        [],
             "composite_skipped":          [],
+            "composite_unavailable":      [],
             "deploy_note":                None,
             "risk_banner":                risk_banner,
         }
@@ -495,6 +496,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _unverified_picks: list[dict] = []
         macro_blocked_picks: list[dict] = []
         composite_skipped:  list[dict] = []
+        # Picks where the composite fetch FAILED (load_all raised / not in cache).
+        # Distinct from composite_skipped (where composite loaded but < BUY).
+        # Kept out of new_picks entirely so we never surface a half-validated
+        # recommendation; the Brief renders an aggregate banner with a Refresh
+        # button so the user can retry the data load.
+        composite_unavailable: list[dict] = []
 
         for _, row in candidates.iterrows():
             ticker   = str(row["Ticker"])
@@ -558,6 +565,21 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "momentum_score":  _f(row.get("Score", 0)),
                     "composite_score": _composite_score,
                     "composite_label": _composite_label or "Hold",
+                })
+                continue
+
+            # Composite fetch failed — pick is held out of new_picks entirely.
+            # Surfacing a half-validated card next to high-conviction picks led to
+            # user-visible contradictions (e.g. INTC presented as a new position
+            # to initiate while Analysis page rated it Sell at 38.3). Per the
+            # "decides, not informs" posture: if we can't validate, we don't
+            # recommend. The Brief renders an aggregate "Pending Verification"
+            # banner with a Refresh button so the user can retry the fetch.
+            if _composite_score is None:
+                composite_unavailable.append({
+                    "ticker":         ticker,
+                    "sector":         sector,
+                    "momentum_score": _f(row.get("Score", 0)),
                 })
                 continue
 
@@ -722,6 +744,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "concentration_blocked_adds": concentration_blocked_adds,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,
+        "composite_unavailable":      composite_unavailable,
         "deploy_note":                deploy_note,
         "risk_banner":                risk_banner,
         "sp500_pct":                  sp500_pct,
