@@ -118,8 +118,14 @@ def build_portfolio_df(
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        total_val = df["Market Value"].sum()
-        df["Weight (%)"] = (df["Market Value"] / total_val * 100).round(1)
+        total_val = float(df["Market Value"].sum())
+        if total_val > 0:
+            df["Weight (%)"] = (df["Market Value"] / total_val * 100).round(1)
+        else:
+            # Every row has a 0 market value — cold cache or every yfinance call
+            # failed. Leave Weight at its 0.0 default rather than letting
+            # inf/NaN propagate into rebalancer / risk_advisor / brief gates.
+            df["Weight (%)"] = 0.0
     return df
 
 
