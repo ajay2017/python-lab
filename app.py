@@ -11015,25 +11015,6 @@ elif page == "📒 Trade Journal":
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")
     st.caption("Check the **Delete?** box on any row then click 'Delete Selected' to remove duplicates or mistakes.")
-
-    # TEMPORARY DEBUG — to diagnose why rebaseline BUYs render Date/Time as None.
-    # Shows the raw value, Python type, and parsed datetime for each trade row.
-    # Remove once the parsing issue is resolved.
-    with st.expander("🐛 DEBUG: traded_at inspection (temporary)"):
-        if not trades_df.empty:
-            _dbg = trades_df[["id", "ticker", "action", "traded_at"]].head(20).copy()
-            _dbg["raw_repr"]   = _dbg["traded_at"].apply(lambda v: repr(v))
-            _dbg["py_type"]    = _dbg["traded_at"].apply(lambda v: type(v).__name__)
-            _dbg["parsed"]     = pd.to_datetime(_dbg["traded_at"], errors="coerce", utc=True, format="ISO8601")
-            _dbg["parsed_str"] = _dbg["parsed"].astype(str)
-            st.dataframe(_dbg, hide_index=True, use_container_width=True)
-            st.caption(
-                f"trades_df dtypes — traded_at: **{trades_df['traded_at'].dtype}**  ·  "
-                f"row count: **{len(trades_df)}**"
-            )
-        else:
-            st.write("trades_df is empty")
-
     if trades_df.empty:
         st.info("No trades recorded yet. Use the form above to log your first trade.")
     else:
