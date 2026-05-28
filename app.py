@@ -891,6 +891,53 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "business_summary": business_summary,
     }
 
+def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = 4) -> dict:
+    """Fan out load_all() across threads so cold-cache fetches overlap.
+
+    load_all is @st.cache_data-decorated and Streamlit's cache is thread-safe,
+    so cached hits return instantly while uncached fetches parallelize the
+    yfinance round-trips. Returns {ticker: bundle | None} — ordering is not
+    preserved; callers should index by ticker.
+    """
+    out: dict = {}
+    tickers = [t for t in tickers if t]
+    if not tickers:
+        return out
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(load_all, t, period): t for t in tickers}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            try:
+                out[t] = fut.result()
+            except Exception:
+                out[t] = None
+    return out
+
+
+def _parallel_fetch_bundles(tickers, period: str = "1mo", max_workers: int = 4) -> dict:
+    """Same shape as _parallel_load_all but calls raw fetch_ticker_bundle.
+
+    Used by the Evidence Pack page which wants the un-enriched yfinance
+    bundle (not the load_all composite). Errors are swallowed per-ticker
+    so a single failure doesn't poison the whole pack.
+    """
+    out: dict = {}
+    tickers = [t for t in tickers if t]
+    if not tickers:
+        return out
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch_ticker_bundle, t, period): t for t in tickers}
+        for fut in as_completed(futures):
+            t = futures[fut]
+            try:
+                out[t] = fut.result()
+            except Exception:
+                out[t] = {}
+    return out
+
+
 # ── Sector ETF multi-period returns (for heatmap) ────────────────────────────
 @st.cache_data(ttl=3600)
 def _fetch_sector_returns() -> pd.DataFrame:
@@ -978,11 +1025,13 @@ if page == "🏠 Home":
     ]
     held_data: dict = {}
     with st.spinner("Loading portfolio data…"):
+        _hd_results = _parallel_load_all(held_tickers)
         for t in held_tickers:
-            try:
-                held_data[t] = load_all(t)
-            except Exception as e:
-                st.warning(f"Could not load {t}: {e}")
+            bundle = _hd_results.get(t)
+            if bundle is None:
+                st.warning(f"Could not load {t}")
+            else:
+                held_data[t] = bundle
 
     if held_data:
         _news = curate_news_items(held_data)
@@ -2314,11 +2363,10 @@ if page == "🏠 Home":
                     with st.spinner(
                         f"Validating top {len(_top_candidates)} picks with full analysis…"
                     ):
-                        for _tc in _top_candidates:
-                            try:
-                                _grow_composites[_tc] = load_all(_tc)
-                            except Exception:
-                                pass
+                        _gc_results = _parallel_load_all(_top_candidates)
+                        for _tc, _b in _gc_results.items():
+                            if _b is not None:
+                                _grow_composites[_tc] = _b
                 st.session_state._grow_composites    = _grow_composites
                 st.session_state._brief_signals_ts   = datetime.now()
                 st.rerun()
@@ -7827,13 +7875,8 @@ elif page == "🔍 Market Scanner":
             )
 
         if _load_ev:
-            _ev_bundle_map: dict = {}
             with st.spinner("Loading evidence for top 10 picks…"):
-                for _ev_t in _top10["Ticker"].tolist():
-                    try:
-                        _ev_bundle_map[_ev_t] = fetch_ticker_bundle(_ev_t, period="1mo")
-                    except Exception:
-                        _ev_bundle_map[_ev_t] = {}
+                _ev_bundle_map = _parallel_fetch_bundles(_top10["Ticker"].tolist(), period="1mo")
             st.session_state[_ev_cache_key] = _ev_bundle_map
 
         if _ev_cache_key in st.session_state:
@@ -8445,11 +8488,13 @@ elif page == "📈 Analysis":
     tickers = [name_to_ticker.get(n, n) for n in selected_names]
     results: dict = {}
     with st.spinner("Fetching data…"):
+        _an_results = _parallel_load_all(tickers, period=period)
         for ticker in tickers:
-            try:
-                results[ticker] = load_all(ticker, period)
-            except Exception as e:
-                st.error(f"{ticker}: {e}")
+            bundle = _an_results.get(ticker)
+            if bundle is None:
+                st.error(f"{ticker}: load failed")
+            else:
+                results[ticker] = bundle
 
     if not results:
         st.error("No data loaded.")
@@ -9537,13 +9582,8 @@ elif page == "📋 Watchlist":
     )
 
     # ── Load data for all watchlist tickers ───────────────────────────────────
-    _wl_data: dict = {}
     with st.spinner(f"Loading analysis for {len(_wl)} watchlist ticker(s)…"):
-        for _wt in _wl:
-            try:
-                _wl_data[_wt] = load_all(_wt, "6mo")
-            except Exception as _we:
-                _wl_data[_wt] = None
+        _wl_data = _parallel_load_all(list(_wl), period="6mo")
 
     # ── Build portfolio-fit context (consumed by ENTER_NOW risk gate) ─────────
     _wl_port_df    = st.session_state.get("holdings_df", pd.DataFrame())
