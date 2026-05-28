@@ -1352,30 +1352,35 @@ if page == "🏠 Home":
     # on bull days) so every candidate the Brief evaluates has a composite —
     # otherwise picks beyond slot 5 fall back to "Verify — Run Analysis First"
     # even when the user just wants a Skip/Go verdict on the Brief itself.
-    # load_all() is cached (30-min TTL) so this is instant if picks were recently
-    # analyzed; only the first fetch per ticker per session takes network time.
+    #
+    # Single source of truth: rebuild from load_all() on every render rather
+    # than holding a session-state snapshot. load_all() has a 30-min TTL so
+    # this is a cache-hit and effectively free, but it guarantees the Brief's
+    # composite matches the Analysis page's composite — both ultimately read
+    # the same cache layer. A prior implementation only fetched "missing"
+    # tickers, which let _grow_composites hold a composite from hours ago
+    # while load_all rolled over to a fresher value — same ticker rendered
+    # with two different composites in the same session.
     _sr_for_comp = st.session_state.get("scanner_results")
     if _sr_for_comp is not None and not _sr_for_comp.empty:
-        _existing_comp = st.session_state.get("_grow_composites", {})
         _top_for_comp  = (
             _sr_for_comp[~_sr_for_comp["Ticker"].isin(set(held_tickers))]
             .head(12)["Ticker"].tolist()
         )
-        _missing_comp  = [t for t in _top_for_comp if t not in _existing_comp]
+        _grow_composites: dict = {}
         # Track tickers where the composite fetch failed so the Grow Today UI
         # can surface a "composite scores unavailable" banner instead of
         # silently letting picks bypass the composite-score gate.
         _comp_failures: list[str] = []
-        if _missing_comp:
-            for _tc in _missing_comp:
-                try:
-                    _existing_comp[_tc] = load_all(_tc)
-                except Exception:
-                    _comp_failures.append(_tc)
-            st.session_state._grow_composites = _existing_comp
+        for _tc in _top_for_comp:
+            try:
+                _grow_composites[_tc] = load_all(_tc)
+            except Exception:
+                _comp_failures.append(_tc)
+        st.session_state._grow_composites = _grow_composites
         # Compute coverage = fraction of intended top picks that have composite data
         _intended = set(_top_for_comp)
-        _have     = _intended & set(_existing_comp.keys())
+        _have     = _intended & set(_grow_composites.keys())
         st.session_state._grow_composites_coverage = {
             "intended": sorted(_intended),
             "have":     sorted(_have),
@@ -8541,19 +8546,24 @@ elif page == "📈 Analysis":
         else:
             _sc_position = f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "—"
 
-        # "Shares" column — held: actual shares; not held: suggested entry
+        # "Shares" column — held: actual shares; not held: suggested entry.
+        # Prefix the suggested branch so a not-held row can't be mistaken for
+        # an actual position. Without the marker both branches render identical
+        # integers ("190") and the user can't tell which is which at a glance.
         if _sc_held:
-            _sc_shares = int(_sc_held.get("Shares", 0))
+            _sc_shares = f"{int(_sc_held.get('Shares', 0))} held"
         elif ps:
-            _sc_shares = ps["shares"]
+            _sc_shares = f"→ {ps['shares']} sugg"
         else:
             _sc_shares = "—"
 
-        # "P&L / Entry Cost" column — held: P&L; not held: entry cost
+        # "P&L / Entry Cost" column — held: P&L; not held: entry cost.
+        # Held branch already self-labels with " P&L"; mirror that on the
+        # not-held branch with " entry" so column-meaning is unambiguous.
         if _sc_held:
             _sc_cost = f"{_sc_held.get('P&L (%)', 0):+.1f}% P&L"
         elif ps:
-            _sc_cost = f"${ps['total_cost']:,.0f}"
+            _sc_cost = f"→ ${ps['total_cost']:,.0f} entry"
         else:
             _sc_cost = "—"
 
@@ -8593,7 +8603,7 @@ elif page == "📈 Analysis":
 
     st.dataframe(
         summary_df.style.map(_sig, subset=["Signal"]).map(_sc, subset=["Score"])
-        .format({"Score": "{:.1f}", "Shares": lambda v: str(v)}),
+        .format({"Score": "{:.1f}"}),
         use_container_width=True,
     )
 
