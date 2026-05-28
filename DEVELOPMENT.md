@@ -185,6 +185,16 @@ Pick up tomorrow morning during market validation, then batch.
 - Removes the manual-entry path that produced the May 2026 drift mess (15 unmatched SELLs, multi-round SQL backfill, eventual full rebaseline on 2026-05-27). Drift recovery is documented in memory `feedback_trade_drift_recovery`.
 - Brokers to scope: Fidelity, Schwab/TD, IBKR, Robinhood (varying API quality). Auth via OAuth + token storage in Streamlit secrets.
 
+**Scanner universe — movers ingestion (close the discovery gap):**
+- Today's scanner universe is the hardcoded `SECTOR_UNIVERSE` dict (~70 tickers) plus the user's Watchlist (added 2026-05-28). A genuine winner outside both is invisible — Grow Today never sees it.
+- Add a daily "movers" feed so the system can surface names the user hasn't heard of yet. Candidate sources, in order of preference:
+  - **SP500 / NDX daily-download self-compute** (free, ~500-ticker scan, 3-5 min; cache once per session). Pulls index constituents, scores them through the same `_quick_score` pipeline, surfaces top % gainers / most-active.
+  - Finviz screener scrape (free w/ rate limits; ToS grey area)
+  - Paid API (Polygon / Twelvedata / Alpha Vantage — reliable, adds API-key plumbing)
+- The composite gate is the natural noise filter — a momentum ticker that doesn't have fundamentals/sentiment to back it up gets rejected at COMPOSITE_BUY=65 the same way INTC was (38.3, kicked out).
+- Decision needed before implementation: data source. Default lean is self-compute from SP500 (no new dependencies), accepting the slower scan time as the cost.
+- Without this, the system's discovery scope is bounded by the user's prior knowledge — fine for personal-portfolio mode but limiting if the goal is to surface real winners they haven't researched.
+
 ---
 
 ## What NOT to do

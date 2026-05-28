@@ -2362,11 +2362,18 @@ if page == "🏠 Home":
                 )
         if _do_refresh:
             st.cache_data.clear()
-            _total_scan_tickers = sum(len(v) for v in SECTOR_UNIVERSE.values())
+            _wl_for_scan        = st.session_state.get("watchlist", []) or []
+            _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
+            _wl_extras          = [t for t in _wl_for_scan if str(t).upper() not in _universe_tickers]
+            _total_scan_tickers = len(_universe_tickers) + len(_wl_extras)
             with st.spinner(
                 f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
             ):
-                _fresh_results = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
+                _fresh_results = scan_sectors(
+                    list(SECTOR_UNIVERSE.keys()),
+                    period="6mo",
+                    extra_tickers=_wl_for_scan,
+                )
             if not _fresh_results.empty:
                 st.session_state.scanner_results = _fresh_results
                 # Pre-fetch full composite analysis for top 12 non-held scanner picks.
@@ -7224,9 +7231,12 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
         )
 
         if st.button("🔍 Scan full universe & rank my holdings", key="_rank_scan_btn"):
-            with st.spinner("Scanning universe (~80 tickers)…"):
+            with st.spinner("Scanning universe…"):
                 try:
-                    _full_scan = scan_sectors(list(SECTOR_UNIVERSE.keys()))
+                    _full_scan = scan_sectors(
+                        list(SECTOR_UNIVERSE.keys()),
+                        extra_tickers=st.session_state.get("watchlist", []) or [],
+                    )
                     st.session_state["_rank_scan_df"] = _full_scan
                 except Exception as _e:
                     st.error(f"Scan failed: {_e}")
@@ -7796,12 +7806,25 @@ elif page == "🔍 Market Scanner":
     with col_btn:
         run_scan = st.button("🔍 Scan Now", type="primary", use_container_width=True)
     with col_info:
-        total_tickers = sum(len(v) for k, v in SECTOR_UNIVERSE.items() if k in selected_sectors)
-        st.caption(f"Will scan **{total_tickers} stocks** across {len(selected_sectors)} sectors (~15–30 sec)")
+        _ms_wl          = st.session_state.get("watchlist", []) or []
+        _ms_sector_set  = set().union(*[SECTOR_UNIVERSE.get(s, []) for s in selected_sectors])
+        _ms_wl_extras   = [t for t in _ms_wl if str(t).upper() not in _ms_sector_set]
+        total_tickers   = len(_ms_sector_set) + len(_ms_wl_extras)
+        _wl_suffix      = (
+            f" + {len(_ms_wl_extras)} from your watchlist" if _ms_wl_extras else ""
+        )
+        st.caption(
+            f"Will scan **{total_tickers} stocks** across {len(selected_sectors)} sectors"
+            f"{_wl_suffix} (~15–30 sec)"
+        )
 
     if run_scan:
         with st.spinner(f"Scanning {total_tickers} stocks across {len(selected_sectors)} sectors…"):
-            results_df = scan_sectors(selected_sectors, period="6mo")
+            results_df = scan_sectors(
+                selected_sectors,
+                period="6mo",
+                extra_tickers=_ms_wl,
+            )
         if not results_df.empty:
             st.session_state.scanner_results = results_df
             st.success(f"Scan complete — {len(results_df)} stocks analyzed.")

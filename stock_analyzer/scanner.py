@@ -118,13 +118,34 @@ def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
         return None
 
 
-def scan_sectors(selected_sectors: list[str], period: str = "6mo") -> pd.DataFrame:
+def scan_sectors(
+    selected_sectors: list[str],
+    period: str = "6mo",
+    extra_tickers: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Scan the requested sectors plus any extra tickers (e.g. user's watchlist).
+
+    extra_tickers are tagged with sector="Watchlist" so they appear in scan
+    results with a recognisable label. Tickers already present in a selected
+    sector keep their real sector classification — dedup is by ticker symbol,
+    not by sector. This lets the user widen the scan universe beyond the
+    hardcoded SECTOR_UNIVERSE without needing a code change for each name.
+    """
     all_tickers, ticker_sector = [], {}
     for sector in selected_sectors:
         for t in SECTOR_UNIVERSE.get(sector, []):
             if t not in ticker_sector:
                 all_tickers.append(t)
                 ticker_sector[t] = sector
+
+    # Append watchlist / extra tickers AFTER the curated universe so a ticker
+    # that happens to be in both keeps its real-sector classification.
+    for t in (extra_tickers or []):
+        t = str(t).upper().strip()
+        if t and t not in ticker_sector:
+            all_tickers.append(t)
+            ticker_sector[t] = "Watchlist"
 
     if not all_tickers:
         return pd.DataFrame()
