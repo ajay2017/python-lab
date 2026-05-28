@@ -205,8 +205,17 @@ def run_scenario(
                 est_move = sector_map[sector] * (spy_move / base_spy)
             else:
                 est_move = sector_map[sector]
+        elif sector_key:
+            # Sector-targeted scenario but this position's sector isn't in the
+            # scenario's shock map. Applying beta * spy_move here would re-broadcast
+            # a broad-market shock under a sector-targeted name (e.g. "AI Trade
+            # Unwind -10% SPY" would still hit an Other-sector position with
+            # beta * -10%). Per review H-12: outside the targeted-sector list,
+            # the scenario isn't supposed to move this position at all.
+            est_move = 0.0
         else:
-            # Fall back to beta × SPY move
+            # Fall back to beta × SPY move (only for broad-market scenarios
+            # like "Mild Correction" / "Severe Bear" where sector_key is None).
             pos_beta = None
             data = held_data.get(ticker) or {}
             rm = data.get("risk_metrics") or {}
