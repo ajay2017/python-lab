@@ -19,6 +19,17 @@ def _f(val, default=0.0):
         return default
 
 
+def _opt(val):
+    """None-preserving float coercion — returns None for None / NaN."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if (f != f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 # Historical sector drawdowns (%) for each named scenario.
 # Source: approximate peak-to-trough moves during each event.
 _SECTOR_SHOCKS = {
@@ -171,7 +182,13 @@ def run_scenario(
 
     for _, row in port_df.iterrows():
         ticker  = row["Ticker"]
-        mval    = _f(row.get("Market Value"))
+        # Skip positions with no market value -- a missing yfinance price
+        # would otherwise contribute $0 P&L to the stress scenario, making
+        # a degraded portfolio look falsely benign.
+        mval_v  = _opt(row.get("Market Value"))
+        if mval_v is None or mval_v <= 0:
+            continue
+        mval    = mval_v
         sector  = str(row.get("Sector", "Other"))
         weight  = _f(row.get("Weight (%)"))
 

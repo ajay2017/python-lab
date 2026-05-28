@@ -19,6 +19,17 @@ def _f(val, default=0.0):
         return default
 
 
+def _opt(val):
+    """None-preserving float coercion — returns None for None / NaN."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if (f != f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 def compute_attribution(
     port_df: pd.DataFrame,
     held_data: dict,
@@ -51,8 +62,14 @@ def compute_attribution(
     rows = []
     for _, row in port_df.iterrows():
         ticker = row["Ticker"]
-        weight = _f(row.get("Weight (%)"))
-        mval   = _f(row.get("Market Value"))
+        # Missing weight or market value would yield meaningless dollar-alpha
+        # numbers (or under-report opportunity cost) -- skip the position.
+        weight_v = _opt(row.get("Weight (%)"))
+        mval_v   = _opt(row.get("Market Value"))
+        if weight_v is None or mval_v is None or mval_v <= 0:
+            continue
+        weight = weight_v
+        mval   = mval_v
         sector = str(row.get("Sector", "Other"))
         score  = _f(row.get("Score"))
         signal = str(row.get("Signal", ""))

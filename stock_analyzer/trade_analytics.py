@@ -118,11 +118,17 @@ def build_trigger_breakdown(ext_df: pd.DataFrame) -> pd.DataFrame:
         losers  = grp[grp["realized_pnl"] < 0]
         n       = len(grp)
         wr      = len(winners) / n * 100 if n else 0.0
-        avg_w   = float(winners["realized_pnl"].mean()) if not winners.empty else 0.0
-        avg_l   = float(losers["realized_pnl"].mean())  if not losers.empty else 0.0
+        # Use None for missing winner/loser averages so the UI renders "—"
+        # instead of $0 — that distinguishes "all-loser trigger group" from
+        # "no-data trigger group" in the display. Expectancy math still
+        # needs concrete numbers, so an internal 0-coerced copy is used.
+        avg_w   = float(winners["realized_pnl"].mean()) if not winners.empty else None
+        avg_l   = float(losers["realized_pnl"].mean())  if not losers.empty  else None
+        avg_w_e = avg_w if avg_w is not None else 0.0
+        avg_l_e = avg_l if avg_l is not None else 0.0
         pf_denom = abs(float(losers["realized_pnl"].sum())) if not losers.empty else 0.0
         pf      = (float(winners["realized_pnl"].sum()) / pf_denom) if pf_denom > 0 else None
-        exp_d   = wr / 100 * avg_w + (1 - wr / 100) * avg_l if n else 0.0
+        exp_d   = wr / 100 * avg_w_e + (1 - wr / 100) * avg_l_e if n else 0.0
         avg_w_pct = float(winners["pnl_pct"].mean()) if not winners.empty and winners["pnl_pct"].notna().any() else None
         avg_l_pct = float(losers["pnl_pct"].mean())  if not losers.empty  and losers["pnl_pct"].notna().any()  else None
 
@@ -130,8 +136,8 @@ def build_trigger_breakdown(ext_df: pd.DataFrame) -> pd.DataFrame:
             "Trigger":        ttype,
             "Trades":         n,
             "Win Rate (%)":   round(wr, 1),
-            "Avg Win ($)":    round(avg_w, 0),
-            "Avg Loss ($)":   round(avg_l, 0),
+            "Avg Win ($)":    round(avg_w, 0) if avg_w is not None else None,
+            "Avg Loss ($)":   round(avg_l, 0) if avg_l is not None else None,
             "Avg Win (%)":    round(avg_w_pct, 1) if avg_w_pct is not None else None,
             "Avg Loss (%)":   round(avg_l_pct, 1) if avg_l_pct is not None else None,
             "Profit Factor":  round(pf, 2) if pf is not None else None,

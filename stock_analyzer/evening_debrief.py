@@ -21,6 +21,17 @@ from datetime import date, timedelta
 from stock_analyzer.constants import MEANINGFUL_INTRADAY_PCT
 
 
+def _opt(val):
+    """None-preserving float coercion — returns None for None / NaN."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if (f != f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 def _f(v, default=0.0):
     if v is None:
         return default
@@ -111,7 +122,7 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         go_set.setdefault(tk, {
             "ticker":          tk,
             "sector":          p.get("sector", ""),
-            "momentum":        _f(p.get("score")),
+            "momentum":        _opt(p.get("score")),
             "composite":       p.get("composite_score"),
             "source":          "new_pick",
             "thesis":          p.get("thesis", ""),
@@ -124,8 +135,8 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         go_set.setdefault(tk, {
             "ticker":          tk,
             "sector":          p.get("sector", ""),
-            "momentum":        _f(p.get("score")),
-            "composite":       _f(p.get("score")),
+            "momentum":        _opt(p.get("score")),
+            "composite":       _opt(p.get("score")),
             "source":          "add_winner",
             "thesis":          p.get("thesis", ""),
             "_first_seen_at":  p.get("_first_seen_at"),
@@ -140,7 +151,7 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         go_set.setdefault(tk, {
             "ticker":          tk,
             "sector":          p.get("sector", ""),
-            "momentum":        _f(p.get("score")),
+            "momentum":        _opt(p.get("score")),
             "composite":       None,
             "source":          "buy_candidate",
             "thesis":          "",
@@ -185,8 +196,8 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         skip_picks.append({
             "ticker":           tk,
             "sector":           s.get("sector", ""),
-            "momentum":         _f(s.get("momentum_score")),
-            "composite":        _f(s.get("composite_score")),
+            "momentum":         _opt(s.get("momentum_score")),
+            "composite":        _opt(s.get("composite_score")),
             "composite_label":  s.get("composite_label", "Hold"),
             "today_pct":        today_pct_val,
             "outcome":          outcome,

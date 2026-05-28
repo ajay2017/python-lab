@@ -29,6 +29,17 @@ def _f(val, default=0.0):
         return default
 
 
+def _opt(val):
+    """None-preserving float coercion. Returns None for None / NaN / non-numeric."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if (f != f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 def _earliest_buy(ticker: str, trades_df: pd.DataFrame) -> _date | None:
     """Return the earliest BUY date for a ticker from the trade journal.
 
@@ -139,10 +150,22 @@ def build_tax_analysis(
 
     for _, row in port_df.iterrows():
         ticker      = row["Ticker"]
-        avg_cost    = _f(row.get("Avg Cost"))
-        shares      = _f(row.get("Shares"))
-        price       = _f(row.get("Price"))
-        pnl         = _f(row.get("P&L ($)"))
+        # None-preserving coercion on the decision-gating fields. The legacy
+        # _f(default=0.0) silently turned a missing Price into pnl = -avg_cost
+        # * shares (huge fake loss -> harvestable), and a missing Shares into
+        # cost_total = 0 -> position "fully disposed". Skip the row entirely
+        # so the user sees the position omitted (visible) rather than as $0
+        # tax math (invisible).
+        shares_v    = _opt(row.get("Shares"))
+        avg_cost_v  = _opt(row.get("Avg Cost"))
+        price_v     = _opt(row.get("Price"))
+        pnl_v       = _opt(row.get("P&L ($)"))
+        if shares_v is None or avg_cost_v is None or price_v is None or pnl_v is None:
+            continue
+        shares      = shares_v
+        avg_cost    = avg_cost_v
+        price       = price_v
+        pnl         = pnl_v
         cost_total  = round(avg_cost * shares, 2)
 
         # Tax-lot-aware holding period reconstruction. A multi-lot position
