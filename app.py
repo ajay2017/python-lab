@@ -8386,6 +8386,7 @@ elif page == "🔍 Market Scanner":
                 "Add to Analysis Watchlist",
                 options=candidates,
                 default=[t for t in candidates[:3] if t not in st.session_state.watchlist],
+                key="_sc_add_to_wl",
             )
         with add_col2:
             st.write("")
