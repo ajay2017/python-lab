@@ -152,7 +152,13 @@ def build_perf_recommendations(
     if attr_df.empty:
         return []
 
-    pv = portfolio_value if portfolio_value > 0 else 50_000.0
+    # Don't fabricate a $50k portfolio when the real value is missing —
+    # downstream dollar-alpha math would be plausibly-shaped but unrelated
+    # to the user's actual capital. Bail with empty list so the caller can
+    # render an "Insights unavailable — portfolio value missing" banner.
+    if portfolio_value is None or portfolio_value <= 0:
+        return []
+    pv = portfolio_value
     recs: list[dict] = []
 
     for _, row in attr_df.iterrows():

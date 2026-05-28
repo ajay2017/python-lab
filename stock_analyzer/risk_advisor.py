@@ -80,7 +80,14 @@ def build_risk_advisor_recommendations(
     cvar_pct = _beta_ok(port_risk.get("cvar_95_pct"))   # negative %
     max_dd   = _beta_ok(port_risk.get("max_drawdown"))  # negative %
 
-    pv = portfolio_value if portfolio_value > 0 else 50_000.0
+    # Don't fabricate a $50k portfolio when the real value is missing —
+    # every "saving ~$X in a 10% correction" number would otherwise be
+    # plausible-shaped but unrelated to the user's actual capital. Bail
+    # with empty list so the caller renders a "portfolio value missing"
+    # banner instead of confident wrong-data numbers.
+    if portfolio_value is None or portfolio_value <= 0:
+        return []
+    pv = portfolio_value
 
     # ── Per-ticker risk lookup ────────────────────────────────────────────────
     tr_map: dict[str, dict] = {}
