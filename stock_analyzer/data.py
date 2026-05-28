@@ -143,8 +143,13 @@ def fetch_market_indices() -> list[dict]:
         close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
         for ticker, short, full in _INDICES:
             try:
-                col = close[ticker] if ticker in close.columns else close.iloc[:, 0]
-                col = col.dropna()
+                if ticker not in close.columns:
+                    # Don't silently fall back to the first column — that would
+                    # re-label one index's prices as another (e.g. NASDAQ shown
+                    # as DOW). Bail and let _ah record an empty payload.
+                    _ah.record("yahoo_finance", "empty", msg=f"index {ticker} missing")
+                    continue
+                col = close[ticker].dropna()
                 if len(col) < 1:
                     continue
                 price  = float(col.iloc[-1])
@@ -186,8 +191,13 @@ def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
         close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
         for t in tickers:
             try:
-                col = close[t] if t in close.columns else close.iloc[:, 0]
-                col = col.dropna()
+                if t not in close.columns:
+                    # Same trap as fetch_market_indices: a missing ticker would
+                    # silently inherit the first column's prices, writing e.g.
+                    # NVDA prices under INTC. Skip the ticker instead.
+                    _ah.record("yahoo_finance", "empty", msg=f"price {t} missing")
+                    continue
+                col = close[t].dropna()
                 if len(col) < 1:
                     continue
                 price = float(col.iloc[-1])

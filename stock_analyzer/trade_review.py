@@ -98,8 +98,12 @@ def _build_spy_returns(spy_history_df) -> dict[date, float]:
         return out
     try:
         df = spy_history_df.copy()
-        # The history DataFrame is normally indexed by Timestamp; coerce to date keys
-        closes = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
+        # The history DataFrame is normally indexed by Timestamp; coerce to date keys.
+        # Don't silently fall back to iloc[:, 0] — that would feed Open prices
+        # into the "daily % change" math when the Close column is missing.
+        if "Close" not in df.columns:
+            return out
+        closes = df["Close"]
         prev = None
         for ts, val in closes.items():
             d = ts.date() if hasattr(ts, "date") else _to_date(ts)
@@ -123,7 +127,9 @@ def _spy_return_between(spy_history_df, start_d: date, end_d: date) -> float | N
     if spy_history_df is None or len(spy_history_df) == 0 or start_d is None or end_d is None:
         return None
     try:
-        closes = spy_history_df["Close"] if "Close" in spy_history_df.columns else spy_history_df.iloc[:, 0]
+        if "Close" not in spy_history_df.columns:
+            return None
+        closes = spy_history_df["Close"]
 
         # Find first close at or after start_d, and last close at or before end_d
         c_start = None
