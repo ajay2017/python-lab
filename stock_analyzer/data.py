@@ -8,8 +8,18 @@ from stock_analyzer import api_health as _ah
 _ET = pytz.timezone("America/New_York")
 
 
-def _retry(fn, *args, retries: int = 3, backoff: float = 3.0, **kwargs):
-    """Retry fn on Yahoo Finance 429 / rate-limit errors with linear backoff."""
+def _retry(fn, *args, retries: int = 3, backoff: float = 1.0, **kwargs):
+    """Retry fn on Yahoo Finance 429 / rate-limit errors with linear backoff.
+
+    Backoff is intentionally small (default 1.0s, sleep = backoff * attempt+1
+    so total wait <= ~3s across all retries). yfinance has no usable
+    request-level timeout knob, so the page can still hang on TCP-level
+    failures — but compounded 3s/6s/9s linear backoff on top of that is the
+    biggest user-visible chunk and is what's being reduced here.
+    Non-rate-limit exceptions still raise immediately; only 429-style errors
+    sleep and retry. M-6 (the post-rate-limit "error" double-record on the
+    terminal attempt) is intentionally still present and tracked separately.
+    """
     for attempt in range(retries):
         try:
             return fn(*args, **kwargs)
