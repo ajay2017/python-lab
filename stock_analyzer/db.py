@@ -426,7 +426,19 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
                         "stored_pnl":       stored_pnl,
                         "stored_basis":     stored_basis,
                     }
-                h["shares"] -= shares
+                new_shares = h["shares"] - shares
+                # Over-sell detection: a SELL larger than the open position
+                # would silently drive shares negative and delete the row,
+                # leaving no breadcrumb that the trade history is internally
+                # inconsistent. Surface it as a warning and clamp at 0.
+                if new_shares < -1e-6:
+                    warnings.append(
+                        f"SELL {ticker} {shares:.4f}sh exceeds current {h['shares']:.4f}sh "
+                        f"on hand — trade history is internally inconsistent. "
+                        f"Position closed; the over-sold {abs(new_shares):.4f}sh delta is unaccounted for."
+                    )
+                    new_shares = 0.0
+                h["shares"] = new_shares
                 if h["shares"] <= 1e-6:
                     del holdings[ticker]
             else:
