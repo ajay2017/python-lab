@@ -11023,8 +11023,13 @@ elif page == "📒 Trade Journal":
             if col in display_df.columns:
                 display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
         if "traded_at" in display_df.columns:
+            # utc=True normalises mixed timestamp formats (raw-SQL inserts use
+            # '+00' offset and second precision; Python-SDK inserts use
+            # '+00:00' with microseconds). Without it, pandas can silently
+            # coerce the SQL-inserted rows to NaT — which then renders as
+            # 'None' in the Date/Time column.
             display_df["traded_at"] = pd.to_datetime(
-                display_df["traded_at"], errors="coerce"
+                display_df["traded_at"], errors="coerce", utc=True
             ).dt.strftime("%Y-%m-%d %H:%M")
 
         # Add delete checkbox column
