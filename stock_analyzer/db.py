@@ -17,11 +17,13 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     ALTER TABLE public.watchlist       ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.trades          ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.recommendations ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.manual_stops    ENABLE ROW LEVEL SECURITY;
 
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.holdings;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.watchlist;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.trades;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.recommendations;
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.manual_stops;
 
     CREATE POLICY "Allow all (service role)" ON public.holdings
         FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -30,6 +32,8 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     CREATE POLICY "Allow all (service role)" ON public.trades
         FOR ALL TO service_role USING (true) WITH CHECK (true);
     CREATE POLICY "Allow all (service role)" ON public.recommendations
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow all (service role)" ON public.manual_stops
         FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 Table schema (run once if tables don't exist):
@@ -108,6 +112,20 @@ this once to add the price_at_surface column for the History page:
 
     alter table public.recommendations
         add column if not exists price_at_surface numeric;
+
+Manual stops (added 2026-05-29 — user-set stop overrides recorded when
+the Brief's "raise stop" recommendation is actioned. Without this the
+recommendation re-fires every render because the system has no record
+the user acted on it):
+
+    create table if not exists manual_stops (
+        id            bigint primary key generated always as identity,
+        ticker        text not null unique,
+        stop_price    numeric not null check (stop_price > 0),
+        set_at        timestamptz default now(),
+        note          text,
+        source_action text                            -- e.g. 'review_tighten_only' / 'review_trim_and_tighten' / 'manual'
+    );
 """
 
 import streamlit as st
@@ -603,4 +621,87 @@ def save_watchlist(tickers: list[str]) -> bool:
         return True
     except Exception as e:
         st.error(f"⛔ Failed to save watchlist: {e}")
+        return False
+
+
+# ── Manual stops ──────────────────────────────────────────────────────────────
+# User-set stop overrides recorded when the Brief's "raise stop" recommendation
+# is actioned. build_portfolio_df merges these on top of the ATR-derived stop
+# so all downstream consumers (Brief, Analysis, Scorecard, risk advisor) see
+# the user's chosen value rather than the computed default. Without this,
+# the same recommendation re-fires every render because the system has no
+# record the user acted on it.
+
+def load_manual_stops() -> dict:
+    """Return {ticker: {"stop_price", "set_at", "note", "source_action"}}.
+
+    Empty dict when DB is offline or table empty. Failure to read returns
+    empty rather than raising so the rest of the app keeps working with
+    ATR-derived stops — graceful degradation, not silent gate disable.
+    """
+    if not has_db():
+        return {}
+    try:
+        rows = (
+            _client().table("manual_stops")
+            .select("ticker,stop_price,set_at,note,source_action")
+            .execute().data
+        )
+        out: dict = {}
+        for r in (rows or []):
+            t = str(r.get("ticker", "")).upper().strip()
+            try:
+                sp = float(r.get("stop_price") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not t or sp <= 0:
+                continue
+            out[t] = {
+                "stop_price":    sp,
+                "set_at":        r.get("set_at"),
+                "note":          r.get("note") or "",
+                "source_action": r.get("source_action") or "",
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def save_manual_stop(ticker: str, stop_price: float,
+                     note: str | None = None,
+                     source_action: str | None = None) -> bool:
+    """Upsert a manual stop for the ticker. Returns True on success."""
+    t = str(ticker or "").upper().strip()
+    try:
+        sp = float(stop_price)
+    except (TypeError, ValueError):
+        return False
+    if not t or sp <= 0 or not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        record = {
+            "ticker":        t,
+            "stop_price":    sp,
+            "set_at":        datetime.now(timezone.utc).isoformat(),
+            "note":          (note or "").strip() or None,
+            "source_action": (source_action or "").strip() or None,
+        }
+        _client().table("manual_stops").upsert(record, on_conflict="ticker").execute()
+        return True
+    except Exception as e:
+        st.error(f"⛔ Failed to save manual stop for {t}: {e}")
+        return False
+
+
+def clear_manual_stop(ticker: str) -> bool:
+    """Remove the manual stop override for the ticker (revert to ATR)."""
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return False
+    try:
+        _client().table("manual_stops").delete().eq("ticker", t).execute()
+        return True
+    except Exception as e:
+        st.error(f"⛔ Failed to clear manual stop for {t}: {e}")
         return False

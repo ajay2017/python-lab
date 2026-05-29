@@ -1079,7 +1079,12 @@ if page == "🏠 Home":
             held_data[ticker]["current_price"] = lp["price"]
 
     holdings = st.session_state.holdings_df.to_dict("records")
-    port_df = build_portfolio_df(holdings, held_data)
+    # Load manual stop overrides once per render. Stays in session_state so
+    # the "Mark Done" UI can read/write without an extra DB round-trip and
+    # all downstream consumers see the same merged view.
+    _manual_stops = db.load_manual_stops()
+    st.session_state["_manual_stops"] = _manual_stops
+    port_df = build_portfolio_df(holdings, held_data, manual_stops=_manual_stops)
     st.session_state["_last_port_df"] = port_df          # used by Trade Journal decision context
     st.session_state["_signals_computed_at"] = datetime.now().strftime("%I:%M %p")  # for staleness warning
 
@@ -3093,6 +3098,24 @@ if page == "🏠 Home":
                 elif _db_rev.get("event"):
                     _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
 
+                # Manual-stop badge: if this ticker already has a user-set stop,
+                # surface it next to the headline so the user immediately sees
+                # "I've already acted on this; here's the level I set." Reads
+                # _manual_stops from session_state so it survives full reruns.
+                _ms_map = st.session_state.get("_manual_stops", {}) or {}
+                _ms_for_item = _ms_map.get(str(_db_ticker or "").upper())
+                if _ms_for_item:
+                    _ms_set_at = str(_ms_for_item.get("set_at", ""))[:10]
+                    _ms_p_val  = float(_ms_for_item.get("stop_price") or 0)
+                    _title_left += (
+                        f" <span style='background:#1e3a8a;color:#bfdbfe;"
+                        f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
+                        f"margin-left:6px'>"
+                        f"📌 manual stop ${_ms_p_val:.2f}"
+                        + (f" · set {_ms_set_at}" if _ms_set_at else "")
+                        + "</span>"
+                    )
+
                 st.markdown(
                     f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -3156,11 +3179,87 @@ if page == "🏠 Home":
                         )
 
                 if _db_ticker:
-                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
-                                 use_container_width=False):
-                        st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _db_ticker
-                        st.rerun()
+                    _btn_c1, _btn_c2 = st.columns([1, 5])
+                    with _btn_c1:
+                        if st.button(f"▶ Analyze {_db_ticker}",
+                                     key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
+                                     use_container_width=False):
+                            st.session_state["_pending_page"]    = "📈 Analysis"
+                            st.session_state["_analysis_ticker"] = _db_ticker
+                            st.rerun()
+
+                    # "Mark Done" form for stop-raise actions. The app can't place
+                    # the order at your brokerage — but it can record that YOU did,
+                    # so the same recommendation stops re-firing every render. Two
+                    # action types qualify: TIGHTEN_ONLY (raise stop) and
+                    # TRIM_AND_TIGHTEN (the stop-raise half — the trim half is
+                    # logged separately via the Trade Journal in Phase B).
+                    _action_type = _action.get("type")
+                    if _action_type in ("TIGHTEN_ONLY", "TRIM_AND_TIGHTEN"):
+                        _rec_stop = _action.get("new_stop")
+                        with _btn_c2:
+                            with st.expander(
+                                f"✅ Mark Done — log the stop I placed at brokerage",
+                                expanded=False,
+                            ):
+                                st.caption(
+                                    "The app advises; your brokerage executes. Once you've "
+                                    "placed the stop-loss order at Fidelity / Schwab / IBKR / "
+                                    "wherever, log the level here so this recommendation stops "
+                                    "re-appearing tomorrow."
+                                )
+                                _md_form_key = f"_md_form_{_db_ticker}_{_action_type}"
+                                with st.form(_md_form_key, clear_on_submit=True):
+                                    _md_col1, _md_col2 = st.columns([1, 2])
+                                    with _md_col1:
+                                        _new_stop_input = st.number_input(
+                                            "Stop placed at ($)",
+                                            min_value=0.0,
+                                            value=float(_rec_stop) if _rec_stop else 0.0,
+                                            step=0.01,
+                                            format="%.2f",
+                                            key=f"_md_price_{_db_ticker}",
+                                        )
+                                    with _md_col2:
+                                        _note_input = st.text_input(
+                                            "Note (optional)",
+                                            placeholder="e.g. 'GTC stop at Fidelity 2026-05-29'",
+                                            key=f"_md_note_{_db_ticker}",
+                                        )
+                                    _sub_c1, _sub_c2 = st.columns([1, 1])
+                                    with _sub_c1:
+                                        _md_submitted = st.form_submit_button(
+                                            "💾 Save",
+                                            type="primary",
+                                            use_container_width=True,
+                                        )
+                                    with _sub_c2:
+                                        _md_revert = st.form_submit_button(
+                                            "↩️ Revert to ATR",
+                                            use_container_width=True,
+                                            help="Clear any manual stop override for this ticker",
+                                        )
+                                    if _md_submitted and _new_stop_input > 0:
+                                        if db.save_manual_stop(
+                                            ticker=_db_ticker,
+                                            stop_price=float(_new_stop_input),
+                                            note=_note_input or None,
+                                            source_action=f"review_{_action_type.lower()}",
+                                        ):
+                                            st.success(
+                                                f"Manual stop ${_new_stop_input:.2f} saved for "
+                                                f"{_db_ticker}. The Brief will stop re-suggesting "
+                                                "this until price moves enough to warrant a "
+                                                "further tighten."
+                                            )
+                                            st.rerun()
+                                    if _md_revert:
+                                        if db.clear_manual_stop(_db_ticker):
+                                            st.info(
+                                                f"Manual stop cleared for {_db_ticker}. "
+                                                "Reverted to ATR-derived stop."
+                                            )
+                                            st.rerun()
 
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
@@ -8673,6 +8772,31 @@ elif page == "📈 Analysis":
         st.error("No data loaded.")
         st.stop()
 
+    # Apply manual-stop overrides at the results merge point so every
+    # downstream render (Scorecard, Trade Plan metrics, Stop Loss lines on
+    # charts, Risk advisor, etc.) reads the user's actioned stop instead of
+    # the ATR-derived default. Shallow-copy each bundle so we don't mutate
+    # the cached load_all() return value — that would persist across all
+    # subsequent renders for everyone, not just this user.
+    _an_ms_map = st.session_state.get("_manual_stops", {}) or {}
+    if _an_ms_map:
+        for _t, _r in list(results.items()):
+            _ms = _an_ms_map.get(str(_t).upper())
+            if not _ms:
+                continue
+            _base   = _r.get("stop")
+            try:
+                _ms_p = float(_ms.get("stop_price") or 0)
+            except (TypeError, ValueError):
+                continue
+            if _base and _ms_p > 0 and _ms_p >= _base:
+                results[_t] = {
+                    **_r,
+                    "stop":          _ms_p,
+                    "_stop_source":  "manual",
+                    "_stop_set_at":  _ms.get("set_at"),
+                }
+
     _news = curate_news_items(results)
     st.session_state["_sidebar_news"] = _news
     _fill_news_slot(_news_slot, _news)
@@ -8737,13 +8861,18 @@ elif page == "📈 Analysis":
         # R:R only meaningful for buy signals
         _sc_rr = f"{rr_val:.1f}:1" if (rr_val and rr_val > 0 and _sc_is_buy) else "—"
 
+        # Pin the Stop column when it's a manual override so the user can see
+        # at a glance which tickers have actioned stops vs. ATR-derived ones.
+        _sc_stop_str = f"${r['stop']:.2f}" if r["stop"] else "—"
+        if r.get("_stop_source") == "manual" and r["stop"]:
+            _sc_stop_str = f"📌 {_sc_stop_str}"
         rows.append({
             "Ticker":           ticker,
             "Price":            f"${price:.2f}" if price else "N/A",
             "Score":            r["total"],
             "Signal":           f"{r['rec']['icon']} {r['rec']['label']}",
             "Position / Entry": _sc_position,
-            "Stop":             f"${r['stop']:.2f}" if r["stop"] else "—",
+            "Stop":             _sc_stop_str,
             "Base Target":      f"${targets['base']:.2f} ({targets['base_pct']:+.1f}%)" if targets else "—",
             "R:R":              _sc_rr,
             "Shares":           _sc_shares,
@@ -9029,11 +9158,23 @@ elif page == "📈 Analysis":
                                   f"{_sa_holding.get('P&L (%)', 0):+.1f}%")
                         from datetime import date, timedelta
                         _recheck = (date.today() + timedelta(days=7)).strftime("%b %d")
-                        st.info(
-                            f"**Hold** your {int(_sa_holding.get('Shares', 0))} shares with stop at "
-                            f"**${r['stop']:.2f}**. Mixed signals — re-check {_recheck}. "
+                        # Badge the stop value if it's a user override so the user
+                        # remembers this stop came from their own decision, not ATR.
+                        _stop_badge = (
+                            " <span style='background:#1e3a8a;color:#bfdbfe;"
+                            "border-radius:8px;padding:1px 6px;font-size:0.82em'>"
+                            "📌 manual</span>"
+                            if r.get("_stop_source") == "manual" else ""
+                        )
+                        st.markdown(
+                            "<div style='background:#172554;border-left:4px solid #3b82f6;"
+                            "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
+                            f"<b>Hold</b> your {int(_sa_holding.get('Shares', 0))} shares with stop at "
+                            f"<b>${r['stop']:.2f}</b>{_stop_badge}. Mixed signals — re-check {_recheck}. "
                             f"Add to position if score ≥ {COMPOSITE_BUY:.0f} and price holds above stop. "
                             f"Exit immediately if price closes below stop."
+                            "</div>",
+                            unsafe_allow_html=True,
                         )
                     else:
                         c3.metric("Entry Zone",

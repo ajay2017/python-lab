@@ -65,12 +65,20 @@ def protective_stop(
 
 
 def build_portfolio_df(
-    holdings: list[dict], loaded_data: dict
+    holdings: list[dict], loaded_data: dict,
+    manual_stops: dict | None = None,
 ) -> pd.DataFrame:
     """
     holdings: [{"ticker": "AVGO", "shares": 10, "avg_cost": 200.0}, ...]
     loaded_data: dict of ticker -> load_all() result
+    manual_stops: optional {ticker: {"stop_price", "set_at", ...}} — when set
+        for a ticker, the user's stop overrides the ATR-derived stop. All
+        downstream consumers (Brief, Analysis, Scorecard, risk advisor) read
+        the merged value via the returned "Stop" column. The "Stop Source"
+        column records "manual" vs "ATR" / ratchet label so the UI can
+        render a badge distinguishing user overrides from computed defaults.
     """
+    manual_stops = manual_stops or {}
     rows = []
     for h in holdings:
         ticker = str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper()
@@ -99,6 +107,25 @@ def build_portfolio_df(
             stop, stop_label = protective_stop(price, avg_cost, _raw_stop)
             gap_to_stop = round((price - stop) / price * 100, 1)
 
+        # Manual-stop override: user actioned a Brief "raise stop" recommendation
+        # and recorded the new level. Persisted in Supabase manual_stops table
+        # and merged here so every downstream consumer sees the user's stop,
+        # not the ATR-derived default. Two semantic guards:
+        #   1. Only override if the manual stop is TIGHTER (closer to price) —
+        #      a stale manual stop below a fresh ratchet floor would erode
+        #      profit protection; the ratchet should win in that case.
+        #   2. Stop Type column flips to "Manual" so the UI badges it; the
+        #      original ATR/Ratchet label is preserved in Stop Type Auto so
+        #      Trade Plan can show "your manual stop overrides ATR Stop $X".
+        _ms = manual_stops.get(ticker) if manual_stops else None
+        stop_type_auto = stop_label
+        if _ms and stop is not None:
+            _ms_price = float(_ms.get("stop_price") or 0)
+            if _ms_price > 0 and _ms_price >= stop:
+                stop = round(_ms_price, 2)
+                stop_label = "Manual"
+                gap_to_stop = round((price - stop) / price * 100, 1)
+
         rows.append({
             "Ticker": ticker,
             "Sector": TICKER_SECTORS.get(ticker, "Other"),
@@ -111,6 +138,8 @@ def build_portfolio_df(
             "Weight (%)": 0.0,
             "Stop": stop,
             "Stop Type": stop_label,
+            "Stop Type Auto": stop_type_auto if stop is not None else None,
+            "Manual Stop Set At": (_ms or {}).get("set_at") if _ms else None,
             "Gap to Stop (%)": gap_to_stop,
             "Signal": f"{r['rec']['icon']} {r['rec']['label']}",
             "Score": r["total"],

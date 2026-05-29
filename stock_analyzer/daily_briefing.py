@@ -1006,6 +1006,12 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     #   - If gap critical AND P&L ≥ profit-lock threshold: trim partial AND tighten.
     #   - If gap 3-8%: tighten stop only (still room to run).
     # New stop = price − STOP_TIGHTEN_ATR_MULT × ATR.
+    #
+    # Suppression: if the current active stop (manual override or ratchet) is
+    # already at or tighter than the recommended new_stop, don't re-fire — the
+    # user has already actioned (manual_stops table) or the ratchet has already
+    # provided equivalent protection. Closes the loop the user's "Mark Done"
+    # button opens.
     for _, row in port_df.iterrows():
         gap = _f(row.get("Gap to Stop (%)"), None)
         if gap is None:
@@ -1017,8 +1023,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         shares = int(_f(row.get("Shares")))
         pnl_pct = _f(row.get("P&L (%)"))
         weight  = _f(row.get("Weight (%)"))
+        current_stop = _f(row.get("Stop"))
         atr_val = _f((held_data or {}).get(ticker, {}).get("atr")) if held_data else 0.0
         new_stop = round(price - STOP_TIGHTEN_ATR_MULT * atr_val, 2) if (price and atr_val) else None
+        # Suppress if current stop already meets the recommendation. A 1-cent
+        # buffer absorbs floating-point rounding so a manual stop set at exactly
+        # the recommended level doesn't keep re-firing on rounding noise.
+        if new_stop is not None and current_stop >= new_stop - 0.01:
+            continue
         is_critical = gap <= 3.0
         lock_profits = pnl_pct >= STOP_PROFIT_LOCK_PNL_PCT
         if is_critical and lock_profits:
