@@ -113,6 +113,13 @@ MOVER_MIN_DAY_GAIN_PCT = 5.0    # min 1-day % gain to qualify as a "mover"
                                 # (below this a move is noise, not a breakout)
 MOVER_SHORTLIST_SIZE   = 12     # top N gainers to run the full composite on
                                 # (bounds the expensive load_all fan-out)
+MOVER_MAX_PICKS        = 3      # max movers surfaced in New Positions, as their
+                                # OWN allowance separate from the curated cap.
+                                # A composite-Buy breakout is itself "clearer
+                                # direction", so movers are exempt from the
+                                # flat-day high-conviction suppression — but
+                                # still respect bear-day risk-off, the macro
+                                # gate, the composite gate, and act-today blocks.
 
 # ── Panic-day classifier (Trade Review behavioural lens) ─────────────────────
 # Daily SPY return at or below this = "panic window" — trades executed on

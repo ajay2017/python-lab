@@ -49,6 +49,7 @@ from stock_analyzer.constants import (
     WEAK_LARGE_TRIM_TO_PCT,
     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
     MACRO_AFFECTED_TRIM_REDUCTION_PP,
+    MOVER_MAX_PICKS,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -510,7 +511,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     def _sector_bonus(sector: str) -> int:
         return 5 if any(ls.get("sector", "") in str(sector) for ls in lead_secs) else 0
 
-    candidate_rows: list[dict] = []
+    # Curated pool — momentum-gated, ranked by momentum + sector bonus, then
+    # truncated to a working set for sector-diversity selection.
+    curated_rows: list[dict] = []
     if scanner_results is not None and not scanner_results.empty:
         _curated = scanner_results[
             (scanner_results["Score"] >= min_score) &
@@ -521,15 +524,21 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             d["_rank"]       = _f(d.get("Score", 0)) + _sector_bonus(d.get("Sector", ""))
             d["_is_mover"]   = False
             d["_day_change"] = None
-            candidate_rows.append(d)
+            curated_rows.append(d)
+    curated_rows.sort(key=lambda d: d.get("_rank", 0), reverse=True)
+    curated_rows = curated_rows[: max_picks * 4]
 
-    _seen_ct = {str(d.get("Ticker", "")).upper() for d in candidate_rows}
+    # Mover pool — kept SEPARATE so it isn't truncated out by higher-ranked
+    # curated names and isn't subject to the curated momentum bar or the
+    # flat-day verdict gate. Ranked by composite (their quality signal).
+    mover_rows: list[dict] = []
+    _seen_ct = {str(d.get("Ticker", "")).upper() for d in curated_rows}
     for m in (movers or []):
         mt = str(m.get("ticker", "")).upper()
         if not mt or mt in held_tickers or mt in _seen_ct:
             continue
         _sector = str(m.get("sector", ""))
-        candidate_rows.append({
+        mover_rows.append({
             "Ticker":       mt,
             "Price":        _f(m.get("price")),
             "Sector":       _sector,
@@ -539,20 +548,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "RSI":          _f(m.get("rsi", 50)),
             "1M Momentum":  _f(m.get("mom_1m", 0)),
             "3M Momentum":  _f(m.get("mom_3m", 0)),
-            # Rank movers by composite (their quality signal) + sector bonus so
-            # they sort sensibly against momentum-ranked curated picks.
-            "_rank":        _f(m.get("composite_score")) + _sector_bonus(_sector),
+            "_rank":        _f(m.get("composite_score")),
             "_is_mover":    True,
             "_day_change":  _f(m.get("day_change")),
         })
         _seen_ct.add(mt)
+    mover_rows.sort(key=lambda d: d.get("_rank", 0), reverse=True)
 
-    if candidate_rows:
-        # Wider pool so sector-diversity filtering has enough to draw from.
-        candidate_rows.sort(key=lambda d: d.get("_rank", 0), reverse=True)
-        candidate_rows = candidate_rows[: max_picks * 4]
+    _mover_picks: list[dict] = []
 
-        for row in candidate_rows:
+    if curated_rows or mover_rows:
+        for row in curated_rows + mover_rows:
             ticker   = str(row["Ticker"])
             price    = _f(row.get("Price", 0))
             sector   = str(row.get("Sector", ""))
@@ -584,10 +590,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             xref = _cross_reference(ticker, row, port_df, news_items, held_data, today,
                                     earnings_lookup=earnings_lookup, composites=composites)
 
-            # Skip hard conflicts; on flat days skip anything but confirmed/unverified
+            # Skip hard conflicts (applies to everything).
             if xref["verdict"] == "conflicted":
                 continue
-            if tone == "flat" and xref["verdict"] not in ("confirmed", "unverified"):
+            # Flat-day high-conviction suppression — CURATED ONLY. A composite-Buy
+            # mover up 5%+ today is itself the "clearer direction" the flat-day
+            # caution waits for, so movers are exempt from this gate (they still
+            # face the composite gate, macro gate, act-today block below, and are
+            # never reached on bear days due to the early return).
+            if tone == "flat" and not is_mover and xref["verdict"] not in ("confirmed", "unverified"):
                 continue
 
             sizing = _suggest_size(price, trend, portfolio_value) if price > 0 and portfolio_value > 0 else {}
@@ -671,13 +682,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "sizing":          sizing,
                 "xref":            xref,
             }
-            if xref["verdict"] == "confirmed":
+            if is_mover:
+                _mover_picks.append(pick)
+            elif xref["verdict"] == "confirmed":
                 _confirmed_picks.append(pick)
             else:
                 _unverified_picks.append(pick)
 
-        # On flat days, confirmed picks take priority over unverified.
-        # Enforce 1-per-sector so all slots don't land in the same sector.
+        # Curated selection: confirmed before unverified, 1-per-sector so all
+        # slots don't land in the same sector, capped at max_picks.
         _seen_sectors: set[str] = set()
         for _pick in _confirmed_picks + _unverified_picks:
             _ps = _pick.get("sector", "")
@@ -687,6 +700,22 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if _ps:
                 _seen_sectors.add(_ps)
             if len(new_picks) >= max_picks:
+                break
+
+        # Mover selection: OWN allowance (MOVER_MAX_PICKS), independent of the
+        # curated cap. No sector-diversity constraint — multiple breakouts in
+        # one sector is itself a signal (a sector-wide move), and forcing
+        # 1-per-sector would hide most of them (the HUBS/ESTC/ADBE/INTU case,
+        # all Technology). Ranked by composite (already sorted). Deduped
+        # against anything already chosen.
+        _already = {p["ticker"] for p in new_picks}
+        _movers_added = 0
+        for _pick in _mover_picks:
+            if _pick["ticker"] in _already:
+                continue
+            new_picks.append(_pick)
+            _movers_added += 1
+            if _movers_added >= MOVER_MAX_PICKS:
                 break
 
     # Add-to-winner: held Strong Buy, Score ≥ COMPOSITE_BUY (65), Gap ≥ 8%
