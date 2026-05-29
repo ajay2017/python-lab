@@ -186,3 +186,79 @@ def scan_sectors(
     )
     out.insert(0, "Rank", range(1, len(out) + 1))
     return out
+
+
+def _day_change_pct(close: pd.Series) -> float | None:
+    """Last close vs prior close, in percent. None if insufficient history."""
+    c = close.dropna()
+    if len(c) < 2:
+        return None
+    prev = float(c.iloc[-2])
+    if prev <= 0:
+        return None
+    return (float(c.iloc[-1]) / prev - 1) * 100
+
+
+def scan_movers(tickers: list[str], min_day_gain_pct: float = 4.0,
+                period: str = "3mo") -> pd.DataFrame:
+    """
+    Scan a broad ticker list for today's biggest 1-day GAINERS.
+
+    Distinct from scan_sectors (which ranks by composite momentum score across
+    the curated universe). This is the discovery net: it ranks by today's
+    single-day % change so a fresh breakout in an untracked name surfaces.
+
+    Returns a DataFrame ranked by "Day Change %" descending, filtered to
+    gainers ≥ min_day_gain_pct. Columns mirror scan_sectors output (so the
+    composite-gate + sizing code can treat the rows uniformly) PLUS a
+    "Day Change %" column. Sector is tagged "Mover" since these come from the
+    discovery universe, not a sector bucket.
+
+    Empty DataFrame on any failure — discovery is best-effort, never blocks
+    the rest of the brief.
+    """
+    tickers = [str(t).upper().strip() for t in (tickers or []) if str(t).strip()]
+    if not tickers:
+        return pd.DataFrame()
+
+    try:
+        raw = yf.download(
+            tickers, period=period,
+            auto_adjust=True, progress=False, threads=True,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+    results = []
+    for ticker in tickers:
+        try:
+            if len(tickers) == 1:
+                df = raw
+            elif isinstance(raw.columns, pd.MultiIndex):
+                df = raw.xs(ticker, axis=1, level=1).dropna()
+            else:
+                continue
+            if df.empty:
+                continue
+            day_chg = _day_change_pct(df["Close"])
+            if day_chg is None or day_chg < min_day_gain_pct:
+                continue
+            scored = _quick_score(ticker, df)
+            if not scored:
+                continue
+            scored["Sector"]       = "Mover"
+            scored["Day Change %"] = round(day_chg, 1)
+            results.append(scored)
+        except Exception:
+            continue
+
+    if not results:
+        return pd.DataFrame()
+
+    out = (
+        pd.DataFrame(results)
+        .sort_values("Day Change %", ascending=False)
+        .reset_index(drop=True)
+    )
+    out.insert(0, "Rank", range(1, len(out) + 1))
+    return out

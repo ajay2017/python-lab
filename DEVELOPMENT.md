@@ -185,15 +185,11 @@ Pick up tomorrow morning during market validation, then batch.
 - Removes the manual-entry path that produced the May 2026 drift mess (15 unmatched SELLs, multi-round SQL backfill, eventual full rebaseline on 2026-05-27). Drift recovery is documented in memory `feedback_trade_drift_recovery`.
 - Brokers to scope: Fidelity, Schwab/TD, IBKR, Robinhood (varying API quality). Auth via OAuth + token storage in Streamlit secrets.
 
-**Scanner universe — movers ingestion (close the discovery gap):**
-- Today's scanner universe is the hardcoded `SECTOR_UNIVERSE` dict (~70 tickers) plus the user's Watchlist (added 2026-05-28). A genuine winner outside both is invisible — Grow Today never sees it.
-- Add a daily "movers" feed so the system can surface names the user hasn't heard of yet. Candidate sources, in order of preference:
-  - **SP500 / NDX daily-download self-compute** (free, ~500-ticker scan, 3-5 min; cache once per session). Pulls index constituents, scores them through the same `_quick_score` pipeline, surfaces top % gainers / most-active.
-  - Finviz screener scrape (free w/ rate limits; ToS grey area)
-  - Paid API (Polygon / Twelvedata / Alpha Vantage — reliable, adds API-key plumbing)
-- The composite gate is the natural noise filter — a momentum ticker that doesn't have fundamentals/sentiment to back it up gets rejected at COMPOSITE_BUY=65 the same way INTC was (38.3, kicked out).
-- Decision needed before implementation: data source. Default lean is self-compute from SP500 (no new dependencies), accepting the slower scan time as the cost.
-- Without this, the system's discovery scope is bounded by the user's prior knowledge — fine for personal-portfolio mode but limiting if the goal is to surface real winners they haven't researched.
+**Scanner universe — movers ingestion (close the discovery gap):** ✅ SHIPPED 2026-05-29 (curated ~200 cut)
+- Implemented as the **Movers** feature: `discovery_universe.py` holds a curated ~200-ticker list (broader than the ~70 `SECTOR_UNIVERSE`); `scanner.scan_movers()` ranks today's 1-day gainers; `_cached_scan_movers` in app.py composite-gates the top `MOVER_SHORTLIST_SIZE` and surfaces those clearing `COMPOSITE_BUY` in a "🔥 Movers" sub-section under Grow Today. Excludes already-tracked / held / watchlist tickers (deduped at runtime). Gainer threshold `MOVER_MIN_DAY_GAIN_PCT=5%`.
+- The composite gate is the noise filter — a 1-day pop without fundamentals/sentiment behind it is rejected at COMPOSITE_BUY=65 the same way INTC was (38.3, kicked out).
+- **Future expansion (optional):** widen `discovery_universe` to full S&P 500 (~500) or Russell 1000 (~1000) — bigger net, slower scan, more yfinance flakiness. Or swap the static list for a live source (Wikipedia SP500 scrape needs lxml; paid screener API = Polygon/Twelvedata/Alpha Vantage, reliable but adds key plumbing). The curated static list was chosen first for zero new deps and zero runtime-scrape risk; cost is a manual refresh a few times a year.
+- Also unresolved: the mover signal is 1-day gain only. Could add sustained-momentum and most-active lenses later.
 
 ---
 

@@ -106,6 +106,14 @@ WEAK_LARGE_TRIM_TO_PCT = 8.0
 MACRO_AFFECTED_TRIM_THRESHOLD_PCT = 30.0
 MACRO_AFFECTED_TRIM_REDUCTION_PP  = 5.0
 
+# ── Movers discovery (surface breakouts outside the tracked universe) ────────
+# The Movers pipeline scans the broad discovery_universe for today's big 1-day
+# gainers, then composite-gates the shortlist so only quality breakouts surface.
+MOVER_MIN_DAY_GAIN_PCT = 5.0    # min 1-day % gain to qualify as a "mover"
+                                # (below this a move is noise, not a breakout)
+MOVER_SHORTLIST_SIZE   = 12     # top N gainers to run the full composite on
+                                # (bounds the expensive load_all fan-out)
+
 # ── Panic-day classifier (Trade Review behavioural lens) ─────────────────────
 # Daily SPY return at or below this = "panic window" — trades executed on
 # such days bucketed for retrospective behavioural analysis.
