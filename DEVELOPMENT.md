@@ -204,6 +204,8 @@ Pick up tomorrow morning during market validation, then batch.
 
 **Action Log — Phase B/C (queued):** Phase A (manual stop override) shipped. Phase B = in-context Sell/Trim button directly on Review Before Close items (act without leaving the Brief); Phase C = protective-trim variant. See memory `project_action_log_subsystem`.
 
+**Second market-data source (queued — week of 2026-06-01):** the app is 100% dependent on yfinance (unofficial, no SLA) for all market data. Wire in a second independent source to cross-check critical values (start with latest close / current price — drives stops, P&L, movers) so the app can detect and fail loud on poisoned/stale/incorrect data instead of trusting a single feed silently. Design: small data-source abstraction in `data.py` (primary yfinance + secondary); divergence-tolerance threshold in `constants.py` (policy value); candidates Stooq (free, no key, EOD — cheapest first cut) / Finnhub / Twelve Data / FMP / Tiingo. New keys → Streamlit secrets, wrap in retry + `api_health`. Same "data integrity fails loud" principle as the rest of the app, applied at the market-data boundary. See memory `project_second_data_source`.
+
 ---
 
 ## What NOT to do
