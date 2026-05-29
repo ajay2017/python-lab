@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** May 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
@@ -64,6 +64,15 @@ Single source of truth: `stock_analyzer/constants.py`.
 | Risk per trade | 1.5% of portfolio | Sizing |
 | Earnings imminence window | 7 days | Caution |
 | Macro imminence window (HIGH-impact event in pick's sector) | 3 days | **Hard** |
+| Review profit-lock — P&L trigger / trim size | 25% / 25% of position | Action target |
+| Review stop-tighten ATR multiple (vs 2.0× initial) | 1.5× | Action target |
+| Review earnings-overweight — trim trigger / target weight | 12% / 10% | Action target |
+| Review weak-large — trim-to target weight | 8% | Action target |
+| Review macro-affected — sector trigger / reduction | 30% / 5pp | Action target |
+| Mover — min 1-day gain to qualify | 5% | Discovery gate |
+| Mover — shortlist size composite-gated / max picks surfaced | 12 / 3 | Discovery sizing |
+
+The "Review action target" rows translate a *trigger* (when an item lands in Review Before Close) into a *concrete directive* (trim N shares, raise stop to $Y). See §3.2 F-25 and architecture §4.0.1.
 
 ### 2A.3 Hard gates currently enforced
 
@@ -119,6 +128,8 @@ Single source of truth: `stock_analyzer/constants.py`.
 | F-15 | Display market-closed context note in sidebar showing last close date when market is shut |
 | F-16 | Tax Advisor: per-position tax-lot analysis with HARVEST recommendations on harvestable losses. HARVEST is **suppressed** on positions rated Buy or Strong Buy (action becomes `HOLD_FOR_SIGNAL`) so the tax tail does not wag the investment dog. The UI explicitly surfaces every suppressed harvest with the position's current signal so the user can revisit if conviction degrades. |
 | F-17 | Stop data integrity: when a position's stop value is missing or zero, the portfolio table displays "—" for Stop and Gap, marks Stop Type as "Stop Unavailable", and the mechanical SELL trigger in Act Today is skipped (the user is prompted to set a manual stop). No fabricated fallback is substituted. |
+| F-18 | **Action Log — manual stop override (closes the recommend→act→log loop):** when Review Before Close advises raising a stop, the user can record the new stop level. It persists to the Supabase `manual_stops` table and overrides the computed ATR/ratchet stop in `build_portfolio_df`. Override-wins is **one-directional**: a manual stop is honoured only when it is ≥ the current computed stop (you can tighten, not loosen below the mechanical floor). Overridden positions show a 📌 badge and Stop Type="Manual" wherever the stop is rendered (portfolio table, Trade Plan, Summary Scorecard). |
+| F-19 | A manual stop is auto-cleared (orphan cleanup) when the ticker's share count drops to 0 — `save_holdings` symmetric-sweeps `manual_stops` so a stop override never outlives the position it protects. |
 
 ### 3.2 Today's Brief (Daily Briefing)
 
@@ -126,11 +137,16 @@ Single source of truth: `stock_analyzer/constants.py`.
 |----|-------------|
 | F-20 | Show market tone header (bull / bear / flat) based on S&P 500 daily change (≥+0.5% bull, ≤-0.5% bear). Header date uses ET timezone; when market is closed, appends "data as of [last trading day]". |
 | F-21 | Display date, S&P 500 %, Nasdaq %, and top 2 leading sectors by 1-week return |
-| F-22 | Act Today (right column): prioritised list of urgent actions — stop triggers, sell signals, critical news, macro events |
-| F-23 | Grow Today (left column): market-tone-aware growth setups — new positions and add-to-winners on bull days; deferral message on bear days |
+| F-22 | Act Today (defense / right column): prioritised list of urgent actions — stop breaches, sell signals, critical news, macro events, risk-advisor trims. Each item carries a structured directive (what to do), why, and trigger — not a one-line label. (See F-22a/F-22b.) |
+| F-22a | Act Today items are **consolidated per ticker**: a mechanical-exit signal (stop breach or sell signal) on a ticker suppresses any risk-trim card for the same ticker (you don't trim what you're exiting); multiple risk flags on one ticker merge into a single card. Consolidation logic lives in `daily_briefing._consolidate_act_today`. |
+| F-22b | Each Act Today item exposes `kind` (stop_breach / sell_signal / critical_news / macro / risk), a `directive` (concrete action), `why`, and `trigger`; risk items additionally carry a `risk_flags` list. A back-compatible `reason` field is synthesised for legacy consumers. |
+| F-23 | Grow Today (offense / left column): market-tone-aware growth setups — new positions and add-to-winners on bull/flat days; deferral message on bear days |
 | F-24 | Each Grow Today pick includes: ticker, sector, scanner score, thesis one-liner, suggested entry zone (lo–hi range), position size (shares, cost, stop) |
-| F-25 | Review Before Close (full width): approaching stops, near-term earnings, weakening large positions |
-| F-26 | Buy Candidates (full width): scanner picks cross-referenced across 5 layers (Technical, Composite, News, Earnings, Revisions) with a confidence verdict (Confirmed / Mixed / Conflicted / Caution / Unverified). Earnings risk is checked against a unified `earnings_lookup` derived from held positions AND pre-fetched composites, so non-held new picks are also screened. |
+| F-24a | **Movers** (discovery picks from outside the curated universe — see F-60a) surface in the SAME "New Positions to Initiate" list as curated picks, not a separate developer-facing section; the user sees one action list regardless of how the ticker was sourced. Movers face the composite gate (≥65), macro gate, and act-today block like curated picks, but get their OWN allowance (`MOVER_MAX_PICKS`=3) separate from the curated cap, skip the curated momentum bar and the 1-per-sector diversity rule, and are **exempt from the flat-day high-conviction suppression** (a composite-Buy stock up ≥5% today is itself the clearer direction the flat-day caution waits for). They still respect bear-day risk-off (no Grow Today processing at all on bear days). |
+| F-25 | Review Before Close (defense / right column, under Act Today): approaching stops, near-term earnings, weakening large positions. Each item issues a **quantitative directive** — not prose. Item types: WATCH, TIGHTEN_ONLY (raise stop to current − 1.5×ATR), TRIM_AND_TIGHTEN (profit-lock 25% of position + tighten stop when P&L ≥ 25%), TRIM_TO_TARGET (earnings-overweight → trim to 10%; weak-large → trim to 8%), PROTECTIVE_TRIM (macro-affected sector → reduce lowest-conviction holding by 5pp). Each carries `headline`, `action`, `why`, `trigger`. |
+| F-26 | Buy Candidates (offense / left column, under Grow Today; titled "More Buy Candidates"): scanner picks cross-referenced across 5 layers (Technical, Composite, News, Earnings, Revisions) with a confidence verdict (Confirmed / Mixed / Conflicted / Caution / Unverified). Earnings risk is checked against a unified `earnings_lookup` derived from held positions AND pre-fetched composites, so non-held new picks are also screened. |
+| F-26a | Buy Candidates must be **de-duplicated against everything already shown in Grow Today** (new picks, add-to-winners, composite-skipped, macro-blocked, composite-unavailable) so the same ticker never appears in both lists on the same screen. |
+| F-26b | The Brief renders as a two-column **offense / defense** layout: left column = Grow Today + More Buy Candidates (where to deploy capital); right column = Act Today + Review Before Close (what to protect). Section chips must stay within their column and not bleed across the page when the opposite column is empty. |
 | F-27 | Each Buy Candidate card shows: ticker, sector, score, verdict badge (amber for Verify, not blue), technical summary, conflicts and agreed signals |
 | F-28 | Quick Research panel: user enters any ticker (e.g. from external news), app returns up to 5-bullet actionable summary — signal, momentum, entry timing, key context, and (when portfolio_ctx is supplied) portfolio-fit including sector-level Act Today awareness |
 | F-29 | Entry timing verdicts (boundaries inclusive): High Risk — Avoid Chasing (RSI≥80 or 1D≥15% or 5D≥25%), Wait for Pullback (RSI≥68 or 1D≥5% or 5D≥12%), Oversold — Potential Entry (RSI≤35), Normal Entry Conditions otherwise |
@@ -171,7 +187,8 @@ Single source of truth: `stock_analyzer/constants.py`.
 
 | ID | Requirement |
 |----|-------------|
-| F-60 | Scan a universe of ~73 tickers across 12 sectors for technical momentum |
+| F-60 | Scan a curated universe of ~73 tickers across 12 sectors for technical momentum, **extended at runtime with the user's Watchlist tickers** (tagged sector="Watchlist") so watched names are scored alongside the curated set |
+| F-60a | **Movers discovery (close the discovery gap):** a separate `scan_movers()` pass scans the broad ~200-name `discovery_universe` for today's 1-day gainers ≥ `MOVER_MIN_DAY_GAIN_PCT` (5%). The top `MOVER_SHORTLIST_SIZE` (12) gainers are composite-gated; those clearing `COMPOSITE_BUY` (65) feed the unified New Positions list (see F-24a). The composite gate is the noise filter — a 1-day pop without fundamentals/sentiment behind it is rejected. Cached 30 min via `_cached_scan_movers`. **Two distinct sources:** (1) the candidate *list* is a **static, hardcoded curated set** (`DISCOVERY_UNIVERSE` in `discovery_universe.py`, ~200 liquid large/mid-caps grouped by sector, deduped against curated/held/watchlist at runtime) — NOT scraped from an index provider and NOT pulled from a screener API; it is treated as DATA and refreshed manually (~quarterly). (2) the price *data* used to compute each name's 1-day change comes from **yfinance** (a single batched `yf.download(..., period="3mo")`) — the same market-data source as the rest of the app; there is no paid/third-party movers feed. Consequently the only discovery limits are (a) a breakout must be one of the ~200 listed names, and (b) yfinance must return its data. Widening the net (full S&P 500 / live screener API) is a documented future-expansion path, not current behaviour. |
 | F-61 | Score each ticker 0–100 using RSI, trend alignment (SMA 20/50), and price momentum |
 | F-62 | Surface top picks ranked by score; display sector, signal, RSI, trend, momentum |
 | F-63 | Scanner results persist in session state and feed the Daily Briefing buy candidates list |
@@ -191,6 +208,8 @@ Single source of truth: `stock_analyzer/constants.py`.
 |----|-------------|
 | F-80 | Log all buy and sell trades with ticker, action, shares, price, notes, and trigger type |
 | F-81 | Persist trades to Supabase `trades` table |
+| F-81a | **SELL integrity guard:** a SELL whose shares exceed what the logged BUYs can cover is hard-blocked at form submit. The guard validates against `db.recalculate_from_trades()` — the SAME trade-replay source the drift detector reads — so the guard and the drift detector can never disagree (validating against the `holdings_df` cache instead let an unmatched SELL slip through after a rebaseline; that was the May 2026 COIN double-SELL bug). An explicit override is required to record a SELL beyond accountable shares. |
+| F-81b | **Double-submit dedupe:** an identical `(ticker, action, shares)` submission within 15 seconds is rejected with a "duplicate ignored" warning. The live-prefilled price is deliberately EXCLUDED from the dedupe signature — it ticks between reruns and otherwise disguises a double-click as two different trades (the mechanism behind the COIN double-SELL). |
 | F-82 | Decision Context capture on each trade: signal seen at time of trade (auto-filled from current portfolio signal; help text shows load-time timestamp so pre-fill is clearly dated), whether signal was followed (yes / no / discretionary), deviation reason, lesson learned |
 | F-83 | My Patterns section: analyse historical trades to compute signal accuracy vs override accuracy |
 | F-84 | Surface costly deviations (ignored signal, position lost money) and good overrides |

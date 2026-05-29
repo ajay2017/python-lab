@@ -14,6 +14,19 @@ A personal portfolio intelligence app for a single user (Ajay). Live deploy: **S
 
 ---
 
+## Recently shipped (May 2026, post-audit)
+
+The "decides not informs" push turned several informational surfaces into concrete, consolidated, internally-consistent actions:
+
+- **Movers discovery** — `scan_movers()` over a ~200-name `discovery_universe` surfaces 1-day breakouts outside the curated universe, composite-gated, fed into the SAME "New Positions to Initiate" list (NOT a separate dev-facing section). Flat-day exemption is deliberate — see memory `project_decision_thresholds`.
+- **Review Before Close directives** — every item now carries a quantitative action (trim N shares, raise stop to $Y) instead of "consider trimming" prose. Action types: WATCH / TIGHTEN_ONLY / TRIM_AND_TIGHTEN / TRIM_TO_TARGET / PROTECTIVE_TRIM.
+- **Act Today consolidation** — structured directives + per-ticker consolidation (a mechanical exit suppresses a risk-trim on the same ticker; multiple risk flags merge). Fixed MU-appears-twice.
+- **Action Log (Phase A)** — `manual_stops` table closes the recommend→act→log loop; one-directional override (tighten-only), 📌 badges, auto-clear on shares→0.
+- **Two-column offense/defense Brief** — left = Grow Today + More Buy Candidates; right = Act Today + Review Before Close. Buy Candidates de-duped against Grow Today.
+- **SELL integrity guard + double-submit dedupe** — SELL validates against `recalculate_from_trades()` (same source as the drift detector); identical `(ticker, action, shares)` within 15 s rejected. Fixed the COIN double-SELL drift. See memory `feedback_validation_reads_detector_source`.
+
+---
+
 ## Coming back to this project — checklist
 
 When you open this folder after time away:
@@ -45,7 +58,9 @@ python-lab/
 │   └── architecture.md            Module map, data flow, scoring model, db schema
 └── stock_analyzer/
     ├── constants.py               SINGLE SOURCE OF TRUTH for decision thresholds
-    ├── daily_briefing.py          Grow Today / Act Today / Buy Candidates / Review
+    ├── daily_briefing.py          Grow Today (+Movers) / Act Today / Buy Candidates / Review — directives + consolidation
+    ├── scanner.py                 Curated scan (+Watchlist) and scan_movers() 1-day-gainer pass
+    ├── discovery_universe.py      Broad ~200-name universe for movers discovery
     ├── risk_advisor.py            Beta / Sharpe / volatility / drawdown recs
     ├── rebalancer.py              Trim / add actions; news + risk-trim aware
     ├── watchlist_advisor.py       ENTER_NOW gate with portfolio-fit checks
@@ -53,8 +68,8 @@ python-lab/
     ├── tax_advisor.py             HARVEST subordinated to Buy/Strong Buy signal
     ├── news_intelligence.py       Curated news + critical/warning alerts
     ├── macro_calendar.py          Static event backbone + FRED enrichment
-    ├── portfolio.py               build_portfolio_df; stop integrity gate
-    ├── db.py                      Supabase persistence (service-role only)
+    ├── portfolio.py               build_portfolio_df; stop integrity gate; manual-stop override merge
+    ├── db.py                      Supabase persistence (service-role only); manual_stops + trade-replay
     └── ...                        See architecture.md for full module list
 ```
 
@@ -185,11 +200,9 @@ Pick up tomorrow morning during market validation, then batch.
 - Removes the manual-entry path that produced the May 2026 drift mess (15 unmatched SELLs, multi-round SQL backfill, eventual full rebaseline on 2026-05-27). Drift recovery is documented in memory `feedback_trade_drift_recovery`.
 - Brokers to scope: Fidelity, Schwab/TD, IBKR, Robinhood (varying API quality). Auth via OAuth + token storage in Streamlit secrets.
 
-**Scanner universe — movers ingestion (close the discovery gap):** ✅ SHIPPED 2026-05-29 (curated ~200 cut)
-- Implemented as the **Movers** feature: `discovery_universe.py` holds a curated ~200-ticker list (broader than the ~70 `SECTOR_UNIVERSE`); `scanner.scan_movers()` ranks today's 1-day gainers; `_cached_scan_movers` in app.py composite-gates the top `MOVER_SHORTLIST_SIZE` and surfaces those clearing `COMPOSITE_BUY` in a "🔥 Movers" sub-section under Grow Today. Excludes already-tracked / held / watchlist tickers (deduped at runtime). Gainer threshold `MOVER_MIN_DAY_GAIN_PCT=5%`.
-- The composite gate is the noise filter — a 1-day pop without fundamentals/sentiment behind it is rejected at COMPOSITE_BUY=65 the same way INTC was (38.3, kicked out).
-- **Future expansion (optional):** widen `discovery_universe` to full S&P 500 (~500) or Russell 1000 (~1000) — bigger net, slower scan, more yfinance flakiness. Or swap the static list for a live source (Wikipedia SP500 scrape needs lxml; paid screener API = Polygon/Twelvedata/Alpha Vantage, reliable but adds key plumbing). The curated static list was chosen first for zero new deps and zero runtime-scrape risk; cost is a manual refresh a few times a year.
-- Also unresolved: the mover signal is 1-day gain only. Could add sustained-momentum and most-active lenses later.
+**Future expansion (optional) — discovery universe:** widen `discovery_universe` to full S&P 500 (~500) or Russell 1000 (~1000) — bigger net, slower scan, more yfinance flakiness. Or swap the static list for a live source (Wikipedia SP500 scrape needs lxml; paid screener API = Polygon/Twelvedata/Alpha Vantage, reliable but adds key plumbing). The curated static list was chosen first for zero new deps and zero runtime-scrape risk; cost is a manual refresh a few times a year. The mover signal is also 1-day gain only — could add sustained-momentum and most-active lenses later.
+
+**Action Log — Phase B/C (queued):** Phase A (manual stop override) shipped. Phase B = in-context Sell/Trim button directly on Review Before Close items (act without leaving the Brief); Phase C = protective-trim variant. See memory `project_action_log_subsystem`.
 
 ---
 
@@ -234,3 +247,9 @@ Notable commits:
 - `98a79a4` — Phase 3 coordination + defensive sweep
 - `e0ff999` / `1ecc8d2` — DRISHTA rebrand
 - `6b5f13c` — Supabase RLS hardening
+- `8a36bf2` — Review Before Close: prose → quantitative directives
+- `a4ed74b` / `a4380d4` — Action Log Phase A (manual stops + orphan auto-clear)
+- `0fd66db` — Act Today: structured directives + per-ticker consolidation
+- `287021b` / `67b0dab` / `e4793ff` — Movers discovery, unified into New Positions, flat-day breakout-exempt
+- `fb7b56c` / `aec735a` — two-column offense/defense Brief + Buy Candidates de-dupe
+- `e95ab2d` — SELL integrity guard (replay-sourced) + double-submit dedupe (COIN double-SELL fix)

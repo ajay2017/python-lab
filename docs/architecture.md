@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** May 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §4.0)
@@ -80,8 +80,9 @@ python-lab/
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
     ├── targets.py                  Price targets, support/resistance, entry zones
     ├── ranking.py                  Cross-portfolio stock ranking (composite score sort)
-    ├── scanner.py                  Market scanner (73-ticker universe)
-    ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today / Buy Candidates / Review)
+    ├── scanner.py                  Market scanner (curated ~73-ticker universe + Watchlist extension); scan_movers() 1-day-gainer pass
+    ├── discovery_universe.py       Broad ~200-name discovery universe (by sector) for movers; discovery_tickers() flatten/dedup
+    ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today + Movers / Buy Candidates / Review); structured directives + per-ticker consolidation
     ├── premarket.py                Pre-market intelligence (futures, global markets, movers)
     ├── quick_research.py           Ad-hoc ticker research with entry timing + portfolio-fit verdict
     ├── news_intelligence.py        News aggregation and attention flagging
@@ -100,7 +101,7 @@ python-lab/
     ├── stress_test.py              Macro stress scenario modelling
     ├── split_detector.py           Stock split detection and adjustment
     ├── decision_journal.py         Signal-vs-override pattern analysis
-    ├── db.py                       Supabase database operations (fractional shares)
+    ├── db.py                       Supabase ops (holdings/watchlist/trades/manual_stops); trade-replay; fractional shares
     └── api_health.py               API call health event recording
 ```
 
@@ -135,6 +136,13 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `RISK_PCT_PER_TRADE` | 0.015 | 1.5% portfolio risk per trade (Moderate) |
 | `EARNINGS_IMMINENT_DAYS` | 7 | Trades within this window flagged caution |
 | `MACRO_IMMINENT_DAYS` | 3 | Hard suppress new picks in sectors with HIGH-impact macro within this window |
+| `STOP_PROFIT_LOCK_PNL_PCT` / `_TRIM_PCT` | 25 / 25 | Review profit-lock: trigger P&L and trim size |
+| `STOP_TIGHTEN_ATR_MULT` | 1.5 | Review stop-tighten multiple (vs 2.0× initial) |
+| `EARNINGS_OVERWEIGHT_TRIM_PCT` / `_TO_PCT` | 12 / 10 | Review earnings-overweight: trigger / target weight |
+| `WEAK_LARGE_TRIM_TO_PCT` | 8 | Review weak-large: trim-to target weight |
+| `MACRO_AFFECTED_TRIM_THRESHOLD_PCT` / `_REDUCTION_PP` | 30 / 5pp | Review macro-affected: sector trigger / reduction |
+| `MOVER_MIN_DAY_GAIN_PCT` | 5 | Min 1-day gain to qualify as a discovery mover |
+| `MOVER_SHORTLIST_SIZE` / `MOVER_MAX_PICKS` | 12 / 3 | Movers composite-gated shortlist / surfaced cap (own allowance) |
 
 ### 4.0.2 Cross-feature coordination caches
 
@@ -145,8 +153,9 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | `_port_risk_cache` | Portfolio page (`compute_portfolio_risk_metrics`) | Stock Analysis Trade Plan, Watchlist `_portfolio_risk_gate` | Beta envelope checks across pages |
 | `_risk_high_alerts_cache` | Portfolio page (after `build_risk_advisor_recommendations`) | Watchlist | ENTER_NOW gates against active HIGH risk alerts |
 | `_grow_today_sectors_cache` | After `build_daily_briefing` | Watchlist `_portfolio_risk_gate` | Sector-overlap warning when both features pick the same sector |
-| `_grow_composites` | Portfolio page (top-5 scanner pre-fetch) | `_grow_today` composite gate | Validates new picks against composite score, not just momentum |
+| `_grow_composites` | Portfolio page (top-5 scanner pre-fetch + mover bundles) | `_grow_today` composite gate | Validates new picks AND movers against composite score, not just momentum |
 | `_grow_composites_coverage` | Portfolio page | Grow Today UI | "Composite scores unavailable" banner when pre-fetch failed |
+| `_movers_candidates` | Portfolio page (`_cached_scan_movers` → composite-gate) | `_grow_today` via `movers=` arg | Discovery breakouts fed into the unified New Positions list |
 | `_daily_brief_offline` | Portfolio page (on `build_daily_briefing` exception) | Watchlist | Surfaces explicit offline state instead of silently disabling gates |
 
 ### 4.0.3 Coordination gates currently enforced
@@ -244,15 +253,29 @@ port_df  +  scanner_results  +  news_items  +  held_data
         ▼
 daily_briefing.build_daily_briefing(
     port_df, alert_list, risk_recs, news_items,
-    held_data, scanner_results, portfolio_value, market_context
+    held_data, scanner_results, portfolio_value, market_context,
+    movers=_movers_candidates           ← discovery breakouts (composite-gated)
 )
         │
-        ├── Act Today     ← stop triggers, sell signals, critical news, macro events
+        ├── Act Today     ← stop_breach / sell_signal / critical_news / macro / risk
+        │       each item: {kind, directive, why, trigger, [risk_flags]}
+        │       _consolidate_act_today(): mechanical exit (stop_breach/sell_signal)
+        │         suppresses risk-trim on the same ticker; multiple risk flags
+        │         on one ticker merge into one card; back-compat `reason` synthesised
         ├── Buy Candidates ← scanner picks, each cross-referenced via _cross_reference()
+        │       (de-duped in app.py against everything already shown in Grow Today)
         ├── Grow Today    ← market-tone-aware new picks + add-to-winners
-        │       ├── Bull day: score ≥ 65, up to 3 picks, confirmed + unverified allowed
-        │       └── Flat day: score ≥ 78, max 1 pick, confirmed picks shown before unverified
+        │       ├── curated_rows: momentum-gated, truncated to max_picks*4, ranked
+        │       │     ├── Bull day: score ≥ 65, up to 3 picks
+        │       │     └── Flat day: score ≥ 78, max 1 pick, confirmed before unverified
+        │       └── mover_rows:   composite-gated (≥65), ranked by composite,
+        │             OWN MOVER_MAX_PICKS allowance, NOT momentum-gated, NO
+        │             1-per-sector rule, EXEMPT from flat-day suppression;
+        │             bear day → early return (movers never processed)
         └── Review Before Close ← approaching stops, earnings, weak large positions
+                each item: {headline, action{type}, why, trigger}
+                action.type ∈ WATCH / TIGHTEN_ONLY / TRIM_AND_TIGHTEN /
+                              TRIM_TO_TARGET / PROTECTIVE_TRIM
 
 market_context = {
     tone: "bull" | "bear" | "flat",   (S&P ≥+0.5% bull, ≤-0.5% bear)
@@ -428,6 +451,21 @@ CREATE TABLE trades (
 
 The `signal_seen`, `followed_signal`, `deviation_reason`, and `lesson` columns were added after initial deployment. The `db.load_trades()` function backfills `None` for these columns in older rows to maintain backward compatibility.
 
+### 6.4 `manual_stops` table
+
+```sql
+CREATE TABLE manual_stops (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticker        TEXT    NOT NULL UNIQUE,
+    stop_price    NUMERIC NOT NULL CHECK (stop_price > 0),
+    set_at        TIMESTAMPTZ DEFAULT now(),
+    note          TEXT,
+    source_action TEXT       -- e.g. 'review_tighten_only' / 'review_trim_and_tighten' / 'manual'
+);
+```
+
+Backs the **Action Log** (recommend→act→log loop). When the user acts on a "raise stop" recommendation, the chosen level persists here and overrides the computed ATR/ratchet stop in `portfolio.build_portfolio_df(holdings, loaded_data, manual_stops=...)`. Helpers: `db.load_manual_stops()`, `db.save_manual_stop(ticker, stop_price, note, source_action)`, `db.clear_manual_stop(ticker)`. Override is **one-directional** — honoured only when ≥ the current computed stop (tighten-only). `db.save_holdings` symmetric-sweeps this table so a stop override is auto-cleared (orphan cleanup) when a ticker's shares drop to 0; the sweep is wrapped in its own try so a missing table never blocks a holdings save.
+
 ---
 
 ## 7. Navigation and State Management
@@ -462,6 +500,7 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 | `scanner_results` | Market Scanner | Today's Brief buy candidates |
 | `_sidebar_news` | My Portfolio / Stock Analysis | Sidebar news slot |
 | `_qr_result` | Today's Brief quick research | Today's Brief (persists result) |
+| `_tj_last_submit_sig` / `_tj_last_submit_ts` | Trade Journal (on submit) | Trade Journal double-submit dedupe (next submit) |
 
 **Decision-coordination caches (see §4.0.2 for the gates that consume each):**
 
@@ -470,8 +509,9 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 | `_port_risk_cache` | My Portfolio | Stock Analysis Trade Plan, Watchlist |
 | `_risk_high_alerts_cache` | My Portfolio | Watchlist |
 | `_grow_today_sectors_cache` | After `build_daily_briefing` | Watchlist |
-| `_grow_composites` | My Portfolio (top-5 scanner pre-fetch) | Daily Briefing `_grow_today` |
+| `_grow_composites` | My Portfolio (top-5 scanner pre-fetch + mover bundles) | Daily Briefing `_grow_today` |
 | `_grow_composites_coverage` | My Portfolio (post-fetch) | Grow Today banner |
+| `_movers_candidates` | My Portfolio (`_cached_scan_movers` + composite gate) | Daily Briefing `_grow_today` (movers= arg) |
 | `_daily_brief_offline` | My Portfolio (on briefing exception) | Watchlist offline banner |
 | `_tj_prefill` | Watchlist "Log Planned Trade" | Trade Journal form prefill |
 
@@ -493,6 +533,12 @@ def load_all(ticker, period):
     # Computes all scores, targets, risk metrics
     # Returns complete analysis dict
     # Uses live risk-free rate from _get_rfr() for Sharpe/Sortino
+
+@st.cache_data(ttl=1800)   # 30 minutes
+def _cached_scan_movers(exclude_key, min_gain):
+    # scanner.scan_movers() over the ~200-name discovery_universe
+    # Ranks today's 1-day gainers >= min_gain; excludes curated/held/watchlist
+    # Result shortlist is then composite-gated at the call site
 
 @st.cache_data(ttl=3600)   # 60 minutes
 def _fetch_sector_returns():
@@ -573,6 +619,12 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 | Stock Analysis without Portfolio context | The Trade Plan beta-envelope warning depends on `_port_risk_cache`. When the cache is empty (user landed on Stock Analysis without first visiting Portfolio), a prominent "Portfolio context unavailable" info note renders above the Trade Plan. | Phase 2. Don't pretend the gate is active when it isn't. |
 | Entry-timing thresholds | `quick_research.py` boundaries use `>=` for upper bounds and `<=` for lower bounds (e.g. `move_1d >= 15` triggers "Avoid Chasing"). Previously strict `>` produced unintuitive cliffs where exactly-15% one-day moves slipped past the gate. | Phase 1 H6. Standard TA convention. |
 | Decision constants | All threshold values used to gate, suppress, or downgrade a recommendation live in `stock_analyzer/constants.py`. Features import from this module rather than hardcoding values. | Phase 2. Single source of truth; changes here are policy decisions, not code tuning. |
+| SELL integrity guard reads the replay source | The Trade Journal SELL guard validates `shares_val` against `db.recalculate_from_trades()` — the same trade-replay the drift detector uses — NOT the `holdings_df` cache. A SELL exceeding accountable shares is blocked unless overridden. | A guard that read a different source than the detector silently disagreed: after a rebaseline, `holdings_df` had enough COIN shares so two 5-share SELLs both passed, while the replay had only one covering BUY → unmatched SELL → drift. An input guard must read the same book as the detector that flags the violation. (Commit e95ab2d.) |
+| Double-submit dedupe (price-excluded signature) | An identical `(ticker, action, shares)` submit within 15 s is rejected. Price is deliberately excluded from the signature. | On a slow page a double-click recorded two trades; the live-prefilled price ticked between reruns, disguising the dup as two "different" trades. Excluding price catches the genuine double-click. (Commit e95ab2d.) |
+| Manual stop override is one-directional | `build_portfolio_df` honours a `manual_stops` entry only when it is ≥ the computed ATR/ratchet stop (tighten, never loosen below the mechanical floor). Overridden rows show 📌 and Stop Type="Manual". Auto-cleared when shares → 0 via `save_holdings` symmetric sweep. | Closes the recommend→act→log loop without letting a user weaken the mechanical safety net. An orphaned stop must never outlive its position. (Action Log Phase A, commits a4ed74b / a4380d4.) |
+| Movers flat-day exemption | Discovery movers feed the SAME `_grow_today` New Positions list as curated picks but get their own `MOVER_MAX_PICKS` allowance and are exempt from the flat-day high-conviction suppression and the curated momentum / 1-per-sector rules. They still respect bear-day risk-off, the composite gate, the macro gate, and act-today conflicts. | A composite-Buy stock up ≥5% today IS the clearer direction the flat-day caution waits for — suppressing it defeats the discovery purpose. Deliberate asymmetry; do not "fix" by applying uniform tone-gating. (Commits 67b0dab / e4793ff.) |
+| Act Today per-ticker consolidation | `_consolidate_act_today` suppresses a risk-trim card when a mechanical exit (stop_breach / sell_signal) exists for the same ticker, and merges multiple risk flags on one ticker into a single card. | You don't trim what you're already exiting, and the same ticker appearing in multiple urgent cards (MU appeared twice) reads as noise, not signal. (Commit 0fd66db.) |
+| Two-column offense/defense Brief | The Brief renders left = Grow Today + More Buy Candidates (deploy capital), right = Act Today + Review Before Close (protect capital). Streamlit reusable column containers (`with col:`) are re-entered to append each section into its column regardless of execution order. | A single-column stack buried the protective items below a long offense list; the offense/defense split mirrors how a PM actually reads the morning. Section chips must stay within their column. (Commits fb7b56c / aec735a.) |
 
 ---
 
