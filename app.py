@@ -3392,88 +3392,115 @@ if page == "🏠 Home":
 
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
-        # ── Section 3: Buy Candidates (full width) ────────────────────────────
-        _db_confirmed   = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "confirmed")
-        _db_unverified  = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") == "unverified")
-        _db_conflicted  = sum(1 for b in _db_buys if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
-        _db_c2_label    = f"🟢 Buy Candidates ({len(_db_buys)})"
-        _db_c2_parts    = []
-        if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
-        if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
-        if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
-        _db_c2_sub = " · ".join(_db_c2_parts)
-        st.markdown(
-            f"<div style='background:#14532d;border-left:4px solid #22c55e;"
-            f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
-            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
-            + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
-            + f"</div>",
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "📊 **Scanner = technical momentum only** (RSI, trend, price momentum). "
-            "🔍 **Verify** picks via Analysis before acting — composite signal adds "
-            "sentiment, analyst revisions, earnings risk and fundamentals."
-        )
-        if not _db_buys:
-            st.caption("No scanner results available. Run Market Scanner to populate buy candidates.")
-            if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
-                st.session_state["_pending_page"] = "🔍 Market Scanner"
-                st.rerun()
-        else:
-            for _db_buy in _db_buys:
-                _xref       = _db_buy.get("xref", {})
-                _reconciled = _xref.get("verdict_reconciled", {}) or {}
-                _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
-                _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
-                _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
-                _vagreed    = _xref.get("agreed", [])
-                _vconflicts = _xref.get("conflicts", [])
-                _vlayers    = _xref.get("layers_checked", 0)
-                _db_bg      = "#1c1917"
-                st.markdown(
-                    f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
-                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                    f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
-                    f"{_db_buy['icon']} {_db_buy['action']} — "
-                    f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
-                    f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
-                    + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
-                    + f"</span>"
-                    f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
-                    f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
-                    f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
-                    f"</div>"
-                    # Resolution one-liner — replaces the diffuse "Verify" guidance
-                    # block with the explicit reconciled verdict for this ticker.
-                    + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
-                       f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
-                    + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
-                       f"📊 {_db_buy.get('scanner_signal','')} · "
-                       f"RSI {_db_buy.get('rsi',0):.0f} · "
-                       f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
-                       f"{_db_buy.get('trend','')}"
-                       f"</div>" if _db_buy.get("rsi") else "")
-                    + ("".join(
-                        f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
-                        for c in _vconflicts
-                    ) if _vconflicts else "")
-                    + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
-                       f"✓ {' · '.join(_vagreed[:3])}"
-                       + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
-                       + f"</div>" if _vagreed else "")
-                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                       f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
-                       f"</div>" if _db_buy.get("_first_seen_at") else "")
-                    + f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
-                             use_container_width=False):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _db_buy["ticker"]
+        # ── Buy Candidates — OVERFLOW only, in the left "offense" column ──────
+        # De-duplicated against Grow Today: any ticker already shown there
+        # (made the pick cap, or surfaced in Filtered Out / macro-blocked /
+        # pending) is dropped so the same name never appears twice in the
+        # brief. What remains is the overflow — confirmed/unverified buys
+        # beyond the Grow Today pick cap. Rendered in the left column under
+        # Grow Today so the whole brief stays a clean 2-column offense/defense
+        # split (no full-width banner crossing the page).
+        with _db_col_left:
+            _grow_shown: set = set()
+            for _gk in ("new_picks", "add_positions", "composite_skipped",
+                        "macro_blocked_picks", "composite_unavailable"):
+                for _gp_item in (_db_grow.get(_gk, []) or []):
+                    _gt = _gp_item.get("ticker")
+                    if _gt:
+                        _grow_shown.add(str(_gt).upper())
+            _db_buys_unique = [
+                b for b in _db_buys
+                if str(b.get("ticker", "")).upper() not in _grow_shown
+            ]
+
+            _db_confirmed   = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "confirmed")
+            _db_unverified  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "unverified")
+            _db_conflicted  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
+            _db_c2_label    = f"🟢 More Buy Candidates ({len(_db_buys_unique)})"
+            _db_c2_parts    = []
+            if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
+            if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
+            if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
+            _db_c2_sub = " · ".join(_db_c2_parts)
+            st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='background:#14532d;border-left:4px solid #22c55e;"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
+                + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+            if not _db_buys:
+                st.caption("No scanner results available. Run Market Scanner to populate buy candidates.")
+                if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
+                    st.session_state["_pending_page"] = "🔍 Market Scanner"
                     st.rerun()
+            elif not _db_buys_unique:
+                # Scanner ran, but every candidate is already represented in
+                # Grow Today above — no need to repeat them here.
+                st.caption(
+                    "All scanner candidates are already reflected in Grow Today above "
+                    "(picks, Filtered Out, or pending)."
+                )
+            else:
+                st.caption(
+                    "📊 Scanner momentum picks beyond today's gated list. "
+                    "🔍 Verify via Analysis before acting."
+                )
+                for _db_buy in _db_buys_unique:
+                    _xref       = _db_buy.get("xref", {})
+                    _reconciled = _xref.get("verdict_reconciled", {}) or {}
+                    _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
+                    _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
+                    _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
+                    _vagreed    = _xref.get("agreed", [])
+                    _vconflicts = _xref.get("conflicts", [])
+                    _vlayers    = _xref.get("layers_checked", 0)
+                    _db_bg      = "#1c1917"
+                    st.markdown(
+                        f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
+                        f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
+                        f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                        f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
+                        f"{_db_buy['icon']} {_db_buy['action']} — "
+                        f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
+                        f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
+                        + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
+                        + f"</span>"
+                        f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
+                        f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
+                        f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
+                        f"</div>"
+                        # Resolution one-liner — replaces the diffuse "Verify" guidance
+                        # block with the explicit reconciled verdict for this ticker.
+                        + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
+                           f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
+                        + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
+                           f"📊 {_db_buy.get('scanner_signal','')} · "
+                           f"RSI {_db_buy.get('rsi',0):.0f} · "
+                           f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
+                           f"{_db_buy.get('trend','')}"
+                           f"</div>" if _db_buy.get("rsi") else "")
+                        + ("".join(
+                            f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
+                            for c in _vconflicts
+                        ) if _vconflicts else "")
+                        + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
+                           f"✓ {' · '.join(_vagreed[:3])}"
+                           + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
+                           + f"</div>" if _vagreed else "")
+                        + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                           f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
+                           f"</div>" if _db_buy.get("_first_seen_at") else "")
+                        + f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
+                                 use_container_width=False):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _db_buy["ticker"]
+                        st.rerun()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — EVENING DEBRIEF
