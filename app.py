@@ -10875,6 +10875,22 @@ elif page == "📒 Trade Journal":
 
         # Process submission outside the form block
         if submitted:
+            # ── Double-submit guard ───────────────────────────────────────────
+            # A slow save + an impatient second click on "Record Trade" was
+            # creating two near-identical rows (e.g. two COIN SELLs of 5 within
+            # the same second). Reject an identical (ticker, action, shares)
+            # submission within a short window. Price is intentionally excluded
+            # from the signature — the prefilled live price ticks between
+            # reruns, so a true double-click produces two DIFFERENT prices and
+            # a price-sensitive signature would miss it.
+            import time as _tj_time
+            _submit_sig = (ticker_input, action, float(shares_val or 0))
+            _last_sig   = st.session_state.get("_tj_last_submit_sig")
+            _last_ts    = st.session_state.get("_tj_last_submit_ts", 0.0)
+            _is_dup_submit = (
+                _last_sig == _submit_sig and (_tj_time.time() - _last_ts) < 15
+            )
+
             # Stash everything entered into prefill so the form re-renders pre-
             # filled on validation failure (otherwise clear_on_submit=True wipes
             # the user's input on every error and they'd have to retype).
@@ -10969,7 +10985,45 @@ elif page == "📒 Trade Journal":
                             "Portfolio page if your records disagree with the app's."
                         )
 
-            if not ticker_input:
+            # ── SELL vs trade-history replay (drift-source guard) ─────────────
+            # The check above validates against holdings_df (the portfolio
+            # cache). But drift detection replays the TRADES table — and the two
+            # can disagree (e.g. after a rebaseline where a ticker's holdings
+            # count and its logged BUY shares differ). When they do, a SELL that
+            # passes the holdings check can still create an unmatched SELL on
+            # replay — the "N SELL rows with no prior BUY" drift. Validating
+            # here against the same replay the drift detector uses closes that
+            # gap at the source. Override (the same backfill checkbox) still
+            # lets a genuine pre-app holding through.
+            if action == "SELL" and ticker_input and not _override and not _shares_block_reason:
+                try:
+                    _replay = db.recalculate_from_trades(st.session_state.get("trades_df"))
+                    _rh     = _replay.get("holdings_df")
+                    _avail  = 0.0
+                    if _rh is not None and not _rh.empty:
+                        _rm = _rh[_rh["Ticker"].astype(str).str.upper() == ticker_input]
+                        if not _rm.empty:
+                            _avail = float(_rm.iloc[0]["Shares"])
+                    if shares_val > _avail + 1e-6:
+                        _shares_block_reason = (
+                            f"Selling <b>{shares_val:g}</b> share(s) of <b>{ticker_input}</b> "
+                            f"would exceed the <b>{_avail:g}</b> your trade history can account "
+                            "for (logged BUYs minus prior SELLs). Recording it would create an "
+                            "unmatched SELL and a drift warning — the exact issue we just fixed. "
+                            "If this is a pre-app holding, tick <b>'Allow unusual price'</b> to "
+                            "override; otherwise check for a duplicate row or a wrong share count."
+                        )
+                except Exception:
+                    pass
+
+            if _is_dup_submit:
+                st.warning(
+                    f"⚠️ Duplicate ignored — a **{action} of {shares_val:g} {ticker_input}** "
+                    "was just recorded seconds ago (likely a double-click on a slow page). "
+                    "If you genuinely meant to record it twice, wait a moment and resubmit."
+                )
+                # Don't stash prefill — the first submission already cleared it.
+            elif not ticker_input:
                 st.error("Enter a ticker symbol.")
                 st.session_state["_tj_prefill"] = _stash_failed_entry
             elif shares_val <= 0:
@@ -11131,6 +11185,11 @@ elif page == "📒 Trade Journal":
                     # only surface in the NEXT session, not immediately.
                     st.session_state.pop("_tj_drift_checked", None)
                     st.session_state.pop("_tj_drift_state",   None)
+                    # Record this submission's signature so an immediate
+                    # double-click (same ticker/action/shares within 15s) is
+                    # rejected as a duplicate on the next run.
+                    st.session_state["_tj_last_submit_sig"] = _submit_sig
+                    st.session_state["_tj_last_submit_ts"]  = _tj_time.time()
                     st.rerun()
 
     # ── Performance Dashboard ─────────────────────────────────────────────────
