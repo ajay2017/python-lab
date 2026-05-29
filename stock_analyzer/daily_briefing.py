@@ -764,6 +764,28 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 # ── Act Today ─────────────────────────────────────────────────────────────────
 
 def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) -> list[dict]:
+    """
+    Build the Act Today list. Each item carries a structured directive so the
+    UI renders a concrete ACT/Why/Trigger block (matching Review Before Close)
+    rather than a prose one-liner.
+
+    item shape:
+      priority  : "critical" | "high"
+      icon, ticker, action (headline)
+      kind      : "stop_breach" | "sell_signal" | "critical_news" | "macro" | "risk"
+      directive : the concrete action line (what to do)
+      why       : 1-line rationale
+      trigger   : escalation / confirmation condition
+      risk_flags: [{title, recommendation, problem}] — populated for kind="risk";
+                  multiple flags on one ticker are merged into a single card
+      weight, pnl_pct
+
+    After building the flat list, items are CONSOLIDATED per-ticker so a ticker
+    never appears in more than one card. Rule (user-chosen): a mechanical exit
+    (stop breach / Sell signal) WINS — it suppresses any risk-advisor trim on
+    the same ticker, because if you're exiting, a "trim 50% for beta" rec is
+    moot. Multiple risk flags on one non-exiting ticker merge into one card.
+    """
     items: list[dict] = []
 
     # 1 — Stop-loss breaches (Gap to Stop ≤ 0)
@@ -772,16 +794,22 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
         if gap is None:
             continue
         if gap <= 0:
+            _shares = int(_f(row.get("Shares")))
             items.append({
                 "priority": "critical",
                 "icon":     "🛑",
                 "ticker":   row["Ticker"],
+                "kind":     "stop_breach",
                 "action":   "SELL — Stop Breached",
-                "reason":   (
-                    f"Price ${_f(row.get('Price')):.2f} has breached the "
-                    f"{row.get('Stop Type', '')} stop at ${_f(row.get('Stop')):.2f} "
-                    f"(gap {gap:+.1f}%). Mechanical sell rule triggered."
+                "directive": (
+                    f"Sell all {_shares} shares at next open — mechanical stop rule."
                 ),
+                "why": (
+                    f"Price ${_f(row.get('Price')):.2f} closed below the "
+                    f"{row.get('Stop Type','')} stop ${_f(row.get('Stop')):.2f} "
+                    f"(gap {gap:+.1f}%)."
+                ),
+                "trigger": "Already breached — this is the exit signal, not a watch.",
                 "weight":  _f(row.get("Weight (%)")),
                 "pnl_pct": _f(row.get("P&L (%)")),
             })
@@ -795,12 +823,16 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
                 "priority": "high",
                 "icon":     "📉",
                 "ticker":   row["Ticker"],
+                "kind":     "sell_signal",
                 "action":   f"REVIEW — Signal: {sig}",
-                "reason":   (
-                    f"Composite signal has shifted to **{sig}** with conviction "
-                    f"score {_f(row.get('Score')):.0f}/100. "
-                    f"P&L {_f(row.get('P&L (%)')):+.1f}%, weight {_f(row.get('Weight (%)')):+.1f}%."
+                "directive": (
+                    f"Reduce or exit — composite signal has shifted to {sig}."
                 ),
+                "why": (
+                    f"Composite score {_f(row.get('Score')):.0f}/100 in the Sell zone. "
+                    f"P&L {_f(row.get('P&L (%)')):+.1f}%, weight {_f(row.get('Weight (%)')):.1f}%."
+                ),
+                "trigger": "Confirm before close; if price is also below stop, exit fully.",
                 "weight":  _f(row.get("Weight (%)")),
                 "pnl_pct": _f(row.get("P&L (%)")),
             })
@@ -819,11 +851,19 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
                     "priority": "high",
                     "icon":     "🚨",
                     "ticker":   ticker,
+                    "kind":     "critical_news",
                     "action":   "MONITOR — Critical News",
-                    "reason":   (
-                        f"Tier-{item.get('tier',3)} source: \"{item.get('headline','news alert')[:80]}\" "
-                        f"(sentiment {item.get('compound',0):+.2f}). "
-                        "Verify thesis integrity before next open."
+                    "directive": (
+                        "Hold for now, but tighten your stop and re-evaluate the thesis "
+                        "after the news is confirmed."
+                    ),
+                    "why": (
+                        f"One tier-{item.get('tier',3)} headline at sentiment "
+                        f"{item.get('compound',0):+.2f}: \"{item.get('headline','news alert')[:80]}\" "
+                        "— material, but a single headline isn't a mechanical sell."
+                    ),
+                    "trigger": (
+                        "A second negative headline OR price −3% intraday → exit."
                     ),
                     "weight":  _f(row.get("Weight (%)") if hasattr(row, "get") else 0),
                     "pnl_pct": _f(row.get("P&L (%)") if hasattr(row, "get") else 0),
@@ -833,15 +873,22 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH
     today_macro = [e for e in (macro_events or []) if e.get("date") == today and e.get("impact") == MC_HIGH]
     for ev in today_macro:
+        _affected = ", ".join(ev.get("affected_tickers", [])[:5]) or "broad market"
         items.append({
             "priority": "high",
             "icon":     "🌐",
             "ticker":   None,
+            "kind":     "macro",
             "action":   f"MACRO — {ev.get('event', 'Economic Event')}",
-            "reason":   (
-                f"{ev.get('category','')} release today. "
-                f"Affected: {', '.join(ev.get('affected_tickers',[])[:5]) or 'All'}. "
-                f"{ev.get('playbook_note','') or 'Review macro playbook for positioning.'}"
+            "directive": (
+                "Hold through the print — no new entries in affected names until it clears."
+            ),
+            "why": (
+                f"{ev.get('category','Economic')} release today. Affected: {_affected}."
+            ),
+            "trigger": (
+                ev.get("playbook_note")
+                or "Hawkish surprise → existing stops protect; dovish → reconsider adds."
             ),
             "weight":  None,
             "pnl_pct": None,
@@ -856,14 +903,108 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
             "priority": "high",
             "icon":     "⚠️",
             "ticker":   rt[0]["ticker"] if rt else None,
+            "kind":     "risk",
             "action":   f"RISK — {rec.get('title','Risk Alert')}",
-            "reason":   rec.get("recommendation", rec.get("problem", "")),
+            # risk recs already carry rich directive text in `recommendation`;
+            # keep it as a flag entry so multiple flags on one ticker can merge.
+            "risk_flags": [{
+                "title":          rec.get("title", "Risk Alert"),
+                "recommendation": rec.get("recommendation", rec.get("problem", "")),
+                "problem":        rec.get("problem", ""),
+            }],
             "weight":  None,
             "pnl_pct": None,
         })
 
-    items.sort(key=lambda x: (0 if x["priority"] == "critical" else 1, -(x.get("weight") or 0)))
-    return items
+    return _consolidate_act_today(items, port_df)
+
+
+# Kinds that represent a mechanical exit decision — these suppress softer
+# advisories (risk trims, news monitors) on the same ticker.
+_MECHANICAL_KINDS = {"stop_breach", "sell_signal"}
+
+
+def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
+    """Collapse Act Today items so each ticker appears at most once.
+
+    - Ticker-less items (macro) pass through unchanged.
+    - For each ticker: if a mechanical-exit item exists, emit only the
+      highest-priority mechanical one (drop risk + news — moot if exiting).
+    - Otherwise merge: the highest-priority item becomes the card; all
+      risk_flags across the group are gathered onto it so a ticker with
+      two risk recs (e.g. beta + volatility) renders as one card.
+    """
+    passthrough = [it for it in items if not it.get("ticker")]
+    by_ticker: dict[str, list[dict]] = {}
+    for it in items:
+        t = it.get("ticker")
+        if t:
+            by_ticker.setdefault(str(t).upper(), []).append(it)
+
+    _pri_rank = {"critical": 0, "high": 1}
+    consolidated: list[dict] = []
+    for ticker, group in by_ticker.items():
+        # Pull weight/pnl from port_df so merged cards always have them.
+        pm = port_df[port_df["Ticker"] == ticker] if port_df is not None else None
+        w  = _f(pm["Weight (%)"].iloc[0]) if pm is not None and not pm.empty else None
+        p  = _f(pm["P&L (%)"].iloc[0]) if pm is not None and not pm.empty else None
+
+        mechanical = [it for it in group if it.get("kind") in _MECHANICAL_KINDS]
+        if mechanical:
+            # Mechanical wins. Highest priority (critical before high), and if
+            # tied, stop_breach before sell_signal.
+            mechanical.sort(key=lambda x: (
+                _pri_rank.get(x["priority"], 9),
+                0 if x.get("kind") == "stop_breach" else 1,
+            ))
+            primary = dict(mechanical[0])
+            primary["weight"]  = w if w is not None else primary.get("weight")
+            primary["pnl_pct"] = p if p is not None else primary.get("pnl_pct")
+            consolidated.append(primary)
+            continue
+
+        # No mechanical exit — merge softer advisories into one card.
+        group.sort(key=lambda x: _pri_rank.get(x["priority"], 9))
+        primary = dict(group[0])
+        # Gather all risk flags across the group (could be multiple recs).
+        all_flags: list[dict] = []
+        for it in group:
+            all_flags.extend(it.get("risk_flags", []) or [])
+        if all_flags:
+            primary["risk_flags"] = all_flags
+            # If the primary is a risk card, reflect the flag count in the header.
+            if primary.get("kind") == "risk" and len(all_flags) > 1:
+                primary["action"] = f"RISK — {len(all_flags)} flags on {ticker}"
+        primary["weight"]  = w if w is not None else primary.get("weight")
+        primary["pnl_pct"] = p if p is not None else primary.get("pnl_pct")
+        consolidated.append(primary)
+
+    # Back-compat: synthesize a flat `reason` string on every item from the
+    # structured fields. Older consumers (quick_research _portfolio_bullet,
+    # premarket movers tooltip) read item["reason"] directly — keep it
+    # populated so they don't KeyError on the new structured shape.
+    def _synth_reason(it: dict) -> str:
+        if it.get("reason"):
+            return it["reason"]
+        parts = []
+        if it.get("directive"):
+            parts.append(it["directive"])
+        elif it.get("risk_flags"):
+            parts.append(" ".join(f.get("recommendation", "") for f in it["risk_flags"]))
+        if it.get("why"):
+            parts.append(it["why"])
+        return " ".join(p for p in parts if p).strip()
+
+    out = passthrough + consolidated
+    for it in out:
+        it["reason"] = _synth_reason(it)
+
+    # Critical first, then by weight desc (None weights last).
+    out.sort(key=lambda x: (
+        0 if x["priority"] == "critical" else 1,
+        -(x.get("weight") or 0),
+    ))
+    return out
 
 
 # ── Buy Candidates ─────────────────────────────────────────────────────────────

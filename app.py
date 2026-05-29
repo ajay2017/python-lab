@@ -2940,6 +2940,47 @@ if page == "🏠 Home":
                         f" · P&L {_db_item['pnl_pct']:+.1f}%"
                         if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
                     )
+                    # Body: structured ACT/Why/Trigger when present (matches
+                    # Review Before Close); falls back to legacy reason / risk
+                    # flags for older item shapes.
+                    _db_directive = _db_item.get("directive", "")
+                    _db_why       = _db_item.get("why", "")
+                    _db_trigger   = _db_item.get("trigger", "")
+                    _db_flags     = _db_item.get("risk_flags", []) or []
+                    _act_color    = "#ef4444" if _db_is_crit else "#fbbf24"
+
+                    _body = ""
+                    if _db_directive:
+                        _body += (
+                            f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
+                            f"<span style='color:{_act_color};font-weight:700'>→ ACT:</span> "
+                            f"<span style='color:#f1f5f9'>{_db_directive}</span></div>"
+                        )
+                    if _db_why:
+                        _body += (
+                            f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                            f"<b>Why:</b> {_db_why}</div>"
+                        )
+                    if _db_trigger:
+                        _body += (
+                            f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                            f"<b>Trigger:</b> {_db_trigger}</div>"
+                        )
+                    # Risk flags: one sub-block per flag (consolidated multi-risk).
+                    for _flag in _db_flags:
+                        _body += (
+                            f"<div style='color:#e7e5e4;font-size:0.81em;margin-top:6px;"
+                            f"border-left:2px solid #f59e0b;padding-left:8px'>"
+                            f"<span style='color:#fbbf24;font-weight:600'>{_flag.get('title','Risk')}</span><br>"
+                            f"<span style='color:#d1d5db'>{_flag.get('recommendation','')}</span></div>"
+                        )
+                    # Back-compat: anything without the new fields still shows reason.
+                    if not _body and _db_item.get("reason"):
+                        _body = (
+                            f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>"
+                            f"{_db_item['reason']}</div>"
+                        )
+
                     st.markdown(
                         f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
                         f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -2948,8 +2989,8 @@ if page == "🏠 Home":
                         + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
                         + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
                         f"</div>"
-                        f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_item['reason']}</div>"
-                        f"</div>",
+                        + _body
+                        + f"</div>",
                         unsafe_allow_html=True,
                     )
                     if _db_ticker:
