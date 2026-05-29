@@ -384,7 +384,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 composites: dict | None = None,
                 risk_recs: list | None = None,
                 earnings_lookup: dict | None = None,
-                macro_events: list | None = None) -> dict:
+                macro_events: list | None = None,
+                movers: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -484,39 +485,81 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     max_picks   = 3  if tone == "bull" else 1
 
     new_picks: list[dict] = []
+    _confirmed_picks: list[dict] = []
+    _unverified_picks: list[dict] = []
+    macro_blocked_picks: list[dict] = []
+    composite_skipped:  list[dict] = []
+    # Picks where the composite fetch FAILED (load_all raised / not in cache).
+    # Distinct from composite_skipped (where composite loaded but < BUY).
+    # Kept out of new_picks entirely so we never surface a half-validated
+    # recommendation; the Brief renders an aggregate banner with a Refresh
+    # button so the user can retry the data load.
+    composite_unavailable: list[dict] = []
+
+    # Build ONE candidate pool from two sources so the user sees a single
+    # "New Positions to Initiate" list regardless of where a ticker came from:
+    #   (a) curated scanner picks — qualify on momentum Score ≥ min_score
+    #   (b) movers — qualify on today's 1-day gain (applied upstream in
+    #       scan_movers); NOT momentum-gated, since a fresh breakout may not
+    #       show in 1M/3M momentum yet.
+    # Both then face the SAME gates below (act-today block, macro suppression,
+    # cross-ref verdict, composite ≥ BUY, sector diversity) and compete for the
+    # SAME max_picks cap. This is what stops the flat-day contradiction where
+    # the main section said "no new entries" while a separate Movers section
+    # listed four. Movers are a SOURCE of candidates, not a parallel pipeline.
+    def _sector_bonus(sector: str) -> int:
+        return 5 if any(ls.get("sector", "") in str(sector) for ls in lead_secs) else 0
+
+    candidate_rows: list[dict] = []
     if scanner_results is not None and not scanner_results.empty:
-        candidates = scanner_results[
+        _curated = scanner_results[
             (scanner_results["Score"] >= min_score) &
             (~scanner_results["Ticker"].isin(held_tickers))
-        ].copy()
+        ]
+        for _, r in _curated.iterrows():
+            d = dict(r)
+            d["_rank"]       = _f(d.get("Score", 0)) + _sector_bonus(d.get("Sector", ""))
+            d["_is_mover"]   = False
+            d["_day_change"] = None
+            candidate_rows.append(d)
 
-        # Bonus sort key: sector leader gets +5 to score for ranking
-        def _rank_score(row):
-            sector_bonus = 5 if any(ls.get("sector","") in str(row.get("Sector",""))
-                                    for ls in lead_secs) else 0
-            return _f(row.get("Score", 0)) + sector_bonus
+    _seen_ct = {str(d.get("Ticker", "")).upper() for d in candidate_rows}
+    for m in (movers or []):
+        mt = str(m.get("ticker", "")).upper()
+        if not mt or mt in held_tickers or mt in _seen_ct:
+            continue
+        _sector = str(m.get("sector", ""))
+        candidate_rows.append({
+            "Ticker":       mt,
+            "Price":        _f(m.get("price")),
+            "Sector":       _sector,
+            "Trend":        str(m.get("trend", "")),
+            "Signal":       str(m.get("scanner_signal", "")),
+            "Score":        _f(m.get("score")),          # momentum (may be modest)
+            "RSI":          _f(m.get("rsi", 50)),
+            "1M Momentum":  _f(m.get("mom_1m", 0)),
+            "3M Momentum":  _f(m.get("mom_3m", 0)),
+            # Rank movers by composite (their quality signal) + sector bonus so
+            # they sort sensibly against momentum-ranked curated picks.
+            "_rank":        _f(m.get("composite_score")) + _sector_bonus(_sector),
+            "_is_mover":    True,
+            "_day_change":  _f(m.get("day_change")),
+        })
+        _seen_ct.add(mt)
 
-        candidates["_rank"] = candidates.apply(_rank_score, axis=1)
-        # Wider pool so sector-diversity filtering has enough candidates to draw from
-        candidates = candidates.sort_values("_rank", ascending=False).head(max_picks * 4)
+    if candidate_rows:
+        # Wider pool so sector-diversity filtering has enough to draw from.
+        candidate_rows.sort(key=lambda d: d.get("_rank", 0), reverse=True)
+        candidate_rows = candidate_rows[: max_picks * 4]
 
-        _confirmed_picks: list[dict] = []
-        _unverified_picks: list[dict] = []
-        macro_blocked_picks: list[dict] = []
-        composite_skipped:  list[dict] = []
-        # Picks where the composite fetch FAILED (load_all raised / not in cache).
-        # Distinct from composite_skipped (where composite loaded but < BUY).
-        # Kept out of new_picks entirely so we never surface a half-validated
-        # recommendation; the Brief renders an aggregate banner with a Refresh
-        # button so the user can retry the data load.
-        composite_unavailable: list[dict] = []
-
-        for _, row in candidates.iterrows():
+        for row in candidate_rows:
             ticker   = str(row["Ticker"])
             price    = _f(row.get("Price", 0))
             sector   = str(row.get("Sector", ""))
             trend    = str(row.get("Trend", ""))
             is_leader = any(ls.get("sector","") in sector for ls in lead_secs)
+            is_mover  = bool(row.get("_is_mover"))
+            day_change = row.get("_day_change")
 
             # Skip if Act Today already has an action on this ticker
             if ticker in _act_blocked:
@@ -538,7 +581,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 })
                 continue
 
-            xref = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
+            xref = _cross_reference(ticker, row, port_df, news_items, held_data, today,
                                     earnings_lookup=earnings_lookup, composites=composites)
 
             # Skip hard conflicts; on flat days skip anything but confirmed/unverified
@@ -548,7 +591,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 continue
 
             sizing = _suggest_size(price, trend, portfolio_value) if price > 0 and portfolio_value > 0 else {}
-            thesis = _thesis(ticker, row.to_dict(), is_leader)
+            _base_thesis = _thesis(ticker, row, is_leader)
+            # Movers lead with today's move (their entry trigger), then the
+            # standard trend/momentum thesis.
+            thesis = (
+                f"Up {day_change:+.1f}% today — breakout outside your core universe. {_base_thesis}"
+                if is_mover and day_change is not None else _base_thesis
+            )
 
             # Validate conviction using full composite score when available.
             # Scanner score measures momentum only; composite includes fundamentals
@@ -616,6 +665,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "trend":           trend,
                 "scanner_signal":  str(row.get("Signal", "")),
                 "is_leader":       is_leader,
+                "is_mover":        is_mover,
+                "day_change":      day_change,
                 "thesis":          thesis,
                 "sizing":          sizing,
                 "xref":            xref,
@@ -1440,6 +1491,7 @@ def build_daily_briefing(
     today:           date,
     market_context:  dict | None = None,
     grow_composites: dict | None = None,
+    movers:          list | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -1473,5 +1525,6 @@ def build_daily_briefing(
                           portfolio_value=portfolio_value)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
-                         earnings_lookup=earnings_lookup, macro_events=macro_events)
+                         earnings_lookup=earnings_lookup, macro_events=macro_events,
+                         movers=movers)
     return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}

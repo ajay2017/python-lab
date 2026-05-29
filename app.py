@@ -1423,14 +1423,19 @@ if page == "🏠 Home":
         }
 
         # ── Movers discovery ────────────────────────────────────────────────
-        # Surface big 1-day gainers from the broad discovery universe that are
-        # NOT in the curated SECTOR_UNIVERSE / held / watchlist (those are
-        # already scanned). Composite-gate the shortlist so only quality
-        # breakouts surface — a 10% pop with no fundamentals/sentiment behind
-        # it gets rejected the same way INTC was. Piggybacks on the
-        # scanner-run state so the ~200-ticker download only happens once the
-        # user has asked for signals, not on a cold Home load.
-        _movers_picks: list[dict] = []
+        # Scan the broad discovery universe for big 1-day gainers NOT already
+        # in the curated SECTOR_UNIVERSE / held / watchlist, then feed them as
+        # ADDITIONAL CANDIDATES into the same Grow Today pipeline (not a
+        # separate section). Their load_all bundles are added to grow_composites
+        # so _grow_today's composite gate validates them exactly like curated
+        # picks; from there they face the same macro / sector / tone / cap
+        # gates and compete for the same slots. This is what keeps the brief
+        # internally consistent — no "flat market, no new entries" message
+        # sitting above a list of mover entries.
+        #
+        # Piggybacks on the scanner-run state so the ~200-ticker download only
+        # happens once the user has asked for signals, not on a cold Home load.
+        _movers_candidates: list[dict] = []
         try:
             _mv_exclude = (
                 set().union(*SECTOR_UNIVERSE.values())
@@ -1445,31 +1450,32 @@ if page == "🏠 Home":
                         _mb = load_all(_mt)
                     except Exception:
                         continue
+                    # Add the bundle to grow_composites so _grow_today's
+                    # composite gate finds it (same path as curated picks).
+                    _grow_composites[_mt] = _mb
                     try:
                         _mcomp = float(_mb.get("total"))
                     except (TypeError, ValueError):
-                        continue
-                    if _mcomp < COMPOSITE_BUY:
-                        continue   # composite gate — discovery noise filter
-                    _mprice = _mb.get("current_price")
-                    _mstop  = _mb.get("stop")
-                    _msize  = (
-                        position_sizing(total_val, MODERATE_RISK_PCT, _mprice, _mstop)
-                        if _mprice and _mstop and _mprice > _mstop else None
-                    )
-                    _movers_picks.append({
+                        _mcomp = None
+                    _movers_candidates.append({
                         "ticker":          _mt,
-                        "day_change":      float(_mrow.get("Day Change %", 0)),
+                        "price":           _mb.get("current_price"),
+                        "sector":          _mb.get("sector", "") or "Other",
+                        "trend":           str(_mrow.get("Trend", "")),
+                        "scanner_signal":  str(_mrow.get("Signal", "")),
+                        "score":           float(_mrow.get("Score", 0)),       # momentum
+                        "rsi":             float(_mrow.get("RSI", 50)),
+                        "mom_1m":          float(_mrow.get("1M Momentum", 0)),
+                        "mom_3m":          float(_mrow.get("3M Momentum", 0)),
                         "composite_score": _mcomp,
                         "composite_label": str((_mb.get("rec") or {}).get("label", "")),
-                        "sector":          _mb.get("sector", "") or "—",
-                        "price":           _mprice,
-                        "stop":            _mstop,
-                        "sizing":          _msize,
+                        "day_change":      float(_mrow.get("Day Change %", 0)),
                     })
-            st.session_state["_movers_picks"] = _movers_picks
+                # Re-publish grow_composites now that mover bundles are merged in.
+                st.session_state._grow_composites = _grow_composites
+            st.session_state["_movers_candidates"] = _movers_candidates
         except Exception:
-            st.session_state["_movers_picks"] = []
+            st.session_state["_movers_candidates"] = []
 
     # Build Daily Briefing (synthesises all intelligence — computed once before tabs).
     #
@@ -1507,6 +1513,7 @@ if page == "🏠 Home":
                 today           = _today_et(),
                 market_context  = _market_context,
                 grow_composites = st.session_state.get("_grow_composites", {}),
+                movers          = st.session_state.get("_movers_candidates", []),
             )
             # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
             # the Brief header so the user can see how fresh the data is.
@@ -2790,6 +2797,18 @@ if page == "🏠 Home":
                     if _comp_lbl:
                         _score_line += f" ({_comp_lbl})"
 
+                # Mover badge: this candidate entered via today's 1-day breakout
+                # (from the broad discovery universe) rather than the curated
+                # scanner. Same list, same gates — the badge just shows the
+                # entry trigger so the user knows it's a fresh breakout.
+                _mover_badge = ""
+                if _gp.get("is_mover") and _gp.get("day_change") is not None:
+                    _mover_badge = (
+                        f"<span style='background:#052e16;border:1px solid #22c55e;color:#4ade80;"
+                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>"
+                        f"🔥 +{_gp['day_change']:.1f}% today</span>"
+                    )
+
                 st.markdown(
                     f"<div style='background:#111827;border-left:3px solid {_vc};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -2798,8 +2817,9 @@ if page == "🏠 Home":
                     f"<span style='color:#9ca3af;font-size:0.8em'>{_score_line} · {_gp['sector']}"
                     + (f" 🔥" if _gp.get("is_leader") else "")
                     + f"</span>"
+                    + _mover_badge
                     # Cross-reference verdict badge
-                    f"<span style='background:{_vc}22;border:1px solid {_vc};color:{_vc};"
+                    + f"<span style='background:{_vc}22;border:1px solid {_vc};color:{_vc};"
                     f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_vl}</span>"
                     # Conviction badge (composite-driven)
                     f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
@@ -2977,56 +2997,6 @@ if page == "🏠 Home":
 
         with _db_col_left:
             _render_grow_today(_db_grow, _db_tone)
-
-            # ── Movers — breakouts outside your tracked universe ────────────
-            _movers = st.session_state.get("_movers_picks", []) or []
-            if _movers:
-                st.markdown(
-                    "<div style='background:#1a1005;border-left:4px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin:10px 0 6px'>"
-                    f"<span style='font-size:0.95em;font-weight:700;color:#f9fafb'>"
-                    f"🔥 Movers ({len(_movers)})</span>"
-                    "<span style='color:#fcd34d;font-size:0.78em;margin-left:8px'>"
-                    "big 1-day gainers outside your tracked universe · composite-verified</span>"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-                for _mp in _movers:
-                    _m_comp = _mp.get("composite_score")
-                    _m_lbl  = _mp.get("composite_label", "")
-                    _m_sz   = _mp.get("sizing") or {}
-                    _m_size_line = ""
-                    if _m_sz:
-                        _m_size_line = (
-                            f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
-                            f"📐 Suggested: {_m_sz.get('shares',0)} shares "
-                            f"(~${_m_sz.get('total_cost',0):,.0f}) · "
-                            f"Stop ${_mp.get('stop',0):.2f}</div>"
-                        )
-                    st.markdown(
-                        f"<div style='background:#111827;border-left:3px solid #f59e0b;"
-                        f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                        f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                        f"<span style='color:#f9fafb;font-weight:700'>{_mp['ticker']}</span>"
-                        f"<span style='background:#052e16;border:1px solid #22c55e;color:#4ade80;"
-                        f"padding:1px 8px;border-radius:10px;font-size:0.76em;font-weight:700'>"
-                        f"▲ {_mp.get('day_change',0):+.1f}% today</span>"
-                        f"<span style='color:#9ca3af;font-size:0.8em'>"
-                        f"Composite {_m_comp:.0f}/100"
-                        + (f" ({_m_lbl})" if _m_lbl else "")
-                        + f" · {_mp.get('sector','—')}</span>"
-                        f"</div>"
-                        f"<div style='color:#d1d5db;font-size:0.81em;margin-top:5px'>"
-                        f"→ Breakout outside your tracked universe — cleared the composite "
-                        f"gate ({COMPOSITE_BUY:.0f}+). Run Analysis before acting.</div>"
-                        + _m_size_line
-                        + f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                    if st.button(f"▶ Analyze {_mp['ticker']}", key=f"_db_mover_{_mp['ticker']}"):
-                        st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _mp["ticker"]
-                        st.rerun()
 
         with _db_col_right:
             _db_c1_label  = f"🔴 Act Today ({len(_db_act)})" if _db_act else "🟢 Act Today — All Clear"
