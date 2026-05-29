@@ -41,6 +41,14 @@ from stock_analyzer.constants import (
     NEWS_SENTIMENT_NEGATIVE,
     NEWS_SENTIMENT_WARN,
     NEWS_SENTIMENT_POSITIVE,
+    STOP_PROFIT_LOCK_PNL_PCT,
+    STOP_PROFIT_LOCK_TRIM_PCT,
+    STOP_TIGHTEN_ATR_MULT,
+    EARNINGS_OVERWEIGHT_TRIM_PCT,
+    EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
+    WEAK_LARGE_TRIM_TO_PCT,
+    MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
+    MACRO_AFFECTED_TRIM_REDUCTION_PP,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -970,30 +978,84 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 
 # ── Review Before Close ────────────────────────────────────────────────────────
 
-def _review_list(port_df, news_items, macro_events, held_data, today) -> list[dict]:
+def _review_list(port_df, news_items, macro_events, held_data, today,
+                 portfolio_value: float = 0.0) -> list[dict]:
+    """
+    Build the Review Before Close list.
+
+    Each item carries:
+      headline — one-line description of the trigger
+      action   — structured directive dict (type + quantitative fields)
+      why      — 1-line rationale (refs numbers from the trigger)
+      trigger  — what condition tomorrow escalates this to ACT
+
+    The renderer (app.py) formats action into a display string and, for
+    weak-large items, appends "reallocate to" alternatives sourced from
+    the brief's new_picks / add_positions (two complementary buckets).
+
+    portfolio_value is required to compute dollar amounts for trim
+    directives; passed in by build_daily_briefing.
+    """
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
-    from stock_analyzer.macro_calendar import HIGH as MC_HIGH
+    from stock_analyzer.macro_calendar import HIGH as MC_HIGH, affected_sectors as _aff_sectors
 
     # 1 — Approaching stop (0–8% gap)
+    # Action policy:
+    #   - If gap critical (<3%) AND P&L < profit-lock threshold: just tighten stop.
+    #   - If gap critical AND P&L ≥ profit-lock threshold: trim partial AND tighten.
+    #   - If gap 3-8%: tighten stop only (still room to run).
+    # New stop = price − STOP_TIGHTEN_ATR_MULT × ATR.
     for _, row in port_df.iterrows():
         gap = _f(row.get("Gap to Stop (%)"), None)
         if gap is None:
             continue
-        if 0 < gap <= APPROACHING_STOP_GAP_PCT:
-            items.append({
-                "priority": "medium" if gap > 3 else "low",
-                "icon":     "📍",
-                "ticker":   row["Ticker"],
-                "reason":   (
-                    f"Only **{gap:.1f}%** above {row.get('Stop Type','ATR')} stop "
-                    f"(${_f(row.get('Stop')):.2f}). P&L {_f(row.get('P&L (%)')):+.1f}%. "
-                    "Tighten stop or plan exit if level breaks."
-                ),
-                "weight": _f(row.get("Weight (%)")),
-            })
+        if not (0 < gap <= APPROACHING_STOP_GAP_PCT):
+            continue
+        ticker = str(row["Ticker"])
+        price  = _f(row.get("Price"))
+        shares = int(_f(row.get("Shares")))
+        pnl_pct = _f(row.get("P&L (%)"))
+        weight  = _f(row.get("Weight (%)"))
+        atr_val = _f((held_data or {}).get(ticker, {}).get("atr")) if held_data else 0.0
+        new_stop = round(price - STOP_TIGHTEN_ATR_MULT * atr_val, 2) if (price and atr_val) else None
+        is_critical = gap <= 3.0
+        lock_profits = pnl_pct >= STOP_PROFIT_LOCK_PNL_PCT
+        if is_critical and lock_profits:
+            trim_shares = max(1, int(round(shares * STOP_PROFIT_LOCK_TRIM_PCT / 100)))
+            trim_dollars = round(trim_shares * price, 0)
+            action = {
+                "type":         "TRIM_AND_TIGHTEN",
+                "trim_shares":  trim_shares,
+                "trim_dollars": trim_dollars,
+                "trim_pct":     STOP_PROFIT_LOCK_TRIM_PCT,
+                "new_stop":     new_stop,
+            }
+            why = (
+                f"Gap critical ({gap:.1f}% < 3%) and P&L +{pnl_pct:.1f}% above "
+                f"{STOP_PROFIT_LOCK_PNL_PCT:.0f}% — lock part of the gain, tighten stop on the rest."
+            )
+        else:
+            action = {"type": "TIGHTEN_ONLY", "new_stop": new_stop}
+            why = (
+                f"Gap {gap:.1f}% above stop; P&L {pnl_pct:+.1f}%. "
+                "Tighten stop to protect downside; position still has room."
+            )
+        items.append({
+            "priority": "medium" if is_critical else "low",
+            "icon":     "📍",
+            "ticker":   ticker,
+            "headline": f"gap {gap:.1f}% above {row.get('Stop Type','ATR')} stop, P&L {pnl_pct:+.1f}%",
+            "action":   action,
+            "why":      why,
+            "trigger":  "Stop break = full exit next open.",
+            "weight":   weight,
+        })
 
     # 2 — Earnings within 7 days
+    # Action policy:
+    #   - Weight > EARNINGS_OVERWEIGHT_TRIM_PCT (12%) → trim to TRIM_TO_PCT (10%).
+    #   - Weight ≤ threshold → WATCH; sizing already conservative for the binary risk.
     seen_earn: set = set()
     for ticker, data in (held_data or {}).items():
         earn_date = (data or {}).get("earnings")
@@ -1003,56 +1065,128 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
         if days is None or not (0 <= days <= 7):
             continue
         seen_earn.add(ticker)
-        pm     = port_df[port_df["Ticker"] == ticker]
-        weight = _f(pm["Weight (%)"].iloc[0]) if not pm.empty else 0
+        pm = port_df[port_df["Ticker"] == ticker]
+        if pm.empty:
+            continue
+        weight = _f(pm["Weight (%)"].iloc[0])
+        shares = int(_f(pm["Shares"].iloc[0]))
+        price  = _f(pm["Price"].iloc[0])
         label  = "TODAY" if days == 0 else f"in {days}d"
+        if weight > EARNINGS_OVERWEIGHT_TRIM_PCT and portfolio_value > 0:
+            target_value = portfolio_value * (EARNINGS_OVERWEIGHT_TRIM_TO_PCT / 100)
+            current_value = portfolio_value * (weight / 100)
+            trim_dollars = round(current_value - target_value, 0)
+            trim_shares  = max(1, int(round(trim_dollars / price))) if price > 0 else 0
+            action = {
+                "type":           "TRIM_TO_TARGET",
+                "trim_shares":    trim_shares,
+                "trim_dollars":   trim_dollars,
+                "from_weight":    weight,
+                "target_weight":  EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
+                "reason_key":     "earnings",
+            }
+            why = (
+                f"Weight {weight:.1f}% × binary earnings risk above the "
+                f"{EARNINGS_OVERWEIGHT_TRIM_PCT:.0f}% overweight threshold. "
+                "Trim to size-down the binary event exposure."
+            )
+            trigger = "Beat → re-enter post-print if composite holds; Miss → existing stop protects rest."
+        else:
+            action = {"type": "WATCH"}
+            why = (
+                f"Weight {weight:.1f}% within tolerance "
+                f"(≤ {EARNINGS_OVERWEIGHT_TRIM_PCT:.0f}% overweight threshold). "
+                "Existing sizing already conservative for the binary risk."
+            )
+            trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
         items.append({
             "priority": "medium" if days <= 3 else "low",
             "icon":     "📅",
             "ticker":   ticker,
-            "reason":   (
-                f"Earnings **{label}** ({earn_date}). Weight {weight:.1f}%. "
-                "Consider sizing down before event or confirm thesis."
-            ),
-            "weight": weight,
+            "headline": f"earnings {label} ({earn_date}), weight {weight:.1f}%",
+            "action":   action,
+            "why":      why,
+            "trigger":  trigger,
+            "weight":   weight,
         })
 
-    # 3 — Weak large positions (weight ≥ 10%, Score < 55)
+    # 3 — Weak large positions (weight ≥ LARGE_POSITION_WEIGHT_PCT, Score < WEAK_CONVICTION_SCORE)
+    # Action: trim to WEAK_LARGE_TRIM_TO_PCT (below re-flag threshold).
+    # Alternatives are wired in by the renderer (app.py has access to new_picks/add_positions).
     for _, row in port_df.iterrows():
-        if (_f(row.get("Weight (%)")) >= LARGE_POSITION_WEIGHT_PCT
-                and _f(row.get("Score")) < WEAK_CONVICTION_SCORE):
-            items.append({
-                "priority": "medium",
-                "icon":     "🔍",
-                "ticker":   row["Ticker"],
-                "reason":   (
-                    f"Large position ({_f(row.get('Weight (%)')):+.1f}% of portfolio) "
-                    f"but weak conviction score {_f(row.get('Score')):.0f}/100. "
-                    "Reassess or trim to free capital for higher-conviction names."
-                ),
-                "weight": _f(row.get("Weight (%)")),
-            })
+        weight = _f(row.get("Weight (%)"))
+        score  = _f(row.get("Score"))
+        if not (weight >= LARGE_POSITION_WEIGHT_PCT and score < WEAK_CONVICTION_SCORE):
+            continue
+        ticker = str(row["Ticker"])
+        shares = int(_f(row.get("Shares")))
+        price  = _f(row.get("Price"))
+        if portfolio_value > 0 and price > 0:
+            target_value = portfolio_value * (WEAK_LARGE_TRIM_TO_PCT / 100)
+            current_value = portfolio_value * (weight / 100)
+            trim_dollars = round(current_value - target_value, 0)
+            trim_shares  = max(1, int(round(trim_dollars / price)))
+        else:
+            trim_dollars, trim_shares = 0, 0
+        items.append({
+            "priority": "medium",
+            "icon":     "🔍",
+            "ticker":   ticker,
+            "headline": f"largest weak holding — {weight:.1f}% weight, score {score:.0f}/100",
+            "action":   {
+                "type":          "TRIM_TO_TARGET",
+                "trim_shares":   trim_shares,
+                "trim_dollars":  trim_dollars,
+                "from_weight":   weight,
+                "target_weight": WEAK_LARGE_TRIM_TO_PCT,
+                "reason_key":    "weak_large",
+            },
+            "why": (
+                f"Weight {weight:.1f}% ≥ {LARGE_POSITION_WEIGHT_PCT:.0f}% AND score "
+                f"{score:.0f} < {WEAK_CONVICTION_SCORE} — largest position with weakest "
+                "conviction. Free capital for higher-conviction names."
+            ),
+            "trigger": "Already flagged — act before close, don't wait.",
+            "weight":  weight,
+        })
 
-    # 4 — Warning news on held positions (compound ≤ -0.05, not critical-level)
+    # 4 — Warning news on held positions (NEWS_SENTIMENT_CRITICAL < compound ≤ NEWS_SENTIMENT_WARN)
+    # Always WATCH — one negative headline below critical threshold doesn't warrant a
+    # quantitative action. Trigger condition tells the user what would escalate.
     warned: set = set()
     for item in (news_items or []):
         ticker = str(item.get("ticker", "")).upper()
+        sent   = item.get("compound", 0)
         if (ticker in held_tickers
-                and NEWS_SENTIMENT_CRITICAL < item.get("compound", 0) <= NEWS_SENTIMENT_WARN
+                and NEWS_SENTIMENT_CRITICAL < sent <= NEWS_SENTIMENT_WARN
                 and ticker not in warned):
             warned.add(ticker)
+            headline_text = item.get("headline", "news")[:80]
             items.append({
                 "priority": "low",
                 "icon":     "📰",
                 "ticker":   ticker,
-                "reason":   (
-                    f"Negative headline: \"{item.get('headline','news')[:70]}\" "
-                    f"(sentiment {item.get('compound',0):+.2f}). Monitor for confirmation."
+                "headline": f"negative headline (sentiment {sent:+.2f}): \"{headline_text}\"",
+                "action":   {"type": "WATCH"},
+                "why":      (
+                    f"One negative headline (sentiment {sent:+.2f}), below the "
+                    f"critical threshold ({NEWS_SENTIMENT_CRITICAL:+.2f}). Insufficient "
+                    "signal alone — wait for confirmation."
                 ),
-                "weight": 0,
+                "trigger":  (
+                    f"Second negative headline OR sentiment drops below {NEWS_SENTIMENT_CRITICAL:+.2f} "
+                    "→ tighten stop on this position."
+                ),
+                "weight":   0,
             })
 
     # 5 — Upcoming macro events (1–3 days)
+    # Action policy:
+    #   - Compute user's exposure to affected sectors from port_df.
+    #   - If exposure > MACRO_AFFECTED_TRIM_THRESHOLD_PCT → recommend trimming
+    #     the lowest-conviction holding in the affected sectors by
+    #     MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio.
+    #   - Else → WATCH (exposure within tolerance).
     for ev in (macro_events or []):
         ev_date = ev.get("date")
         if not ev_date or ev.get("impact") != MC_HIGH:
@@ -1060,16 +1194,78 @@ def _review_list(port_df, news_items, macro_events, held_data, today) -> list[di
         days = _days_until(ev_date, today)
         if days is None or not (1 <= days <= 3):
             continue
+
+        # Compute user's exposure to the event's affected sectors.
+        ev_affected_sectors = set(_aff_sectors(ev.get("category", "")))
+        if "__ALL__" in ev_affected_sectors:
+            # Event affects everything — exposure check is "all your equity."
+            exposure_pct = 100.0
+            sector_rows  = port_df.copy()
+        else:
+            sector_rows  = port_df[port_df["Sector"].isin(ev_affected_sectors)] if not port_df.empty else port_df
+            exposure_pct = _f(sector_rows["Weight (%)"].sum()) if not sector_rows.empty else 0.0
+
+        affected_tickers_str = ", ".join(ev.get("affected_tickers", [])[:4]) or "macro-sensitive"
+        playbook = ev.get("playbook_note") or ""
+
+        if exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not sector_rows.empty and portfolio_value > 0:
+            # Find lowest-conviction-score holding in the affected sectors.
+            weakest = sector_rows.sort_values("Score", ascending=True).iloc[0]
+            weak_ticker = str(weakest["Ticker"])
+            weak_score  = _f(weakest["Score"])
+            weak_weight = _f(weakest["Weight (%)"])
+            weak_price  = _f(weakest["Price"])
+            # Trim by MACRO_AFFECTED_TRIM_REDUCTION_PP percentage points of portfolio
+            # — but cap at the position's own weight so we don't try to trim more
+            # than the position holds.
+            reduction_pp = min(MACRO_AFFECTED_TRIM_REDUCTION_PP, weak_weight)
+            trim_dollars = round(portfolio_value * (reduction_pp / 100), 0)
+            trim_shares  = max(1, int(round(trim_dollars / weak_price))) if weak_price > 0 else 0
+            new_exposure = max(0.0, exposure_pct - reduction_pp)
+            action = {
+                "type":           "PROTECTIVE_TRIM",
+                "trim_ticker":    weak_ticker,
+                "trim_shares":    trim_shares,
+                "trim_dollars":   trim_dollars,
+                "from_exposure":  exposure_pct,
+                "to_exposure":    new_exposure,
+                "reduction_pp":   reduction_pp,
+                "weakest_score":  weak_score,
+            }
+            why = (
+                f"Affected-sector exposure {exposure_pct:.1f}% > "
+                f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold. "
+                f"Trimming weakest holding first preserves higher-conviction names."
+            )
+        else:
+            action = {
+                "type":          "WATCH",
+                "from_exposure": exposure_pct,
+                "threshold":     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
+            }
+            why = (
+                f"Affected-sector exposure {exposure_pct:.1f}% ≤ "
+                f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold — within tolerance, "
+                "no pre-event trim warranted."
+            )
+
         items.append({
             "priority": "low",
             "icon":     "🌐",
             "ticker":   None,
-            "reason":   (
-                f"**{ev.get('event')}** in {days}d ({ev_date}). "
-                f"Affected: {', '.join(ev.get('affected_tickers',[])[:4]) or 'macro-sensitive'}. "
-                f"{ev.get('playbook_note','') or 'Review playbook before event.'}"
+            "event":    ev.get("event", "Macro event"),
+            "headline": (
+                f"{ev.get('event','Macro event')} in {days}d ({ev_date}) · "
+                f"affected: {affected_tickers_str}"
             ),
-            "weight": None,
+            "action":   action,
+            "why":      why,
+            "trigger":  (
+                playbook
+                if playbook
+                else f"Hawkish surprise → existing stops protect; dovish surprise → reconsider add."
+            ),
+            "weight":   None,
         })
 
     pri_order = {"medium": 0, "low": 1}
@@ -1120,7 +1316,8 @@ def build_daily_briefing(
                              act_today=act, risk_recs=risk_recs,
                              earnings_lookup=earnings_lookup,
                              composites=grow_composites or {})
-    review = _review_list(port_df, news_items, macro_events, held_data, today)
+    review = _review_list(port_df, news_items, macro_events, held_data, today,
+                          portfolio_value=portfolio_value)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events)

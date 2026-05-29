@@ -3001,19 +3001,113 @@ if page == "🏠 Home":
                     return None
                 return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
 
+            # Format a structured action dict into (color, label, text) so each
+            # item renders the directive directly instead of a "consider X" prose.
+            def _fmt_action(action: dict) -> tuple[str, str, str]:
+                t = (action or {}).get("type", "")
+                if t == "WATCH":
+                    return ("#94a3b8", "WATCH",
+                            "no action today — see Trigger below for what would escalate.")
+                if t == "TIGHTEN_ONLY":
+                    ns = action.get("new_stop")
+                    return ("#fbbf24", "ACT",
+                            f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
+                if t == "TRIM_AND_TIGHTEN":
+                    ns = action.get("new_stop")
+                    stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
+                    return ("#22c55e", "ACT",
+                            f"Trim {action['trim_shares']} shares "
+                            f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
+                            f"{stop_str}")
+                if t == "TRIM_TO_TARGET":
+                    return ("#fbbf24", "ACT",
+                            f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
+                            f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
+                if t == "PROTECTIVE_TRIM":
+                    return ("#fbbf24", "ACT",
+                            f"Trim {action['trim_ticker']} (weakest in sector, score "
+                            f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
+                            f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
+                            f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
+                return ("#94a3b8", "—", "—")
+
+            # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
+            # Two complementary sources (primary + backup so both don't fail
+            # together): (1) Grow Today's verified new picks above COMPOSITE_BUY,
+            # (2) Add-to-Winner candidates (existing positions with room).
+            def _alt_targets(skip_ticker: str | None) -> list[str]:
+                _grow_picks = _db_grow.get("new_picks", []) or []
+                _add_picks  = _db_grow.get("add_positions", []) or []
+                _alts: list[tuple[str, float]] = []
+                _seen: set = set()
+                for _p in _grow_picks:
+                    _t = str(_p.get("ticker", "")).upper()
+                    _cs = _p.get("composite_score")
+                    if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
+                        continue
+                    if _cs is None:
+                        continue
+                    _alts.append((_t, _cs))
+                    _seen.add(_t)
+                if len(_alts) < 3:
+                    for _p in _add_picks:
+                        _t = str(_p.get("ticker", "")).upper()
+                        _cs = _p.get("score")
+                        if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
+                            continue
+                        _alts.append((_t, _cs))
+                        _seen.add(_t)
+                        if len(_alts) >= 3:
+                            break
+                _alts.sort(key=lambda x: -(x[1] or 0))
+                return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
+
             for _db_rev in _db_review:
                 _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
                 _db_bg      = "#1c1917"
                 _db_ticker  = _db_rev.get("ticker")
+                _headline   = _db_rev.get("headline", "")
+                _action     = _db_rev.get("action", {}) or {}
+                _why        = _db_rev.get("why", "")
+                _trigger    = _db_rev.get("trigger", "")
+                _act_color, _act_label, _act_text = _fmt_action(_action)
+
+                # Append alternatives only on weak-large TRIM_TO_TARGET items —
+                # this is the case where we're freeing capital and the user
+                # naturally needs to know where to put it.
+                if (_action.get("type") == "TRIM_TO_TARGET"
+                        and _action.get("reason_key") == "weak_large"):
+                    _alts = _alt_targets(_db_ticker)
+                    if _alts:
+                        _act_text += f" Reallocate to: {', '.join(_alts)}."
+                    else:
+                        _act_text += (
+                            " No composite-verified deployment options in today's "
+                            "brief — consider Watchlist or hold cash."
+                        )
+
+                # Title line: icon + ticker (or event name for macro) + headline
+                _title_left = _db_rev["icon"]
+                if _db_ticker:
+                    _title_left += f" <span style='color:#fbbf24'>{_db_ticker}</span>"
+                elif _db_rev.get("event"):
+                    _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
+
                 st.markdown(
                     f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                     f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                    f"{_db_rev['icon']}"
-                    + (f" <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                    f"{_title_left}"
+                    + (f" <span style='color:#a8a29e;font-weight:400'>· {_headline}</span>" if _headline else "")
                     + f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>{_db_rev['reason']}</div>"
-                    f"</div>",
+                    f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
+                    f"<span style='color:{_act_color};font-weight:700'>→ {_act_label}:</span> "
+                    f"<span style='color:#f1f5f9'>{_act_text}</span></div>"
+                    + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                       f"<b>Why:</b> {_why}</div>" if _why else "")
+                    + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                       f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
+                    + f"</div>",
                     unsafe_allow_html=True,
                 )
 

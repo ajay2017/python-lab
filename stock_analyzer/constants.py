@@ -56,6 +56,56 @@ APPROACHING_STOP_GAP_PCT = 8.0   # ≤ this gap = surface for monitoring (same n
 LARGE_POSITION_WEIGHT_PCT = 10.0
 WEAK_CONVICTION_SCORE     = 55
 
+# ── Review Before Close — action targets ────────────────────────────────────
+# Triggers above define WHEN a position lands in Review. The values below
+# define WHAT TO DO once flagged — translating the trigger into a concrete
+# directive (trim X shares, raise stop to $Y, reallocate to Z). Without
+# these, Review Before Close shows only "Consider X / Reassess" prose; with
+# them, every item carries a quantitative action. See CLAUDE.md operating
+# posture: the app decides, it does not inform.
+
+# 📍 Approaching stop — partial profit-lock rule.
+# When the gap to stop has narrowed (≤ APPROACHING_STOP_GAP_PCT) AND P&L is
+# meaningful, recommend a partial trim alongside the stop tighten. A 25%
+# P&L threshold avoids banking too early; a 25% trim preserves conviction
+# in the remaining 75% while removing asymmetric downside.
+STOP_PROFIT_LOCK_PNL_PCT  = 25.0
+STOP_PROFIT_LOCK_TRIM_PCT = 25.0
+# New stop level when tightening = current price − this × ATR.
+# Tighter than the 2.0× used for initial stops because the position is
+# already in the danger zone — less room before next stop-out is warranted.
+STOP_TIGHTEN_ATR_MULT     = 1.5
+
+# 📅 Earnings overweight — trim-down rule.
+# Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
+# expected earnings move would breach the per-trade risk budget; trim down
+# to EARNINGS_OVERWEIGHT_TRIM_TO_PCT (aligned with LARGE_POSITION_WEIGHT_PCT
+# floor — "large but not overweight").
+EARNINGS_OVERWEIGHT_TRIM_PCT    = 12.0
+EARNINGS_OVERWEIGHT_TRIM_TO_PCT = 10.0
+
+# 🔍 Weak large position — trim-down rule.
+# Target is set below the 10% LARGE_POSITION_WEIGHT_PCT re-flag threshold so
+# the position stops appearing in Review next session. Anything lower would
+# be excessive cap-throwing-away on a position you still hold.
+WEAK_LARGE_TRIM_TO_PCT = 8.0
+
+# 🌐 Macro event — protective-trim rule.
+# Pairs with the existing MACRO_EXPOSURE_* tier cutoffs. If sector exposure
+# to an affected sector exceeds MACRO_AFFECTED_TRIM_THRESHOLD_PCT AND a
+# HIGH-impact event is ≤ MACRO_IMMINENT_DAYS away, recommend trimming the
+# lowest-conviction holding in that sector by MACRO_AFFECTED_TRIM_REDUCTION_PP
+# percentage points of portfolio.
+# - Threshold 30% sits 5pp below MACRO_EXPOSURE_HIGH=35; above this the
+#   portfolio is concentrated enough that binary surprises hurt materially.
+# - 5pp reduction matches the long-only retail / RIA pre-event de-risk
+#   magnitude — meaningful but not so large that a dovish surprise costs
+#   the rest of the upside.
+# - "Lowest-conviction first" preserves your high-conviction holdings
+#   ("press winners, cull weaklings") while reducing gross exposure.
+MACRO_AFFECTED_TRIM_THRESHOLD_PCT = 30.0
+MACRO_AFFECTED_TRIM_REDUCTION_PP  = 5.0
+
 # ── Panic-day classifier (Trade Review behavioural lens) ─────────────────────
 # Daily SPY return at or below this = "panic window" — trades executed on
 # such days bucketed for retrospective behavioural analysis.
