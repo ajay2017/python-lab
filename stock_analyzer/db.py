@@ -225,6 +225,20 @@ def save_holdings(df: pd.DataFrame) -> bool:
         else:
             sweep = sweep.neq("ticker", "")
         sweep.execute()
+        # Symmetric sweep on manual_stops — a stop override for a ticker no
+        # longer held is an orphan (the override only applies to active
+        # positions). Wrapped in its own try so a missing manual_stops table
+        # (user hasn't run the one-time DDL yet) doesn't fail the holdings
+        # save that already succeeded.
+        try:
+            ms_sweep = client.table("manual_stops").delete()
+            if kept:
+                ms_sweep = ms_sweep.not_.in_("ticker", kept)
+            else:
+                ms_sweep = ms_sweep.neq("ticker", "")
+            ms_sweep.execute()
+        except Exception:
+            pass
         _ah.record("supabase", "success")
         return True
     except Exception as e:
