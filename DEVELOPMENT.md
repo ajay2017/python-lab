@@ -204,7 +204,11 @@ Pick up tomorrow morning during market validation, then batch.
 
 **Action Log — Phase B/C (queued):** Phase A (manual stop override) shipped. Phase B = in-context Sell/Trim button directly on Review Before Close items (act without leaving the Brief); Phase C = protective-trim variant. See memory `project_action_log_subsystem`.
 
-**Second market-data source (queued — week of 2026-06-01):** the app is 100% dependent on yfinance (unofficial, no SLA) for all market data. Wire in a second independent source to cross-check critical values (start with latest close / current price — drives stops, P&L, movers) so the app can detect and fail loud on poisoned/stale/incorrect data instead of trusting a single feed silently. Design: small data-source abstraction in `data.py` (primary yfinance + secondary); divergence-tolerance threshold in `constants.py` (policy value); candidates Stooq (free, no key, EOD — cheapest first cut) / Finnhub / Twelve Data / FMP / Tiingo. New keys → Streamlit secrets, wrap in retry + `api_health`. Same "data integrity fails loud" principle as the rest of the app, applied at the market-data boundary. See memory `project_second_data_source`.
+**Multi-source market-data layer (queued — week of 2026-06-01; design converged):** the app is 100% dependent on yfinance (unofficial, no SLA) for all market data. Add a failover + cross-check layer so right-data-at-the-right-time is protected.
+- **Goal:** failover (try primary; fall to next on error/empty) + **price-only cross-check** (compare two sources on the price field, fail loud on divergence). NOT full dual-source-everything.
+- **Chain (configurable order, no permanent primary):** `yfinance → Finnhub → FMP`. yfinance primary = free + unquota'd, absorbs 60s price refresh + scanner + movers fan-out. Finnhub = real-time quote cross-check (60/min) + news/earnings failover. FMP = fundamentals/analyst-targets backup (250/day, fine for 30-min-cached loads). **Alpha Vantage rejected** (~25 req/day free tier — re-verify all limits at build time).
+- **Build:** new `stock_analyzer/providers/` (base protocol + yfinance/finnhub/fmp adapters); `data.py` becomes orchestrator keeping the SAME public function signatures (zero change above data.py); route `premarket.py` + `scanner.py` through the layer; provider order + `DATA_XCHECK_TOLERANCE_PCT` in `constants.py` (policy); per-provider events in `api_health`; keys in Streamlit secrets; fail-loud divergence banner.
+- Full converged spec + per-data-type chain table in memory `project_second_data_source`.
 
 ---
 
