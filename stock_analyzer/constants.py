@@ -168,3 +168,34 @@ MACRO_WATCH_LOW_WEIGHT   = 12.0   # min weight gating WATCH-LOW
 MACRO_EXPOSURE_CRITICAL_PCT = 55
 MACRO_EXPOSURE_HIGH_PCT     = 35
 MACRO_EXPOSURE_MEDIUM_PCT   = 15
+
+# ── Multi-source market-data layer (providers/ + data.py orchestrator) ───────
+# The app was historically single-sourced on yfinance (unofficial, no SLA). The
+# provider seam + orchestrator add failover + a price cross-check so right-data-
+# at-the-right-time is protected. See memory `project_second_data_source`.
+
+# Failover chain — the orchestrator tries these IN ORDER per data type, using
+# the first CONFIGURED provider (key present) that advertises the capability and
+# doesn't raise ProviderUnavailable. Order is a setting, not hardcoded: if
+# yfinance reliability degrades, move another provider to the front here with no
+# code change. Names must match DataProvider.name.
+DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub", "fmp"]
+
+# Master switch. When False, data.py behaves EXACTLY as the single-source
+# yfinance code (no failover, no cross-check) — lets the layer ship dormant and
+# be flipped on only once the Finnhub/FMP adapters are validated on live data.
+DATA_MULTISOURCE_ENABLED = False
+
+# Price cross-check tolerance. After the primary returns a live price, the
+# orchestrator fetches the same ticker from the next provider that can serve a
+# quote and compares; a gap beyond this % is surfaced loudly ("price
+# unverified") rather than silently trusted. Scoped to PRICE only — the one
+# field where a plausible-but-wrong value directly drives stops, P&L and movers.
+# This is an investment-policy value (PROVISIONAL — confirm with user before
+# enabling the layer; 1.0% is a starting point, not a settled call).
+DATA_XCHECK_TOLERANCE_PCT = 1.0
+
+# Which fields are cross-checked. Everything else is failover-only — calling two
+# sources for fundamentals/news would burn keyed free-tier quotas for little
+# gain. Kept as a set for cheap membership tests in the orchestrator.
+DATA_XCHECK_FIELDS = {"price"}

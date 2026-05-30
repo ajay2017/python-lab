@@ -1,37 +1,19 @@
-import time
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
 import pytz
-from stock_analyzer import api_health as _ah
+
+from stock_analyzer.providers.base import ProviderUnavailable
+from stock_analyzer.providers.yfinance_provider import YFinanceProvider, _retry
 
 _ET = pytz.timezone("America/New_York")
 
-
-def _retry(fn, *args, retries: int = 3, backoff: float = 1.0, **kwargs):
-    """Retry fn on Yahoo Finance 429 / rate-limit errors with linear backoff.
-
-    Backoff is intentionally small (default 1.0s, sleep = backoff * attempt+1
-    so total wait <= ~3s across all retries). yfinance has no usable
-    request-level timeout knob, so the page can still hang on TCP-level
-    failures — but compounded 3s/6s/9s linear backoff on top of that is the
-    biggest user-visible chunk and is what's being reduced here.
-    Non-rate-limit exceptions still raise immediately; only 429-style errors
-    sleep and retry. M-6 (the post-rate-limit "error" double-record on the
-    terminal attempt) is intentionally still present and tracked separately.
-    """
-    for attempt in range(retries):
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:
-            msg = str(exc).lower()
-            if any(k in msg for k in ("429", "too many", "rate limit", "rate-limit")):
-                _ah.record("yahoo_finance", "rate_limit")
-                if attempt < retries - 1:
-                    time.sleep(backoff * (attempt + 1))
-                    continue
-            _ah.record("yahoo_finance", "error", msg=str(exc)[:120])
-            raise
+# Default primary provider. A failover orchestrator (chain yfinance → Finnhub
+# → FMP + price cross-check) is layered on in a later phase; for now every
+# public fetch below delegates to this single yfinance provider, so behaviour
+# is identical to the pre-provider code. `_retry` is imported from the provider
+# module for the one remaining direct-yfinance call (fetch_curated_news).
+_PRIMARY = YFinanceProvider()
 
 
 DEFAULT_TICKERS = {
@@ -47,142 +29,17 @@ DEFAULT_TICKERS = {
 
 
 def fetch_price_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
-    def _fetch():
-        df = yf.Ticker(ticker).history(period=period)
-        df.index = pd.to_datetime(df.index)
-        return df
-    return _retry(_fetch)
+    return _PRIMARY.price_history(ticker, period)
 
 
 def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
-    """Single yf.Ticker session — fetches history, info, news and earnings in one go."""
-    def _fetch():
-        t = yf.Ticker(ticker)
-        hist = t.history(period=period)
-        hist.index = pd.to_datetime(hist.index)
-        info = {}
-        try:
-            info = t.info or {}
-            # yfinance's .info is lazy-loaded and occasionally returns a sparse
-            # dict on the first call (missing industry / marketCap / longBusinessSummary).
-            # A single retry against a fresh Ticker handle resolves this for most
-            # tickers without forcing a slow retry on every call.
-            if info and not info.get("longBusinessSummary") and not info.get("industry"):
-                try:
-                    info_retry = yf.Ticker(ticker).info or {}
-                    if info_retry.get("longBusinessSummary") or info_retry.get("industry"):
-                        info = info_retry
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        news = []
-        try:
-            news = t.news or []
-        except Exception:
-            pass
-        earnings = None
-        try:
-            cal = t.calendar
-            if isinstance(cal, dict):
-                dates = cal.get("Earnings Date") or cal.get("earningsDate")
-                if dates:
-                    earnings = str(dates[0])[:10]
-        except Exception:
-            pass
-
-        revisions = {}
-        try:
-            upg = t.upgrades_downgrades
-            if upg is not None and not upg.empty:
-                upg = upg.copy()
-                try:
-                    upg.index = pd.to_datetime(upg.index, utc=True)
-                    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=90)
-                    recent = upg[upg.index >= cutoff]
-                except Exception:
-                    recent = upg.head(20)
-                actions = recent["Action"].str.lower() if not recent.empty else pd.Series([], dtype=str)
-                ups   = int(actions.isin(["up", "init"]).sum())
-                downs = int((actions == "down").sum())
-                maint = int(actions.isin(["main", "reit"]).sum())
-                revisions = {
-                    "upgrades_90d":   ups,
-                    "downgrades_90d": downs,
-                    "maintained_90d": maint,
-                    "net":            ups - downs,
-                    "latest": [
-                        {
-                            "firm":       str(row.get("Firm", "")),
-                            "to_grade":   str(row.get("ToGrade", "")),
-                            "from_grade": str(row.get("FromGrade", "")),
-                            "action":     str(row.get("Action", "")),
-                        }
-                        for _, row in upg.head(5).iterrows()
-                    ],
-                }
-        except Exception:
-            pass
-
-        return {
-            "history": hist, "info": info, "news": news,
-            "earnings": earnings, "revisions": revisions,
-        }
-
-    result = _retry(_fetch)
-    _ah.record("yahoo_finance", "success")
-    return result
-
-
-_INDICES = [
-    ("^DJI",  "DOW",     "Dow Jones"),
-    ("^GSPC", "S&P 500", "S&P 500"),
-    ("^IXIC", "NASDAQ",  "Nasdaq Comp"),
-]
+    """Single session — fetches history, info, news, earnings and revisions in one go."""
+    return _PRIMARY.bundle(ticker, period)
 
 
 def fetch_market_indices() -> list[dict]:
     """Fetch DOW, S&P 500 and NASDAQ last price + daily change."""
-    results = []
-    try:
-        tickers = [t for t, _, _ in _INDICES]
-        raw = _retry(
-            yf.download, tickers,
-            period="2d", auto_adjust=True, progress=False, threads=True,
-        )
-        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
-        for ticker, short, full in _INDICES:
-            try:
-                if ticker not in close.columns:
-                    # Don't silently fall back to the first column — that would
-                    # re-label one index's prices as another (e.g. NASDAQ shown
-                    # as DOW). Bail and let _ah record an empty payload.
-                    _ah.record("yahoo_finance", "empty", msg=f"index {ticker} missing")
-                    continue
-                col = close[ticker].dropna()
-                if len(col) < 1:
-                    continue
-                price  = float(col.iloc[-1])
-                prev   = float(col.iloc[-2]) if len(col) >= 2 else price
-                change = price - prev
-                change_pct = change / prev * 100 if prev else 0.0
-                results.append({
-                    "short":      short,
-                    "full":       full,
-                    "price":      price,
-                    "change":     change,
-                    "change_pct": round(change_pct, 2),
-                    "fetched_at": datetime.now(_ET).strftime("%H:%M ET"),
-                })
-            except Exception:
-                continue
-    except Exception as _e:
-        _ah.record("yahoo_finance", "error", msg=str(_e)[:80])
-    if results:
-        _ah.record("yahoo_finance", "success")
-    else:
-        _ah.record("yahoo_finance", "empty")
-    return results
+    return _PRIMARY.market_indices()
 
 
 def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
@@ -190,43 +47,7 @@ def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
     Lightweight batch fetch of current prices only — bypasses the full history load.
     Returns {ticker: {"price": float, "prev_close": float, "change_pct": float, "fetched_at": str}}.
     """
-    results = {}
-    if not tickers:
-        return results
-    try:
-        raw = _retry(
-            yf.download, tickers,
-            period="2d", auto_adjust=True, progress=False, threads=True,
-        )
-        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
-        for t in tickers:
-            try:
-                if t not in close.columns:
-                    # Same trap as fetch_market_indices: a missing ticker would
-                    # silently inherit the first column's prices, writing e.g.
-                    # NVDA prices under INTC. Skip the ticker instead.
-                    _ah.record("yahoo_finance", "empty", msg=f"price {t} missing")
-                    continue
-                col = close[t].dropna()
-                if len(col) < 1:
-                    continue
-                price = float(col.iloc[-1])
-                prev  = float(col.iloc[-2]) if len(col) >= 2 else price
-                results[t] = {
-                    "price":      round(price, 2),
-                    "prev_close": round(prev, 2),
-                    "change_pct": round((price - prev) / prev * 100, 2) if prev else 0.0,
-                    "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
-                }
-            except Exception:
-                continue
-    except Exception as _e:
-        _ah.record("yahoo_finance", "error", msg=str(_e)[:80])
-    if results:
-        _ah.record("yahoo_finance", "success")
-    else:
-        _ah.record("yahoo_finance", "empty")
-    return results
+    return _PRIMARY.live_prices(tickers)
 
 
 def market_status() -> dict:
@@ -261,16 +82,13 @@ def fetch_spy(period: str = "6mo") -> pd.DataFrame:
 def fetch_risk_free_rate(fallback: float = 0.045) -> float:
     """
     Return the current annualised risk-free rate from the 13-week T-bill (^IRX).
-    ^IRX quotes in percentage points (e.g. 5.25 = 5.25%), so we divide by 100.
-    Falls back to `fallback` on any error.
+    ^IRX quotes in percentage points (e.g. 5.25 = 5.25%), so the provider
+    divides by 100. Falls back to `fallback` on any provider failure.
     """
     try:
-        hist = _retry(lambda: yf.Ticker("^IRX").history(period="5d"))
-        if hist is not None and not hist.empty:
-            return round(float(hist["Close"].iloc[-1]) / 100, 4)
-    except Exception:
-        pass
-    return fallback
+        return _PRIMARY.risk_free_rate()
+    except ProviderUnavailable:
+        return fallback
 
 
 def fetch_financials_from_info(info: dict) -> dict:
@@ -320,7 +138,7 @@ def fetch_financials_from_info(info: dict) -> dict:
 
 def fetch_financials(ticker: str) -> dict:
     """Fetch financials by ticker — prefer fetch_ticker_bundle for batch loads."""
-    info = _retry(lambda: yf.Ticker(ticker).info or {})
+    info = _PRIMARY.info(ticker)
     return fetch_financials_from_info(info)
 
 
