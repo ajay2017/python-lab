@@ -57,7 +57,9 @@ python-lab/
 │   ├── requirements.md            Functional + non-functional reqs + operating posture
 │   └── architecture.md            Module map, data flow, scoring model, db schema
 └── stock_analyzer/
-    ├── constants.py               SINGLE SOURCE OF TRUTH for decision thresholds
+    ├── constants.py               SINGLE SOURCE OF TRUTH for decision thresholds + DATA_* provider config
+    ├── data.py                    Public market-data API (fetch_* + crosscheck_*); routes to providers/ orchestrator
+    ├── providers/                 Multi-source data layer: base + yfinance/finnhub/fmp adapters + orchestrator + selftest
     ├── daily_briefing.py          Grow Today (+Movers) / Act Today / Buy Candidates / Review — directives + consolidation
     ├── scanner.py                 Curated scan (+Watchlist) and scan_movers() 1-day-gainer pass
     ├── discovery_universe.py      Broad ~200-name universe for movers discovery
@@ -204,11 +206,14 @@ Pick up tomorrow morning during market validation, then batch.
 
 **Action Log — Phase B/C (queued):** Phase A (manual stop override) shipped. Phase B = in-context Sell/Trim button directly on Review Before Close items (act without leaving the Brief); Phase C = protective-trim variant. See memory `project_action_log_subsystem`.
 
-**Multi-source market-data layer (queued — week of 2026-06-01; design converged):** the app is 100% dependent on yfinance (unofficial, no SLA) for all market data. Add a failover + cross-check layer so right-data-at-the-right-time is protected.
-- **Goal:** failover (try primary; fall to next on error/empty) + **price-only cross-check** (compare two sources on the price field, fail loud on divergence). NOT full dual-source-everything.
-- **Chain (configurable order, no permanent primary):** `yfinance → Finnhub → FMP`. yfinance primary = free + unquota'd, absorbs 60s price refresh + scanner + movers fan-out. Finnhub = real-time quote cross-check (60/min) + news/earnings failover. FMP = fundamentals/analyst-targets backup (250/day, fine for 30-min-cached loads). **Alpha Vantage rejected** (~25 req/day free tier — re-verify all limits at build time).
-- **Build:** new `stock_analyzer/providers/` (base protocol + yfinance/finnhub/fmp adapters); `data.py` becomes orchestrator keeping the SAME public function signatures (zero change above data.py); route `premarket.py` + `scanner.py` through the layer; provider order(s) + cross-check tolerances (`DATA_XCHECK_PREVCLOSE_TOL_PCT` strict / `DATA_XCHECK_LIVE_TOL_PCT` loose) in `constants.py` (policy); per-provider events in `api_health`; keys in Streamlit secrets; fail-loud divergence banner.
-- Full converged spec + per-data-type chain table in memory `project_second_data_source`.
+**Multi-source market-data layer — ✅ SHIPPED & LIVE (2026-06-01):** the single-source yfinance dependency is removed. Code in `stock_analyzer/providers/` (base abstraction + yfinance/finnhub/fmp adapters + orchestrator + `_util` + `selftest`); `data.py` keeps the SAME public `fetch_*` signatures and routes through the orchestrator when `DATA_MULTISOURCE_ENABLED` (instant rollback = set False).
+- **Live prices:** Finnhub real-time PRIMARY, gap-fill to yfinance(delayed)→FMP (`DATA_LIVE_PRICE_ORDER`).
+- **History / bundle / indices / risk-free:** yfinance primary, failover to FMP (`DATA_PROVIDER_ORDER`) — so composite scoring survives a yfinance rate-limit (observed live).
+- **Price cross-check (held positions, fail-loud banner):** prev_close strict 0.5% (`DATA_XCHECK_PREVCLOSE_TOL_PCT`) / live loose 3.0% (`DATA_XCHECK_LIVE_TOL_PCT`).
+- **Source transparency:** price-strip caption + Data Health sidebar show the real provider per call.
+- Keys in Streamlit secrets (`FINNHUB_API_KEY`, `FMP_API_KEY`); `_util.get_secret` tolerates TOML section-nesting + env-var fallback. Validate adapters offline with `python -m stock_analyzer.providers.selftest AAPL MSFT` (env-var keys). **Alpha Vantage rejected** (~25 req/day free tier).
+- Full spec + per-data-type chain table + status in memory `project_second_data_source`; architecture §4.0.4 + §11; requirements §3.10.
+- **Optional follow-ups remaining:** Analysis-page per-ticker cross-check status; harden FMP `news`/`earnings` stable endpoints (currently empty → neutral sentiment / no earnings date on the FMP failover path only).
 
 ---
 

@@ -2,8 +2,8 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.2  
-**Date:** May 2026  
+**Version:** 1.3  
+**Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
 
@@ -71,6 +71,10 @@ Single source of truth: `stock_analyzer/constants.py`.
 | Review macro-affected — sector trigger / reduction | 30% / 5pp | Action target |
 | Mover — min 1-day gain to qualify | 5% | Discovery gate |
 | Mover — shortlist size composite-gated / max picks surfaced | 12 / 3 | Discovery sizing |
+| Price cross-check — prev_close tolerance (settled) | 0.5% | **Integrity** (strict) |
+| Price cross-check — live-price tolerance (latency) | 3.0% | Soft (loose) |
+| Data live-price provider order | Finnhub → yfinance → FMP | Sourcing policy |
+| Data general provider order (history/bundle) | yfinance → Finnhub → FMP | Sourcing policy |
 
 The "Review action target" rows translate a *trigger* (when an item lands in Review Before Close) into a *concrete directive* (trim N shares, raise stop to $Y). See §3.2 F-25 and architecture §4.0.1.
 
@@ -112,7 +116,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | ID | Requirement |
 |----|-------------|
 | F-01 | Display all held positions with live price, shares, average cost, market value, P&L ($), P&L (%), portfolio weight (%) |
-| F-02 | Auto-refresh live prices every 60 seconds during market hours via a Streamlit fragment |
+| F-02 | Auto-refresh live prices every 60 seconds during market hours via a Streamlit fragment. Prices come from the multi-source layer (§3.10) — real-time from Finnhub during market hours, with gap-fill to yfinance/FMP. The price-strip caption shows the actual source(s); a fail-loud banner appears if held-position prices fail the cross-check. |
 | F-03 | Show real-time daily P&L (total portfolio $ and %) based on prior-close vs current price |
 | F-04 | Detect and prompt for stock splits; adjust shares and average cost accordingly |
 | F-05 | Allow user to add, edit, and remove holdings; persist to Supabase `holdings` table |
@@ -242,6 +246,19 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-110 | Generate a natural language portfolio brief using an LLM (Anthropic / OpenAI / Google) |
 | F-111 | Brief should summarise portfolio state, key risks, and suggested actions |
 
+### 3.10 Market Data Layer (multi-source: failover + cross-check)
+
+The app must not depend on a single market-data source. A provider abstraction (`stock_analyzer/providers/`) sits behind `data.py`'s public functions so the rest of the app is source-agnostic. See architecture §4.0.4.
+
+| ID | Requirement |
+|----|-------------|
+| F-120 | Market data must be served through a provider chain with automatic failover. A `DATA_MULTISOURCE_ENABLED` master switch toggles the layer; when off, `data.py` behaves exactly as the single-source yfinance code (instant rollback). |
+| F-121 | **Live prices** use `DATA_LIVE_PRICE_ORDER` (Finnhub → yfinance → FMP). Finnhub (real-time US quotes) is primary; the chain gap-fills — later providers supply only tickers the primary couldn't. A Finnhub outage must degrade to yfinance (delayed), never fail outright. |
+| F-122 | **History, the analysis bundle, indices, and risk-free rate** use `DATA_PROVIDER_ORDER` (yfinance → Finnhub → FMP). yfinance stays primary; when a yfinance call hard-fails (e.g. rate-limited), the request fails over to FMP so composite scoring does not go dark. The broad scanner/movers scans stay on yfinance only. |
+| F-123 | **Price cross-check guardrail:** held-position prices are validated against an independent source (cached 5 min). `prev_close` is compared strictly (`DATA_XCHECK_PREVCLOSE_TOL_PCT` 0.5%) — a settled value whose mismatch signals a real integrity fault (missed split, wrong-symbol, poisoned feed). Live price is compared loosely (`DATA_XCHECK_LIVE_TOL_PCT` 3.0%) to tolerate delayed-vs-real-time latency. A breach renders a fail-loud red "Price unverified — sources disagree" banner naming the tickers and gaps. (Implements OP-03 at the data boundary.) |
+| F-124 | **Source transparency:** every live-price record is tagged with its provider; the price-strip caption shows the actual source(s) ("Finnhub (real-time)" / "Yahoo Finance (15-min delayed)" / "FMP"), and the Data Health sidebar shows per-provider call / error / rate-limit counts. The user can always see where a price came from. |
+| F-125 | **Keyed-provider configuration:** Finnhub/FMP API keys live in Streamlit secrets (`FINNHUB_API_KEY`, `FMP_API_KEY`). A missing key makes that provider report unconfigured and be skipped silently (no error). The secret reader tolerates a key mis-nested under a TOML `[section]` and falls back to an env var for offline self-test. |
+
 ---
 
 ## 4. Non-Functional Requirements
@@ -259,7 +276,8 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 
 | ID | Requirement |
 |----|-------------|
-| NF-10 | Live prices refresh every 60 seconds during market hours via Streamlit fragment |
+| NF-10 | Live prices refresh every 60 seconds during market hours via Streamlit fragment. During market hours the live-price primary (Finnhub) returns real-time US quotes (vs yfinance's ~15-min delay); when the market is closed all sources report the last regular-session close. |
+| NF-10a | The held-position price cross-check is cached 5 minutes (`_cached_price_xcheck`) — a periodic integrity check, not a per-rerun live call — to bound keyed-provider quota usage. |
 | NF-11 | load_all() cache TTL: 30 minutes (1800 seconds) |
 | NF-12 | Sector ETF returns cache TTL: 60 minutes (3600 seconds) |
 | NF-13 | Market indices cache TTL: not cached — fetched on each Daily Briefing load |
@@ -274,14 +292,16 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 |----|-------------|
 | NF-20 | Yahoo Finance API failures must be caught and displayed as warnings, not crash the app |
 | NF-21 | Rate-limit (HTTP 429) responses from Yahoo Finance must be retried with linear backoff (3 attempts, 3s base) |
-| NF-22 | API health events (success, rate_limit, error, empty) must be recorded via api_health module |
+| NF-22 | API health events (success, rate_limit, error, empty) must be recorded via api_health module, per provider (`yahoo_finance`, `finnhub`, `fmp`, `fred`, `supabase`) |
 | NF-23 | Supabase connectivity failures must display a user-facing error without exposing credentials |
+| NF-24 | No single market-data source is a hard dependency for live prices or the analysis bundle. A provider hard-failure (error, rate-limit after retries, or empty) must fail over to the next configured provider in the chain; the request fails only if every capable provider fails. |
+| NF-25 | Keyed-provider errors must never leak the API key — error text surfaced or logged must have the key redacted (e.g. FMP's `?apikey=` in request URLs). |
 
 ### 4.4 Security
 
 | ID | Requirement |
 |----|-------------|
-| NF-30 | All secrets (Supabase URL, Supabase key, LLM API keys) must be stored in Streamlit Cloud Secrets, never in code or committed files |
+| NF-30 | All secrets (Supabase URL/key, LLM API keys, market-data keys `FINNHUB_API_KEY` / `FMP_API_KEY`, `[fred] api_key`) must be stored in Streamlit Cloud Secrets, never in code or committed files. A missing market-data key degrades gracefully (provider skipped), never crashes. |
 | NF-31 | No user authentication required (single-user personal app) |
 | NF-32 | Row Level Security is **enabled** on all public-schema tables with `FOR ALL TO service_role` policies. The Streamlit secret `[supabase] key` must be the service-role / secret key (bypasses RLS); the publishable/anon key has no matching policy and is denied. This is defense-in-depth: a leaked publishable key cannot access portfolio data. |
 

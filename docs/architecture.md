@@ -2,8 +2,8 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.2  
-**Date:** May 2026  
+**Version:** 1.3  
+**Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §4.0)
 
@@ -15,7 +15,10 @@
 |-------|-----------|---------|---------|
 | Runtime | Python | 3.12 | Application language |
 | UI Framework | Streamlit | 1.57.0 | Web app rendering and state management |
-| Market Data | yfinance | 1.3.0 | OHLCV prices, company info, news, analyst data |
+| Market Data (primary, history/bundle) | yfinance | 1.3.0 | OHLCV history, company info, news, analyst data |
+| Market Data (real-time quotes) | Finnhub (REST, free tier) | — | Real-time US live prices — **primary for the live-price field**; price cross-check |
+| Market Data (failover) | FMP / Financial Modeling Prep (REST, free tier) | `/stable/` | Failover for live prices, history, and the full analysis bundle |
+| HTTP client | requests | ≥2.28.0 | Keyed REST calls to Finnhub / FMP / FRED |
 | Data Processing | pandas | ≥2.0.0 | DataFrames, time series, portfolio calculations |
 | Charting | Plotly | ≥5.20.0 | Interactive charts (candlestick, bar, pie) |
 | Sentiment | vaderSentiment | 3.3.2 | News headline sentiment scoring |
@@ -70,7 +73,17 @@ python-lab/
 └── stock_analyzer/                 Domain logic package
     ├── __init__.py
     ├── constants.py                Single source of truth for all decision thresholds (Phase 2)
-    ├── data.py                     Data fetching (yfinance wrapper, risk-free rate)
+    ├── data.py                     Public market-data API (fetch_* + crosscheck_*); routes through the
+    │                               provider layer when DATA_MULTISOURCE_ENABLED, else single-source yfinance
+    ├── providers/                  Multi-source market-data layer (failover + price cross-check)
+    │   ├── base.py                 DataProvider abstraction, capability flags, canonical schemas
+    │   ├── yfinance_provider.py    yfinance adapter (history/bundle/indices/risk-free; live-price failover)
+    │   ├── finnhub_provider.py     Finnhub adapter — real-time live prices (live-price PRIMARY)
+    │   ├── fmp_provider.py         FMP adapter — live prices + history + full bundle (failover)
+    │   ├── orchestrator.py         Failover chains (per data type) + price cross-check; PROVIDER_REGISTRY consumer
+    │   ├── _util.py                Secret reader (st.secrets→env, section-nesting tolerant) + http helper
+    │   └── selftest.py             Offline provider smoke-test (env-var keys)
+    ├── indicators.py               Pure technical indicator calculations
     ├── indicators.py               Pure technical indicator calculations
     ├── technicals.py               Technical scoring from indicator output
     ├── fundamentals.py             Fundamental scoring — sector-relative benchmarks
@@ -143,6 +156,12 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `MACRO_AFFECTED_TRIM_THRESHOLD_PCT` / `_REDUCTION_PP` | 30 / 5pp | Review macro-affected: sector trigger / reduction |
 | `MOVER_MIN_DAY_GAIN_PCT` | 5 | Min 1-day gain to qualify as a discovery mover |
 | `MOVER_SHORTLIST_SIZE` / `MOVER_MAX_PICKS` | 12 / 3 | Movers composite-gated shortlist / surfaced cap (own allowance) |
+| `DATA_MULTISOURCE_ENABLED` | True | Master switch — False reverts to single-source yfinance (instant rollback) |
+| `DATA_PROVIDER_ORDER` | `[yahoo_finance, finnhub, fmp]` | Failover order for history/bundle/indices/risk-free |
+| `DATA_LIVE_PRICE_ORDER` | `[finnhub, yahoo_finance, fmp]` | Failover order for live prices — Finnhub real-time PRIMARY |
+| `DATA_XCHECK_PREVCLOSE_TOL_PCT` | 0.5 | Cross-check: settled prev_close strict tolerance (integrity faults) |
+| `DATA_XCHECK_LIVE_TOL_PCT` | 3.0 | Cross-check: live-price loose tolerance (latency-tolerant) |
+| `DATA_XCHECK_FIELDS` | `{price}` | Which fields are cross-checked (price only; rest failover-only) |
 
 ### 4.0.2 Cross-feature coordination caches
 
@@ -171,6 +190,29 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | Imminent macro event → Grow Today new picks | Suppress picks in affected sector | "Picks Suppressed — Imminent HIGH-Impact Macro Event" banner |
 | Held position composite Buy → Tax Advisor HARVEST | Suppress; action becomes `HOLD_FOR_SIGNAL` | "Harvest Suppressed — Investment View Holds" banner |
 | Grow Today sectors → Watchlist ENTER_NOW | Soft warn on same-sector overlap | Caution text in ENTER_NOW card |
+
+### 4.0.4 Multi-source market-data layer (failover + price cross-check)
+
+The app was historically 100% dependent on yfinance (unofficial, no SLA) for all market data. The `providers/` package + `data.py` orchestrator remove that single point of failure. `data.py` keeps the same public functions (`fetch_ticker_bundle`, `fetch_live_prices`, `fetch_price_history`, `fetch_market_indices`, `fetch_risk_free_rate`) so **nothing above `data.py` changed**; it routes through the orchestrator when `DATA_MULTISOURCE_ENABLED` is True, else calls yfinance directly (byte-for-byte the pre-provider path — instant rollback).
+
+**Providers & capabilities** (a provider serves only what it advertises; the orchestrator builds a per-data-type chain from whichever configured providers — key present — advertise the matching capability):
+
+| Provider | `name` | Capabilities | Role |
+|---|---|---|---|
+| Finnhub | `finnhub` | live_price | **Live-price primary** (real-time US quotes); cross-check source |
+| yfinance | `yahoo_finance` | live_price, history, bundle, indices, risk_free | History/bundle/indices primary; live-price failover |
+| FMP | `fmp` | live_price, history, bundle | Failover for live price, history, and the full analysis bundle |
+
+**Failover chains** (tried in order, first configured + capable + non-empty wins):
+- **Live price** → `DATA_LIVE_PRICE_ORDER` = Finnhub → yfinance → FMP. *Gap-fill*: the primary fills most tickers; later providers fill only those still missing. Finnhub is primary because its free tier serves real-time quotes (yfinance is ~15-min delayed); a Finnhub outage silently degrades to yfinance, never worse.
+- **History / bundle / indices / risk-free** → `DATA_PROVIDER_ORDER` = yfinance → Finnhub → FMP. yfinance stays primary (free, unquota'd, broad coverage); FMP is the safety net when a yfinance call hard-fails (e.g. rate-limited). The broad scanner/movers scans deliberately stay on yfinance (Finnhub's per-symbol quote would blow its 60/min limit on ~200 names).
+
+**Price cross-check** (`orchestrator.crosscheck_batch` / `crosscheck_price`, surfaced on the Portfolio page, cached 5 min):
+- Validates the live-price primary against an INDEPENDENT source. **`prev_close` is checked strictly** (`DATA_XCHECK_PREVCLOSE_TOL_PCT` 0.5%) — a settled value that must match across sources, so a breach is a real integrity fault (missed split, wrong-symbol mapping, poisoned feed). **Live price is checked loosely** (`DATA_XCHECK_LIVE_TOL_PCT` 3.0%) because a delayed validator legitimately differs from a real-time primary intraday. A breach renders a fail-loud red banner ("Price unverified — sources disagree").
+
+**Secrets:** `FINNHUB_API_KEY`, `FMP_API_KEY` (Streamlit Cloud secrets). `_util.get_secret` reads top-level first, then tolerates a key mis-nested under a `[section]` (a common TOML mistake), then falls back to an env var (offline `selftest`). A missing key → provider reports unconfigured and is skipped (no error).
+
+**Source transparency:** every live-price record carries a `source` tag; the price-strip caption shows the actual source(s) ("Finnhub (real-time)" / "Yahoo Finance (15-min delayed)" / "FMP"), and the Data Health sidebar tracks per-provider call/error/rate-limit counts via `api_health`.
 
 ---
 
@@ -551,9 +593,15 @@ def _get_rfr():
     # Fallback: 0.045 (4.5%) if Yahoo Finance unavailable
     # Used for Sharpe and Sortino calculations across all risk functions
 
+@st.cache_data(ttl=300)    # 5 minutes
+def _cached_price_xcheck(tickers_key):
+    # Held-position price cross-check (Finnhub vs yfinance).
+    # 5-min TTL: a periodic integrity guardrail, not a live feed — must not
+    # re-run every rerun or burn the keyed quota. Result → _price_xcheck_cache.
+
 # Not cached (always fresh):
 fetch_market_indices()      # Called on Daily Briefing load
-fetch_live_prices()         # Called by 60s auto-refresh fragment
+fetch_live_prices()         # Called by 60s auto-refresh fragment (Finnhub real-time primary)
 ```
 
 ---
@@ -625,6 +673,11 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 | Movers flat-day exemption | Discovery movers feed the SAME `_grow_today` New Positions list as curated picks but get their own `MOVER_MAX_PICKS` allowance and are exempt from the flat-day high-conviction suppression and the curated momentum / 1-per-sector rules. They still respect bear-day risk-off, the composite gate, the macro gate, and act-today conflicts. | A composite-Buy stock up ≥5% today IS the clearer direction the flat-day caution waits for — suppressing it defeats the discovery purpose. Deliberate asymmetry; do not "fix" by applying uniform tone-gating. (Commits 67b0dab / e4793ff.) |
 | Act Today per-ticker consolidation | `_consolidate_act_today` suppresses a risk-trim card when a mechanical exit (stop_breach / sell_signal) exists for the same ticker, and merges multiple risk flags on one ticker into a single card. | You don't trim what you're already exiting, and the same ticker appearing in multiple urgent cards (MU appeared twice) reads as noise, not signal. (Commit 0fd66db.) |
 | Two-column offense/defense Brief | The Brief renders left = Grow Today + More Buy Candidates (deploy capital), right = Act Today + Review Before Close (protect capital). Streamlit reusable column containers (`with col:`) are re-entered to append each section into its column regardless of execution order. | A single-column stack buried the protective items below a long offense list; the offense/defense split mirrors how a PM actually reads the morning. Section chips must stay within their column. (Commits fb7b56c / aec735a.) |
+| Finnhub-primary live prices (per data type) | Live prices use `DATA_LIVE_PRICE_ORDER` (Finnhub→yfinance→FMP); history/bundle/indices use `DATA_PROVIDER_ORDER` (yfinance→FMP). "Primary" is per-data-type, configurable, not global. | yfinance is free/unquota'd and the only free source for history/bundle, so it stays primary there; Finnhub's free tier serves real-time quotes, so it's primary for the live-price field. yfinance's weakness is availability — failover + real-time primary mitigate it. (Phase 5; commit 319edad.) |
+| Price cross-check: prev_close strict / live loose | The cross-check compares the live-price primary against an independent source — `prev_close` within 0.5% (strict) and live price within 3% (loose). A breach → red "Price unverified" banner. | A delayed validator (yfinance ~15-min) legitimately differs from a real-time primary (Finnhub) intraday, so the live check must be loose; but settled `prev_close` must match across sources, so that check is strict and catches splits/wrong-symbol/poison without false positives. (Phase 5b-ii; commit 9ad0ab6.) |
+| Bundle failover keeps the analysis alive | When a yfinance `bundle()` hard-fails (rate-limited), the orchestrator fails over to FMP's bundle (validated fundamentals; news/earnings degrade to neutral/None). | Observed live: yfinance went rate-limited while the app stayed functional. Composite scoring no longer goes dark when yfinance throttles. (Phase 3b; commit cc5076b.) |
+| Secret reading tolerates TOML mis-nesting | `_util.get_secret` reads a key top-level, then scans one level of `[section]` tables, then env var. A flat key written after a `[section]` header (TOML nests it inside that table) still resolves. | A `FINNHUB_API_KEY` placed below `[fred]` is parsed as `fred.FINNHUB_API_KEY`; the top-level lookup missed it and Finnhub silently reported unconfigured — exactly the silent degradation the app refuses. (Commit 2d3870c.) |
+| Multi-source master switch | `DATA_MULTISOURCE_ENABLED` gates the whole layer. False → `data.py` calls yfinance directly, byte-for-byte the pre-provider path. | A one-line, instant rollback to single-source if the layer ever misbehaves, with no other code changes. (Phase 1–5.) |
 
 ---
 
@@ -632,9 +685,12 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 
 | API | Purpose | Rate Limits | Failure Handling |
 |-----|---------|-------------|-----------------|
-| Yahoo Finance (yfinance) | OHLCV prices, company info, news, analyst data, earnings, futures, global indices | Informal; 429 responses possible | Retry with linear backoff (3 attempts, 3s base); `api_health` records events; pre-market failures caught and shown as caption |
-| Supabase REST API | Holdings, watchlist, trades CRUD | Generous free tier | Connection errors surface as UI warnings |
+| Yahoo Finance (yfinance) | History/bundle primary (OHLCV, company info, news, analyst data, earnings); indices; futures; global indices; live-price failover | Informal; 429 responses possible | Retry with linear backoff (3 attempts, 3s base); `api_health` records events; **a hard failure now fails over to FMP** (history/bundle) |
+| Finnhub (REST, free) | **Real-time live-price primary**; price cross-check source | 60 calls/min (free) | Per-symbol; rate-limit/error skips that ticker → gap-fill to yfinance; `api_health("finnhub")` |
+| FMP / Financial Modeling Prep (REST, free, `/stable/`) | Failover for live prices, history, and full analysis bundle (profile/ratios/growth/targets/news/earnings/grades) | 250 calls/day (free) | Only invoked when higher-priority providers fail; key redacted from logged errors; `api_health("fmp")` |
+| Supabase REST API | Holdings, watchlist, trades, manual_stops CRUD | Generous free tier | Connection errors surface as UI warnings |
 | Anthropic / OpenAI / Google | AI Brief generation | Per-account | Errors surfaced in AI Brief tab; rest of app unaffected |
+| FRED (St. Louis Fed) | Economic-calendar actuals + release-drift dates | 120 req/min (free key) | `api_health("fred")`; macro calendar degrades to static backbone without a key |
 | US Treasury / Yahoo `^IRX` | 13-week T-bill rate for risk-free rate | Daily cached | Falls back to 4.5% if unavailable |
 
-Yahoo Finance has no official public API SLA. All yfinance calls are wrapped in `_retry()` in `data.py` to handle transient 429 rate-limit responses. Pre-market `fast_info` calls in `premarket.py` are not retried (best-effort; panel silently omits unavailable tickers).
+No single market-data source is now a hard dependency for prices or the analysis bundle. yfinance has no official SLA, so its calls are wrapped in `_retry()` (transient 429s) and a hard failure fails over to FMP; live prices come from Finnhub (real-time) first with gap-fill to yfinance/FMP. Keyed providers (Finnhub/FMP/FRED) are skipped silently when their key is absent. The price cross-check (§4.0.4) surfaces source disagreement loudly. Pre-market `fast_info` calls in `premarket.py` are not retried (best-effort).
