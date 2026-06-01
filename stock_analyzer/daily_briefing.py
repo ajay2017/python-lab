@@ -1214,7 +1214,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 # ── Review Before Close ────────────────────────────────────────────────────────
 
 def _review_list(port_df, news_items, macro_events, held_data, today,
-                 portfolio_value: float = 0.0) -> list[dict]:
+                 portfolio_value: float = 0.0,
+                 act_today: list | None = None) -> list[dict]:
     """
     Build the Review Before Close list.
 
@@ -1233,6 +1234,12 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     """
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
+    # Tickers already surfaced in Act Today — the news-warning block below
+    # excludes them so a ticker's negative-news risk shows ONCE, on the
+    # higher-priority surface, instead of appearing as a Critical-News ACT here
+    # AND a "no action today" WATCH below (the DELL split-brain). Mirrors the
+    # act_today dedup that _buy_candidates and _grow_today already do.
+    _act_tickers = {str(a.get("ticker", "")).upper() for a in (act_today or [])}
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH, affected_sectors as _aff_sectors
 
     # 1 — Approaching stop (0–8% gap)
@@ -1405,6 +1412,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         ticker = str(item.get("ticker", "")).upper()
         sent   = item.get("compound", 0)
         if (ticker in held_tickers
+                and ticker not in _act_tickers   # already an Act Today item — don't double-surface news
                 and NEWS_SENTIMENT_CRITICAL < sent <= NEWS_SENTIMENT_WARN
                 and ticker not in warned):
             warned.add(ticker)
@@ -1565,7 +1573,7 @@ def build_daily_briefing(
                              earnings_lookup=earnings_lookup,
                              composites=grow_composites or {})
     review = _review_list(port_df, news_items, macro_events, held_data, today,
-                          portfolio_value=portfolio_value)
+                          portfolio_value=portfolio_value, act_today=act)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
