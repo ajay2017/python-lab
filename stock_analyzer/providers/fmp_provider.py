@@ -82,14 +82,13 @@ def _num(row: dict, *keys):
 
 class FMPProvider(DataProvider):
     name = "fmp"
-    # CAP_BUNDLE is intentionally NOT advertised yet: bundle() is implemented but
-    # its field mappings are written to FMP's documented (unvalidated) endpoint
-    # shapes. Advertising it would route LIVE bundle-failover to FMP and could
-    # feed mis-mapped fundamentals into a composite. Validate bundle() via the
-    # selftest first, fix any endpoint/field mismatch, THEN add CAP_BUNDLE here
-    # to enable the failover. (orchestrator only uses providers for capabilities
-    # they advertise, so until then bundle failover stays yfinance-only.)
-    capabilities = frozenset({CAP_LIVE_PRICE, CAP_HISTORY})
+    # CAP_BUNDLE enabled 2026-06-01 after live selftest validated the bundle:
+    # history + comprehensive, ACCURATE fundamentals (sector/PE/margins/growth/
+    # D-E/targets) + revisions all populate correctly for AAPL. Known soft gaps:
+    # news may be empty (→ neutral sentiment, 15% weight) and earnings-date may
+    # be None on the failover path — both degrade gracefully and only matter
+    # while yfinance is actually down. Bundle failover chain is now yfinance→fmp.
+    capabilities = frozenset({CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE})
 
     def __init__(self):
         self._key = get_secret("FMP_API_KEY")
@@ -307,7 +306,12 @@ class FMPProvider(DataProvider):
         """Map FMP stock news into the flat shape data._parse_news_item reads
         (title / publisher / link / providerPublishTime)."""
         try:
-            payload = self._get_json("news/stock", {"symbols": ticker, "limit": limit})
+            # Some FMP news endpoints require an explicit date window; pass one.
+            payload = self._get_json("news/stock", {
+                "symbols": ticker, "limit": limit,
+                "from": (date.today() - timedelta(days=21)).isoformat(),
+                "to":   date.today().isoformat(),
+            })
         except Exception:
             return []
         rows = payload if isinstance(payload, list) else (
