@@ -49,6 +49,23 @@ def main(argv: list[str]) -> int:
             except Exception as exc:
                 print(f"   price_history ERROR: {exc}")
         print()
+
+    # ── Orchestrator end-to-end (live-price-primary + cross-check) ───────────
+    # Exercises the REAL failover/cross-check paths regardless of the master
+    # switch, so we can validate them before flipping DATA_MULTISOURCE_ENABLED.
+    from stock_analyzer.providers import orchestrator as orch
+    from stock_analyzer import constants as C
+    orch.reset()
+    print(f"=== orchestrator   (live-price order: {C.DATA_LIVE_PRICE_ORDER})")
+    lp = orch.get_live_prices(tickers)
+    for t in tickers:
+        print(f"   {t}: {lp.get(t, '— (none)')}")
+    prim = lp.get(tickers[0], {})
+    xc = orch.crosscheck_price(tickers[0], prim.get("price"), prim.get("prev_close"))
+    print(f"   cross-check {tickers[0]}: {xc}")
+    print(f"   (prev_close tol={C.DATA_XCHECK_PREVCLOSE_TOL_PCT}% strict, "
+          f"live tol={C.DATA_XCHECK_LIVE_TOL_PCT}% loose)")
+    print()
     return 0
 
 

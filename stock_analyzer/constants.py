@@ -174,26 +174,39 @@ MACRO_EXPOSURE_MEDIUM_PCT   = 15
 # provider seam + orchestrator add failover + a price cross-check so right-data-
 # at-the-right-time is protected. See memory `project_second_data_source`.
 
-# Failover chain — the orchestrator tries these IN ORDER per data type, using
-# the first CONFIGURED provider (key present) that advertises the capability and
-# doesn't raise ProviderUnavailable. Order is a setting, not hardcoded: if
-# yfinance reliability degrades, move another provider to the front here with no
-# code change. Names must match DataProvider.name.
+# Failover order for the GENERAL data types (history / bundle / indices /
+# risk-free): the orchestrator tries these IN ORDER, using the first CONFIGURED
+# provider (key present) that advertises the capability. yfinance is primary
+# here — it's free, unquota'd, and the only one that serves history/bundle/
+# indices on the free tier. Order is a setting, not hardcoded.
 DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub", "fmp"]
+
+# Failover order for the LIVE-PRICE field specifically — DIFFERENT from the
+# general order on purpose. Finnhub is primary because its free tier serves
+# REAL-TIME US quotes (yfinance is ~15-min delayed), and real-time held-position
+# prices/stops/P&L are core to the app's near-real-time intelligence. yfinance
+# is the failover (gap-fill) if Finnhub rate-limits or is down, so worst case is
+# today's delayed behaviour, never worse. Only the live-price path uses this;
+# the broad scanner/movers scans stay on yfinance (they use history, and
+# Finnhub's per-symbol /quote would blow the 60/min free limit on ~200 names).
+DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
 
 # Master switch. When False, data.py behaves EXACTLY as the single-source
 # yfinance code (no failover, no cross-check) — lets the layer ship dormant and
-# be flipped on only once the Finnhub/FMP adapters are validated on live data.
+# be flipped on only once the orchestrator is validated on live data.
 DATA_MULTISOURCE_ENABLED = False
 
-# Price cross-check tolerance. After the primary returns a live price, the
-# orchestrator fetches the same ticker from the next provider that can serve a
-# quote and compares; a gap beyond this % is surfaced loudly ("price
-# unverified") rather than silently trusted. Scoped to PRICE only — the one
-# field where a plausible-but-wrong value directly drives stops, P&L and movers.
-# This is an investment-policy value (PROVISIONAL — confirm with user before
-# enabling the layer; 1.0% is a starting point, not a settled call).
-DATA_XCHECK_TOLERANCE_PCT = 1.0
+# Price cross-check tolerances. The cross-check compares the live-price primary
+# (Finnhub, real-time) against an INDEPENDENT validator (yfinance, ~15-min
+# delayed). Because of that latency the two checks have different strictness:
+#   • prev_close is a SETTLED value — it must match across sources to within a
+#     tight band; a breach means a real data-integrity fault (missed split,
+#     wrong-symbol mapping, poisoned feed). This is the high-signal check.
+#   • live price legitimately differs during fast intraday moves (delayed vs
+#     real-time), so it's checked loosely — only a large gap (frozen/wrong feed)
+#     trips it. Both are investment-policy values.
+DATA_XCHECK_PREVCLOSE_TOL_PCT = 0.5   # strict — settled close should match
+DATA_XCHECK_LIVE_TOL_PCT      = 3.0   # loose — live gaps expected (latency)
 
 # Which fields are cross-checked. Everything else is failover-only — calling two
 # sources for fundamentals/news would burn keyed free-tier quotas for little
