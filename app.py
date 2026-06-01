@@ -909,6 +909,11 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         "name": name, "sector": sector,
         "industry": industry, "market_cap": market_cap,
         "business_summary": business_summary,
+        # When yfinance .info was sparse, the orchestrator backfilled
+        # fundamentals from a failover provider (FMP). Surfaced as a
+        # transparency tag on the Analysis page so the user knows the
+        # composite's fundamental leg came from the secondary source.
+        "info_source": bundle.get("_info_source"),
     }
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -9183,6 +9188,20 @@ elif page == "📈 Analysis":
                    else "")
                 + "</div>", unsafe_allow_html=True,
             )
+
+            # Fundamentals backfill transparency — when yfinance .info was sparse,
+            # the orchestrator pulled the fundamental leg from a failover source
+            # (FMP). Flagging it tells the user this composite is on backfilled
+            # fundamentals, not a yfinance hiccup that would have collapsed it to
+            # a neutral 50 (the old Buy↔Hold flip).
+            _info_src = r.get("info_source")
+            if _info_src:
+                _src_label = {"fmp": "FMP", "finnhub": "Finnhub"}.get(_info_src, _info_src)
+                st.caption(
+                    f"ℹ️ Fundamentals via {_src_label} — Yahoo Finance company data was "
+                    f"unavailable, so the fundamental score was backfilled from the "
+                    f"cross-check source (keeps the composite stable)."
+                )
 
             # Source links
             st.markdown(
