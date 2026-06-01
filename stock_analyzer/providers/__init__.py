@@ -6,9 +6,19 @@ from stock_analyzer.providers.base import (
     CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE, CAP_INDICES, CAP_RISK_FREE,
 )
 from stock_analyzer.providers.yfinance_provider import YFinanceProvider
+from stock_analyzer.providers.finnhub_provider import FinnhubProvider
+from stock_analyzer.providers.fmp_provider import FMPProvider
+
+#: Registry mapping DataProvider.name → class, for the orchestrator to build the
+#: failover chain from constants.DATA_PROVIDER_ORDER.
+PROVIDER_REGISTRY = {
+    YFinanceProvider.name: YFinanceProvider,
+    FinnhubProvider.name:  FinnhubProvider,
+    FMPProvider.name:      FMPProvider,
+}
 
 __all__ = [
     "DataProvider", "ProviderUnavailable",
     "CAP_LIVE_PRICE", "CAP_HISTORY", "CAP_BUNDLE", "CAP_INDICES", "CAP_RISK_FREE",
-    "YFinanceProvider",
+    "YFinanceProvider", "FinnhubProvider", "FMPProvider", "PROVIDER_REGISTRY",
 ]
