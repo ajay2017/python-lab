@@ -192,9 +192,13 @@ DATA_PROVIDER_ORDER = ["yahoo_finance", "finnhub", "fmp"]
 DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
 
 # Master switch. When False, data.py behaves EXACTLY as the single-source
-# yfinance code (no failover, no cross-check) — lets the layer ship dormant and
-# be flipped on only once the orchestrator is validated on live data.
-DATA_MULTISOURCE_ENABLED = False
+# yfinance code (no failover, no cross-check). Enabled 2026-06-01 after the
+# orchestrator was validated live (selftest: all three sources agree to the
+# cent; Finnhub-primary real-time live prices; prev_close cross-check ok). With
+# it True: live prices come from Finnhub (real-time) with gap-fill to yfinance/
+# FMP, and history/bundle/indices fail over yfinance→FMP. Cross-check surfacing
+# is wired separately (Phase 5b-ii).
+DATA_MULTISOURCE_ENABLED = True
 
 # Price cross-check tolerances. The cross-check compares the live-price primary
 # (Finnhub, real-time) against an INDEPENDENT validator (yfinance, ~15-min
