@@ -189,3 +189,67 @@ def crosscheck_price(ticker: str, primary_price: float,
         result["ok"] = ok
         return result
     return None
+
+
+def _compare(primary_price, primary_pc, other_price, other_pc) -> dict | None:
+    """Build a cross-check result comparing one ticker's primary vs validator
+    readings. prev_close strict, live loose. None if nothing comparable."""
+    result: dict = {"other_price": round(float(other_price), 2) if other_price else None}
+    ok, ran = True, False
+    if primary_pc and other_pc:
+        pg = abs(float(primary_pc) - float(other_pc)) / float(primary_pc) * 100
+        result["prev_gap_pct"] = round(pg, 3)
+        result["prev_ok"] = pg <= float(C.DATA_XCHECK_PREVCLOSE_TOL_PCT)
+        ok &= result["prev_ok"]; ran = True
+    if primary_price and other_price:
+        lg = abs(float(primary_price) - float(other_price)) / float(primary_price) * 100
+        result["live_gap_pct"] = round(lg, 3)
+        result["live_ok"] = lg <= float(C.DATA_XCHECK_LIVE_TOL_PCT)
+        ok &= result["live_ok"]; ran = True
+    if not ran:
+        return None
+    result["ok"] = ok
+    return result
+
+
+def crosscheck_batch(tickers: list[str]) -> dict[str, dict]:
+    """Batch cross-check for many tickers in just TWO calls: the live-price
+    primary (Finnhub) and the first INDEPENDENT validator (yfinance, one batched
+    download). Returns {ticker: result} only for tickers checkable against an
+    independent source. Used by the portfolio-page guardrail; cached upstream so
+    it runs periodically, not on every rerun."""
+    if "price" not in C.DATA_XCHECK_FIELDS or not tickers:
+        return {}
+    provs = _live_price_providers()
+    if len(provs) < 2:
+        return {}
+    primary = provs[0]
+    validator = provs[1]
+    try:
+        prim = primary.live_prices(list(tickers))
+    except Exception:
+        prim = {}
+    if not prim:
+        return {}
+    try:
+        val = validator.live_prices(list(tickers))
+    except Exception:
+        return {}
+
+    out: dict[str, dict] = {}
+    for t, pr in prim.items():
+        # Skip tickers the primary itself gap-filled from the validator source —
+        # comparing a source against itself proves nothing.
+        if pr.get("source") == validator.name:
+            continue
+        vr = val.get(t)
+        if not vr:
+            continue
+        res = _compare(pr.get("price"), pr.get("prev_close"),
+                       vr.get("price"), vr.get("prev_close"))
+        if res is None:
+            continue
+        res["primary_source"] = primary.name
+        res["validator"] = validator.name
+        out[t] = res
+    return out

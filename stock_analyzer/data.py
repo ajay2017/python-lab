@@ -19,12 +19,21 @@ _ET = pytz.timezone("America/New_York")
 _PRIMARY = YFinanceProvider()
 
 
-def crosscheck_price(ticker: str, primary_price: float) -> dict | None:
-    """Deliberate price cross-check (see orchestrator.crosscheck_price). Returns
-    None when the layer is off so callers can guard on a single truthiness check."""
+def crosscheck_price(ticker: str, primary_price: float,
+                     primary_prev_close: float | None = None) -> dict | None:
+    """Deliberate single-ticker price cross-check (see orchestrator.crosscheck_price).
+    Returns None when the layer is off so callers can guard on one truthiness check."""
     if not _C.DATA_MULTISOURCE_ENABLED:
         return None
-    return _orch.crosscheck_price(ticker, primary_price)
+    return _orch.crosscheck_price(ticker, primary_price, primary_prev_close)
+
+
+def crosscheck_prices(tickers: list[str]) -> dict[str, dict]:
+    """Batch price cross-check for held positions (see orchestrator.crosscheck_batch).
+    Returns {} when the layer is off."""
+    if not _C.DATA_MULTISOURCE_ENABLED:
+        return {}
+    return _orch.crosscheck_batch(tickers)
 
 
 DEFAULT_TICKERS = {
