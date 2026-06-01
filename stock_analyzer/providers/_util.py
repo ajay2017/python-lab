@@ -14,13 +14,30 @@ _TIMEOUT = 10  # seconds — REST calls must not hang the page
 
 def get_secret(name: str) -> str | None:
     """Return a secret by name from Streamlit secrets (deployed) or an env var
-    (offline test), stripped of whitespace. None when absent in both."""
+    (offline test), stripped of whitespace. None when absent in both.
+
+    Tolerates a common TOML mistake: a flat key placed AFTER a [section] header
+    is parsed by TOML as nested INSIDE that section (e.g. FINNHUB_API_KEY written
+    below [fred] becomes fred.FINNHUB_API_KEY). So if the top-level lookup misses,
+    we also scan one level of sections — a misplaced key silently disabling a
+    data source is exactly the silent degradation this app refuses to allow."""
     # 1) Streamlit secrets — available when running inside the app.
     try:
         import streamlit as st
-        val = st.secrets.get(name)        # st.secrets supports .get()
+        # 1a) top-level (the correct placement)
+        val = st.secrets.get(name)
         if val:
             return str(val).strip()
+        # 1b) fallback: scan one level of sections for a mis-nested key
+        try:
+            for _k in st.secrets.keys():
+                _sec = st.secrets[_k]
+                if hasattr(_sec, "get"):           # a [section] table, not a scalar
+                    _v = _sec.get(name)
+                    if _v:
+                        return str(_v).strip()
+        except Exception:
+            pass
     except Exception:
         # No secrets file / not in a Streamlit context — fall through to env.
         pass
