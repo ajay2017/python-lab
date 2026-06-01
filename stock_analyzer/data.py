@@ -3,17 +3,28 @@ import pandas as pd
 from datetime import datetime
 import pytz
 
+from stock_analyzer import constants as _C
 from stock_analyzer.providers.base import ProviderUnavailable
 from stock_analyzer.providers.yfinance_provider import YFinanceProvider, _retry
+from stock_analyzer.providers import orchestrator as _orch
 
 _ET = pytz.timezone("America/New_York")
 
-# Default primary provider. A failover orchestrator (chain yfinance → Finnhub
-# → FMP + price cross-check) is layered on in a later phase; for now every
-# public fetch below delegates to this single yfinance provider, so behaviour
-# is identical to the pre-provider code. `_retry` is imported from the provider
-# module for the one remaining direct-yfinance call (fetch_curated_news).
+# Primary (yfinance) provider, used directly whenever the multi-source layer is
+# OFF so behaviour is byte-for-byte the pre-provider code. When
+# constants.DATA_MULTISOURCE_ENABLED is True, the public fetch_* functions route
+# through `_orch` (failover chain yfinance → Finnhub → FMP + price cross-check).
+# `_retry` is imported from the provider module for the one remaining
+# direct-yfinance call (fetch_curated_news).
 _PRIMARY = YFinanceProvider()
+
+
+def crosscheck_price(ticker: str, primary_price: float) -> dict | None:
+    """Deliberate price cross-check (see orchestrator.crosscheck_price). Returns
+    None when the layer is off so callers can guard on a single truthiness check."""
+    if not _C.DATA_MULTISOURCE_ENABLED:
+        return None
+    return _orch.crosscheck_price(ticker, primary_price)
 
 
 DEFAULT_TICKERS = {
@@ -29,16 +40,22 @@ DEFAULT_TICKERS = {
 
 
 def fetch_price_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
+    if _C.DATA_MULTISOURCE_ENABLED:
+        return _orch.get_history(ticker, period)
     return _PRIMARY.price_history(ticker, period)
 
 
 def fetch_ticker_bundle(ticker: str, period: str = "6mo") -> dict:
     """Single session — fetches history, info, news, earnings and revisions in one go."""
+    if _C.DATA_MULTISOURCE_ENABLED:
+        return _orch.get_bundle(ticker, period)
     return _PRIMARY.bundle(ticker, period)
 
 
 def fetch_market_indices() -> list[dict]:
     """Fetch DOW, S&P 500 and NASDAQ last price + daily change."""
+    if _C.DATA_MULTISOURCE_ENABLED:
+        return _orch.get_market_indices()
     return _PRIMARY.market_indices()
 
 
@@ -47,6 +64,8 @@ def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
     Lightweight batch fetch of current prices only — bypasses the full history load.
     Returns {ticker: {"price": float, "prev_close": float, "change_pct": float, "fetched_at": str}}.
     """
+    if _C.DATA_MULTISOURCE_ENABLED:
+        return _orch.get_live_prices(tickers)
     return _PRIMARY.live_prices(tickers)
 
 
@@ -86,6 +105,8 @@ def fetch_risk_free_rate(fallback: float = 0.045) -> float:
     divides by 100. Falls back to `fallback` on any provider failure.
     """
     try:
+        if _C.DATA_MULTISOURCE_ENABLED:
+            return _orch.get_risk_free_rate()
         return _PRIMARY.risk_free_rate()
     except ProviderUnavailable:
         return fallback
