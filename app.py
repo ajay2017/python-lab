@@ -50,6 +50,7 @@ from stock_analyzer.constants import (
     MOVER_MIN_DAY_GAIN_PCT,
     MOVER_SHORTLIST_SIZE,
     DATA_XCHECK_PREVCLOSE_TOL_PCT,
+    FUNDAMENTALS_GATE_MIN_METRICS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
@@ -870,6 +871,16 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     financials = fetch_financials_from_info(bundle["info"])
     _sector_for_scoring = bundle.get("info", {}).get("sector", "")
     f_score, f_signals = fundamental_score(financials, _sector_for_scoring)
+    # Is the fundamental leg backed by real data, or a fabricated neutral 50?
+    # When yfinance .info is empty and no failover source backfilled it, none of
+    # the core scoreable metrics are present and fundamental_score returns 50 by
+    # default — the composite would then emit a confident verdict on data we
+    # don't have. Downstream (Analysis verdict + Brief new-position gate) reads
+    # this flag and WITHHOLDS the verdict instead. Threshold in constants.
+    _core_fund_keys = ("forward_pe", "revenue_growth", "earnings_growth",
+                       "profit_margins", "debt_to_equity")
+    _fund_metric_count = sum(1 for k in _core_fund_keys if financials.get(k) is not None)
+    fundamentals_available = _fund_metric_count >= FUNDAMENTALS_GATE_MIN_METRICS
     avg_sent, headlines = analyze_news(bundle["news"])
     s_score = sentiment_score_0_100(avg_sent)
     total = combined_score(t_score, f_score, s_score)
@@ -914,6 +925,10 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         # transparency tag on the Analysis page so the user knows the
         # composite's fundamental leg came from the secondary source.
         "info_source": bundle.get("_info_source"),
+        # False → fundamental leg is a fabricated neutral 50 (no real data);
+        # consumers withhold the verdict rather than recommend on it.
+        "fundamentals_available": fundamentals_available,
+        "fund_metric_count": _fund_metric_count,
     }
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -9170,38 +9185,68 @@ elif page == "📈 Analysis":
             sr = r["sr"]
             rm = r["risk_metrics"]
 
-            st.markdown(
-                f"<div style='padding:10px;border-radius:8px;background:{rec['color']}18;"
-                f"border-left:5px solid {rec['color']};margin-bottom:10px'>"
-                f"<b style='font-size:1.1em;color:{rec['color']}'>{rec['icon']} {rec['label']} "
-                f"· {r['total']}/100</b>"
-                f"<span style='color:#888;font-size:0.85em'> "
-                f"(<abbr title='{_tip('RSI').split(chr(10))[0]}' style='cursor:help'>Technical</abbr> "
-                f"{r['t_score']:.0f} × 45% + "
-                f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Fundamental</abbr> "
-                f"{r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
-                f"</span><br>{rec['rationale']}"
-                + (f"<br><small>📍 {r['upside']}</small>"
-                   if r["upside"]
-                   and rec["label"] not in ("Sell", "Strong Sell")
-                   and "upside" in r["upside"].lower()
-                   else "")
-                + "</div>", unsafe_allow_html=True,
-            )
-
-            # Fundamentals backfill transparency — when yfinance .info was sparse,
-            # the orchestrator pulled the fundamental leg from a failover source
-            # (FMP). Flagging it tells the user this composite is on backfilled
-            # fundamentals, not a yfinance hiccup that would have collapsed it to
-            # a neutral 50 (the old Buy↔Hold flip).
-            _info_src = r.get("info_source")
-            if _info_src:
-                _src_label = {"fmp": "FMP", "finnhub": "Finnhub"}.get(_info_src, _info_src)
-                st.caption(
-                    f"ℹ️ Fundamentals via {_src_label} — Yahoo Finance company data was "
-                    f"unavailable, so the fundamental score was backfilled from the "
-                    f"cross-check source (keeps the composite stable)."
+            # Verdict GATE: if the fundamental leg has no real data (yfinance
+            # .info empty AND no failover backfill), fundamental_score is a
+            # fabricated neutral 50 and the composite would emit a confident
+            # Buy/Hold on data we don't have. Per the operating posture
+            # ("recommend nothing rather than recommend wrongly") we WITHHOLD the
+            # verdict and show a red note that also explains the Brief↔Analysis
+            # mismatch the user would otherwise see. The composite number is
+            # deliberately NOT shown — a "Hold 58.1" on a fake 50 is the
+            # misleading output we're suppressing.
+            if not r.get("fundamentals_available", True):
+                st.markdown(
+                    "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                    "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                    "<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
+                    "fundamentals unavailable</b>"
+                    f"<br><span style='color:#dc2626'>We couldn't get {ticker}'s "
+                    "fundamental data from any source right now (Yahoo Finance returned "
+                    "nothing and the failover couldn't backfill it). The composite needs "
+                    "the fundamental leg (40% weight) to issue a trustworthy call — "
+                    "without it the score defaults to a neutral 50 and produces a "
+                    "<b>misleading verdict</b>, so the app is holding the recommendation "
+                    "rather than guessing.</span>"
+                    f"<br><small style='color:#dc2626'>⚠️ If {ticker} appeared under "
+                    "<b>New Positions to Initiate</b> in today's Brief, that read used "
+                    "fundamentals that are momentarily missing here — re-check in a "
+                    "minute (data sources recover), or verify on your broker before "
+                    "acting. This is a data gap, not a change in the thesis.</small>"
+                    "</div>", unsafe_allow_html=True,
                 )
+            else:
+                st.markdown(
+                    f"<div style='padding:10px;border-radius:8px;background:{rec['color']}18;"
+                    f"border-left:5px solid {rec['color']};margin-bottom:10px'>"
+                    f"<b style='font-size:1.1em;color:{rec['color']}'>{rec['icon']} {rec['label']} "
+                    f"· {r['total']}/100</b>"
+                    f"<span style='color:#888;font-size:0.85em'> "
+                    f"(<abbr title='{_tip('RSI').split(chr(10))[0]}' style='cursor:help'>Technical</abbr> "
+                    f"{r['t_score']:.0f} × 45% + "
+                    f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Fundamental</abbr> "
+                    f"{r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
+                    f"</span><br>{rec['rationale']}"
+                    + (f"<br><small>📍 {r['upside']}</small>"
+                       if r["upside"]
+                       and rec["label"] not in ("Sell", "Strong Sell")
+                       and "upside" in r["upside"].lower()
+                       else "")
+                    + "</div>", unsafe_allow_html=True,
+                )
+
+                # Fundamentals backfill transparency — when yfinance .info was sparse,
+                # the orchestrator pulled the fundamental leg from a failover source
+                # (FMP). Flagging it tells the user this composite is on backfilled
+                # fundamentals, not a yfinance hiccup that would have collapsed it to
+                # a neutral 50 (the old Buy↔Hold flip).
+                _info_src = r.get("info_source")
+                if _info_src:
+                    _src_label = {"fmp": "FMP", "finnhub": "Finnhub"}.get(_info_src, _info_src)
+                    st.caption(
+                        f"ℹ️ Fundamentals via {_src_label} — Yahoo Finance company data was "
+                        f"unavailable, so the fundamental score was backfilled from the "
+                        f"cross-check source (keeps the composite stable)."
+                    )
 
             # Source links
             st.markdown(

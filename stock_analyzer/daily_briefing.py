@@ -617,6 +617,20 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _composite_score = _f(_comp_data.get("total")) if _comp_data else None
             _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
 
+            # Fundamentals gate: if the composite was computed on a fabricated
+            # neutral-50 fundamental (no real data from any source), the verdict
+            # isn't trustworthy — hold it OUT of new_picks exactly like a failed
+            # fetch. Otherwise the Brief can surface a "new position to initiate"
+            # whose Analysis page withholds its verdict (the PINS/HUBS mismatch).
+            # Default True so legacy bundles without the flag aren't gated.
+            if _comp_data and not _comp_data.get("fundamentals_available", True):
+                composite_unavailable.append({
+                    "ticker":         ticker,
+                    "sector":         sector,
+                    "momentum_score": _f(row.get("Score", 0)),
+                })
+                continue
+
             # Exclude picks where composite is known and below the Buy threshold.
             # Scanner score measures momentum only — composite (technical + fundamental
             # + sentiment) is the authoritative signal. A 100/100 momentum score with

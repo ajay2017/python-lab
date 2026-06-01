@@ -224,3 +224,18 @@ DATA_XCHECK_FIELDS = {"price"}
 # same name while staying fresh enough for daily fundamentals (which barely
 # move intraday). Process-local cache — cleared on reboot or orchestrator reset.
 DATA_FMP_INFO_CACHE_TTL_SEC = 3600
+
+# Minimum number of CORE fundamental metrics that must be present for the
+# fundamental leg — and therefore the composite verdict — to be trusted. The
+# five core scoreable metrics are forward_pe, revenue_growth, earnings_growth,
+# profit_margins, debt_to_equity (see fundamentals.fundamental_score). When
+# yfinance `.info` comes back empty AND no failover source can backfill it,
+# zero of these are present, and fundamental_score returns a FABRICATED neutral
+# 50 (points/max_points with max_points==0). The composite then emits a
+# confident Buy/Hold on data we don't actually have — the exact "recommend
+# wrongly" failure the operating posture forbids. Below this threshold the app
+# WITHHOLDS the verdict (gates it, with a visible note) rather than guessing.
+# Default 1 → gate only when fundamentals are entirely absent (the PINS/HUBS
+# fabricated-50 case); raise to 2-3 to also withhold on thin/unreliable data.
+# Policy value — changing it is an investment-policy decision.
+FUNDAMENTALS_GATE_MIN_METRICS = 1
