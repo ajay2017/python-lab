@@ -216,3 +216,11 @@ DATA_XCHECK_LIVE_TOL_PCT      = 3.0   # loose — live gaps expected (latency)
 # sources for fundamentals/news would burn keyed free-tier quotas for little
 # gain. Kept as a set for cheap membership tests in the orchestrator.
 DATA_XCHECK_FIELDS = {"price"}
+
+# How long FMP fundamentals (the `.info` backfill) are cached per ticker, in
+# seconds. FMP's free tier is 250 calls/day and one fundamentals fetch is ~5
+# calls; without a cache, every cache-miss reload of a sparse-yfinance ticker
+# re-spends that. 1h comfortably covers a session's repeated analyses of the
+# same name while staying fresh enough for daily fundamentals (which barely
+# move intraday). Process-local cache — cleared on reboot or orchestrator reset.
+DATA_FMP_INFO_CACHE_TTL_SEC = 3600

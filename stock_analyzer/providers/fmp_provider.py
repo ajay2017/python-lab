@@ -19,11 +19,13 @@ Parsing is defensive about field names + shape (flat list vs legacy
 {"historical":[...]}) so a re-revamp doesn't silently break it.
 """
 
+import time
 from datetime import datetime, date, timedelta
 import pytz
 import pandas as pd
 
 from stock_analyzer import api_health as _ah
+from stock_analyzer import constants as C
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable, CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE,
 )
@@ -92,6 +94,11 @@ class FMPProvider(DataProvider):
 
     def __init__(self):
         self._key = get_secret("FMP_API_KEY")
+        # Process-local fundamentals cache {ticker: (fetched_at, info)} — one
+        # info() fetch is ~5 calls against a 250/day free tier, so caching it
+        # keeps repeated analyses of the same sparse-yfinance ticker from
+        # re-spending the quota. TTL in constants; cleared on reboot.
+        self._info_cache: dict[str, tuple[float, dict]] = {}
 
     def is_configured(self) -> bool:
         return bool(self._key)
@@ -246,10 +253,35 @@ class FMPProvider(DataProvider):
 
     def info(self, ticker: str) -> dict:
         """yfinance-shaped `.info` (fundamentals only — no history/news), used by
-        the orchestrator to backfill a sparse yfinance bundle's fundamentals."""
+        the orchestrator to backfill a sparse yfinance bundle's fundamentals.
+        Cached per ticker (DATA_FMP_INFO_CACHE_TTL_SEC) to protect the free-tier
+        quota. Only non-sparse results are cached, so a quota-exhausted empty
+        fetch is retried next time rather than pinned for an hour."""
         if not self._key:
             raise ProviderUnavailable("FMP_API_KEY not set")
-        return self._build_info(ticker)
+        hit = self._info_cache.get(ticker)
+        if hit and (time.time() - hit[0]) < float(C.DATA_FMP_INFO_CACHE_TTL_SEC):
+            return hit[1]
+        info = self._build_info(ticker)
+        if info and any(info.get(k) is not None for k in
+                        ("marketCap", "trailingPE", "profitMargins",
+                         "revenueGrowth", "returnOnEquity")):
+            self._info_cache[ticker] = (time.time(), info)
+        return info
+
+    def earnings(self, ticker: str) -> str | None:
+        """Soonest future earnings date — light accessor (1 call) so the
+        orchestrator can backfill earnings without re-fetching a full bundle."""
+        if not self._key:
+            raise ProviderUnavailable("FMP_API_KEY not set")
+        return self._next_earnings(ticker)
+
+    def revisions(self, ticker: str) -> dict:
+        """Analyst-revision consensus — light accessor (1 call), same rationale
+        as earnings(): avoids paying for a whole bundle during backfill."""
+        if not self._key:
+            raise ProviderUnavailable("FMP_API_KEY not set")
+        return self._fetch_revisions(ticker)
 
     def _build_info(self, ticker: str) -> dict:
         """Map FMP profile + ratios + growth + price-target into the subset of

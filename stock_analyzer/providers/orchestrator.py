@@ -152,12 +152,19 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
             if not _info_sparse(other_info):
                 primary["info"] = other_info
                 primary["_info_source"] = prov.name
-                # fill earnings/revisions too if the primary lacked them
-                if not primary.get("earnings") or not primary.get("revisions"):
+                # Backfill earnings/revisions too if the primary lacked them —
+                # via the LIGHT per-field accessors (1 call each), not a second
+                # full bundle(). A full bundle would re-fetch info (redundant —
+                # just got it) AND history (discarded, we keep the primary's),
+                # roughly tripling the free-tier quota cost per backfill.
+                if not primary.get("earnings") and hasattr(prov, "earnings"):
                     try:
-                        ob = prov.bundle(ticker, period)
-                        primary["earnings"] = primary.get("earnings") or ob.get("earnings")
-                        primary["revisions"] = primary.get("revisions") or ob.get("revisions")
+                        primary["earnings"] = prov.earnings(ticker)
+                    except Exception:
+                        pass
+                if not primary.get("revisions") and hasattr(prov, "revisions"):
+                    try:
+                        primary["revisions"] = prov.revisions(ticker)
                     except Exception:
                         pass
                 break
