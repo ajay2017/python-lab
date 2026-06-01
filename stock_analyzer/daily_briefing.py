@@ -1407,12 +1407,23 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     # 4 — Warning news on held positions (NEWS_SENTIMENT_CRITICAL < compound ≤ NEWS_SENTIMENT_WARN)
     # Always WATCH — one negative headline below critical threshold doesn't warrant a
     # quantitative action. Trigger condition tells the user what would escalate.
+    # Tickers already carrying an ACTIONABLE card — in Act Today, OR a stop /
+    # trim ACT in the Review blocks above. A negative-news WATCH for them is
+    # redundant: its only escalation is "tighten stop on this position", which
+    # is moot when the position is already being acted on (NVDA had a raise-stop
+    # ACT and a news WATCH). Earnings WATCH (a distinct scheduled catalyst, e.g.
+    # AVGO) is type "WATCH", so it does NOT suppress — genuinely different items
+    # still coexist; only same-dimension/redundant info is collapsed.
+    _actioned = set(_act_tickers) | {
+        str(it.get("ticker", "")).upper() for it in items
+        if (it.get("action") or {}).get("type") != "WATCH"
+    }
     warned: set = set()
     for item in (news_items or []):
         ticker = str(item.get("ticker", "")).upper()
         sent   = item.get("compound", 0)
         if (ticker in held_tickers
-                and ticker not in _act_tickers   # already an Act Today item — don't double-surface news
+                and ticker not in _actioned   # already actioned elsewhere — don't double-surface news
                 and NEWS_SENTIMENT_CRITICAL < sent <= NEWS_SENTIMENT_WARN
                 and ticker not in warned):
             warned.add(ticker)
