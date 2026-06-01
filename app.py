@@ -9120,6 +9120,34 @@ elif page == "📈 Analysis":
         use_container_width=True,
     )
 
+    # ── Price cross-check (analysed tickers) ────────────────────────────────
+    # Validate each analysed ticker's price against an independent source, so a
+    # researched (often not-held) name carries the same trust signal as the
+    # Portfolio page. Reuses the 5-min-cached batch cross-check. prev_close
+    # mismatch (strict) = real integrity fault; live gap (loose) = latency.
+    _an_xc = _cached_price_xcheck(tuple(sorted(results.keys())))
+    if _an_xc:
+        _an_bad = {t: r for t, r in _an_xc.items() if not r.get("ok", True)}
+        if _an_bad:
+            _an_lines = []
+            for t, r in _an_bad.items():
+                if r.get("prev_ok") is False:
+                    _an_lines.append(f"{t} (prior-close gap {r.get('prev_gap_pct')}% "
+                                     f">{DATA_XCHECK_PREVCLOSE_TOL_PCT}%)")
+                else:
+                    _an_lines.append(f"{t} (live gap {r.get('live_gap_pct')}%)")
+            st.warning(
+                "⚠️ **Price unverified — sources disagree** for "
+                + ", ".join(_an_lines)
+                + ". Verify against your broker before acting on price-sensitive levels."
+            )
+        else:
+            _an_one = next(iter(_an_xc.values()), {})
+            st.caption(
+                f"✓ Price cross-checked — {_an_one.get('primary_source', '—')} vs "
+                f"{_an_one.get('validator', '—')} agree within tolerance."
+            )
+
     # ── Per-ticker tabs ────────────────────────────────────────────────────
     st.subheader("Detailed Analysis")
     ticker_tabs = st.tabs(list(results.keys()))

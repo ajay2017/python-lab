@@ -284,6 +284,25 @@ class FMPProvider(DataProvider):
                         pass
         except Exception:
             pass
+        try:                                            # key metrics (TTM) — fills ROE / EPS / FCF
+            km = _first(self._get_json("key-metrics-ttm", {"symbol": ticker}))
+            if km:
+                if info.get("returnOnEquity") is None:
+                    info["returnOnEquity"] = _pick(km, "returnOnEquityTTM", "roeTTM")
+                eps = _pick(km, "netIncomePerShareTTM", "epsTTM", "earningsPerShareTTM")
+                if eps is not None:
+                    info["trailingEps"] = eps
+                # data.fetch_financials_from_info computes fcf_yield = freeCashflow /
+                # marketCap; back it out from FMP's FCF yield so that derivation works.
+                fcf_yield = _pick(km, "freeCashFlowYieldTTM")
+                mc = info.get("marketCap")
+                if fcf_yield is not None and mc:
+                    try:
+                        info["freeCashflow"] = float(fcf_yield) * float(mc)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         try:                                            # growth
             grow = _first(self._get_json("financial-growth", {"symbol": ticker, "limit": 1}))
             if grow:
