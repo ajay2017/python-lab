@@ -25,7 +25,7 @@ import pandas as pd
 
 from stock_analyzer import api_health as _ah
 from stock_analyzer.providers.base import (
-    DataProvider, ProviderUnavailable, CAP_LIVE_PRICE, CAP_HISTORY,
+    DataProvider, ProviderUnavailable, CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE,
 )
 from stock_analyzer.providers._util import get_secret, http_get_json, is_rate_limit
 
@@ -50,6 +50,24 @@ def _fmp_error(payload) -> str | None:
     return None
 
 
+def _first(payload):
+    """First element of a list payload, or the dict itself, else {}."""
+    if isinstance(payload, list):
+        return payload[0] if payload else {}
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _pick(d: dict, *keys):
+    """First present, non-None value among `keys` (tolerates FMP field renames)."""
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 def _num(row: dict, *keys):
     """First non-None value among `keys`, coerced to float, else None."""
     for k in keys:
@@ -64,6 +82,13 @@ def _num(row: dict, *keys):
 
 class FMPProvider(DataProvider):
     name = "fmp"
+    # CAP_BUNDLE is intentionally NOT advertised yet: bundle() is implemented but
+    # its field mappings are written to FMP's documented (unvalidated) endpoint
+    # shapes. Advertising it would route LIVE bundle-failover to FMP and could
+    # feed mis-mapped fundamentals into a composite. Validate bundle() via the
+    # selftest first, fix any endpoint/field mismatch, THEN add CAP_BUNDLE here
+    # to enable the failover. (orchestrator only uses providers for capabilities
+    # they advertise, so until then bundle failover stays yfinance-only.)
     capabilities = frozenset({CAP_LIVE_PRICE, CAP_HISTORY})
 
     def __init__(self):
@@ -182,3 +207,166 @@ class FMPProvider(DataProvider):
             raise ProviderUnavailable(f"fmp empty history for {ticker}")
         _ah.record("fmp", "success")
         return out
+
+    # ── Bundle (failover for the full analysis when yfinance is down) ─────────
+    def _get_json(self, path: str, params: dict | None = None):
+        """GET /stable/<path> with apikey; raise ProviderUnavailable (key
+        redacted) on transport error or FMP error payload."""
+        p = dict(params or {})
+        p["apikey"] = self._key
+        try:
+            payload = http_get_json(f"{_BASE}/{path}", params=p)
+        except Exception as exc:
+            if is_rate_limit(exc):
+                _ah.record("fmp", "rate_limit")
+            else:
+                _ah.record("fmp", "error", msg=self._safe(exc))
+            raise ProviderUnavailable(self._safe(exc)) from exc
+        err = _fmp_error(payload)
+        if err:
+            _ah.record("fmp", "error", msg=self._safe(err))
+            raise ProviderUnavailable(err)
+        return payload
+
+    def bundle(self, ticker: str, period: str = "6mo") -> dict:
+        """Compose the canonical bundle from FMP. History is REQUIRED (raises if
+        unavailable); every other section is best-effort — if an endpoint fails,
+        that section comes back empty rather than failing the whole bundle, so a
+        partial failover bundle is still useful for scoring. Field names map onto
+        the yfinance-shaped `info` dict that fundamentals/scoring read."""
+        if not self._key:
+            raise ProviderUnavailable("FMP_API_KEY not set")
+        hist = self.price_history(ticker, period)   # core — raises if unavailable
+        return {
+            "history":   hist,
+            "info":      self._build_info(ticker),
+            "news":      self._fetch_news(ticker),
+            "earnings":  self._next_earnings(ticker),
+            "revisions": self._fetch_revisions(ticker),
+        }
+
+    def _build_info(self, ticker: str) -> dict:
+        """Map FMP profile + ratios + growth + price-target into the subset of
+        yfinance `.info` keys that fundamentals.fundamental_score and
+        data.fetch_financials_from_info read. Each block is independent."""
+        info: dict = {}
+        try:                                            # company profile
+            prof = _first(self._get_json("profile", {"symbol": ticker}))
+            if prof:
+                info["longName"]  = prof.get("companyName")
+                info["shortName"] = prof.get("companyName")
+                info["longBusinessSummary"] = prof.get("description")
+                info["sector"]    = prof.get("sector")
+                info["industry"]  = prof.get("industry")
+                info["marketCap"] = _pick(prof, "marketCap", "mktCap")
+                info["beta"]      = prof.get("beta")
+                rng = prof.get("range") or ""
+                if isinstance(rng, str) and "-" in rng:
+                    try:
+                        lo, hi = (x.strip() for x in rng.split("-")[:2])
+                        info["fiftyTwoWeekLow"]  = float(lo)
+                        info["fiftyTwoWeekHigh"] = float(hi)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:                                            # valuation / quality ratios (TTM)
+            rat = _first(self._get_json("ratios-ttm", {"symbol": ticker}))
+            if rat:
+                info["trailingPE"]     = _pick(rat, "priceToEarningsRatioTTM", "peRatioTTM", "priceEarningsRatioTTM")
+                info["profitMargins"]  = _pick(rat, "netProfitMarginTTM", "netProfitMargin")
+                info["returnOnEquity"] = _pick(rat, "returnOnEquityTTM", "returnOnEquity")
+                info["currentRatio"]   = _pick(rat, "currentRatioTTM", "currentRatio")
+                de = _pick(rat, "debtToEquityRatioTTM", "debtEquityRatioTTM", "debtToEquity")
+                if de is not None:
+                    try:                                # yfinance reports D/E as a percent (1.5x → 150)
+                        info["debtToEquity"] = float(de) * 100
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:                                            # growth
+            grow = _first(self._get_json("financial-growth", {"symbol": ticker, "limit": 1}))
+            if grow:
+                info["revenueGrowth"]  = _pick(grow, "revenueGrowth", "growthRevenue")
+                info["earningsGrowth"] = _pick(grow, "epsgrowth", "growthEPS", "netIncomeGrowth")
+        except Exception:
+            pass
+        try:                                            # analyst price targets
+            tgt = _first(self._get_json("price-target-consensus", {"symbol": ticker}))
+            if tgt:
+                info["targetMeanPrice"]   = _pick(tgt, "targetConsensus", "targetMean")
+                info["targetHighPrice"]   = _pick(tgt, "targetHigh")
+                info["targetLowPrice"]    = _pick(tgt, "targetLow")
+                info["targetMedianPrice"] = _pick(tgt, "targetMedian", "targetConsensus")
+        except Exception:
+            pass
+        return info
+
+    def _fetch_news(self, ticker: str, limit: int = 8) -> list:
+        """Map FMP stock news into the flat shape data._parse_news_item reads
+        (title / publisher / link / providerPublishTime)."""
+        try:
+            payload = self._get_json("news/stock", {"symbols": ticker, "limit": limit})
+        except Exception:
+            return []
+        rows = payload if isinstance(payload, list) else (
+            payload.get("content") if isinstance(payload, dict) else [])
+        out = []
+        for r in (rows or [])[:limit]:
+            title = r.get("title")
+            if not title:
+                continue
+            ts = 0
+            pub = r.get("publishedDate") or r.get("date") or ""
+            if pub:
+                try:
+                    ts = int(datetime.fromisoformat(str(pub).replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    ts = 0
+            out.append({
+                "title": title,
+                "publisher": r.get("site") or r.get("publisher") or "FMP",
+                "link": r.get("url"),
+                "providerPublishTime": ts,
+            })
+        return out
+
+    def _next_earnings(self, ticker: str) -> str | None:
+        """Soonest future earnings date as 'YYYY-MM-DD', else None."""
+        try:
+            payload = self._get_json("earnings", {"symbol": ticker, "limit": 12})
+        except Exception:
+            return None
+        rows = payload if isinstance(payload, list) else []
+        today = date.today().isoformat()
+        future = sorted(str(r.get("date"))[:10] for r in rows
+                        if r.get("date") and str(r.get("date"))[:10] >= today)
+        return future[0] if future else None
+
+    def _fetch_revisions(self, ticker: str) -> dict:
+        """Map FMP analyst grade consensus into the yfinance-shaped revisions
+        dict (net upgrades-vs-downgrades is the signal scoring uses). A consensus
+        snapshot, not a 90-day delta — a reasonable failover proxy."""
+        try:
+            d = _first(self._get_json("grades-consensus", {"symbol": ticker}))
+        except Exception:
+            return {}
+        if not d:
+            return {}
+        def _i(*keys):
+            v = _pick(d, *keys)
+            try:
+                return int(v) if v is not None else 0
+            except (TypeError, ValueError):
+                return 0
+        sb, b = _i("strongBuy"), _i("buy")
+        h = _i("hold")
+        s, ss = _i("sell"), _i("strongSell")
+        ups, downs = sb + b, s + ss
+        if (ups + downs + h) == 0:
+            return {}
+        return {
+            "upgrades_90d": ups, "downgrades_90d": downs,
+            "maintained_90d": h, "net": ups - downs, "latest": [],
+        }

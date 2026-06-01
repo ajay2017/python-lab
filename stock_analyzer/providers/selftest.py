@@ -66,6 +66,24 @@ def main(argv: list[str]) -> int:
     print(f"   (prev_close tol={C.DATA_XCHECK_PREVCLOSE_TOL_PCT}% strict, "
           f"live tol={C.DATA_XCHECK_LIVE_TOL_PCT}% loose)")
     print()
+
+    # ── FMP full bundle (Phase 3b — analysis/composite failover) ─────────────
+    fm = FMPProvider()
+    if fm.is_configured():
+        print(f"=== fmp bundle({tickers[0]})  (failover for the full analysis)")
+        try:
+            b = fm.bundle(tickers[0], "3mo")
+            info = b.get("info", {})
+            print(f"   history: {len(b.get('history', []))} rows")
+            print(f"   info keys populated: {sorted(k for k, v in info.items() if v is not None)}")
+            print(f"   sector={info.get('sector')!r} PE={info.get('trailingPE')} "
+                  f"margin={info.get('profitMargins')} revGrowth={info.get('revenueGrowth')} "
+                  f"target={info.get('targetMeanPrice')}")
+            print(f"   news: {len(b.get('news') or [])} items · "
+                  f"earnings: {b.get('earnings')} · revisions: {b.get('revisions')}")
+        except Exception as exc:
+            print(f"   bundle ERROR: {exc}")
+        print()
     return 0
 
 
