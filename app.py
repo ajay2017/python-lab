@@ -20,6 +20,7 @@ from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
+    crosscheck_price, crosscheck_prices,
 )
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import fundamental_score, upside_potential
@@ -48,6 +49,7 @@ from stock_analyzer.constants import (
     MACRO_IMMINENT_DAYS,
     MOVER_MIN_DAY_GAIN_PCT,
     MOVER_SHORTLIST_SIZE,
+    DATA_XCHECK_PREVCLOSE_TOL_PCT,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
@@ -768,7 +770,9 @@ with st.sidebar:
     _ah_auto_expand = _ah_overall_lv in ("red", "yellow")
     with st.expander(f"{_ah_overall_icon} Data Health", expanded=_ah_auto_expand):
         for _ah_src, _ah_label in [
-            ("yahoo_finance", "Yahoo Finance"),
+            ("finnhub",       "Finnhub (live-price primary)"),
+            ("yahoo_finance", "Yahoo Finance (history/failover)"),
+            ("fmp",           "FMP (failover)"),
             ("fred",          "FRED (St. Louis Fed)"),
             ("supabase",      "Supabase DB"),
         ]:
@@ -812,12 +816,25 @@ with st.sidebar:
         st.markdown("🟢 **Supabase connected** — data persists")
     else:
         st.markdown("🟡 **Local session only** — [configure DB to persist](https://supabase.com)")
-    st.caption("Prices: Yahoo Finance · Not financial advice")
+    st.caption("Market data: Finnhub + Yahoo Finance + FMP · Not financial advice")
 
 # ── Risk-free rate (13-week T-bill, refreshed daily) ─────────────────────────
 @st.cache_data(ttl=86400)
 def _get_rfr() -> float:
     return fetch_risk_free_rate()
+
+
+# ── Price cross-check (held positions) — periodic integrity guardrail ────────
+# Compares the live-price primary (Finnhub) against an independent source
+# (yfinance) for held tickers. 5-min TTL: this is a periodic data-integrity
+# check, not a live feed, and it must not re-run on every Streamlit rerun or
+# burn the keyed quota. Keyed on the sorted ticker tuple.
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_price_xcheck(tickers_key: tuple) -> dict:
+    try:
+        return crosscheck_prices(list(tickers_key))
+    except Exception:
+        return {}
 
 
 @st.cache_data(ttl=300)
@@ -1099,6 +1116,39 @@ if page == "🏠 Home":
         st.divider()
 
     _price_strip(held_tickers)
+
+    # ── Price cross-check guardrail (fail loud on source disagreement) ───────
+    # The settled prev_close should match across independent sources; a breach
+    # means a real data-integrity fault (missed split, wrong-symbol mapping,
+    # poisoned feed) on a number that drives stops / P&L. Live-price gaps are
+    # tolerated loosely (delayed validator vs real-time primary). Per the app's
+    # "decides, fail loud" posture, a breach is surfaced as a red banner, not
+    # buried — the user decides whether to trust the figure.
+    if held_tickers:
+        _xc = _cached_price_xcheck(tuple(sorted(held_tickers)))
+        _xc_bad = {t: r for t, r in _xc.items() if not r.get("ok", True)}
+        if _xc_bad:
+            _xc_lines = []
+            for t, r in _xc_bad.items():
+                _bits = []
+                if r.get("prev_ok") is False:
+                    _bits.append(
+                        f"prior-close gap {r.get('prev_gap_pct')}% "
+                        f"(>{DATA_XCHECK_PREVCLOSE_TOL_PCT}% limit)"
+                    )
+                if r.get("live_ok") is False:
+                    _bits.append(f"live-price gap {r.get('live_gap_pct')}%")
+                _xc_lines.append(
+                    f"- **{t}**: {r.get('primary_source')} vs {r.get('validator')} "
+                    f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
+                )
+            st.error(
+                "⚠️ **Price unverified — sources disagree.** The primary price feed "
+                "differs from an independent source beyond tolerance for:\n\n"
+                + "\n".join(_xc_lines)
+                + "\n\nTreat stops / P&L for these names with caution and verify against your broker."
+            )
+        st.session_state["_price_xcheck_cache"] = _xc
 
     # Merge live prices into held_data so P&L uses the freshest price
     for ticker, lp in st.session_state.get("_live_prices", {}).items():
