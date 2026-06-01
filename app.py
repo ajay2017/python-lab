@@ -1078,10 +1078,21 @@ if page == "🏠 Home":
             )
         refresh_note = (
             "🔄 auto-refreshes every 60s"
-            if mkt["is_open"] else "market closed · showing last close"
+            if mkt["is_open"]
+            else "market closed · showing last close (pre/after-hours moves appear in Pre-Market Intel)"
         )
+        # Reflect the ACTUAL source(s) that served these prices (multi-source
+        # layer: Finnhub real-time primary, gap-fill to yfinance/FMP). When the
+        # market is closed every source reports the last regular-session close.
+        _src_labels = {
+            "finnhub":       "Finnhub (real-time)",
+            "yahoo_finance": "Yahoo Finance (15-min delayed)",
+            "fmp":           "FMP",
+        }
+        _srcs = {v.get("source") for v in live.values() if v.get("source")}
+        _src_str = " + ".join(_src_labels.get(s, s) for s in sorted(_srcs)) or "Yahoo Finance"
         st.caption(
-            f"Prices: **Yahoo Finance** · "
+            f"Prices: **{_src_str}** · "
             f"{list(live.values())[0]['fetched_at']} · "
             f"{mkt['label']} · {refresh_note}"
         )

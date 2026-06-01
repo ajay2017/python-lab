@@ -67,6 +67,7 @@ class FinnhubProvider(DataProvider):
                     "change_pct": round(float(dp), 2) if dp is not None else (
                         round((price - prev) / prev * 100, 2) if prev else 0.0),
                     "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
+                    "source":     "finnhub",
                 }
             except Exception as exc:
                 had_error = True

@@ -122,6 +122,7 @@ class FMPProvider(DataProvider):
                 "change_pct": round(chg, 2) if chg is not None else (
                     round((price - prev) / prev * 100, 2) if prev else 0.0),
                 "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
+                "source":     "fmp",
             }
 
         if results:

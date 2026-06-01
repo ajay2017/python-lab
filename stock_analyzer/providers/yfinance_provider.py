@@ -229,6 +229,7 @@ class YFinanceProvider(DataProvider):
                         "prev_close": round(prev, 2),
                         "change_pct": round((price - prev) / prev * 100, 2) if prev else 0.0,
                         "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
+                        "source":     "yahoo_finance",
                     }
                 except Exception:
                     continue
