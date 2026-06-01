@@ -244,6 +244,13 @@ class FMPProvider(DataProvider):
             "revisions": self._fetch_revisions(ticker),
         }
 
+    def info(self, ticker: str) -> dict:
+        """yfinance-shaped `.info` (fundamentals only — no history/news), used by
+        the orchestrator to backfill a sparse yfinance bundle's fundamentals."""
+        if not self._key:
+            raise ProviderUnavailable("FMP_API_KEY not set")
+        return self._build_info(ticker)
+
     def _build_info(self, ticker: str) -> dict:
         """Map FMP profile + ratios + growth + price-target into the subset of
         yfinance `.info` keys that fundamentals.fundamental_score and

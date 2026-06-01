@@ -101,8 +101,67 @@ def get_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
     return _failover_single(CAP_HISTORY, "price_history", ticker, period)
 
 
+def _info_sparse(info: dict | None) -> bool:
+    """True when an `.info` dict can't support fundamental scoring — yfinance's
+    `.info` intermittently returns empty/sparse, which would collapse the
+    fundamental score to a neutral 50 and flip a Buy to a Hold on a data hiccup
+    rather than a real change."""
+    if not info:
+        return True
+    anchors = ("marketCap", "trailingPE", "profitMargins", "revenueGrowth", "returnOnEquity")
+    return not any(info.get(k) is not None for k in anchors)
+
+
 def get_bundle(ticker: str, period: str = "6mo") -> dict:
-    return _failover_single(CAP_BUNDLE, "bundle", ticker, period)
+    """Bundle with failover AND fundamental backfill. The primary (yfinance)
+    bundle is used for history + news (sentiment); if its `.info` is sparse (a
+    yfinance hiccup), fundamentals are backfilled from the next bundle-capable
+    provider (FMP) so the composite stays stable across surfaces instead of
+    flipping Buy↔Hold on missing `.info`. Keeps the richest of both sources."""
+    providers = _providers_for(CAP_BUNDLE)
+    primary = None
+    last_exc: Exception | None = None
+    for prov in providers:
+        try:
+            b = prov.bundle(ticker, period)
+        except Exception as exc:
+            last_exc = exc
+            continue
+        if not b:
+            continue
+        hist = b.get("history")
+        if isinstance(hist, pd.DataFrame) and hist.empty:
+            continue
+        primary = b
+        primary.setdefault("_source", prov.name)
+        break
+    if primary is None:
+        if last_exc is not None:
+            raise last_exc
+        raise ProviderUnavailable(f"no configured provider served bundle for {ticker}")
+
+    # Backfill fundamentals if the primary's .info is sparse.
+    if _info_sparse(primary.get("info")):
+        for prov in providers:
+            if prov.name == primary.get("_source") or not hasattr(prov, "info"):
+                continue
+            try:
+                other_info = prov.info(ticker)
+            except Exception:
+                continue
+            if not _info_sparse(other_info):
+                primary["info"] = other_info
+                primary["_info_source"] = prov.name
+                # fill earnings/revisions too if the primary lacked them
+                if not primary.get("earnings") or not primary.get("revisions"):
+                    try:
+                        ob = prov.bundle(ticker, period)
+                        primary["earnings"] = primary.get("earnings") or ob.get("earnings")
+                        primary["revisions"] = primary.get("revisions") or ob.get("revisions")
+                    except Exception:
+                        pass
+                break
+    return primary
 
 
 def get_market_indices() -> list:
