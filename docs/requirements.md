@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.3  
+**Version:** 1.4  
 **Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
@@ -61,6 +61,7 @@ Single source of truth: `stock_analyzer/constants.py`.
 | Composite — Buy boundary (entry AND add-to-winner) | 65 | Gate |
 | Composite — Strong Buy boundary | 75 | Tier label |
 | Composite — Hold floor (below = Sell zone) | 44 | Tier label |
+| Fundamentals gate — min core metrics to trust the verdict | 1 | **Hard** (withhold verdict below it) |
 | Risk per trade | 1.5% of portfolio | Sizing |
 | Earnings imminence window | 7 days | Caution |
 | Macro imminence window (HIGH-impact event in pick's sector) | 3 days | **Hard** |
@@ -96,6 +97,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | G-12 | Composite Signal empty on held position → Confirmed verdict | Route to "🔍 Verify — Composite Signal Missing" |
 | G-13 | ENTER_NOW without validated R:R (`rr is None`) | Downgrade to NEAR_ENTRY; R:R must be `≥ 2.0` |
 | G-14 | `build_daily_briefing` failure → coordination caches | Set to `None`; dependent features show explicit offline banner |
+| G-15 | Fundamentals absent from all sources (< `FUNDAMENTALS_GATE_MIN_METRICS`) → Analysis verdict AND Brief new-pick | Withhold the verdict: Analysis suppresses Buy/Hold and shows a red "verdict withheld" note; `daily_briefing` holds the ticker out of `new_picks` (→ `composite_unavailable`) |
 
 ### 2A.4 Soft warnings (kept in addition to gates)
 
@@ -167,6 +169,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-39a | Grow Today must hard-suppress new picks in any sector with a HIGH-impact macro event scheduled within `MACRO_IMMINENT_DAYS` (3 days), and surface a "Picks Suppressed — Imminent HIGH-Impact Macro Event" banner with the affected sectors and event date. (Implements G-07.) |
 | F-39b | Grow Today and Buy Candidates add-to-winner blocks must suppress: (a) tickers Risk Advisor recommends trimming, (b) positions at or above the single-name ceiling (15%), and (c) positions drift-overweight beyond equal-weight + tolerance. Each suppression class renders a distinct banner with the conflict reason. (Implements G-01, G-04, G-09.) |
 | F-39c | Review Before Close items flagged as weak-large-positions must pull the entry thesis (most recent BUY notes) and up to two recent lessons from the Trade Journal for that ticker, rendered as an amber-bordered block below the mechanical assessment. When no journal entry exists, prompt the user to log thesis on future entries. |
+| F-39d | Grow Today must hold a candidate OUT of new picks when its composite was computed without real fundamental data (`fundamentals_available == False`, i.e. < `FUNDAMENTALS_GATE_MIN_METRICS` core metrics present). Such a ticker is routed to the `composite_unavailable` bucket, never surfaced as a "new position to initiate". (Implements G-15.) |
 
 ### 3.3 Stock Analysis
 
@@ -176,6 +179,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-41 | Summary scorecard table: price, composite score, signal, position/entry zone, stop, base target, R:R, shares, P&L/cost, earnings |
 | F-42 | Scorecard adapts to context: held tickers show actual shares and P&L%; non-held show entry zone and suggested entry cost |
 | F-43 | Signal banner shows composite score breakdown (technical × 45% + fundamental × 40% + sentiment × 15%) |
+| F-43a | When fundamentals are unavailable from all sources (`fundamentals_available == False`), the Analysis page must WITHHOLD the Buy/Hold verdict — suppressing the signal banner and composite number — and render a red "Verdict withheld — fundamentals unavailable" note. The note must explain the data gap and the possible Brief↔Analysis mismatch (a ticker that appeared as a Brief new-pick when data was present), and advise re-checking / broker verification. The verdict must not be computed on the fabricated neutral-50 fundamental. (Implements G-15.) |
 | F-44 | Analyst upside note shown only when it reinforces signal direction (upside on Buy; suppressed on Sell and when downside on Buy) |
 | F-45 | Trade Plan tab (Buy/Strong Buy): entry zone, stop loss, R:R, position sizing (shares, cost, max risk) |
 | F-46 | Exit Plan tab (Sell/Strong Sell): current price, shares held, position value, P&L if sold now; exit recommendation banner; ATR downside level |
