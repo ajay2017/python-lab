@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.7  
+**Version:** 1.8  
 **Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
@@ -167,7 +167,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-35 | Pre-Market Intel shows pre-market movers (≥0.5% change) for all held positions and watchlist tickers; held positions are visually distinguished |
 | F-36 | Pre-Market Intel shows today's HIGH and MEDIUM impact economic events as "catalysts" |
 | F-37 | Pre-market expected open tone (bull/bear/flat) is derived from ES=F futures % change (≥+0.4% bull, ≤-0.4% bear) |
-| F-37a | **Catalyst Watch** panel (in the Pre-Market Intel area, but NOT gated by pre-market hours — after-close reports must show during the trading day): upcoming earnings within `CATALYST_WATCH_WINDOW_DAYS` (7) for names the app tracks (held ∪ watchlist ∪ sector universe). Each row shows days-until, before-open/after-close, sector, a 🔥 flag when the sector is leading, and a held/watchlist/universe tag. **Awareness only** — it must NOT recommend initiating into earnings (the proximity gates still suppress that); it removes the blind spot of a tracked name reporting unannounced (the PANW case). Earnings dates come from a market-wide calendar (FMP) intersected with the tracked set; on failure it degrades to held-only earnings. |
+| F-37a | **Catalyst Watch** — its OWN nav page (🔔 Catalyst Watch, before Economic Calendar; viewable any time, not gated to pre/post-market). Lists upcoming earnings within `CATALYST_WATCH_WINDOW_DAYS` (7) for names the app tracks (held ∪ watchlist ∪ sector universe), grouped Today / Tomorrow / Next-7d. Each row: ticker, sector (🔥 when leading), date, before-open/after-close, and a held/watchlist/universe chip. **Awareness only** — it must NOT recommend initiating into earnings (the proximity gates still suppress that); it removes the blind spot of a tracked name reporting unannounced (the PANW case). Earnings dates: FMP market-wide calendar (one call) first, then a per-name yfinance fallback for any tracked names FMP didn't cover, so universe coverage does not depend on FMP's tier. 24h-cached; the dedicated page makes the heavier fetch acceptable (runs only when visited). |
 | F-38 | When `build_daily_briefing()` fails, the page must render an explicit "offline" state on dependent features (notably the Watchlist) rather than silently disabling coordination gates. The user must see that gates are inactive. (Implements G-14.) |
 | F-39 | Grow Today must surface a "Composite Scores Unavailable" banner when the composite pre-fetch failed for any of the intended top picks, so the user knows the multi-factor gate did not run for those tickers. |
 | F-39a | Grow Today must hard-suppress new picks in any sector with a HIGH-impact macro event scheduled within `MACRO_IMMINENT_DAYS` (3 days), and surface a "Picks Suppressed — Imminent HIGH-Impact Macro Event" banner with the affected sectors and event date. (Implements G-07.) |
