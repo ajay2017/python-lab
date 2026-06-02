@@ -171,6 +171,20 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
     return primary
 
 
+def get_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
+    """Market-wide upcoming earnings for a date range. Only FMP serves this, so
+    it's a best-effort single-source lookup: return [] (not an error) when no
+    provider in the chain offers it, so Catalyst Watch degrades to held-only
+    earnings rather than failing the page."""
+    for prov in chain():
+        if hasattr(prov, "earnings_calendar"):
+            try:
+                return prov.earnings_calendar(from_date, to_date) or []
+            except Exception:
+                return []
+    return []
+
+
 def get_market_indices() -> list:
     return _failover_single(CAP_INDICES, "market_indices")
 

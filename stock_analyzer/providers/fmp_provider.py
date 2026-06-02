@@ -283,6 +283,28 @@ class FMPProvider(DataProvider):
             raise ProviderUnavailable("FMP_API_KEY not set")
         return self._fetch_revisions(ticker)
 
+    def earnings_calendar(self, from_date: str, to_date: str) -> list[dict]:
+        """Upcoming earnings across the market for a date range, in ONE call.
+        Returns [{ticker, date, when}] (when = 'bmo'/'amc'/'' if FMP provides it).
+        Used by Catalyst Watch, which intersects this with the app's tracked
+        universe — so one call covers held + watchlist + sector-universe names."""
+        if not self._key:
+            raise ProviderUnavailable("FMP_API_KEY not set")
+        payload = self._get_json("earnings-calendar", {"from": from_date, "to": to_date})
+        rows = payload if isinstance(payload, list) else []
+        out: list[dict] = []
+        for r in rows:
+            sym = r.get("symbol")
+            dt  = r.get("date")
+            if not sym or not dt:
+                continue
+            out.append({
+                "ticker": str(sym).upper(),
+                "date":   str(dt)[:10],
+                "when":   str(r.get("time") or r.get("when") or "").lower(),
+            })
+        return out
+
     def _build_info(self, ticker: str) -> dict:
         """Map FMP profile + ratios + growth + price-target into the subset of
         yfinance `.info` keys that fundamentals.fundamental_score and

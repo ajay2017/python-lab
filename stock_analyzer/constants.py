@@ -164,6 +164,13 @@ COMPOSITE_WEIGHTS = {
 EARNINGS_IMMINENT_DAYS = 7       # any trade within this window = caution
 MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = suppress new picks in affected sector
 
+# Forward window (days) for the Catalyst Watch panel — upcoming earnings for
+# names the app tracks (held + watchlist + sector universe). AWARENESS ONLY: it
+# does not recommend initiating into earnings (the proximity gates still
+# suppress that); it just removes the blind spot of a tracked name reporting
+# without warning. Post-print confirmation still surfaces via the Movers scan.
+CATALYST_WATCH_WINDOW_DAYS = 7
+
 # ── Macro-event playbook gates (macro_playbook.py) ───────────────────────────
 # Pre-event PROTECT / WATCH classification thresholds. Values surfaced here
 # so future changes are policy decisions, not hidden literals.

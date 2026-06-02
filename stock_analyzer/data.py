@@ -78,6 +78,15 @@ def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
     return _PRIMARY.live_prices(tickers)
 
 
+def fetch_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
+    """Market-wide upcoming earnings for a date range (Catalyst Watch). Only the
+    multi-source layer's FMP provider serves this; returns [] when the layer is
+    off or no provider offers it, so the caller degrades gracefully."""
+    if _C.DATA_MULTISOURCE_ENABLED:
+        return _orch.get_earnings_calendar(from_date, to_date)
+    return []
+
+
 def market_status() -> dict:
     """Returns current NYSE market status and a human-readable label."""
     now_et = datetime.now(_ET)
