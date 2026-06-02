@@ -157,6 +157,22 @@ class YFinanceProvider(DataProvider):
         """Lightweight .info fetch (no history) — backs data.fetch_financials."""
         return _retry(lambda: yf.Ticker(ticker).info or {})
 
+    def next_earnings(self, ticker: str) -> str | None:
+        """Light next-earnings-date fetch (yf.Ticker.calendar, no history/info) —
+        'YYYY-MM-DD' or None. Lets Catalyst Watch cover universe names cheaply
+        when the FMP market-wide calendar isn't available, without the full bundle."""
+        def _fetch():
+            cal = yf.Ticker(ticker).calendar
+            if isinstance(cal, dict):
+                dates = cal.get("Earnings Date") or cal.get("earningsDate")
+                if dates:
+                    return str(dates[0])[:10]
+            return None
+        try:
+            return _retry(_fetch)
+        except Exception:
+            return None
+
     # ── Market indices ────────────────────────────────────────────────────────
     def market_indices(self) -> list[dict]:
         results = []

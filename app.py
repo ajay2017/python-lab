@@ -20,7 +20,7 @@ from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
-    crosscheck_price, crosscheck_prices, fetch_earnings_calendar,
+    crosscheck_price, crosscheck_prices, fetch_earnings_calendar, fetch_next_earnings,
 )
 from stock_analyzer.catalyst_watch import build_catalyst_watch
 from stock_analyzer.technicals import compute_indicators, technical_score
@@ -722,7 +722,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "🔔 Catalyst Watch", "📅 Economic Calendar"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -842,14 +842,39 @@ def _cached_price_xcheck(tickers_key: tuple) -> dict:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _cached_earnings_calendar(from_str: str, to_str: str) -> list:
-    """24h-cached market-wide earnings calendar for Catalyst Watch. One FMP call
-    per day covers the whole window; keyed by date range so it refreshes daily.
-    Returns [] on any failure so the panel degrades to held-only earnings."""
+def _cached_catalyst_calendar(tracked_tuple: tuple, from_str: str, to_str: str) -> list:
+    """24h-cached upcoming-earnings rows for the tracked universe, used by the
+    Catalyst Watch page. Tries the FMP market-wide calendar first (one cheap
+    call); for any tracked names it didn't cover, falls back to a light
+    per-name yfinance fetch (threaded) so universe coverage doesn't depend on
+    FMP's calendar being on the free tier. Keyed by date range → refreshes daily."""
+    tracked = {str(t).upper() for t in tracked_tuple}
+    rows: list[dict] = []
+    covered: set = set()
     try:
-        return fetch_earnings_calendar(from_str, to_str)
+        for r in (fetch_earnings_calendar(from_str, to_str) or []):
+            t = str(r.get("ticker", "")).upper()
+            if t in tracked:
+                rows.append(r)
+                covered.add(t)
     except Exception:
-        return []
+        pass
+    missing = [t for t in tracked_tuple if t not in covered]
+    if missing:
+        from concurrent.futures import ThreadPoolExecutor
+        def _one(t):
+            try:
+                return (t, fetch_next_earnings(t))
+            except Exception:
+                return (t, None)
+        try:
+            with ThreadPoolExecutor(max_workers=8) as _ex:
+                for t, d in _ex.map(_one, missing):
+                    if d:
+                        rows.append({"ticker": str(t).upper(), "date": d, "when": ""})
+        except Exception:
+            pass
+    return rows
 
 
 @st.cache_data(ttl=300)
@@ -1636,6 +1661,11 @@ if page == "🏠 Home":
             for p in (_gt_today.get("new_picks") or []) + (_gt_today.get("add_positions") or [])
             if str(p.get("sector", "")).strip()
         })
+        # Stash leading sector names so the standalone Catalyst Watch page can
+        # show the 🔥 leading-sector flag without recomputing the brief.
+        st.session_state["_leading_sectors_cache"] = [
+            ls.get("sector", "") for ls in (_gt_today.get("leading_sectors") or [])
+        ]
 
         # ── Recommendations log (persist + decorate with first-seen) ─────────
         # Capture every pick surfaced today so the user can audit the App's
@@ -2191,80 +2221,8 @@ if page == "🏠 Home":
             if i.get("ticker")
         }
 
-        # ── Catalyst Watch — upcoming earnings for tracked names (AWARENESS) ──
-        # Ungated by is_premarket() on purpose: an after-close report (the PANW
-        # case) must be visible during the trading day, not only pre-open. This
-        # does NOT recommend buying into earnings — the proximity gates still
-        # suppress that; it removes the blind spot so the user can make their own
-        # call and isn't blindsided by a tracked name reporting.
-        try:
-            from datetime import timedelta as _timedelta
-            _cw_today  = _today_et()
-            _cw_from   = _cw_today.isoformat()
-            _cw_to     = (_cw_today + _timedelta(days=CATALYST_WATCH_WINDOW_DAYS)).isoformat()
-            _cw_cal    = _cached_earnings_calendar(_cw_from, _cw_to)
-            # Tracked universe = held ∪ watchlist ∪ curated sector universe.
-            _cw_watch  = {str(t).upper() for t in st.session_state.get("watchlist", [])}
-            _cw_held   = {str(t).upper() for t in held_tickers}
-            _cw_secmap: dict = {}
-            for _sec, _tks in SECTOR_UNIVERSE.items():
-                for _tk in _tks:
-                    _cw_secmap[_tk.upper()] = _sec
-            # Held names not in the sector universe still get a sector label.
-            for _t in _cw_held:
-                _cw_secmap.setdefault(_t, TICKER_SECTORS.get(_t, ""))
-            _cw_tracked = set(_cw_secmap) | _cw_held | _cw_watch
-            _cw_held_earn = {
-                _t: (held_data.get(_t) or {}).get("earnings")
-                for _t in _cw_held if (held_data.get(_t) or {}).get("earnings")
-            }
-            _cw_lead = {
-                ls.get("sector", "")
-                for ls in (_daily_brief.get("grow_today", {}) or {}).get("leading_sectors", [])
-            }
-            _cw_rows = build_catalyst_watch(
-                tracked=_cw_tracked, held_tickers=_cw_held, watchlist=_cw_watch,
-                sector_lookup=_cw_secmap, calendar_rows=_cw_cal,
-                held_earnings=_cw_held_earn, leading_sector_names=_cw_lead,
-                today=_cw_today, window_days=CATALYST_WATCH_WINDOW_DAYS,
-            )
-        except Exception:
-            _cw_rows = []
-
-        if _cw_rows:
-            _own_chip = {
-                "held":      ("#1e3a8a", "#bfdbfe", "held"),
-                "watchlist": ("#4c1d95", "#ddd6fe", "watchlist"),
-                "universe":  ("#374151", "#d1d5db", "universe"),
-            }
-            _cw_html = []
-            for _r in _cw_rows[:8]:
-                _when  = f" · {_r['when']}" if _r["when"] else ""
-                _dlbl  = "today" if _r["days"] == 0 else (
-                    "tomorrow" if _r["days"] == 1 else f"in {_r['days']}d")
-                _hot   = " 🔥" if _r["sector_hot"] else ""
-                _bg, _fg, _lbl = _own_chip.get(_r["ownership"], _own_chip["universe"])
-                _cw_html.append(
-                    f"<div style='color:#e5e7eb;font-size:0.82em;margin:2px 0'>"
-                    f"<b>{_r['ticker']}</b> "
-                    f"<span style='color:#fbbf24'>{_dlbl}{_when}</span> "
-                    f"<span style='color:#9ca3af'>· {_r['sector']}{_hot}</span> "
-                    f"<span style='background:{_bg};color:{_fg};border-radius:8px;"
-                    f"padding:1px 6px;font-size:0.88em'>{_lbl}</span></div>"
-                )
-            st.markdown(
-                "<div style='background:#0b1220;border:1px solid #334155;"
-                "border-radius:8px;padding:10px 16px;margin-bottom:10px'>"
-                "<div style='color:#f9fafb;font-weight:700;font-size:0.9em;margin-bottom:6px'>"
-                f"📅 Catalyst Watch — earnings in your tracked names "
-                f"(next {CATALYST_WATCH_WINDOW_DAYS}d)</div>"
-                + "".join(_cw_html)
-                + "<div style='color:#94a3b8;font-size:0.74em;margin-top:6px;font-style:italic'>"
-                "Awareness only — the app does not recommend initiating into earnings "
-                "(binary risk). Confirmed post-print moves surface via Movers. Your call.</div>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+        # Catalyst Watch moved to its own nav page (🔔 Catalyst Watch) to keep
+        # the Home brief lean — see the `elif page == "🔔 Catalyst Watch"` block.
 
         # ── Pre-Market Intel panel (visible 4:00–9:29 AM ET weekdays) ─────────
         if is_premarket():
@@ -13257,6 +13215,106 @@ delete from recommendations where rec_date < '2026-05-27';
 ```
 """
         )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — CATALYST WATCH (forward earnings awareness)
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🔔 Catalyst Watch":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("🔔 Catalyst Watch")
+    st.caption(
+        "Upcoming earnings for the names you track — held positions, your watchlist, "
+        "and the curated sector universe. **Awareness only:** the app does not recommend "
+        "initiating into earnings (binary risk) — this just removes the blind spot so you "
+        "aren't surprised by a report. Confirmed post-print moves still surface via Movers."
+    )
+
+    from datetime import timedelta as _cw_td
+    _cw_today = _today_et()
+    _cw_from  = _cw_today.isoformat()
+    _cw_to    = (_cw_today + _cw_td(days=CATALYST_WATCH_WINDOW_DAYS)).isoformat()
+
+    # Tracked universe = held ∪ watchlist ∪ curated sector universe.
+    _cw_watch = {str(t).upper() for t in st.session_state.get("watchlist", [])}
+    _cw_held  = {
+        str(r.get("Ticker", "")).strip().upper()
+        for _, r in st.session_state.get("holdings_df", pd.DataFrame()).iterrows()
+        if str(r.get("Ticker", "")).strip()
+    }
+    _cw_secmap: dict = {}
+    for _sec, _tks in SECTOR_UNIVERSE.items():
+        for _tk in _tks:
+            _cw_secmap[_tk.upper()] = _sec
+    for _t in _cw_held:
+        _cw_secmap.setdefault(_t, TICKER_SECTORS.get(_t, ""))
+    _cw_tracked = set(_cw_secmap) | _cw_held | _cw_watch
+    _cw_lead = set(st.session_state.get("_leading_sectors_cache", []) or [])
+
+    _cw_rc1, _cw_rc2 = st.columns([5, 1])
+    with _cw_rc2:
+        if st.button("🔄 Refresh", key="_cw_refresh", use_container_width=True,
+                     help="Re-fetch today's earnings calendar (otherwise cached for the day)."):
+            _cached_catalyst_calendar.clear()
+            st.rerun()
+
+    with st.spinner("Loading earnings calendar…"):
+        _cw_cal  = _cached_catalyst_calendar(tuple(sorted(_cw_tracked)), _cw_from, _cw_to)
+        _cw_rows = build_catalyst_watch(
+            tracked=_cw_tracked, held_tickers=_cw_held, watchlist=_cw_watch,
+            sector_lookup=_cw_secmap, calendar_rows=_cw_cal, held_earnings={},
+            leading_sector_names=_cw_lead, today=_cw_today,
+            window_days=CATALYST_WATCH_WINDOW_DAYS,
+        )
+
+    st.caption(
+        f"Tracking {len(_cw_tracked)} names · {len(_cw_rows)} reporting in the next "
+        f"{CATALYST_WATCH_WINDOW_DAYS} days · updated daily."
+    )
+
+    if not _cw_rows:
+        st.info(
+            f"No earnings in your tracked names in the next {CATALYST_WATCH_WINDOW_DAYS} days. "
+            "Check back — this refreshes daily."
+        )
+    else:
+        _cw_chip = {
+            "held":      ("#1e3a8a", "#bfdbfe", "held"),
+            "watchlist": ("#4c1d95", "#ddd6fe", "watchlist"),
+            "universe":  ("#374151", "#d1d5db", "universe"),
+        }
+        # Group by timeframe so the eye lands on the most imminent first.
+        _cw_buckets = [("📍 Today", 0, 0), ("🔜 Tomorrow", 1, 1),
+                       (f"🗓️ Next {CATALYST_WATCH_WINDOW_DAYS} days", 2, CATALYST_WATCH_WINDOW_DAYS)]
+        for _blabel, _lo, _hi in _cw_buckets:
+            _grp = [r for r in _cw_rows if _lo <= r["days"] <= _hi]
+            if not _grp:
+                continue
+            st.markdown(f"#### {_blabel}")
+            for _r in _grp:
+                _when = f" · {_r['when']}" if _r["when"] else ""
+                _hot  = " 🔥" if _r["sector_hot"] else ""
+                _bg, _fg, _lbl = _cw_chip.get(_r["ownership"], _cw_chip["universe"])
+                st.markdown(
+                    "<div style='background:#0b1220;border:1px solid #334155;"
+                    "border-radius:8px;padding:8px 14px;margin:4px 0;"
+                    "display:flex;justify-content:space-between;align-items:center'>"
+                    f"<span><b style='font-size:1.05em;color:#f9fafb'>{_r['ticker']}</b> "
+                    f"<span style='color:#9ca3af'>· {_r['sector']}{_hot}</span></span>"
+                    f"<span><span style='color:#fbbf24;font-size:0.85em'>{_r['date']}{_when}</span> "
+                    f"<span style='background:{_bg};color:{_fg};border-radius:8px;"
+                    f"padding:1px 7px;font-size:0.8em;margin-left:8px'>{_lbl}</span></span>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown(
+        "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
+        "🔥 = sector currently leading. Awareness only — the app does not recommend "
+        "initiating into earnings; the proximity gates still suppress that. Decide for "
+        "yourself, and let confirmed post-print moves surface via Movers.</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

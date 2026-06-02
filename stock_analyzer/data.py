@@ -87,6 +87,13 @@ def fetch_earnings_calendar(from_date: str, to_date: str) -> list[dict]:
     return []
 
 
+def fetch_next_earnings(ticker: str) -> str | None:
+    """Light next-earnings-date for one ticker ('YYYY-MM-DD' or None) via yfinance.
+    Per-name fallback for Catalyst Watch when the market-wide FMP calendar is
+    unavailable — covers universe names without a full bundle load."""
+    return _PRIMARY.next_earnings(ticker)
+
+
 def market_status() -> dict:
     """Returns current NYSE market status and a human-readable label."""
     now_et = datetime.now(_ET)
