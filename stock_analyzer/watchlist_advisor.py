@@ -27,6 +27,7 @@ from stock_analyzer.constants import (
     SINGLE_NAME_CEILING,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
+    RR_ENTRY_MIN,
 )
 
 
@@ -271,7 +272,7 @@ def build_watchlist_recommendation(
     # ── ENTER NOW ─────────────────────────────────────────────────────────────
     # R:R must be VALIDATED (>= 2:1), not merely "unknown." A missing R:R means
     # we don't have a target price — that's incomplete homework, not a green light.
-    if score >= COMPOSITE_BUY and (in_zone or near_zone) and rr is not None and rr >= 2.0:
+    if score >= COMPOSITE_BUY and (in_zone or near_zone) and rr is not None and rr >= RR_ENTRY_MIN:
         # Portfolio risk gate: ENTER_NOW from this advisor only sees the single
         # stock — it must also respect portfolio-level concentration and beta.
         ticker_beta = (data.get("risk_metrics") or {}).get("beta")
@@ -386,7 +387,7 @@ def build_watchlist_recommendation(
             ],
             conditions_missing=[
                 f"Price {abs(pct_above):.1f}% above entry zone — wait for pullback or set limit",
-                (f"R:R {rr:.1f}:1 — currently below 2:1 target at this price" if rr and rr < 2.0 else ""),
+                (f"R:R {rr:.1f}:1 — currently below {RR_ENTRY_MIN:.0f}:1 target at this price" if rr and rr < RR_ENTRY_MIN else ""),
             ],
             institutional_lens=(
                 "Entry discipline is where most retail investors give back the edge their analysis creates. "
@@ -497,7 +498,7 @@ def _card(
     elif action in ("NEAR_ENTRY",):    pts += 25
     elif action in ("WAIT_ENTRY",):    pts += 15
     elif action in ("WAIT_CATALYST",): pts += 5
-    if rr and rr >= 2.0:              pts += 20
+    if rr and rr >= RR_ENTRY_MIN:     pts += 20
     elif rr and rr >= 1.5:            pts += 10
     if earn_days is None or earn_days > 14: pts += 10
     elif earn_days > 7:                     pts += 5

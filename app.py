@@ -51,6 +51,7 @@ from stock_analyzer.constants import (
     MOVER_SHORTLIST_SIZE,
     DATA_XCHECK_PREVCLOSE_TOL_PCT,
     FUNDAMENTALS_GATE_MIN_METRICS,
+    RR_ENTRY_MIN,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis
@@ -9570,6 +9571,30 @@ elif page == "📈 Analysis":
                               delta_color="inverse", help=_tip("ATR Stop"))
                     c4.metric("R:R", f"{rr_val:.1f}:1" if rr_val and rr_val > 0 else "N/A",
                               help=_tip("R:R Ratio"))
+
+                    # Entry-timing caveat — the composite says this is a good STOCK
+                    # (Buy/Strong Buy), but R:R says whether NOW is a good ENTRY. A
+                    # great name at a poor entry (target near, stop far) is a KEEP,
+                    # not a fresh buy here. We DON'T downgrade the verdict (that would
+                    # lose the quality signal) — the Analysis page is a research
+                    # surface, so we flag the tension clearly and leave the call to
+                    # the user. Hard R:R gating lives on Watchlist ENTER_NOW (G-13).
+                    if rr_val is not None and 0 < rr_val < RR_ENTRY_MIN and price and r["stop"] and targets:
+                        _risk_ps   = price - r["stop"]
+                        _reward_ps = targets["base"] - price
+                        _lo = r.get("entry_lo")
+                        st.warning(
+                            f"⚖️ **Strong stock, weak entry here.** {rec['label']} reflects "
+                            f"quality (composite {r['total']:.0f}), but the **entry R:R is "
+                            f"{rr_val:.1f}:1** — below the {RR_ENTRY_MIN:.0f}:1 target. At "
+                            f"${price:.2f} you'd risk **${_risk_ps:.2f}/sh** (to the ${r['stop']:.2f} "
+                            f"stop) to make **${_reward_ps:.2f}/sh** (to the ${targets['base']:.2f} "
+                            f"base target) — unfavourable asymmetry. "
+                            + (f"Consider waiting for a pullback toward the lower entry zone "
+                               f"(~${_lo:.2f}) to improve it. " if _lo else "")
+                            + "If you already hold it, this is a **KEEP, not an add here** — "
+                            "your judgment call."
+                        )
 
                     if _sa_holding:
                         # Pre-compute earnings proximity so we can fold it into this message

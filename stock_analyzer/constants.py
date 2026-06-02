@@ -41,6 +41,14 @@ COMPOSITE_HIGH_CONVICTION = COMPOSITE_STRONG_BUY
 # setups clear when the index isn't providing tailwind.
 COMPOSITE_BUY_FLAT_DAY = 78
 
+# Minimum reward:risk for an entry to be considered favourable. The composite
+# score answers "is this a good STOCK to own?"; R:R answers "is THIS price a
+# good ENTRY?" — independent questions, so a Strong-Buy stock can have poor
+# entry R:R (target near, stop far). Watchlist ENTER_NOW hard-gates on this
+# (G-13); the Analysis Trade Plan surfaces a caveat below it (not a hard block —
+# the Analysis page is a research/judgement surface, so the user decides).
+RR_ENTRY_MIN = 2.0
+
 # ── Risk per trade (position sizing) ─────────────────────────────────────────
 RISK_PCT_PER_TRADE = 0.015       # 1.5% portfolio risk per trade (Moderate)
 
