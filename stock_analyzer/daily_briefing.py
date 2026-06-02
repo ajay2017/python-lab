@@ -31,6 +31,7 @@ from stock_analyzer.constants import (
     COMPOSITE_HIGH_CONVICTION,
     COMPOSITE_BUY_FLAT_DAY,
     SINGLE_NAME_CEILING,
+    SECTOR_CEILING,
     MACRO_IMMINENT_DAYS,
     RISK_PCT_PER_TRADE,
     ADD_WINNER_MIN_GAP_PCT,
@@ -461,6 +462,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _macro_blocked_sectors.add(_s)
             _macro_block_reasons.setdefault(_s, f"{_ev.get('event','')} ({_ev.get('date')}) — {_d}d away")
 
+    # Sector concentration gate — sectors already AT/ABOVE the hard cap. Opening
+    # or adding to a position in such a sector worsens a breach the Risk Advisor
+    # is simultaneously telling the user to TRIM (the ESTC case: a Strong-Buy add
+    # surfaced while its sector was 44% over the 35% cap). The deploy-capital
+    # signal must defer to the protect-capital signal. Mirrors the macro gate.
+    _breached_sectors: set = set()
+    if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
+        _sec_wt = port_df.groupby("Sector")["Weight (%)"].sum()
+        _breached_sectors = {str(_s) for _s, _w in _sec_wt.items()
+                             if _f(_w, 0) >= SECTOR_CEILING}
+
     # On bear days — no new entries, return protection message
     if tone == "bear":
         return {
@@ -474,6 +486,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             "add_positions":              [],
             "risk_blocked_adds":          [],
             "concentration_blocked_adds": [],
+            "sector_blocked_adds":        [],
+            "sector_blocked_picks":       [],
             "macro_blocked_picks":        [],
             "composite_skipped":          [],
             "composite_unavailable":      [],
@@ -489,6 +503,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     _confirmed_picks: list[dict] = []
     _unverified_picks: list[dict] = []
     macro_blocked_picks: list[dict] = []
+    sector_blocked_picks: list[dict] = []   # new picks suppressed — sector over hard cap
     composite_skipped:  list[dict] = []
     # Picks where the composite fetch FAILED (load_all raised / not in cache).
     # Distinct from composite_skipped (where composite loaded but < BUY).
@@ -584,6 +599,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     "ticker": ticker, "sector": sector,
                     "score":  _f(row.get("Score", 0)),
                     "reason": _macro_block,
+                })
+                continue
+
+            # Sector concentration gate — same rationale as macro: don't open a
+            # fresh position in a sector already over the hard cap.
+            if sector in _breached_sectors:
+                sector_blocked_picks.append({
+                    "ticker": ticker, "sector": sector,
+                    "score":  _f(row.get("Score", 0)),
+                    "reason": f"{sector} sector already ≥ {SECTOR_CEILING:.0f}% hard cap",
                 })
                 continue
 
@@ -740,6 +765,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     add_positions:     list[dict] = []
     risk_blocked_adds: list[dict] = []
     concentration_blocked_adds: list[dict] = []
+    sector_blocked_adds: list[dict] = []   # adds suppressed — sector over hard cap
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
             sig = str(row.get("Signal", ""))
@@ -747,8 +773,26 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             scr = _f(row.get("Score"), 0)
             if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= ADD_WINNER_MIN_GAP_PCT:
                 ticker  = str(row["Ticker"])
+                sector  = str(row.get("Sector", ""))
                 # Skip if Act Today already flags this ticker for action
                 if ticker in _act_blocked:
+                    continue
+                # Sector concentration gate — don't add to a position whose sector
+                # is over the hard cap (Risk Advisor is recommending a trim there).
+                if sector in _breached_sectors:
+                    sector_blocked_adds.append({
+                        "ticker":  ticker,
+                        "sector":  sector,
+                        "weight":  _f(row.get("Weight (%)"), 0),
+                        "score":   scr,
+                        "pnl_pct": _f(row.get("P&L (%)")),
+                        "gap":     gap,
+                        "reason":  (
+                            f"{sector} sector ≥ {SECTOR_CEILING:.0f}% hard cap — "
+                            "trim the sector before adding. A Strong Buy here is a "
+                            "KEEP, not an add."
+                        ),
+                    })
                     continue
                 # Skip — and record — if Risk Advisor is recommending trim on this ticker
                 _trim_info = _trim_set.get(ticker.upper())
@@ -799,7 +843,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     })
                     continue
                 price   = _f(row.get("Price", 0))
-                sector  = str(row.get("Sector", ""))
                 is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
                 sizing  = _suggest_size(price, "Strong Uptrend", portfolio_value) if price > 0 else {}
                 add_positions.append({
@@ -844,6 +887,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "add_positions":              add_positions,
         "risk_blocked_adds":          risk_blocked_adds,
         "concentration_blocked_adds": concentration_blocked_adds,
+        "sector_blocked_adds":        sector_blocked_adds,
+        "sector_blocked_picks":       sector_blocked_picks,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,
         "composite_unavailable":      composite_unavailable,

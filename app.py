@@ -2721,6 +2721,7 @@ if page == "🏠 Home":
             risk_banner  = grow.get("risk_banner")
             blocked_adds  = grow.get("risk_blocked_adds", [])
             conc_blocked  = grow.get("concentration_blocked_adds", [])
+            sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
             macro_blocked = grow.get("macro_blocked_picks", [])
             comp_skipped  = grow.get("composite_skipped", [])
             comp_unavail  = grow.get("composite_unavailable", [])
@@ -2978,6 +2979,30 @@ if page == "🏠 Home":
                     "These winners qualify on signal but already exceed the institutional "
                     "single-name ceiling. Adding more would concentrate idiosyncratic risk. "
                     "Trim back to target before considering further adds."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Sector hard-cap breach — adds AND new picks in an over-cap sector are
+            # suppressed so the Brief never says "add here" while Act Today says
+            # "trim this sector". The protect-capital signal wins (the ESTC case).
+            if sector_blocked:
+                _sb_rows = "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                    f"({b.get('sector','?')} · Score {b.get('score',0):.0f}) — "
+                    f"{b.get('reason','sector over hard cap')}</div>"
+                    for b in sector_blocked[:4]
+                )
+                st.markdown(
+                    "<div style='background:#422006;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    f"🔒 Suppressed — Sector Hard Cap ({int(SECTOR_CEILING)}%)</div>"
+                    + _sb_rows
+                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "These names qualify on signal, but their sector is already over the "
+                    "institutional hard cap. Adding more would deepen a concentration the "
+                    "Risk Advisor is recommending you trim. A Strong Buy here is a KEEP, not an add."
                     "</div></div>",
                     unsafe_allow_html=True,
                 )

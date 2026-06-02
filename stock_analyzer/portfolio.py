@@ -128,7 +128,13 @@ def build_portfolio_df(
 
         rows.append({
             "Ticker": ticker,
-            "Sector": TICKER_SECTORS.get(ticker, "Other"),
+            # Sector: prefer the curated granular bucket (Semiconductors, AI &
+            # Data, …); fall back to the ticker's actual yfinance .info sector
+            # (already fetched by load_all) before the "Other" catch-all. Without
+            # this, every unmapped name piled into "Other", inflating it past the
+            # hard cap (ESTC, a Tech/Software name, landed in a 44% "Other"
+            # bucket) — a classification artifact, not a real concentration.
+            "Sector": TICKER_SECTORS.get(ticker) or (r.get("sector") or "").strip() or "Other",
             "Shares": int(shares),
             "Avg Cost": avg_cost,
             "Price": price,
