@@ -13251,16 +13251,17 @@ elif page == "🔔 Catalyst Watch":
             str(r.get("Ticker", "")).strip().upper()
             for _, r in _cw_pdf.iterrows() if str(r.get("Ticker", "")).strip()
         })
-        _cw_ac1, _cw_ac2 = st.columns([3, 1])
-        with _cw_ac1:
-            _cw_an = st.selectbox("Analyze a holding", ["—"] + _cw_hold_tk,
-                                  key="_cw_hold_analyze_sel", label_visibility="collapsed")
-        with _cw_ac2:
-            if st.button("▶ Analyze", key="_cw_hold_analyze_btn", use_container_width=True,
-                         disabled=(_cw_an in (None, "—"))):
-                st.session_state["_pending_page"]    = "📈 Analysis"
-                st.session_state["_analysis_ticker"] = _cw_an
-                st.rerun()
+        if _cw_hold_tk:
+            st.markdown("**🔎 Jump to full Analysis →**")
+            _cw_ac1, _cw_ac2 = st.columns([3, 1])
+            with _cw_ac1:
+                _cw_an = st.selectbox("holding", _cw_hold_tk, key="_cw_hold_analyze_sel",
+                                      label_visibility="collapsed")
+            with _cw_ac2:
+                if st.button("▶ Open", key="_cw_hold_analyze_btn", use_container_width=True):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _cw_an
+                    st.rerun()
 
     st.divider()
 
@@ -13353,16 +13354,17 @@ elif page == "🔔 Catalyst Watch":
 
         # Analyze link for any radar name (the ticker→research jump).
         _cw_radar_tk = sorted({r["ticker"] for r in _cw_rows})
-        _cw_rc3, _cw_rc4 = st.columns([3, 1])
-        with _cw_rc3:
-            _cw_ran = st.selectbox("Analyze a radar name", ["—"] + _cw_radar_tk,
-                                   key="_cw_radar_analyze_sel", label_visibility="collapsed")
-        with _cw_rc4:
-            if st.button("▶ Analyze", key="_cw_radar_analyze_btn", use_container_width=True,
-                         disabled=(_cw_ran in (None, "—"))):
-                st.session_state["_pending_page"]    = "📈 Analysis"
-                st.session_state["_analysis_ticker"] = _cw_ran
-                st.rerun()
+        if _cw_radar_tk:
+            st.markdown("**🔎 Jump to full Analysis →**")
+            _cw_rc3, _cw_rc4 = st.columns([3, 1])
+            with _cw_rc3:
+                _cw_ran = st.selectbox("radar", _cw_radar_tk, key="_cw_radar_analyze_sel",
+                                       label_visibility="collapsed")
+            with _cw_rc4:
+                if st.button("▶ Open", key="_cw_radar_analyze_btn", use_container_width=True):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _cw_ran
+                    st.rerun()
 
     st.markdown(
         "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
