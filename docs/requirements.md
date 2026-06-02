@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.5  
+**Version:** 1.6  
 **Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
@@ -62,6 +62,7 @@ Single source of truth: `stock_analyzer/constants.py`.
 | Composite — Strong Buy boundary | 75 | Tier label |
 | Composite — Hold floor (below = Sell zone) | 44 | Tier label |
 | Fundamentals gate — min core metrics to trust the verdict | 1 | **Hard** (withhold verdict below it) |
+| Entry reward:risk minimum (`RR_ENTRY_MIN`) | 2.0 | **Hard** on Watchlist ENTER_NOW (G-13); caveat on Analysis |
 | Risk per trade | 1.5% of portfolio | Sizing |
 | Earnings imminence window | 7 days | Caution |
 | Macro imminence window (HIGH-impact event in pick's sector) | 3 days | **Hard** |
@@ -183,6 +184,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-42 | Scorecard adapts to context: held tickers show actual shares and P&L%; non-held show entry zone and suggested entry cost |
 | F-43 | Signal banner shows composite score breakdown (technical × 45% + fundamental × 40% + sentiment × 15%) |
 | F-43a | When fundamentals are unavailable from all sources (`fundamentals_available == False`), the Analysis page must WITHHOLD the Buy/Hold verdict — suppressing the signal banner and composite number — and render a red "Verdict withheld — fundamentals unavailable" note. The note must explain the data gap and the possible Brief↔Analysis mismatch (a ticker that appeared as a Brief new-pick when data was present), and advise re-checking / broker verification. The verdict must not be computed on the fabricated neutral-50 fundamental. (Implements G-15.) |
+| F-43b | When the Analysis verdict is Buy/Strong Buy but the entry R:R is below `RR_ENTRY_MIN` (2.0), the Trade Plan must surface a caveat distinguishing stock quality (composite) from entry timing (R:R): per-share risk/reward, a suggested pullback level, and "KEEP, not an add here — user's judgment." The verdict must NOT be downgraded (Analysis is a research/judgement surface, not a hard gate; the hard R:R block is G-13 on Watchlist ENTER_NOW). |
 | F-44 | Analyst upside note shown only when it reinforces signal direction (upside on Buy; suppressed on Sell and when downside on Buy) |
 | F-45 | Trade Plan tab (Buy/Strong Buy): entry zone, stop loss, R:R, position sizing (shares, cost, max risk) |
 | F-46 | Exit Plan tab (Sell/Strong Sell): current price, shares held, position value, P&L if sold now; exit recommendation banner; ATR downside level |
