@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.4  
+**Version:** 1.5  
 **Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
@@ -98,6 +98,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | G-13 | ENTER_NOW without validated R:R (`rr is None`) | Downgrade to NEAR_ENTRY; R:R must be `≥ 2.0` |
 | G-14 | `build_daily_briefing` failure → coordination caches | Set to `None`; dependent features show explicit offline banner |
 | G-15 | Fundamentals absent from all sources (< `FUNDAMENTALS_GATE_MIN_METRICS`) → Analysis verdict AND Brief new-pick | Withhold the verdict: Analysis suppresses Buy/Hold and shows a red "verdict withheld" note; `daily_briefing` holds the ticker out of `new_picks` (→ `composite_unavailable`) |
+| G-16 | Sector at/above `SECTOR_CEILING` (35%) → Grow Today new picks AND add-to-winner in that sector | Suppress; render "Suppressed — Sector Hard Cap" banner (`sector_blocked_picks` / `sector_blocked_adds`). A Strong Buy in an over-cap sector is a KEEP, not an add — deploy-capital defers to protect-capital |
 
 ### 2A.4 Soft warnings (kept in addition to gates)
 
@@ -170,6 +171,8 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-39b | Grow Today and Buy Candidates add-to-winner blocks must suppress: (a) tickers Risk Advisor recommends trimming, (b) positions at or above the single-name ceiling (15%), and (c) positions drift-overweight beyond equal-weight + tolerance. Each suppression class renders a distinct banner with the conflict reason. (Implements G-01, G-04, G-09.) |
 | F-39c | Review Before Close items flagged as weak-large-positions must pull the entry thesis (most recent BUY notes) and up to two recent lessons from the Trade Journal for that ticker, rendered as an amber-bordered block below the mechanical assessment. When no journal entry exists, prompt the user to log thesis on future entries. |
 | F-39d | Grow Today must hold a candidate OUT of new picks when its composite was computed without real fundamental data (`fundamentals_available == False`, i.e. < `FUNDAMENTALS_GATE_MIN_METRICS` core metrics present). Such a ticker is routed to the `composite_unavailable` bucket, never surfaced as a "new position to initiate". (Implements G-15.) |
+| F-39e | Grow Today must suppress BOTH new picks and add-to-winners whose sector is at/above `SECTOR_CEILING` (35%), surfacing a "Suppressed — Sector Hard Cap" banner. This keeps the deploy-capital signal from contradicting the Risk Advisor's concurrent sector-trim recommendation (the ESTC case). (Implements G-16.) |
+| F-39f | Portfolio sector classification must fall back to the ticker's yfinance `.info` sector before the `"Other"` catch-all, so unmapped tickers carry a real sector and the "Other" bucket cannot accumulate a spurious hard-cap breach. `risk_advisor` and the F-39e gate both read this same `port_df["Sector"]`, so the Act Today breach card and the Grow Today gate agree. |
 
 ### 3.3 Stock Analysis
 
