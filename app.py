@@ -9267,11 +9267,19 @@ elif page == "📈 Analysis":
         _sc_stop_str = f"${r['stop']:.2f}" if r["stop"] else "—"
         if r.get("_stop_source") == "manual" and r["stop"]:
             _sc_stop_str = f"📌 {_sc_stop_str}"
+        # When fundamentals are unavailable the composite ran on a fabricated
+        # neutral-50 fundamental leg, so the Score/Signal are not trustworthy.
+        # The Detailed Analysis below withholds the verdict (G-15); the Scorecard
+        # — the quick-glance surface — must match, or the same page shows
+        # "Hold 54.2" up top and "verdict withheld" in the body. Score/Signal are
+        # withheld; price-derived columns (Stop, Target, R:R) stay (data is real).
+        _sc_fund_ok = r.get("fundamentals_available", True)
         rows.append({
             "Ticker":           ticker,
             "Price":            f"${price:.2f}" if price else "N/A",
-            "Score":            r["total"],
-            "Signal":           f"{r['rec']['icon']} {r['rec']['label']}",
+            "Score":            r["total"] if _sc_fund_ok else "—",
+            "Signal":           (f"{r['rec']['icon']} {r['rec']['label']}"
+                                 if _sc_fund_ok else "🚫 Withheld"),
             "Position / Entry": _sc_position,
             "Stop":             _sc_stop_str,
             "Base Target":      f"${targets['base']:.2f} ({targets['base_pct']:+.1f}%)" if targets else "—",
@@ -9285,6 +9293,7 @@ elif page == "📈 Analysis":
 
     def _sig(v):
         s = str(v)
+        if "Withheld" in s:    return "background-color:#450a0a;color:#fca5a5;font-weight:bold"
         if "Strong Buy" in s: return "background-color:#00C851;color:white"
         if "Buy" in s:        return "background-color:#00b300;color:white"
         if "Hold" in s:       return "background-color:#ffbb33;color:black"
@@ -9300,7 +9309,7 @@ elif page == "📈 Analysis":
 
     st.dataframe(
         summary_df.style.map(_sig, subset=["Signal"]).map(_sc, subset=["Score"])
-        .format({"Score": "{:.1f}"}),
+        .format({"Score": lambda v: f"{v:.1f}" if isinstance(v, (int, float)) else str(v)}),
         use_container_width=True,
     )
 
