@@ -2,7 +2,7 @@
 ## DRISHTA — Beyond Noise
 *Personal Portfolio Intelligence App*
 
-**Version:** 1.9  
+**Version:** 2.0  
 **Date:** June 2026  
 **Status:** Active Development  
 **Operating Posture:** Decides, not informs (see §2A)
@@ -26,36 +26,6 @@ The app is not a brokerage or order-execution system.
 - **Experience level:** Active investor, growing familiarity with technical and fundamental analysis
 - **Usage pattern:** Daily briefing check before market open; ad-hoc analysis during trading hours; end-of-day journal entries
 - **Access:** Web browser via Streamlit Community Cloud; no mobile-specific UI required
-
----
-
-## 2AA. Intended Investor Persona and Time Horizon
-
-This app is built for the **quality-first, medium-term investor with long-term tax discipline** — and a defensive bias. It is explicitly **not** a day-trading tool. This framing is a design constraint: features and gates are evaluated against it, and a request that only serves intraday trading is out of scope (see §5) unless the persona itself is revisited.
-
-### 2AA.1 Persona fit by horizon
-
-| Persona | Horizon | Fit | Rationale |
-|---|---|---|---|
-| Day trader | seconds–hours | **Not supported** | The engine actively works against it (see 2AA.2). |
-| Swing trader | days–weeks | **Partial** | Technical signals, entry zones, ATR stops, R:R, Catalyst Watch and Movers serve this — but quality gates and the no-trade-into-earnings posture temper pure momentum. |
-| Medium-term investor | weeks–months | **Primary (sweet spot)** | Composite scoring, sector rotation, macro-regime, rebalancing, diversification advisor all operate on this horizon. |
-| Long-term investor | months–years | **Strong** | 40% fundamental weight, valuation/FCF, tax-loss harvesting, 1-yr cap-gains & wash-sale awareness, behavioural discipline. Fit strengthens with horizon. |
-
-### 2AA.2 Why the design is investor-oriented, not trader-oriented
-
-| ID | Design choice | Implication |
-|---|---|---|
-| PH-01 | Composite = Technical 45% + **Fundamental 40%** + Sentiment 15%; verdict is WITHHELD when fundamentals are unavailable. | A 40% fundamental weight is central to an investor and irrelevant to an intraday trader. |
-| PH-02 | Composite signals are computed on page load and held; only prices refresh (~60s). Signals do **not** recompute every tick. | Deliberate anti-overtrading choice (also a rate-limit guard). Intraday signal churn is intentionally absent. |
-| PH-03 | Proximity gates suppress initiating into earnings; Catalyst Watch is awareness, **not** a buy rec. | The app declines binary-event volatility that a trader often seeks. |
-| PH-04 | Stops are ATR-based, R:R is multi-day, sizing is risk-%-of-portfolio. | Swing-to-position constructs (holding across days/weeks), not intraday levels. |
-| PH-05 | Macro-regime lens reads CPI / Fed / rates (months horizon); concentration caps, beta/Sharpe/Sortino/VaR, rebalancing, tax/wash-sale all operate at portfolio/horizon scale. | Portfolio-construction and protection, not per-trade edge capture. |
-| PH-06 | Even Movers (1-day breakouts) are funnelled through the **same composite quality gate**, never traded on momentum alone. | The most opportunistic surface is still quality-first — the philosophy in miniature. |
-
-### 2AA.3 What day-trading support would require (fork, not extension)
-
-Supporting day traders would mean intraday/real-time data feeds, Level 2 / order-flow, tick charts, removal of the fundamental weighting, and removal of the earnings/macro gates that make this app safe. That is a different product with an opposite risk philosophy — a fork, not an increment. Documented here so the boundary stays explicit.
 
 ---
 
@@ -131,6 +101,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | G-14 | `build_daily_briefing` failure → coordination caches | Set to `None`; dependent features show explicit offline banner |
 | G-15 | Fundamentals absent from all sources (< `FUNDAMENTALS_GATE_MIN_METRICS`) → Analysis verdict AND Brief new-pick | Withhold the verdict: Analysis suppresses Buy/Hold and shows a red "verdict withheld" note; `daily_briefing` holds the ticker out of `new_picks` (→ `composite_unavailable`) |
 | G-16 | Sector at/above `SECTOR_CEILING` (35%) → Grow Today new picks AND add-to-winner in that sector | Suppress; render "Suppressed — Sector Hard Cap" banner (`sector_blocked_picks` / `sector_blocked_adds`). A Strong Buy in an over-cap sector is a KEEP, not an add — deploy-capital defers to protect-capital |
+| G-17 | CPI YoY > `REGIME_CPI_CONTROLLED_MAX` (2.5%) → macro "Rate-Cut Optimism" regime | Block: the regime cannot be selected even if risk-on signals (low VIX, strong SPY) win the score, because its rationale claims "controlled inflation." Reassigns to the next-best regime. Prevents a label that contradicts itself (e.g. 3.95% CPI in a "controlled inflation" regime). |
 
 ### 2A.4 Soft warnings (kept in addition to gates)
 
@@ -141,6 +112,36 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | W-03 | Active HIGH risk alerts in portfolio | Resolve-first prompt in Watchlist |
 | W-04 | Grow Today and Watchlist same-sector overlap | Inform the user one sector trade is enough today |
 | W-05 | Trade Journal entry thesis missing on a weak-large-position review | Prompt user to log thesis on future entries |
+
+---
+
+## 2B. Intended Investor Persona and Time Horizon
+
+This app is built for the **quality-first, medium-term investor with long-term tax discipline** — and a defensive bias. It is explicitly **not** a day-trading tool. This framing is a design constraint: features and gates are evaluated against it, and a request that only serves intraday trading is out of scope (see §5) unless the persona itself is revisited.
+
+### 2B.1 Persona fit by horizon
+
+| Persona | Horizon | Fit | Rationale |
+|---|---|---|---|
+| Day trader | seconds–hours | **Not supported** | The engine actively works against it (see 2B.2). |
+| Swing trader | days–weeks | **Partial** | Technical signals, entry zones, ATR stops, R:R, Catalyst Watch and Movers serve this — but quality gates and the no-trade-into-earnings posture temper pure momentum. |
+| Medium-term investor | weeks–months | **Primary (sweet spot)** | Composite scoring, sector rotation, macro-regime, rebalancing, diversification advisor all operate on this horizon. |
+| Long-term investor | months–years | **Strong** | 40% fundamental weight, valuation/FCF, tax-loss harvesting, 1-yr cap-gains & wash-sale awareness, behavioural discipline. Fit strengthens with horizon. |
+
+### 2B.2 Why the design is investor-oriented, not trader-oriented
+
+| ID | Design choice | Implication |
+|---|---|---|
+| PH-01 | Composite = Technical 45% + **Fundamental 40%** + Sentiment 15%; verdict is WITHHELD when fundamentals are unavailable. | A 40% fundamental weight is central to an investor and irrelevant to an intraday trader. |
+| PH-02 | Composite signals are computed on page load and held; only prices refresh (~60s). Signals do **not** recompute every tick. | Deliberate anti-overtrading choice (also a rate-limit guard). Intraday signal churn is intentionally absent. |
+| PH-03 | Proximity gates suppress initiating into earnings; Catalyst Watch is awareness, **not** a buy rec. | The app declines binary-event volatility that a trader often seeks. |
+| PH-04 | Stops are ATR-based, R:R is multi-day, sizing is risk-%-of-portfolio. | Swing-to-position constructs (holding across days/weeks), not intraday levels. |
+| PH-05 | Macro-regime lens reads CPI / Fed / rates (months horizon); concentration caps, beta/Sharpe/Sortino/VaR, rebalancing, tax/wash-sale all operate at portfolio/horizon scale. | Portfolio-construction and protection, not per-trade edge capture. |
+| PH-06 | Even Movers (1-day breakouts) are funnelled through the **same composite quality gate**, never traded on momentum alone. | The most opportunistic surface is still quality-first — the philosophy in miniature. |
+
+### 2B.3 What day-trading support would require (fork, not extension)
+
+Supporting day traders would mean intraday/real-time data feeds, Level 2 / order-flow, tick charts, removal of the fundamental weighting, and removal of the earnings/macro gates that make this app safe. That is a different product with an opposite risk philosophy — a fork, not an increment. Documented here so the boundary stays explicit.
 
 ---
 
@@ -163,6 +164,7 @@ The "Review action target" rows translate a *trigger* (when an item lands in Rev
 | F-11 | Earnings calendar for held positions (KPIs, timeline, detail table with Fwd EPS/weight/P&L/signal, Pre-Earnings Playbook) lives on the 🔔 Catalyst Watch page ("Your Holdings — Earnings" tier), NOT a Home tab — consolidated there with the watchlist/universe awareness tier so all earnings detail is in one place. |
 | F-12 | Risk advisor: flag positions breaching stop-loss, concentration risk, correlation clusters. Beta and Sharpe recommendations name specific trim targets, which downstream features (Grow Today add-to-winner, Rebalancer ADD) cross-check and suppress to avoid contradicting the active reduce-exposure recommendation. |
 | F-13 | Rebalancer: suggest target weights and trim/add trades. ADD actions cross-check News Intelligence alerts (suppressed for critical news; warned for negative) and Risk Advisor TRIM recommendations (ADD suppressed on tickers being trimmed). Suppressions render as explicit banners. |
+| F-13a | Diversification Advisor ADD card: candidates are sourced from the broad discovery universe (≈20 names per sector, curated roster unioned first so known names are never dropped; capped by `DIVERSIFY_SCAN_CAP`), not a fixed roster — so the best diversifier surfaces, not a frozen list. Each candidate is cross-validated against the quality engine (composite/signal/R:R, the SAME numbers as Analysis, via the `_grow_composites` cache + load_all fallback), gated at `COMPOSITE_BUY`, ranked best-first, and shows the top `DIVERSIFY_DISPLAY_TOP` with a 🎯 best-passer / 🚦 none-clears banner. Failing names stay visible-but-demoted (never silently filtered). Each carries an "▶ Analyze {ticker}" button to the full Analysis scorecard (the bridge from candidate to decision/trade). |
 | F-14 | Stress test: model portfolio impact under defined macro scenarios (rate shock, recession, etc.) |
 | F-15 | Display market-closed context note in sidebar showing last close date when market is shut |
 | F-16 | Tax Advisor: per-position tax-lot analysis with HARVEST recommendations on harvestable losses. HARVEST is **suppressed** on positions rated Buy or Strong Buy (action becomes `HOLD_FOR_SIGNAL`) so the tax tail does not wag the investment dog. The UI explicitly surfaces every suppressed harvest with the position's current signal so the user can revisit if conviction degrades. |
@@ -377,4 +379,4 @@ The app must not depend on a single market-data source. A provider abstraction (
 - International or non-US equity markets
 - Options, ETFs, or fixed income instruments
 - Automated trading or algorithmic execution
-- Day-trading / intraday support (Level 2, order flow, tick charts, momentum-only signals) — counter to the intended persona; see §2AA
+- Day-trading / intraday support (Level 2, order flow, tick charts, momentum-only signals) — counter to the intended persona; see §2B
