@@ -6,6 +6,54 @@ rather than absolute universal thresholds. A 35x P/E is expensive for a
 utility but fair for a high-growth semiconductor company.
 """
 
+# The core scoreable metrics. When NONE are present, fundamental_score returns a
+# fabricated neutral 50 — so consumers gate on the count, not the raw score.
+# Single source of truth (was duplicated as `_scored_keys` here and
+# `_core_fund_keys` in app.py).
+CORE_FUNDAMENTAL_KEYS = (
+    "forward_pe", "revenue_growth", "earnings_growth",
+    "profit_margins", "debt_to_equity",
+)
+
+
+def count_core_metrics(financials: dict | None) -> int:
+    """How many core scoreable fundamental metrics are actually present."""
+    f = financials or {}
+    return sum(1 for k in CORE_FUNDAMENTAL_KEYS if f.get(k) is not None)
+
+
+def resolve_fundamentals(
+    live_financials: dict | None,
+    cached_financials: dict | None,
+    cached_age_days: int | None,
+    max_age_days: int,
+    min_metrics: int,
+) -> tuple[dict, int, str, int | None]:
+    """Choose which fundamentals to score on — live, or last-known-good cache.
+
+    Pure decision (the caller does the I/O: fetch live, read/write the cache).
+    Live wins whenever it has enough metrics. Otherwise, if a cached copy is
+    both sufficient AND fresh enough (`cached_age_days <= max_age_days`), serve
+    that — real data, transparently aged. Else keep live (the verdict will then
+    withhold, since its metric count is below the gate).
+
+    Returns (financials, metric_count, source, age_days):
+      source  : "live"  — live data used (whether sufficient or not)
+                "cache" — served from last-known-good fallback
+      age_days: 0 for live; the cache age when source == "cache"
+    """
+    live = live_financials or {}
+    live_count = count_core_metrics(live)
+    if live_count >= min_metrics:
+        return live, live_count, "live", 0
+    if cached_financials:
+        cached_count = count_core_metrics(cached_financials)
+        if (cached_count >= min_metrics
+                and cached_age_days is not None
+                and cached_age_days <= max_age_days):
+            return cached_financials, cached_count, "cache", cached_age_days
+    return live, live_count, "live", 0
+
 # Sector-relative benchmarks.
 # Keys: pe_cheap, pe_fair_hi, pe_exp  (forward P/E tier boundaries)
 #       rev_strong, rev_healthy        (revenue growth %, annual)
@@ -208,8 +256,7 @@ def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     # ── Data quality check ────────────────────────────────────────────────────
     # The 5 scoreable metrics are: fwd_pe, rev_growth, earn_growth, margins,
     # debt_to_equity (fcf_yield and analyst_target are supplemental).
-    _scored_keys = ["forward_pe", "revenue_growth", "earnings_growth", "profit_margins", "debt_to_equity"]
-    _missing = sum(1 for k in _scored_keys if financials.get(k) is None)
+    _missing = len(CORE_FUNDAMENTAL_KEYS) - count_core_metrics(financials)
     if _missing >= 3:
         signals["⚠ Data Quality"] = (
             f"{_missing}/5 core metrics missing from Yahoo Finance — "

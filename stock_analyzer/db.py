@@ -18,12 +18,14 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     ALTER TABLE public.trades          ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.recommendations ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.manual_stops    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.fundamentals_cache ENABLE ROW LEVEL SECURITY;
 
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.holdings;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.watchlist;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.trades;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.recommendations;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.manual_stops;
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.fundamentals_cache;
 
     CREATE POLICY "Allow all (service role)" ON public.holdings
         FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -34,6 +36,8 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     CREATE POLICY "Allow all (service role)" ON public.recommendations
         FOR ALL TO service_role USING (true) WITH CHECK (true);
     CREATE POLICY "Allow all (service role)" ON public.manual_stops
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow all (service role)" ON public.fundamentals_cache
         FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 Table schema (run once if tables don't exist):
@@ -125,6 +129,16 @@ the user acted on it):
         set_at        timestamptz default now(),
         note          text,
         source_action text                            -- e.g. 'review_tighten_only' / 'review_trim_and_tighten' / 'manual'
+    );
+
+    -- Last-known-good fundamentals fallback (load_all serves this when the live
+    -- .info leg is sparse and FMP can't backfill, bounded by
+    -- FUNDAMENTALS_CACHE_MAX_AGE_DAYS). Optional: until created, the app runs
+    -- live-only exactly as before (load/save degrade to no-ops).
+    create table if not exists fundamentals_cache (
+        ticker      text primary key,
+        financials  jsonb not null,
+        fetched_at  timestamptz not null default now()
     );
 """
 
@@ -718,4 +732,52 @@ def clear_manual_stop(ticker: str) -> bool:
         return True
     except Exception as e:
         st.error(f"⛔ Failed to clear manual stop for {t}: {e}")
+        return False
+
+
+def load_fundamentals_cache(ticker: str) -> dict | None:
+    """Return the last-known-good fundamentals for a ticker, or None.
+
+    Shape: {"financials": {...}, "fetched_at": "<iso>"}. Returns None when the
+    DB is offline, the table doesn't exist yet, or there's no row — so the
+    feature degrades to current behaviour (live-only) until the table is
+    created. Never raises: a cache miss must not break the data path.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("fundamentals_cache")
+            .select("financials,fetched_at")
+            .eq("ticker", t).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        fin = row.get("financials")
+        if not isinstance(fin, dict) or not fin:
+            return None
+        return {"financials": fin, "fetched_at": row.get("fetched_at")}
+    except Exception:
+        return None
+
+
+def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
+    """Upsert the last-known-good fundamentals for a ticker (write-through on a
+    successful live fetch). Best-effort: a failure (e.g. table not created yet)
+    is swallowed so it never disrupts the data path."""
+    t = str(ticker or "").upper().strip()
+    if not t or not financials or not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        record = {
+            "ticker":     t,
+            "financials": financials,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _client().table("fundamentals_cache").upsert(record, on_conflict="ticker").execute()
+        return True
+    except Exception:
         return False

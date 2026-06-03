@@ -24,7 +24,10 @@ from stock_analyzer.data import (
 )
 from stock_analyzer.catalyst_watch import build_catalyst_watch
 from stock_analyzer.technicals import compute_indicators, technical_score
-from stock_analyzer.fundamentals import fundamental_score, upside_potential
+from stock_analyzer.fundamentals import (
+    fundamental_score, upside_potential,
+    count_core_metrics, resolve_fundamentals,
+)
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics
@@ -53,6 +56,7 @@ from stock_analyzer.constants import (
     MOVER_SHORTLIST_SIZE,
     DATA_XCHECK_PREVCLOSE_TOL_PCT,
     FUNDAMENTALS_GATE_MIN_METRICS,
+    FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     RR_ENTRY_MIN,
     CATALYST_WATCH_WINDOW_DAYS,
 )
@@ -903,6 +907,21 @@ def _get_premarket_brief(held_tickers: tuple, watchlist: tuple) -> dict:
 
 
 # ── Shared data loader ────────────────────────────────────────────────────────
+def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
+    """Whole days between a stored ISO timestamp and now (UTC). None if unparseable.
+    Used to bound the last-known-good fundamentals fallback."""
+    if not fetched_at_iso:
+        return None
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(str(fetched_at_iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0, (datetime.now(timezone.utc) - dt).days)
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=1800)
 def load_all(ticker: str, period: str = "6mo") -> dict:
     # One yf.Ticker session covers history + info + news + earnings (was 4 separate calls)
@@ -910,17 +929,34 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     df = compute_indicators(bundle["history"])
     t_score, t_signals = technical_score(df)
     financials = fetch_financials_from_info(bundle["info"])
+    # ── Persistent last-known-good fundamentals fallback ──────────────────────
+    # The fundamental leg is the fragile one: yfinance .info intermittently
+    # returns empty AND the FMP backfill can be quota-exhausted, leaving zero
+    # core metrics — fundamental_score then defaults to a fabricated neutral 50
+    # and the verdict is withheld (G-15). Rather than blackout on a transient
+    # double-miss, serve the last good copy from Supabase (real data, aged,
+    # bounded by FUNDAMENTALS_CACHE_MAX_AGE_DAYS). Write-through when live is
+    # good. db.* degrade to no-ops if the table doesn't exist → live-only.
+    _fund_source = "live"
+    _fund_cache_age_days = None
+    if count_core_metrics(financials) >= FUNDAMENTALS_GATE_MIN_METRICS:
+        db.save_fundamentals_cache(ticker, financials)            # write-through
+    else:
+        _cached = db.load_fundamentals_cache(ticker)
+        _cached_age = _cache_age_in_days((_cached or {}).get("fetched_at"))
+        financials, _, _fund_source, _fund_cache_age_days = resolve_fundamentals(
+            financials,
+            (_cached or {}).get("financials"),
+            _cached_age,
+            FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
+            FUNDAMENTALS_GATE_MIN_METRICS,
+        )
     _sector_for_scoring = bundle.get("info", {}).get("sector", "")
     f_score, f_signals = fundamental_score(financials, _sector_for_scoring)
-    # Is the fundamental leg backed by real data, or a fabricated neutral 50?
-    # When yfinance .info is empty and no failover source backfilled it, none of
-    # the core scoreable metrics are present and fundamental_score returns 50 by
-    # default — the composite would then emit a confident verdict on data we
-    # don't have. Downstream (Analysis verdict + Brief new-position gate) reads
-    # this flag and WITHHOLDS the verdict instead. Threshold in constants.
-    _core_fund_keys = ("forward_pe", "revenue_growth", "earnings_growth",
-                       "profit_margins", "debt_to_equity")
-    _fund_metric_count = sum(1 for k in _core_fund_keys if financials.get(k) is not None)
+    # Is the fundamental leg backed by real data (live or fresh cache), or a
+    # fabricated neutral 50? Downstream (Analysis verdict + Brief new-position
+    # gate) reads this flag and WITHHOLDS the verdict when it's False.
+    _fund_metric_count = count_core_metrics(financials)
     fundamentals_available = _fund_metric_count >= FUNDAMENTALS_GATE_MIN_METRICS
     avg_sent, headlines = analyze_news(bundle["news"])
     s_score = sentiment_score_0_100(avg_sent)
@@ -970,6 +1006,10 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         # consumers withhold the verdict rather than recommend on it.
         "fundamentals_available": fundamentals_available,
         "fund_metric_count": _fund_metric_count,
+        # "live" normally; "cache" when the live leg was sparse and we served
+        # the last-known-good copy (age in days) instead of withholding.
+        "fund_source": _fund_source,
+        "fund_cache_age_days": _fund_cache_age_days,
     }
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -9406,6 +9446,27 @@ elif page == "📈 Analysis":
                        else "")
                     + "</div>", unsafe_allow_html=True,
                 )
+
+                # Last-known-good fallback transparency — when the live fundamental
+                # leg was sparse this run, we served the cached copy (real data,
+                # aged) instead of withholding. Tell the user it's aged and bounded.
+                if r.get("fund_source") == "cache":
+                    _age = r.get("fund_cache_age_days")
+                    _age_lbl = (
+                        "today" if _age == 0 else
+                        "1 day ago" if _age == 1 else
+                        f"{_age} days ago" if isinstance(_age, int) else "recently"
+                    )
+                    st.markdown(
+                        "<div style='padding:8px 12px;border-radius:8px;background:#92400e18;"
+                        "border-left:4px solid #f59e0b;margin-bottom:10px'>"
+                        f"<span style='color:#f59e0b;font-weight:600'>📦 Fundamentals as of "
+                        f"{_age_lbl}</span> — live company data was momentarily unavailable, "
+                        "so the verdict stands on the last-known-good copy (real data, just "
+                        "aged). Re-check later to refresh; the verdict will be withheld if "
+                        f"the cache ages past {FUNDAMENTALS_CACHE_MAX_AGE_DAYS} days.</div>",
+                        unsafe_allow_html=True,
+                    )
 
                 # Fundamentals backfill transparency — when yfinance .info was sparse,
                 # the orchestrator pulled the fundamental leg from a failover source

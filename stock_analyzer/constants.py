@@ -278,3 +278,12 @@ DATA_FMP_INFO_CACHE_TTL_SEC = 3600
 # fabricated-50 case); raise to 2-3 to also withhold on thin/unreliable data.
 # Policy value — changing it is an investment-policy decision.
 FUNDAMENTALS_GATE_MIN_METRICS = 1
+
+# Persistent last-known-good fundamentals cache (Supabase `fundamentals_cache`).
+# When the live fundamental leg is unavailable (yfinance .info sparse AND FMP
+# couldn't backfill), serve the last good copy rather than withholding — real
+# data, transparently aged. This is the MAX age that fallback stays valid;
+# beyond it the verdict is withheld again (stale-but-real has a limit). Policy
+# value: forward_pe drifts daily with price, the rest are quarterly, so a week
+# keeps the verdict materially correct. Changing it is an investment-policy call.
+FUNDAMENTALS_CACHE_MAX_AGE_DAYS = 7
