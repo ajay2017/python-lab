@@ -75,6 +75,14 @@ RISK_PCT_PER_TRADE = 0.015       # 1.5% portfolio risk per trade (Moderate)
 # Review-Before-Close bucket).
 ADD_WINNER_MIN_GAP_PCT  = 8.0    # ≥ this gap = comfortable enough to add
 APPROACHING_STOP_GAP_PCT = 8.0   # ≤ this gap = surface for monitoring (same number, different lens)
+# Post-add cooldown: after the user ADDS shares to a position (a recent buy lot),
+# don't keep re-recommending "add to this winner" for this many days. Acting on
+# an add the user already executed is the same screen-watching churn §2B kills
+# (the PATH case: still nudging "ADD" after the user bought 150 shares). Let the
+# new shares settle; legitimate pyramiding can resume after the window. Aligned
+# with POSITION_SETTLING_DAYS — "don't grow a position you just changed." None
+# days-since-last-buy (no trade journal) = no cooldown (calm, not blind).
+ADD_WINNER_COOLDOWN_DAYS = 10
 
 # Weak-large-position flag (Review Before Close): a position is "weak" when
 # both its weight and its conviction score breach these.

@@ -1486,6 +1486,11 @@ if page == "🏠 Home":
         # still-held lot was opened, via FIFO replay of the trade journal. None
         # when there's no journal for the ticker — which must NOT silence
         # management (classify_position_state treats None as "not settling").
+        # days_since_last_buy = age of the NEWEST still-held lot — i.e. how
+        # recently the user last added shares. Used to cool down repeat
+        # "add-to-winner" nudges right after the user acted on one (the PATH
+        # case: keep recommending an add the user already executed). None when
+        # there's no journal — then no cooldown (calm, not blind).
         _hd_trades = st.session_state.get("trades_df")
         for t in held_tickers:
             bundle = _hd_results.get(t)
@@ -1494,9 +1499,12 @@ if page == "🏠 Home":
             else:
                 try:
                     _lots = _build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not None else []
-                    bundle["position_age_days"] = max((l["days_held"] for l in _lots), default=None)
+                    _ages = [l["days_held"] for l in _lots]
+                    bundle["position_age_days"]   = max(_ages) if _ages else None
+                    bundle["days_since_last_buy"] = min(_ages) if _ages else None
                 except Exception:
-                    bundle["position_age_days"] = None
+                    bundle["position_age_days"]   = None
+                    bundle["days_since_last_buy"] = None
                 held_data[t] = bundle
 
     if held_data:
@@ -3185,6 +3193,7 @@ if page == "🏠 Home":
             blocked_adds  = grow.get("risk_blocked_adds", [])
             conc_blocked  = grow.get("concentration_blocked_adds", [])
             sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
+            cooldown_adds = grow.get("cooldown_adds", [])
             macro_blocked = grow.get("macro_blocked_picks", [])
             comp_skipped  = grow.get("composite_skipped", [])
             comp_unavail  = grow.get("composite_unavailable", [])
@@ -3445,6 +3454,29 @@ if page == "🏠 Home":
                     st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _ga["ticker"]
                     st.rerun()
+
+            # Post-add cooldown — you already acted on this add recently; the app
+            # is deliberately staying quiet so it doesn't read as day-trading.
+            if cooldown_adds:
+                _cd_rows = "".join(
+                    f"<div style='color:#93c5fd;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                    f"(Score {b.get('score',0):.0f} · P&L {b.get('pnl_pct',0):+.1f}%) — "
+                    f"{b.get('reason','recently added')}</div>"
+                    for b in cooldown_adds[:4]
+                )
+                st.markdown(
+                    "<div style='background:#0f172a;border:1px solid #475569;"
+                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                    "<div style='color:#cbd5e1;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    "🌱 Add Paused — Recently Added (settling)</div>"
+                    + _cd_rows
+                    + "<div style='color:#94a3b8;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                    "You already acted on these — the trend's still intact, but adding again "
+                    "this soon is churn, not conviction. They'll return to the add list after "
+                    "the new shares settle (or if you trim and the thesis re-strengthens)."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
 
             # Single-name concentration ceiling suppressed an add — surface why
             # so the user understands the position is capped, not signal-weak.

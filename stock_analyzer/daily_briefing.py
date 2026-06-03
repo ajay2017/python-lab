@@ -35,6 +35,7 @@ from stock_analyzer.constants import (
     MACRO_IMMINENT_DAYS,
     RISK_PCT_PER_TRADE,
     ADD_WINNER_MIN_GAP_PCT,
+    ADD_WINNER_COOLDOWN_DAYS,
     APPROACHING_STOP_GAP_PCT,
     LARGE_POSITION_WEIGHT_PCT,
     WEAK_CONVICTION_SCORE,
@@ -381,6 +382,16 @@ def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
         "entry_lo":    entry_lo,
         "entry_hi":    entry_hi,
     }
+
+
+def _recently_added(ticker, held_data, cooldown: int = ADD_WINNER_COOLDOWN_DAYS) -> bool:
+    """True when the user added shares to `ticker` within the cooldown window —
+    used to suppress repeat add-to-winner nudges right after they acted on one
+    (the PATH case). days_since_last_buy is the age of the newest still-held lot
+    (attached in app.py). None (no trade journal) → False (calm, not blind)."""
+    d = (held_data or {}).get(ticker) or (held_data or {}).get(str(ticker).upper()) or {}
+    dslb = d.get("days_since_last_buy")
+    return dslb is not None and dslb < cooldown
 
 
 def _grow_today(port_df, scanner_results, news_items, held_data, today,
@@ -769,6 +780,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     risk_blocked_adds: list[dict] = []
     concentration_blocked_adds: list[dict] = []
     sector_blocked_adds: list[dict] = []   # adds suppressed — sector over hard cap
+    cooldown_adds:     list[dict] = []     # adds suppressed — recently added (post-act cooldown)
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
             sig = str(row.get("Signal", ""))
@@ -779,6 +791,22 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 sector  = str(row.get("Sector", ""))
                 # Skip if Act Today already flags this ticker for action
                 if ticker in _act_blocked:
+                    continue
+                # Post-add cooldown — you already acted on this add recently; let
+                # the new shares settle before nudging to add more (anti-churn).
+                if _recently_added(ticker, held_data):
+                    _dslb = ((held_data or {}).get(ticker) or {}).get("days_since_last_buy")
+                    cooldown_adds.append({
+                        "ticker":  ticker,
+                        "score":   scr,
+                        "pnl_pct": _f(row.get("P&L (%)")),
+                        "days_since_last_buy": _dslb,
+                        "reason":  (
+                            f"Added within the last {ADD_WINNER_COOLDOWN_DAYS} days "
+                            f"({_dslb}d ago) — letting the new shares settle before "
+                            "suggesting more."
+                        ),
+                    })
                     continue
                 # Sector concentration gate — don't add to a position whose sector
                 # is over the hard cap (Risk Advisor is recommending a trim there).
@@ -891,6 +919,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "risk_blocked_adds":          risk_blocked_adds,
         "concentration_blocked_adds": concentration_blocked_adds,
         "sector_blocked_adds":        sector_blocked_adds,
+        "cooldown_adds":              cooldown_adds,
         "sector_blocked_picks":       sector_blocked_picks,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,
@@ -1221,6 +1250,10 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             ticker = str(row["Ticker"])
             # Skip if Act Today already flags this ticker for any action
             if ticker in _act_blocked:
+                continue
+            # Post-add cooldown — already acted on this add recently (anti-churn,
+            # mirrors the Grow Today add gate so PATH doesn't linger here either)
+            if _recently_added(ticker, held_data):
                 continue
             # Skip if Risk Advisor is recommending trim — same-ticker conflict
             if ticker.upper() in _trim_set:
