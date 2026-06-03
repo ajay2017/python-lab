@@ -74,6 +74,7 @@ from stock_analyzer.targets import (
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
+    annotate_add_candidates,
     holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
@@ -6469,36 +6470,96 @@ if page == "🏠 Home":
                         with ac2:
                             st.metric("Suggested add", f"${rec['add_dollars']:,.0f}",
                                       f"+{rec['gap_pct']:.1f}%", delta_color="normal")
-                        st.markdown(f"**Top candidates:** {' · '.join(rec['candidates'])}")
-                        btn_key = f"_div_analyze_{rec['sector'].replace(' ', '_')}"
-                        if st.button(
-                            f"📊 Load live scores for {', '.join(rec['candidates'][:2])}",
-                            key=btn_key,
-                        ):
-                            st.session_state[f"_div_scores_{rec['sector']}"] = True
-                        if st.session_state.get(f"_div_scores_{rec['sector']}"):
-                            score_cols = st.columns(len(rec["candidates"][:2]))
-                            for scol, cand in zip(score_cols, rec["candidates"][:2]):
-                                try:
-                                    with st.spinner(f"Loading {cand}…"):
-                                        cd = load_all(cand)
-                                    rev     = cd.get("revisions", {})
-                                    net_rev = rev.get("net", 0)
-                                    rev_label = (
-                                        f"↑{net_rev} upgrades (90d)"  if net_rev > 0 else
-                                        f"↓{abs(net_rev)} downgrades (90d)" if net_rev < 0 else
-                                        "No recent revisions"
+                        # ── Cross-validate candidates against the quality engine ──
+                        # The candidate roster answers "which sector is underweight,"
+                        # not "is this name a good entry." Join each to the SAME
+                        # composite / signal / R:R the Analysis page produces so the
+                        # rebalance card and the new-position engine agree. Pull from
+                        # the cached _grow_composites bundle first (zero new calls);
+                        # fall back to load_all (also cached) for un-scored names.
+                        _div_cands = rec["candidates"][:3]
+                        _grow_cache = st.session_state.get("_grow_composites", {}) or {}
+                        _div_quality: dict = {}
+                        _div_bundles: dict = {}
+                        with st.spinner(f"Scoring {', '.join(_div_cands)}…"):
+                            for _cand in _div_cands:
+                                _cb = _grow_cache.get(_cand)
+                                if _cb is None:
+                                    try:
+                                        _cb = load_all(_cand)
+                                    except Exception:
+                                        _cb = None
+                                if _cb is None:
+                                    continue
+                                _div_bundles[_cand] = _cb
+                                _cprice = _cb.get("current_price")
+                                _cstop  = _cb.get("stop")
+                                _ctgt   = (_cb.get("targets") or {}).get("base")
+                                _crr    = (
+                                    risk_reward(_cprice, _cstop, _ctgt)
+                                    if (_cprice and _cstop and _ctgt) else None
+                                )
+                                _div_quality[_cand] = {
+                                    "score":  _cb.get("total"),
+                                    "signal": (_cb.get("rec") or {}).get("label"),
+                                    "rr":     _crr,
+                                }
+                        _annotated = annotate_add_candidates(_div_cands, _div_quality)
+
+                        # Headline: does the sector need have an actionable entry today?
+                        _passers = [c for c in _annotated if c["passes"] is True]
+                        if _passers:
+                            _best = _passers[0]
+                            _best_rr = (
+                                f" · R:R {_best['rr']:.1f}:1"
+                                if isinstance(_best["rr"], (int, float)) and _best["rr"] > 0 else ""
+                            )
+                            st.success(
+                                f"✅ **{_best['ticker']}** clears the Buy gate "
+                                f"({_best['score']:.0f} ≥ {COMPOSITE_BUY:.0f}{_best_rr}) — "
+                                f"a genuine entry, not just a sector filler.",
+                                icon="🎯",
+                            )
+                        elif any(c["passes"] is False for c in _annotated):
+                            st.warning(
+                                f"⚠️ The sector tilt is sound, but none of these names currently "
+                                f"clear the Buy gate (≥ {COMPOSITE_BUY:.0f}). Diversifying here is "
+                                f"reasonable — but wait for a better entry or pick your own "
+                                f"{rec['sector']} name.",
+                                icon="🚦",
+                            )
+
+                        # Per-candidate quality cards (best-first, gated)
+                        _score_cols = st.columns(len(_annotated))
+                        for _scol, _c in zip(_score_cols, _annotated):
+                            _cand = _c["ticker"]
+                            with _scol:
+                                if _c["passes"] is None:
+                                    st.metric(_cand, "—", "score unavailable")
+                                    st.caption("Could not load live score")
+                                    continue
+                                _gate_icon = "✅" if _c["passes"] else "⚠️"
+                                st.metric(
+                                    f"{_gate_icon} {_cand}",
+                                    f"{_c['score']:.0f}/100",
+                                    _c["signal"] or "—",
+                                    delta_color="normal" if _c["passes"] else "off",
+                                )
+                                if isinstance(_c["rr"], (int, float)) and _c["rr"] > 0:
+                                    _rr_q = (
+                                        "✅" if _c["rr"] >= 2.5 else
+                                        ("⚠️" if _c["rr"] >= 1.5 else "❌")
                                     )
-                                    fin = cd.get("financials", {})
-                                    pe  = fin.get("forward_pe")
-                                    fcf = fin.get("fcf_yield")
-                                    with scol:
-                                        st.metric(cand, f"{cd['total']:.0f}/100", cd["rec"]["label"])
-                                        st.caption(f"Fwd P/E: {pe:.1f}" if pe else "Fwd P/E: N/A")
-                                        st.caption(f"FCF Yield: {fcf:.1f}%" if fcf else "FCF Yield: N/A")
-                                        st.caption(f"Revisions: {rev_label}")
-                                except Exception:
-                                    scol.warning(f"Could not load {cand}")
+                                    st.caption(f"R:R {_c['rr']:.1f}:1 {_rr_q}")
+                                else:
+                                    st.caption("R:R N/A")
+                                if not _c["passes"]:
+                                    st.caption(f"Below Buy gate ({COMPOSITE_BUY:.0f})")
+                                # Secondary fundamentals from the same bundle (no extra call)
+                                _fin = (_div_bundles.get(_cand) or {}).get("financials", {}) or {}
+                                _pe  = _fin.get("forward_pe")
+                                if _pe:
+                                    st.caption(f"Fwd P/E: {_pe:.1f}")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 3 — RISK ANALYSIS

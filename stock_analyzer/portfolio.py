@@ -2,6 +2,8 @@ import math
 import pandas as pd
 import numpy as np
 
+from stock_analyzer.constants import COMPOSITE_BUY
+
 
 def _safe_float(val, default: float = 0.0) -> float:
     """Convert val to float, returning default for None/NaN/empty-string."""
@@ -669,3 +671,56 @@ def diversification_recommendations(
         })
 
     return recs
+
+
+def annotate_add_candidates(
+    candidates: list[str],
+    quality: dict[str, dict],
+    buy_gate: float = COMPOSITE_BUY,
+) -> list[dict]:
+    """Cross-validate diversification ADD candidates against the stock-quality engine.
+
+    The Diversification Advisor proposes candidate names from a static per-sector
+    roster — it answers "which SECTOR is underweight," not "is this NAME a good
+    entry." This helper joins each candidate to the SAME composite/signal/R:R the
+    Analysis page and Grow Today produce, so the rebalance card and the
+    new-position engine give one consistent read instead of two disconnected ones.
+
+    Parameters
+    ----------
+    candidates : the bare ticker list from a diversification ADD rec.
+    quality    : {ticker: {"score": float|None, "signal": str|None, "rr": float|None}}
+                 supplied by app.py from the cached load_all bundles (orchestration
+                 layer owns the data fetch; this function stays pure/testable).
+    buy_gate   : composite threshold a candidate must clear to be a genuine Buy.
+
+    Returns a list of dicts {ticker, score, signal, rr, passes}, where:
+      passes is True  -> scored at/above the Buy gate (a real, actionable entry)
+      passes is False -> scored but below the Buy gate (diversifies, but weak entry)
+      passes is None  -> no score available (couldn't load) — surfaced, not hidden
+
+    Sorted best-first: gate-passers by composite desc, then scored-but-failing by
+    composite desc, then unscored. Callers should render passers prominently and
+    keep the rest visible-but-demoted (never silently filter).
+    """
+    out: list[dict] = []
+    for t in candidates:
+        q = quality.get(t) or {}
+        score = q.get("score")
+        passes = (score >= buy_gate) if isinstance(score, (int, float)) else None
+        out.append({
+            "ticker": t,
+            "score":  score,
+            "signal": q.get("signal"),
+            "rr":     q.get("rr"),
+            "passes": passes,
+        })
+
+    def _rank(c: dict) -> tuple:
+        # passers (0) before scored-failers (1) before unscored (2); within a
+        # tier, higher composite first.
+        tier = 0 if c["passes"] is True else (1 if c["passes"] is False else 2)
+        return (tier, -(c["score"] if isinstance(c["score"], (int, float)) else 0))
+
+    out.sort(key=_rank)
+    return out
