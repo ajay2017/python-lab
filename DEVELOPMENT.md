@@ -160,14 +160,17 @@ python -c "import ast, io; ast.parse(io.open(r'app.py', encoding='utf-8').read()
 
 The audit and live-market validation surfaced these items; none blocking:
 
-**Macro calendar / regime:**
-- Macro calendar drift detection (Tier 1): cross-check `_STATIC` dates against FRED `last_updated`; warn loudly if drift
-- Auto-released flag via FRED last-update (Tier 2): macro gate filters on `not released AND in window`
-- "⏳ awaiting FRED update" placeholder when an event is past but `actual` is None
-- "Refresh macro data" button that bypasses session_state cache
-- Switch CPI series CPIAUCSL (SA) → CPIAUCNS (NSA) so value matches the media headline
-- Tighten "controlled inflation" threshold in regime detection (≤2.5%, not ≤4%)
-- Don't auto-claim "in-line" regime note without a consensus value supplied
+**Macro calendar / regime — ✅ CLUSTER COMPLETE (2026-06-02 audit).**
+All originally-queued items are implemented and live. Verified against code:
+- ✅ Macro calendar drift detection (Tier 1): `drift_days` computed in `macro_calendar._fetch_fred`; surfaced as a "⚠ Drift Nd — FRED released …" badge in `app.py` (`_release_status_html`).
+- ✅ Auto-released flag (Tier 2): `released` flag set per event; the new-pick macro gate (`daily_briefing.py`) already filters `0 ≤ days ≤ MACRO_IMMINENT_DAYS` (forward = unreleased), and a "✓ Released" badge renders in the calendar.
+- ✅ "⏳ Awaiting FRED update" placeholder: rendered for past events with no `actual` yet.
+- ✅ "🔄 Refresh macro" button: bypasses the per-day `_macro_cal_{date}` session cache.
+- ✅ CPI series CPIAUCSL (SA) → **CPIAUCNS** (NSA): matches the media-headline number (`_FRED_MAP` + `detect_macro_regime`).
+- ✅ "controlled inflation" gate: rate-cut regime is hard-gated off when CPI > `REGIME_CPI_CONTROLLED_MAX` (2.5%). The CPI ladder (2.5 / 3.0 / 4.0) now lives in `constants.py` as `REGIME_CPI_CONTROLLED_MAX / _ELEVATED_MIN / _HOT_MIN` (was hardcoded inline; centralized 2026-06-02 per hard-rule #1, values unchanged).
+- ✅ Don't auto-claim "in-line" without consensus: `classify_scenario` returns `None` with no reference; UI shows "⬜ vs baseline (no consensus)" instead of "In-Line" when only the model baseline is available.
+
+_Remaining (genuinely minor, optional):_ the macro pick-gate uses the static event date for "forward", not FRED's `released` flag — so in the rare drift case where FRED releases a day before the static date, the gate could suppress for one extra day. The drift badge already surfaces this visually; wiring `released` into the gate itself is an edge-case refinement only.
 
 **Long-term (optional):**
 - BLS Calendar API integration to replace `_STATIC` dates entirely (Tier 3)
@@ -176,8 +179,6 @@ The audit and live-market validation surfaced these items; none blocking:
 - Dead "Weak Hold" / "Avoid" code paths (no producer emits them)
 - R:R targets dict validation (defensive)
 - Trim trade journal entry text suggestion
-
-Pick up tomorrow morning during market validation, then batch.
 
 ---
 

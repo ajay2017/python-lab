@@ -19,6 +19,12 @@ from datetime import date as _date, datetime as _datetime, timedelta as _td
 import pandas as _pd
 import pytz as _pytz
 
+from stock_analyzer.constants import (
+    REGIME_CPI_CONTROLLED_MAX,
+    REGIME_CPI_ELEVATED_MIN,
+    REGIME_CPI_HOT_MIN,
+)
+
 def _today_et() -> _date:
     return _datetime.now(_pytz.timezone("America/New_York")).date()
 
@@ -784,16 +790,16 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
         if len(cpi_obs) >= 13:
             any_success = True
             cpi_yoy = (cpi_obs[0] - cpi_obs[12]) / cpi_obs[12] * 100
-            if cpi_yoy > 4.0:
+            if cpi_yoy > REGIME_CPI_HOT_MIN:
                 scores["inflation_fight"] += 3
                 scores["stagflation_risk"] += 2
                 scores["rate_cut"] -= 2
                 signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "🔥", "inflation_fight"))
-            elif cpi_yoy >= 3.0:
+            elif cpi_yoy >= REGIME_CPI_ELEVATED_MIN:
                 scores["inflation_fight"] += 1
                 scores["stagflation_risk"] += 1
                 signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "⚠️", "inflation_fight"))
-            elif cpi_yoy < 2.5:
+            elif cpi_yoy < REGIME_CPI_CONTROLLED_MAX:
                 scores["rate_cut"] += 2
                 scores["inflation_fight"] -= 2
                 signals.append(("CPI YoY", f"{cpi_yoy:.1f}%", "✅", "rate_cut"))
@@ -929,14 +935,15 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
     winning_score = scores[winner]
 
     # Hard gate: "Rate-Cut Optimism" claims "controlled inflation" in its
-    # rationale, so it must not be selected when CPI > 2.5% YoY even if other
-    # risk-on signals (low VIX, strong SPY) push the score that way. Without
-    # this, a 3.95% CPI print could still land in the rate-cut regime — a
-    # direct contradiction of the label.
+    # rationale, so it must not be selected when CPI exceeds the controlled
+    # ceiling (REGIME_CPI_CONTROLLED_MAX) even if other risk-on signals (low
+    # VIX, strong SPY) push the score that way. Without this, a 3.95% CPI print
+    # could still land in the rate-cut regime — a direct contradiction of the
+    # label.
     if (
         winner == "rate_cut"
         and cpi_yoy is not None
-        and cpi_yoy > 2.5
+        and cpi_yoy > REGIME_CPI_CONTROLLED_MAX
     ):
         _alt_scores = {k: v for k, v in scores.items() if k != "rate_cut"}
         if _alt_scores:

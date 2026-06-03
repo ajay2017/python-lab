@@ -184,6 +184,20 @@ MACRO_EXPOSURE_CRITICAL_PCT = 55
 MACRO_EXPOSURE_HIGH_PCT     = 35
 MACRO_EXPOSURE_MEDIUM_PCT   = 15
 
+# ── Regime-classifier CPI YoY thresholds (macro_calendar.detect_macro_regime) ─
+# The CPI inflation ladder used by the 7-signal regime classifier. Below the
+# CONTROLLED ceiling, inflation is "controlled" and supports the rate-cut
+# regime; above ELEVATED it adds inflation-fight pressure; above HOT it is a
+# strong inflation-fight / stagflation signal.
+#   REGIME_CPI_CONTROLLED_MAX doubles as a HARD GATE: the "Rate-Cut Optimism"
+#   regime claims "controlled inflation" in its rationale, so it must NOT be
+#   selected when CPI YoY exceeds this value even if risk-on signals push the
+#   score that way (else a 3.95% CPI print could land in a regime whose own
+#   label contradicts it). Changing these is an investment-policy decision.
+REGIME_CPI_CONTROLLED_MAX = 2.5   # ≤ this = controlled inflation (rate-cut supportive + gate ceiling)
+REGIME_CPI_ELEVATED_MIN   = 3.0   # ≥ this (and ≤ HOT) = mild inflation-fight pressure
+REGIME_CPI_HOT_MIN        = 4.0   # > this = strong inflation-fight / stagflation signal
+
 # ── Multi-source market-data layer (providers/ + data.py orchestrator) ───────
 # The app was historically single-sourced on yfinance (unofficial, no SLA). The
 # provider seam + orchestrator add failover + a price cross-check so right-data-
