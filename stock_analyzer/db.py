@@ -763,6 +763,33 @@ def load_fundamentals_cache(ticker: str) -> dict | None:
         return None
 
 
+def _json_safe(obj):
+    """Coerce a value tree to JSON/jsonb-safe Python primitives.
+
+    The fundamentals dict can carry numpy scalars (yfinance/pandas) or non-finite
+    floats (NaN/inf) — neither survives the JSON serialisation the Supabase
+    client does, and because save_* swallows errors that would fail the write
+    SILENTLY (cache never populates, invisibly). Normalise here so the write is
+    robust: numpy scalars → native via .item(); NaN/inf → None; recurse dict/list.
+    """
+    import math
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if hasattr(obj, "item"):          # numpy / pandas scalar
+        try:
+            v = obj.item()
+            return _json_safe(v)
+        except Exception:
+            return None
+    return obj
+
+
 def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
     """Upsert the last-known-good fundamentals for a ticker (write-through on a
     successful live fetch). Best-effort: a failure (e.g. table not created yet)
@@ -774,7 +801,7 @@ def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
         from datetime import datetime, timezone
         record = {
             "ticker":     t,
-            "financials": financials,
+            "financials": _json_safe(financials),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         _client().table("fundamentals_cache").upsert(record, on_conflict="ticker").execute()
