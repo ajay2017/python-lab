@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, DIVERSIFY_SCAN_CAP
+from stock_analyzer.constants import COMPOSITE_BUY, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -31,8 +31,14 @@ TICKER_SECTORS = {
     "HPE": "Enterprise Tech", "SAP": "Enterprise Tech",
     "PLTR": "AI & Data", "AI": "AI & Data", "MDB": "AI & Data", "SNOW": "AI & Data",
     "PATH": "AI & Data", "IONQ": "AI & Data",
+    # Data / observability / search infra — same correlated cluster as SNOW/MDB.
+    "ESTC": "AI & Data", "CFLT": "AI & Data", "GTLB": "AI & Data",
     "MSFT": "AI & Cloud", "GOOGL": "AI & Cloud", "META": "AI & Cloud",
     "CRM": "AI & Cloud", "NOW": "AI & Cloud", "DDOG": "AI & Cloud",
+    # Consumer-internet / social-advertising names — map to Consumer Tech so they
+    # don't fall through to the "Other" catch-all and inflate a phantom breach.
+    "PINS": "Consumer Tech", "SPOT": "Consumer Tech", "DASH": "Consumer Tech",
+    "DIS": "Consumer Tech", "SNAP": "Consumer Tech",
     "LLY": "Healthcare", "NVO": "Healthcare", "ABBV": "Healthcare",
     "ISRG": "Healthcare", "MRNA": "Healthcare", "REGN": "Healthcare",
     "JPM": "Financials", "V": "Financials", "MA": "Financials",
@@ -137,7 +143,7 @@ def build_portfolio_df(
             # this, every unmapped name piled into "Other", inflating it past the
             # hard cap (ESTC, a Tech/Software name, landed in a 44% "Other"
             # bucket) — a classification artifact, not a real concentration.
-            "Sector": TICKER_SECTORS.get(ticker) or (r.get("sector") or "").strip() or "Other",
+            "Sector": TICKER_SECTORS.get(ticker) or (r.get("sector") or "").strip() or UNCLASSIFIED_SECTOR,
             "Shares": int(shares),
             "Avg Cost": avg_cost,
             "Price": price,

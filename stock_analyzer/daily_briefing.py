@@ -1544,9 +1544,20 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         affected_tickers_str = ", ".join(ev.get("affected_tickers", [])[:4]) or "macro-sensitive"
         playbook = ev.get("playbook_note") or ""
 
-        if exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not sector_rows.empty and portfolio_value > 0:
+        # Don't pre-trim a name that already carries its own Act Today decision
+        # (a critical-news hold, a stop breach, a sell signal, a risk trim). That
+        # name is already being acted on; a second "trim ahead of the macro event"
+        # card on the SAME ticker is the contradictory double-surface §2B kills
+        # (AVGO: critical-news "hold & tighten" vs NFP "trim"). Trim the weakest
+        # affected name NOT already spoken for; if every affected holding is, the
+        # event downgrades to WATCH (awareness), not a conflicting trim.
+        _macro_eligible = sector_rows[
+            ~sector_rows["Ticker"].astype(str).str.upper().isin(_act_tickers)
+        ] if not sector_rows.empty else sector_rows
+
+        if exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not _macro_eligible.empty and portfolio_value > 0:
             # Find lowest-conviction-score holding in the affected sectors.
-            weakest = sector_rows.sort_values("Score", ascending=True).iloc[0]
+            weakest = _macro_eligible.sort_values("Score", ascending=True).iloc[0]
             weak_ticker = str(weakest["Ticker"])
             weak_score  = _f(weakest["Score"])
             weak_weight = _f(weakest["Weight (%)"])
@@ -1557,6 +1568,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             reduction_pp = min(MACRO_AFFECTED_TRIM_REDUCTION_PP, weak_weight)
             trim_dollars = round(portfolio_value * (reduction_pp / 100), 0)
             trim_shares  = max(1, int(round(trim_dollars / weak_price))) if weak_price > 0 else 0
+            # Reconcile the displayed dollars + pp with the ROUNDED whole-share
+            # count so "trim N shares (~$X)" is internally consistent (X = N ×
+            # price). The pp-target alone diverges badly on small portfolios /
+            # high-priced shares — the "1 share (~$571)" false-precision artifact.
+            if weak_price > 0 and trim_shares > 0:
+                trim_dollars = round(trim_shares * weak_price, 0)
+                reduction_pp = (round(trim_dollars / portfolio_value * 100, 1)
+                                if portfolio_value > 0 else reduction_pp)
             new_exposure = max(0.0, exposure_pct - reduction_pp)
             action = {
                 "type":           "PROTECTIVE_TRIM",
@@ -1572,6 +1591,21 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 f"Affected-sector exposure {exposure_pct:.1f}% > "
                 f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% trim threshold. "
                 f"Trimming weakest holding first preserves higher-conviction names."
+            )
+        elif (exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not sector_rows.empty
+              and _macro_eligible.empty):
+            # Over threshold, but every affected holding already has an Act Today
+            # decision — defer to those instead of issuing a contradictory trim.
+            action = {
+                "type":          "WATCH",
+                "from_exposure": exposure_pct,
+                "threshold":     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
+            }
+            why = (
+                f"Affected-sector exposure {exposure_pct:.1f}% > "
+                f"{MACRO_AFFECTED_TRIM_THRESHOLD_PCT:.0f}% threshold, but the affected "
+                "holdings already carry their own Act Today decision — no separate "
+                "pre-event trim (avoids a contradictory double-call on one name)."
             )
         else:
             action = {

@@ -18,6 +18,7 @@ from stock_analyzer.constants import (
     PORTFOLIO_BETA_TARGET,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
+    UNCLASSIFIED_SECTOR,
 )
 
 
@@ -519,8 +520,41 @@ def build_risk_advisor_recommendations(
             "pnl_pct":      tr["pnl_pct"],
         })
 
-    if sector_weights:
-        top_sec, top_wt = max(sector_weights.items(), key=lambda x: x[1])
+    # The "Other" catch-all is not a real correlated sector — it's the bucket
+    # unclassified holdings land in. A hard-cap "breach" on it is a classification
+    # artifact, and "trim Other / redeploy" is incoherent advice. Exclude it from
+    # the concentration scan (top-sector pick AND redeploy targets); surface it
+    # separately as a data-hygiene note so the gap is visible, not silent.
+    real_sector_weights = {
+        s: w for s, w in sector_weights.items() if s != UNCLASSIFIED_SECTOR
+    }
+    other_wt = sector_weights.get(UNCLASSIFIED_SECTOR, 0.0)
+    if other_wt >= SECTOR_ELEVATED:
+        other_names = sorted(
+            sector_holdings[UNCLASSIFIED_SECTOR], key=lambda h: -h["weight"]
+        )
+        other_str = ", ".join(h["ticker"] for h in other_names[:6])
+        if len(other_names) > 6:
+            other_str += f" +{len(other_names) - 6} more"
+        recs.append({
+            "priority": "LOW",
+            "type":     "unclassified_holdings",
+            "title":    f"{other_wt:.1f}% Unclassified — Sector Tags Pending",
+            "problem": (
+                f"**{other_wt:.1f}% of your portfolio ({other_str})** has no sector "
+                "classification, so it sits in the catch-all \"Other\" bucket. "
+                "These names are excluded from sector concentration caps until "
+                "they're tagged — a real sector overweight could hide here."
+            ),
+            "recommendation": (
+                "These holdings need a sector mapping before concentration caps "
+                "can cover them. They are NOT a real sector, so no trim is implied "
+                "— this is a data-quality note, not a risk action."
+            ),
+        })
+
+    if real_sector_weights:
+        top_sec, top_wt = max(real_sector_weights.items(), key=lambda x: x[1])
         if top_wt >= SECTOR_CEILING:
             sec_priority = "HIGH"
         elif top_wt >= SECTOR_ELEVATED:
@@ -552,7 +586,7 @@ def build_risk_advisor_recommendations(
             excess_dollar = round(excess_pp / 100.0 * pv)
             # Other sectors with low weight — natural redeployment targets
             under_sectors = sorted(
-                [(s, w) for s, w in sector_weights.items() if s != top_sec and w < SECTOR_ELEVATED],
+                [(s, w) for s, w in real_sector_weights.items() if s != top_sec and w < SECTOR_ELEVATED],
                 key=lambda x: x[1],
             )[:3]
             under_str = (

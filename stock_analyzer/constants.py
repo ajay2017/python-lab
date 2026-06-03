@@ -22,6 +22,13 @@ SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
 SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
 
+# The catch-all bucket a holding lands in when it has no curated sector mapping
+# AND no provider .info sector. It is NOT a real correlated sector — it's a
+# grab-bag of unclassified names — so concentration caps must NOT treat it as a
+# tradable sector (a "Hard Cap Breach on Other → trim/redeploy" is incoherent
+# advice). Gates exclude it; a data-hygiene note surfaces it instead.
+UNCLASSIFIED_SECTOR = "Other"
+
 # ── Diversification Advisor candidate sourcing ───────────────────────────────
 # The ADD card draws candidates from the broad discovery universe (~200 curated
 # liquid names) rather than a fixed 4-name roster, so a better entry outside the
