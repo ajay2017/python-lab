@@ -9804,7 +9804,39 @@ elif page == "📈 Analysis":
                             "your judgment call."
                         )
 
-                    if _sa_holding:
+                    # Stop-breach gate (mirrors Act Today's detector: Gap to Stop ≤ 0,
+                    # i.e. price has fallen to/through the stop). A held position whose
+                    # stop is breached is a mechanical EXIT — protect-capital overrides
+                    # deploy-capital, so the Analysis page must NOT frame it as an add.
+                    # The composite still rates the STOCK (it can be a genuine Buy); the
+                    # stop protects the POSITION. Same data the Brief reads, so the two
+                    # surfaces agree instead of contradicting (add here vs sell there).
+                    _sa_stop = r.get("stop")
+                    _stop_breached = bool(
+                        _sa_holding and price and _sa_stop and price <= _sa_stop
+                    )
+
+                    if _sa_holding and _stop_breached:
+                        _br_shares   = int(_sa_holding.get("Shares", 0))
+                        _br_stoptype = "manual" if r.get("_stop_source") == "manual" else "ATR"
+                        _br_gap      = ((price - _sa_stop) / price * 100) if price else 0
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                            "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                            "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal, "
+                            "not an add</b>"
+                            f"<br><span style='color:#dc2626'>You hold <b>{_br_shares} shares</b> and "
+                            f"price <b>${price:.2f}</b> is at/below your {_br_stoptype} stop "
+                            f"<b>${_sa_stop:.2f}</b> (gap {_br_gap:+.1f}%). Your mechanical rule says "
+                            f"<b>sell all {_br_shares} at next open</b> — the same exit Today's Brief "
+                            "is showing. <b>This overrides the Buy composite:</b> the composite rates the "
+                            "stock; your stop protects the position. Add-on sizing is suppressed.</span>"
+                            "<br><small style='color:#dc2626'>If your thesis has genuinely changed and "
+                            "you want to keep holding, move/clear the stop in the Action Log first — "
+                            "don't add into a breach.</small></div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif _sa_holding:
                         # Pre-compute earnings proximity so we can fold it into this message
                         # rather than showing a contradictory standalone warning below.
                         _earn_str = r.get("earnings", "")
@@ -9825,7 +9857,9 @@ elif page == "📈 Analysis":
                             f"Sizing below is for adding to your existing position.{_earn_note}"
                         )
 
-                    if ps:
+                    # Add-on sizing is suppressed on a breached held position — you
+                    # don't size up a position your own stop rule says to exit.
+                    if ps and not _stop_breached:
                         st.markdown("#### Position Sizing")
                         p1, p2, p3, p4 = st.columns(4)
                         p1.metric("Shares", f"{ps['shares']:,}", help=_tip("Position Sizing"))
