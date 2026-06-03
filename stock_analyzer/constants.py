@@ -22,6 +22,16 @@ SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
 SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
 
+# ── Diversification Advisor candidate sourcing ───────────────────────────────
+# The ADD card draws candidates from the broad discovery universe (~200 curated
+# liquid names) rather than a fixed 4-name roster, so a better entry outside the
+# old list can surface. Each scored name is a cached load_all, so SCAN_CAP bounds
+# the per-sector scoring work (prevents a fetch storm when many sectors are
+# underweight); DISPLAY_TOP is how many ranked candidates render. The curated
+# roster is always unioned in FIRST so known names are never dropped by the cap.
+DIVERSIFY_SCAN_CAP    = 10        # max names composite-scored per underweight sector
+DIVERSIFY_DISPLAY_TOP = 3         # ranked candidates shown per sector
+
 # ── Composite scoring boundaries ─────────────────────────────────────────────
 # scoring.recommendation() uses these to assign the Strong Buy / Buy / Hold /
 # Sell / Strong Sell label that surfaces across the app. Every gate and filter

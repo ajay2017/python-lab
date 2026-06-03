@@ -45,6 +45,7 @@ from stock_analyzer.constants import (
     TICKER_BETA_CRITICAL,
     SECTOR_CEILING,
     SINGLE_NAME_CEILING,
+    DIVERSIFY_DISPLAY_TOP,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     MACRO_IMMINENT_DAYS,
@@ -6471,17 +6472,21 @@ if page == "🏠 Home":
                             st.metric("Suggested add", f"${rec['add_dollars']:,.0f}",
                                       f"+{rec['gap_pct']:.1f}%", delta_color="normal")
                         # ── Cross-validate candidates against the quality engine ──
-                        # The candidate roster answers "which sector is underweight,"
-                        # not "is this name a good entry." Join each to the SAME
-                        # composite / signal / R:R the Analysis page produces so the
-                        # rebalance card and the new-position engine agree. Pull from
-                        # the cached _grow_composites bundle first (zero new calls);
-                        # fall back to load_all (also cached) for un-scored names.
-                        _div_cands = rec["candidates"][:3]
+                        # The candidate POOL now comes from the broad discovery
+                        # universe (portfolio.diversifying_candidate_pool), not a
+                        # fixed 4-name roster — so a better entry the roster omits
+                        # can surface. Score every name (composite / signal / R:R,
+                        # the SAME numbers the Analysis page produces), rank
+                        # best-first, then show the top few. Pull from the cached
+                        # _grow_composites bundle first (zero new calls); fall back
+                        # to load_all (also cached) for un-scored names.
+                        _div_cands = rec["candidates"]
                         _grow_cache = st.session_state.get("_grow_composites", {}) or {}
                         _div_quality: dict = {}
                         _div_bundles: dict = {}
-                        with st.spinner(f"Scoring {', '.join(_div_cands)}…"):
+                        with st.spinner(
+                            f"Scoring {len(_div_cands)} {rec['sector']} candidates…"
+                        ):
                             for _cand in _div_cands:
                                 _cb = _grow_cache.get(_cand)
                                 if _cb is None:
@@ -6505,6 +6510,8 @@ if page == "🏠 Home":
                                     "rr":     _crr,
                                 }
                         _annotated = annotate_add_candidates(_div_cands, _div_quality)
+                        _scored_n  = sum(1 for c in _annotated if c["passes"] is not None)
+                        _top       = _annotated[:DIVERSIFY_DISPLAY_TOP]
 
                         # Headline: does the sector need have an actionable entry today?
                         _passers = [c for c in _annotated if c["passes"] is True]
@@ -6529,9 +6536,17 @@ if page == "🏠 Home":
                                 icon="🚦",
                             )
 
-                        # Per-candidate quality cards (best-first, gated)
-                        _score_cols = st.columns(len(_annotated))
-                        for _scol, _c in zip(_score_cols, _annotated):
+                        # Show how wide the net was cast vs the curated 4-roster.
+                        st.caption(
+                            f"Scanned **{_scored_n}** {rec['sector']} names from the discovery "
+                            f"universe · showing the top **{len(_top)}** by composite "
+                            f"(best-first). The roster is always included; gate = "
+                            f"composite ≥ {COMPOSITE_BUY:.0f}."
+                        )
+
+                        # Per-candidate quality cards (top N, best-first, gated)
+                        _score_cols = st.columns(len(_top))
+                        for _scol, _c in zip(_score_cols, _top):
                             _cand = _c["ticker"]
                             with _scol:
                                 if _c["passes"] is None:

@@ -2,7 +2,8 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY
+from stock_analyzer.constants import COMPOSITE_BUY, DIVERSIFY_SCAN_CAP
+from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
 def _safe_float(val, default: float = 0.0) -> float:
@@ -533,7 +534,9 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
 
 # ── Diversification Advisor ────────────────────────────────────────────────────
 
-# Candidate tickers per sector for ADD recommendations
+# Curated fallback roster per sector. Kept as the seed of the candidate pool
+# (always unioned in FIRST so well-known names are never dropped by the scan
+# cap), and as the sole source if the discovery-universe bucket is unavailable.
 _SECTOR_CANDIDATES = {
     "Healthcare":    ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
     "Energy":        ["XOM", "CVX", "COP", "OXY"],
@@ -546,6 +549,47 @@ _SECTOR_CANDIDATES = {
     "Cybersecurity": ["CRWD", "PANW", "NET", "ZS", "FTNT"],
     "Semiconductors":["NVDA", "AVGO", "AMD", "MU", "QCOM"],
 }
+
+# Maps a Diversification-Advisor sector to the broad discovery-universe bucket
+# (discovery_universe.py uses slightly different bucket labels). This widens the
+# candidate pool from the fixed roster (~4) to the curated universe slice (~20)
+# so the ADD card can surface a better entry the roster doesn't list — without
+# the runtime risk of a live market scrape (the universe is curated, refreshed
+# quarterly). A sector with no mapping falls back to its roster only.
+_DIVERSIFY_TO_DISCOVERY = {
+    "Healthcare":   "Healthcare & Biotech",
+    "Energy":       "Energy & Materials",
+    "Defense":      "Industrials & Defense",
+    "Financials":   "Financials",
+    "Clean Energy": "Clean Energy & Utilities",
+}
+
+
+def diversifying_candidate_pool(
+    sector: str,
+    held_tickers,
+    cap: int = DIVERSIFY_SCAN_CAP,
+) -> list[str]:
+    """Candidate pool for a diversification ADD, drawn from the broad universe.
+
+    Unions the curated roster (FIRST, so names like V/MA are never dropped by
+    the cap) with the sector's discovery-universe bucket, removes already-held
+    names, dedupes (case-insensitive, order-preserving), and caps the length so
+    the caller's composite-scoring pass stays bounded. Falls back to the roster
+    alone when the sector has no discovery bucket. Pure / no I/O — app.py scores
+    the returned names and ranks them via `annotate_add_candidates`.
+    """
+    held = {str(t).upper().strip() for t in (held_tickers or [])}
+    roster = _SECTOR_CANDIDATES.get(sector, [])
+    bucket = DISCOVERY_UNIVERSE.get(_DIVERSIFY_TO_DISCOVERY.get(sector, ""), [])
+    seen: set = set()
+    pool: list[str] = []
+    for t in [*roster, *bucket]:
+        tu = str(t).upper().strip()
+        if tu and tu not in held and tu not in seen:
+            seen.add(tu)
+            pool.append(tu)
+    return pool[:max(0, cap)]
 
 # How correlated each sector is to a typical tech-heavy portfolio (lower = better diversifier)
 _SECTOR_PROFILES = {
@@ -647,7 +691,7 @@ def diversification_recommendations(
         current_pct = sector_pcts.get(sector, 0.0)
         if current_pct >= 8.0:
             continue
-        candidates = [t for t in _SECTOR_CANDIDATES.get(sector, []) if t not in held_tickers][:3]
+        candidates = diversifying_candidate_pool(sector, held_tickers)
         if not candidates:
             continue
         profile    = _SECTOR_PROFILES.get(sector, {"corr": 0.30, "why": ""})
