@@ -63,6 +63,7 @@ from stock_analyzer.constants import (
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
 from stock_analyzer.position_lifecycle import lifecycle_badge
+from stock_analyzer.decision_bucket import split_defensive
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import (
     build_macro_calendar,
@@ -3524,408 +3525,435 @@ if page == "🏠 Home":
             _render_grow_today(_db_grow, _db_tone)
 
         with _db_col_right:
-            _db_c1_label  = f"🔴 Act Today ({len(_db_act)})" if _db_act else "🟢 Act Today — All Clear"
-            _db_c1_color  = "#7f1d1d" if _db_act else "#14532d"
-            _db_c1_border = "#ef4444" if _db_act else "#22c55e"
-            st.markdown(
-                f"<div style='background:{_db_c1_color};border-left:4px solid {_db_c1_border};"
-                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c1_label}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if not _db_act:
-                st.caption("No urgent actions required. Portfolio is within all risk parameters.")
-            else:
-                for _db_item in _db_act:
-                    _db_is_crit = _db_item["priority"] == "critical"
-                    _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
-                    _db_border  = "#ef4444" if _db_is_crit else "#f59e0b"
-                    _db_ticker  = _db_item.get("ticker")
-                    _db_weight_txt = (
-                        f" · {_db_item['weight']:.1f}% of portfolio"
-                        if _db_item.get("weight") else ""
-                    )
-                    _db_pnl_txt = (
-                        f" · P&L {_db_item['pnl_pct']:+.1f}%"
-                        if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
-                    )
-                    # Body: structured ACT/Why/Trigger when present (matches
-                    # Review Before Close); falls back to legacy reason / risk
-                    # flags for older item shapes.
-                    _db_directive = _db_item.get("directive", "")
-                    _db_why       = _db_item.get("why", "")
-                    _db_trigger   = _db_item.get("trigger", "")
-                    _db_flags     = _db_item.get("risk_flags", []) or []
-                    _act_color    = "#ef4444" if _db_is_crit else "#fbbf24"
+            # ── Act vs Awareness split (calm advisor 2B) ────────────────────
+            # Split the defensive column by URGENCY, not origin: "Act Today" holds
+            # genuine same-day trade decisions; "Monitoring / Awareness" holds FYI
+            # items. Each item keeps its origin card template (_source) but lands in
+            # the bucket decision_bucket.classify_bucket assigns. Empty Act bucket =
+            # "you're set for today" (derived; no new persistence).
+            _split_def    = split_defensive(_db_act, _db_review)
+            _act_bucket   = _split_def["act"]
+            _aware_bucket = _split_def["aware"]
 
-                    _body = ""
-                    if _db_directive:
-                        _body += (
-                            f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
-                            f"<span style='color:{_act_color};font-weight:700'>→ ACT:</span> "
-                            f"<span style='color:#f1f5f9'>{_db_directive}</span></div>"
-                        )
-                    if _db_why:
-                        _body += (
-                            f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                            f"<b>Why:</b> {_db_why}</div>"
-                        )
-                    if _db_trigger:
-                        _body += (
-                            f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                            f"<b>Trigger:</b> {_db_trigger}</div>"
-                        )
-                    # Risk flags: one sub-block per flag (consolidated multi-risk).
-                    for _flag in _db_flags:
-                        _body += (
-                            f"<div style='color:#e7e5e4;font-size:0.81em;margin-top:6px;"
-                            f"border-left:2px solid #f59e0b;padding-left:8px'>"
-                            f"<span style='color:#fbbf24;font-weight:600'>{_flag.get('title','Risk')}</span><br>"
-                            f"<span style='color:#d1d5db'>{_flag.get('recommendation','')}</span></div>"
-                        )
-                    # Back-compat: anything without the new fields still shows reason.
-                    if not _body and _db_item.get("reason"):
-                        _body = (
-                            f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>"
-                            f"{_db_item['reason']}</div>"
+            _db_trades = st.session_state.get("trades_df")
+
+            def _journal_context(ticker: str) -> dict | None:
+                if _db_trades is None or _db_trades.empty:
+                    return None
+                t = str(ticker).strip().upper()
+                df = _db_trades[_db_trades["ticker"].astype(str).str.upper() == t]
+                if df.empty:
+                    return None
+                df = df.sort_values("traded_at", ascending=False)
+                # Entry thesis = notes on the most recent BUY (with non-empty notes)
+                thesis, thesis_date = "", ""
+                buys = df[df["action"].astype(str).str.upper() == "BUY"]
+                for _, _row in buys.iterrows():
+                    n = str(_row.get("notes") or "").strip()
+                    if n and n.lower() != "nan":
+                        thesis, thesis_date = n, str(_row.get("traded_at", ""))[:10]
+                        break
+                # Lessons = up to 2 most recent non-empty lesson entries
+                lessons = []
+                for _, _row in df.iterrows():
+                    l = str(_row.get("lesson") or "").strip()
+                    if l and l.lower() != "nan":
+                        lessons.append({"text": l, "date": str(_row.get("traded_at", ""))[:10]})
+                        if len(lessons) >= 2:
+                            break
+                if not thesis and not lessons:
+                    return None
+                return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
+
+            # Format a structured action dict into (color, label, text) so each
+            # item renders the directive directly instead of a "consider X" prose.
+            def _fmt_action(action: dict) -> tuple[str, str, str]:
+                t = (action or {}).get("type", "")
+                if t == "WATCH":
+                    return ("#94a3b8", "WATCH",
+                            "no action today — see Trigger below for what would escalate.")
+                if t == "TIGHTEN_ONLY":
+                    ns = action.get("new_stop")
+                    return ("#fbbf24", "ACT",
+                            f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
+                if t == "TRIM_AND_TIGHTEN":
+                    ns = action.get("new_stop")
+                    stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
+                    return ("#22c55e", "ACT",
+                            f"Trim {action['trim_shares']} shares "
+                            f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
+                            f"{stop_str}")
+                if t == "TRIM_TO_TARGET":
+                    return ("#fbbf24", "ACT",
+                            f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
+                            f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
+                if t == "PROTECTIVE_TRIM":
+                    return ("#fbbf24", "ACT",
+                            f"Trim {action['trim_ticker']} (weakest in sector, score "
+                            f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
+                            f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
+                            f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
+                return ("#94a3b8", "—", "—")
+
+            # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
+            # Two complementary sources (primary + backup so both don't fail
+            # together): (1) Grow Today's verified new picks above COMPOSITE_BUY,
+            # (2) Add-to-Winner candidates (existing positions with room).
+            def _alt_targets(skip_ticker: str | None) -> list[str]:
+                _grow_picks = _db_grow.get("new_picks", []) or []
+                _add_picks  = _db_grow.get("add_positions", []) or []
+                _alts: list[tuple[str, float]] = []
+                _seen: set = set()
+                for _p in _grow_picks:
+                    _t = str(_p.get("ticker", "")).upper()
+                    _cs = _p.get("composite_score")
+                    if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
+                        continue
+                    if _cs is None:
+                        continue
+                    _alts.append((_t, _cs))
+                    _seen.add(_t)
+                if len(_alts) < 3:
+                    for _p in _add_picks:
+                        _t = str(_p.get("ticker", "")).upper()
+                        _cs = _p.get("score")
+                        if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
+                            continue
+                        _alts.append((_t, _cs))
+                        _seen.add(_t)
+                        if len(_alts) >= 3:
+                            break
+                _alts.sort(key=lambda x: -(x[1] or 0))
+                return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
+
+            def _render_act_card(_db_item):
+                _db_is_crit = _db_item["priority"] == "critical"
+                _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
+                _db_border  = "#ef4444" if _db_is_crit else "#f59e0b"
+                _db_ticker  = _db_item.get("ticker")
+                _db_weight_txt = (
+                    f" · {_db_item['weight']:.1f}% of portfolio"
+                    if _db_item.get("weight") else ""
+                )
+                _db_pnl_txt = (
+                    f" · P&L {_db_item['pnl_pct']:+.1f}%"
+                    if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
+                )
+                # Body: structured ACT/Why/Trigger when present (matches
+                # Review Before Close); falls back to legacy reason / risk
+                # flags for older item shapes.
+                _db_directive = _db_item.get("directive", "")
+                _db_why       = _db_item.get("why", "")
+                _db_trigger   = _db_item.get("trigger", "")
+                _db_flags     = _db_item.get("risk_flags", []) or []
+                _act_color    = "#ef4444" if _db_is_crit else "#fbbf24"
+
+                _body = ""
+                if _db_directive:
+                    _body += (
+                        f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
+                        f"<span style='color:{_act_color};font-weight:700'>→ ACT:</span> "
+                        f"<span style='color:#f1f5f9'>{_db_directive}</span></div>"
+                    )
+                if _db_why:
+                    _body += (
+                        f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                        f"<b>Why:</b> {_db_why}</div>"
+                    )
+                if _db_trigger:
+                    _body += (
+                        f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                        f"<b>Trigger:</b> {_db_trigger}</div>"
+                    )
+                # Risk flags: one sub-block per flag (consolidated multi-risk).
+                for _flag in _db_flags:
+                    _body += (
+                        f"<div style='color:#e7e5e4;font-size:0.81em;margin-top:6px;"
+                        f"border-left:2px solid #f59e0b;padding-left:8px'>"
+                        f"<span style='color:#fbbf24;font-weight:600'>{_flag.get('title','Risk')}</span><br>"
+                        f"<span style='color:#d1d5db'>{_flag.get('recommendation','')}</span></div>"
+                    )
+                # Back-compat: anything without the new fields still shows reason.
+                if not _body and _db_item.get("reason"):
+                    _body = (
+                        f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>"
+                        f"{_db_item['reason']}</div>"
+                    )
+
+                st.markdown(
+                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"{_db_item['icon']} {_db_item['action']}"
+                    + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                    + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
+                    f"</div>"
+                    + _body
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if _db_ticker:
+                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
+                                 use_container_width=False):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _db_ticker
+                        st.rerun()
+
+            def _render_review_card(_db_rev):
+                _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
+                _db_bg      = "#1c1917"
+                _db_ticker  = _db_rev.get("ticker")
+                _headline   = _db_rev.get("headline", "")
+                _action     = _db_rev.get("action", {}) or {}
+                _why        = _db_rev.get("why", "")
+                _trigger    = _db_rev.get("trigger", "")
+                _act_color, _act_label, _act_text = _fmt_action(_action)
+
+                # Append alternatives only on weak-large TRIM_TO_TARGET items —
+                # this is the case where we're freeing capital and the user
+                # naturally needs to know where to put it.
+                if (_action.get("type") == "TRIM_TO_TARGET"
+                        and _action.get("reason_key") == "weak_large"):
+                    _alts = _alt_targets(_db_ticker)
+                    if _alts:
+                        _act_text += f" Reallocate to: {', '.join(_alts)}."
+                    else:
+                        _act_text += (
+                            " No composite-verified deployment options in today's "
+                            "brief — consider Watchlist or hold cash."
                         )
 
-                    st.markdown(
-                        f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
-                        f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                        f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                        f"{_db_item['icon']} {_db_item['action']}"
-                        + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
-                        + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
-                        f"</div>"
-                        + _body
-                        + f"</div>",
-                        unsafe_allow_html=True,
+                # Title line: icon + ticker (or event name for macro) + headline
+                _title_left = _db_rev["icon"]
+                if _db_ticker:
+                    _title_left += f" <span style='color:#fbbf24'>{_db_ticker}</span>"
+                elif _db_rev.get("event"):
+                    _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
+
+                # Lifecycle badge (calm-advisor): 🌱 Settling / 📈 Winning / ⚠️ At Risk.
+                # "established" is un-badged (returns None). Tells the user WHERE this
+                # position is in its life so a stop nudge reads in context.
+                _lc = lifecycle_badge(_db_rev.get("lifecycle"))
+                if _lc:
+                    _title_left += (
+                        f" <span style='background:{_lc['color']}22;color:{_lc['color']};"
+                        f"border:1px solid {_lc['color']};border-radius:8px;padding:1px 7px;"
+                        f"font-size:0.74em;font-weight:700;margin-left:6px' title=\"{_lc['tip']}\">"
+                        f"{_lc['emoji']} {_lc['label']}</span>"
                     )
-                    if _db_ticker:
-                        if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
+
+                # Manual-stop badge: if this ticker already has a user-set stop,
+                # surface it next to the headline so the user immediately sees
+                # "I've already acted on this; here's the level I set." Reads
+                # _manual_stops from session_state so it survives full reruns.
+                _ms_map = st.session_state.get("_manual_stops", {}) or {}
+                _ms_for_item = _ms_map.get(str(_db_ticker or "").upper())
+                if _ms_for_item:
+                    _ms_set_at = str(_ms_for_item.get("set_at", ""))[:10]
+                    _ms_p_val  = float(_ms_for_item.get("stop_price") or 0)
+                    _title_left += (
+                        f" <span style='background:#1e3a8a;color:#bfdbfe;"
+                        f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
+                        f"margin-left:6px'>"
+                        f"📌 manual stop ${_ms_p_val:.2f}"
+                        + (f" · set {_ms_set_at}" if _ms_set_at else "")
+                        + "</span>"
+                    )
+
+                st.markdown(
+                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                    f"{_title_left}"
+                    + (f" <span style='color:#a8a29e;font-weight:400'>· {_headline}</span>" if _headline else "")
+                    + f"</div>"
+                    f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
+                    f"<span style='color:{_act_color};font-weight:700'>→ {_act_label}:</span> "
+                    f"<span style='color:#f1f5f9'>{_act_text}</span></div>"
+                    + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                       f"<b>Why:</b> {_why}</div>" if _why else "")
+                    + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                       f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Weak-large-position items get Trade Journal context injected so the
+                # user can re-evaluate the position against their original reasoning,
+                # not just the current weight/score metrics.
+                if _db_rev.get("icon") == "🔍" and _db_ticker:
+                    _jctx = _journal_context(_db_ticker)
+                    if _jctx:
+                        _parts = []
+                        if _jctx.get("thesis"):
+                            _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
+                            _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
+                            _parts.append(
+                                f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                                f"📒 <b>Your entry thesis</b>{_date_tag}: "
+                                f"<span style='color:#e7e5e4;font-style:italic'>“{_t_clip}”</span></div>"
+                            )
+                        for _ln in _jctx.get("lessons", []):
+                            _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
+                            _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
+                            _parts.append(
+                                f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                                f"💡 <b>Lesson</b>{_l_date}: "
+                                f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
+                            )
+                        if _parts:
+                            st.markdown(
+                                f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
+                                f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
+                                + "".join(_parts)
+                                + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
+                                "Re-evaluate this large position against your original reasoning before trimming."
+                                f"</div></div>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid #57534e;"
+                            f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
+                            f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
+                            f"📒 No Trade Journal entry found for {_db_ticker}. "
+                            "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                if _db_ticker:
+                    _btn_c1, _btn_c2 = st.columns([1, 5])
+                    with _btn_c1:
+                        if st.button(f"▶ Analyze {_db_ticker}",
+                                     key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
                                      use_container_width=False):
                             st.session_state["_pending_page"]    = "📈 Analysis"
                             st.session_state["_analysis_ticker"] = _db_ticker
                             st.rerun()
 
-            # ── Review Before Close (right column, under Act Today) ──────────
-            # Lives in the right column ("defense": manage / protect) so the
-            # brief stays a clean left/right split — left = Grow (offense),
-            # right = Act + Review. Streamlit columns are reusable containers,
-            # so re-entering `with _db_col_right:` appends below Act Today.
-            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-            _db_c3_label = f"🟡 Review Before Close ({len(_db_review)})"
+                    # "Mark Done" form for stop-raise actions. The app can't place
+                    # the order at your brokerage — but it can record that YOU did,
+                    # so the same recommendation stops re-firing every render. Two
+                    # action types qualify: TIGHTEN_ONLY (raise stop) and
+                    # TRIM_AND_TIGHTEN (the stop-raise half — the trim half is
+                    # logged separately via the Trade Journal in Phase B).
+                    _action_type = _action.get("type")
+                    if _action_type in ("TIGHTEN_ONLY", "TRIM_AND_TIGHTEN"):
+                        _rec_stop = _action.get("new_stop")
+                        with _btn_c2:
+                            with st.expander(
+                                f"✅ Mark Done — log the stop I placed at brokerage",
+                                expanded=False,
+                            ):
+                                st.caption(
+                                    "The app advises; your brokerage executes. Once you've "
+                                    "placed the stop-loss order at Fidelity / Schwab / IBKR / "
+                                    "wherever, log the level here so this recommendation stops "
+                                    "re-appearing tomorrow."
+                                )
+                                _md_form_key = f"_md_form_{_db_ticker}_{_action_type}"
+                                with st.form(_md_form_key, clear_on_submit=True):
+                                    _md_col1, _md_col2 = st.columns([1, 2])
+                                    with _md_col1:
+                                        _new_stop_input = st.number_input(
+                                            "Stop placed at ($)",
+                                            min_value=0.0,
+                                            value=float(_rec_stop) if _rec_stop else 0.0,
+                                            step=0.01,
+                                            format="%.2f",
+                                            key=f"_md_price_{_db_ticker}",
+                                        )
+                                    with _md_col2:
+                                        _note_input = st.text_input(
+                                            "Note (optional)",
+                                            placeholder="e.g. 'GTC stop at Fidelity 2026-05-29'",
+                                            key=f"_md_note_{_db_ticker}",
+                                        )
+                                    _sub_c1, _sub_c2 = st.columns([1, 1])
+                                    with _sub_c1:
+                                        _md_submitted = st.form_submit_button(
+                                            "💾 Save",
+                                            type="primary",
+                                            use_container_width=True,
+                                        )
+                                    with _sub_c2:
+                                        _md_revert = st.form_submit_button(
+                                            "↩️ Revert to ATR",
+                                            use_container_width=True,
+                                            help="Clear any manual stop override for this ticker",
+                                        )
+                                    if _md_submitted and _new_stop_input > 0:
+                                        if db.save_manual_stop(
+                                            ticker=_db_ticker,
+                                            stop_price=float(_new_stop_input),
+                                            note=_note_input or None,
+                                            source_action=f"review_{_action_type.lower()}",
+                                        ):
+                                            st.success(
+                                                f"Manual stop ${_new_stop_input:.2f} saved for "
+                                                f"{_db_ticker}. The Brief will stop re-suggesting "
+                                                "this until price moves enough to warrant a "
+                                                "further tighten."
+                                            )
+                                            st.rerun()
+                                    if _md_revert:
+                                        if db.clear_manual_stop(_db_ticker):
+                                            st.info(
+                                                f"Manual stop cleared for {_db_ticker}. "
+                                                "Reverted to ATR-derived stop."
+                                            )
+                                            st.rerun()
+
+            def _render_defensive_card(_item):
+                if _item.get("_source") == "review":
+                    _render_review_card(_item)
+                else:
+                    _render_act_card(_item)
+
+            # Act Today — genuine decisions only
+            _act_label  = (f"🔴 Act Today ({len(_act_bucket)})" if _act_bucket
+                           else "✅ Act Today — you're set")
+            _act_bg     = "#7f1d1d" if _act_bucket else "#14532d"
+            _act_border = "#ef4444" if _act_bucket else "#22c55e"
             st.markdown(
-                f"<div style='background:#422006;border-left:4px solid #f59e0b;"
+                f"<div style='background:{_act_bg};border-left:4px solid {_act_border};"
                 f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c3_label}</span>"
+                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_act_label}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
-            if not _db_review:
-                st.caption("Nothing requiring pre-close review today.")
+            if not _act_bucket:
+                _n_aware = len(_aware_bucket)
+                st.markdown(
+                    f"<div style='background:#052e16;border:1px solid #22c55e;border-radius:8px;"
+                    f"padding:12px 16px;margin-bottom:10px'>"
+                    f"<span style='color:#86efac;font-weight:700'>✅ Nothing to act on — you're set for today.</span>"
+                    f"<span style='color:#bbf7d0;font-size:0.85em'> Monitoring {_n_aware} "
+                    f"item{'s' if _n_aware != 1 else ''} below — no trade needed.</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
             else:
-                # Trade Journal context lookup — pulled once for all review items so the
-                # weak-large-position assessment is grounded in the original entry thesis
-                # and any prior lessons, not just current weight/score.
-                _db_trades = st.session_state.get("trades_df")
+                for _item in _act_bucket:
+                    _render_defensive_card(_item)
 
-                def _journal_context(ticker: str) -> dict | None:
-                    if _db_trades is None or _db_trades.empty:
-                        return None
-                    t = str(ticker).strip().upper()
-                    df = _db_trades[_db_trades["ticker"].astype(str).str.upper() == t]
-                    if df.empty:
-                        return None
-                    df = df.sort_values("traded_at", ascending=False)
-                    # Entry thesis = notes on the most recent BUY (with non-empty notes)
-                    thesis, thesis_date = "", ""
-                    buys = df[df["action"].astype(str).str.upper() == "BUY"]
-                    for _, _row in buys.iterrows():
-                        n = str(_row.get("notes") or "").strip()
-                        if n and n.lower() != "nan":
-                            thesis, thesis_date = n, str(_row.get("traded_at", ""))[:10]
-                            break
-                    # Lessons = up to 2 most recent non-empty lesson entries
-                    lessons = []
-                    for _, _row in df.iterrows():
-                        l = str(_row.get("lesson") or "").strip()
-                        if l and l.lower() != "nan":
-                            lessons.append({"text": l, "date": str(_row.get("traded_at", ""))[:10]})
-                            if len(lessons) >= 2:
-                                break
-                    if not thesis and not lessons:
-                        return None
-                    return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
-
-                # Format a structured action dict into (color, label, text) so each
-                # item renders the directive directly instead of a "consider X" prose.
-                def _fmt_action(action: dict) -> tuple[str, str, str]:
-                    t = (action or {}).get("type", "")
-                    if t == "WATCH":
-                        return ("#94a3b8", "WATCH",
-                                "no action today — see Trigger below for what would escalate.")
-                    if t == "TIGHTEN_ONLY":
-                        ns = action.get("new_stop")
-                        return ("#fbbf24", "ACT",
-                                f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
-                    if t == "TRIM_AND_TIGHTEN":
-                        ns = action.get("new_stop")
-                        stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
-                        return ("#22c55e", "ACT",
-                                f"Trim {action['trim_shares']} shares "
-                                f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
-                                f"{stop_str}")
-                    if t == "TRIM_TO_TARGET":
-                        return ("#fbbf24", "ACT",
-                                f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
-                                f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
-                    if t == "PROTECTIVE_TRIM":
-                        return ("#fbbf24", "ACT",
-                                f"Trim {action['trim_ticker']} (weakest in sector, score "
-                                f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
-                                f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
-                                f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
-                    return ("#94a3b8", "—", "—")
-
-                # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
-                # Two complementary sources (primary + backup so both don't fail
-                # together): (1) Grow Today's verified new picks above COMPOSITE_BUY,
-                # (2) Add-to-Winner candidates (existing positions with room).
-                def _alt_targets(skip_ticker: str | None) -> list[str]:
-                    _grow_picks = _db_grow.get("new_picks", []) or []
-                    _add_picks  = _db_grow.get("add_positions", []) or []
-                    _alts: list[tuple[str, float]] = []
-                    _seen: set = set()
-                    for _p in _grow_picks:
-                        _t = str(_p.get("ticker", "")).upper()
-                        _cs = _p.get("composite_score")
-                        if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
-                            continue
-                        if _cs is None:
-                            continue
-                        _alts.append((_t, _cs))
-                        _seen.add(_t)
-                    if len(_alts) < 3:
-                        for _p in _add_picks:
-                            _t = str(_p.get("ticker", "")).upper()
-                            _cs = _p.get("score")
-                            if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
-                                continue
-                            _alts.append((_t, _cs))
-                            _seen.add(_t)
-                            if len(_alts) >= 3:
-                                break
-                    _alts.sort(key=lambda x: -(x[1] or 0))
-                    return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
-
-                for _db_rev in _db_review:
-                    _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
-                    _db_bg      = "#1c1917"
-                    _db_ticker  = _db_rev.get("ticker")
-                    _headline   = _db_rev.get("headline", "")
-                    _action     = _db_rev.get("action", {}) or {}
-                    _why        = _db_rev.get("why", "")
-                    _trigger    = _db_rev.get("trigger", "")
-                    _act_color, _act_label, _act_text = _fmt_action(_action)
-
-                    # Append alternatives only on weak-large TRIM_TO_TARGET items —
-                    # this is the case where we're freeing capital and the user
-                    # naturally needs to know where to put it.
-                    if (_action.get("type") == "TRIM_TO_TARGET"
-                            and _action.get("reason_key") == "weak_large"):
-                        _alts = _alt_targets(_db_ticker)
-                        if _alts:
-                            _act_text += f" Reallocate to: {', '.join(_alts)}."
-                        else:
-                            _act_text += (
-                                " No composite-verified deployment options in today's "
-                                "brief — consider Watchlist or hold cash."
-                            )
-
-                    # Title line: icon + ticker (or event name for macro) + headline
-                    _title_left = _db_rev["icon"]
-                    if _db_ticker:
-                        _title_left += f" <span style='color:#fbbf24'>{_db_ticker}</span>"
-                    elif _db_rev.get("event"):
-                        _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
-
-                    # Lifecycle badge (calm-advisor): 🌱 Settling / 📈 Winning / ⚠️ At Risk.
-                    # "established" is un-badged (returns None). Tells the user WHERE this
-                    # position is in its life so a stop nudge reads in context.
-                    _lc = lifecycle_badge(_db_rev.get("lifecycle"))
-                    if _lc:
-                        _title_left += (
-                            f" <span style='background:{_lc['color']}22;color:{_lc['color']};"
-                            f"border:1px solid {_lc['color']};border-radius:8px;padding:1px 7px;"
-                            f"font-size:0.74em;font-weight:700;margin-left:6px' title=\"{_lc['tip']}\">"
-                            f"{_lc['emoji']} {_lc['label']}</span>"
-                        )
-
-                    # Manual-stop badge: if this ticker already has a user-set stop,
-                    # surface it next to the headline so the user immediately sees
-                    # "I've already acted on this; here's the level I set." Reads
-                    # _manual_stops from session_state so it survives full reruns.
-                    _ms_map = st.session_state.get("_manual_stops", {}) or {}
-                    _ms_for_item = _ms_map.get(str(_db_ticker or "").upper())
-                    if _ms_for_item:
-                        _ms_set_at = str(_ms_for_item.get("set_at", ""))[:10]
-                        _ms_p_val  = float(_ms_for_item.get("stop_price") or 0)
-                        _title_left += (
-                            f" <span style='background:#1e3a8a;color:#bfdbfe;"
-                            f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
-                            f"margin-left:6px'>"
-                            f"📌 manual stop ${_ms_p_val:.2f}"
-                            + (f" · set {_ms_set_at}" if _ms_set_at else "")
-                            + "</span>"
-                        )
-
-                    st.markdown(
-                        f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
-                        f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                        f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                        f"{_title_left}"
-                        + (f" <span style='color:#a8a29e;font-weight:400'>· {_headline}</span>" if _headline else "")
-                        + f"</div>"
-                        f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
-                        f"<span style='color:{_act_color};font-weight:700'>→ {_act_label}:</span> "
-                        f"<span style='color:#f1f5f9'>{_act_text}</span></div>"
-                        + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                           f"<b>Why:</b> {_why}</div>" if _why else "")
-                        + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                           f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
-                        + f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    # Weak-large-position items get Trade Journal context injected so the
-                    # user can re-evaluate the position against their original reasoning,
-                    # not just the current weight/score metrics.
-                    if _db_rev.get("icon") == "🔍" and _db_ticker:
-                        _jctx = _journal_context(_db_ticker)
-                        if _jctx:
-                            _parts = []
-                            if _jctx.get("thesis"):
-                                _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
-                                _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
-                                _parts.append(
-                                    f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
-                                    f"📒 <b>Your entry thesis</b>{_date_tag}: "
-                                    f"<span style='color:#e7e5e4;font-style:italic'>“{_t_clip}”</span></div>"
-                                )
-                            for _ln in _jctx.get("lessons", []):
-                                _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
-                                _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
-                                _parts.append(
-                                    f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
-                                    f"💡 <b>Lesson</b>{_l_date}: "
-                                    f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
-                                )
-                            if _parts:
-                                st.markdown(
-                                    f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
-                                    f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
-                                    + "".join(_parts)
-                                    + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
-                                    "Re-evaluate this large position against your original reasoning before trimming."
-                                    f"</div></div>",
-                                    unsafe_allow_html=True,
-                                )
-                        else:
-                            st.markdown(
-                                f"<div style='background:#1c1917;border-left:3px solid #57534e;"
-                                f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
-                                f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
-                                f"📒 No Trade Journal entry found for {_db_ticker}. "
-                                "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-
-                    if _db_ticker:
-                        _btn_c1, _btn_c2 = st.columns([1, 5])
-                        with _btn_c1:
-                            if st.button(f"▶ Analyze {_db_ticker}",
-                                         key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
-                                         use_container_width=False):
-                                st.session_state["_pending_page"]    = "📈 Analysis"
-                                st.session_state["_analysis_ticker"] = _db_ticker
-                                st.rerun()
-
-                        # "Mark Done" form for stop-raise actions. The app can't place
-                        # the order at your brokerage — but it can record that YOU did,
-                        # so the same recommendation stops re-firing every render. Two
-                        # action types qualify: TIGHTEN_ONLY (raise stop) and
-                        # TRIM_AND_TIGHTEN (the stop-raise half — the trim half is
-                        # logged separately via the Trade Journal in Phase B).
-                        _action_type = _action.get("type")
-                        if _action_type in ("TIGHTEN_ONLY", "TRIM_AND_TIGHTEN"):
-                            _rec_stop = _action.get("new_stop")
-                            with _btn_c2:
-                                with st.expander(
-                                    f"✅ Mark Done — log the stop I placed at brokerage",
-                                    expanded=False,
-                                ):
-                                    st.caption(
-                                        "The app advises; your brokerage executes. Once you've "
-                                        "placed the stop-loss order at Fidelity / Schwab / IBKR / "
-                                        "wherever, log the level here so this recommendation stops "
-                                        "re-appearing tomorrow."
-                                    )
-                                    _md_form_key = f"_md_form_{_db_ticker}_{_action_type}"
-                                    with st.form(_md_form_key, clear_on_submit=True):
-                                        _md_col1, _md_col2 = st.columns([1, 2])
-                                        with _md_col1:
-                                            _new_stop_input = st.number_input(
-                                                "Stop placed at ($)",
-                                                min_value=0.0,
-                                                value=float(_rec_stop) if _rec_stop else 0.0,
-                                                step=0.01,
-                                                format="%.2f",
-                                                key=f"_md_price_{_db_ticker}",
-                                            )
-                                        with _md_col2:
-                                            _note_input = st.text_input(
-                                                "Note (optional)",
-                                                placeholder="e.g. 'GTC stop at Fidelity 2026-05-29'",
-                                                key=f"_md_note_{_db_ticker}",
-                                            )
-                                        _sub_c1, _sub_c2 = st.columns([1, 1])
-                                        with _sub_c1:
-                                            _md_submitted = st.form_submit_button(
-                                                "💾 Save",
-                                                type="primary",
-                                                use_container_width=True,
-                                            )
-                                        with _sub_c2:
-                                            _md_revert = st.form_submit_button(
-                                                "↩️ Revert to ATR",
-                                                use_container_width=True,
-                                                help="Clear any manual stop override for this ticker",
-                                            )
-                                        if _md_submitted and _new_stop_input > 0:
-                                            if db.save_manual_stop(
-                                                ticker=_db_ticker,
-                                                stop_price=float(_new_stop_input),
-                                                note=_note_input or None,
-                                                source_action=f"review_{_action_type.lower()}",
-                                            ):
-                                                st.success(
-                                                    f"Manual stop ${_new_stop_input:.2f} saved for "
-                                                    f"{_db_ticker}. The Brief will stop re-suggesting "
-                                                    "this until price moves enough to warrant a "
-                                                    "further tighten."
-                                                )
-                                                st.rerun()
-                                        if _md_revert:
-                                            if db.clear_manual_stop(_db_ticker):
-                                                st.info(
-                                                    f"Manual stop cleared for {_db_ticker}. "
-                                                    "Reverted to ATR-derived stop."
-                                                )
-                                                st.rerun()
+            # Monitoring / Awareness — FYI, nothing to execute
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='background:#1e293b;border-left:4px solid #475569;"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                f"👁️ Monitoring / Awareness ({len(_aware_bucket)})</span>"
+                f"<span style='color:#94a3b8;font-size:0.82em'> · FYI — no action needed</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if not _aware_bucket:
+                st.caption("Nothing to monitor today — every position is steady.")
+            else:
+                for _item in _aware_bucket:
+                    _render_defensive_card(_item)
 
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 

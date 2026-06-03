@@ -112,6 +112,14 @@ POSITION_SETTLING_DAYS   = 10    # held < this = "settling": suppress ROUTINE mg
 POSITION_AT_RISK_GAP_PCT = 3.0   # gap-to-stop ≤ this = "at_risk" (same critical band; always surfaces)
 POSITION_WINNING_PNL_PCT = 8.0   # P&L ≥ this (and healthy) = "winning"; aligns with STOP_TIGHTEN_MIN_GAIN_PCT
 
+# ── Brief Act-vs-Awareness split (decision_bucket.classify_bucket) ───────────
+# The defensive column is split into "Act Today" (a genuine trade decision today)
+# and "Monitoring / Awareness" (FYI). These two flags govern the borderline
+# items; defaults are the user's choices. Flipping a flag moves the item between
+# buckets with no code change. Unknown/missing kinds default to AWARE (calm).
+BUCKET_TIGHTEN_ONLY_IS_ACT  = False  # stop-raise nudges → Awareness (protective housekeeping, not a buy/sell)
+BUCKET_CRITICAL_NEWS_IS_ACT = True   # critical-news flags → Act Today (treat news as a same-day decision)
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down
