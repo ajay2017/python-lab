@@ -61,7 +61,8 @@ from stock_analyzer.constants import (
     CATALYST_WATCH_WINDOW_DAYS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
-from stock_analyzer.tax_advisor import build_tax_analysis
+from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
+from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import (
     build_macro_calendar,
@@ -1479,11 +1480,21 @@ if page == "🏠 Home":
     held_data: dict = {}
     with st.spinner("Loading portfolio data…"):
         _hd_results = _parallel_load_all(held_tickers)
+        # Position age (calm-advisor / settling grace): days since the OLDEST
+        # still-held lot was opened, via FIFO replay of the trade journal. None
+        # when there's no journal for the ticker — which must NOT silence
+        # management (classify_position_state treats None as "not settling").
+        _hd_trades = st.session_state.get("trades_df")
         for t in held_tickers:
             bundle = _hd_results.get(t)
             if bundle is None:
                 st.warning(f"Could not load {t}")
             else:
+                try:
+                    _lots = _build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not None else []
+                    bundle["position_age_days"] = max((l["days_held"] for l in _lots), default=None)
+                except Exception:
+                    bundle["position_age_days"] = None
                 held_data[t] = bundle
 
     if held_data:
@@ -3740,6 +3751,18 @@ if page == "🏠 Home":
                         _title_left += f" <span style='color:#fbbf24'>{_db_ticker}</span>"
                     elif _db_rev.get("event"):
                         _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
+
+                    # Lifecycle badge (calm-advisor): 🌱 Settling / 📈 Winning / ⚠️ At Risk.
+                    # "established" is un-badged (returns None). Tells the user WHERE this
+                    # position is in its life so a stop nudge reads in context.
+                    _lc = lifecycle_badge(_db_rev.get("lifecycle"))
+                    if _lc:
+                        _title_left += (
+                            f" <span style='background:{_lc['color']}22;color:{_lc['color']};"
+                            f"border:1px solid {_lc['color']};border-radius:8px;padding:1px 7px;"
+                            f"font-size:0.74em;font-weight:700;margin-left:6px' title=\"{_lc['tip']}\">"
+                            f"{_lc['emoji']} {_lc['label']}</span>"
+                        )
 
                     # Manual-stop badge: if this ticker already has a user-set stop,
                     # surface it next to the headline so the user immediately sees

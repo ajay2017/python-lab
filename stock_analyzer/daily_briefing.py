@@ -57,6 +57,7 @@ from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
     lookup_composite,
 )
+from stock_analyzer.position_lifecycle import classify_position_state
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -1320,6 +1321,18 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if new_stop is not None and current_stop >= new_stop - 0.01:
             continue
         is_critical = gap <= 3.0
+        # Lifecycle / settling grace: a freshly-opened position (held <
+        # POSITION_SETTLING_DAYS) sits at its normal entry-to-stop distance by
+        # construction — don't nudge it to tighten while it's still finding its
+        # feet. Exits and critical-gap (≤3%) items are unaffected (precedence in
+        # classify_position_state + the `not is_critical` guard). age None (no
+        # journal) never yields "settling" → management is never silenced blind.
+        _lifecycle = classify_position_state(
+            (held_data or {}).get(ticker, {}).get("position_age_days"),
+            pnl_pct, gap, has_exit_signal=False,
+        )
+        if _lifecycle == "settling" and not is_critical:
+            continue
         # Profit-aware gate: a position that still has ROOM (gap > 3%) with no
         # gain to protect yet is NOT nudged to tighten — that's premature
         # micromanagement. A freshly-opened/flat position sits 3–8% above its
@@ -1360,6 +1373,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "why":      why,
             "trigger":  "Stop break = full exit next open.",
             "weight":   weight,
+            "lifecycle": _lifecycle,
         })
 
     # 2 — Earnings within 7 days

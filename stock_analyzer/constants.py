@@ -103,6 +103,15 @@ STOP_TIGHTEN_ATR_MULT     = 1.5
 # regardless of P&L. Policy value — change = investment-policy decision.
 STOP_TIGHTEN_MIN_GAIN_PCT = 8.0
 
+# ── Position lifecycle (position_lifecycle.classify_position_state) ───────────
+# A held position moves through states: settling → established → winning, with
+# at_risk / exit overriding on danger. Drives "settling grace" (don't micromanage
+# a position you just opened) and lifecycle badges — the calm-advisor layer that
+# keeps the app a medium-term advisor, not a day-trading feed (§2B persona).
+POSITION_SETTLING_DAYS   = 10    # held < this = "settling": suppress ROUTINE mgmt nudges (not exits/critical)
+POSITION_AT_RISK_GAP_PCT = 3.0   # gap-to-stop ≤ this = "at_risk" (same critical band; always surfaces)
+POSITION_WINNING_PNL_PCT = 8.0   # P&L ≥ this (and healthy) = "winning"; aligns with STOP_TIGHTEN_MIN_GAIN_PCT
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down
