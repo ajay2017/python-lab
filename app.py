@@ -2908,6 +2908,7 @@ if page == "🏠 Home":
         _db_buys   = _daily_brief["buy_candidates"]
         _db_review = _daily_brief["review_list"]
         _db_grow   = _daily_brief.get("grow_today", {})
+        _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
         _db_tone   = _market_context.get("tone", "flat")
         _db_sp_pct = _market_context.get("sp500_pct", 0.0)
         _db_nq_pct = _market_context.get("nasdaq_pct", 0.0)
@@ -4052,6 +4053,40 @@ if page == "🏠 Home":
             else:
                 for _item in _aware_bucket:
                     _render_defensive_card(_item)
+
+            # Portfolio Tune-up — slow-moving risk-metric improvements (Sharpe /
+            # beta / volatility / drawdown / tail). NOT time-boxed decisions, so
+            # they live below Act Today / Awareness as standing quality work you
+            # do when rebalancing — not on the clock (§2B calm posture).
+            if _db_tuneup:
+                st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='background:#1e293b;border-left:4px solid #64748b;"
+                    f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                    f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                    f"🔧 Portfolio Tune-up ({len(_db_tuneup)})</span>"
+                    f"<span style='color:#94a3b8;font-size:0.82em'> · standing quality — not time-sensitive</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                for _tu in _db_tuneup:
+                    _tu_tk = ", ".join(_tu.get("tickers", [])[:4])
+                    st.markdown(
+                        "<div style='background:#0f172a;border:1px solid #334155;"
+                        "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                        f"<div style='color:#cbd5e1;font-weight:700;font-size:0.86em'>"
+                        f"{_tu.get('title','Portfolio metric')}</div>"
+                        + (f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
+                           f"{_tu.get('recommendation','')}</div>" if _tu.get("recommendation") else "")
+                        + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
+                           f"Positions: {_tu_tk}</div>" if _tu_tk else "")
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.caption(
+                    "These lift risk-adjusted quality over time — act on them when you're "
+                    "rebalancing or have fresh capital, not on the clock."
+                )
 
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 

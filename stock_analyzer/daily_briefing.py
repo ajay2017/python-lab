@@ -82,6 +82,37 @@ def _days_until(date_str: str, today: date) -> int | None:
         return None
 
 
+# Risk-Advisor rec types that are slow-moving statistical metrics (6-month
+# Sharpe / beta / volatility / drawdown / tail risk) rather than time-boxed
+# decisions. These route to the Brief's "Portfolio Tune-up" awareness lane
+# instead of Act Today — §2B: Act Today = decisions to make TODAY; a Sharpe drag
+# is a standing portfolio-quality issue, not a same-day call. Concentration
+# breaches are NOT here — they stay in Act (structural, user-flagged act-worthy).
+_TUNEUP_RISK_TYPES = frozenset({"beta", "sharpe", "volatility", "drawdown", "tail_risk"})
+
+
+def _portfolio_tuneup(risk_recs: list | None) -> list[dict]:
+    """Slow-moving risk-metric recommendations surfaced as standing 'Portfolio
+    Tune-up' items (awareness), not Act Today decisions. HIGH or MEDIUM only —
+    OK/LOW aren't improvements to make. Shape is render-ready for app.py."""
+    out: list[dict] = []
+    for rec in (risk_recs or []):
+        if rec.get("type") not in _TUNEUP_RISK_TYPES:
+            continue
+        if rec.get("priority") not in ("HIGH", "MEDIUM"):
+            continue
+        rt = rec.get("root_tickers", []) or []
+        out.append({
+            "type":           rec.get("type"),
+            "priority":       rec.get("priority"),
+            "title":          rec.get("title", "Portfolio metric"),
+            "problem":        rec.get("problem", ""),
+            "recommendation": rec.get("recommendation", ""),
+            "tickers":        [r.get("ticker") for r in rt if r.get("ticker")],
+        })
+    return out
+
+
 def _trim_targets(risk_recs: list | None) -> dict[str, dict]:
     """
     Extract tickers Risk Advisor is recommending the user trim.
@@ -1069,6 +1100,11 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
     for rec in (risk_recs or []):
         if rec.get("priority") != "HIGH":
             continue
+        # Slow-moving metric drags (Sharpe/beta/vol/drawdown/tail) are NOT
+        # same-day decisions — they go to the Portfolio Tune-up awareness lane
+        # (_portfolio_tuneup), not Act Today. Concentration breaches stay here.
+        if rec.get("type") in _TUNEUP_RISK_TYPES:
+            continue
         rt = rec.get("root_tickers", [])
         items.append({
             "priority": "high",
@@ -1774,4 +1810,6 @@ def build_daily_briefing(
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
                          movers=movers)
-    return {"act_today": act, "buy_candidates": buys, "review_list": review, "grow_today": grow}
+    tuneup = _portfolio_tuneup(risk_recs)
+    return {"act_today": act, "buy_candidates": buys, "review_list": review,
+            "grow_today": grow, "portfolio_tuneup": tuneup}
