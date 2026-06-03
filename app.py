@@ -64,6 +64,7 @@ from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import split_defensive
+from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import (
     build_macro_calendar,
@@ -2207,6 +2208,48 @@ if page == "🏠 Home":
                 "error":      _rec_load_error,
             }
 
+        # ── Signal hysteresis (calm advisor 2C) ──────────────────────────────
+        # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
+        # a persistent pick as continuity, not a fresh daily call to re-litigate
+        # (§2B medium-term posture). ANNOTATE-ONLY — never adds/removes/re-orders
+        # a pick, so it can't fight the buy gates. Skipped under the AM lock (we
+        # don't re-annotate the frozen snapshot) and when there's no DB to read
+        # yesterday's surface from. A weekend/holiday with no prior rows → no-op.
+        if db.has_db() and not _brief_use_lock:
+            try:
+                from datetime import timedelta as _hys_td
+                _hys_today = _today_et()
+                # Look back a few calendar days so the most-recent PRIOR trading
+                # day is found across weekends/holidays. df is surfaced_at-desc,
+                # so the first row seen per ticker is the most recent prior day.
+                _hys_prior_df = db.load_recommendations(
+                    start_date=_hys_today - _hys_td(days=4),
+                    end_date=_hys_today - _hys_td(days=1),
+                )
+                _hys_snapshot: dict = {}
+                if not _hys_prior_df.empty:
+                    for _, _hr in _hys_prior_df.iterrows():
+                        if str(_hr.get("rec_type", "")) not in ("new_pick", "add_winner"):
+                            continue
+                        _hk = str(_hr.get("ticker", "")).strip().upper()
+                        if not _hk or _hk in _hys_snapshot:
+                            continue
+                        _hcomp = _hr.get("composite_score")
+                        try:
+                            _hcomp = float(_hcomp) if _hcomp is not None else None
+                        except (TypeError, ValueError):
+                            _hcomp = None
+                        _hys_snapshot[_hk] = {
+                            "composite": _hcomp,
+                            "verdict":   str(_hr.get("verdict") or ""),
+                        }
+                if _hys_snapshot:
+                    apply_hysteresis(_gt_today.get("new_picks") or [], _hys_snapshot)
+                    apply_hysteresis(_gt_today.get("add_positions") or [], _hys_snapshot)
+            except Exception:
+                # Cosmetic annotation only — never let it break the Brief.
+                pass
+
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
@@ -3311,6 +3354,18 @@ if page == "🏠 Home":
                         f"🔥 +{_gp['day_change']:.1f}% today</span>"
                     )
 
+                # Steady-vs-yesterday chip (calm advisor 2C): a calm grey marker
+                # telling the user this is the same conviction holding, not a
+                # fresh daily call. Annotate-only; absent when the pick moved.
+                _steady_chip = ""
+                if _gp.get("_hysteresis", {}).get("stable"):
+                    _steady_chip = (
+                        f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
+                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
+                        f"title='Composite and verdict barely changed since yesterday'>"
+                        f"↔ Steady vs yesterday</span>"
+                    )
+
                 st.markdown(
                     f"<div style='background:#111827;border-left:3px solid {_vc};"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -3326,7 +3381,8 @@ if page == "🏠 Home":
                     # Conviction badge (composite-driven)
                     f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
                     f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_conv_txt}</span>"
-                    f"</div>"
+                    + _steady_chip
+                    + f"</div>"
                     # Resolution one-liner — explicit verdict that reconciles
                     # momentum vs composite vs news vs earnings into one sentence.
                     + (f"<div style='color:{_vc};font-size:0.85em;margin-top:6px;"
@@ -3355,6 +3411,14 @@ if page == "🏠 Home":
                 st.markdown("**➕ Add to Winning Positions**")
             for _ga in add_pos:
                 _sz = _ga.get("sizing", {})
+                _ga_steady_chip = ""
+                if _ga.get("_hysteresis", {}).get("stable"):
+                    _ga_steady_chip = (
+                        f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
+                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
+                        f"title='Score and verdict barely changed since yesterday'>"
+                        f"↔ Steady vs yesterday</span>"
+                    )
                 st.markdown(
                     f"<div style='background:#052e16;border-left:3px solid #4ade80;"
                     f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -3363,7 +3427,9 @@ if page == "🏠 Home":
                     f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
                     f"Score {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
                     + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
-                    + f"</span></div>"
+                    + f"</span>"
+                    + _ga_steady_chip
+                    + f"</div>"
                     f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                     f"💡 <em>{_ga['thesis']}</em></div>"
                     + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"

@@ -120,6 +120,14 @@ POSITION_WINNING_PNL_PCT = 8.0   # P&L ≥ this (and healthy) = "winning"; align
 BUCKET_TIGHTEN_ONLY_IS_ACT  = False  # stop-raise nudges → Awareness (protective housekeeping, not a buy/sell)
 BUCKET_CRITICAL_NEWS_IS_ACT = True   # critical-news flags → Act Today (treat news as a same-day decision)
 
+# ── Signal hysteresis (signal_hysteresis.apply_hysteresis) ───────────────────
+# A pick whose composite barely moved since yesterday (within this band) and
+# whose verdict is unchanged gets a calm "steady vs yesterday" chip — it tells
+# the user "this isn't a fresh call, it's the same conviction holding". Damps
+# the day-trader instinct to re-evaluate on daily noise. Annotate-only — NEVER
+# suppresses a pick. Policy value — change = investment-policy decision.
+HYSTERESIS_COMPOSITE_DELTA = 4.0   # |today − yesterday| composite ≤ this = "steady" (absorbs daily wobble)
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down
