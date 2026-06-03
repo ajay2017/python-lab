@@ -51,6 +51,7 @@ from stock_analyzer.constants import (
     WEAK_LARGE_TRIM_TO_PCT,
     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
     MACRO_AFFECTED_TRIM_REDUCTION_PP,
+    MACRO_BROAD_EXPOSURE_PCT,
     MOVER_MAX_PICKS,
 )
 from stock_analyzer.signal_reconciliation import (
@@ -1556,7 +1557,28 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             ~sector_rows["Ticker"].astype(str).str.upper().isin(_act_tickers)
         ] if not sector_rows.empty else sector_rows
 
-        if exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not _macro_eligible.empty and portfolio_value > 0:
+        # Broad macro print (NFP / CPI / Fed) — the affected sectors cover most
+        # of the book, so a bounded single-name trim wouldn't meaningfully cut
+        # the exposure; it just reads as pre-event churn (§2B). Downgrade to a
+        # "hold through, mind your stops" awareness WATCH. The sized trim is
+        # reserved for sector-CONCENTRATED events below.
+        _is_broad = exposure_pct >= MACRO_BROAD_EXPOSURE_PCT
+
+        if _is_broad:
+            action = {
+                "type":          "WATCH",
+                "from_exposure": exposure_pct,
+                "threshold":     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
+                "broad":         True,
+            }
+            why = (
+                f"This event touches {exposure_pct:.0f}% of your portfolio — a broad "
+                "macro print, not a sector-specific shock. A token single-name trim "
+                "wouldn't materially reduce that exposure; hold through and let your "
+                "existing stops do the work. Sized de-risking is reserved for events "
+                "that hit a concentrated sector you can actually prune."
+            )
+        elif exposure_pct > MACRO_AFFECTED_TRIM_THRESHOLD_PCT and not _macro_eligible.empty and portfolio_value > 0:
             # Find lowest-conviction-score holding in the affected sectors.
             weakest = _macro_eligible.sort_values("Score", ascending=True).iloc[0]
             weak_ticker = str(weakest["Ticker"])

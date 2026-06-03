@@ -164,6 +164,13 @@ WEAK_LARGE_TRIM_TO_PCT = 8.0
 #   ("press winners, cull weaklings") while reducing gross exposure.
 MACRO_AFFECTED_TRIM_THRESHOLD_PCT = 30.0
 MACRO_AFFECTED_TRIM_REDUCTION_PP  = 5.0
+# Above this affected-sector exposure, the event is effectively portfolio-wide
+# (NFP / CPI / Fed hit ~every sector). A bounded single-name trim (≤ REDUCTION_PP)
+# is immaterial against it and reads as pre-event churn (§2B). Such broad events
+# are downgraded to an awareness WATCH ("hold through, mind your stops") instead
+# of an Act-Today trim; the sized trim is reserved for sector-CONCENTRATED events
+# where culling one name meaningfully cuts the exposure. Policy value.
+MACRO_BROAD_EXPOSURE_PCT          = 60.0
 
 # ── Movers discovery (surface breakouts outside the tracked universe) ────────
 # The Movers pipeline scans the broad discovery_universe for today's big 1-day
