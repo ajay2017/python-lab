@@ -45,6 +45,7 @@ from stock_analyzer.constants import (
     STOP_PROFIT_LOCK_PNL_PCT,
     STOP_PROFIT_LOCK_TRIM_PCT,
     STOP_TIGHTEN_ATR_MULT,
+    STOP_TIGHTEN_MIN_GAIN_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
     EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
     WEAK_LARGE_TRIM_TO_PCT,
@@ -1319,6 +1320,16 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if new_stop is not None and current_stop >= new_stop - 0.01:
             continue
         is_critical = gap <= 3.0
+        # Profit-aware gate: a position that still has ROOM (gap > 3%) with no
+        # gain to protect yet is NOT nudged to tighten — that's premature
+        # micromanagement. A freshly-opened/flat position sits 3–8% above its
+        # own ATR stop by construction (the MSFT case: gap 6.2%, P&L -0.0%);
+        # tightening toward break-even removes the room the wider entry stop
+        # deliberately gave it and reads as day-trading churn. Let the original
+        # stop work until there's an actual gain to lock. CRITICAL-gap (≤3%,
+        # about to be stopped out) positions still surface regardless of P&L.
+        if not is_critical and pnl_pct < STOP_TIGHTEN_MIN_GAIN_PCT:
+            continue
         lock_profits = pnl_pct >= STOP_PROFIT_LOCK_PNL_PCT
         if is_critical and lock_profits:
             trim_shares = max(1, int(round(shares * STOP_PROFIT_LOCK_TRIM_PCT / 100)))

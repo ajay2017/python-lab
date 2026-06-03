@@ -93,6 +93,15 @@ STOP_PROFIT_LOCK_TRIM_PCT = 25.0
 # Tighter than the 2.0× used for initial stops because the position is
 # already in the danger zone — less room before next stop-out is warranted.
 STOP_TIGHTEN_ATR_MULT     = 1.5
+# Profit-aware tightening: a position that STILL HAS ROOM (gap 3–8% to stop)
+# is only nudged to tighten once it has a real gain to protect (P&L ≥ this).
+# A freshly-opened/flat position sits 3–8% above its own ATR stop by
+# construction — tightening it toward break-even is premature churn (it removes
+# the room the wider entry stop deliberately gave it) and is the kind of
+# constant-management noise that makes the app feel like day-trading. Positions
+# in the CRITICAL band (≤3% gap, about to be stopped out) still surface
+# regardless of P&L. Policy value — change = investment-policy decision.
+STOP_TIGHTEN_MIN_GAIN_PCT = 8.0
 
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
