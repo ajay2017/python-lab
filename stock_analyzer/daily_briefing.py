@@ -1502,6 +1502,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "priority": "low",
                 "icon":     "📰",
                 "ticker":   ticker,
+                "watch_kind": "news",   # discriminator: a negative-news WATCH (vs an earnings/scheduled WATCH)
                 "headline": f"negative headline (sentiment {sent:+.2f}): \"{headline_text}\"",
                 "action":   {"type": "WATCH"},
                 "why":      (
@@ -1637,6 +1638,31 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             ),
             "weight":   None,
         })
+
+    # Final-pass news-WATCH dedup. The inline check above suppresses a
+    # negative-news WATCH for any ticker actioned by an EARLIER block or Act
+    # Today. But the macro pre-event trim runs AFTER the news block and carries
+    # its target in action.trim_ticker (the item-level ticker is None), so a
+    # macro trim of a name that also has mild negative news would slip through
+    # as a double-surface (MSFT: NFP "trim" in Act + news WATCH in Awareness).
+    # Re-derive the full actioned set (incl. trim_ticker) and drop any redundant
+    # negative-news WATCH. Only news-WATCH is removed (watch_kind=="news");
+    # earnings/scheduled WATCHes are distinct catalysts and are preserved.
+    _actioned_final = set(_act_tickers)
+    for _it in items:
+        _ia = _it.get("action") or {}
+        if _ia.get("type") == "WATCH":
+            continue
+        _itk = str(_it.get("ticker") or _ia.get("trim_ticker") or "").upper()
+        if _itk:
+            _actioned_final.add(_itk)
+    items = [
+        _it for _it in items
+        if not (
+            _it.get("watch_kind") == "news"
+            and str(_it.get("ticker") or "").upper() in _actioned_final
+        )
+    ]
 
     pri_order = {"medium": 0, "low": 1}
     items.sort(key=lambda x: (pri_order.get(x.get("priority","low"), 1), -(x.get("weight") or 0)))
