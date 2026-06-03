@@ -6548,10 +6548,19 @@ if page == "🏠 Home":
                         _score_cols = st.columns(len(_top))
                         for _scol, _c in zip(_score_cols, _top):
                             _cand = _c["ticker"]
+                            _div_an_key = f"_div_analyze_{rec['sector']}_{_cand}"
                             with _scol:
                                 if _c["passes"] is None:
                                     st.metric(_cand, "—", "score unavailable")
                                     st.caption("Could not load live score")
+                                    # Jump to the full Analysis scorecard (same
+                                    # control as the New-Position cards) — trade
+                                    # decisions happen on Analysis; this is the bridge.
+                                    if st.button(f"▶ Analyze {_cand}", key=_div_an_key,
+                                                 use_container_width=True):
+                                        st.session_state["_pending_page"]    = "📈 Analysis"
+                                        st.session_state["_analysis_ticker"] = _cand
+                                        st.rerun()
                                     continue
                                 _gate_icon = "✅" if _c["passes"] else "⚠️"
                                 st.metric(
@@ -6575,6 +6584,14 @@ if page == "🏠 Home":
                                 _pe  = _fin.get("forward_pe")
                                 if _pe:
                                     st.caption(f"Fwd P/E: {_pe:.1f}")
+                                # Jump to the full Analysis scorecard for this name
+                                # (same control as the New-Position cards) — the
+                                # bridge from "good candidate" to "trade from there."
+                                if st.button(f"▶ Analyze {_cand}", key=_div_an_key,
+                                             use_container_width=True):
+                                    st.session_state["_pending_page"]    = "📈 Analysis"
+                                    st.session_state["_analysis_ticker"] = _cand
+                                    st.rerun()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 3 — RISK ANALYSIS
