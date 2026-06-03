@@ -29,6 +29,36 @@ The app is not a brokerage or order-execution system.
 
 ---
 
+## 2AA. Intended Investor Persona and Time Horizon
+
+This app is built for the **quality-first, medium-term investor with long-term tax discipline** — and a defensive bias. It is explicitly **not** a day-trading tool. This framing is a design constraint: features and gates are evaluated against it, and a request that only serves intraday trading is out of scope (see §5) unless the persona itself is revisited.
+
+### 2AA.1 Persona fit by horizon
+
+| Persona | Horizon | Fit | Rationale |
+|---|---|---|---|
+| Day trader | seconds–hours | **Not supported** | The engine actively works against it (see 2AA.2). |
+| Swing trader | days–weeks | **Partial** | Technical signals, entry zones, ATR stops, R:R, Catalyst Watch and Movers serve this — but quality gates and the no-trade-into-earnings posture temper pure momentum. |
+| Medium-term investor | weeks–months | **Primary (sweet spot)** | Composite scoring, sector rotation, macro-regime, rebalancing, diversification advisor all operate on this horizon. |
+| Long-term investor | months–years | **Strong** | 40% fundamental weight, valuation/FCF, tax-loss harvesting, 1-yr cap-gains & wash-sale awareness, behavioural discipline. Fit strengthens with horizon. |
+
+### 2AA.2 Why the design is investor-oriented, not trader-oriented
+
+| ID | Design choice | Implication |
+|---|---|---|
+| PH-01 | Composite = Technical 45% + **Fundamental 40%** + Sentiment 15%; verdict is WITHHELD when fundamentals are unavailable. | A 40% fundamental weight is central to an investor and irrelevant to an intraday trader. |
+| PH-02 | Composite signals are computed on page load and held; only prices refresh (~60s). Signals do **not** recompute every tick. | Deliberate anti-overtrading choice (also a rate-limit guard). Intraday signal churn is intentionally absent. |
+| PH-03 | Proximity gates suppress initiating into earnings; Catalyst Watch is awareness, **not** a buy rec. | The app declines binary-event volatility that a trader often seeks. |
+| PH-04 | Stops are ATR-based, R:R is multi-day, sizing is risk-%-of-portfolio. | Swing-to-position constructs (holding across days/weeks), not intraday levels. |
+| PH-05 | Macro-regime lens reads CPI / Fed / rates (months horizon); concentration caps, beta/Sharpe/Sortino/VaR, rebalancing, tax/wash-sale all operate at portfolio/horizon scale. | Portfolio-construction and protection, not per-trade edge capture. |
+| PH-06 | Even Movers (1-day breakouts) are funnelled through the **same composite quality gate**, never traded on momentum alone. | The most opportunistic surface is still quality-first — the philosophy in miniature. |
+
+### 2AA.3 What day-trading support would require (fork, not extension)
+
+Supporting day traders would mean intraday/real-time data feeds, Level 2 / order-flow, tick charts, removal of the fundamental weighting, and removal of the earnings/macro gates that make this app safe. That is a different product with an opposite risk philosophy — a fork, not an increment. Documented here so the boundary stays explicit.
+
+---
+
 ## 2A. Operating Posture and Decision Policy
 
 This is an explicit operating-mode commitment that drives functional design. It is the most important policy section in this document because every gate, threshold, and suppression below derives from it.
@@ -347,3 +377,4 @@ The app must not depend on a single market-data source. A provider abstraction (
 - International or non-US equity markets
 - Options, ETFs, or fixed income instruments
 - Automated trading or algorithmic execution
+- Day-trading / intraday support (Level 2, order flow, tick charts, momentum-only signals) — counter to the intended persona; see §2AA
