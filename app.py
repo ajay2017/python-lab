@@ -731,7 +731,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "🔔 Catalyst Watch", "📅 Economic Calendar"],
+        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "🔔 Catalyst Watch", "📅 Economic Calendar", "📖 User Guide"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -14629,5 +14629,123 @@ elif page == "📅 Economic Calendar":
                                 )
 
                     st.divider()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — USER GUIDE
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "📖 User Guide":
+    st.title("📖 User Guide")
+    st.markdown(
+        "*How DRISHTA · Beyond Noise thinks — so you can read it at a glance. "
+        "This is a guide to the app, not financial advice.*"
+    )
+
+    with st.expander("🎯 What this app is (and isn't)", expanded=True):
+        st.markdown(
+            """
+**DRISHTA is a personal portfolio-intelligence advisor — it decides, it doesn't just inform.** Recommendations are issued as clear, actionable calls; suppressions are shown with a visible reason, never silently hidden. When in doubt, it recommends *nothing* rather than recommending wrongly.
+
+**It is built for a medium-term, quality-first investor — not a day trader.** You should not feel the need to watch the screen all day. The app deliberately stays quiet when there's no genuine decision to make ("✅ you're set for today"). A stream of technically-correct-but-trivial prompts is treated as a *bug*, not a feature — the goal is to surface what matters *now* and stay calm otherwise.
+
+⚠️ *Not financial advice. Algorithmic analysis on delayed/third-party data — verify before acting.*
+"""
+        )
+
+    with st.expander("🏠 Reading Today's Brief", expanded=False):
+        st.markdown(
+            """
+The Home brief is split into **offense** (left) and **defense** (right).
+
+**Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
+
+**Right — three lanes, by urgency:**
+- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a sized trim, breaking critical news. If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."**
+- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: mild negative news, a broad macro event to hold through.
+- **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
+
+**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means a pick's conviction is unchanged from yesterday — continuity, not a fresh call.
+"""
+        )
+
+    with st.expander("🧮 How stocks are scored", expanded=False):
+        st.markdown(
+            """
+Every stock gets a **Composite score (0–100)** blending three factors:
+
+- **Technical — 45%** (trend, momentum, RSI, relative strength)
+- **Fundamental — 40%** (valuation, growth, profitability, balance sheet)
+- **Sentiment — 15%** (news tone)
+
+A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not* enough — a hot breakout (high momentum) is **skipped** if the full composite says Hold/Sell ("composite contradicts momentum").
+
+**"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy.
+"""
+        )
+
+    with st.expander("🚦 Why a pick gets held back (the gates)", expanded=False):
+        st.markdown(
+            """
+When a name looks strong but isn't recommended, one of these gates fired — and the app shows you which:
+
+- **Sector hard cap (35%)** — your portfolio is already at the institutional ceiling for that sector; adding more would deepen a concentration the app wants you to *trim*, not grow.
+- **Single-name ceiling (15%)** — one position can't exceed this share of the portfolio; beyond it, a Strong Buy is a *KEEP, not an add*.
+- **Imminent macro event** — a HIGH-impact release (jobs, CPI, Fed) is within a few days and hits that sector; opening into a known binary catalyst is the anti-pattern this blocks.
+- **Composite contradicts momentum** — momentum is hot but the full composite is below the Buy threshold; skip until it confirms.
+- **Recently added (cooldown)** — you already added to this winner in the last ~2 weeks; the app waits for the new shares to settle before suggesting more (anti-churn).
+"""
+        )
+
+    with st.expander("🗺️ The pages, at a glance", expanded=False):
+        st.markdown(
+            """
+- **🏠 Home** — Today's Brief: the daily decision summary (above).
+- **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
+- **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
+- **⚖️ Compare** — side-by-side comparison of multiple tickers.
+- **📋 Watchlist** — names you're tracking, with enter-now flags.
+- **📒 Trade Journal** — your logged trades (the source of truth for holdings, P&L, position age).
+- **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
+- **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
+- **🔔 Catalyst Watch** — upcoming earnings for held + watchlist + sector names (awareness, not a buy signal).
+- **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
+"""
+        )
+
+    with st.expander("🛡️ Risk & portfolio-quality terms", expanded=False):
+        st.markdown(
+            """
+These power the **Portfolio Tune-up** lane:
+
+- **Sharpe ratio** — return *per unit of risk*. Low/negative means you're taking volatility that isn't paying you. [Investopedia ↗](https://www.investopedia.com/terms/s/sharperatio.asp)
+- **Max drawdown** — the worst peak-to-trough drop your portfolio has taken; deep holes are asymmetric (a −50% needs +100% to recover). [Investopedia ↗](https://www.investopedia.com/terms/m/maximum-drawdown-mdd.asp)
+- **Beta** — how much your portfolio moves relative to the market. [Investopedia ↗](https://www.investopedia.com/terms/b/beta.asp)
+- **ATR stop** — a volatility-based stop level (Average True Range); wider ATR = wider stop. [Investopedia ↗](https://www.investopedia.com/terms/a/atr.asp)
+- **Reward:Risk (R:R)** — potential upside vs downside on a trade; the app favours entries at 2:1 or better. [Investopedia ↗](https://www.investopedia.com/terms/r/riskrewardratio.asp)
+- **RSI** — a momentum oscillator (overbought/oversold). [Investopedia ↗](https://www.investopedia.com/terms/r/rsi.asp)
+"""
+        )
+
+    with st.expander("📚 Glossary & external references", expanded=False):
+        st.markdown(
+            """
+- **Composite** — the blended 0–100 score (Technical + Fundamental + Sentiment).
+- **Momentum** — a single-factor breakout signal; necessary but not sufficient for a Buy.
+- **Lifecycle (Settling / Winning / At Risk)** — where a held position is in its life, used to decide which nudges are worth showing.
+- **Act vs Awareness vs Tune-up** — decision-today / FYI / standing-quality, respectively.
+
+Learn more: [Investopedia ↗](https://www.investopedia.com/) · data terms vary by provider (see below).
+"""
+        )
+
+    with st.expander("🔌 Data sources & disclaimer", expanded=False):
+        st.markdown(
+            """
+- **Prices & fundamentals:** Yahoo Finance (yfinance), Finnhub, and Financial Modeling Prep (FMP) — with automatic failover between them. [yfinance ↗](https://finance.yahoo.com/) · [FMP ↗](https://site.financialmodelingprep.com/)
+- **Macro data:** FRED (Federal Reserve Economic Data). [FRED ↗](https://fred.stlouisfed.org/)
+- Prices may be delayed. Scores are algorithmic and can be wrong.
+
+**This app is a decision-support tool, not financial advice. You are responsible for your own trades.**
+"""
+        )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
