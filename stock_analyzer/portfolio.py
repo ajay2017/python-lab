@@ -41,11 +41,34 @@ TICKER_SECTORS = {
     "DIS": "Consumer Tech", "SNAP": "Consumer Tech",
     "LLY": "Healthcare", "NVO": "Healthcare", "ABBV": "Healthcare",
     "ISRG": "Healthcare", "MRNA": "Healthcare", "REGN": "Healthcare",
+    "UNH": "Healthcare", "JNJ": "Healthcare", "PFE": "Healthcare",
+    "MRK": "Healthcare", "TMO": "Healthcare", "ABT": "Healthcare",
+    "AMGN": "Healthcare", "BMY": "Healthcare", "MDT": "Healthcare", "DHR": "Healthcare",
     "JPM": "Financials", "V": "Financials", "MA": "Financials",
     "GS": "Financials", "SQ": "Financials", "COIN": "Financials",
+    "BX": "Financials", "BAC": "Financials", "WFC": "Financials",
+    "C": "Financials", "MS": "Financials", "SCHW": "Financials", "BLK": "Financials",
     "LMT": "Defense", "RTX": "Defense", "NOC": "Defense", "GD": "Defense",
     "XOM": "Energy", "CVX": "Energy", "OXY": "Energy", "COP": "Energy",
 }
+
+
+def resolve_sector(ticker: str, fallback: str = "") -> str:
+    """Single source of truth for a ticker's sector bucket: curated
+    TICKER_SECTORS first, then a provider-supplied fallback (yfinance/scanner
+    sector), then the UNCLASSIFIED_SECTOR catch-all. Used by both held-position
+    classification and the Brief's pick path so a mapped name classifies the
+    same way everywhere."""
+    # None-safe fallback: check truthiness BEFORE str() so a None/blank provider
+    # sector falls through to UNCLASSIFIED_SECTOR — NOT the literal "None" (which
+    # would dodge the breach-gate's "Other" exclusion). Mirrors the original
+    # build_portfolio_df expression `(r.get("sector") or "").strip()`.
+    return (
+        TICKER_SECTORS.get(str(ticker).strip().upper())
+        or (str(fallback).strip() if fallback else "")
+        or UNCLASSIFIED_SECTOR
+    )
+
 
 # Ratchet stop levels: as gains grow, floor the stop to protect accumulated profit
 _RATCHET_LEVELS = [
@@ -143,7 +166,7 @@ def build_portfolio_df(
             # this, every unmapped name piled into "Other", inflating it past the
             # hard cap (ESTC, a Tech/Software name, landed in a 44% "Other"
             # bucket) — a classification artifact, not a real concentration.
-            "Sector": TICKER_SECTORS.get(ticker) or (r.get("sector") or "").strip() or UNCLASSIFIED_SECTOR,
+            "Sector": resolve_sector(ticker, r.get("sector")),
             "Shares": int(shares),
             "Avg Cost": avg_cost,
             "Price": price,

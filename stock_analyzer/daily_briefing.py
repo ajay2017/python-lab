@@ -61,6 +61,7 @@ from stock_analyzer.signal_reconciliation import (
     lookup_composite,
 )
 from stock_analyzer.position_lifecycle import classify_position_state
+from stock_analyzer.portfolio import resolve_sector
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -626,7 +627,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         for row in curated_rows + mover_rows:
             ticker   = str(row["Ticker"])
             price    = _f(row.get("Price", 0))
-            sector   = str(row.get("Sector", ""))
+            sector   = resolve_sector(ticker, row.get("Sector", ""))
             trend    = str(row.get("Trend", ""))
             is_leader = any(ls.get("sector","") in sector for ls in lead_secs)
             is_mover  = bool(row.get("_is_mover"))
