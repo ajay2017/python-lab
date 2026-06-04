@@ -32,6 +32,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY_FLAT_DAY,
     SINGLE_NAME_CEILING,
     SECTOR_CEILING,
+    UNCLASSIFIED_SECTOR,
     MACRO_IMMINENT_DAYS,
     RISK_PCT_PER_TRADE,
     ADD_WINNER_MIN_GAP_PCT,
@@ -515,8 +516,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     _breached_sectors: set = set()
     if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
         _sec_wt = port_df.groupby("Sector")["Weight (%)"].sum()
+        # "Other" is a classification artifact (unclassified holdings), not a
+        # real correlated sector — exclude it so picks/adds aren't suppressed by
+        # a phantom cap breach. Mirrors risk_advisor's UNCLASSIFIED_SECTOR exclusion.
         _breached_sectors = {str(_s) for _s, _w in _sec_wt.items()
-                             if _f(_w, 0) >= SECTOR_CEILING}
+                             if _f(_w, 0) >= SECTOR_CEILING
+                             and str(_s) != UNCLASSIFIED_SECTOR}
 
     # On bear days — no new entries, return protection message
     if tone == "bear":
