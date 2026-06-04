@@ -59,6 +59,7 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     RR_ENTRY_MIN,
     CATALYST_WATCH_WINDOW_DAYS,
+    GROW_CANDIDATE_POOL,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -1935,10 +1936,11 @@ if page == "🏠 Home":
 
     # Auto-fetch composite scores for top scanner picks so Grow Today conviction
     # labels are accurate without requiring a manual Refresh Signals click.
-    # Pool size matches _grow_today's full candidate window (max_picks × 4 = 12
-    # on bull days) so every candidate the Brief evaluates has a composite —
-    # otherwise picks beyond slot 5 fall back to "Verify — Run Analysis First"
-    # even when the user just wants a Skip/Go verdict on the Brief itself.
+    # Pool size = GROW_CANDIDATE_POOL (max_picks_bull × over-fetch = 12) —
+    # matches _grow_today's full candidate window so every candidate the Brief
+    # evaluates has a composite — otherwise picks beyond slot 5 fall back to
+    # "Verify — Run Analysis First" even when the user just wants a Skip/Go
+    # verdict on the Brief itself.
     #
     # Single source of truth: rebuild from load_all() on every render rather
     # than holding a session-state snapshot. load_all() has a 30-min TTL so
@@ -1952,7 +1954,7 @@ if page == "🏠 Home":
     if _sr_for_comp is not None and not _sr_for_comp.empty:
         _top_for_comp  = (
             _sr_for_comp[~_sr_for_comp["Ticker"].isin(set(held_tickers))]
-            .head(12)["Ticker"].tolist()
+            .head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
         )
         _grow_composites: dict = {}
         # Track tickers where the composite fetch failed so the Grow Today UI
@@ -3073,13 +3075,14 @@ if page == "🏠 Home":
                 )
             if not _fresh_results.empty:
                 st.session_state.scanner_results = _fresh_results
-                # Pre-fetch full composite analysis for top 12 non-held scanner picks.
-                # Pool size matches _grow_today's candidate window (max_picks × 4)
-                # so every candidate the Brief considers gets a composite verdict
-                # rather than falling back to "Verify — Run Analysis First."
+                # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
+                # (= 12) non-held scanner picks. Pool size matches _grow_today's
+                # candidate window (max_picks_bull × over-fetch) so every candidate
+                # the Brief considers gets a composite verdict rather than falling
+                # back to "Verify — Run Analysis First."
                 _top_candidates = _fresh_results[
                     ~_fresh_results["Ticker"].isin(set(held_tickers))
-                ].head(12)["Ticker"].tolist()
+                ].head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
                 _grow_composites: dict = {}
                 if _top_candidates:
                     with st.spinner(

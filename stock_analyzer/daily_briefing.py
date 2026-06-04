@@ -55,6 +55,9 @@ from stock_analyzer.constants import (
     MACRO_AFFECTED_TRIM_REDUCTION_PP,
     MACRO_BROAD_EXPOSURE_PCT,
     MOVER_MAX_PICKS,
+    GROW_MAX_PICKS_BULL,
+    GROW_MAX_PICKS_DEFAULT,
+    GROW_CANDIDATE_OVERFETCH,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -548,7 +551,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
     # Score threshold: higher bar on flat days, standard on bull days
     min_score   = COMPOSITE_BUY if tone == "bull" else COMPOSITE_BUY_FLAT_DAY
-    max_picks   = 3  if tone == "bull" else 1
+    max_picks   = GROW_MAX_PICKS_BULL if tone == "bull" else GROW_MAX_PICKS_DEFAULT
 
     new_picks: list[dict] = []
     _confirmed_picks: list[dict] = []
@@ -592,7 +595,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             d["_day_change"] = None
             curated_rows.append(d)
     curated_rows.sort(key=lambda d: d.get("_rank", 0), reverse=True)
-    curated_rows = curated_rows[: max_picks * 4]
+    curated_rows = curated_rows[: max_picks * GROW_CANDIDATE_OVERFETCH]
 
     # Mover pool — kept SEPARATE so it isn't truncated out by higher-ranked
     # curated names and isn't subject to the curated momentum bar or the

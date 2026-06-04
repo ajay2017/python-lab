@@ -39,6 +39,23 @@ UNCLASSIFIED_SECTOR = "Other"
 DIVERSIFY_SCAN_CAP    = 10        # max names composite-scored per underweight sector
 DIVERSIFY_DISPLAY_TOP = 3         # ranked candidates shown per sector
 
+# ── Grow Today candidate funnel ──────────────────────────────────────────────
+# max_picks: how many NEW positions the daily brief will recommend. Lower on
+# flat/bear days (capital-preservation posture). Investment-policy values —
+# changing them is a policy decision, not tuning.
+GROW_MAX_PICKS_BULL      = 3      # bull-day new-position cap
+GROW_MAX_PICKS_DEFAULT   = 1      # flat / bear-day new-position cap
+# Over-fetch headroom: composite-score this many × the pick cap so enough
+# candidates survive the composite/macro/sector/cap gates to fill the slots.
+# Coverage/perf knob (NOT a policy threshold): bigger = wider net scored, but a
+# slower Refresh (each candidate is a load_all).
+GROW_CANDIDATE_OVERFETCH = 4
+# Derived pre-fetch pool = the bull-day maximum candidate window. The app
+# pre-fetches composites for this many top non-held scanner picks so every
+# candidate the brief could consider gets a real composite verdict. Single
+# source of truth — app.py and daily_briefing.py both key off these.
+GROW_CANDIDATE_POOL      = GROW_MAX_PICKS_BULL * GROW_CANDIDATE_OVERFETCH  # = 12
+
 # ── Composite scoring boundaries ─────────────────────────────────────────────
 # scoring.recommendation() uses these to assign the Strong Buy / Buy / Hold /
 # Sell / Strong Sell label that surfaces across the app. Every gate and filter
