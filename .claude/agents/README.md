@@ -73,6 +73,14 @@ Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
   shared) override `~/.claude/agents/`. Filename is cosmetic; identity is the
   `name:` field.
 
+## Tracking the savings
+
+Routing decisions and the savings on delegated work are logged in
+[`docs/cost-routing.md`](../../docs/cost-routing.md) — a running ledger appended
+at commit time (one row per delegated task, plus decisions *not* to delegate).
+It measures the delegated slice only, not total cost; the authoritative total is
+the Anthropic Console / subscription usage view.
+
 ## TL;DR
 
 Opus thinks and reviews; Sonnet builds the decided thing; Haiku writes it up.
