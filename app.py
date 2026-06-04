@@ -684,6 +684,40 @@ if not st.session_state.get("db_loaded"):
     st.session_state.trades_df   = db.load_trades()
     st.session_state.db_loaded   = True
 
+# ── Read-only viewer mode ────────────────────────────────────────────────────
+# Owner-whitelist, FAIL-SAFE: emails listed in st.secrets["owner_emails"] get
+# full access; any OTHER authenticated viewer is read-only. Fails OPEN to full
+# access ONLY when unconfigured (no owner_emails) or the viewer email can't be
+# determined — bounded because this is a PRIVATE Streamlit deployment (only
+# allow-listed emails can open it). Real enforcement is db.set_readonly() (every
+# user-data write no-ops); the UI disabled= flags are UX on top of that backstop.
+def _viewer_email() -> str:
+    try:
+        _u = getattr(st, "user", None)
+        if _u is None:
+            _u = getattr(st, "experimental_user", None)
+        if _u is not None:
+            _em = getattr(_u, "email", None)
+            if _em is None and hasattr(_u, "get"):
+                _em = _u.get("email")
+            return str(_em or "").strip().lower()
+    except Exception:
+        pass
+    return ""
+
+try:
+    _owner_raw = st.secrets.get("owner_emails", [])
+except Exception:
+    _owner_raw = []
+if isinstance(_owner_raw, str):
+    _owner_emails = [e.strip().lower() for e in _owner_raw.split(",") if e.strip()]
+else:
+    _owner_emails = [str(e).strip().lower() for e in (_owner_raw or [])]
+_viewer_em = _viewer_email()
+_readonly_viewer = bool(_owner_emails) and bool(_viewer_em) and (_viewer_em not in _owner_emails)
+st.session_state["_readonly"] = _readonly_viewer
+db.set_readonly(_readonly_viewer)
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     # ── Portfolio value banner — always at the very top ──────────────────
@@ -1469,6 +1503,12 @@ def _render_holdings_earnings(port_df, held_data):
 
 
 
+if st.session_state.get("_readonly"):
+    st.info(
+        "👁️ **Read-only viewer** — you're browsing the owner's live portfolio. "
+        "Logging trades and editing stops / watchlist are disabled."
+    )
+
 if page == "🏠 Home":
     st.title("🏠 Home")
 
@@ -1656,7 +1696,9 @@ if page == "🏠 Home":
         _sp_c1, _sp_c2, _sp_c3 = st.columns([2, 2, 8])
         with _sp_c1:
             if st.button(f"✅ Apply Adjustment", key=f"_sp_apply_{_sp_key}",
-                         type="primary", use_container_width=True):
+                         type="primary", use_container_width=True,
+                         disabled=st.session_state.get("_readonly", False),
+                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                 _hdf = st.session_state.holdings_df.copy()
                 _mask = _hdf["Ticker"] == _sp["ticker"]
                 _hdf.loc[_mask, "Shares"]      = _sp["adj_shares"]
@@ -2065,7 +2107,11 @@ if page == "🏠 Home":
         # Brief build is cheap (single upsert round-trip) and avoids the
         # sticky-flag failure mode where an early failed save permanently
         # blocked retries for the rest of the session.
-        if db.has_db() and not _brief_use_lock:
+        # Session-flag guard (race-immune): a read-only viewer's Home load must
+        # not WRITE the owner's recommendation log. The db-layer _READONLY flag
+        # also no-ops this, but it's a process-global; the per-session flag here
+        # closes the cross-session race (a concurrent owner session flipping it).
+        if db.has_db() and not _brief_use_lock and not st.session_state.get("_readonly", False):
             _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
             try:
                 # Price snapshot resolver: each pick type stores price differently,
@@ -3975,12 +4021,15 @@ if page == "🏠 Home":
                                             "💾 Save",
                                             type="primary",
                                             use_container_width=True,
+                                            disabled=st.session_state.get("_readonly", False),
+                                            help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
                                         )
                                     with _sub_c2:
                                         _md_revert = st.form_submit_button(
                                             "↩️ Revert to ATR",
                                             use_container_width=True,
-                                            help="Clear any manual stop override for this ticker",
+                                            disabled=st.session_state.get("_readonly", False),
+                                            help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else "Clear any manual stop override for this ticker",
                                         )
                                     if _md_submitted and _new_stop_input > 0:
                                         if db.save_manual_stop(
@@ -9287,7 +9336,9 @@ elif page == "🔍 Market Scanner":
         with add_col2:
             st.write("")
             st.write("")
-            if st.button("➕ Add to Watchlist"):
+            if st.button("➕ Add to Watchlist",
+                         disabled=st.session_state.get("_readonly", False),
+                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                 for t in to_add:
                     if t not in st.session_state.watchlist:
                         st.session_state.watchlist.append(t)
@@ -10628,7 +10679,9 @@ elif page == "📋 Watchlist":
         with st.form("_wl_add_form", clear_on_submit=True):
             _wl_add = st.text_input("Add ticker", "",
                                     placeholder="e.g. NVDA")
-            _wl_submit = st.form_submit_button("Add")
+            _wl_submit = st.form_submit_button("Add",
+                                               disabled=st.session_state.get("_readonly", False),
+                                               help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None)
         if _wl_submit:
             _t = (_wl_add or "").strip().upper()
             if not _t:
@@ -10663,7 +10716,9 @@ elif page == "📋 Watchlist":
                 options=st.session_state.watchlist,
                 key="_wl_remove_sel",
             )
-            if _wl_remove and st.button("🗑️ Remove selected", key="_wl_remove_btn"):
+            if _wl_remove and st.button("🗑️ Remove selected", key="_wl_remove_btn",
+                                        disabled=st.session_state.get("_readonly", False),
+                                        help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                 for _rt in _wl_remove:
                     if _rt in st.session_state.watchlist:
                         st.session_state.watchlist.remove(_rt)
@@ -11494,7 +11549,9 @@ elif page == "📒 Trade Journal":
                 placeholder="e.g. Added on dip",
             )
 
-            submitted = st.form_submit_button("✅ Record Trade", type="primary")
+            submitted = st.form_submit_button("✅ Record Trade", type="primary",
+                                               disabled=st.session_state.get("_readonly", False),
+                                               help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None)
 
         # Read action + ticker from session state (set by widgets outside the form)
         action       = st.session_state.get("_tj_action", "BUY")
@@ -12276,6 +12333,8 @@ elif page == "📒 Trade Journal":
             if st.button(
                 f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
                 type="secondary",
+                disabled=st.session_state.get("_readonly", False),
+                help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
             ):
                 ids_to_delete = trades_df.iloc[rows_to_delete.index]["id"].tolist()
                 failed = 0
@@ -12334,7 +12393,9 @@ elif page == "📒 Trade Journal":
                 "every SELL. Use this once after fixing bad trade data — or any "
                 "time the holdings table looks out of sync with the trade log."
             )
-            if st.button("Run rebuild now", key="_tj_rebuild_holdings_btn"):
+            if st.button("Run rebuild now", key="_tj_rebuild_holdings_btn",
+                         disabled=st.session_state.get("_readonly", False),
+                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
                 fresh = db.load_trades()
                 if fresh.empty:
                     st.warning("No trades to replay.")

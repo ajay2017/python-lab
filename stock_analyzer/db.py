@@ -147,6 +147,21 @@ import pandas as pd
 
 _DEFAULT_WATCHLIST = ["NVDA", "AMD", "INTC", "MU"]
 
+# Read-only viewer mode. When enabled, every USER/OWNER-data write function
+# below becomes a safe no-op — the security backstop behind the UI's disabled
+# controls (a missed UI gate still cannot mutate data). Set once at startup by
+# app.py after resolving the viewer's identity. NOTE: save_fundamentals_cache is
+# intentionally NOT gated — it's a system cache (not user data), and cache
+# warming on a viewer's visit is harmless/desirable.
+_READONLY = False
+
+def set_readonly(flag: bool) -> None:
+    global _READONLY
+    _READONLY = bool(flag)
+
+def is_readonly() -> bool:
+    return _READONLY
+
 
 def has_db() -> bool:
     """True when Supabase credentials are present in st.secrets."""
@@ -207,6 +222,7 @@ def save_holdings(df: pd.DataFrame) -> bool:
     first so a transient failure leaves the prior data intact, never wipes.
     Requires UNIQUE(ticker) on holdings (see one-time SQL at module top).
     """
+    if _READONLY: return False  # read-only viewer: no-op
     from stock_analyzer import api_health as _ah
     if not has_db():
         return False
@@ -321,6 +337,7 @@ def load_trades() -> pd.DataFrame:
 
 
 def save_trade(record: dict) -> bool:
+    if _READONLY: return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -332,6 +349,7 @@ def save_trade(record: dict) -> bool:
 
 
 def delete_trade(trade_id: int) -> bool:
+    if _READONLY: return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -349,6 +367,7 @@ def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
     Used by recalculate_from_trades() to correct stale figures stored on rows
     that were saved when holdings_df was in a corrupted state.
     """
+    if _READONLY: return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -536,6 +555,7 @@ def save_recommendations(records: list[dict]) -> dict:
     The DB defaults `surfaced_at` to now() — don't set it client-side so the
     first-seen timestamp is server-authoritative.
     """
+    if _READONLY: return {"attempted": 0, "saved": 0, "error": "read-only"}  # read-only viewer: no-op
     if not records or not has_db():
         return {"attempted": 0, "saved": 0, "error": None}
     payload = []
@@ -625,6 +645,7 @@ def save_watchlist(tickers: list[str]) -> bool:
     Building the deduped list first means malformed input never reaches the
     DB; the sweep at the end is idempotent.
     """
+    if _READONLY: return False  # read-only viewer: no-op
     cleaned: list[str] = []
     seen: set[str] = set()
     for t in tickers:
@@ -699,6 +720,7 @@ def save_manual_stop(ticker: str, stop_price: float,
                      note: str | None = None,
                      source_action: str | None = None) -> bool:
     """Upsert a manual stop for the ticker. Returns True on success."""
+    if _READONLY: return False  # read-only viewer: no-op
     t = str(ticker or "").upper().strip()
     try:
         sp = float(stop_price)
@@ -724,6 +746,7 @@ def save_manual_stop(ticker: str, stop_price: float,
 
 def clear_manual_stop(ticker: str) -> bool:
     """Remove the manual stop override for the ticker (revert to ATR)."""
+    if _READONLY: return False  # read-only viewer: no-op
     t = str(ticker or "").upper().strip()
     if not t or not has_db():
         return False
