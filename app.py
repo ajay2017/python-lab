@@ -3290,6 +3290,36 @@ if page == "🏠 Home":
                 st.caption(f"🛡️ {bear_msg}")
                 return
 
+            # Reach line: make the screening funnel visible — the brief draws
+            # from the curated SECTOR_UNIVERSE + watchlist + the broad discovery
+            # universe (movers pass), but only the finalists get composite-scored.
+            # Without this the user can't tell the engine looks beyond the
+            # ~70 curated names. Read-only; reflects what actually ran this session.
+            _sr_reach = st.session_state.get("scanner_results")
+            if _sr_reach is not None and not _sr_reach.empty:
+                _tracked_set = set().union(*SECTOR_UNIVERSE.values())
+                _tracked_n   = len(_tracked_set)
+                _wl_reach    = st.session_state.get("watchlist", []) or []
+                _wl_extra_n  = len([t for t in _wl_reach if str(t).upper() not in _tracked_set])
+                _disc_extra_n = len(discovery_tickers(exclude=_tracked_set))
+                _movers_ran  = "_movers_candidates" in st.session_state
+                _cov         = st.session_state.get("_grow_composites_coverage") or {}
+                _finalists_n = len(_cov.get("intended", []) or [])
+
+                _reach_parts = [f"{_tracked_n} tracked"]
+                if _wl_extra_n:
+                    _reach_parts.append(f"{_wl_extra_n} watchlist")
+                if _movers_ran:
+                    _reach_parts.append(f"{_disc_extra_n} discovery")
+                _reach_src = " + ".join(_reach_parts)
+                if _finalists_n:
+                    st.caption(
+                        f"🔭 Screened {_reach_src} names → "
+                        f"{_finalists_n} reached full composite scoring."
+                    )
+                else:
+                    st.caption(f"🔭 Screened {_reach_src} names — run Refresh Signals for a fresh pass.")
+
             # Composite-fetch failure banner — picks where load_all() couldn't
             # fetch composite data (yfinance transient errors, etc) are held
             # OUT of new_picks entirely (see daily_briefing.composite_unavailable).
@@ -3427,7 +3457,8 @@ if page == "🏠 Home":
                 if _gp.get("is_mover") and _gp.get("day_change") is not None:
                     _mover_badge = (
                         f"<span style='background:#052e16;border:1px solid #22c55e;color:#4ade80;"
-                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>"
+                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'"
+                        f" title='Surfaced from the broad ~200-name discovery universe — a breakout outside your tracked list'>"
                         f"🔥 +{_gp['day_change']:.1f}% today</span>"
                     )
 
