@@ -644,9 +644,11 @@ def _fill_news_slot(slot, items: list) -> None:
 # ── Password gate ─────────────────────────────────────────────────────────────
 def _check_password():
     try:
-        expected = st.secrets.get("app", {}).get("password", "")
+        expected    = st.secrets.get("app", {}).get("password", "")
+        ro_expected = st.secrets.get("app", {}).get("readonly_password", "")
     except Exception:
-        expected = ""
+        expected    = ""
+        ro_expected = ""
     if not expected or st.session_state.get("auth_ok"):
         return
     _render_brand(large=True)
@@ -654,7 +656,15 @@ def _check_password():
     pwd = st.text_input("Password", type="password")
     if st.button("Login", type="primary"):
         if pwd == expected:
-            st.session_state.auth_ok = True
+            # Owner password — full access; check FIRST so if both passwords are
+            # ever set equal, the owner always lands on the owner role.
+            st.session_state.auth_ok   = True
+            st.session_state["auth_role"] = "owner"
+            st.rerun()
+        elif ro_expected and pwd == ro_expected:
+            # Read-only password — viewer access.
+            st.session_state.auth_ok   = True
+            st.session_state["auth_role"] = "viewer"
             st.rerun()
         else:
             st.error("Incorrect password")
@@ -685,12 +695,15 @@ if not st.session_state.get("db_loaded"):
     st.session_state.db_loaded   = True
 
 # ── Read-only viewer mode ────────────────────────────────────────────────────
-# Owner-whitelist, FAIL-SAFE: emails listed in st.secrets["owner_emails"] get
-# full access; any OTHER authenticated viewer is read-only. Fails OPEN to full
-# access ONLY when unconfigured (no owner_emails) or the viewer email can't be
-# determined — bounded because this is a PRIVATE Streamlit deployment (only
-# allow-listed emails can open it). Real enforcement is db.set_readonly() (every
-# user-data write no-ops); the UI disabled= flags are UX on top of that backstop.
+# PRIMARY: login password role (auth_role="owner" → full access,
+# auth_role="viewer" → read-only). Set by _check_password() when the
+# optional readonly_password is configured in st.secrets["app"].
+# FALLBACK: when no password role is set (gate disabled / future email-auth
+# deployment), falls back to the owner-email allowlist. Fails OPEN to full
+# access when unconfigured or the viewer email can't be determined — bounded
+# because this is a PRIVATE Streamlit deployment. Real enforcement is
+# db.set_readonly() (every user-data write no-ops); the UI disabled= flags
+# are UX on top of that backstop.
 def _viewer_email() -> str:
     try:
         _u = getattr(st, "user", None)
@@ -713,8 +726,16 @@ if isinstance(_owner_raw, str):
     _owner_emails = [e.strip().lower() for e in _owner_raw.split(",") if e.strip()]
 else:
     _owner_emails = [str(e).strip().lower() for e in (_owner_raw or [])]
-_viewer_em = _viewer_email()
-_readonly_viewer = bool(_owner_emails) and bool(_viewer_em) and (_viewer_em not in _owner_emails)
+_viewer_em  = _viewer_email()
+_auth_role  = st.session_state.get("auth_role")
+if _auth_role == "viewer":
+    _readonly_viewer = True          # logged in with the read-only password
+elif _auth_role == "owner":
+    _readonly_viewer = False         # logged in with the owner password — full access
+else:
+    # No password role (gate disabled / email-auth deployment) — fall back to the
+    # owner-email allowlist; fails OPEN to full access when unconfigured/unknown.
+    _readonly_viewer = bool(_owner_emails) and bool(_viewer_em) and (_viewer_em not in _owner_emails)
 st.session_state["_readonly"] = _readonly_viewer
 db.set_readonly(_readonly_viewer)
 
