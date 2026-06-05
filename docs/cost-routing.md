@@ -56,12 +56,14 @@ are therefore **ballpark**.
 | 2026-06-04 | Lift candidate-funnel magic numbers into constants — build | Sonnet | 27,784 | ~$0.13 | ~$0.66 | ~$0.53 | Pure refactor, values unchanged; Opus designed + reviewed |
 | 2026-06-04 | Constants refactor — architecture.md table rows | — | — | — | — | n/a — lead | Inline doc edit alongside the review |
 | 2026-06-04 | This ledger (`docs/cost-routing.md`) — create + seed | — | — | — | — | n/a — lead | New doc; structure/framing is a design choice, not mechanical |
+| 2026-06-05 | Rate-limit resilience — scope + plan doc | — | — | — | — | n/a — lead | Architecture/design decision; mapped the data layer via Explore (read-only) |
+| 2026-06-05 | Rate-limit resilience Phase 1 — refresh cooldown (build) | Sonnet | 25,663 | ~$0.12 | ~$0.62 | ~$0.50 | Decided UI gating; Opus designed spec + reviewed diff |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 45,629 | ~$0.22 | ~$1.10 | **~$0.88 (≈80% on delegated slice)** |
+| **To date** | 71,292 | ~$0.34 | ~$1.72 | **~$1.38 (≈80% on delegated slice)** |
 
 ---
 

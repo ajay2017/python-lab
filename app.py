@@ -16,6 +16,7 @@ def _today_et():
     return datetime.now(_ET_TZ).date()
 
 import html as _html
+import time
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
@@ -60,6 +61,7 @@ from stock_analyzer.constants import (
     RR_ENTRY_MIN,
     CATALYST_WATCH_WINDOW_DAYS,
     GROW_CANDIDATE_POOL,
+    REFRESH_COOLDOWN_SEC,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -821,12 +823,26 @@ with st.sidebar:
             f"Prices & signals update when market opens."
         )
 
-    # Refresh button
-    if st.button("🔄 Refresh All Data", use_container_width=True):
+    # Refresh button (Phase 1 rate-limit cooldown — shared "data" bucket)
+    _rl_locked, _rl_rem = _refresh_gate("data")
+    if st.button(
+        "🔄 Refresh All Data",
+        use_container_width=True,
+        disabled=_rl_locked,
+        help=(
+            f"Cooling down — available in {_rl_rem}s. Providers are rate-limited; "
+            "waiting avoids burning the daily API budget."
+            if _rl_locked else
+            "Clears all cached data and re-fetches across every provider."
+        ),
+    ):
+        _refresh_gate_arm("data")
         _ah.reset()
         st.cache_data.clear()
         st.session_state.last_refresh = datetime.now()
         st.rerun()
+    if _rl_locked:
+        st.caption(f"⏳ Refresh cooling down — available in {_rl_rem}s")
 
     refresh_ago = int((datetime.now() - st.session_state.last_refresh).total_seconds())
     if refresh_ago < 60:
@@ -1082,6 +1098,26 @@ def _cached_scan_movers(exclude_key: tuple, min_gain: float):
     """
     tickers = discovery_tickers(exclude=set(exclude_key))
     return scan_movers(tickers, min_day_gain_pct=min_gain)
+
+
+def _refresh_gate(bucket: str) -> tuple[bool, int]:
+    """Cooldown gate shared by the heavy refresh buttons (Phase 1 rate-limit
+    resilience). Returns (locked, seconds_remaining). Buttons sharing a `bucket`
+    lock together — they all clear the cache and re-fetch across the same price
+    providers, so one press should cool down the others too. Call
+    `_refresh_gate_arm(bucket)` the instant a refresh fires.
+    The displayed countdown may be stale between reruns, but the lock is
+    recomputed from the timestamp on every render, so it always lifts correctly
+    once REFRESH_COOLDOWN_SEC has elapsed."""
+    armed = st.session_state.get(f"_refresh_armed_{bucket}")
+    if armed is None:
+        return (False, 0)
+    remaining = int(REFRESH_COOLDOWN_SEC - (time.time() - armed))
+    return (remaining > 0, max(remaining, 0))
+
+
+def _refresh_gate_arm(bucket: str) -> None:
+    st.session_state[f"_refresh_armed_{bucket}"] = time.time()
 
 
 def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = 4) -> dict:
@@ -3038,11 +3074,17 @@ if page == "🏠 Home":
         # ── Refresh Signals ───────────────────────────────────────────────────
         _rb_col, _ri_col = st.columns([1, 4])
         with _rb_col:
+            _rs_locked, _rs_rem = _refresh_gate("data")
             _do_refresh = st.button(
                 "🔄 Refresh Signals",
                 key="_db_refresh_signals",
                 use_container_width=True,
-                help="Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open.",
+                disabled=_rs_locked,
+                help=(
+                    f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
+                    if _rs_locked else
+                    "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
+                ),
             )
         with _ri_col:
             _sig_ts = st.session_state.get("_brief_signals_ts")
@@ -3060,6 +3102,7 @@ if page == "🏠 Home":
                     "to score today's price action."
                 )
         if _do_refresh:
+            _refresh_gate_arm("data")
             st.cache_data.clear()
             _wl_for_scan        = st.session_state.get("watchlist", []) or []
             _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
@@ -3351,8 +3394,13 @@ if page == "🏠 Home":
                         unsafe_allow_html=True,
                     )
                 with _bn_c2:
+                    _rg_locked, _rg_rem = _refresh_gate("data")
                     if st.button("🔁 Retry", key="_db_grow_retry_comp",
-                                 help="Clear cache and re-fetch composite data for the affected tickers"):
+                                 disabled=_rg_locked,
+                                 help=(f"Cooling down — available in {_rg_rem}s."
+                                       if _rg_locked else
+                                       "Clear cache and re-fetch composite data for the affected tickers")):
+                        _refresh_gate_arm("data")
                         st.cache_data.clear()
                         st.session_state.pop("_grow_composites", None)
                         st.session_state.pop("_grow_composites_coverage", None)

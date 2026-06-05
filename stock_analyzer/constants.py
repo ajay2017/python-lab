@@ -360,3 +360,11 @@ FUNDAMENTALS_GATE_MIN_METRICS = 1
 # value: forward_pe drifts daily with price, the rest are quarterly, so a week
 # keeps the verdict materially correct. Changing it is an investment-policy call.
 FUNDAMENTALS_CACHE_MAX_AGE_DAYS = 7
+
+# ── Rate-limit resilience ────────────────────────────────────────────────────
+# Cooldown (seconds) that the heavy refresh buttons (Refresh All Data / Refresh
+# Signals / Grow Retry) stay disabled after a press. Each of those does a full
+# st.cache_data.clear() + re-fetch across all price providers; hammering them
+# exhausts the free-tier API budgets (the 2026-06-05 incident). Operational
+# knob, not an investment threshold — safe to tune from observation.
+REFRESH_COOLDOWN_SEC = 60
