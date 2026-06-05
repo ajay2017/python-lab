@@ -24,24 +24,30 @@ dashboard. Read the scope notes before trusting a number.
 
 ## Price ladder (list prices, per 1M tokens)
 
-| Tier | Model | Input | Output | vs Opus |
-|---|---|---|---|---|
-| Plan / Review / Lead | Opus 4.8 | $15 | $75 | 1× (baseline) |
-| Build | Sonnet 4.6 | $3 | $15 | **exactly 1/5** |
-| Docs | Haiku 4.5 | $1 | $5 | **exactly 1/15** |
+> **Corrected 2026-06-05.** An earlier version of this ladder assumed Opus at
+> $15 / $75. Opus 4.8 list price is **$5 / $25**. That collapses the Opus↔Sonnet
+> gap: Sonnet is now **0.6×** Opus (not 0.2×), so delegated build saves ~40%, not
+> ~80%. Haiku is **0.2×** (saves ~80%). All figures below have been recomputed.
 
-Sonnet is 1/5 of Opus on **both** input and output, so delegated build work
-costs **exactly 20%** of the Opus price regardless of the input/output mix
-(Haiku ≈ 7%). The **ratio is mix-independent**; only the absolute-dollar columns
-below assume a mix (~85% input / 15% output, typical for read-heavy coding) and
-are therefore **ballpark**.
+| Tier | Model | Input | Output | vs Opus 4.8 |
+|---|---|---|---|---|
+| Plan / Review / Lead | Opus 4.8 | $5 | $25 | 1× (baseline) |
+| Build | Sonnet 4.6 | $3 | $15 | **0.6× (60%)** |
+| Docs | Haiku 4.5 | $1 | $5 | **0.2× (20%)** |
+
+Sonnet is **0.6×** of Opus 4.8 on **both** input ($3 vs $5) and output ($15 vs
+$25), so delegated build work costs **exactly 60%** of the Opus price regardless
+of the input/output mix — i.e. it **saves 40%**. Haiku is **0.2×** (saves 80%).
+The **ratio is mix-independent**; only the absolute-dollar columns below assume a
+mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
+**ballpark**.
 
 ## Conventions
 
 - One row per delegated task (or per inline decision worth recording).
 - **Tier** = the model that did the work.
-- **Saved** = Opus-equivalent cost − actual cost (≈ 80% of Opus-equiv for
-  Sonnet, ≈ 93% for Haiku). For inline lead work, mark `n/a — lead`.
+- **Saved** = Opus-equivalent cost − actual cost (≈ 40% of Opus-equiv for
+  Sonnet, ≈ 80% for Haiku). For inline lead work, mark `n/a — lead`.
 - Record **decisions NOT to delegate** too (one-liners done inline as lead), so
   the log doesn't imply we delegate everything.
 
@@ -51,19 +57,19 @@ are therefore **ballpark**.
 
 | Date | Task | Tier | Tokens | Est. cost | Opus-equiv | Saved | Notes |
 |---|---|---|---|---|---|---|---|
-| 2026-06-04 | Grow Today reach/funnel caption — build | Sonnet | 17,845 | ~$0.09 | ~$0.43 | ~$0.34 | Decided, mechanical UI edit; Opus designed + reviewed diff |
+| 2026-06-04 | Grow Today reach/funnel caption — build | Sonnet | 17,845 | ~$0.09 | ~$0.14 | ~$0.06 | Decided, mechanical UI edit; Opus designed + reviewed diff |
 | 2026-06-04 | Grow Today reach caption — Known-Behaviours doc row | — | — | — | — | n/a — lead | One-row doc edit; handoff overhead > saving, done inline |
-| 2026-06-04 | Lift candidate-funnel magic numbers into constants — build | Sonnet | 27,784 | ~$0.13 | ~$0.66 | ~$0.53 | Pure refactor, values unchanged; Opus designed + reviewed |
+| 2026-06-04 | Lift candidate-funnel magic numbers into constants — build | Sonnet | 27,784 | ~$0.13 | ~$0.22 | ~$0.09 | Pure refactor, values unchanged; Opus designed + reviewed |
 | 2026-06-04 | Constants refactor — architecture.md table rows | — | — | — | — | n/a — lead | Inline doc edit alongside the review |
 | 2026-06-04 | This ledger (`docs/cost-routing.md`) — create + seed | — | — | — | — | n/a — lead | New doc; structure/framing is a design choice, not mechanical |
 | 2026-06-05 | Rate-limit resilience — scope + plan doc | — | — | — | — | n/a — lead | Architecture/design decision; mapped the data layer via Explore (read-only) |
-| 2026-06-05 | Rate-limit resilience Phase 1 — refresh cooldown (build) | Sonnet | 25,663 | ~$0.12 | ~$0.62 | ~$0.50 | Decided UI gating; Opus designed spec + reviewed diff |
+| 2026-06-05 | Rate-limit resilience Phase 1 — refresh cooldown (build) | Sonnet | 25,663 | ~$0.12 | ~$0.21 | ~$0.08 | Decided UI gating; Opus designed spec + reviewed diff |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 71,292 | ~$0.34 | ~$1.72 | **~$1.38 (≈80% on delegated slice)** |
+| **To date** | 71,292 | ~$0.34 | ~$0.57 | **~$0.23 (≈40% on delegated slice)** |
 
 ---
 
@@ -77,5 +83,16 @@ judgment-heavy day is the routing working correctly, not a miss.
 
 Savings that never appear in tokens — and are arguably the real ROI: the Opus
 review tier catching problems before they reach the live app (e.g. a `None`
-sector bug, a read-only race, a leaked API key were all caught pre-commit),
-plus context hygiene and faster iteration on the mechanical parts.
+sector bug, a read-only race, a leaked API key were all caught pre-commit, and a
+def-order NameError that *slipped* the gate on 2026-06-05 sharpened the review
+checklist), plus context hygiene and faster iteration on the mechanical parts.
+
+**Implication of the corrected pricing (2026-06-05):** with Opus 4.8 at $5/$25,
+Build→Sonnet now saves only **~40%** (was ~80% under the wrong $15/$75
+assumption). That thinner margin means handoff overhead (a subagent re-reads
+context cold) eats a bigger fraction of the saving — so the bar for delegating a
+*small* build to Sonnet is higher than before; tiny edits are often cheaper done
+inline as lead. The strong-saving lane is now **Docs→Haiku (~80%)**, and the
+durable case for keeping Opus on plan/review (catching the costly mistakes) is
+unchanged. Net: route for *quality and context hygiene* first, dollars second —
+the dollar gap is no longer the headline it looked like.
