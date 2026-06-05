@@ -14819,6 +14819,23 @@ elif page == "📖 User Guide":
 """
         )
 
+    with st.expander("🚀 First run — start here: get your data in first", expanded=False):
+        st.markdown(
+            """
+**The single most important step — do this before trusting anything.** This app *decides*; it issues confident buy / sell / trim calls. If it doesn't know what you actually hold, or has the wrong cost basis, it will be **confidently wrong** — recommending you buy what you already own, miscomputing your concentration and position sizing, setting a stop off a bad basis, or misstating your P&L. **Garbage in → confident garbage out.** Populate your data *first*.
+
+**The order of operations:**
+
+1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates.
+2. **Reconcile against your broker.** Confirm share counts and average cost match your brokerage *exactly*. The Trade Journal runs a **drift check** and flags mismatches (a SELL with no prior BUY, or a stored P&L that disagrees with the replayed history); use **🔄 Rebuild holdings & realized P&L** to preview and apply the correction. Wrong basis → wrong P&L → wrong trim/stop advice.
+3. **(Optional) Add Watchlist names** — **📋 Watchlist** — anything you're tracking but don't yet hold, so the scanner and brief include them.
+4. **Refresh signals** — **🏠 Home → Refresh Signals** — let live prices, composite scores, and risk metrics populate for your names.
+5. **Now read the Brief / Grow Today / Risk.** Only after steps 1–4 is the intelligence computed on *complete, correct* data — and only then are the recommendations trustworthy.
+
+*Persistence:* trades save to your database and carry across sessions; with no database connected they last only the current session (a one-time owner setup).
+"""
+        )
+
     with st.expander("🏠 Reading Today's Brief", expanded=False):
         st.markdown(
             """
