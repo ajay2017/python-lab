@@ -14835,6 +14835,28 @@ The Home brief is split into **offense** (left) and **defense** (right).
 """
         )
 
+    with st.expander("🔭 How the app finds candidates (where tickers come from)", expanded=False):
+        st.markdown(
+            """
+Two separate questions live here — keeping them apart answers most *"why didn't X show up?"* puzzles:
+
+**1. What gets *scanned* (the universe).** Each time signals refresh, the app screens:
+- **~70 curated names** across 12 sectors (the core list the scanner runs daily),
+- **your Watchlist**, and
+- a broad **~200-name "discovery" universe** of liquid large/mid-caps, swept for big 1-day movers so a breakout in a name you *don't* track can still surface.
+
+The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tracked + N watchlist + N discovery names → N reached full composite scoring"* — so you can always see how wide the net was that day.
+
+**2. What gets *recommended* (the gates).** Of everything scanned, only names that clear **Composite ≥ 65** *and* pass the gates (sector cap, single-name ceiling, imminent-macro, …) become **Grow Today → "New Positions to Initiate."** The funnel:
+
+> **scanned (~270)** → ranked by momentum → **finalists composite-scored** → cleared the gates → **recommended**
+
+**"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Fundamental + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
+
+**What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page.
+"""
+        )
+
     with st.expander("🧮 How stocks are scored", expanded=False):
         st.markdown(
             """
