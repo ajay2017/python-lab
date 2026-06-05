@@ -742,6 +742,30 @@ else:
 st.session_state["_readonly"] = _readonly_viewer
 db.set_readonly(_readonly_viewer)
 
+# ── Refresh cooldown helpers (Phase 1 rate-limit resilience) ────────────────
+# MUST be defined before the sidebar block below — the refresh buttons there
+# call these at module-execution time, and Python resolves names top-to-bottom,
+# so a later definition would NameError on first run.
+def _refresh_gate(bucket: str) -> tuple[bool, int]:
+    """Cooldown gate shared by the heavy refresh buttons (Phase 1 rate-limit
+    resilience). Returns (locked, seconds_remaining). Buttons sharing a `bucket`
+    lock together — they all clear the cache and re-fetch across the same price
+    providers, so one press should cool down the others too. Call
+    `_refresh_gate_arm(bucket)` the instant a refresh fires.
+    The displayed countdown may be stale between reruns, but the lock is
+    recomputed from the timestamp on every render, so it always lifts correctly
+    once REFRESH_COOLDOWN_SEC has elapsed."""
+    armed = st.session_state.get(f"_refresh_armed_{bucket}")
+    if armed is None:
+        return (False, 0)
+    remaining = int(REFRESH_COOLDOWN_SEC - (time.time() - armed))
+    return (remaining > 0, max(remaining, 0))
+
+
+def _refresh_gate_arm(bucket: str) -> None:
+    st.session_state[f"_refresh_armed_{bucket}"] = time.time()
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     # ── Portfolio value banner — always at the very top ──────────────────
@@ -1098,26 +1122,6 @@ def _cached_scan_movers(exclude_key: tuple, min_gain: float):
     """
     tickers = discovery_tickers(exclude=set(exclude_key))
     return scan_movers(tickers, min_day_gain_pct=min_gain)
-
-
-def _refresh_gate(bucket: str) -> tuple[bool, int]:
-    """Cooldown gate shared by the heavy refresh buttons (Phase 1 rate-limit
-    resilience). Returns (locked, seconds_remaining). Buttons sharing a `bucket`
-    lock together — they all clear the cache and re-fetch across the same price
-    providers, so one press should cool down the others too. Call
-    `_refresh_gate_arm(bucket)` the instant a refresh fires.
-    The displayed countdown may be stale between reruns, but the lock is
-    recomputed from the timestamp on every render, so it always lifts correctly
-    once REFRESH_COOLDOWN_SEC has elapsed."""
-    armed = st.session_state.get(f"_refresh_armed_{bucket}")
-    if armed is None:
-        return (False, 0)
-    remaining = int(REFRESH_COOLDOWN_SEC - (time.time() - armed))
-    return (remaining > 0, max(remaining, 0))
-
-
-def _refresh_gate_arm(bucket: str) -> None:
-    st.session_state[f"_refresh_armed_{bucket}"] = time.time()
 
 
 def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = 4) -> dict:
