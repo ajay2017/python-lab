@@ -14841,11 +14841,15 @@ The Home brief is split into **offense** (left) and **defense** (right).
 Two separate questions live here — keeping them apart answers most *"why didn't X show up?"* puzzles:
 
 **1. What gets *scanned* (the universe).** Each time signals refresh, the app screens:
-- **~70 curated names** across 12 sectors (the core list the scanner runs daily),
+- **~80 curated names** across 12 sectors (the core list the scanner runs daily),
 - **your Watchlist**, and
 - a broad **~200-name "discovery" universe** of liquid large/mid-caps, swept for big 1-day movers so a breakout in a name you *don't* track can still surface.
 
 The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tracked + N watchlist + N discovery names → N reached full composite scoring"* — so you can always see how wide the net was that day.
+
+**Two places this happens — don't mix them up:**
+- **🏠 Home → "Refresh Signals"** runs the *full* sweep above — curated **+** watchlist **+** the ~200-name discovery movers — and feeds **Grow Today**.
+- **🔍 Market Scanner page** is a separate *manual* tool: it scans only the curated names you select **+ your watchlist** (~85), ranked by momentum. It does **not** include the discovery sweep. So a breakout in an *untracked* name appears on the **Home brief (Grow Today / More Buy Candidates)** — *not* on the Market Scanner page.
 
 **2. What gets *recommended* (the gates).** Of everything scanned, only names that clear **Composite ≥ 65** *and* pass the gates (sector cap, single-name ceiling, imminent-macro, …) become **Grow Today → "New Positions to Initiate."** The funnel:
 
