@@ -67,6 +67,7 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-05 | User Guide — "how candidates are found" explainer | — | — | — | — | n/a — lead | Content + engine-accuracy = judgment, not a mechanical doc row; a Haiku handoff would've needed a spec as detailed as the content, so done inline |
 | 2026-06-05 | User Guide — "first run / data-population order" section | — | — | — | — | n/a — lead | Correctness-critical onboarding content; grounded in real UI affordances (Trade Journal, Rebuild flow); done inline as lead |
 | 2026-06-08 | Grow Today funnel-caption fix (macro-blocked mislabel + "16 of 12" arithmetic) | — | — | — | — | n/a — lead | Small, fully-designed display-logic fix; per corrected pricing the ~40% Sonnet margin isn't worth the handoff on a one-spot edit |
+| 2026-06-08 | Grow Today: macro block count/overflow (16-vs-4) + macro-aware empty-state CTA (hide futile re-scan) | — | — | — | — | n/a — lead | Two small display-only fixes from the same review thread; done inline as lead |
 
 ### Running totals (delegated work only)
 

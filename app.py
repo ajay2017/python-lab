@@ -3468,10 +3468,16 @@ if page == "🏠 Home":
                         )
                     else:
                         _macro_note = ""
+                    # When the emptiness is macro-driven, a re-scan can't un-block
+                    # the suppressed names — so don't suggest one (§2B calm).
+                    _tail = (
+                        "These re-evaluate automatically once the event resolves."
+                        if _macro_n else
+                        "Run Market Scanner for a fresh pass."
+                    )
                     st.caption(
                         f"Today's scan: none of the scored candidates cleared the "
-                        f"buy threshold{_funnel}.{_macro_note} "
-                        "Run Market Scanner for a fresh pass."
+                        f"buy threshold{_funnel}.{_macro_note} {_tail}"
                     )
                 elif tone == "bull":
                     st.caption(
@@ -3482,7 +3488,11 @@ if page == "🏠 Home":
                     st.caption(
                         "Flat market — waiting for clearer direction before adding new positions."
                     )
-                if tone == "bull":
+                # Hide the re-scan CTA when emptiness is macro-driven — a fresh
+                # scan can't un-block names suppressed for an imminent event, so
+                # prompting it is a futile action (§2B calm). The sidebar nav
+                # still reaches the Market Scanner page.
+                if tone == "bull" and not macro_blocked:
                     if st.button("🔍 Run Market Scanner", key="_db_grow_scanner"):
                         st.session_state["_pending_page"] = "🔍 Market Scanner"
                         st.rerun()
@@ -3735,16 +3745,23 @@ if page == "🏠 Home":
 
             # Macro-blocked picks — sector has imminent HIGH-impact catalyst.
             if macro_blocked:
+                _mb_shown = macro_blocked[:4]
+                _mb_extra = len(macro_blocked) - len(_mb_shown)
                 _mb_rows = "".join(
                     f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
                     f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
-                    for b in macro_blocked[:4]
+                    for b in _mb_shown
                 )
+                if _mb_extra > 0:
+                    _mb_rows += (
+                        f"<div style='color:#fcd34d;font-size:0.79em;opacity:0.85'>"
+                        f"• …and {_mb_extra} more in affected sectors</div>"
+                    )
                 st.markdown(
                     "<div style='background:#422006;border:1px solid #f59e0b;"
                     "border-radius:8px;padding:8px 14px;margin-top:12px;margin-bottom:8px'>"
                     "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    "🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event</div>"
+                    f"🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event ({len(macro_blocked)})</div>"
                     + _mb_rows
                     + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
                     "These sectors have a HIGH-impact macro release within "
