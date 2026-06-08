@@ -3440,22 +3440,37 @@ if page == "🏠 Home":
                 # and the user has no way to know those are different things).
                 _comp_cov     = st.session_state.get("_grow_composites_coverage") or {}
                 _scanned_n    = len(_comp_cov.get("intended", []) or [])
-                _rejected_n   = len(comp_skipped) + len(macro_blocked)
+                # Keep these SEPARATE. composite_skipped = reached full scoring but
+                # fell below the Buy bar (a merit rejection). macro_blocked = MET
+                # the criteria (often top momentum) but were suppressed ONLY for an
+                # imminent macro event — they get their own detailed block below.
+                # Lumping the two as "didn't meet criteria" both mislabelled the
+                # macro picks (a score-100 name did NOT fail on merit) and broke
+                # the arithmetic (the combined count could exceed the count
+                # actually evaluated, e.g. "of 12 evaluated, 16 didn't meet…").
+                _belowbar_n   = len(comp_skipped)
+                _macro_n      = len(macro_blocked)
                 _couldnt_n    = len(comp_unavail)
                 if _scanned_n > 0 and tone == "bull":
                     _funnel_parts = []
-                    if _rejected_n:
-                        _funnel_parts.append(
-                            f"{_rejected_n} didn't meet criteria"
-                        )
+                    if _belowbar_n:
+                        _funnel_parts.append(f"{_belowbar_n} fell below it")
                     if _couldnt_n:
                         _funnel_parts.append(
                             f"{_couldnt_n} couldn't be scored (see banner above)"
                         )
                     _funnel = f" ({'; '.join(_funnel_parts)})" if _funnel_parts else ""
+                    if _macro_n:
+                        _mp_word = "pick was" if _macro_n == 1 else "picks were"
+                        _macro_note = (
+                            f" Separately, {_macro_n} strong {_mp_word} suppressed "
+                            "for an imminent macro event (see below)."
+                        )
+                    else:
+                        _macro_note = ""
                     st.caption(
-                        f"Today's scan: of {_scanned_n} candidates evaluated, "
-                        f"none cleared the buy threshold{_funnel}. "
+                        f"Today's scan: none of the scored candidates cleared the "
+                        f"buy threshold{_funnel}.{_macro_note} "
                         "Run Market Scanner for a fresh pass."
                     )
                 elif tone == "bull":

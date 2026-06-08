@@ -66,6 +66,7 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-05 | Rate-limit resilience Phase 1 — refresh cooldown (build) | Sonnet | 25,663 | ~$0.12 | ~$0.21 | ~$0.08 | Decided UI gating; Opus designed spec + reviewed diff |
 | 2026-06-05 | User Guide — "how candidates are found" explainer | — | — | — | — | n/a — lead | Content + engine-accuracy = judgment, not a mechanical doc row; a Haiku handoff would've needed a spec as detailed as the content, so done inline |
 | 2026-06-05 | User Guide — "first run / data-population order" section | — | — | — | — | n/a — lead | Correctness-critical onboarding content; grounded in real UI affordances (Trade Journal, Rebuild flow); done inline as lead |
+| 2026-06-08 | Grow Today funnel-caption fix (macro-blocked mislabel + "16 of 12" arithmetic) | — | — | — | — | n/a — lead | Small, fully-designed display-logic fix; per corrected pricing the ~40% Sonnet margin isn't worth the handoff on a one-spot edit |
 
 ### Running totals (delegated work only)
 
