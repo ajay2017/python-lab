@@ -9624,7 +9624,7 @@ elif page == "📈 Analysis":
         price = r["current_price"]
         targets = r["targets"]
         ps = (
-            position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"])
+            position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING)
             if price and r["stop"] and price > r["stop"] else None
         )
         rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
@@ -9766,7 +9766,7 @@ elif page == "📈 Analysis":
             price = r["current_price"]
             targets = r["targets"]
             ps = (
-                position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"])
+                position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING)
                 if price and r["stop"] and price > r["stop"] else None
             )
             sr = r["sr"]
@@ -10239,12 +10239,21 @@ elif page == "📈 Analysis":
                         p1.metric("Shares", f"{ps['shares']:,}", help=_tip("Position Sizing"))
                         p2.metric("Investment", f"${ps['total_cost']:,.0f}",
                                   f"{ps['portfolio_pct']:.1f}% of portfolio",
+                                  delta_color="off",
                                   help=_tip("Position Sizing"))
                         p3.metric("Max Risk", f"${ps['actual_risk']:,.0f}",
                                   f"{ps['risk_pct_actual']:.2f}%", delta_color="inverse",
                                   help="Maximum dollar loss if stop is hit. Should not exceed 1.5–2% of portfolio.")
                         p4.metric("Risk/Share", f"${ps['risk_per_share']:.2f}",
                                   help="Dollar distance from entry to stop per share.")
+                        if ps.get("ceiling_capped"):
+                            st.warning(
+                                f"⚠️ **Capped to your {ps['ceiling_pct']:.0f}% single-name ceiling.** "
+                                f"A pure risk-based size would be **{ps['uncapped_shares']:,} shares "
+                                f"(~{ps['uncapped_pct']:.0f}% of portfolio)** — over the ceiling, because the "
+                                "stop is tight, so the risk-budget math inflates the dollar size. The figures "
+                                f"above are capped to **{ps['shares']:,} shares (~{ps['portfolio_pct']:.0f}%)**."
+                            )
 
                         # Beta envelope check — warn when adding this position would push
                         # an already-elevated portfolio beta materially higher
@@ -10770,7 +10779,7 @@ elif page == "📈 Analysis":
         for ticker, r in results.items():
             price = r["current_price"]
             targets = r["targets"]
-            ps = (position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"])
+            ps = (position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING)
                   if price and r["stop"] and price > r["stop"] else None)
             rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
             rm = r["risk_metrics"]
@@ -10996,7 +11005,7 @@ elif page == "📋 Watchlist":
         _wl_ps = None
         if _price and _stop and _price > _stop and _pv_now > 0:
             try:
-                _wl_ps = position_sizing(_pv_now, MODERATE_RISK_PCT, _price, _stop)
+                _wl_ps = position_sizing(_pv_now, MODERATE_RISK_PCT, _price, _stop, SINGLE_NAME_CEILING)
             except Exception:
                 pass
 
@@ -11100,6 +11109,12 @@ elif page == "📋 Watchlist":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                    if _wl_ps and _wl_ps.get("ceiling_capped"):
+                        st.caption(
+                            f"↳ capped to {_wl_ps['ceiling_pct']:.0f}% single-name ceiling "
+                            f"(risk-based would be {_wl_ps['uncapped_shares']:,} sh / "
+                            f"~{_wl_ps['uncapped_pct']:.0f}%)"
+                        )
                 elif _price:
                     st.caption("Position sizing unavailable — stop price too close to entry or not set.")
 

@@ -68,12 +68,13 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-05 | User Guide — "first run / data-population order" section | — | — | — | — | n/a — lead | Correctness-critical onboarding content; grounded in real UI affordances (Trade Journal, Rebuild flow); done inline as lead |
 | 2026-06-08 | Grow Today funnel-caption fix (macro-blocked mislabel + "16 of 12" arithmetic) | — | — | — | — | n/a — lead | Small, fully-designed display-logic fix; per corrected pricing the ~40% Sonnet margin isn't worth the handoff on a one-spot edit |
 | 2026-06-08 | Grow Today: macro block count/overflow (16-vs-4) + macro-aware empty-state CTA (hide futile re-scan) | — | — | — | — | n/a — lead | Two small display-only fixes from the same review thread; done inline as lead |
+| 2026-06-08 | Position sizing — single-name ceiling cap + warning (risk.py + 4 call sites + Trade Plan/Watchlist UI) | Sonnet | 25,065 | ~$0.12 | ~$0.20 | ~$0.08 | Risk-discipline fix touching sizing logic; Opus scoped the spec + reviewed the diff before commit |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 71,292 | ~$0.34 | ~$0.57 | **~$0.23 (≈40% on delegated slice)** |
+| **To date** | 96,357 | ~$0.46 | ~$0.77 | **~$0.31 (≈40% on delegated slice)** |
 
 ---
 

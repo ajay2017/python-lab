@@ -19,24 +19,45 @@ def atr_stop_loss(df: pd.DataFrame, multiplier: float = 2.0) -> tuple[float, flo
 
 
 def position_sizing(
-    portfolio_value: float, risk_pct: float, entry: float, stop: float
+    portfolio_value: float, risk_pct: float, entry: float, stop: float,
+    max_position_pct: float | None = None,
 ) -> dict | None:
     if entry <= stop or stop <= 0:
         return None
-    risk_dollars = portfolio_value * risk_pct
+    risk_dollars   = portfolio_value * risk_pct
     risk_per_share = entry - stop
-    shares = max(1, int(risk_dollars / risk_per_share))
-    total_cost = round(shares * entry, 2)
+    risk_based_shares = max(1, int(risk_dollars / risk_per_share))
+
+    # Single-name concentration cap. With a tight stop the risk-budget math can
+    # balloon the DOLLAR position well past the single-name ceiling (e.g. a 3%
+    # stop on a high-priced name → 40%+ of the book). Never SUGGEST a size that
+    # breaches the ceiling the rest of the app enforces; cap it and flag, so the
+    # UI can show the capped figure plus what the uncapped size would have been.
+    shares = risk_based_shares
+    ceiling_capped = False
+    if max_position_pct is not None and portfolio_value > 0 and entry > 0:
+        ceiling_shares = max(1, int((portfolio_value * (max_position_pct / 100.0)) / entry))
+        if shares > ceiling_shares:
+            shares = ceiling_shares
+            ceiling_capped = True
+
+    total_cost  = round(shares * entry, 2)
     actual_risk = round(shares * risk_per_share, 2)
-    return {
+    out = {
         "shares": shares,
         "risk_budget": round(risk_dollars, 2),
         "actual_risk": actual_risk,
         "risk_per_share": round(risk_per_share, 2),
         "total_cost": total_cost,
-        "portfolio_pct": round(total_cost / portfolio_value * 100, 1),
-        "risk_pct_actual": round(actual_risk / portfolio_value * 100, 2),
+        "portfolio_pct": round(total_cost / portfolio_value * 100, 1) if portfolio_value else 0.0,
+        "risk_pct_actual": round(actual_risk / portfolio_value * 100, 2) if portfolio_value else 0.0,
     }
+    if max_position_pct is not None:
+        out["ceiling_pct"]     = max_position_pct
+        out["ceiling_capped"]  = ceiling_capped
+        out["uncapped_shares"] = risk_based_shares
+        out["uncapped_pct"]    = round(risk_based_shares * entry / portfolio_value * 100, 1) if portfolio_value else 0.0
+    return out
 
 
 def sharpe_ratio(df: pd.DataFrame, risk_free_annual: float = 0.045) -> float:
