@@ -139,9 +139,42 @@ api_key = "..."                     # optional, enriches macro calendar with rel
 git pull
 # edit code
 git add <files>
-git commit -m "Short imperative summary"
+git commit -m "type(scope): short imperative summary"   # see Commit messages below
 git push
 # wait ~2 min, hard-refresh deployed app
+```
+
+### Commit messages (Conventional Commits)
+
+Standard format so history stays readable and tooling-friendly:
+
+```
+type(scope): summary
+
+Body — what changed and especially WHY (wrap ~72). Bullets fine.
+
+BREAKING CHANGE: ...        # if applicable
+Refs #123                   # if applicable
+```
+
+- **type**: `feat` | `fix` | `docs` | `refactor` | `perf` | `test` | `build` | `ci` | `chore` | `revert`
+- **scope** (optional): the area — e.g. `pnl`, `brief`, `risk`, `db`, `constants`, `scanner`, `ui`
+- **summary**: imperative mood, lowercase, ≤72 chars, no trailing period
+- **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — say so in the body and name the constant + old→new value
+- Claude-authored commits end with: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+
+One-time setup per clone (wires the editor to pre-fill the format from `.gitmessage.txt`):
+
+```
+git config commit.template .gitmessage.txt
+```
+
+Examples:
+
+```
+feat(pnl): add Tier B true day-over-day P&L
+fix(brief): split macro-blocked names out of the funnel caption
+docs(architecture): record the fragility gauge
 ```
 
 ### Quick syntax check before pushing

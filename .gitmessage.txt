@@ -1,0 +1,18 @@
+# type(scope): summary   — imperative, lowercase, ≤72 chars, no trailing period
+#
+# Body: WHAT changed and especially WHY (wrap ~72 cols). Bullets fine.
+#
+# Footer: BREAKING CHANGE: <desc>  ·  Refs #<issue>  ·  trailers
+#
+# ── Conventional Commits ──────────────────────────────────────────────────
+#   type:  feat | fix | docs | refactor | perf | test | build | ci | chore | revert
+#   scope: optional area — pnl · brief · risk · db · constants · scanner · ui
+#   e.g.   feat(pnl): add Tier B true day-over-day P&L
+#          fix(brief): split macro-blocked names out of the funnel caption
+#          docs(architecture): record the fragility gauge
+#
+# ── DRISHTA rules ──────────────────────────────────────────────────────────
+#   • Threshold/gate changes (stock_analyzer/constants.py) are investment-policy
+#     decisions — name the constant + old→new value in the body.
+#   • Claude-authored commits end with:
+#       Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

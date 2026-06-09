@@ -77,6 +77,7 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-09 | Today's P&L honesty (Fix A) — relabel "(held)" + scope tooltip + fail-loud "N of M priced" caption | — | — | — | — | n/a — lead | Correctness/honesty fix; computed number byte-for-byte unchanged (no decision logic/threshold). Diagnosed -0.57% vs broker -5% as held-only-mark scope (excludes today's realized trades). Inline as lead |
 | 2026-06-09 | Tier B — TRUE positions day-P&L (new daily_pnl.py equity-delta + daily_snapshots table I/O + app.py wiring) | — | — | — | — | n/a — lead | Correctness-critical P&L + new DB writer; built inline as lead (judgment-heavy: equity-delta design, baseline/tz logic, snapshot-write timing). Unit-tested the pure math |
 | 2026-06-09 | Tier B — Opus review (2 rounds) | — | — | — | — | n/a — lead | Mandatory review (P&L + DB writer + RLS). Round 1 caught a BLOCKER: `not is_open` write gate fired in pre-market → persisted stale prior-close as the baseline + blocked the real post-close write. Round 2 verified the post-close-window fix → SHIP |
+| 2026-06-09 | Adopt Conventional Commits standard — .gitmessage template + DEVELOPMENT.md spec + CLAUDE.md pointer | — | — | — | — | n/a — lead | Process/docs; defining the convention is judgment, not a mechanical doc row. Template+docs only (no hook), per user choice |
 
 ### Running totals (delegated work only)
 
