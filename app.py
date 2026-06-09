@@ -3081,68 +3081,74 @@ if page == "🏠 Home":
         if not mkt["is_open"] and _db_last_close != _today_et():
             _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
 
-        st.markdown(
-            f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
-            f"border-radius:12px;padding:14px 20px;margin-bottom:12px'>"
-            f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
-            f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
-            f"{_tone_label}</span>"
-            f"<span style='color:#9ca3af;font-size:0.8em'>"
-            f"{_db_date_str}</span>"
-            f"</div>"
-            f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
-            f"{_sp_str} · {_nq_str}{_lead_str}</div>"
-            f"<div style='color:#9ca3af;font-size:0.77em;margin-top:4px'>"
-            f"{len(_db_act)} urgent action{'s' if len(_db_act) != 1 else ''} · "
-            f"{len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))} growth setup{'s' if (len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))) != 1 else ''} · "
-            f"{len(_db_review)} to review before close</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        # ── Fragility gauge — how a routine pullback would hit THIS book ───────
-        # Exposure, not a forecast. Turns the stress-test "Mild Correction" result
-        # into a standing one-line read so portfolio fragility is visible BEFORE a
-        # down day, not just on the Stress Testing page after one.
-        _frag = st.session_state.get("_fragility_cache")
-        if _frag:
-            _fg_sev   = _frag["severity"]
-            _fg_color = {"calm": "#1c1917", "caution": "#78350f", "fragile": "#7f1d1d"}[_fg_sev]
-            _fg_bdr   = {"calm": "#4b5563", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
-            _fg_icon  = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
-            _fg_lead  = {
-                "calm":    "Your book moves roughly with the market.",
-                "caution": "Your book is more volatile than the market.",
-                "fragile": "Your book is fragile to a pullback.",
-            }[_fg_sev]
-            _fg_why  = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
-            _fg_mult = f" · about <b>{_frag['mult']:.1f}×</b> the market's move" if _frag.get("mult") else ""
+        # ── Market tone + fragility, side by side ─────────────────────────────
+        # The market context (left) and YOUR exposure to it (right) are a natural
+        # pair — show them together to keep the brief header compact. Matched
+        # padding + min-height so the two cards align cleanly across the columns.
+        _tone_col, _frag_col = st.columns(2)
+        with _tone_col:
             st.markdown(
-                f"<div style='background:{_fg_color};border:1px solid {_fg_bdr};"
-                f"border-radius:12px;padding:12px 18px;margin-bottom:12px'>"
-                f"<span style='font-size:1.0em;font-weight:700;color:#f9fafb'>"
-                f"{_fg_icon} {_fg_lead}</span>"
+                f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
+                f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px'>"
+                f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
+                f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
+                f"{_tone_label}</span>"
+                f"<span style='color:#9ca3af;font-size:0.8em'>"
+                f"{_db_date_str}</span>"
+                f"</div>"
                 f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
-                f"A routine {abs(_frag['pullback_pct']):.0f}% market pullback would take your book to roughly "
-                f"<b>{_frag['implied_move']:+.0f}%</b>{_fg_mult}{_fg_why}</div>"
-                f"<div style='color:#9ca3af;font-size:0.74em;margin-top:4px'>"
-                f"Exposure if a pullback hits — not a forecast of when. "
-                f"Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>"
+                f"{_sp_str} · {_nq_str}{_lead_str}</div>"
+                f"<div style='color:#9ca3af;font-size:0.77em;margin-top:4px'>"
+                f"{len(_db_act)} urgent action{'s' if len(_db_act) != 1 else ''} · "
+                f"{len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))} growth setup{'s' if (len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))) != 1 else ''} · "
+                f"{len(_db_review)} to review before close</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
-        elif not port_df.empty:
-            # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
-            # computed — say so rather than imply zero exposure. Matches the
-            # fundamentals-gate "withhold with a visible reason" precedent.
-            st.markdown(
-                "<div style='background:#1c1917;border:1px solid #4b5563;"
-                "border-radius:12px;padding:10px 18px;margin-bottom:12px;"
-                "color:#9ca3af;font-size:0.8em'>"
-                "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
-                "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
-                unsafe_allow_html=True,
-            )
+
+        # Fragility gauge — how a routine pullback would hit THIS book. Exposure,
+        # not a forecast; reuses the stress-test "Mild Correction" result. Sits
+        # beside the tone banner so market + your exposure read together.
+        with _frag_col:
+            _frag = st.session_state.get("_fragility_cache")
+            if _frag:
+                _fg_sev   = _frag["severity"]
+                _fg_color = {"calm": "#1c1917", "caution": "#78350f", "fragile": "#7f1d1d"}[_fg_sev]
+                _fg_bdr   = {"calm": "#4b5563", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
+                _fg_icon  = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
+                _fg_lead  = {
+                    "calm":    "Your book moves roughly with the market.",
+                    "caution": "Your book is more volatile than the market.",
+                    "fragile": "Your book is fragile to a pullback.",
+                }[_fg_sev]
+                _fg_why  = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
+                _fg_mult = f" · about <b>{_frag['mult']:.1f}×</b> the market's move" if _frag.get("mult") else ""
+                st.markdown(
+                    f"<div style='background:{_fg_color};border:1px solid {_fg_bdr};"
+                    f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px'>"
+                    f"<span style='font-size:1.0em;font-weight:700;color:#f9fafb'>"
+                    f"{_fg_icon} {_fg_lead}</span>"
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
+                    f"A routine {abs(_frag['pullback_pct']):.0f}% market pullback would take your book to roughly "
+                    f"<b>{_frag['implied_move']:+.0f}%</b>{_fg_mult}{_fg_why}</div>"
+                    f"<div style='color:#9ca3af;font-size:0.74em;margin-top:4px'>"
+                    f"Exposure if a pullback hits — not a forecast of when. "
+                    f"Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            elif not port_df.empty:
+                # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
+                # computed — say so rather than imply zero exposure. Matches the
+                # fundamentals-gate "withhold with a visible reason" precedent.
+                st.markdown(
+                    "<div style='background:#1c1917;border:1px solid #4b5563;"
+                    "border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px;"
+                    "color:#9ca3af;font-size:0.8em'>"
+                    "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
+                    "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                    unsafe_allow_html=True,
+                )
 
         # ── Refresh Signals ───────────────────────────────────────────────────
         _rb_col, _ri_col = st.columns([1, 4])
@@ -3214,17 +3220,17 @@ if page == "🏠 Home":
             else:
                 st.warning("Scanner returned no results — check your connection and try again.")
 
-        # ── Quick Research ────────────────────────────────────────────────────
-        st.markdown(
-            "<div style='background:#111827;border:1px solid #374151;"
-            "border-radius:10px;padding:12px 16px;margin-bottom:12px'>"
-            "<div style='display:flex;align-items:center;gap:10px;margin-bottom:8px'>"
-            "<span style='color:#f9fafb;font-size:0.95em;font-weight:700'>🔍 Research a Stock</span>"
-            "<span style='color:#6b7280;font-size:0.8em'>Spot a news catalyst? Enter any ticker for an instant actionable summary.</span>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        _qr_ic1, _qr_ic2 = st.columns([5, 1])
+        # ── Quick Research — label · input · button on one row ────────────────
+        # Collapsed from a header banner + caption + input row down to a single
+        # row. The dropped caption ("instant actionable summary") now lives in the
+        # button tooltip; the placeholder already carries the "any ticker" hint.
+        _qr_lbl, _qr_ic1, _qr_ic2 = st.columns([2, 6, 1.3])
+        with _qr_lbl:
+            st.markdown(
+                "<div style='padding-top:8px;color:#f9fafb;font-size:0.95em;"
+                "font-weight:700;white-space:nowrap'>🔍 Research a Stock</div>",
+                unsafe_allow_html=True,
+            )
         with _qr_ic1:
             _qr_ticker_in = st.text_input(
                 "ticker", key="_qr_ticker_input",
@@ -3232,7 +3238,10 @@ if page == "🏠 Home":
                 label_visibility="collapsed",
             )
         with _qr_ic2:
-            _qr_btn = st.button("Research →", key="_qr_btn", use_container_width=True)
+            _qr_btn = st.button(
+                "Research →", key="_qr_btn", use_container_width=True,
+                help="Enter any ticker for an instant actionable summary — spot a news catalyst fast.",
+            )
 
         if _qr_btn and _qr_ticker_in.strip():
             _t = _qr_ticker_in.strip().upper()
