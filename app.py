@@ -2611,12 +2611,17 @@ if page == "🏠 Home":
                     st.session_state["_brief_locked_at"]       = _b_now_et
                     st.rerun()
 
-        # ── Refresh macro data ────────────────────────────────────────────────
-        # Bypasses the per-day _macro_cal_{date} session cache so the user can
-        # force a fresh FRED pull mid-day (e.g. right after CPI prints when the
-        # static date and the actual release time disagree). Cache otherwise
-        # only invalidates at midnight ET.
-        _rmd_c1, _rmd_c2 = st.columns([1, 5])
+        # ── Refresh controls — macro + signals, side by side ──────────────────
+        # Both are "refresh" actions, so group them in one row (button + caption
+        # stacked per column). Refresh macro bypasses the per-day _macro_cal_{date}
+        # cache to force a fresh FRED pull mid-day (e.g. right after CPI prints when
+        # the static date and the actual release time disagree; cache otherwise
+        # only invalidates at midnight ET). Refresh Signals re-fetches live prices
+        # + re-runs the scanner. The scan handler follows immediately so a press is
+        # acted on (and rerun) before the rest of the brief renders.
+        # Both buttons' deps are module-level / defined far above (held_tickers
+        # @~1580, _parallel_load_all @~1128) — safe this high in the page.
+        _rmd_c1, _rmd_c2 = st.columns(2)
         with _rmd_c1:
             if st.button(
                 "🔄 Refresh macro",
@@ -2628,12 +2633,78 @@ if page == "🏠 Home":
                 if _mc_clear_key in st.session_state:
                     del st.session_state[_mc_clear_key]
                 st.rerun()
-        with _rmd_c2:
             _macro_src = (
                 "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
                 else "Static only (add FRED key in Economic Calendar)"
             )
             st.caption(f"Macro data source: **{_macro_src}** · cache invalidates at midnight ET.")
+        with _rmd_c2:
+            _rs_locked, _rs_rem = _refresh_gate("data")
+            _do_refresh = st.button(
+                "🔄 Refresh Signals",
+                key="_db_refresh_signals",
+                use_container_width=True,
+                disabled=_rs_locked,
+                help=(
+                    f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
+                    if _rs_locked else
+                    "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
+                ),
+            )
+            _sig_ts = st.session_state.get("_brief_signals_ts")
+            if _sig_ts:
+                _sig_age = int((datetime.now() - _sig_ts).total_seconds())
+                if _sig_age < 60:
+                    st.caption(f"Signals refreshed {_sig_age}s ago — live prices current")
+                elif _sig_age < 3600:
+                    st.caption(f"Signals refreshed {_sig_age // 60}m {_sig_age % 60}s ago — click to pull latest market data")
+                else:
+                    st.caption(f"Signals last refreshed {_sig_age // 3600}h ago — **stale, refresh recommended**")
+            else:
+                st.caption(
+                    "Signals reflect the last scanner run — click **Refresh Signals** ~15 min after open "
+                    "to score today's price action."
+                )
+
+        if _do_refresh:
+            _refresh_gate_arm("data")
+            st.cache_data.clear()
+            _wl_for_scan        = st.session_state.get("watchlist", []) or []
+            _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
+            _wl_extras          = [t for t in _wl_for_scan if str(t).upper() not in _universe_tickers]
+            _total_scan_tickers = len(_universe_tickers) + len(_wl_extras)
+            with st.spinner(
+                f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
+            ):
+                _fresh_results = scan_sectors(
+                    list(SECTOR_UNIVERSE.keys()),
+                    period="6mo",
+                    extra_tickers=_wl_for_scan,
+                )
+            if not _fresh_results.empty:
+                st.session_state.scanner_results = _fresh_results
+                # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
+                # (= 12) non-held scanner picks. Pool size matches _grow_today's
+                # candidate window (max_picks_bull × over-fetch) so every candidate
+                # the Brief considers gets a composite verdict rather than falling
+                # back to "Verify — Run Analysis First."
+                _top_candidates = _fresh_results[
+                    ~_fresh_results["Ticker"].isin(set(held_tickers))
+                ].head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
+                _grow_composites: dict = {}
+                if _top_candidates:
+                    with st.spinner(
+                        f"Validating top {len(_top_candidates)} picks with full analysis…"
+                    ):
+                        _gc_results = _parallel_load_all(_top_candidates)
+                        for _tc, _b in _gc_results.items():
+                            if _b is not None:
+                                _grow_composites[_tc] = _b
+                st.session_state._grow_composites    = _grow_composites
+                st.session_state._brief_signals_ts   = datetime.now()
+                st.rerun()
+            else:
+                st.warning("Scanner returned no results — check your connection and try again.")
 
         # ── 🪞 Trade Review verdict strip ─────────────────────────────────────
         # Surfaces the top finding from Trade Review's Course-Correction engine
@@ -3149,76 +3220,6 @@ if page == "🏠 Home":
                     "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
                     unsafe_allow_html=True,
                 )
-
-        # ── Refresh Signals ───────────────────────────────────────────────────
-        _rb_col, _ri_col = st.columns([1, 4])
-        with _rb_col:
-            _rs_locked, _rs_rem = _refresh_gate("data")
-            _do_refresh = st.button(
-                "🔄 Refresh Signals",
-                key="_db_refresh_signals",
-                use_container_width=True,
-                disabled=_rs_locked,
-                help=(
-                    f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
-                    if _rs_locked else
-                    "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
-                ),
-            )
-        with _ri_col:
-            _sig_ts = st.session_state.get("_brief_signals_ts")
-            if _sig_ts:
-                _sig_age = int((datetime.now() - _sig_ts).total_seconds())
-                if _sig_age < 60:
-                    st.caption(f"Signals refreshed {_sig_age}s ago — live prices current")
-                elif _sig_age < 3600:
-                    st.caption(f"Signals refreshed {_sig_age // 60}m {_sig_age % 60}s ago — click to pull latest market data")
-                else:
-                    st.caption(f"Signals last refreshed {_sig_age // 3600}h ago — **stale, refresh recommended**")
-            else:
-                st.caption(
-                    "Signals reflect the last scanner run — click **Refresh Signals** ~15 min after open "
-                    "to score today's price action."
-                )
-        if _do_refresh:
-            _refresh_gate_arm("data")
-            st.cache_data.clear()
-            _wl_for_scan        = st.session_state.get("watchlist", []) or []
-            _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
-            _wl_extras          = [t for t in _wl_for_scan if str(t).upper() not in _universe_tickers]
-            _total_scan_tickers = len(_universe_tickers) + len(_wl_extras)
-            with st.spinner(
-                f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
-            ):
-                _fresh_results = scan_sectors(
-                    list(SECTOR_UNIVERSE.keys()),
-                    period="6mo",
-                    extra_tickers=_wl_for_scan,
-                )
-            if not _fresh_results.empty:
-                st.session_state.scanner_results = _fresh_results
-                # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
-                # (= 12) non-held scanner picks. Pool size matches _grow_today's
-                # candidate window (max_picks_bull × over-fetch) so every candidate
-                # the Brief considers gets a composite verdict rather than falling
-                # back to "Verify — Run Analysis First."
-                _top_candidates = _fresh_results[
-                    ~_fresh_results["Ticker"].isin(set(held_tickers))
-                ].head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
-                _grow_composites: dict = {}
-                if _top_candidates:
-                    with st.spinner(
-                        f"Validating top {len(_top_candidates)} picks with full analysis…"
-                    ):
-                        _gc_results = _parallel_load_all(_top_candidates)
-                        for _tc, _b in _gc_results.items():
-                            if _b is not None:
-                                _grow_composites[_tc] = _b
-                st.session_state._grow_composites    = _grow_composites
-                st.session_state._brief_signals_ts   = datetime.now()
-                st.rerun()
-            else:
-                st.warning("Scanner returned no results — check your connection and try again.")
 
         # ── Quick Research — label · input · button on one row ────────────────
         # Collapsed from a header banner + caption + input row down to a single

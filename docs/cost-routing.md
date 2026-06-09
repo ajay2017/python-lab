@@ -73,6 +73,7 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-09 | Fragility gauge — pre-commit review (risk-severity display + new constant) | — | — | — | — | n/a — lead | Opus reviewer tier by design; verdict SHIP, 3 non-blocking findings (2 fixed: beta-consistency multiplier + visible-withhold note) |
 | 2026-06-09 | Fragility gauge — architecture.md constants + Known-Behaviours rows | Haiku | 39,118 | ~$0.06 | ~$0.27 | ~$0.21 | Mechanical doc rows; the strong-saving lane (~80%). Token count includes reading the large architecture.md to match house style |
 | 2026-06-09 | Today's Brief header declutter — pair tone+fragility (2 cols) + 1-row Quick Research | — | — | — | — | n/a — lead | Pure layout (st.columns wrap, no logic/thresholds/gates); user-chosen option. No decision logic to review → inline as lead |
+| 2026-06-09 | Today's Brief — group Refresh macro + Refresh Signals into one button row (moved button + scan handler up; def-before-use deps verified) | — | — | — | — | n/a — lead | Pure layout move; verified held_tickers/_parallel_load_all defined above the new location; grep-confirmed single widget key + single handler. Inline as lead |
 
 ### Running totals (delegated work only)
 
