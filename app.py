@@ -38,6 +38,7 @@ from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, run_all_scenarios, assess_fragility
+from stock_analyzer.daily_pnl import compute_positions_day_pnl
 from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
     TOLERANCE_OK, TOLERANCE_WATCH,
@@ -1854,6 +1855,99 @@ if page == "🏠 Home":
     )
     _today_pnl_pct = _today_pnl / total_val * 100 if total_val else 0
     _today_loaded  = bool(_lp_map)
+
+    # ── Tier B: TRUE positions day-over-day P&L (snapshot baseline + today's trades) ──
+    # Upgrades the held-only mark above into a broker-style day P&L for the
+    # tracked positions:  current marked value − prior-close snapshot + today's
+    # trade cash. Because the baseline is the PRIOR CLOSE, every term is a
+    # day-move only — so it folds in realized P&L from names SOLD today and marks
+    # same-day BUYS from fill (the two things the held mark gets wrong). Excludes
+    # cash & external flows (positions scope); never claims broker parity.
+    # Activates only when (a) a prior-day snapshot exists AND (b) every held name
+    # priced — otherwise it transparently falls back to the held mark above.
+    # Optional DB table: until the user runs the one-time DDL it stays None and
+    # the held mark shows, unchanged.
+    _dpnl = None
+    _dpnl_baseline_date = None
+    _dpnl_is_current = False
+    try:
+        if _today_loaded and not _today_missing and not port_df.empty:
+            _snap_df = db.load_recent_snapshots(days=10)
+            # Tier-B reads ["price"] for held names, so guard on price>0 (the
+            # field it consumes, not prev_close) and require EVERY held name to
+            # price — a missing/zero price would silently distort the equity delta.
+            _held_now = [
+                {"ticker": r["Ticker"], "shares": float(r["Shares"]),
+                 "price": float(_lp_map[r["Ticker"]]["price"])}
+                for _, r in port_df.iterrows()
+                if r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("price", 0) > 0
+            ]
+            if not _snap_df.empty and len(_held_now) == len(port_df):
+                _snap_df["_d"] = _snap_df["snapshot_date"].astype(str)
+                _today_iso = _today_et().isoformat()
+                _prior = _snap_df[_snap_df["_d"] < _today_iso]
+                if not _prior.empty:
+                    _dpnl_baseline_date = max(_prior["_d"])
+                    _base_rows = _prior[_prior["_d"] == _dpnl_baseline_date]
+                    _baseline = {
+                        str(r["ticker"]).upper(): {"shares": float(r["shares"]),
+                                                   "close": float(r["close_price"])}
+                        for _, r in _base_rows.iterrows()
+                    }
+                    # Today's trades (ET day) from the journal — for realized
+                    # day-move on names sold today + same-day-buy cash.
+                    _today_trades_dp = []
+                    _tdf_dp = st.session_state.get("trades_df")
+                    if _tdf_dp is not None and not _tdf_dp.empty and "traded_at" in _tdf_dp.columns:
+                        _tt = _tdf_dp.copy()
+                        _tt["_d"] = (
+                            pd.to_datetime(_tt["traded_at"], utc=True, errors="coerce")
+                            .dt.tz_convert("America/New_York").dt.date
+                        )
+                        _tt = _tt[_tt["_d"] == _today_et()]
+                        _today_trades_dp = [
+                            {"action": r.get("action"), "shares": r.get("shares"),
+                             "price": r.get("price"), "ticker": r.get("ticker")}
+                            for _, r in _tt.iterrows()
+                        ]
+                    _dpnl = compute_positions_day_pnl(_held_now, _baseline, _today_trades_dp, total_val)
+                    # Label "Today" only when the baseline IS the prior trading day;
+                    # an older baseline (user skipped a day) is an honest multi-day
+                    # "since {date}", not "today".
+                    from datetime import timedelta as _dp_td
+                    _ptd = _today_et() - _dp_td(days=1)
+                    while _ptd.weekday() >= 5:
+                        _ptd -= _dp_td(days=1)
+                    _dpnl_is_current = _dpnl_baseline_date >= _ptd.isoformat()
+    except Exception:
+        _dpnl = None
+
+    # (Re)write TODAY's snapshot ONLY in the post-close window (regular session
+    # over: weekday AND ET ≥ 16:00), so close_price is the FINAL settled close.
+    # A generic `not is_open` would also fire during PRE-MARKET (4:00–9:30) and
+    # overnight, when _lp_map still carries the PRIOR close — persisting that
+    # stale price under today's date AND (via the once-a-day flag) blocking the
+    # real post-close write, which corrupts tomorrow's baseline. No cron yet →
+    # opportunistic write-on-view, once per session/day; the Phase-2 cron will
+    # make it deterministic. (After-hours: share count may include an after-hours
+    # trade while close_price is the regular close — minor, rare timing skew, not
+    # broker parity.)
+    try:
+        _et_now     = datetime.now(_ET_TZ)
+        _post_close = _et_now.weekday() < 5 and (_et_now.hour + _et_now.minute / 60) >= 16.0
+        _snap_flag  = f"_snap_written_{_today_et().isoformat()}"
+        if (_today_loaded and not port_df.empty and _post_close
+                and not st.session_state.get(_snap_flag)):
+            _snap_rows = [
+                {"ticker": r["Ticker"], "shares": float(r["Shares"]),
+                 "close_price": float(_lp_map[r["Ticker"]]["price"])}
+                for _, r in port_df.iterrows()
+                if r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("price", 0) > 0
+            ]
+            if _snap_rows and db.save_daily_snapshot(_today_et(), _snap_rows):
+                st.session_state[_snap_flag] = True
+    except Exception:
+        pass
     portfolio_value = total_val                        # drive risk calc from live holdings
     st.session_state["_portfolio_value"] = total_val  # update sidebar display
 
@@ -2493,7 +2587,27 @@ if page == "🏠 Home":
     _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8 = st.columns(8)
     _c1.metric("Portfolio Value",  _m(f"${total_val:,.0f}"))
     _c2.metric("Total P&L",        _m(f"${total_pnl:,.0f}"), f"{total_pnl_pct:+.1f}%", delta_color="normal")
-    if _today_loaded:
+    if _dpnl is not None:
+        _dp_val = _dpnl["day_pnl"]
+        _dp_pct = _dpnl["day_pnl_pct"]
+        if _dpnl_is_current:
+            _dp_label = "Today's P&L"
+        else:
+            _dp_label = "P&L since " + date.fromisoformat(_dpnl_baseline_date).strftime("%b %d")
+        _c3.metric(
+            _dp_label,
+            _m(f"${_dp_val:+,.0f}"),
+            f"{_dp_pct:+.2f}%",
+            delta_color="normal" if _dp_val >= 0 else "inverse",
+            help=(
+                f"TRUE day P&L for your tracked positions, measured from the "
+                f"{_dpnl_baseline_date} close — held names + today's realized trades "
+                f"(same-day buys marked from your fill). Positions scope: excludes cash & "
+                f"external deposits/withdrawals, so it still won't penny-match your broker's "
+                f"account 'Today'."
+            ),
+        )
+    elif _today_loaded:
         _c3.metric(
             "Today's P&L (held)",
             _m(f"${_today_pnl:+,.0f}"),
@@ -2503,7 +2617,8 @@ if page == "🏠 Home":
                 "Mark-to-market of your CURRENTLY-HELD positions vs yesterday's close, "
                 "updated every 60s. This is NOT your broker's account 'Today': it excludes "
                 "realized P&L from anything you bought or sold today, and marks same-day buys "
-                "from the prior close (not your fill). On an active trading day the two differ."
+                "from the prior close (not your fill). On an active trading day the two differ. "
+                "(A true day P&L activates once the daily-snapshot baseline is seeded.)"
             ),
         )
     else:
@@ -2527,6 +2642,14 @@ if page == "🏠 Home":
         st.caption(
             f"⚠️ Today's P&L (held) covers {_today_priced_n} of {_today_total_n} positions — "
             f"no live price for **{', '.join(_today_missing)}**, so it understates the rest."
+        )
+    # Fail-loud: a baseline name with no current holding and no recorded exit
+    # today is a journal gap that would distort the day P&L — surface it.
+    if _dpnl is not None and _dpnl.get("orphans"):
+        st.caption(
+            f"⚠️ Day-P&L baseline includes **{', '.join(_dpnl['orphans'])}** from the prior "
+            f"close with no current holding and no recorded trade today — check the Trade "
+            f"Journal; the figure may be off by that position's move."
         )
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)

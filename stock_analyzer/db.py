@@ -140,6 +140,26 @@ the user acted on it):
         financials  jsonb not null,
         fetched_at  timestamptz not null default now()
     );
+
+    -- Daily snapshots — Tier B day-over-day P&L baseline (added 2026-06-09).
+    -- Prior-close snapshot of held positions; the positions day-P&L =
+    --   current marked value − this baseline value + today's trade cash.
+    -- Optional: until created, load_recent_snapshots returns empty and
+    -- save_daily_snapshot no-ops, so the app runs exactly as before (the
+    -- held-only "Today's P&L (held)" mark). Written once per trading day when
+    -- the market is CLOSED, so close_price is the final settled close.
+    create table if not exists public.daily_snapshots (
+        snapshot_date date    not null,
+        ticker        text    not null,
+        shares        numeric not null check (shares > 0),
+        close_price   numeric not null check (close_price > 0),
+        created_at    timestamptz default now(),
+        primary key (snapshot_date, ticker)
+    );
+    alter table public.daily_snapshots enable row level security;
+    drop policy if exists "Allow all (service role)" on public.daily_snapshots;
+    create policy "Allow all (service role)" on public.daily_snapshots
+        for all to service_role using (true) with check (true);
 """
 
 import streamlit as st
@@ -282,6 +302,75 @@ def save_holdings(df: pd.DataFrame) -> bool:
             )
         else:
             st.error(f"⛔ Failed to save holdings: {err}")
+        return False
+
+
+# ── Daily snapshots (Tier B day-over-day P&L baseline) ─────────────────────────
+# Optional table. Until created, load returns empty and save no-ops, so the
+# day-P&L degrades to the held-only mark exactly as before. See DDL at module top.
+
+def load_recent_snapshots(days: int = 10) -> pd.DataFrame:
+    """Most-recent daily snapshots (newest first). Empty on any error / missing
+    table — the day-P&L then falls back to the held-only mark, never crashes."""
+    empty = pd.DataFrame(columns=["snapshot_date", "ticker", "shares", "close_price"])
+    if not has_db():
+        return empty
+    try:
+        rows = (
+            _client().table("daily_snapshots")
+            .select("snapshot_date,ticker,shares,close_price")
+            .order("snapshot_date", desc=True)
+            .limit(max(1, days) * 200)   # days × generous max plausible positions
+            .execute().data
+        )
+        if not rows:
+            return empty
+        df = pd.DataFrame(rows)
+        df["shares"]      = df["shares"].astype(float)
+        df["close_price"] = df["close_price"].astype(float)
+        return df
+    except Exception:
+        # Optional enhancement table — degrade silently (no error banner) so a
+        # not-yet-created table doesn't nag; core P&L still renders (held mark).
+        return empty
+
+
+def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
+    """Upsert the snapshot for `snapshot_date` (today's held positions at the
+    final, market-closed close price). Sweeps tickers no longer held for that
+    date so a same-day exit doesn't linger. Read-only viewers no-op; a missing
+    table degrades to a silent no-op (returns False)."""
+    if _READONLY: return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    _date = str(snapshot_date)
+    records = []
+    seen: set[str] = set()
+    for r in rows:
+        tk = str(r.get("ticker", "")).strip().upper()
+        try:
+            sh = float(r.get("shares") or 0)
+            px = float(r.get("close_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if tk and sh > 0 and px > 0 and tk not in seen:
+            records.append({"snapshot_date": _date, "ticker": tk,
+                            "shares": sh, "close_price": px})
+            seen.add(tk)
+    if not records:
+        return False
+    try:
+        client = _client()
+        client.table("daily_snapshots").upsert(
+            records, on_conflict="snapshot_date,ticker"
+        ).execute()
+        # Sweep tickers for THIS date no longer held (idempotent; a partial
+        # failure leaves a stale row, recoverable next write, never destructive).
+        client.table("daily_snapshots").delete().eq(
+            "snapshot_date", _date
+        ).not_.in_("ticker", list(seen)).execute()
+        return True
+    except Exception:
         return False
 
 
