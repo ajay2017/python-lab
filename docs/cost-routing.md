@@ -69,12 +69,15 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-08 | Grow Today funnel-caption fix (macro-blocked mislabel + "16 of 12" arithmetic) | — | — | — | — | n/a — lead | Small, fully-designed display-logic fix; per corrected pricing the ~40% Sonnet margin isn't worth the handoff on a one-spot edit |
 | 2026-06-08 | Grow Today: macro block count/overflow (16-vs-4) + macro-aware empty-state CTA (hide futile re-scan) | — | — | — | — | n/a — lead | Two small display-only fixes from the same review thread; done inline as lead |
 | 2026-06-08 | Position sizing — single-name ceiling cap + warning (risk.py + 4 call sites + Trade Plan/Watchlist UI) | Sonnet | 25,065 | ~$0.12 | ~$0.20 | ~$0.08 | Risk-discipline fix touching sizing logic; Opus scoped the spec + reviewed the diff before commit |
+| 2026-06-09 | Fragility gauge (Phase 1) — pure `assess_fragility` + constant + Home render | — | — | — | — | n/a — lead | Judgment-heavy: severity bands, risk-display copy, the call to reuse existing beta bands rather than add thresholds. Thin Sonnet margin not worth the handoff on a design-laden spec — done inline as lead |
+| 2026-06-09 | Fragility gauge — pre-commit review (risk-severity display + new constant) | — | — | — | — | n/a — lead | Opus reviewer tier by design; verdict SHIP, 3 non-blocking findings (2 fixed: beta-consistency multiplier + visible-withhold note) |
+| 2026-06-09 | Fragility gauge — architecture.md constants + Known-Behaviours rows | Haiku | 39,118 | ~$0.06 | ~$0.27 | ~$0.21 | Mechanical doc rows; the strong-saving lane (~80%). Token count includes reading the large architecture.md to match house style |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 96,357 | ~$0.46 | ~$0.77 | **~$0.31 (≈40% on delegated slice)** |
+| **To date** | 135,475 | ~$0.52 | ~$1.04 | **~$0.52 (≈50% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 
