@@ -276,3 +276,61 @@ def run_all_scenarios(
         if result:
             results.append({**sc, **result})
     return results
+
+
+def assess_fragility(
+    scenario_result: dict,
+    portfolio_beta: float | None,
+    elevated_beta: float,
+    ceiling_beta: float,
+    pullback_pct: float,
+) -> dict | None:
+    """
+    Classify how exposed the book is to a ROUTINE pullback, from an already-run
+    mild-correction scenario. Pure / UI-free.
+
+    This is *exposure*, not a forecast: it answers "if a normal -10% pullback
+    hits, how far does MY book fall?" — knowable in advance, deterministic.
+
+    Severity reuses the portfolio-beta policy bands so the gauge agrees with the
+    risk advisor's gating:
+      beta >= ceiling_beta  -> "fragile"  (outsized drawdown — flag it)
+      beta >= elevated_beta -> "caution"  (more volatile than the market)
+      else                  -> "calm"     (moves roughly with the market)
+
+    Returns None when beta or the scenario is unavailable — WITHHOLD rather than
+    fabricate a falsely-calm reading (consumers can render an "offline" note).
+    """
+    if portfolio_beta is None or not scenario_result:
+        return None
+    implied_move = scenario_result.get("estimated_port_move")  # % the book moves under the shock
+    if implied_move is None:
+        return None
+
+    if portfolio_beta >= ceiling_beta:
+        severity = "fragile"
+    elif portfolio_beta >= elevated_beta:
+        severity = "caution"
+    else:
+        severity = "calm"
+
+    # Name the biggest dollar losers — the "why" behind the fragility (concentration).
+    exposed = [
+        r.get("Ticker")
+        for r in (scenario_result.get("most_exposed") or [])[:2]
+        if r.get("Ticker")
+    ]
+
+    # Effective multiplier vs the market, derived FROM the displayed implied move
+    # (not the regression beta) so the two numbers shown to the user always tie
+    # out: implied_move ÷ pullback. e.g. -26% book on a -10% market = ~2.6× market.
+    mult = round(abs(implied_move / pullback_pct), 1) if pullback_pct else None
+
+    return {
+        "severity":     severity,
+        "beta":         round(float(portfolio_beta), 2),  # regression portfolio beta — drives severity band
+        "mult":         mult,                              # ×-market multiplier — consistent with implied_move
+        "pullback_pct": pullback_pct,
+        "implied_move": round(float(implied_move), 1),
+        "exposed":      exposed,
+    }

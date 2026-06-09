@@ -37,7 +37,7 @@ from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommen
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.trade_analytics import build_full_analytics
-from stock_analyzer.stress_test import SCENARIOS, run_scenario, run_all_scenarios
+from stock_analyzer.stress_test import SCENARIOS, run_scenario, run_all_scenarios, assess_fragility
 from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
     TOLERANCE_OK, TOLERANCE_WATCH,
@@ -62,6 +62,7 @@ from stock_analyzer.constants import (
     CATALYST_WATCH_WINDOW_DAYS,
     GROW_CANDIDATE_POOL,
     REFRESH_COOLDOWN_SEC,
+    FRAGILITY_PULLBACK_PCT,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -1906,6 +1907,30 @@ if page == "🏠 Home":
         _port_risk = {}
     st.session_state["_port_risk_cache"] = _port_risk  # available to Analysis page
 
+    # Fragility gauge — how a ROUTINE pullback would hit THIS book. Pre-emptive
+    # exposure, NOT a forecast of when a pullback comes. Reuses the stress-test
+    # "Mild Correction" engine + cached portfolio beta; severity reuses the
+    # PORTFOLIO_BETA_ELEVATED / _CEILING policy bands. None on failure (not {})
+    # so the render can show "offline" rather than fabricate a calm reading.
+    try:
+        _frag_beta = _port_risk.get("beta") if _port_risk else None
+        if _frag_beta is not None and not port_df.empty:
+            _mild_sc  = next((s for s in SCENARIOS if s["id"] == "mild_correction"), None)
+            _mild_res = (
+                run_scenario(_mild_sc, port_df, held_data, _frag_beta,
+                             custom_spy_move=FRAGILITY_PULLBACK_PCT)
+                if _mild_sc else {}
+            )
+            _fragility = assess_fragility(
+                _mild_res, _frag_beta,
+                PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING, FRAGILITY_PULLBACK_PCT,
+            )
+        else:
+            _fragility = None
+    except Exception:
+        _fragility = None
+    st.session_state["_fragility_cache"] = _fragility
+
     # Risk Advisor recommendations — generated from portfolio risk metrics
     try:
         _risk_advisor_recs = build_risk_advisor_recommendations(
@@ -3074,6 +3099,50 @@ if page == "🏠 Home":
             f"</div>",
             unsafe_allow_html=True,
         )
+
+        # ── Fragility gauge — how a routine pullback would hit THIS book ───────
+        # Exposure, not a forecast. Turns the stress-test "Mild Correction" result
+        # into a standing one-line read so portfolio fragility is visible BEFORE a
+        # down day, not just on the Stress Testing page after one.
+        _frag = st.session_state.get("_fragility_cache")
+        if _frag:
+            _fg_sev   = _frag["severity"]
+            _fg_color = {"calm": "#1c1917", "caution": "#78350f", "fragile": "#7f1d1d"}[_fg_sev]
+            _fg_bdr   = {"calm": "#4b5563", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
+            _fg_icon  = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
+            _fg_lead  = {
+                "calm":    "Your book moves roughly with the market.",
+                "caution": "Your book is more volatile than the market.",
+                "fragile": "Your book is fragile to a pullback.",
+            }[_fg_sev]
+            _fg_why  = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
+            _fg_mult = f" · about <b>{_frag['mult']:.1f}×</b> the market's move" if _frag.get("mult") else ""
+            st.markdown(
+                f"<div style='background:{_fg_color};border:1px solid {_fg_bdr};"
+                f"border-radius:12px;padding:12px 18px;margin-bottom:12px'>"
+                f"<span style='font-size:1.0em;font-weight:700;color:#f9fafb'>"
+                f"{_fg_icon} {_fg_lead}</span>"
+                f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
+                f"A routine {abs(_frag['pullback_pct']):.0f}% market pullback would take your book to roughly "
+                f"<b>{_frag['implied_move']:+.0f}%</b>{_fg_mult}{_fg_why}</div>"
+                f"<div style='color:#9ca3af;font-size:0.74em;margin-top:4px'>"
+                f"Exposure if a pullback hits — not a forecast of when. "
+                f"Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        elif not port_df.empty:
+            # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
+            # computed — say so rather than imply zero exposure. Matches the
+            # fundamentals-gate "withhold with a visible reason" precedent.
+            st.markdown(
+                "<div style='background:#1c1917;border:1px solid #4b5563;"
+                "border-radius:12px;padding:10px 18px;margin-bottom:12px;"
+                "color:#9ca3af;font-size:0.8em'>"
+                "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
+                "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                unsafe_allow_html=True,
+            )
 
         # ── Refresh Signals ───────────────────────────────────────────────────
         _rb_col, _ri_col = st.columns([1, 4])

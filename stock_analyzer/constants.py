@@ -17,6 +17,15 @@ PORTFOLIO_BETA_CEILING  = 1.4    # hard breach above this — institutional ceil
 TICKER_BETA_HIGH     = 1.5       # "high beta" — soft warn when added to elevated port
 TICKER_BETA_CRITICAL = 1.8       # "very high beta" — hard breach when added to breached port
 
+# ── Fragility gauge (stress_test.assess_fragility) ───────────────────────────
+# How a ROUTINE pullback would hit THIS book, surfaced pre-emptively on Home.
+# NOT a forecast of WHEN a pullback comes (no one can reliably predict that) — a
+# measure of how exposed the portfolio is IF one does. Reuses the stress-test
+# "Mild Correction" engine. Severity reuses the PORTFOLIO_BETA_ELEVATED / _CEILING
+# bands above so the gauge agrees with the risk advisor's beta gating — only the
+# yardstick magnitude is new here.
+FRAGILITY_PULLBACK_PCT = -10.0   # routine-correction yardstick (~1–2×/yr); mirrors the "Mild Correction" stress scenario
+
 # ── Concentration limits ─────────────────────────────────────────────────────
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
