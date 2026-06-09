@@ -1831,8 +1831,22 @@ if page == "🏠 Home":
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
 
-    # Today's P&L — (live price − prev close) × shares for each position
+    # Today's P&L — mark-to-market of CURRENTLY-HELD shares vs prior close.
+    # SCOPE (surfaced in the metric label "(held)" + tooltip): this is a
+    # held-position mark, NOT a brokerage account day-P&L. It excludes realized
+    # P&L from anything bought/sold *today* (a same-day sell's intraday loss
+    # leaves with the position; a same-day buy is marked from prior close, not
+    # the fill), so on an active trading day the broker's account "Today" will
+    # diverge. Folding in today's realized P&L + fill basis is deferred (Fix B).
+    # Fail-loud: track positions that DIDN'T price so a partial sum is never
+    # presented as a confident whole (CLAUDE.md: never silently filter).
     _lp_map = st.session_state.get("_live_prices", {})
+    _today_total_n  = len(port_df)
+    _today_missing  = [
+        r["Ticker"] for _, r in port_df.iterrows()
+        if not (r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("prev_close", 0) > 0)
+    ]
+    _today_priced_n = _today_total_n - len(_today_missing)
     _today_pnl = sum(
         (_lp_map[r["Ticker"]]["price"] - _lp_map[r["Ticker"]]["prev_close"]) * r["Shares"]
         for _, r in port_df.iterrows()
@@ -2481,14 +2495,19 @@ if page == "🏠 Home":
     _c2.metric("Total P&L",        _m(f"${total_pnl:,.0f}"), f"{total_pnl_pct:+.1f}%", delta_color="normal")
     if _today_loaded:
         _c3.metric(
-            "Today's P&L",
+            "Today's P&L (held)",
             _m(f"${_today_pnl:+,.0f}"),
             f"{_today_pnl_pct:+.2f}%",
             delta_color="normal" if _today_pnl >= 0 else "inverse",
-            help="Intraday gain/loss vs yesterday's close · updates every 60s",
+            help=(
+                "Mark-to-market of your CURRENTLY-HELD positions vs yesterday's close, "
+                "updated every 60s. This is NOT your broker's account 'Today': it excludes "
+                "realized P&L from anything you bought or sold today, and marks same-day buys "
+                "from the prior close (not your fill). On an active trading day the two differ."
+            ),
         )
     else:
-        _c3.metric("Today's P&L", "Updating…", help="Loads with the live price strip")
+        _c3.metric("Today's P&L (held)", "Updating…", help="Loads with the live price strip")
     _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
                help=f"{n_danger} danger · {n_warning} warning — check Alerts & Actions tab")
     _c5.metric("Avg Conviction",   f"{avg_score:.0f}/100")
@@ -2501,6 +2520,14 @@ if page == "🏠 Home":
                _m(f"${best_row['P&L ($)']:,.0f}"), f"{best_row['P&L (%)']:+.1f}%", delta_color="normal")
     _c8.metric(f"Worst: {worst_row['Ticker']}",
                _m(f"${worst_row['P&L ($)']:,.0f}"), f"{worst_row['P&L (%)']:+.1f}%", delta_color="normal")
+
+    # Fail-loud: if any held position didn't price, say so — a partial Today's
+    # P&L must never masquerade as the whole book (CLAUDE.md: never silently filter).
+    if _today_loaded and _today_missing:
+        st.caption(
+            f"⚠️ Today's P&L (held) covers {_today_priced_n} of {_today_total_n} positions — "
+            f"no live price for **{', '.join(_today_missing)}**, so it understates the rest."
+        )
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
