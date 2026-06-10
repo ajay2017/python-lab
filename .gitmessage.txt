@@ -15,4 +15,4 @@
 #   • Threshold/gate changes (stock_analyzer/constants.py) are investment-policy
 #     decisions — name the constant + old→new value in the body.
 #   • Claude-authored commits end with:
-#       Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+#       Co-Authored-By: Ajay with Claude Opus 4.8 ajay.x.ku@accenture.com

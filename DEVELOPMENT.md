@@ -161,7 +161,7 @@ Refs #123                   # if applicable
 - **scope** (optional): the area — e.g. `pnl`, `brief`, `risk`, `db`, `constants`, `scanner`, `ui`
 - **summary**: imperative mood, lowercase, ≤72 chars, no trailing period
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — say so in the body and name the constant + old→new value
-- Claude-authored commits end with: `Co-Authored-By: Ajay with Claude Opus 4.8 <ajay.x.ku@accenture.com>`
+- Claude-authored commits end with: `Co-Authored-By: Ajay with Claude Opus 4.8 ajay.x.ku@accenture.com`
 
 One-time setup per clone (wires the editor to pre-fill the format from `.gitmessage.txt`):
 
