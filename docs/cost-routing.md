@@ -78,6 +78,10 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-09 | Tier B — TRUE positions day-P&L (new daily_pnl.py equity-delta + daily_snapshots table I/O + app.py wiring) | — | — | — | — | n/a — lead | Correctness-critical P&L + new DB writer; built inline as lead (judgment-heavy: equity-delta design, baseline/tz logic, snapshot-write timing). Unit-tested the pure math |
 | 2026-06-09 | Tier B — Opus review (2 rounds) | — | — | — | — | n/a — lead | Mandatory review (P&L + DB writer + RLS). Round 1 caught a BLOCKER: `not is_open` write gate fired in pre-market → persisted stale prior-close as the baseline + blocked the real post-close write. Round 2 verified the post-close-window fix → SHIP |
 | 2026-06-09 | Adopt Conventional Commits standard — .gitmessage template + DEVELOPMENT.md spec + CLAUDE.md pointer | — | — | — | — | n/a — lead | Process/docs; defining the convention is judgment, not a mechanical doc row. Template+docs only (no hook), per user choice |
+| 2026-06-10 | Data-outage triage + #1 honest empty-state (holdings-exist-but-load-failed → fail-loud + retry) | — | — | — | — | n/a — lead | Live incident triage (diagnosed Yahoo bundle-throttle vs Finnhub quotes) + display/fail-loud fix; judgment-heavy, inline |
+| 2026-06-10 | Resilience part (a) — burst-taming (DATA_LOAD_MAX_WORKERS 4→2 + stagger) | — | — | — | — | n/a — lead | Operational tuning to stop tripping Yahoo's throttle; small, inline |
+| 2026-06-10 | Resilience part (b) — last-known-good bundle cache (daily_pnl-style: db table + load_all write-through/fallback + staleness banner) | — | — | — | — | n/a — lead | Correctness-critical (load_all hot path) + new DB writer/RLS; built inline as lead, serialization unit-tested |
+| 2026-06-10 | Resilience part (b) — Opus review | — | — | — | — | n/a — lead | Mandatory review (hot path + DB writer + RLS). Traced hot-path safety, ran tz round-trip + _json_safe live → SHIP, no blockers |
 
 ### Running totals (delegated work only)
 
