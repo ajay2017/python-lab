@@ -160,6 +160,24 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.daily_snapshots;
     create policy "Allow all (service role)" on public.daily_snapshots
         for all to service_role using (true) with check (true);
+
+    -- Last-known-good bundle cache — data-resilience fallback (added 2026-06-10).
+    -- load_all write-throughs the raw history + info here on every successful
+    -- fetch; when the history/bundle providers (Yahoo→FMP) ALL fail it serves
+    -- this aged copy (with a staleness banner) instead of "Could not load".
+    -- Optional: until created, load returns None / save no-ops, so the app keeps
+    -- today's fail-loud behaviour. System cache (not user data) — but gated by
+    -- the read-only guard anyway since it's a write.
+    create table if not exists public.bundle_cache (
+        ticker       text primary key,
+        history_json text not null,
+        info         jsonb,
+        fetched_at   timestamptz not null default now()
+    );
+    alter table public.bundle_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.bundle_cache;
+    create policy "Allow all (service role)" on public.bundle_cache
+        for all to service_role using (true) with check (true);
 """
 
 import streamlit as st
@@ -372,6 +390,102 @@ def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Last-known-good bundle cache (data-resilience) ─────────────────────────────
+# Optional table. Until created, load returns None and save no-ops, so load_all
+# keeps its honest "Could not load" failure exactly as before. See DDL at top.
+
+def _json_safe(obj):
+    """Recursively coerce to JSON-serializable: NaN/inf → None, numpy scalars →
+    python, anything exotic → str. Keeps Supabase's JSON encoder from choking on
+    a yfinance .info dict (numpy floats, NaN, odd types). Never raises."""
+    import math
+    if obj is None or isinstance(obj, bool) or isinstance(obj, (int, str)):
+        return obj
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    try:
+        import numpy as _np
+        if isinstance(obj, _np.generic):
+            return _json_safe(obj.item())
+    except Exception:
+        pass
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
+def save_bundle_cache(ticker: str, bundle: dict) -> bool:
+    """Write-through the last-known-good raw bundle (history + info) so load_all
+    can serve aged-but-real data when providers are down. Read-only viewers
+    no-op; a missing table degrades to a silent no-op. NEVER raises (callers wrap
+    too) — cache I/O must not break the load_all success path."""
+    if _READONLY: return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        hist = bundle.get("history")
+        if hist is None or getattr(hist, "empty", True):
+            return False
+        record = {
+            "ticker":       str(ticker).strip().upper(),
+            "history_json": hist.to_json(orient="split", date_format="iso"),
+            "info":         _json_safe(bundle.get("info") or {}),
+            "fetched_at":   pd.Timestamp.now(tz="UTC").isoformat(),
+        }
+        _client().table("bundle_cache").upsert(record, on_conflict="ticker").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_bundle_cache(ticker: str, max_age_days: int) -> dict | None:
+    """Return the cached raw bundle for `ticker` if present and within
+    max_age_days, else None. Reconstructs the history DataFrame. Graceful —
+    returns None on missing table / parse error / staleness; news, earnings and
+    revisions come back EMPTY (fallback mode degrades those, never live)."""
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("bundle_cache")
+            .select("history_json,info,fetched_at")
+            .eq("ticker", str(ticker).strip().upper())
+            .limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        fetched = pd.to_datetime(row.get("fetched_at"), utc=True, errors="coerce")
+        if pd.isna(fetched):
+            return None
+        age_days = (pd.Timestamp.now(tz="UTC") - fetched).days
+        if age_days > max_age_days:
+            return None
+        from io import StringIO
+        hist = pd.read_json(StringIO(row["history_json"]), orient="split")
+        if hist.empty:
+            return None
+        hist.index = pd.to_datetime(hist.index)
+        return {
+            "bundle": {
+                "history":   hist,
+                "info":      row.get("info") or {},
+                "news":      [],
+                "earnings":  {},
+                "revisions": {},
+            },
+            "fetched_at": fetched.date().isoformat(),
+            "age_days":   int(age_days),
+        }
+    except Exception:
+        return None
 
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────

@@ -66,6 +66,7 @@ from stock_analyzer.constants import (
     FRAGILITY_PULLBACK_PCT,
     DATA_LOAD_MAX_WORKERS,
     DATA_LOAD_STAGGER_SEC,
+    BUNDLE_CACHE_MAX_AGE_DAYS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -1028,7 +1029,33 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
 @st.cache_data(ttl=1800)
 def load_all(ticker: str, period: str = "6mo") -> dict:
     # One yf.Ticker session covers history + info + news + earnings (was 4 separate calls)
-    bundle = fetch_ticker_bundle(ticker, period)
+    # Resilience: write-through the raw bundle to a last-known-good cache on every
+    # successful fetch; if the history/bundle providers ALL fail, serve the aged
+    # cached copy (tagged stale) so the portfolio still renders instead of
+    # cascading to "Could not load". No cached copy → re-raise (honest failure).
+    # All cache I/O is wrapped so it can NEVER break the normal success path.
+    _stale_as_of = None
+    try:
+        bundle = fetch_ticker_bundle(ticker, period)
+        try:
+            db.save_bundle_cache(ticker, bundle)
+        except Exception:
+            pass
+    except Exception:
+        _cached_bundle = None
+        try:
+            _cached_bundle = db.load_bundle_cache(ticker, BUNDLE_CACHE_MAX_AGE_DAYS)
+        except Exception:
+            _cached_bundle = None
+        if not _cached_bundle:
+            raise  # nothing cached (or too stale) → honest "Could not load"
+        # The stale result is intentionally memoized by @st.cache_data(ttl=1800):
+        # a name can keep showing last-known-good data for up to ~30 min after
+        # the provider recovers. That's deliberate — it also stops us re-hammering
+        # a still-recovering provider every rerun; the banner keeps it honest.
+        # Don't "fix" this by shortening the TTL.
+        bundle = _cached_bundle["bundle"]
+        _stale_as_of = _cached_bundle["fetched_at"]
     df = compute_indicators(bundle["history"])
     t_score, t_signals = technical_score(df)
     financials = fetch_financials_from_info(bundle["info"])
@@ -1113,6 +1140,10 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
         # the last-known-good copy (age in days) instead of withholding.
         "fund_source": _fund_source,
         "fund_cache_age_days": _fund_cache_age_days,
+        # None when the bundle is live; an ISO date when the history/bundle
+        # providers were all down and we served the last-known-good cached bundle
+        # (news/earnings empty in that mode). Consumers show a staleness banner.
+        "stale_as_of": _stale_as_of,
     }
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1622,6 +1653,21 @@ if page == "🏠 Home":
                     bundle["position_age_days"]   = None
                     bundle["days_since_last_buy"] = None
                 held_data[t] = bundle
+
+    # Data-resilience: surface when any holding is rendering on the last-known-good
+    # cache (a provider was down) — never silently pass aged data off as live.
+    _stale_held = sorted(
+        (t, b.get("stale_as_of")) for t, b in held_data.items() if b.get("stale_as_of")
+    )
+    if _stale_held:
+        _stale_oldest = min(d for _, d in _stale_held if d)
+        _stale_names  = ", ".join(t for t, _ in _stale_held)
+        st.warning(
+            f"📦 **Showing last-known-good data** (as of {_stale_oldest}) for "
+            f"{len(_stale_held)} name{'s' if len(_stale_held) != 1 else ''}: {_stale_names}. "
+            "The live history/fundamentals provider is down — live prices in the strip remain "
+            "current, but signals & analysis for these names may be slightly stale."
+        )
 
     if held_data:
         _news = curate_news_items(held_data)

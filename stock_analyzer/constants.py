@@ -331,6 +331,14 @@ DATA_MULTISOURCE_ENABLED = True
 DATA_LOAD_MAX_WORKERS = 2     # was 4 — halve the simultaneous heavy requests to Yahoo
 DATA_LOAD_STAGGER_SEC = 0.1   # gap between thread submits so starts aren't synchronized
 
+# Last-known-good bundle cache (data-resilience; bundle_cache table). When the
+# history/bundle providers (Yahoo→FMP) ALL fail, load_all serves the last cached
+# bundle (real data, aged) so the portfolio still renders WITH a staleness banner
+# instead of "Could not load". Bounds how stale a displayed analysis may be —
+# beyond this, fail loud rather than pass off very old signals as current. Mild
+# policy flavour (stale data drives the shown signals); adjustable.
+BUNDLE_CACHE_MAX_AGE_DAYS = 5
+
 # Price cross-check tolerances. The cross-check compares the live-price primary
 # (Finnhub, real-time) against an INDEPENDENT validator (yfinance, ~15-min
 # delayed). Because of that latency the two checks have different strictness:
