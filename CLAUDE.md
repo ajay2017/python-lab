@@ -52,7 +52,7 @@ When adding a new advisor or recommendation feature, **always** check whether it
 **Conventional Commits**: `type(scope): summary` — imperative, lowercase, ≤72 chars, no trailing period; a body explaining **why**; trailers in the footer. Types: `feat fix docs refactor perf test build ci chore revert`. Full spec + the one-time `git config commit.template .gitmessage.txt` setup live in [DEVELOPMENT.md](DEVELOPMENT.md); the template is [`.gitmessage.txt`](.gitmessage.txt).
 
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — call them out in the body and name the constant + old→new value.
-- **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with Claude Opus 4.8 ajay.x.ku@accenture.com`, written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling).
+- **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with Claude Opus 4.8 <ajay.x.ku@accenture.com>`, written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling).
 
 ---
 
