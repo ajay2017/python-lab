@@ -1712,7 +1712,38 @@ if page == "🏠 Home":
     st.session_state["_signals_computed_at"] = datetime.now().strftime("%I:%M %p")  # for staleness warning
 
     if port_df.empty:
-        st.info("Enter your holdings above to see portfolio analytics.")
+        # Distinguish "no holdings yet" from "you HAVE holdings but the heavy
+        # data bundle (history + fundamentals) failed for all of them". The old
+        # message said "enter your holdings" in BOTH cases — misleading + scary
+        # when you actually hold positions and a provider just hiccuped. Fail
+        # loud with the truth (CLAUDE.md: never silently misrepresent state).
+        if held_tickers:
+            _n = len(held_tickers)
+            st.error(
+                f"⚠️ **Couldn't load market data for your {_n} holding"
+                f"{'s' if _n != 1 else ''}** ({', '.join(held_tickers)}).\n\n"
+                "Your holdings are **safe** — this is a data-provider issue, not data loss. "
+                "Live prices in the strip above are fine; only the **history & fundamentals** "
+                "feed is temporarily failing (usually a brief upstream hiccup, common pre-open). "
+                "It clears itself once the provider recovers — no need to re-enter anything."
+            )
+            _rl_locked, _rl_rem = _refresh_gate("data")
+            if st.button(
+                "🔄 Retry data load",
+                key="_home_retry_load",
+                disabled=_rl_locked,
+                help=(f"Cooling down — available in {_rl_rem}s (avoids burning the daily API budget)."
+                      if _rl_locked else "Clears the cache and re-fetches across all providers."),
+            ):
+                _refresh_gate_arm("data")
+                _ah.reset()
+                st.cache_data.clear()
+                st.rerun()
+            if _rl_locked:
+                st.caption(f"⏳ Retry cooling down — available in {_rl_rem}s. "
+                           "Hammering it deepens the throttle; give the provider a minute.")
+        else:
+            st.info("Enter your holdings above to see portfolio analytics.")
         st.stop()
 
     # Cache enriched port_df (with Sector) so other pages can use it
