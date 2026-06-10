@@ -321,6 +321,16 @@ DATA_LIVE_PRICE_ORDER = ["finnhub", "yahoo_finance", "fmp"]
 # is wired separately (Phase 5b-ii).
 DATA_MULTISOURCE_ENABLED = True
 
+# ── Data-load concurrency (operational tuning — NOT an investment threshold) ──
+# The held-data / candidate cold-load fans out load_all() across threads. Yahoo
+# (the history/bundle PRIMARY) rate-limits bursty parallel requests, so a wide
+# fan-out of many heavy requests at once trips its throttle and cascades to
+# "Could not load" across every name (the 2026-06-10 pre-open incident). Keep
+# concurrency modest and stagger the thread starts to stay under the burst limit.
+# These are operational knobs — safe to tune, not a recommendation/gate decision.
+DATA_LOAD_MAX_WORKERS = 2     # was 4 — halve the simultaneous heavy requests to Yahoo
+DATA_LOAD_STAGGER_SEC = 0.1   # gap between thread submits so starts aren't synchronized
+
 # Price cross-check tolerances. The cross-check compares the live-price primary
 # (Finnhub, real-time) against an INDEPENDENT validator (yfinance, ~15-min
 # delayed). Because of that latency the two checks have different strictness:

@@ -64,6 +64,8 @@ from stock_analyzer.constants import (
     GROW_CANDIDATE_POOL,
     REFRESH_COOLDOWN_SEC,
     FRAGILITY_PULLBACK_PCT,
+    DATA_LOAD_MAX_WORKERS,
+    DATA_LOAD_STAGGER_SEC,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -1126,21 +1128,31 @@ def _cached_scan_movers(exclude_key: tuple, min_gain: float):
     return scan_movers(tickers, min_day_gain_pct=min_gain)
 
 
-def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = 4) -> dict:
+def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = DATA_LOAD_MAX_WORKERS) -> dict:
     """Fan out load_all() across threads so cold-cache fetches overlap.
 
     load_all is @st.cache_data-decorated and Streamlit's cache is thread-safe,
     so cached hits return instantly while uncached fetches parallelize the
     yfinance round-trips. Returns {ticker: bundle | None} — ordering is not
     preserved; callers should index by ticker.
+
+    Concurrency is deliberately modest (DATA_LOAD_MAX_WORKERS) with a small
+    inter-submit stagger (DATA_LOAD_STAGGER_SEC): Yahoo — the history/bundle
+    primary — throttles bursty parallel requests, and a wide synchronized
+    fan-out trips it, cascading to "Could not load" across every name. Spacing
+    the starts keeps us under the burst limit at a tiny latency cost.
     """
+    import time
     out: dict = {}
     tickers = [t for t in tickers if t]
     if not tickers:
         return out
     from concurrent.futures import ThreadPoolExecutor, as_completed
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(load_all, t, period): t for t in tickers}
+        futures = {}
+        for t in tickers:
+            futures[ex.submit(load_all, t, period)] = t
+            time.sleep(DATA_LOAD_STAGGER_SEC)   # de-synchronize starts to avoid a burst on Yahoo
         for fut in as_completed(futures):
             t = futures[fut]
             try:
