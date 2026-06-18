@@ -45,6 +45,30 @@ def _to_date(v) -> date | None:
         return None
 
 
+def _spy_return_pct(spy_close_by_date: dict | None, start_d: date | None,
+                    today: date) -> float | None:
+    """SPY % return from `start_d` to `today`, using the nearest trading-day
+    close on-or-before each date. Returns None when the benchmark series is
+    missing or doesn't cover the window. `spy_close_by_date` is {date: close}.
+    The benchmark is the regime adjustment: a rec's alpha = its outcome minus
+    this, so a down-market loss that still beat SPY reads as positive alpha.
+    """
+    if not spy_close_by_date or start_d is None:
+        return None
+
+    def _close_on_or_before(d: date):
+        keys = [k for k in spy_close_by_date if k <= d]
+        if not keys:
+            return None
+        return spy_close_by_date[max(keys)]
+
+    p0 = _close_on_or_before(start_d)
+    p1 = _close_on_or_before(today)
+    if p0 is None or p1 is None or p0 <= 0:
+        return None
+    return (p1 - p0) / p0 * 100.0
+
+
 # ── Match recs to trades ────────────────────────────────────────────────────
 
 def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
@@ -114,7 +138,8 @@ def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
 # ── Outcome computation ─────────────────────────────────────────────────────
 
 def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | None,
-                     today: date) -> list[dict]:
+                     today: date, spy_close_by_date: dict | None = None,
+                     min_days: int = 0) -> list[dict]:
     """
     Add outcome fields to each matched rec:
       - outcome_pct      : float | None
@@ -127,9 +152,21 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
                             comparison isn't dominated by price level)
       - outcome_label    : 'win' | 'loss' | 'flat' | 'unknown'
       - days_since       : int — days from rec_date to today
+      - spy_return_pct   : float | None — SPY % over rec_date→today (the regime
+                            benchmark). None for acted SELLs (realized P&L spans an
+                            unknown holding period that can't be benchmarked to a
+                            single window) and when the SPY series is missing.
+      - alpha_pct        : float | None — outcome_pct − spy_return_pct. This is the
+                            regime-adjusted read: did the rec beat the market over
+                            the same window? None whenever either input is None.
+      - outcome_maturing : bool — True when the rec is younger than `min_days`
+                            (calendar). Such recs are kept for display but excluded
+                            from the scorecard aggregates (one session of wiggle
+                            isn't an outcome). See REC_SCORE_MIN_DAYS.
 
-    Pure read of current_prices; no fetches. Caller is responsible for
-    ensuring current_prices has every relevant ticker.
+    Pure read of current_prices / spy_close_by_date; no fetches. Caller is
+    responsible for ensuring current_prices has every relevant ticker and that
+    spy_close_by_date ({date: close}) covers the rec date range.
     """
     current_prices = current_prices or {}
     out: list[dict] = []
@@ -182,6 +219,28 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
         rd = rec["rec_date"]
         rec["days_since"] = (today - rd).days if rd is not None else None
 
+        # Regime benchmark + alpha. SELL outcomes are realized P&L over an
+        # unknown holding period, so a single rec_date→today SPY window can't
+        # fairly benchmark them — leave alpha None for those.
+        is_sell_acted = bool(
+            rec["acted_on"] and rec["acted_trade"]
+            and "SELL" in rec["acted_trade"]["action"].upper()
+        )
+        if is_sell_acted:
+            rec["spy_return_pct"] = None
+            rec["alpha_pct"]      = None
+        else:
+            spy_ret = _spy_return_pct(spy_close_by_date, rd, today)
+            rec["spy_return_pct"] = round(spy_ret, 2) if spy_ret is not None else None
+            rec["alpha_pct"] = (
+                round(rec["outcome_pct"] - spy_ret, 2)
+                if (rec["outcome_pct"] is not None and spy_ret is not None) else None
+            )
+
+        # Maturity: too young to grade (one session of wiggle isn't an outcome).
+        ds = rec["days_since"]
+        rec["outcome_maturing"] = (ds is not None and ds < min_days)
+
         out.append(rec)
     return out
 
@@ -198,22 +257,35 @@ def summary_stats(enriched: list[dict]) -> dict:
       action_rate      : float (0–100) — n_acted / n_total
       n_wins / losses  : among priced outcomes
       best_pct / worst : largest gain / largest loss outcome
-      avg_acted_pct    : mean outcome_pct for acted with priced outcome
-      avg_missed_pct   : mean outcome_pct for missed with priced outcome
+      avg_acted_pct    : mean outcome_pct for MATURE acted with priced outcome
+      avg_missed_pct   : mean outcome_pct for MATURE missed with priced outcome
       missed_alpha     : avg_missed_pct - avg_acted_pct (positive = leaving money on table)
+      avg_acted_alpha  : mean alpha_pct (vs SPY) for mature acted — the regime-
+                         adjusted read of whether acting beat the market
+      avg_missed_alpha : mean alpha_pct (vs SPY) for mature missed
+      n_maturing       : count of recs too young to grade (excluded from the
+                         outcome means; still counted in n_total / n_acted)
+
+    Action rate (n_acted / n_total) counts ALL recs — acting is known the day a
+    rec surfaces. Only the OUTCOME aggregates exclude maturing recs (an outcome
+    needs time to mean anything).
     """
-    n_total  = len(enriched)
-    n_acted  = sum(1 for r in enriched if r.get("acted_on"))
-    priced   = [r for r in enriched if r.get("outcome_pct") is not None]
+    n_total    = len(enriched)
+    n_acted    = sum(1 for r in enriched if r.get("acted_on"))
+    n_maturing = sum(1 for r in enriched if r.get("outcome_maturing"))
+    # Outcome aggregates: priced AND mature only.
+    priced   = [r for r in enriched
+                if r.get("outcome_pct") is not None and not r.get("outcome_maturing")]
     wins     = [r for r in priced if r["outcome_label"] == "win"]
     losses   = [r for r in priced if r["outcome_label"] == "loss"]
     acted_priced  = [r for r in priced if r["acted_on"]]
     missed_priced = [r for r in priced if not r["acted_on"]]
 
     def _mean(items, key="outcome_pct"):
-        if not items:
+        vals = [it[key] for it in items if it.get(key) is not None]
+        if not vals:
             return None
-        return round(sum(it[key] for it in items) / len(items), 2)
+        return round(sum(vals) / len(vals), 2)
 
     avg_acted   = _mean(acted_priced)
     avg_missed  = _mean(missed_priced)
@@ -221,32 +293,36 @@ def summary_stats(enriched: list[dict]) -> dict:
         round(avg_missed - avg_acted, 2)
         if (avg_missed is not None and avg_acted is not None) else None
     )
+    avg_acted_alpha  = _mean(acted_priced,  "alpha_pct")
+    avg_missed_alpha = _mean(missed_priced, "alpha_pct")
 
     best  = max(priced, key=lambda r: r["outcome_pct"]) if priced else None
     worst = min(priced, key=lambda r: r["outcome_pct"]) if priced else None
 
+    def _bw(r):
+        return {
+            "ticker":      r["ticker"],
+            "rec_date":    r["rec_date"],
+            "outcome_pct": round(r["outcome_pct"], 2),
+            "alpha_pct":   r.get("alpha_pct"),
+            "acted_on":    r["acted_on"],
+        }
+
     return {
         "n_total":      n_total,
         "n_acted":      n_acted,
+        "n_maturing":   n_maturing,
         "action_rate":  round(n_acted / n_total * 100.0, 1) if n_total else None,
         "n_priced":     len(priced),
         "n_wins":       len(wins),
         "n_losses":     len(losses),
-        "avg_acted_pct":  avg_acted,
-        "avg_missed_pct": avg_missed,
-        "missed_alpha":   missed_alpha,
-        "best":  {
-            "ticker":      best["ticker"],
-            "rec_date":    best["rec_date"],
-            "outcome_pct": round(best["outcome_pct"], 2),
-            "acted_on":    best["acted_on"],
-        } if best else None,
-        "worst": {
-            "ticker":      worst["ticker"],
-            "rec_date":    worst["rec_date"],
-            "outcome_pct": round(worst["outcome_pct"], 2),
-            "acted_on":    worst["acted_on"],
-        } if worst else None,
+        "avg_acted_pct":    avg_acted,
+        "avg_missed_pct":   avg_missed,
+        "missed_alpha":     missed_alpha,
+        "avg_acted_alpha":  avg_acted_alpha,
+        "avg_missed_alpha": avg_missed_alpha,
+        "best":  _bw(best)  if best  else None,
+        "worst": _bw(worst) if worst else None,
     }
 
 
@@ -261,6 +337,46 @@ def by_rec_type(enriched: list[dict]) -> dict:
     out = {}
     for rt, items in groups.items():
         out[rt] = summary_stats(items)
+    return out
+
+
+def _verdict_bucket(v: str) -> str:
+    """Normalize the stored verdict string into a display bucket."""
+    s = (v or "").strip().lower()
+    if "confirm" in s:
+        return "Confirmed"
+    if "conflict" in s:
+        return "Conflicted"
+    if "caution" in s:
+        return "Caution"
+    if "mixed" in s:
+        return "Mixed"
+    if "unverified" in s or "verify" in s:
+        return "Unverified"
+    return "Other / blank"
+
+
+# Stable display order for the by-verdict rollup (best → worst signal quality).
+_VERDICT_ORDER = ["Confirmed", "Conflicted", "Caution", "Mixed", "Unverified", "Other / blank"]
+
+
+def by_verdict(enriched: list[dict]) -> list[dict]:
+    """
+    Action-rate + outcome + alpha rollup keyed by verdict bucket. This is the
+    engine-quality view: it judges the App's actual recommendations (Confirmed)
+    apart from the awareness feed it deliberately surfaces but steers you away
+    from (Conflicted / Caution). Returns a list ordered best→worst signal
+    quality so the table reads top-down.
+    """
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in enriched:
+        groups[_verdict_bucket(r.get("verdict"))].append(r)
+    out: list[dict] = []
+    for bucket in _VERDICT_ORDER:
+        items = groups.get(bucket)
+        if not items:
+            continue
+        out.append({"verdict": bucket, **summary_stats(items)})
     return out
 
 

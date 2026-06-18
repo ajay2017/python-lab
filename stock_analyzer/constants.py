@@ -395,3 +395,13 @@ FUNDAMENTALS_CACHE_MAX_AGE_DAYS = 7
 # exhausts the free-tier API budgets (the 2026-06-05 incident). Operational
 # knob, not an investment threshold — safe to tune from observation.
 REFRESH_COOLDOWN_SEC = 60
+
+# ── Recommendations-history scorecard ────────────────────────────────────────
+# Minimum age (calendar days) before a surfaced rec's OUTCOME is scored on the
+# Recommendations History page. A rec measured the day after it surfaces is just
+# noise (one session of price wiggle); the aggregates (avg outcome / alpha /
+# best / worst) only count recs at least this old. Younger recs still appear in
+# the table flagged "maturing." This is a MEASUREMENT window for the retrospective
+# scorecard — NOT a decision gate; it never affects what the engine recommends,
+# only how long we wait before grading. Safe to tune from observation.
+REC_SCORE_MIN_DAYS = 5
