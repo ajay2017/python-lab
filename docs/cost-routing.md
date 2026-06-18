@@ -82,6 +82,9 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-10 | Resilience part (a) — burst-taming (DATA_LOAD_MAX_WORKERS 4→2 + stagger) | — | — | — | — | n/a — lead | Operational tuning to stop tripping Yahoo's throttle; small, inline |
 | 2026-06-10 | Resilience part (b) — last-known-good bundle cache (daily_pnl-style: db table + load_all write-through/fallback + staleness banner) | — | — | — | — | n/a — lead | Correctness-critical (load_all hot path) + new DB writer/RLS; built inline as lead, serialization unit-tested |
 | 2026-06-10 | Resilience part (b) — Opus review | — | — | — | — | n/a — lead | Mandatory review (hot path + DB writer + RLS). Traced hot-path safety, ran tz round-trip + _json_safe live → SHIP, no blockers |
+| 2026-06-10 | Home perf — memoize pre-tab synthesis (signature-gated session cache + explicit-only recompute triggers) | — | — | — | — | n/a — lead | Correctness-critical (Daily Brief + recommendations DB write + cross-page coordination caches); judgment-heavy boundary placement + NameError-risk bundle. Built inline as lead; +4-indent of the 525-line region done via a one-shot script, py_compile-verified |
+| 2026-06-10 | Home perf — Opus review (bundle completeness, DB-write gating, lock, signature) | — | — | — | — | n/a — lead | Mandatory review (Brief + DB writer). Grepped all post-region reads vs the restore set → no escaped local; verified holdings/manual_stops signature keys + no threshold change → SHIP |
+| 2026-06-10 | Home perf — architecture.md Known-Behaviours + coordination-cache rows | Haiku | — | — | — | — | Mechanical doc rows (the strong-saving lane). Handed the facts; doc-writer matched house style |
 
 ### Running totals (delegated work only)
 
