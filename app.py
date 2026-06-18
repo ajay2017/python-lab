@@ -2040,6 +2040,12 @@ if page == "🏠 Home":
     portfolio_value = total_val                        # drive risk calc from live holdings
     st.session_state["_portfolio_value"] = total_val  # update sidebar display
 
+    # Best / worst position tiles stay live (cheap, price-driven) — kept
+    # OUT of the memoized synthesis block below.
+    best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
+    worst_row = port_df.loc[port_df["P&L (%)"].idxmin()]
+    winners   = int((port_df["P&L (%)"] > 0).sum())
+
     # ── Pre-compute all analytics (before tabs so all tabs can access) ────────
     # Signal change detection (session-state baseline)
     _curr_signals = dict(zip(port_df["Ticker"], port_df["Signal"]))
@@ -2056,539 +2062,626 @@ if page == "🏠 Home":
                 "ticker": _t, "from": _prev, "to": _sig,
                 "degraded": _degraded, "improved": _improved,
             })
-    st.session_state["_prev_signals"] = _curr_signals
 
-    alert_list = alerts(port_df, held_data)
-    # Append signal-change alerts
-    for _sc in _signal_changes:
-        _icon = "📉" if _sc["degraded"] else "📈" if _sc["improved"] else "↔️"
-        _lvl  = "warning" if _sc["degraded"] else "info"
-        alert_list.append({
-            "level": _lvl, "category": "signal_change",
-            "msg": f"{_icon} **{_sc['ticker']}** signal changed: {_sc['from']} → **{_sc['to']}** since last check",
-        })
-
-    n_danger   = sum(1 for a in alert_list if a["level"] == "danger")
-    n_warning  = sum(1 for a in alert_list if a["level"] == "warning")
-
-    actions = rebalance_actions(port_df)
-
-    try:
-        corr_df      = correlation_matrix(held_data)
-        _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
-        div          = diversification_score(corr_df, _weights_map)
-        div_score    = div["score"]
-        avg_corr     = div["avg_correlation"]
-        risk_pairs   = div["risk_pairs"]
-        _div_label   = ("Well Diversified" if div_score >= 42
-                        else "Moderate" if div_score >= 30 else "High Correlation Risk")
-    except Exception:
-        corr_df    = pd.DataFrame()
-        div        = {"score": None, "avg_correlation": None, "risk_pairs": []}
-        div_score  = avg_corr = None
-        risk_pairs = []
-        _div_label = "Unavailable"
-
-    try:
-        div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
-    except Exception:
-        div_recs = []
-
-    h_rets = holding_returns(held_data)
-
-    # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
-    try:
-        _spy_for_risk = fetch_spy("6mo")
-        _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
-    except Exception:
-        _port_risk = {}
-    st.session_state["_port_risk_cache"] = _port_risk  # available to Analysis page
-
-    # Fragility gauge — how a ROUTINE pullback would hit THIS book. Pre-emptive
-    # exposure, NOT a forecast of when a pullback comes. Reuses the stress-test
-    # "Mild Correction" engine + cached portfolio beta; severity reuses the
-    # PORTFOLIO_BETA_ELEVATED / _CEILING policy bands. None on failure (not {})
-    # so the render can show "offline" rather than fabricate a calm reading.
-    try:
-        _frag_beta = _port_risk.get("beta") if _port_risk else None
-        if _frag_beta is not None and not port_df.empty:
-            _mild_sc  = next((s for s in SCENARIOS if s["id"] == "mild_correction"), None)
-            _mild_res = (
-                run_scenario(_mild_sc, port_df, held_data, _frag_beta,
-                             custom_spy_move=FRAGILITY_PULLBACK_PCT)
-                if _mild_sc else {}
-            )
-            _fragility = assess_fragility(
-                _mild_res, _frag_beta,
-                PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING, FRAGILITY_PULLBACK_PCT,
-            )
-        else:
-            _fragility = None
-    except Exception:
-        _fragility = None
-    st.session_state["_fragility_cache"] = _fragility
-
-    # Risk Advisor recommendations — generated from portfolio risk metrics
-    try:
-        _risk_advisor_recs = build_risk_advisor_recommendations(
-            port_df, held_data, _port_risk, h_rets, total_val
-        )
-    except Exception:
-        _risk_advisor_recs = []
-    # Cache HIGH-priority alert titles so other pages (e.g. Watchlist) can gate
-    # ENTER_NOW recommendations against active portfolio risk state.
-    st.session_state["_risk_high_alerts_cache"] = [
-        r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
-    ]
-
-    best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
-    worst_row = port_df.loc[port_df["P&L (%)"].idxmin()]
-    winners   = int((port_df["P&L (%)"] > 0).sum())
-
-    if n_danger > 0 or (div_score is not None and div_score < 30):
-        _rag_label, _rag_color = "Action Required", "#ff4444"
-    elif n_warning > 0 or (div_score is not None and div_score < 42):
-        _rag_label, _rag_color = "Monitor", "#ffbb33"
-    else:
-        _rag_label, _rag_color = "All Clear", "#00C851"
-
-    # Load macro calendar (cached per ET date — FRED key optional but recommended)
-    _mc_day_key = f"_macro_cal_{_today_et()}"
-    if _mc_day_key not in st.session_state:
-        _fred_k = (
-            st.secrets.get("fred", {}).get("api_key")
-            or os.environ.get("FRED_API_KEY", "")
-        )
-        st.session_state[_mc_day_key] = build_macro_calendar(
-            port_df, fred_key=_fred_k or None, days_ahead=45, days_behind=7,
-            today=_today_et(),
-        )
-    _macro_events = st.session_state[_mc_day_key]
-
-    # Market context — drives Daily Briefing tone (bull / bear / flat)
-    try:
-        _mkt_indices = fetch_market_indices()
-        _sp_row      = next((i for i in _mkt_indices if i["short"] == "S&P 500"), None)
-        _nq_row      = next((i for i in _mkt_indices if i["short"] == "NASDAQ"),  None)
-        _sp_pct      = float(_sp_row["change_pct"]) if _sp_row else 0.0
-        _nq_pct      = float(_nq_row["change_pct"]) if _nq_row else 0.0
-        _mkt_tone    = "bull" if _sp_pct >= 0.5 else "bear" if _sp_pct <= -0.5 else "flat"
-
-        # Leading / lagging sectors from 1-week returns
-        _sect_df_ctx  = _fetch_sector_returns()
-        _lead_sectors: list[dict] = []
-        if not _sect_df_ctx.empty and "1W" in _sect_df_ctx.columns:
-            _sect_sorted = _sect_df_ctx.sort_values("1W", ascending=False)
-            for _, _sr in _sect_sorted.head(3).iterrows():
-                _etf = str(_sr["ETF"])
-                _lead_sectors.append({
-                    "etf":       _etf,
-                    "sector":    next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf),
-                    "return_1w": float(_sr["1W"]),
-                })
-
-        _market_context = {
-            "tone":            _mkt_tone,
-            "sp500_pct":       _sp_pct,
-            "nasdaq_pct":      _nq_pct,
-            "leading_sectors": _lead_sectors,
-        }
-    except Exception:
-        _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
-
-    # Auto-fetch composite scores for top scanner picks so Grow Today conviction
-    # labels are accurate without requiring a manual Refresh Signals click.
-    # Pool size = GROW_CANDIDATE_POOL (max_picks_bull × over-fetch = 12) —
-    # matches _grow_today's full candidate window so every candidate the Brief
-    # evaluates has a composite — otherwise picks beyond slot 5 fall back to
-    # "Verify — Run Analysis First" even when the user just wants a Skip/Go
-    # verdict on the Brief itself.
-    #
-    # Single source of truth: rebuild from load_all() on every render rather
-    # than holding a session-state snapshot. load_all() has a 30-min TTL so
-    # this is a cache-hit and effectively free, but it guarantees the Brief's
-    # composite matches the Analysis page's composite — both ultimately read
-    # the same cache layer. A prior implementation only fetched "missing"
-    # tickers, which let _grow_composites hold a composite from hours ago
-    # while load_all rolled over to a fresher value — same ticker rendered
-    # with two different composites in the same session.
-    _sr_for_comp = st.session_state.get("scanner_results")
-    if _sr_for_comp is not None and not _sr_for_comp.empty:
-        _top_for_comp  = (
-            _sr_for_comp[~_sr_for_comp["Ticker"].isin(set(held_tickers))]
-            .head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
-        )
-        _grow_composites: dict = {}
-        # Track tickers where the composite fetch failed so the Grow Today UI
-        # can surface a "composite scores unavailable" banner instead of
-        # silently letting picks bypass the composite-score gate.
-        _comp_failures: list[str] = []
-        for _tc in _top_for_comp:
-            # Single retry on failure — yfinance frequently throws transient
-            # errors on individual tickers (rate limits, momentary 5xx) that
-            # clear on a second call. Without the retry the pick falls into
-            # the composite_unavailable bucket and only re-tries on the next
-            # full Brief render. Cheap to retry inline since load_all is
-            # cache_data-decorated; the second call is a no-op cache lookup.
-            _bundle = None
-            for _attempt in range(2):
-                try:
-                    _bundle = load_all(_tc)
-                    break
-                except Exception:
-                    if _attempt == 1:
-                        # Final attempt failed — record for the banner.
-                        _comp_failures.append(_tc)
-            if _bundle is not None:
-                _grow_composites[_tc] = _bundle
-        st.session_state._grow_composites = _grow_composites
-        # Compute coverage = fraction of intended top picks that have composite data
-        _intended = set(_top_for_comp)
-        _have     = _intended & set(_grow_composites.keys())
-        st.session_state._grow_composites_coverage = {
-            "intended": sorted(_intended),
-            "have":     sorted(_have),
-            "missing":  sorted(_intended - _have),
-            "failures": _comp_failures,
-        }
-
-        # ── Movers discovery ────────────────────────────────────────────────
-        # Scan the broad discovery universe for big 1-day gainers NOT already
-        # in the curated SECTOR_UNIVERSE / held / watchlist, then feed them as
-        # ADDITIONAL CANDIDATES into the same Grow Today pipeline (not a
-        # separate section). Their load_all bundles are added to grow_composites
-        # so _grow_today's composite gate validates them exactly like curated
-        # picks; from there they face the same macro / sector / tone / cap
-        # gates and compete for the same slots. This is what keeps the brief
-        # internally consistent — no "flat market, no new entries" message
-        # sitting above a list of mover entries.
-        #
-        # Piggybacks on the scanner-run state so the ~200-ticker download only
-        # happens once the user has asked for signals, not on a cold Home load.
-        _movers_candidates: list[dict] = []
-        try:
-            _mv_exclude = (
-                set().union(*SECTOR_UNIVERSE.values())
-                | set(held_tickers)
-                | {str(t).upper() for t in (st.session_state.get("watchlist", []) or [])}
-            )
-            _movers_df = _cached_scan_movers(tuple(sorted(_mv_exclude)), MOVER_MIN_DAY_GAIN_PCT)
-            if _movers_df is not None and not _movers_df.empty:
-                for _, _mrow in _movers_df.head(MOVER_SHORTLIST_SIZE).iterrows():
-                    _mt = str(_mrow["Ticker"]).upper()
-                    try:
-                        _mb = load_all(_mt)
-                    except Exception:
-                        continue
-                    # Add the bundle to grow_composites so _grow_today's
-                    # composite gate finds it (same path as curated picks).
-                    _grow_composites[_mt] = _mb
-                    try:
-                        _mcomp = float(_mb.get("total"))
-                    except (TypeError, ValueError):
-                        _mcomp = None
-                    _movers_candidates.append({
-                        "ticker":          _mt,
-                        "price":           _mb.get("current_price"),
-                        "sector":          _mb.get("sector", "") or "Other",
-                        "trend":           str(_mrow.get("Trend", "")),
-                        "scanner_signal":  str(_mrow.get("Signal", "")),
-                        "score":           float(_mrow.get("Score", 0)),       # momentum
-                        "rsi":             float(_mrow.get("RSI", 50)),
-                        "mom_1m":          float(_mrow.get("1M Momentum", 0)),
-                        "mom_3m":          float(_mrow.get("3M Momentum", 0)),
-                        "composite_score": _mcomp,
-                        "composite_label": str((_mb.get("rec") or {}).get("label", "")),
-                        "day_change":      float(_mrow.get("Day Change %", 0)),
-                    })
-                # Re-publish grow_composites now that mover bundles are merged in.
-                st.session_state._grow_composites = _grow_composites
-            st.session_state["_movers_candidates"] = _movers_candidates
-        except Exception:
-            st.session_state["_movers_candidates"] = []
-
-    # Build Daily Briefing (synthesises all intelligence — computed once before tabs).
-    #
-    # Lock semantics: when the user has clicked "Lock Today's Setup", we serve
-    # the cached snapshot instead of rebuilding. This freezes the AM read so
-    # mid-day data drift can't shift recommendations under the user after they
-    # already decided. Lock auto-expires next trading day (different _today_et()).
-    _brief_locked_for = st.session_state.get("_brief_locked_for_date")
-    _brief_snapshot   = st.session_state.get("_brief_locked_snapshot")
-    _brief_use_lock   = (
-        st.session_state.get("_brief_locked", False)
-        and _brief_locked_for == _today_et()
-        and _brief_snapshot is not None
+    # ── Synthesis memoization (perf) ─────────────────────────
+    # The heavy synthesis below (alerts -> risk -> grow-composites -> Daily
+    # Brief -> rec-log) used to re-run top-to-bottom on EVERY rerun (every tab
+    # click / button press), even though the Brief is a stable once-per-AM read
+    # (see the Lock feature). Memoize it behind an input signature: recompute
+    # ONLY on an explicit trigger — holdings change, a new trading day, a fresh
+    # scanner run (_scanner_ver), or a Refresh / Lock / Unlock click
+    # (_brief_refresh_nonce). The live metric row (Portfolio Value / Total P&L /
+    # Today's P&L / Best / Worst) is computed ABOVE this block and stays live
+    # every rerun. On a cache hit we restore the bundled locals AND re-publish
+    # the cross-page coordination caches (other pages may mutate them) so the
+    # CLAUDE.md publish/consume contract holds.
+    _synth_sig = (
+        frozenset(
+            (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
+             float(_h.get("Shares") or _h.get("shares") or 0))
+            for _h in holdings
+        ),
+        _today_et().isoformat(),
+        frozenset(
+            (str(_t).upper(), float((_v or {}).get("stop_price") or 0))
+            for _t, _v in (_manual_stops or {}).items()
+        ),
+        st.session_state.get("_scanner_ver", 0),
+        st.session_state.get("_brief_refresh_nonce", 0),
     )
-    if _brief_use_lock:
-        _daily_brief = _brief_snapshot
-        # _brief_built_at was set at the time of the original build (preserved)
+    _synth_cache = st.session_state.get("_home_synth_cache")
+    if _synth_cache is not None and _synth_cache.get("sig") == _synth_sig:
+        _b = _synth_cache["bundle"]
+        alert_list         = _b["alert_list"]
+        n_danger           = _b["n_danger"]
+        n_warning          = _b["n_warning"]
+        actions            = _b["actions"]
+        corr_df            = _b["corr_df"]
+        div                = _b["div"]
+        div_score          = _b["div_score"]
+        avg_corr           = _b["avg_corr"]
+        risk_pairs         = _b["risk_pairs"]
+        _div_label         = _b["_div_label"]
+        div_recs           = _b["div_recs"]
+        h_rets             = _b["h_rets"]
+        _port_risk         = _b["_port_risk"]
+        _fragility         = _b["_fragility"]
+        _risk_advisor_recs = _b["_risk_advisor_recs"]
+        _rag_label         = _b["_rag_label"]
+        _rag_color         = _b["_rag_color"]
+        _macro_events      = _b["_macro_events"]
+        _market_context    = _b["_market_context"]
+        _grow_composites   = _b["_grow_composites"]
+        _movers_candidates = _b["_movers_candidates"]
+        _daily_brief       = _b["_daily_brief"]
+        # Re-publish coordination caches (downstream pages read these and may
+        # have mutated them since the last rebuild).
+        st.session_state["_port_risk_cache"]          = _port_risk
+        st.session_state["_fragility_cache"]          = _fragility
+        st.session_state["_risk_high_alerts_cache"]   = _b["_risk_high_alerts_cache"]
+        st.session_state["_grow_composites"]          = _grow_composites
+        st.session_state["_grow_composites_coverage"] = _b["_grow_composites_coverage"]
+        st.session_state["_movers_candidates"]        = _movers_candidates
+        st.session_state["_grow_today_sectors_cache"] = _b["_grow_today_sectors_cache"]
+        st.session_state["_leading_sectors_cache"]    = _b["_leading_sectors_cache"]
+        st.session_state["_daily_brief_offline"]      = _b["_daily_brief_offline"]
     else:
-        # Lock from a previous trading day — clear it so the new day's Brief builds fresh
-        if st.session_state.get("_brief_locked") and _brief_locked_for != _today_et():
-            st.session_state["_brief_locked"] = False
-            st.session_state.pop("_brief_locked_snapshot", None)
-            st.session_state.pop("_brief_locked_for_date", None)
-            st.session_state.pop("_brief_locked_at", None)
-        try:
-            _daily_brief = build_daily_briefing(
-                port_df         = port_df,
-                alert_list      = alert_list,
-                risk_recs       = _risk_advisor_recs,
-                news_items      = st.session_state.get("_sidebar_news", []),
-                macro_events    = _macro_events,
-                held_data       = held_data,
-                scanner_results = st.session_state.get("scanner_results"),
-                portfolio_value = total_val,
-                today           = _today_et(),
-                market_context  = _market_context,
-                grow_composites = st.session_state.get("_grow_composites", {}),
-                movers          = st.session_state.get("_movers_candidates", []),
-            )
-            # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
-            # the Brief header so the user can see how fresh the data is.
-            st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
-        except Exception:
-            _daily_brief    = None
-            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+        alert_list = alerts(port_df, held_data)
+        # Append signal-change alerts
+        for _sc in _signal_changes:
+            _icon = "📉" if _sc["degraded"] else "📈" if _sc["improved"] else "↔️"
+            _lvl  = "warning" if _sc["degraded"] else "info"
+            alert_list.append({
+                "level": _lvl, "category": "signal_change",
+                "msg": f"{_icon} **{_sc['ticker']}** signal changed: {_sc['from']} → **{_sc['to']}** since last check",
+            })
 
-    # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
-    # can demote ENTER_NOW picks that would stack the same sector exposure.
-    # When Daily Briefing failed, cache is None (not empty list) so downstream
-    # features can detect "offline" vs. "computed and empty" and surface the
-    # state to the user instead of silently disabling coordination gates.
-    if _daily_brief is None:
-        st.session_state["_grow_today_sectors_cache"] = None
-        st.session_state["_daily_brief_offline"]      = True
-        # Provide a minimal empty dict so downstream code doesn't crash, but
-        # session_state flag tells consumers to render the offline UI state.
-        _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
-    else:
-        st.session_state["_daily_brief_offline"] = False
-        _gt_today = _daily_brief.get("grow_today") or {}
-        st.session_state["_grow_today_sectors_cache"] = sorted({
-            str(p.get("sector", "")).strip()
-            for p in (_gt_today.get("new_picks") or []) + (_gt_today.get("add_positions") or [])
-            if str(p.get("sector", "")).strip()
-        })
-        # Stash leading sector names so the standalone Catalyst Watch page can
-        # show the 🔥 leading-sector flag without recomputing the brief.
-        st.session_state["_leading_sectors_cache"] = [
-            ls.get("sector", "") for ls in (_gt_today.get("leading_sectors") or [])
+        n_danger   = sum(1 for a in alert_list if a["level"] == "danger")
+        n_warning  = sum(1 for a in alert_list if a["level"] == "warning")
+
+        actions = rebalance_actions(port_df)
+
+        try:
+            corr_df      = correlation_matrix(held_data)
+            _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
+            div          = diversification_score(corr_df, _weights_map)
+            div_score    = div["score"]
+            avg_corr     = div["avg_correlation"]
+            risk_pairs   = div["risk_pairs"]
+            _div_label   = ("Well Diversified" if div_score >= 42
+                            else "Moderate" if div_score >= 30 else "High Correlation Risk")
+        except Exception:
+            corr_df    = pd.DataFrame()
+            div        = {"score": None, "avg_correlation": None, "risk_pairs": []}
+            div_score  = avg_corr = None
+            risk_pairs = []
+            _div_label = "Unavailable"
+
+        try:
+            div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
+        except Exception:
+            div_recs = []
+
+        h_rets = holding_returns(held_data)
+
+        # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
+        try:
+            _spy_for_risk = fetch_spy("6mo")
+            _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
+        except Exception:
+            _port_risk = {}
+        st.session_state["_port_risk_cache"] = _port_risk  # available to Analysis page
+
+        # Fragility gauge — how a ROUTINE pullback would hit THIS book. Pre-emptive
+        # exposure, NOT a forecast of when a pullback comes. Reuses the stress-test
+        # "Mild Correction" engine + cached portfolio beta; severity reuses the
+        # PORTFOLIO_BETA_ELEVATED / _CEILING policy bands. None on failure (not {})
+        # so the render can show "offline" rather than fabricate a calm reading.
+        try:
+            _frag_beta = _port_risk.get("beta") if _port_risk else None
+            if _frag_beta is not None and not port_df.empty:
+                _mild_sc  = next((s for s in SCENARIOS if s["id"] == "mild_correction"), None)
+                _mild_res = (
+                    run_scenario(_mild_sc, port_df, held_data, _frag_beta,
+                                 custom_spy_move=FRAGILITY_PULLBACK_PCT)
+                    if _mild_sc else {}
+                )
+                _fragility = assess_fragility(
+                    _mild_res, _frag_beta,
+                    PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING, FRAGILITY_PULLBACK_PCT,
+                )
+            else:
+                _fragility = None
+        except Exception:
+            _fragility = None
+        st.session_state["_fragility_cache"] = _fragility
+
+        # Risk Advisor recommendations — generated from portfolio risk metrics
+        try:
+            _risk_advisor_recs = build_risk_advisor_recommendations(
+                port_df, held_data, _port_risk, h_rets, total_val
+            )
+        except Exception:
+            _risk_advisor_recs = []
+        # Cache HIGH-priority alert titles so other pages (e.g. Watchlist) can gate
+        # ENTER_NOW recommendations against active portfolio risk state.
+        st.session_state["_risk_high_alerts_cache"] = [
+            r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
         ]
 
-        # ── Recommendations log (persist + decorate with first-seen) ─────────
-        # Capture every pick surfaced today so the user can audit the App's
-        # recommendation history over time. Unique-constraint on
-        # (ticker, rec_date, rec_type) means the same ticker re-surfacing
-        # across Brief rebuilds within the same day is a no-op — only the
-        # first surface gets a row, and that row's surfaced_at is what we
-        # display on the card. Locked Briefs skip the write (the snapshot's
-        # surfaced_at was captured at lock time) but still get decorated
-        # on read.
+
+        if n_danger > 0 or (div_score is not None and div_score < 30):
+            _rag_label, _rag_color = "Action Required", "#ff4444"
+        elif n_warning > 0 or (div_score is not None and div_score < 42):
+            _rag_label, _rag_color = "Monitor", "#ffbb33"
+        else:
+            _rag_label, _rag_color = "All Clear", "#00C851"
+
+        # Load macro calendar (cached per ET date — FRED key optional but recommended)
+        _mc_day_key = f"_macro_cal_{_today_et()}"
+        if _mc_day_key not in st.session_state:
+            _fred_k = (
+                st.secrets.get("fred", {}).get("api_key")
+                or os.environ.get("FRED_API_KEY", "")
+            )
+            st.session_state[_mc_day_key] = build_macro_calendar(
+                port_df, fred_key=_fred_k or None, days_ahead=45, days_behind=7,
+                today=_today_et(),
+            )
+        _macro_events = st.session_state[_mc_day_key]
+
+        # Market context — drives Daily Briefing tone (bull / bear / flat)
+        try:
+            _mkt_indices = fetch_market_indices()
+            _sp_row      = next((i for i in _mkt_indices if i["short"] == "S&P 500"), None)
+            _nq_row      = next((i for i in _mkt_indices if i["short"] == "NASDAQ"),  None)
+            _sp_pct      = float(_sp_row["change_pct"]) if _sp_row else 0.0
+            _nq_pct      = float(_nq_row["change_pct"]) if _nq_row else 0.0
+            _mkt_tone    = "bull" if _sp_pct >= 0.5 else "bear" if _sp_pct <= -0.5 else "flat"
+
+            # Leading / lagging sectors from 1-week returns
+            _sect_df_ctx  = _fetch_sector_returns()
+            _lead_sectors: list[dict] = []
+            if not _sect_df_ctx.empty and "1W" in _sect_df_ctx.columns:
+                _sect_sorted = _sect_df_ctx.sort_values("1W", ascending=False)
+                for _, _sr in _sect_sorted.head(3).iterrows():
+                    _etf = str(_sr["ETF"])
+                    _lead_sectors.append({
+                        "etf":       _etf,
+                        "sector":    next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf),
+                        "return_1w": float(_sr["1W"]),
+                    })
+
+            _market_context = {
+                "tone":            _mkt_tone,
+                "sp500_pct":       _sp_pct,
+                "nasdaq_pct":      _nq_pct,
+                "leading_sectors": _lead_sectors,
+            }
+        except Exception:
+            _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+
+        # Auto-fetch composite scores for top scanner picks so Grow Today conviction
+        # labels are accurate without requiring a manual Refresh Signals click.
+        # Pool size = GROW_CANDIDATE_POOL (max_picks_bull × over-fetch = 12) —
+        # matches _grow_today's full candidate window so every candidate the Brief
+        # evaluates has a composite — otherwise picks beyond slot 5 fall back to
+        # "Verify — Run Analysis First" even when the user just wants a Skip/Go
+        # verdict on the Brief itself.
         #
-        # No once-per-session guard: db.save_recommendations is idempotent
-        # via the unique constraint + ignore_duplicates, so writing on every
-        # Brief build is cheap (single upsert round-trip) and avoids the
-        # sticky-flag failure mode where an early failed save permanently
-        # blocked retries for the rest of the session.
-        # Session-flag guard (race-immune): a read-only viewer's Home load must
-        # not WRITE the owner's recommendation log. The db-layer _READONLY flag
-        # also no-ops this, but it's a process-global; the per-session flag here
-        # closes the cross-session race (a concurrent owner session flipping it).
-        if db.has_db() and not _brief_use_lock and not st.session_state.get("_readonly", False):
-            _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
-            try:
-                # Price snapshot resolver: each pick type stores price differently,
-                # and some buy_candidates don't carry one. Fall back to held-position
-                # avg_cost (via port_df) or live-prices cache before giving up. The
-                # column is nullable in the DB so None is safe — but a populated
-                # value makes "would-have-gained" math possible later.
-                _live_px_map = st.session_state.get("_live_prices", {}) or {}
-                _port_px_map: dict = {}
-                if port_df is not None and not port_df.empty and "Price" in port_df.columns:
-                    _port_px_map = {
-                        str(_r["Ticker"]).upper(): float(_r["Price"] or 0)
-                        for _, _r in port_df.iterrows()
-                        if _r.get("Ticker")
-                    }
-                def _price_for(_tk: str, _pick_price=None):
-                    if _pick_price:
-                        try:
-                            _v = float(_pick_price)
-                            if _v > 0:
-                                return _v
-                        except (TypeError, ValueError):
-                            pass
-                    _u = str(_tk).upper()
-                    _lp = _live_px_map.get(_u, {})
-                    if isinstance(_lp, dict):
-                        try:
-                            _v = float(_lp.get("price") or 0)
-                            if _v > 0:
-                                return _v
-                        except (TypeError, ValueError):
-                            pass
-                    _pv = _port_px_map.get(_u, 0)
-                    return _pv if _pv > 0 else None
-
-                _rec_rows: list[dict] = []
-                for _p in (_gt_today.get("new_picks") or []):
-                    _tk = str(_p.get("ticker", ""))
-                    _rec_rows.append({
-                        "ticker":           _tk,
-                        "rec_date":         _today_et(),
-                        "rec_type":         "new_pick",
-                        "price_at_surface": _price_for(_tk, _p.get("price")),
-                        "composite_score":  _p.get("composite_score"),
-                        "momentum_score":   _p.get("score"),
-                        "sector":           _p.get("sector", ""),
-                        "conviction":       _p.get("conviction", ""),
-                        "verdict":          ((_p.get("xref") or {}).get("verdict") or ""),
-                        "thesis":           _p.get("thesis", ""),
-                    })
-                for _p in (_gt_today.get("add_positions") or []):
-                    _tk = str(_p.get("ticker", ""))
-                    _rec_rows.append({
-                        "ticker":           _tk,
-                        "rec_date":         _today_et(),
-                        "rec_type":         "add_winner",
-                        "price_at_surface": _price_for(_tk),  # add-to-winner doesn't carry an explicit price
-                        "composite_score":  _p.get("score"),
-                        "momentum_score":   _p.get("score"),
-                        "sector":           _p.get("sector", ""),
-                        "conviction":       "high",   # add-to-winner only fires on Strong Buy
-                        "verdict":          "confirmed",
-                        "thesis":           _p.get("thesis", ""),
-                    })
-                # Composite lookup helper for buy_candidates — neither dict
-                # branch carries composite directly. For held names port_df
-                # has the composite as Score; for non-held names the pre-fetched
-                # _grow_composites cache has it under .total. This is the same
-                # source-of-truth chain lookup_composite uses internally; we
-                # inline it here to avoid plumbing yet another argument through.
-                _grow_comp_cache = st.session_state.get("_grow_composites", {}) or {}
-                _port_score_map: dict = {}
-                if port_df is not None and not port_df.empty and "Score" in port_df.columns:
-                    _port_score_map = {
-                        str(_r["Ticker"]).upper(): float(_r.get("Score") or 0)
-                        for _, _r in port_df.iterrows()
-                        if _r.get("Ticker")
-                    }
-                def _composite_for(_tk: str):
-                    _u = str(_tk).upper()
-                    _comp = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk)
-                    if _comp:
-                        try:
-                            _v = float(_comp.get("total") or 0)
-                            if _v > 0:
-                                return _v
-                        except (TypeError, ValueError):
-                            pass
-                    _ps = _port_score_map.get(_u, 0)
-                    return _ps if _ps > 0 else None
-
-                for _p in (_daily_brief.get("buy_candidates") or []):
-                    _bx = _p.get("xref") or {}
-                    _tk = str(_p.get("ticker", ""))
-                    _rec_rows.append({
-                        "ticker":           _tk,
-                        "rec_date":         _today_et(),
-                        "rec_type":         "buy_candidate",
-                        "price_at_surface": _price_for(_tk),
-                        "composite_score":  _composite_for(_tk),
-                        "momentum_score":   _p.get("score"),
-                        "sector":           _p.get("sector", ""),
-                        "conviction":       "",
-                        "verdict":          str(_bx.get("verdict") or ""),
-                        "thesis":           "",
-                    })
-                if _rec_rows:
-                    _rec_save_result = db.save_recommendations(_rec_rows)
-            except Exception as _rec_save_err:
-                _rec_save_result = {"attempted": 0, "saved": 0,
-                                    "error": str(_rec_save_err)[:200]}
-            st.session_state["_rec_log_save_result"] = _rec_save_result
-
-        # Decorate each pick with its first-seen surfaced_at so the card
-        # render can show "Recommended at HH:MM ET" without an extra round-trip
-        # per card. Single fetch for today; build (ticker, rec_type) → ts map.
-        if db.has_db() and not _brief_use_lock:
-            _rec_load_count = 0
-            _rec_load_error: str | None = None
-            try:
-                _rec_today_df = db.load_recommendations(start_date=_today_et(), end_date=_today_et())
-                _rec_first_seen: dict[tuple[str, str], str] = {}
-                if not _rec_today_df.empty:
-                    for _, _r in _rec_today_df.iterrows():
-                        _key = (str(_r.get("ticker", "")).upper(),
-                                str(_r.get("rec_type", "")))
-                        _ts = _r.get("surfaced_at")
-                        if _ts is not None and _key not in _rec_first_seen:
-                            _rec_first_seen[_key] = str(_ts)
-                _rec_load_count = len(_rec_today_df)
-                # Attach to each pick dict for downstream render to read
-                for _p in (_gt_today.get("new_picks") or []):
-                    _p["_first_seen_at"] = _rec_first_seen.get(
-                        (str(_p.get("ticker", "")).upper(), "new_pick")
-                    )
-                for _p in (_gt_today.get("add_positions") or []):
-                    _p["_first_seen_at"] = _rec_first_seen.get(
-                        (str(_p.get("ticker", "")).upper(), "add_winner")
-                    )
-                for _p in (_daily_brief.get("buy_candidates") or []):
-                    _p["_first_seen_at"] = _rec_first_seen.get(
-                        (str(_p.get("ticker", "")).upper(), "buy_candidate")
-                    )
-            except Exception as _rec_load_err:
-                _rec_load_error = str(_rec_load_err)[:200]
-            st.session_state["_rec_log_load_state"] = {
-                "rows_today": _rec_load_count,
-                "error":      _rec_load_error,
+        # Single source of truth: rebuild from load_all() on every render rather
+        # than holding a session-state snapshot. load_all() has a 30-min TTL so
+        # this is a cache-hit and effectively free, but it guarantees the Brief's
+        # composite matches the Analysis page's composite — both ultimately read
+        # the same cache layer. A prior implementation only fetched "missing"
+        # tickers, which let _grow_composites hold a composite from hours ago
+        # while load_all rolled over to a fresher value — same ticker rendered
+        # with two different composites in the same session.
+        _sr_for_comp = st.session_state.get("scanner_results")
+        if _sr_for_comp is not None and not _sr_for_comp.empty:
+            _top_for_comp  = (
+                _sr_for_comp[~_sr_for_comp["Ticker"].isin(set(held_tickers))]
+                .head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
+            )
+            _grow_composites: dict = {}
+            # Track tickers where the composite fetch failed so the Grow Today UI
+            # can surface a "composite scores unavailable" banner instead of
+            # silently letting picks bypass the composite-score gate.
+            _comp_failures: list[str] = []
+            for _tc in _top_for_comp:
+                # Single retry on failure — yfinance frequently throws transient
+                # errors on individual tickers (rate limits, momentary 5xx) that
+                # clear on a second call. Without the retry the pick falls into
+                # the composite_unavailable bucket and only re-tries on the next
+                # full Brief render. Cheap to retry inline since load_all is
+                # cache_data-decorated; the second call is a no-op cache lookup.
+                _bundle = None
+                for _attempt in range(2):
+                    try:
+                        _bundle = load_all(_tc)
+                        break
+                    except Exception:
+                        if _attempt == 1:
+                            # Final attempt failed — record for the banner.
+                            _comp_failures.append(_tc)
+                if _bundle is not None:
+                    _grow_composites[_tc] = _bundle
+            st.session_state._grow_composites = _grow_composites
+            # Compute coverage = fraction of intended top picks that have composite data
+            _intended = set(_top_for_comp)
+            _have     = _intended & set(_grow_composites.keys())
+            st.session_state._grow_composites_coverage = {
+                "intended": sorted(_intended),
+                "have":     sorted(_have),
+                "missing":  sorted(_intended - _have),
+                "failures": _comp_failures,
             }
 
-        # ── Signal hysteresis (calm advisor 2C) ──────────────────────────────
-        # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
-        # a persistent pick as continuity, not a fresh daily call to re-litigate
-        # (§2B medium-term posture). ANNOTATE-ONLY — never adds/removes/re-orders
-        # a pick, so it can't fight the buy gates. Skipped under the AM lock (we
-        # don't re-annotate the frozen snapshot) and when there's no DB to read
-        # yesterday's surface from. A weekend/holiday with no prior rows → no-op.
-        if db.has_db() and not _brief_use_lock:
+            # ── Movers discovery ────────────────────────────────────────────────
+            # Scan the broad discovery universe for big 1-day gainers NOT already
+            # in the curated SECTOR_UNIVERSE / held / watchlist, then feed them as
+            # ADDITIONAL CANDIDATES into the same Grow Today pipeline (not a
+            # separate section). Their load_all bundles are added to grow_composites
+            # so _grow_today's composite gate validates them exactly like curated
+            # picks; from there they face the same macro / sector / tone / cap
+            # gates and compete for the same slots. This is what keeps the brief
+            # internally consistent — no "flat market, no new entries" message
+            # sitting above a list of mover entries.
+            #
+            # Piggybacks on the scanner-run state so the ~200-ticker download only
+            # happens once the user has asked for signals, not on a cold Home load.
+            _movers_candidates: list[dict] = []
             try:
-                from datetime import timedelta as _hys_td
-                _hys_today = _today_et()
-                # Look back a few calendar days so the most-recent PRIOR trading
-                # day is found across weekends/holidays. df is surfaced_at-desc,
-                # so the first row seen per ticker is the most recent prior day.
-                _hys_prior_df = db.load_recommendations(
-                    start_date=_hys_today - _hys_td(days=4),
-                    end_date=_hys_today - _hys_td(days=1),
+                _mv_exclude = (
+                    set().union(*SECTOR_UNIVERSE.values())
+                    | set(held_tickers)
+                    | {str(t).upper() for t in (st.session_state.get("watchlist", []) or [])}
                 )
-                _hys_snapshot: dict = {}
-                if not _hys_prior_df.empty:
-                    for _, _hr in _hys_prior_df.iterrows():
-                        if str(_hr.get("rec_type", "")) not in ("new_pick", "add_winner"):
-                            continue
-                        _hk = str(_hr.get("ticker", "")).strip().upper()
-                        if not _hk or _hk in _hys_snapshot:
-                            continue
-                        _hcomp = _hr.get("composite_score")
+                _movers_df = _cached_scan_movers(tuple(sorted(_mv_exclude)), MOVER_MIN_DAY_GAIN_PCT)
+                if _movers_df is not None and not _movers_df.empty:
+                    for _, _mrow in _movers_df.head(MOVER_SHORTLIST_SIZE).iterrows():
+                        _mt = str(_mrow["Ticker"]).upper()
                         try:
-                            _hcomp = float(_hcomp) if _hcomp is not None else None
+                            _mb = load_all(_mt)
+                        except Exception:
+                            continue
+                        # Add the bundle to grow_composites so _grow_today's
+                        # composite gate finds it (same path as curated picks).
+                        _grow_composites[_mt] = _mb
+                        try:
+                            _mcomp = float(_mb.get("total"))
                         except (TypeError, ValueError):
-                            _hcomp = None
-                        _hys_snapshot[_hk] = {
-                            "composite": _hcomp,
-                            "verdict":   str(_hr.get("verdict") or ""),
-                        }
-                if _hys_snapshot:
-                    apply_hysteresis(_gt_today.get("new_picks") or [], _hys_snapshot)
-                    apply_hysteresis(_gt_today.get("add_positions") or [], _hys_snapshot)
+                            _mcomp = None
+                        _movers_candidates.append({
+                            "ticker":          _mt,
+                            "price":           _mb.get("current_price"),
+                            "sector":          _mb.get("sector", "") or "Other",
+                            "trend":           str(_mrow.get("Trend", "")),
+                            "scanner_signal":  str(_mrow.get("Signal", "")),
+                            "score":           float(_mrow.get("Score", 0)),       # momentum
+                            "rsi":             float(_mrow.get("RSI", 50)),
+                            "mom_1m":          float(_mrow.get("1M Momentum", 0)),
+                            "mom_3m":          float(_mrow.get("3M Momentum", 0)),
+                            "composite_score": _mcomp,
+                            "composite_label": str((_mb.get("rec") or {}).get("label", "")),
+                            "day_change":      float(_mrow.get("Day Change %", 0)),
+                        })
+                    # Re-publish grow_composites now that mover bundles are merged in.
+                    st.session_state._grow_composites = _grow_composites
+                st.session_state["_movers_candidates"] = _movers_candidates
             except Exception:
-                # Cosmetic annotation only — never let it break the Brief.
-                pass
+                st.session_state["_movers_candidates"] = []
 
+        # Build Daily Briefing (synthesises all intelligence — computed once before tabs).
+        #
+        # Lock semantics: when the user has clicked "Lock Today's Setup", we serve
+        # the cached snapshot instead of rebuilding. This freezes the AM read so
+        # mid-day data drift can't shift recommendations under the user after they
+        # already decided. Lock auto-expires next trading day (different _today_et()).
+        _brief_locked_for = st.session_state.get("_brief_locked_for_date")
+        _brief_snapshot   = st.session_state.get("_brief_locked_snapshot")
+        _brief_use_lock   = (
+            st.session_state.get("_brief_locked", False)
+            and _brief_locked_for == _today_et()
+            and _brief_snapshot is not None
+        )
+        if _brief_use_lock:
+            _daily_brief = _brief_snapshot
+            # _brief_built_at was set at the time of the original build (preserved)
+        else:
+            # Lock from a previous trading day — clear it so the new day's Brief builds fresh
+            if st.session_state.get("_brief_locked") and _brief_locked_for != _today_et():
+                st.session_state["_brief_locked"] = False
+                st.session_state.pop("_brief_locked_snapshot", None)
+                st.session_state.pop("_brief_locked_for_date", None)
+                st.session_state.pop("_brief_locked_at", None)
+            try:
+                _daily_brief = build_daily_briefing(
+                    port_df         = port_df,
+                    alert_list      = alert_list,
+                    risk_recs       = _risk_advisor_recs,
+                    news_items      = st.session_state.get("_sidebar_news", []),
+                    macro_events    = _macro_events,
+                    held_data       = held_data,
+                    scanner_results = st.session_state.get("scanner_results"),
+                    portfolio_value = total_val,
+                    today           = _today_et(),
+                    market_context  = _market_context,
+                    grow_composites = st.session_state.get("_grow_composites", {}),
+                    movers          = st.session_state.get("_movers_candidates", []),
+                )
+                # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
+                # the Brief header so the user can see how fresh the data is.
+                st.session_state["_brief_built_at"] = datetime.now(_pytz.timezone("America/New_York"))
+            except Exception:
+                _daily_brief    = None
+                _market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+
+        # Cache sectors Grow Today is already filling so the Watchlist (a separate page)
+        # can demote ENTER_NOW picks that would stack the same sector exposure.
+        # When Daily Briefing failed, cache is None (not empty list) so downstream
+        # features can detect "offline" vs. "computed and empty" and surface the
+        # state to the user instead of silently disabling coordination gates.
+        if _daily_brief is None:
+            st.session_state["_grow_today_sectors_cache"] = None
+            st.session_state["_daily_brief_offline"]      = True
+            # Provide a minimal empty dict so downstream code doesn't crash, but
+            # session_state flag tells consumers to render the offline UI state.
+            _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
+        else:
+            st.session_state["_daily_brief_offline"] = False
+            _gt_today = _daily_brief.get("grow_today") or {}
+            st.session_state["_grow_today_sectors_cache"] = sorted({
+                str(p.get("sector", "")).strip()
+                for p in (_gt_today.get("new_picks") or []) + (_gt_today.get("add_positions") or [])
+                if str(p.get("sector", "")).strip()
+            })
+            # Stash leading sector names so the standalone Catalyst Watch page can
+            # show the 🔥 leading-sector flag without recomputing the brief.
+            st.session_state["_leading_sectors_cache"] = [
+                ls.get("sector", "") for ls in (_gt_today.get("leading_sectors") or [])
+            ]
+
+            # ── Recommendations log (persist + decorate with first-seen) ─────────
+            # Capture every pick surfaced today so the user can audit the App's
+            # recommendation history over time. Unique-constraint on
+            # (ticker, rec_date, rec_type) means the same ticker re-surfacing
+            # across Brief rebuilds within the same day is a no-op — only the
+            # first surface gets a row, and that row's surfaced_at is what we
+            # display on the card. Locked Briefs skip the write (the snapshot's
+            # surfaced_at was captured at lock time) but still get decorated
+            # on read.
+            #
+            # No once-per-session guard: db.save_recommendations is idempotent
+            # via the unique constraint + ignore_duplicates, so writing on every
+            # Brief build is cheap (single upsert round-trip) and avoids the
+            # sticky-flag failure mode where an early failed save permanently
+            # blocked retries for the rest of the session.
+            # Session-flag guard (race-immune): a read-only viewer's Home load must
+            # not WRITE the owner's recommendation log. The db-layer _READONLY flag
+            # also no-ops this, but it's a process-global; the per-session flag here
+            # closes the cross-session race (a concurrent owner session flipping it).
+            if db.has_db() and not _brief_use_lock and not st.session_state.get("_readonly", False):
+                _rec_save_result = {"attempted": 0, "saved": 0, "error": None}
+                try:
+                    # Price snapshot resolver: each pick type stores price differently,
+                    # and some buy_candidates don't carry one. Fall back to held-position
+                    # avg_cost (via port_df) or live-prices cache before giving up. The
+                    # column is nullable in the DB so None is safe — but a populated
+                    # value makes "would-have-gained" math possible later.
+                    _live_px_map = st.session_state.get("_live_prices", {}) or {}
+                    _port_px_map: dict = {}
+                    if port_df is not None and not port_df.empty and "Price" in port_df.columns:
+                        _port_px_map = {
+                            str(_r["Ticker"]).upper(): float(_r["Price"] or 0)
+                            for _, _r in port_df.iterrows()
+                            if _r.get("Ticker")
+                        }
+                    def _price_for(_tk: str, _pick_price=None):
+                        if _pick_price:
+                            try:
+                                _v = float(_pick_price)
+                                if _v > 0:
+                                    return _v
+                            except (TypeError, ValueError):
+                                pass
+                        _u = str(_tk).upper()
+                        _lp = _live_px_map.get(_u, {})
+                        if isinstance(_lp, dict):
+                            try:
+                                _v = float(_lp.get("price") or 0)
+                                if _v > 0:
+                                    return _v
+                            except (TypeError, ValueError):
+                                pass
+                        _pv = _port_px_map.get(_u, 0)
+                        return _pv if _pv > 0 else None
+
+                    _rec_rows: list[dict] = []
+                    for _p in (_gt_today.get("new_picks") or []):
+                        _tk = str(_p.get("ticker", ""))
+                        _rec_rows.append({
+                            "ticker":           _tk,
+                            "rec_date":         _today_et(),
+                            "rec_type":         "new_pick",
+                            "price_at_surface": _price_for(_tk, _p.get("price")),
+                            "composite_score":  _p.get("composite_score"),
+                            "momentum_score":   _p.get("score"),
+                            "sector":           _p.get("sector", ""),
+                            "conviction":       _p.get("conviction", ""),
+                            "verdict":          ((_p.get("xref") or {}).get("verdict") or ""),
+                            "thesis":           _p.get("thesis", ""),
+                        })
+                    for _p in (_gt_today.get("add_positions") or []):
+                        _tk = str(_p.get("ticker", ""))
+                        _rec_rows.append({
+                            "ticker":           _tk,
+                            "rec_date":         _today_et(),
+                            "rec_type":         "add_winner",
+                            "price_at_surface": _price_for(_tk),  # add-to-winner doesn't carry an explicit price
+                            "composite_score":  _p.get("score"),
+                            "momentum_score":   _p.get("score"),
+                            "sector":           _p.get("sector", ""),
+                            "conviction":       "high",   # add-to-winner only fires on Strong Buy
+                            "verdict":          "confirmed",
+                            "thesis":           _p.get("thesis", ""),
+                        })
+                    # Composite lookup helper for buy_candidates — neither dict
+                    # branch carries composite directly. For held names port_df
+                    # has the composite as Score; for non-held names the pre-fetched
+                    # _grow_composites cache has it under .total. This is the same
+                    # source-of-truth chain lookup_composite uses internally; we
+                    # inline it here to avoid plumbing yet another argument through.
+                    _grow_comp_cache = st.session_state.get("_grow_composites", {}) or {}
+                    _port_score_map: dict = {}
+                    if port_df is not None and not port_df.empty and "Score" in port_df.columns:
+                        _port_score_map = {
+                            str(_r["Ticker"]).upper(): float(_r.get("Score") or 0)
+                            for _, _r in port_df.iterrows()
+                            if _r.get("Ticker")
+                        }
+                    def _composite_for(_tk: str):
+                        _u = str(_tk).upper()
+                        _comp = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk)
+                        if _comp:
+                            try:
+                                _v = float(_comp.get("total") or 0)
+                                if _v > 0:
+                                    return _v
+                            except (TypeError, ValueError):
+                                pass
+                        _ps = _port_score_map.get(_u, 0)
+                        return _ps if _ps > 0 else None
+
+                    for _p in (_daily_brief.get("buy_candidates") or []):
+                        _bx = _p.get("xref") or {}
+                        _tk = str(_p.get("ticker", ""))
+                        _rec_rows.append({
+                            "ticker":           _tk,
+                            "rec_date":         _today_et(),
+                            "rec_type":         "buy_candidate",
+                            "price_at_surface": _price_for(_tk),
+                            "composite_score":  _composite_for(_tk),
+                            "momentum_score":   _p.get("score"),
+                            "sector":           _p.get("sector", ""),
+                            "conviction":       "",
+                            "verdict":          str(_bx.get("verdict") or ""),
+                            "thesis":           "",
+                        })
+                    if _rec_rows:
+                        _rec_save_result = db.save_recommendations(_rec_rows)
+                except Exception as _rec_save_err:
+                    _rec_save_result = {"attempted": 0, "saved": 0,
+                                        "error": str(_rec_save_err)[:200]}
+                st.session_state["_rec_log_save_result"] = _rec_save_result
+
+            # Decorate each pick with its first-seen surfaced_at so the card
+            # render can show "Recommended at HH:MM ET" without an extra round-trip
+            # per card. Single fetch for today; build (ticker, rec_type) → ts map.
+            if db.has_db() and not _brief_use_lock:
+                _rec_load_count = 0
+                _rec_load_error: str | None = None
+                try:
+                    _rec_today_df = db.load_recommendations(start_date=_today_et(), end_date=_today_et())
+                    _rec_first_seen: dict[tuple[str, str], str] = {}
+                    if not _rec_today_df.empty:
+                        for _, _r in _rec_today_df.iterrows():
+                            _key = (str(_r.get("ticker", "")).upper(),
+                                    str(_r.get("rec_type", "")))
+                            _ts = _r.get("surfaced_at")
+                            if _ts is not None and _key not in _rec_first_seen:
+                                _rec_first_seen[_key] = str(_ts)
+                    _rec_load_count = len(_rec_today_df)
+                    # Attach to each pick dict for downstream render to read
+                    for _p in (_gt_today.get("new_picks") or []):
+                        _p["_first_seen_at"] = _rec_first_seen.get(
+                            (str(_p.get("ticker", "")).upper(), "new_pick")
+                        )
+                    for _p in (_gt_today.get("add_positions") or []):
+                        _p["_first_seen_at"] = _rec_first_seen.get(
+                            (str(_p.get("ticker", "")).upper(), "add_winner")
+                        )
+                    for _p in (_daily_brief.get("buy_candidates") or []):
+                        _p["_first_seen_at"] = _rec_first_seen.get(
+                            (str(_p.get("ticker", "")).upper(), "buy_candidate")
+                        )
+                except Exception as _rec_load_err:
+                    _rec_load_error = str(_rec_load_err)[:200]
+                st.session_state["_rec_log_load_state"] = {
+                    "rows_today": _rec_load_count,
+                    "error":      _rec_load_error,
+                }
+
+            # ── Signal hysteresis (calm advisor 2C) ──────────────────────────────
+            # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
+            # a persistent pick as continuity, not a fresh daily call to re-litigate
+            # (§2B medium-term posture). ANNOTATE-ONLY — never adds/removes/re-orders
+            # a pick, so it can't fight the buy gates. Skipped under the AM lock (we
+            # don't re-annotate the frozen snapshot) and when there's no DB to read
+            # yesterday's surface from. A weekend/holiday with no prior rows → no-op.
+            if db.has_db() and not _brief_use_lock:
+                try:
+                    from datetime import timedelta as _hys_td
+                    _hys_today = _today_et()
+                    # Look back a few calendar days so the most-recent PRIOR trading
+                    # day is found across weekends/holidays. df is surfaced_at-desc,
+                    # so the first row seen per ticker is the most recent prior day.
+                    _hys_prior_df = db.load_recommendations(
+                        start_date=_hys_today - _hys_td(days=4),
+                        end_date=_hys_today - _hys_td(days=1),
+                    )
+                    _hys_snapshot: dict = {}
+                    if not _hys_prior_df.empty:
+                        for _, _hr in _hys_prior_df.iterrows():
+                            if str(_hr.get("rec_type", "")) not in ("new_pick", "add_winner"):
+                                continue
+                            _hk = str(_hr.get("ticker", "")).strip().upper()
+                            if not _hk or _hk in _hys_snapshot:
+                                continue
+                            _hcomp = _hr.get("composite_score")
+                            try:
+                                _hcomp = float(_hcomp) if _hcomp is not None else None
+                            except (TypeError, ValueError):
+                                _hcomp = None
+                            _hys_snapshot[_hk] = {
+                                "composite": _hcomp,
+                                "verdict":   str(_hr.get("verdict") or ""),
+                            }
+                    if _hys_snapshot:
+                        apply_hysteresis(_gt_today.get("new_picks") or [], _hys_snapshot)
+                        apply_hysteresis(_gt_today.get("add_positions") or [], _hys_snapshot)
+                except Exception:
+                    # Cosmetic annotation only — never let it break the Brief.
+                    pass
+
+        # Advance the signal-change baseline only on a real rebuild, so changes
+        # are measured since the last synthesis (not on every rerun).
+        st.session_state["_prev_signals"] = _curr_signals
+        # Cache the whole synthesis behind the input signature. _grow_composites
+        # and _movers_candidates are sourced from session_state (they're only
+        # assigned as locals when scanner_results exist); the rest are
+        # unconditional locals.
+        st.session_state["_home_synth_cache"] = {
+            "sig": _synth_sig,
+            "bundle": {
+                "alert_list": alert_list, "n_danger": n_danger, "n_warning": n_warning,
+                "actions": actions, "corr_df": corr_df, "div": div,
+                "div_score": div_score, "avg_corr": avg_corr, "risk_pairs": risk_pairs,
+                "_div_label": _div_label, "div_recs": div_recs, "h_rets": h_rets,
+                "_port_risk": _port_risk, "_fragility": _fragility,
+                "_risk_advisor_recs": _risk_advisor_recs,
+                "_rag_label": _rag_label, "_rag_color": _rag_color,
+                "_macro_events": _macro_events, "_market_context": _market_context,
+                "_daily_brief": _daily_brief,
+                "_grow_composites":   st.session_state.get("_grow_composites", {}),
+                "_movers_candidates": st.session_state.get("_movers_candidates", []),
+                "_grow_composites_coverage": st.session_state.get("_grow_composites_coverage", {}),
+                "_risk_high_alerts_cache":   st.session_state.get("_risk_high_alerts_cache", []),
+                "_grow_today_sectors_cache": st.session_state.get("_grow_today_sectors_cache"),
+                "_leading_sectors_cache":    st.session_state.get("_leading_sectors_cache", []),
+                "_daily_brief_offline":      st.session_state.get("_daily_brief_offline", False),
+            },
+        }
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
@@ -2835,6 +2928,10 @@ if page == "🏠 Home":
                     st.session_state.pop("_brief_locked_snapshot", None)
                     st.session_state.pop("_brief_locked_for_date", None)
                     st.session_state.pop("_brief_locked_at", None)
+                    # Force a synthesis rebuild so unlock serves a fresh (non-frozen)
+                    # brief rather than a bundle that was cached under the lock.
+                    st.session_state["_brief_refresh_nonce"] = \
+                        st.session_state.get("_brief_refresh_nonce", 0) + 1
                     st.rerun()
             else:
                 if st.button(
@@ -2848,6 +2945,10 @@ if page == "🏠 Home":
                     st.session_state["_brief_locked_snapshot"] = _daily_brief
                     st.session_state["_brief_locked_for_date"] = _today_et()
                     st.session_state["_brief_locked_at"]       = _b_now_et
+                    # Rebuild once so the lock transition is captured cleanly in
+                    # the synthesis cache (the snapshot is sourced from _daily_brief).
+                    st.session_state["_brief_refresh_nonce"] = \
+                        st.session_state.get("_brief_refresh_nonce", 0) + 1
                     st.rerun()
 
         # ── Refresh controls — macro + signals, side by side ──────────────────
@@ -2871,6 +2972,10 @@ if page == "🏠 Home":
                 _mc_clear_key = f"_macro_cal_{_today_et()}"
                 if _mc_clear_key in st.session_state:
                     del st.session_state[_mc_clear_key]
+                # Bump the nonce so the (memoized) synthesis rebuilds and the
+                # freshly-pulled FRED calendar actually reaches the Brief.
+                st.session_state["_brief_refresh_nonce"] = \
+                    st.session_state.get("_brief_refresh_nonce", 0) + 1
                 st.rerun()
             _macro_src = (
                 "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
@@ -2922,6 +3027,10 @@ if page == "🏠 Home":
                 )
             if not _fresh_results.empty:
                 st.session_state.scanner_results = _fresh_results
+                # New scan → invalidate the Home synthesis cache so the Brief
+                # rebuilds against the fresh scanner results.
+                st.session_state["_scanner_ver"] = \
+                    st.session_state.get("_scanner_ver", 0) + 1
                 # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
                 # (= 12) non-held scanner picks. Pool size matches _grow_today's
                 # candidate window (max_picks_bull × over-fetch) so every candidate
@@ -9151,6 +9260,10 @@ elif page == "🔍 Market Scanner":
             )
         if not results_df.empty:
             st.session_state.scanner_results = results_df
+            # New scan → invalidate the Home synthesis cache (the Brief consumes
+            # scanner_results) so it rebuilds when the user returns to Home.
+            st.session_state["_scanner_ver"] = \
+                st.session_state.get("_scanner_ver", 0) + 1
             st.success(f"Scan complete — {len(results_df)} stocks analyzed.")
         else:
             st.error("Scan returned no results. Check connection.")
