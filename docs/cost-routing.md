@@ -89,12 +89,16 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-18 | Rec-history scorecard hardening — SPY-relative alpha + maturity window + by_verdict (module + page) | — | — | — | — | n/a — lead | Correctness-critical analytics the user trusts to judge the engine; built inline as lead, unit-tested the alpha/maturity/verdict math |
 | 2026-06-18 | Rec-history hardening — Opus review (alpha math, maturity exclusion, rollup propagation, no-gate-change) | — | — | — | — | n/a — lead | Mandatory review of trust-bearing metrics + a new constant. Traced alpha direction + SELL=None + SPY-build degradation → SHIP, no blockers |
 | 2026-06-18 | Rec-history hardening — architecture.md Known-Behaviours + constant row | Haiku | 49,651 | ~$0.08 | ~$0.34 | ~$0.26 | Mechanical doc rows (strong-saving lane); handed the facts |
+| 2026-06-19 | Market-holiday awareness — diagnose ("Market Open" on Juneteenth vs the independent "Could not load" rate-limit burst; confirmed independent) + plan | — | — | — | — | n/a — lead | Live-incident triage; mapped market_status blast radius, separated the display bug from the cold-load burst; user-chosen hardcoded-calendar approach |
+| 2026-06-19 | Market-holiday awareness — build (NYSE calendar constants + is_market_holiday/is_trading_day/market_status + Tier-B guard swaps) | — | — | — | — | n/a — lead | Correctness-critical (Tier-B snapshot/baseline timing); dates cross-checked against the official NYSE/ICE calendar via WebSearch/WebFetch; unit-tested helpers + full date set |
+| 2026-06-19 | Market-holiday awareness — Opus review (date set + Tier-B semantics + return-shape compat) | — | — | — | — | n/a — lead | Mandatory review; verified 28 holidays no weekend/observance errors, half-day branch ordering, additive calendar_stale key, no gate change → SHIP |
+| 2026-06-19 | Market-holiday awareness — architecture.md Known-Behaviours + constants rows | Haiku | 45,826 | ~$0.07 | ~$0.32 | ~$0.25 | Mechanical doc rows (strong-saving lane); handed the facts |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 227,732 | ~$0.67 | ~$1.67 | **~$1.00 (≈60% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
+| **To date** | 273,558 | ~$0.74 | ~$1.99 | **~$1.25 (≈63% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 
