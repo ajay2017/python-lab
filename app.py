@@ -1187,6 +1187,7 @@ def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = DATA_LOA
     if not tickers:
         return out
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    _errs: dict = {}
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {}
         for t in tickers:
@@ -1196,8 +1197,17 @@ def _parallel_load_all(tickers, period: str = "6mo", max_workers: int = DATA_LOA
             t = futures[fut]
             try:
                 out[t] = fut.result()
-            except Exception:
+            except Exception as exc:
                 out[t] = None
+                # Capture the REAL reason so "Could not load" can show it. The
+                # bundle-cache fallback can succeed and yet load_all still raise
+                # downstream (indicators/scoring) — without this the cause was
+                # swallowed and invisible.
+                _errs[t] = f"{type(exc).__name__}: {str(exc)[:160]}"
+    try:
+        st.session_state["_load_all_errs"] = _errs
+    except Exception:
+        pass
     return out
 
 
@@ -1650,7 +1660,8 @@ if page == "🏠 Home":
         for t in held_tickers:
             bundle = _hd_results.get(t)
             if bundle is None:
-                st.warning(f"Could not load {t}")
+                _why = st.session_state.get("_load_all_errs", {}).get(t, "")
+                st.warning(f"Could not load {t}" + (f" — {_why}" if _why else ""))
             else:
                 try:
                     _lots = _build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not None else []
