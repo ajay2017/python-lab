@@ -67,7 +67,12 @@ def compute_price_targets(
         week52_high * 1.12,
         current_price * 1.25,
     ]
-    bull = round(max(c for c in bull_candidates if c > current_price), 2)
+    # default= guards the empty case: when NO candidate exceeds current_price
+    # (price at/above every projected ceiling, OR a NaN/degraded current_price),
+    # max() of the empty generator would raise ValueError and crash the whole
+    # load_all → "Could not load". Fall back to a modest 10% upside.
+    bull = round(max((c for c in bull_candidates if c > current_price),
+                     default=current_price * 1.10), 2)
 
     # Bear: strongest support floor below current price.
     # ATR-based floor replaces the old flat 0.78× multiplier so that volatile

@@ -487,6 +487,12 @@ def load_bundle_cache(ticker: str, max_age_days: int) -> dict | None:
             return None
         from io import StringIO
         hist = pd.read_json(StringIO(row["history_json"]), orient="split")
+        # Drop any bar with a NaN/missing Close. A trailing partial/placeholder
+        # bar serializes to null and round-trips back as NaN, which makes the
+        # last close (→ current_price downstream) NaN and crashed the target
+        # math (max() of an empty set). A bar with no close isn't a usable price.
+        if "Close" in hist.columns:
+            hist = hist[hist["Close"].notna()]
         if hist.empty:
             _ah.record("bundle_cache", "empty")
             return None
