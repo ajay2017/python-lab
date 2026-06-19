@@ -95,12 +95,15 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-19 | Market-holiday awareness — architecture.md Known-Behaviours + constants rows | Haiku | 45,826 | ~$0.07 | ~$0.32 | ~$0.25 | Mechanical doc rows (strong-saving lane); handed the facts |
 | 2026-06-19 | "Could not load" incident — multi-round diagnosis (reboot triage → bundle-cache observability → swallowed-exception surfacing → root cause) + fix (targets max() default + drop NaN-close cached bars) | — | — | — | — | n/a — lead | Live correctness incident; iterative deploy-to-diagnose converged on a latent crash (max() on a NaN cached close), NOT the assumed cache-empty/rate-limit. Built inline as lead; guard logic unit-tested |
 | 2026-06-19 | "Could not load" incident — architecture.md rows (NaN safeguards + bundle_cache health + load-error surfacing) | Haiku | 46,252 | ~$0.07 | ~$0.32 | ~$0.25 | Mechanical doc rows (strong-saving lane); handed the facts |
+| 2026-06-19 | Cold-load burst reduction (rate-limit P2) — provider circuit-breaker (api_health.in_cooldown + orchestrator _providers_for) + SPY-fetch dedup + constant | — | — | — | — | n/a — lead | Failover hot path, correctness-sensitive; found + reused the already-approved Phase-2 design; in_cooldown logic unit-tested |
+| 2026-06-19 | Burst reduction P2 — Opus review (failover, live-price-path unaffected, all-cooled fallthrough, import cycle) | — | — | — | — | n/a — lead | Mandatory review (touches failover); verified breaker scope + no hard-block + no decision change → SHIP, 0 blocking |
+| 2026-06-19 | Burst reduction P2 — architecture.md Known-Behaviours rows + constant | Haiku | 52,370 | ~$0.08 | ~$0.36 | ~$0.28 | Mechanical doc rows (strong-saving lane); handed the facts |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 319,810 | ~$0.81 | ~$2.31 | **~$1.50 (≈65% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
+| **To date** | 372,180 | ~$0.89 | ~$2.67 | **~$1.78 (≈67% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 

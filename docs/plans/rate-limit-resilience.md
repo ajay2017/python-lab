@@ -1,6 +1,8 @@
 # Plan: Rate-Limit Resilience
 
-**Status:** approved 2026-06-05. Phase 1 in progress.
+**Status:** approved 2026-06-05. Phase 1 SHIPPED (REFRESH_COOLDOWN_SEC).
+Phase 2 SHIPPED 2026-06-19 (d400e7a — provider circuit-breaker + SPY dedup).
+Phase 3 (FMP daily-budget guard) remaining.
 
 ## Problem (from the 2026-06-05 pre-market incident)
 A transient provider hiccup escalated to near-exhaustion of all three data
