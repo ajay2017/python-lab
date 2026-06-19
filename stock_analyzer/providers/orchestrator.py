@@ -24,6 +24,7 @@ registry FROM __init__, so importing it there would create a cycle.
 import pandas as pd
 
 from stock_analyzer import constants as C
+from stock_analyzer import api_health as _ah
 from stock_analyzer.providers import PROVIDER_REGISTRY
 from stock_analyzer.providers.base import (
     ProviderUnavailable,
@@ -66,7 +67,18 @@ def reset() -> None:
 
 
 def _providers_for(capability: str) -> list:
-    return [p for p in chain() if p.supports(capability)]
+    capable = [p for p in chain() if p.supports(capability)]
+    # Circuit-breaker (rate-limit-resilience Phase 2): skip providers actively
+    # tripped on 429s so we don't re-hammer them ticker-after-ticker (the FMP
+    # quota-exhaustion amplifier). If that would leave NO provider (all cooled),
+    # fall through to the full capable list — degrade to a live attempt + the
+    # caller's cache fallback rather than ever hard-blocking. Auto-recovers when
+    # PROVIDER_RL_COOLDOWN_SEC elapses.
+    # NB: p.name must equal the api_health source key the provider records under
+    # (yahoo_finance / finnhub / fmp) for the cooldown lookup to match.
+    live = [p for p in capable
+            if not _ah.in_cooldown(p.name, C.PROVIDER_RL_COOLDOWN_SEC)]
+    return live if live else capable
 
 
 # ── Single-result failover (history / bundle / indices / risk-free) ──────────

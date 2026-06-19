@@ -153,6 +153,25 @@ def overall_level() -> tuple[str, str]:
     return "gray", "⚪"
 
 
+def in_cooldown(source: str, cooldown_sec: float) -> bool:
+    """True when `source` is currently 'tripped' (rate-limited / erroring hard)
+    AND its last error was within `cooldown_sec`. Used by the orchestrator
+    circuit-breaker to skip a provider that's actively 429-ing instead of
+    re-calling it on every ticker. Reuses the same 'red' thresholds as
+    get_health (rate_limits >= 3 or consecutive_errors >= 5). Auto-recovers:
+    once cooldown_sec elapses since the last error, returns False again."""
+    s = _stats.get(source)
+    if not s:
+        return False
+    tripped = s["rate_limits"] >= 3 or s["consecutive_errors"] >= 5
+    if not tripped:
+        return False
+    last = s["last_error_ts"]
+    if last is None:
+        return False
+    return (_now() - last) < cooldown_sec
+
+
 def reset() -> None:
     """Reset all counters — call when user clicks Refresh."""
     for src in list(_stats.keys()):

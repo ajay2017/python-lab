@@ -946,6 +946,18 @@ def _get_rfr() -> float:
     return fetch_risk_free_rate()
 
 
+# ── SPY history (shared, cached) ─────────────────────────────────────────────
+# SPY's 6-mo history is identical for every ticker's risk calc, but load_all
+# (which runs per-ticker, in worker threads) called fetch_spy() directly — so a
+# 10-name cold load re-downloaded SPY ~10×, a pure-waste chunk of the provider
+# burst. Cache it (same pattern as _get_rfr above): the first caller pays, the
+# rest hit the cache. ttl matches load_all's 30-min window. Keyed by period so
+# the 3mo/6mo callers don't collide.
+@st.cache_data(ttl=1800)
+def _cached_spy(period: str = "6mo"):
+    return fetch_spy(period)
+
+
 # ── Price cross-check (held positions) — periodic integrity guardrail ────────
 # Compares the live-price primary (Finnhub) against an independent source
 # (yfinance) for held tickers. 5-min TTL: this is a periodic data-integrity
@@ -1107,7 +1119,7 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     sr = support_resistance(df)
     _rfr = _get_rfr()
     try:
-        spy_df = fetch_spy(period)
+        spy_df = _cached_spy(period)
         risk_metrics = compute_all_risk(df, spy_df, _rfr)
     except Exception:
         risk_metrics = compute_all_risk(df, None, _rfr)
@@ -2188,7 +2200,7 @@ if page == "🏠 Home":
 
         # Portfolio-level risk metrics (Beta, Sharpe, Sortino, VaR, CVaR, Max Drawdown)
         try:
-            _spy_for_risk = fetch_spy("6mo")
+            _spy_for_risk = _cached_spy("6mo")
             _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
         except Exception:
             _port_risk = {}
@@ -3121,7 +3133,7 @@ if page == "🏠 Home":
                         _tr_strip_prices = {}
                 _tr_strip_spy = None
                 try:
-                    _tr_strip_spy = fetch_spy(period="3mo")
+                    _tr_strip_spy = _cached_spy(period="3mo")
                 except Exception:
                     _tr_strip_spy = None
                 _tr_data = build_trade_review(
@@ -6311,7 +6323,7 @@ if page == "🏠 Home":
         _n_days = _period_days[_perf_period]
 
         try:
-            _spy_hist  = fetch_spy("6mo")
+            _spy_hist  = _cached_spy("6mo")
             _spy_close = _spy_hist["Close"]
             if _spy_close.index.tz is not None:
                 _spy_close.index = _spy_close.index.tz_localize(None)
@@ -6429,7 +6441,7 @@ if page == "🏠 Home":
                     }
 
             _attr_df = compute_attribution(
-                port_df, held_data, fetch_spy("6mo"),
+                port_df, held_data, _cached_spy("6mo"),
                 _n_days, _sect_rets_dict, _perf_period,
             )
 
@@ -13107,7 +13119,7 @@ elif page == "🪞 Trade Review":
         # level (data.py @ st.cache_data) so this is cheap on repeated renders.
         _tr_spy_period = "6mo" if _tr_days >= 90 or _tr_days == 0 else "3mo"
         try:
-            _tr_spy_df = fetch_spy(period=_tr_spy_period)
+            _tr_spy_df = _cached_spy(period=_tr_spy_period)
         except Exception:
             _tr_spy_df = None
 
@@ -14086,7 +14098,7 @@ elif page == "📜 Recommendations History":
     # SPY over the same window). Cached at the data layer; {date: close}.
     _rh_spy_by_date: dict = {}
     try:
-        _rh_spy_hist = fetch_spy("6mo")
+        _rh_spy_hist = _cached_spy("6mo")
         if _rh_spy_hist is not None and not _rh_spy_hist.empty and "Close" in _rh_spy_hist.columns:
             for _sidx, _srow in _rh_spy_hist.iterrows():
                 _sd = _sidx.date() if hasattr(_sidx, "date") else None

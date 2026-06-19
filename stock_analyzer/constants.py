@@ -430,6 +430,16 @@ NYSE_EARLY_CLOSES = {
 # knob, not an investment threshold — safe to tune from observation.
 REFRESH_COOLDOWN_SEC = 60
 
+# Provider circuit-breaker (rate-limit-resilience Phase 2). Once a data provider
+# trips "red" in api_health (rate_limits ≥ 3 or 5+ consecutive errors), the
+# orchestrator SKIPS it for this many seconds rather than re-calling it on every
+# ticker's cache miss and eating another 429 — which is what exhausts FMP's free
+# tier and starves the last-known-good cache. Auto-recovers after the window; if
+# ALL providers are cooled the orchestrator falls through and tries anyway (never
+# a permanent hard-block). Operational infra knob — reversible, tune from
+# observation; NOT an investment-decision threshold.
+PROVIDER_RL_COOLDOWN_SEC = 120
+
 # ── Recommendations-history scorecard ────────────────────────────────────────
 # Minimum age (calendar days) before a surfaced rec's OUTCOME is scored on the
 # Recommendations History page. A rec measured the day after it surfaces is just
