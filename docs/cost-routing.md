@@ -93,12 +93,14 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-19 | Market-holiday awareness — build (NYSE calendar constants + is_market_holiday/is_trading_day/market_status + Tier-B guard swaps) | — | — | — | — | n/a — lead | Correctness-critical (Tier-B snapshot/baseline timing); dates cross-checked against the official NYSE/ICE calendar via WebSearch/WebFetch; unit-tested helpers + full date set |
 | 2026-06-19 | Market-holiday awareness — Opus review (date set + Tier-B semantics + return-shape compat) | — | — | — | — | n/a — lead | Mandatory review; verified 28 holidays no weekend/observance errors, half-day branch ordering, additive calendar_stale key, no gate change → SHIP |
 | 2026-06-19 | Market-holiday awareness — architecture.md Known-Behaviours + constants rows | Haiku | 45,826 | ~$0.07 | ~$0.32 | ~$0.25 | Mechanical doc rows (strong-saving lane); handed the facts |
+| 2026-06-19 | "Could not load" incident — multi-round diagnosis (reboot triage → bundle-cache observability → swallowed-exception surfacing → root cause) + fix (targets max() default + drop NaN-close cached bars) | — | — | — | — | n/a — lead | Live correctness incident; iterative deploy-to-diagnose converged on a latent crash (max() on a NaN cached close), NOT the assumed cache-empty/rate-limit. Built inline as lead; guard logic unit-tested |
+| 2026-06-19 | "Could not load" incident — architecture.md rows (NaN safeguards + bundle_cache health + load-error surfacing) | Haiku | 46,252 | ~$0.07 | ~$0.32 | ~$0.25 | Mechanical doc rows (strong-saving lane); handed the facts |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 273,558 | ~$0.74 | ~$1.99 | **~$1.25 (≈63% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
+| **To date** | 319,810 | ~$0.81 | ~$2.31 | **~$1.50 (≈65% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 
