@@ -427,12 +427,18 @@ def save_bundle_cache(ticker: str, bundle: dict) -> bool:
     no-op; a missing table degrades to a silent no-op. NEVER raises (callers wrap
     too) — cache I/O must not break the load_all success path."""
     if _READONLY: return False  # read-only viewer: no-op
-    if not has_db():
-        return False
+    # Instrumented under the "bundle_cache" Data Health source so seeding is
+    # finally visible (it was a fully-silent except: pass — a broken table / RLS
+    # / serialization / missing-context write was invisible). has_db() is inside
+    # the try so a credential/context failure is RECORDED, not swallowed.
+    from stock_analyzer import api_health as _ah
     try:
+        if not has_db():
+            _ah.record("bundle_cache", "error", msg="save: has_db()=False (no creds/context)")
+            return False
         hist = bundle.get("history")
         if hist is None or getattr(hist, "empty", True):
-            return False
+            return False  # empty history — nothing worth caching (not an error)
         record = {
             "ticker":       str(ticker).strip().upper(),
             "history_json": hist.to_json(orient="split", date_format="iso"),
@@ -440,8 +446,10 @@ def save_bundle_cache(ticker: str, bundle: dict) -> bool:
             "fetched_at":   pd.Timestamp.now(tz="UTC").isoformat(),
         }
         _client().table("bundle_cache").upsert(record, on_conflict="ticker").execute()
+        _ah.record("bundle_cache", "success")
         return True
-    except Exception:
+    except Exception as e:
+        _ah.record("bundle_cache", "error", msg=f"save: {str(e)[:100]}")
         return False
 
 
@@ -450,9 +458,15 @@ def load_bundle_cache(ticker: str, max_age_days: int) -> dict | None:
     max_age_days, else None. Reconstructs the history DataFrame. Graceful —
     returns None on missing table / parse error / staleness; news, earnings and
     revisions come back EMPTY (fallback mode degrades those, never live)."""
-    if not has_db():
-        return None
+    # Instrumented under "bundle_cache": "success" = served last-known-good,
+    # "empty" = queried but nothing usable (no row / too stale), "error" =
+    # has_db/RLS/parse failure. This is what disambiguates "cache empty (seeding
+    # starved)" from "cache present but unreadable" when providers are down.
+    from stock_analyzer import api_health as _ah
     try:
+        if not has_db():
+            _ah.record("bundle_cache", "error", msg="load: has_db()=False (no creds/context)")
+            return None
         rows = (
             _client().table("bundle_cache")
             .select("history_json,info,fetched_at")
@@ -460,19 +474,24 @@ def load_bundle_cache(ticker: str, max_age_days: int) -> dict | None:
             .limit(1).execute().data
         )
         if not rows:
+            _ah.record("bundle_cache", "empty")   # never seeded for this ticker
             return None
         row = rows[0]
         fetched = pd.to_datetime(row.get("fetched_at"), utc=True, errors="coerce")
         if pd.isna(fetched):
+            _ah.record("bundle_cache", "empty")
             return None
         age_days = (pd.Timestamp.now(tz="UTC") - fetched).days
         if age_days > max_age_days:
+            _ah.record("bundle_cache", "empty")   # seeded but too stale to trust
             return None
         from io import StringIO
         hist = pd.read_json(StringIO(row["history_json"]), orient="split")
         if hist.empty:
+            _ah.record("bundle_cache", "empty")
             return None
         hist.index = pd.to_datetime(hist.index)
+        _ah.record("bundle_cache", "success")     # served last-known-good
         return {
             "bundle": {
                 "history":   hist,
@@ -484,7 +503,8 @@ def load_bundle_cache(ticker: str, max_age_days: int) -> dict | None:
             "fetched_at": fetched.date().isoformat(),
             "age_days":   int(age_days),
         }
-    except Exception:
+    except Exception as e:
+        _ah.record("bundle_cache", "error", msg=f"load: {str(e)[:100]}")
         return None
 
 

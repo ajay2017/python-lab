@@ -894,6 +894,7 @@ with st.sidebar:
             ("fmp",           "FMP (failover)"),
             ("fred",          "FRED (St. Louis Fed)"),
             ("supabase",      "Supabase DB"),
+            ("bundle_cache",  "Bundle cache (last-known-good)"),
         ]:
             _ah_h = _ah.get_health(_ah_src)
             _ah_parts = []
@@ -903,6 +904,8 @@ with st.sidebar:
                 _ah_parts.append(f"**{_ah_h['errors']} err**")
             if _ah_h["rate_limits"] > 0:
                 _ah_parts.append(f"**{_ah_h['rate_limits']} RL**")
+            if _ah_h["empty"] > 0:
+                _ah_parts.append(f"{_ah_h['empty']} empty")
             _ah_detail = " · ".join(_ah_parts) if _ah_parts else "no calls yet"
             _ah_fresh  = _ah_h["freshness"]
             _ah_err_snippet = (
