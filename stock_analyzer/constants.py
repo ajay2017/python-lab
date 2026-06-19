@@ -388,6 +388,40 @@ FUNDAMENTALS_GATE_MIN_METRICS = 1
 # keeps the verdict materially correct. Changing it is an investment-policy call.
 FUNDAMENTALS_CACHE_MAX_AGE_DAYS = 7
 
+# ── NYSE market calendar (holiday awareness) ─────────────────────────────────
+# Hardcoded NYSE full-day closures + 1pm early-close half-days, 2026–2028, by
+# the OBSERVED date (weekend holidays move to the Fri/Mon NYSE actually closes).
+# market_status() / is_trading_day() in data.py read these so the app stops
+# showing "Market Open" on a holiday (e.g. Juneteenth, 2026-06-19). These are
+# calendar FACTS, not decision gates. Source: official NYSE/ICE 2026–2028
+# holiday & early-closings calendar (verified against nyse.com 2026-06-19);
+# note 2026-07-03 is a 1pm early close — NYSE observes that Saturday-July-4 as a
+# half day, not a full close — and 2028 has no New Year's (Jan 1 is a Saturday).
+#
+# ⚠️ EXTEND BEFORE 2029. When the system year exceeds MARKET_CALENDAR_LAST_YEAR,
+# market_status() returns calendar_stale=True so the UI warns rather than
+# silently treating future holidays as open trading days.
+MARKET_CALENDAR_LAST_YEAR = 2028
+
+NYSE_HOLIDAYS = frozenset({
+    # 2026
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-09-07", "2026-11-26", "2026-12-25",
+    # 2027
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    # 2028  (no New Year's Day — Jan 1 2028 is a Saturday, not observed)
+    "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+    "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+})
+
+# Observed date → early-close hour (ET, 24h float). NYSE trades until 1:00pm.
+NYSE_EARLY_CLOSES = {
+    "2026-07-03": 13.0, "2026-11-27": 13.0, "2026-12-24": 13.0,
+    "2027-11-26": 13.0,
+    "2028-07-03": 13.0, "2028-11-24": 13.0,
+}
+
 # ── Rate-limit resilience ────────────────────────────────────────────────────
 # Cooldown (seconds) that the heavy refresh buttons (Refresh All Data / Refresh
 # Signals / Grow Retry) stay disabled after a press. Each of those does a full

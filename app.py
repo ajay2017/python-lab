@@ -22,6 +22,7 @@ from stock_analyzer.data import (
     fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, fetch_earnings_calendar, fetch_next_earnings,
+    is_trading_day,
 )
 from stock_analyzer.catalyst_watch import build_catalyst_watch
 from stock_analyzer.technicals import compute_indicators, technical_score
@@ -831,6 +832,10 @@ with st.sidebar:
         f"<span style='color:#888'> · {mkt['time_et']}</span>",
         unsafe_allow_html=True,
     )
+    if mkt.get("calendar_stale"):
+        # The hardcoded NYSE holiday calendar has run out — holiday detection can
+        # no longer be trusted, so warn loudly rather than silently show "open."
+        st.caption("⚠️ Holiday calendar is out of date — update NYSE_HOLIDAYS in constants.py.")
     if not mkt["is_open"]:
         # Compute last trading day for the closed-market note
         from datetime import timedelta as _td
@@ -2005,25 +2010,28 @@ if page == "🏠 Home":
                     # "since {date}", not "today".
                     from datetime import timedelta as _dp_td
                     _ptd = _today_et() - _dp_td(days=1)
-                    while _ptd.weekday() >= 5:
+                    while not is_trading_day(_ptd):   # skip weekends AND holidays
                         _ptd -= _dp_td(days=1)
                     _dpnl_is_current = _dpnl_baseline_date >= _ptd.isoformat()
     except Exception:
         _dpnl = None
 
     # (Re)write TODAY's snapshot ONLY in the post-close window (regular session
-    # over: weekday AND ET ≥ 16:00), so close_price is the FINAL settled close.
+    # over: TRADING DAY AND ET ≥ 16:00), so close_price is the FINAL settled close.
     # A generic `not is_open` would also fire during PRE-MARKET (4:00–9:30) and
     # overnight, when _lp_map still carries the PRIOR close — persisting that
     # stale price under today's date AND (via the once-a-day flag) blocking the
-    # real post-close write, which corrupts tomorrow's baseline. No cron yet →
-    # opportunistic write-on-view, once per session/day; the Phase-2 cron will
-    # make it deterministic. (After-hours: share count may include an after-hours
-    # trade while close_price is the regular close — minor, rare timing skew, not
+    # real post-close write, which corrupts tomorrow's baseline. is_trading_day
+    # also excludes holidays so we don't write a holiday-dated snapshot (its
+    # "close" would just be the prior real close). No cron yet → opportunistic
+    # write-on-view, once per session/day; the Phase-2 cron will make it
+    # deterministic. (After-hours: share count may include an after-hours trade
+    # while close_price is the regular close — minor, rare timing skew, not
     # broker parity.)
     try:
         _et_now     = datetime.now(_ET_TZ)
-        _post_close = _et_now.weekday() < 5 and (_et_now.hour + _et_now.minute / 60) >= 16.0
+        _post_close = (is_trading_day(_et_now.date())
+                       and (_et_now.hour + _et_now.minute / 60) >= 16.0)
         _snap_flag  = f"_snap_written_{_today_et().isoformat()}"
         if (_today_loaded and not port_df.empty and _post_close
                 and not st.session_state.get(_snap_flag)):

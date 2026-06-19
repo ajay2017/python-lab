@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import pytz
 
 from stock_analyzer import constants as _C
@@ -94,14 +94,48 @@ def fetch_next_earnings(ticker: str) -> str | None:
     return _PRIMARY.next_earnings(ticker)
 
 
+def is_market_holiday(d: date) -> bool:
+    """True if `d` is a full-day NYSE closure (per the hardcoded calendar)."""
+    return d.isoformat() in _C.NYSE_HOLIDAYS
+
+
+def is_trading_day(d: date) -> bool:
+    """True if `d` is a regular NYSE session day — weekday AND not a holiday.
+    Early-close (half) days are still trading days. The single source of truth
+    for 'is the market supposed to be open today'; any new date logic that skips
+    weekends should use this so it skips holidays too."""
+    return d.weekday() < 5 and not is_market_holiday(d)
+
+
+def _early_close_hour(d: date) -> float | None:
+    """ET hour the NYSE closes early on `d` (e.g. 13.0 = 1pm), else None."""
+    return _C.NYSE_EARLY_CLOSES.get(d.isoformat())
+
+
 def market_status() -> dict:
-    """Returns current NYSE market status and a human-readable label."""
-    now_et = datetime.now(_ET)
-    weekday = now_et.weekday()          # 0=Mon … 4=Fri
-    hour    = now_et.hour + now_et.minute / 60
+    """Returns current NYSE market status and a human-readable label.
+
+    Holiday-aware: consults the hardcoded NYSE calendar (constants.NYSE_HOLIDAYS
+    / NYSE_EARLY_CLOSES) so it no longer shows "Market Open" on a closed holiday.
+    `calendar_stale` is True once the system year passes the last hardcoded year
+    (MARKET_CALENDAR_LAST_YEAR) — the holiday set can't be trusted past then, so
+    callers should surface a "update the calendar" warning rather than silently
+    treat future holidays as open.
+    """
+    now_et   = datetime.now(_ET)
+    today    = now_et.date()
+    weekday  = now_et.weekday()          # 0=Mon … 4=Fri
+    hour     = now_et.hour + now_et.minute / 60
+    stale    = now_et.year > _C.MARKET_CALENDAR_LAST_YEAR
+    early_hr = _early_close_hour(today)
 
     if weekday >= 5:
         label, color, is_open = "Market Closed (Weekend)", "#888", False
+    elif is_market_holiday(today):
+        label, color, is_open = "Market Closed (Holiday)", "#888", False
+    elif early_hr is not None and hour >= early_hr:
+        # Half-day: traded this morning, now closed for the early-close holiday.
+        label, color, is_open = "Market Closed (Early Close)", "#888", False
     elif 9.5 <= hour < 16.0:
         label, color, is_open = "Market Open", "#00C851", True
     elif 4.0 <= hour < 9.5:
@@ -112,10 +146,11 @@ def market_status() -> dict:
         label, color, is_open = "Market Closed", "#888", False
 
     return {
-        "label":   label,
-        "color":   color,
-        "is_open": is_open,
-        "time_et": now_et.strftime("%H:%M ET"),
+        "label":         label,
+        "color":         color,
+        "is_open":       is_open,
+        "time_et":       now_et.strftime("%H:%M ET"),
+        "calendar_stale": stale,
     }
 
 
