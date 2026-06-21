@@ -1112,7 +1112,12 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     s_score = sentiment_score_0_100(avg_sent)
     total = combined_score(t_score, f_score, s_score)
     rec = recommendation(total)
-    price = float(df["Close"].iloc[-1]) if not df.empty else None
+    # Last *valid* close. compute_indicators already strips NaN-Close bars, but
+    # guard here too — defense in depth: float(NaN) is truthy, so a stray NaN
+    # would pass every `if price:` check and render "$nan" instead of routing to
+    # the existing "N/A" / verdict-withheld path. None is the honest "no price".
+    _closes = df["Close"].dropna() if not df.empty else None
+    price = float(_closes.iloc[-1]) if _closes is not None and not _closes.empty else None
     stop, atr_val = atr_stop_loss(df, multiplier=2.0)
     entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
     targets = compute_price_targets(df, financials, price) if price else None

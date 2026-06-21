@@ -4,6 +4,19 @@ from stock_analyzer.indicators import sma, ema, rsi, macd, bbands, obv
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    # Drop bars with no Close before computing anything. A degraded/partial
+    # trailing bar (a market-holiday or mid-outage row) carries a NaN Close;
+    # left in, it does two kinds of silent damage: (a) df["Close"].iloc[-1]
+    # becomes NaN — which is *truthy* in Python, so it sails past every
+    # `if price:` guard downstream and sprays "$nan" through the Trade Plan;
+    # and (b) it NaN-poisons that row's RSI/SMA/MACD/Bollinger, so
+    # technical_score (which reads df.iloc[-1] behind pd.notna gates) silently
+    # computes on a reduced signal set and distorts the verdict. A bar without
+    # a Close is not a tradeable bar. Mirrors the same notna() filter applied on
+    # the cached path in db.load_bundle_cache (single source of truth for the
+    # rule: no Close → not a bar).
+    if "Close" in df.columns:
+        df = df[df["Close"].notna()]
     close  = df["Close"]
     volume = df["Volume"]
     high   = df["High"]
