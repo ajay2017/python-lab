@@ -98,12 +98,15 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-06-19 | Cold-load burst reduction (rate-limit P2) — provider circuit-breaker (api_health.in_cooldown + orchestrator _providers_for) + SPY-fetch dedup + constant | — | — | — | — | n/a — lead | Failover hot path, correctness-sensitive; found + reused the already-approved Phase-2 design; in_cooldown logic unit-tested |
 | 2026-06-19 | Burst reduction P2 — Opus review (failover, live-price-path unaffected, all-cooled fallthrough, import cycle) | — | — | — | — | n/a — lead | Mandatory review (touches failover); verified breaker scope + no hard-block + no decision change → SHIP, 0 blocking |
 | 2026-06-19 | Burst reduction P2 — architecture.md Known-Behaviours rows + constant | Haiku | 52,370 | ~$0.08 | ~$0.36 | ~$0.28 | Mechanical doc rows (strong-saving lane); handed the facts |
+| 2026-06-21 | Analysis "$nan" — diagnose (up/downstream impact sweep: price chokepoint vs the latent `technical_score` reduced-signal-set distortion) + boundary fix (`compute_indicators` NaN-Close strip + `load_all` last-non-NaN price) | — | — | — | — | n/a — lead | Same NaN-is-truthy class as af854a8 but on the LIVE path; fixed at the data boundary, not the one surface (user directive: trace impact across, fix the class). Built inline as lead; py_compile-verified |
+| 2026-06-21 | NaN-Close hygiene — Opus review (healthy no-op, index alignment, None-path consumers, drop-all vs drop-trailing) | — | — | — | — | n/a — lead | Mandatory review (scoring/verdict input path); verified zero healthy-path drift + all `current_price` None consumers handled → SHIP, 0 blocking. First attempt died on a transient agent-API 401, re-run cleanly |
+| 2026-06-21 | NaN-Close hygiene — architecture.md Known-Behaviours row | Haiku | 29,669 | ~$0.05 | ~$0.20 | ~$0.15 | Mechanical doc row (strong-saving lane); handed the facts. Lead trimmed one borrowed-neighbour sentence post-hoc |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 372,180 | ~$0.89 | ~$2.67 | **~$1.78 (≈67% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
+| **To date** | 401,849 | ~$0.94 | ~$2.87 | **~$1.93 (≈67% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 
