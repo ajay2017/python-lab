@@ -169,6 +169,33 @@ BUCKET_CRITICAL_NEWS_IS_ACT = True   # critical-news flags → Act Today (treat 
 # suppresses a pick. Policy value — change = investment-policy decision.
 HYSTERESIS_COMPOSITE_DELTA = 4.0   # |today − yesterday| composite ≤ this = "steady" (absorbs daily wobble)
 
+# ── Held-position deterioration exit (exit_advisor.assess_holding) ────────────
+# The missing middle layer between "Hold" and a score-collapse "Sell (<30)": a
+# held name can bleed 15–25% while the composite sits inside Hold (44–64) and
+# nothing fires. A trade-log review found ~$1,465 of realized loss in positions
+# the app never flagged (the user exited them manually, on trend). This is a
+# 3-tier drawdown-from-peak + trend-break signal: WATCH (awareness only) →
+# TRIM (Act Today) → EXIT (Act Today, reduce aggressively). The thresholds are
+# investment-policy decisions — change = policy, not code tuning. See
+# docs/plans/exit-discipline.md. The TRIM/EXIT drawdown floors are
+# ATR-scaled so a quiet name trips tight and a jumpy one gets room, but CEILINGs
+# cap that widening so volatility can never disable the stop on the high-beta
+# names that cause the biggest losses.
+DETERIORATION_WATCH_DD_PCT     = 6.0    # drawdown-from-peak that arms WATCH (+ close < SMA50)
+DETERIORATION_TRIM_DD_PCT      = 8.0    # base TRIM drawdown-from-peak floor
+DETERIORATION_EXIT_DD_PCT      = 12.0   # base EXIT drawdown-from-peak floor
+DETERIORATION_ATR_MULT_TRIM    = 2.5    # TRIM floor = max(TRIM_DD_PCT, this × ATR%)
+DETERIORATION_ATR_MULT_EXIT    = 3.5    # EXIT floor = max(EXIT_DD_PCT, this × ATR%)
+DETERIORATION_TRIM_DD_CEILING  = 14.0   # cap on the ATR-scaled TRIM floor (vol can't disable the stop)
+DETERIORATION_EXIT_DD_CEILING  = 20.0   # cap on the ATR-scaled EXIT floor
+DETERIORATION_EXIT_DOLLAR_LOSS = 250.0  # unrealized $ loss that escalates TRIM → EXIT
+DETERIORATION_TREND_MA         = 50     # trend reference moving average (close < SMA50 = trend broken)
+DETERIORATION_CONFIRM_DAYS     = 3      # trend-confirmation lookback window (sessions)
+DETERIORATION_CONFIRM_REQUIRED = 2      # sessions below the MA required to confirm TRIM (NOT required for a deep EXIT)
+REL_STRENGTH_LOOKBACK_DAYS     = 20     # relative-strength-vs-SPY lookback (negative RS = idiosyncratic weakness)
+DETERIORATION_PEAK_FALLBACK_BARS = 63   # peak-window lookback (~3mo) when position age is unknown (no journal)
+MATERIAL_ADD_RESET_THRESHOLD   = 25.0   # a recent lot adding ≥ this % of shares re-anchors the peak/cost baseline (Phase-1.1 — wiring deferred)
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down

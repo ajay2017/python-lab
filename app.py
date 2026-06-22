@@ -2448,6 +2448,7 @@ if page == "🏠 Home":
                     market_context  = _market_context,
                     grow_composites = st.session_state.get("_grow_composites", {}),
                     movers          = st.session_state.get("_movers_candidates", []),
+                    spy_df          = _cached_spy("6mo"),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -4343,6 +4344,10 @@ if page == "🏠 Home":
                             f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
                             f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
                             f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
+                if t == "DETERIORATION_WATCH":
+                    return ("#94a3b8", "WATCH",
+                            "no action today — early deterioration; watching for follow-through "
+                            "(see Trigger for what escalates it to a TRIM).")
                 return ("#94a3b8", "—", "—")
 
             # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.

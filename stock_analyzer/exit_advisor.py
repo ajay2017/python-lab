@@ -1,0 +1,263 @@
+"""
+Held-position deterioration exit — the missing middle layer between "Hold" and a
+score-collapse "Sell (<30)".
+
+A trade-log review found the realized loss lived almost entirely in positions the
+app never flagged: the composite sat inside Hold (44–64) while the name bled, so
+no mechanical exit fired and the user bailed manually (on trend). This module
+issues a graduated, drawdown-from-peak + trend-break signal so the app gets ahead
+of that bleed:
+
+    WATCH  → awareness only (Review lane). Down ≥ WATCH_DD% from peak AND below the
+             trend MA. No action demanded.
+    TRIM   → Act Today. Down past an ATR-scaled floor, below the MA for 2 of the
+             last 3 sessions, AND weaker than the benchmark (idiosyncratic, not a
+             market-wide down day — that's Phase 2's job).
+    EXIT   → Act Today, reduce aggressively. TRIM conditions plus an escalation
+             (underwater vs cost, large $ loss, or a deep drawdown). A DEEP
+             drawdown fires EXIT on its own — depth IS confirmation, so a one-day
+             gap-down doesn't wait for "2 of 3 below MA".
+
+Design notes:
+- The drawdown floors are ATR-scaled (a quiet name trips tight, a jumpy one gets
+  room) but CAPPED by a ceiling so volatility can never disable the stop on the
+  high-beta names that cause the biggest losses.
+- The relative-strength filter gates only the ACTION tiers (TRIM/EXIT), not the
+  awareness WATCH.
+- Settling grace silences routine WATCH/TRIM on a freshly-opened position, but a
+  deep EXIT is danger and is NEVER silenced by age (mirrors
+  position_lifecycle.classify_position_state precedence).
+
+Pure logic — no Streamlit / no I/O. The scalar decision core takes primitives so
+it is trivially unit-testable; the pandas extraction layer pulls those primitives
+from the same df / port_df / held_data the rest of the brief already has.
+
+See docs/plans/exit-discipline.md.
+"""
+
+from __future__ import annotations
+
+from stock_analyzer.constants import (
+    DETERIORATION_WATCH_DD_PCT,
+    DETERIORATION_TRIM_DD_PCT,
+    DETERIORATION_EXIT_DD_PCT,
+    DETERIORATION_ATR_MULT_TRIM,
+    DETERIORATION_ATR_MULT_EXIT,
+    DETERIORATION_TRIM_DD_CEILING,
+    DETERIORATION_EXIT_DD_CEILING,
+    DETERIORATION_EXIT_DOLLAR_LOSS,
+    DETERIORATION_TREND_MA,
+    DETERIORATION_CONFIRM_DAYS,
+    DETERIORATION_CONFIRM_REQUIRED,
+    REL_STRENGTH_LOOKBACK_DAYS,
+    DETERIORATION_PEAK_FALLBACK_BARS,
+    POSITION_SETTLING_DAYS,
+)
+
+WATCH = "WATCH"
+TRIM = "TRIM"
+EXIT = "EXIT"
+
+# Tier rank for sorting / escalation comparisons (higher = stronger).
+TIER_RANK = {WATCH: 1, TRIM: 2, EXIT: 3}
+
+
+def _trim_floor(atr_pct: float) -> float:
+    """ATR-scaled TRIM drawdown floor, capped by the ceiling."""
+    return min(max(DETERIORATION_TRIM_DD_PCT, DETERIORATION_ATR_MULT_TRIM * atr_pct),
+               DETERIORATION_TRIM_DD_CEILING)
+
+
+def _exit_floor(atr_pct: float) -> float:
+    """ATR-scaled EXIT drawdown floor, capped by the ceiling."""
+    return min(max(DETERIORATION_EXIT_DD_PCT, DETERIORATION_ATR_MULT_EXIT * atr_pct),
+               DETERIORATION_EXIT_DD_CEILING)
+
+
+def classify_deterioration_tier(
+    *,
+    dd_from_peak_pct: float,   # POSITIVE % below the high-water mark (8.0 = 8% below)
+    atr_pct: float,            # ATR as % of price
+    trend_broken_now: bool,    # close < trend MA on the latest bar
+    below_ma_count: int,       # sessions below the MA in the last CONFIRM_DAYS
+    rel_strength: float,       # name return − benchmark return over the lookback (pct pts); <0 = weaker
+    price: float,
+    avg_cost: float,           # cost basis per share
+    dollar_pnl: float,         # unrealized $ (negative = loss)
+    age_days: int | None,
+) -> str | None:
+    """Return the deterioration tier (EXIT | TRIM | WATCH) or None.
+
+    Pure scalar decision core — no pandas, no I/O. Strongest tier first; a deep
+    drawdown reaches EXIT without the multi-session trend confirmation (depth is
+    its own confirmation), and a deep EXIT is never silenced by settling grace.
+    """
+    if dd_from_peak_pct is None or price is None or price <= 0:
+        return None
+
+    trim_floor = _trim_floor(atr_pct)
+    exit_floor = _exit_floor(atr_pct)
+    in_settling = age_days is not None and age_days < POSITION_SETTLING_DAYS
+
+    # TRIM base conditions: past the ATR-scaled floor, trend confirmed (2 of 3
+    # below the MA), AND idiosyncratically weak (not just a market-wide down day).
+    trim_active = (
+        dd_from_peak_pct >= trim_floor
+        and below_ma_count >= DETERIORATION_CONFIRM_REQUIRED
+        and rel_strength < 0
+    )
+
+    # EXIT escalation off an active TRIM: underwater, large $ loss, or deep dd.
+    escalate = (
+        price < avg_cost
+        or dollar_pnl <= -abs(DETERIORATION_EXIT_DOLLAR_LOSS)
+        or dd_from_peak_pct >= exit_floor
+    )
+
+    # Deep-drawdown EXIT shortcut: fires WITHOUT the 2-of-3 confirmation so a
+    # one-session gap-down past the deep floor doesn't lag. Still requires the
+    # current bar to be below the trend MA (don't exit a name at/above its MA).
+    deep_exit = dd_from_peak_pct >= exit_floor and trend_broken_now
+
+    if deep_exit or (trim_active and escalate):
+        return EXIT   # danger — never silenced by settling grace
+
+    if trim_active:
+        return None if in_settling else TRIM
+
+    # WATCH (awareness only): RS-independent — a name down ≥ WATCH_DD% and below
+    # its trend MA is worth watching regardless of the market.
+    if dd_from_peak_pct >= DETERIORATION_WATCH_DD_PCT and trend_broken_now:
+        return None if in_settling else WATCH
+
+    return None
+
+
+def _series_close(df):
+    """Return the clean Close series (NaN-Close bars dropped), or None."""
+    if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
+        return None
+    s = df["Close"].dropna()
+    return s if not s.empty else None
+
+
+def _pct_return(close, lookback: int):
+    """Simple return over `lookback` bars, or None if not enough history."""
+    if close is None or len(close) <= lookback:
+        return None
+    prev = float(close.iloc[-(lookback + 1)])
+    if prev <= 0:
+        return None
+    return float(close.iloc[-1]) / prev - 1.0
+
+
+def assess_holding(
+    ticker: str,
+    df,
+    spy_df=None,
+    *,
+    price: float | None = None,
+    atr: float | None = None,
+    avg_cost: float | None = None,
+    shares: float | None = None,
+    pnl_pct: float | None = None,
+    weight_pct: float | None = None,
+    age_days: int | None = None,
+    peak_window_days: int | None = None,
+) -> dict | None:
+    """Extract the deterioration scalars from price history and classify.
+
+    df            : the indicator frame (has Close + SMA_<DETERIORATION_TREND_MA>).
+    spy_df        : benchmark history for relative strength (optional → RS treated
+                    as 0, which keeps the action tiers from firing on unknown RS).
+    peak_window_days : override for the high-water-mark window (caller passes a
+                    material-add re-anchored window); defaults to age_days.
+
+    Returns a payload dict (tier + the figures the brief needs to render the
+    directive / why / trigger and to sort by dollar risk), or None when there is
+    no signal or insufficient data.
+    """
+    close = _series_close(df)
+    if close is None or price is None or price <= 0:
+        return None
+
+    ma_col = f"SMA_{DETERIORATION_TREND_MA}"
+    if ma_col not in df.columns:
+        return None
+    ma = df[ma_col]
+    sma_now = ma.iloc[-1]
+    # Need a valid trend MA to assess a trend break; a NaN MA (insufficient
+    # history) means no signal rather than a fabricated one.
+    if sma_now is None or sma_now != sma_now:   # NaN check without importing math
+        return None
+    trend_broken_now = float(price) < float(sma_now)
+
+    # Sessions below the MA over the confirmation window.
+    k = DETERIORATION_CONFIRM_DAYS
+    tail_close = close.tail(k)
+    tail_ma = ma.tail(k)
+    below_ma_count = 0
+    for c, m in zip(tail_close.tolist(), tail_ma.tolist()):
+        if m == m and c == c and c < m:   # skip NaN MA/close bars
+            below_ma_count += 1
+
+    # High-water mark over the holding window (re-anchored window if provided).
+    window = peak_window_days if peak_window_days is not None else age_days
+    if window is not None and window > 0:
+        # Calendar days → approx trading bars; +2 cushion, floor of 2.
+        n = max(2, int(round(window * 5.0 / 7.0)) + 2)
+        peak_series = close.tail(n)
+    else:
+        # No journal age — bound the lookback so an old pre-entry high can't
+        # fabricate a huge drawdown. ~3 trading months.
+        peak_series = close.tail(DETERIORATION_PEAK_FALLBACK_BARS)
+    peak = float(peak_series.max())
+    if peak <= 0:
+        return None
+    dd_from_peak_pct = max(0.0, (peak - float(price)) / peak * 100.0)
+
+    atr_pct = (float(atr) / float(price) * 100.0) if atr else 0.0
+
+    # Relative strength vs benchmark over the lookback (pct points). Unknown → 0
+    # (not negative), so the action tiers never fire on missing RS.
+    name_ret = _pct_return(close, REL_STRENGTH_LOOKBACK_DAYS)
+    spy_ret = _pct_return(_series_close(spy_df), REL_STRENGTH_LOOKBACK_DAYS)
+    rel_strength = ((name_ret - spy_ret) * 100.0) if (name_ret is not None and spy_ret is not None) else 0.0
+
+    avg_cost = float(avg_cost) if avg_cost else float(price)
+    shares = float(shares) if shares else 0.0
+    dollar_pnl = (float(price) - avg_cost) * shares
+
+    tier = classify_deterioration_tier(
+        dd_from_peak_pct=dd_from_peak_pct,
+        atr_pct=atr_pct,
+        trend_broken_now=trend_broken_now,
+        below_ma_count=below_ma_count,
+        rel_strength=rel_strength,
+        price=float(price),
+        avg_cost=avg_cost,
+        dollar_pnl=dollar_pnl,
+        age_days=age_days,
+    )
+    if tier is None:
+        return None
+
+    return {
+        "ticker": ticker,
+        "tier": tier,
+        "dd_from_peak_pct": round(dd_from_peak_pct, 1),
+        "peak": round(peak, 2),
+        "price": round(float(price), 2),
+        "atr_pct": round(atr_pct, 1),
+        "rel_strength": round(rel_strength, 1),
+        "below_ma_count": below_ma_count,
+        "trend_ma": DETERIORATION_TREND_MA,
+        "sma": round(float(sma_now), 2),
+        "trim_floor": round(_trim_floor(atr_pct), 1),
+        "exit_floor": round(_exit_floor(atr_pct), 1),
+        "dollar_pnl": round(dollar_pnl, 0),
+        "pnl_pct": pnl_pct,
+        "weight_pct": weight_pct,
+        "shares": int(shares),
+        "dollar_risk": round(float(price) * shares, 0),   # position size — Act-Today sort tiebreak
+    }

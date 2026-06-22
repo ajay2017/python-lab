@@ -65,6 +65,7 @@ from stock_analyzer.signal_reconciliation import (
 )
 from stock_analyzer.position_lifecycle import classify_position_state
 from stock_analyzer.portfolio import resolve_sector
+from stock_analyzer import exit_advisor
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -974,7 +975,39 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
 
 # ── Act Today ─────────────────────────────────────────────────────────────────
 
-def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) -> list[dict]:
+def deterioration_signals(port_df, held_data, spy_df=None) -> list[dict]:
+    """Held-position deterioration signals (exit_advisor) for every holding.
+
+    Returns the list of non-None payloads (tier WATCH/TRIM/EXIT) — TRIM/EXIT feed
+    Act Today, WATCH feeds the Review awareness lane. Pure pass-through to
+    exit_advisor.assess_holding; all inputs come from data the brief already has
+    (port_df row + held_data[t]'s df/atr/position_age_days + the SPY benchmark).
+    """
+    if port_df is None or getattr(port_df, "empty", True):
+        return []
+    out: list[dict] = []
+    for _, row in port_df.iterrows():
+        ticker = str(row.get("Ticker", "")).upper()
+        data = (held_data or {}).get(ticker, {}) or {}
+        payload = exit_advisor.assess_holding(
+            ticker,
+            data.get("df"),
+            spy_df,
+            price=_f(row.get("Price"), None),
+            atr=data.get("atr"),
+            avg_cost=_f(row.get("Avg Cost"), None),
+            shares=_f(row.get("Shares"), 0),
+            pnl_pct=_f(row.get("P&L (%)"), None),
+            weight_pct=_f(row.get("Weight (%)"), None),
+            age_days=data.get("position_age_days"),
+        )
+        if payload:
+            out.append(payload)
+    return out
+
+
+def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
+               deterioration: list | None = None) -> list[dict]:
     """
     Build the Act Today list. Each item carries a structured directive so the
     UI renders a concrete ACT/Why/Trigger block (matching Review Before Close)
@@ -1047,6 +1080,47 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
                 "weight":  _f(row.get("Weight (%)")),
                 "pnl_pct": _f(row.get("P&L (%)")),
             })
+
+    # 2.5 — Held-position deterioration (TRIM / EXIT). Fills the gap between
+    # "Hold" and a score-collapse "Sell (<30)": a name down from its peak and
+    # below trend, before the composite ever reacts. WATCH tier is awareness-only
+    # → it goes to the Review lane, not here. Dedup: a stop_breach or sell_signal
+    # already added above wins (single-surface), so skip a ticker already present.
+    _existing = {i["ticker"] for i in items}
+    for d in (deterioration or []):
+        if d.get("tier") not in ("TRIM", "EXIT"):
+            continue
+        if d["ticker"] in _existing:
+            continue
+        _is_exit = d["tier"] == "EXIT"
+        _pnl = d.get("pnl_pct") or 0.0
+        _wt = d.get("weight_pct") or 0.0
+        items.append({
+            "priority": "high",
+            "icon":     "📉" if _is_exit else "✂️",
+            "ticker":   d["ticker"],
+            "kind":     "deterioration_exit" if _is_exit else "deterioration_trim",
+            "action":   "REDUCE — Deterioration Exit" if _is_exit else "TRIM — Deterioration",
+            "directive": (
+                f"Reduce aggressively — exit most/all of {d['shares']} shares. Down "
+                f"{d['dd_from_peak_pct']:.1f}% from its ${d['peak']:.2f} peak and below "
+                f"the {d['trend_ma']}-day trend."
+                if _is_exit else
+                f"Trim into the weakness. Down {d['dd_from_peak_pct']:.1f}% from its "
+                f"${d['peak']:.2f} peak, below the {d['trend_ma']}-day trend, and lagging "
+                f"the market."
+            ),
+            "why": (
+                f"Drawdown {d['dd_from_peak_pct']:.1f}% (trigger "
+                f"{d['trim_floor']:.0f}%/{d['exit_floor']:.0f}%), {d['below_ma_count']}/3 "
+                f"sessions below SMA{d['trend_ma']}, rel-strength {d['rel_strength']:+.1f}pp. "
+                f"P&L {_pnl:+.1f}%, weight {_wt:.1f}%."
+            ),
+            "trigger": "If it keeps closing below the trend and breaks support, exit the rest.",
+            "weight":  d.get("weight_pct"),
+            "pnl_pct": d.get("pnl_pct"),
+            "dollar_risk": d.get("dollar_risk"),
+        })
 
     # 3 — Critical news on held positions (compound ≤ -0.25, tier ≤ 2)
     held_tickers = set(port_df["Ticker"].tolist())
@@ -1136,8 +1210,21 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today) 
 
 
 # Kinds that represent a mechanical exit decision — these suppress softer
-# advisories (risk trims, news monitors) on the same ticker.
+# advisories (risk trims, news monitors) on the same ticker. Deterioration
+# signals are deliberately NOT here: they are the gentler/earlier tripwire and
+# get suppressed BY stop_breach/sell_signal (deduped at build time), never the
+# other way round.
 _MECHANICAL_KINDS = {"stop_breach", "sell_signal"}
+
+# Display ordering within Act Today (lower = higher up). Mirrors the exit
+# hierarchy: a breached stop first, then a composite Sell, then the deterioration
+# tiers (aggressive EXIT before a TRIM), then everything else.
+_KIND_RANK = {
+    "stop_breach":        0,
+    "sell_signal":        1,
+    "deterioration_exit": 2,
+    "deterioration_trim": 3,
+}
 
 
 def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
@@ -1215,9 +1302,13 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
     for it in out:
         it["reason"] = _synth_reason(it)
 
-    # Critical first, then by weight desc (None weights last).
+    # Critical first; then by the exit hierarchy (stop > Sell > EXIT > TRIM >
+    # other); then by dollar risk desc (largest exposure first, weight as
+    # fallback). None values sort last within each band.
     out.sort(key=lambda x: (
         0 if x["priority"] == "critical" else 1,
+        _KIND_RANK.get(x.get("kind"), 4),
+        -(x.get("dollar_risk") or 0),
         -(x.get("weight") or 0),
     ))
     return out
@@ -1341,7 +1432,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 
 def _review_list(port_df, news_items, macro_events, held_data, today,
                  portfolio_value: float = 0.0,
-                 act_today: list | None = None) -> list[dict]:
+                 act_today: list | None = None,
+                 deterioration: list | None = None) -> list[dict]:
     """
     Build the Review Before Close list.
 
@@ -1367,6 +1459,34 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     # act_today dedup that _buy_candidates and _grow_today already do.
     _act_tickers = {str(a.get("ticker", "")).upper() for a in (act_today or [])}
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH, affected_sectors as _aff_sectors
+
+    # 0 — Deterioration WATCH (awareness only). The early tripwire: a held name
+    # down ≥ WATCH_DD% from its peak and below trend, but not yet at the
+    # TRIM/EXIT action thresholds. Lives here (not Act Today) so it informs
+    # without demanding a same-day trade — the calm-advisor split (§2B). Deduped
+    # against Act Today so a name escalated to TRIM/EXIT doesn't also WATCH here.
+    for d in (deterioration or []):
+        if d.get("tier") != "WATCH":
+            continue
+        if str(d["ticker"]).upper() in _act_tickers:
+            continue
+        items.append({
+            "priority": "low",
+            "icon":     "👁️",
+            "ticker":   d["ticker"],
+            "headline": (
+                f"down {d['dd_from_peak_pct']:.1f}% from ${d['peak']:.2f} peak, "
+                f"below SMA{d['trend_ma']}"
+            ),
+            "action":   {"type": "DETERIORATION_WATCH"},
+            "why": (
+                f"Early deterioration: drawdown {d['dd_from_peak_pct']:.1f}%, below the "
+                f"{d['trend_ma']}-day trend. Not an action yet — watching for follow-through."
+            ),
+            "trigger": "A 2-of-3 close below the trend with market underperformance → TRIM.",
+            "weight":  d.get("weight_pct"),
+            "lifecycle": "",
+        })
 
     # 1 — Approaching stop (0–8% gap)
     # Action policy:
@@ -1784,6 +1904,7 @@ def build_daily_briefing(
     market_context:  dict | None = None,
     grow_composites: dict | None = None,
     movers:          list | None = None,
+    spy_df:          object | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -1808,13 +1929,19 @@ def build_daily_briefing(
         if _ed:
             earnings_lookup.setdefault(_t, _ed)
 
-    act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today)
+    # Held-position deterioration (exit_advisor) — computed once, fed to both
+    # Act Today (TRIM/EXIT) and the Review awareness lane (WATCH).
+    deterioration = deterioration_signals(port_df, held_data, spy_df)
+
+    act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
+                        deterioration=deterioration)
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                              act_today=act, risk_recs=risk_recs,
                              earnings_lookup=earnings_lookup,
                              composites=grow_composites or {})
     review = _review_list(port_df, news_items, macro_events, held_data, today,
-                          portfolio_value=portfolio_value, act_today=act)
+                          portfolio_value=portfolio_value, act_today=act,
+                          deterioration=deterioration)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
