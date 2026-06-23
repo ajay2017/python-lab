@@ -68,14 +68,18 @@ Suppress the deterioration signal when:
   EXIT on a still-deteriorating name is correct, not churn. Revisit if the cards
   feel repetitive in practice.
 
-**Material-add re-anchor** (`MATERIAL_ADD_RESET_THRESHOLD = 25.0`) — *declared but
-wiring deferred (Phase 1.1).* Intent: when a recent lot adds ≥25% to the
-position, re-anchor the high-water-mark window (and cost basis) to that add so
-averaging down can't leave a stale pre-add peak triggering a false EXIT. The
-`assess_holding(peak_window_days=...)` hook exists for this; the producer does
-not yet compute/pass it, so the peak window currently spans the whole holding
-(oldest lot). Acceptable now (no current holding has averaged down into a
-deteriorating name); wire before that pattern appears.
+**Material-add re-anchor** (`MATERIAL_ADD_RESET_THRESHOLD = 25.0`) — *SHIPPED
+(Phase 1.1).* When a NON-initial lot is ≥25% of the position, the peak window is
+clipped to "since that add" (`exit_advisor.material_add_window_days(lots)` →
+`assess_holding(peak_window_days=...)`), so averaging down can't measure
+drawdown from a stale pre-add high (false EXIT). Computed in app.py alongside
+`position_age_days` (`bundle["material_add_age_days"]`) and consumed in
+`deterioration_signals`. **Cost basis stays BLENDED (deliberately NOT
+re-anchored):** every EXIT path is already gated by the re-anchored drawdown, so
+the `price < avg_cost` escalation only bites once there's genuine post-add
+deterioration — at which point blended cost is the honest "are you underwater"
+measure. Re-anchoring cost would only ever loosen the exit, so the cautious
+default is kept.
 
 ## Act-Today priority (extends `_consolidate_act_today` ordering)
 `stop_breach > composite Sell > deterioration EXIT > deterioration TRIM >
@@ -132,7 +136,6 @@ Cloud validate. Logged in `docs/cost-routing.md`.
 - No auto-execution — directives only; the user decides.
 - **Hysteresis** on deterioration cards (suppress an unchanged tier) — deferred;
   revisit if the rebuilt-snapshot cards feel repetitive.
-- **Material-add re-anchor wiring** (Phase 1.1) — the constant + `peak_window_days`
-  hook exist; the producer doesn't compute the re-anchored window yet.
+- ~~**Material-add re-anchor wiring** (Phase 1.1)~~ — SHIPPED (see above).
 - Action Log Phase B (log the trim/exit, stop re-nagging) threads in alongside
   but the full trim/exit logging UI is its own task.

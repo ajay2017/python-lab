@@ -194,7 +194,7 @@ DETERIORATION_CONFIRM_DAYS     = 3      # trend-confirmation lookback window (se
 DETERIORATION_CONFIRM_REQUIRED = 2      # sessions below the MA required to confirm TRIM (NOT required for a deep EXIT)
 REL_STRENGTH_LOOKBACK_DAYS     = 20     # relative-strength-vs-SPY lookback (negative RS = idiosyncratic weakness)
 DETERIORATION_PEAK_FALLBACK_BARS = 63   # peak-window lookback (~3mo) when position age is unknown (no journal)
-MATERIAL_ADD_RESET_THRESHOLD   = 25.0   # a recent lot adding ≥ this % of shares re-anchors the peak/cost baseline (Phase-1.1 — wiring deferred)
+MATERIAL_ADD_RESET_THRESHOLD   = 25.0   # a non-initial lot ≥ this % of the position re-anchors the deterioration PEAK window to "since the add" (averaging-down guard; cost basis stays blended — see exit_advisor.material_add_window_days)
 
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the

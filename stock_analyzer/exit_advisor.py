@@ -51,6 +51,7 @@ from stock_analyzer.constants import (
     DETERIORATION_CONFIRM_REQUIRED,
     REL_STRENGTH_LOOKBACK_DAYS,
     DETERIORATION_PEAK_FALLBACK_BARS,
+    MATERIAL_ADD_RESET_THRESHOLD,
     POSITION_SETTLING_DAYS,
 )
 
@@ -60,6 +61,49 @@ EXIT = "EXIT"
 
 # Tier rank for sorting / escalation comparisons (higher = stronger).
 TIER_RANK = {WATCH: 1, TRIM: 2, EXIT: 3}
+
+
+def material_add_window_days(lots) -> int | None:
+    """Days since the most recent MATERIAL add, or None.
+
+    A "material add" is a NON-initial lot whose shares are ≥
+    MATERIAL_ADD_RESET_THRESHOLD % of the current open position. When the user
+    averages down (or pyramids) materially, the relevant high-water mark resets
+    to that decision point — otherwise the deterioration peak window spans back
+    to the original entry and a stale pre-add high fabricates a large
+    drawdown-from-peak (a false EXIT). The caller passes the return value as
+    `assess_holding(peak_window_days=...)` to clip the peak window to "since the
+    add".
+
+    `lots`: the open tax lots oldest→newest, each `{"shares", "days_held", ...}`
+    (the shape returned by tax_advisor._build_open_lots). Returns None for no
+    lots, a single lot (just the original entry — nothing to re-anchor to), or
+    no qualifying add. Any second-or-later purchase that clears the threshold
+    counts (a position built over two same-week buys re-anchors to the second —
+    harmless, it only shortens the window slightly).
+
+    Safe-by-construction: the share fraction is taken against the CURRENT
+    post-SELL open total (FIFO has already consumed earlier lots), so a later
+    lot's fraction can only be inflated, never understated — i.e. re-anchoring
+    can only SHORTEN the peak window, never lengthen it. A shorter window means a
+    smaller measured drawdown, so this can only ever SUPPRESS a (false) exit,
+    never manufacture one. Don't "fix" the denominator to the gross bought total.
+    """
+    if not lots or len(lots) < 2:
+        return None
+    total = sum((l.get("shares") or 0) for l in lots)
+    if total <= 0:
+        return None
+    # Skip the oldest lot (the original entry); a re-anchoring add must come
+    # AFTER it. Among qualifying adds, the most recent (smallest days_held) wins.
+    newest_material = None
+    for l in lots[1:]:
+        sh = l.get("shares") or 0
+        if (sh / total) * 100.0 >= MATERIAL_ADD_RESET_THRESHOLD:
+            d = l.get("days_held")
+            if d is not None:
+                newest_material = d if newest_material is None else min(newest_material, d)
+    return newest_material
 
 
 def _trim_floor(atr_pct: float) -> float:

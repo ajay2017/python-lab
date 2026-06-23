@@ -71,6 +71,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
+from stock_analyzer import exit_advisor
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import split_defensive
 from stock_analyzer.signal_hysteresis import apply_hysteresis
@@ -1685,9 +1686,15 @@ if page == "🏠 Home":
                     _ages = [l["days_held"] for l in _lots]
                     bundle["position_age_days"]   = max(_ages) if _ages else None
                     bundle["days_since_last_buy"] = min(_ages) if _ages else None
+                    # Days since the most recent MATERIAL add (≥ threshold % of
+                    # the position). Re-anchors the deterioration peak window so
+                    # averaging down doesn't measure drawdown from a stale
+                    # pre-add high (false EXIT). None when no qualifying add.
+                    bundle["material_add_age_days"] = exit_advisor.material_add_window_days(_lots)
                 except Exception:
                     bundle["position_age_days"]   = None
                     bundle["days_since_last_buy"] = None
+                    bundle["material_add_age_days"] = None
                 held_data[t] = bundle
 
     # Data-resilience: surface when any holding is rendering on the last-known-good

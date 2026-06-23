@@ -1000,6 +1000,11 @@ def deterioration_signals(port_df, held_data, spy_df=None) -> list[dict]:
             pnl_pct=_f(row.get("P&L (%)"), None),
             weight_pct=_f(row.get("Weight (%)"), None),
             age_days=data.get("position_age_days"),
+            # Material-add re-anchor (Phase 1.1): when the user averaged in
+            # materially, clip the peak window to "since the add" so a stale
+            # pre-add high can't fabricate a false EXIT. None → spans the whole
+            # holding (oldest lot), as before.
+            peak_window_days=data.get("material_add_age_days"),
         )
         if payload:
             out.append(payload)
