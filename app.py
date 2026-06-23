@@ -15469,8 +15469,8 @@ The Home brief is split into **offense** (left) and **defense** (right).
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
 
 **Right — three lanes, by urgency:**
-- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a sized trim, breaking critical news. If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."**
-- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: mild negative news, a broad macro event to hold through.
+- **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news. If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."**
+- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, mild negative news, a broad macro event to hold through.
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means a pick's conviction is unchanged from yesterday — continuity, not a fresh call.
@@ -15528,6 +15528,25 @@ When a name looks strong but isn't recommended, one of these gates fired — and
 - **Imminent macro event** — a HIGH-impact release (jobs, CPI, Fed) is within a few days and hits that sector; opening into a known binary catalyst is the anti-pattern this blocks.
 - **Composite contradicts momentum** — momentum is hot but the full composite is below the Buy threshold; skip until it confirms.
 - **Recently added (cooldown)** — you already added to this winner in the last ~2 weeks; the app waits for the new shares to settle before suggesting more (anti-churn).
+"""
+        )
+
+    with st.expander("🛡️ How it protects a position you hold (loss protection)", expanded=False):
+        st.markdown(
+            """
+Buying is only half the job — the app also watches every position you hold and tells you to **reduce *before* the score fully breaks down**. Most slow losses happen while a name is still rated "Hold": it bleeds 10–20% but never trips a hard Sell. This layer catches that.
+
+It reads two things together: how far a name has fallen **from its highest point since you bought it**, and whether it's **broken below its trend** (the 50-day line). Based on severity you'll see one of three calls:
+
+- **👁️ Watch** *(Monitoring lane — no action)* — down modestly from its peak and below trend. Early heads-up, nothing to do yet.
+- **✂️ Trim** *(Act Today)* — the slide has confirmed (multiple days below trend) **and** the name is underperforming the market. Reduce the position.
+- **📉 Reduce Aggressively / Exit** *(Act Today)* — the trim conditions plus real damage (you're underwater, a large dollar loss, or a steep drawdown). Cut it down hard.
+
+**Deliberately calm:** it stays quiet on small wobbles (a normal 3–5% dip won't fire anything) — this is a medium-term guard, not a day-trading stop. The drawdown threshold also scales with each stock's own volatility, so a jumpy name gets more room than a steady one.
+
+**If you averaged down:** when you add materially to a position, it re-measures the decline **from your add**, not from an old pre-add high — so doubling down won't trigger a false exit signal.
+
+**What it does *not* do (yet):** it flags names weakening *on their own*. It does **not** yet act on broad market-wide down days (when everything falls together) — that protection is a planned next step. And every call is **advisory — you decide and act**; nothing is auto-sold. If a name already has a hard stop breach or a full Sell signal, that takes precedence and you'll see *that* instead (one card per position, strongest call wins).
 """
         )
 
