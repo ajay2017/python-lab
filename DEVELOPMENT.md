@@ -127,7 +127,7 @@ GOOGLE_API_KEY    = "AIza..."      # optional
 api_key = "..."                     # optional, enriches macro calendar with released values
 ```
 
-**Security model:** RLS is enabled on all Supabase tables with `FOR ALL TO service_role` policies. The publishable/anon key has no matching policy — defense-in-depth in case the publishable key ever leaks. If you ever swap secrets, you MUST reboot the app via Manage app (the `@st.cache_resource` client doesn't auto-refresh).
+**Security model:** RLS is enabled on all Supabase tables with `FOR ALL TO service_role` policies. The publishable/anon key has no matching policy — defense-in-depth in case the publishable key ever leaks. If you ever swap secrets, you MUST reboot the app via Manage app (the Supabase client is a process-level singleton — `db._CLIENT` — so a swap is only picked up on restart). Credentials resolve env-first (`SUPABASE_URL`/`SUPABASE_KEY`) then `st.secrets`, so the headless alert cron and the app share one path.
 
 ---
 

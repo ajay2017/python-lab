@@ -218,6 +218,12 @@ RISK_OFF_NAME_MIN_BETA  = 1.2    # only trim genuinely high-beta drivers (β ≥
 RISK_OFF_TRIM_TOP_N     = 3      # act on the top-N beta contributors (β × weight), not the whole book.
 RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position (or tighten the stop instead).
 
+# ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
+# investment-decision threshold. The ET hour the daily email targets; the cron is
+# scheduled at two UTC times (to straddle EST/EDT) and a Supabase idempotency
+# guard fires only the first run each ET trading day at/after this hour.
+ALERT_EMAIL_HOUR_ET = 8
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down

@@ -178,7 +178,23 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.bundle_cache;
     create policy "Allow all (service role)" on public.bundle_cache
         for all to service_role using (true) with check (true);
+
+    -- alert_state: single-row (id=1) dedup state for the protective-alert cron
+    -- (exit-discipline Phase 3). Until created, load returns None / save no-ops,
+    -- so the cron degrades to "always send" (no double-send guard) but still works.
+    create table if not exists public.alert_state (
+        id                 integer primary key,
+        last_emailed_date  text,
+        last_fingerprint   text,
+        updated_at         timestamptz not null default now()
+    );
+    alter table public.alert_state enable row level security;
+    drop policy if exists "Allow all (service role)" on public.alert_state;
+    create policy "Allow all (service role)" on public.alert_state
+        for all to service_role using (true) with check (true);
 """
+
+import os
 
 import streamlit as st
 import pandas as pd
@@ -201,22 +217,45 @@ def is_readonly() -> bool:
     return _READONLY
 
 
-def has_db() -> bool:
-    """True when Supabase credentials are present in st.secrets."""
+def _supabase_creds() -> tuple[str, str]:
+    """(url, key) for Supabase — env first, then st.secrets.
+
+    Env (`SUPABASE_URL` / `SUPABASE_KEY`) is checked FIRST so the headless cron
+    (GitHub Actions, no Streamlit runtime) works; the Streamlit app falls through
+    to `st.secrets`. Mirrors the dual-source pattern in providers/_util. The key
+    must be the service-role/secret key in both contexts — RLS stays on (the env
+    path does NOT weaken security; it's the same key class)."""
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    if url and key:
+        return url, key
     try:
-        url = st.secrets.get("supabase", {}).get("url", "")
-        return bool(url) and not url.startswith("https://your-project")
+        sec = st.secrets.get("supabase", {})
+        return sec.get("url", "") or "", sec.get("key", "") or ""
     except Exception:
-        return False
+        return "", ""
 
 
-@st.cache_resource
+def has_db() -> bool:
+    """True when usable Supabase credentials are present (env or st.secrets)."""
+    url, key = _supabase_creds()
+    return bool(url) and bool(key) and not url.startswith("https://your-project")
+
+
+# Process-level singleton (was @st.cache_resource). A plain module global caches
+# the client across Streamlit reruns (same process) AND works headless, where the
+# Streamlit cache decorators have no runtime. The DB client is genuinely a
+# per-process singleton, so this is strictly simpler with identical app behaviour.
+_CLIENT = None
+
+
 def _client():
-    from supabase import create_client
-    return create_client(
-        st.secrets["supabase"]["url"],
-        st.secrets["supabase"]["key"],
-    )
+    global _CLIENT
+    if _CLIENT is None:
+        from supabase import create_client
+        url, key = _supabase_creds()
+        _CLIENT = create_client(url, key)
+    return _CLIENT
 
 
 # ── Holdings ──────────────────────────────────────────────────────────────────
@@ -1057,6 +1096,53 @@ def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         _client().table("fundamentals_cache").upsert(record, on_conflict="ticker").execute()
+        return True
+    except Exception:
+        return False
+
+
+# ── Alert-cron dedup state (single row, id=1) ────────────────────────────────
+# Used ONLY by the headless email-alerts cron (exit-discipline Phase 3) to (a)
+# fire at most once per ET trading day and (b) skip an email whose protective set
+# is unchanged since the last send. System state, NOT user data → not _READONLY-
+# gated (the cron runs outside the app anyway). Degrades to "always send" if the
+# table is absent — the feature works before the DDL, just without dedup.
+
+def load_alert_state() -> dict | None:
+    """Return {"last_emailed_date": "<YYYY-MM-DD>", "last_fingerprint": "<hex>"}
+    or None (DB offline / table missing / no row). Never raises."""
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("alert_state")
+            .select("last_emailed_date,last_fingerprint")
+            .eq("id", 1).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "last_emailed_date": row.get("last_emailed_date"),
+            "last_fingerprint":  row.get("last_fingerprint"),
+        }
+    except Exception:
+        return None
+
+
+def save_alert_state(emailed_date: str, fingerprint: str) -> bool:
+    """Upsert the cron's dedup state (id=1). Best-effort; swallows failures."""
+    if not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        record = {
+            "id":                1,
+            "last_emailed_date": str(emailed_date),
+            "last_fingerprint":  str(fingerprint),
+            "updated_at":        datetime.now(timezone.utc).isoformat(),
+        }
+        _client().table("alert_state").upsert(record, on_conflict="id").execute()
         return True
     except Exception:
         return False

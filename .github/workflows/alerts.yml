@@ -1,0 +1,54 @@
+name: Protective Alerts (daily)
+
+# Exit-discipline Phase 3 — recompute protective signals headlessly and email
+# the user once per ET trading day when the action set changes.
+#
+# DST: GitHub cron is UTC with no DST. We schedule TWO slots straddling EST/EDT
+# (08:00 ET = 13:00 UTC in winter / 12:00 UTC in summer). cron_runner's guards
+# (trading-day + ET-hour >= ALERT_EMAIL_HOUR_ET + a once-per-day Supabase flag)
+# ensure exactly one run fires per ET day at ~08:00 local, never twice.
+
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"   # 12:00 UTC — 08:00 EDT (summer) / 07:00 EST (winter, gated out as too-early)
+    - cron: "0 13 * * 1-5"   # 13:00 UTC — 09:00 EDT (gated as already-done) / 08:00 EST (winter run)
+  workflow_dispatch:          # manual smoke-test button (Actions tab → Run workflow)
+    inputs:
+      force:
+        description: "Bypass the trading-day / hour / once-per-day guards (test)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: protective-alerts
+  cancel-in-progress: false
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run protective-alert cron
+        env:
+          SUPABASE_URL:    ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:    ${{ secrets.SUPABASE_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FMP_API_KEY:     ${{ secrets.FMP_API_KEY }}
+          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+          RESEND_API_KEY:  ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO:   ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '' }}
+        run: python cron_runner.py

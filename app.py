@@ -39,6 +39,7 @@ from stock_analyzer.data import (
 )
 from stock_analyzer.catalyst_watch import build_catalyst_watch
 from stock_analyzer.technicals import compute_indicators, technical_score
+from stock_analyzer.bundle_loader import load_bundle
 from stock_analyzer.fundamentals import (
     fundamental_score, upside_potential,
     count_core_metrics, resolve_fundamentals,
@@ -1080,128 +1081,16 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
 
 @st.cache_data(ttl=1800)
 def load_all(ticker: str, period: str = "6mo") -> dict:
-    # One yf.Ticker session covers history + info + news + earnings (was 4 separate calls)
-    # Resilience: write-through the raw bundle to a last-known-good cache on every
-    # successful fetch; if the history/bundle providers ALL fail, serve the aged
-    # cached copy (tagged stale) so the portfolio still renders instead of
-    # cascading to "Could not load". No cached copy → re-raise (honest failure).
-    # All cache I/O is wrapped so it can NEVER break the normal success path.
-    _stale_as_of = None
+    """Thin Streamlit-cached wrapper over bundle_loader.load_bundle (the shared
+    pure pipeline, also used by the headless email-alerts cron). Supplies the
+    cached SPY benchmark + risk-free rate so the heavy single-ticker analysis runs
+    once per 30-min TTL per ticker. Logic lives in stock_analyzer/bundle_loader.py
+    so the app and the cron never drift."""
     try:
-        bundle = fetch_ticker_bundle(ticker, period)
-        try:
-            db.save_bundle_cache(ticker, bundle)
-        except Exception:
-            pass
+        _spy = _cached_spy(period)
     except Exception:
-        _cached_bundle = None
-        try:
-            _cached_bundle = db.load_bundle_cache(ticker, BUNDLE_CACHE_MAX_AGE_DAYS)
-        except Exception:
-            _cached_bundle = None
-        if not _cached_bundle:
-            raise  # nothing cached (or too stale) → honest "Could not load"
-        # The stale result is intentionally memoized by @st.cache_data(ttl=1800):
-        # a name can keep showing last-known-good data for up to ~30 min after
-        # the provider recovers. That's deliberate — it also stops us re-hammering
-        # a still-recovering provider every rerun; the banner keeps it honest.
-        # Don't "fix" this by shortening the TTL.
-        bundle = _cached_bundle["bundle"]
-        _stale_as_of = _cached_bundle["fetched_at"]
-    df = compute_indicators(bundle["history"])
-    t_score, t_signals = technical_score(df)
-    financials = fetch_financials_from_info(bundle["info"])
-    # ── Persistent last-known-good fundamentals fallback ──────────────────────
-    # The fundamental leg is the fragile one: yfinance .info intermittently
-    # returns empty AND the FMP backfill can be quota-exhausted, leaving zero
-    # core metrics — fundamental_score then defaults to a fabricated neutral 50
-    # and the verdict is withheld (G-15). Rather than blackout on a transient
-    # double-miss, serve the last good copy from Supabase (real data, aged,
-    # bounded by FUNDAMENTALS_CACHE_MAX_AGE_DAYS). Write-through when live is
-    # good. db.* degrade to no-ops if the table doesn't exist → live-only.
-    _fund_source = "live"
-    _fund_cache_age_days = None
-    if count_core_metrics(financials) >= FUNDAMENTALS_GATE_MIN_METRICS:
-        db.save_fundamentals_cache(ticker, financials)            # write-through
-    else:
-        _cached = db.load_fundamentals_cache(ticker)
-        _cached_age = _cache_age_in_days((_cached or {}).get("fetched_at"))
-        financials, _, _fund_source, _fund_cache_age_days = resolve_fundamentals(
-            financials,
-            (_cached or {}).get("financials"),
-            _cached_age,
-            FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
-            FUNDAMENTALS_GATE_MIN_METRICS,
-        )
-    _sector_for_scoring = bundle.get("info", {}).get("sector", "")
-    f_score, f_signals = fundamental_score(financials, _sector_for_scoring)
-    # Is the fundamental leg backed by real data (live or fresh cache), or a
-    # fabricated neutral 50? Downstream (Analysis verdict + Brief new-position
-    # gate) reads this flag and WITHHOLDS the verdict when it's False.
-    _fund_metric_count = count_core_metrics(financials)
-    fundamentals_available = _fund_metric_count >= FUNDAMENTALS_GATE_MIN_METRICS
-    avg_sent, headlines = analyze_news(bundle["news"])
-    s_score = sentiment_score_0_100(avg_sent)
-    total = combined_score(t_score, f_score, s_score)
-    rec = recommendation(total)
-    # Last *valid* close. compute_indicators already strips NaN-Close bars, but
-    # guard here too — defense in depth: float(NaN) is truthy, so a stray NaN
-    # would pass every `if price:` check and render "$nan" instead of routing to
-    # the existing "N/A" / verdict-withheld path. None is the honest "no price".
-    _closes = df["Close"].dropna() if not df.empty else None
-    price = float(_closes.iloc[-1]) if _closes is not None and not _closes.empty else None
-    stop, atr_val = atr_stop_loss(df, multiplier=2.0)
-    entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
-    targets = compute_price_targets(df, financials, price) if price else None
-    sr = support_resistance(df)
-    _rfr = _get_rfr()
-    try:
-        spy_df = _cached_spy(period)
-        risk_metrics = compute_all_risk(df, spy_df, _rfr)
-    except Exception:
-        risk_metrics = compute_all_risk(df, None, _rfr)
-    upside = upside_potential(price, financials) if price else None
-    _info  = bundle.get("info", {})
-    name   = _info.get("shortName") or _info.get("longName") or ticker
-    sector = _info.get("sector", "")
-    # Company Overview fields — sourced from yfinance .info, exposed so the
-    # Analysis page can render a "Company Overview" block before the Trade Plan
-    # without a second network call.
-    industry          = _info.get("industry", "")
-    market_cap        = _info.get("marketCap")
-    business_summary  = _info.get("longBusinessSummary", "")
-    return {
-        "df": df, "t_score": t_score, "t_signals": t_signals,
-        "f_score": f_score, "f_signals": f_signals,
-        "s_score": s_score, "avg_sent": avg_sent, "headlines": headlines,
-        "total": total, "rec": rec, "financials": financials,
-        "current_price": price, "upside": upside,
-        "atr": atr_val, "stop": stop, "news_raw": bundle["news"],
-        "entry_lo": entry_lo, "entry_hi": entry_hi,
-        "targets": targets, "sr": sr,
-        "risk_metrics": risk_metrics, "earnings": bundle["earnings"],
-        "revisions": bundle.get("revisions", {}),
-        "name": name, "sector": sector,
-        "industry": industry, "market_cap": market_cap,
-        "business_summary": business_summary,
-        # When yfinance .info was sparse, the orchestrator backfilled
-        # fundamentals from a failover provider (FMP). Surfaced as a
-        # transparency tag on the Analysis page so the user knows the
-        # composite's fundamental leg came from the secondary source.
-        "info_source": bundle.get("_info_source"),
-        # False → fundamental leg is a fabricated neutral 50 (no real data);
-        # consumers withhold the verdict rather than recommend on it.
-        "fundamentals_available": fundamentals_available,
-        "fund_metric_count": _fund_metric_count,
-        # "live" normally; "cache" when the live leg was sparse and we served
-        # the last-known-good copy (age in days) instead of withholding.
-        "fund_source": _fund_source,
-        "fund_cache_age_days": _fund_cache_age_days,
-        # None when the bundle is live; an ISO date when the history/bundle
-        # providers were all down and we served the last-known-good cached bundle
-        # (news/earnings empty in that mode). Consumers show a staleness banner.
-        "stale_as_of": _stale_as_of,
-    }
+        _spy = None
+    return load_bundle(ticker, period, spy_df=_spy, rfr=_get_rfr())
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _cached_scan_movers(exclude_key: tuple, min_gain: float):
