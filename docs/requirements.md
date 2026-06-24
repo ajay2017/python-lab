@@ -64,7 +64,9 @@ Single source of truth: `stock_analyzer/constants.py`.
 | Fundamentals gate — min core metrics to trust the verdict | 1 | **Hard** (withhold verdict below it) |
 | Entry reward:risk minimum (`RR_ENTRY_MIN`) | 2.0 | **Hard** on Watchlist ENTER_NOW (G-13); caveat on Analysis |
 | Risk per trade | 1.5% of portfolio | Sizing |
-| Earnings imminence window | 7 days | Caution |
+| Earnings imminence window (`EARNINGS_IMMINENT_DAYS`) | 7 days | Caution (binary-event conflict) |
+| Earnings "manageable window" — Brief verdict agreed signal (`EARNINGS_MANAGEABLE_DAYS`) | 8–21 days | Tier label |
+| Earnings urgency "SOON" tier — Catalyst Watch playbook (`EARNINGS_URGENCY_SOON_DAYS`) | 8–14 days | Display tier |
 | Macro imminence window (HIGH-impact event in pick's sector) | 3 days | **Hard** |
 | Catalyst Watch forward window (`CATALYST_WATCH_WINDOW_DAYS`) | 7 days | Awareness |
 | Review profit-lock — P&L trigger / trim size | 25% / 25% of position | Action target |
