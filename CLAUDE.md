@@ -83,7 +83,7 @@ Last reconciled 2026-06-24 (audited against code, not memory). The macro/regime 
 
 **Genuinely not yet done** (verify against code before starting — statuses live in the named plan/memory):
 - **Rate-limit resilience Phase 3** (FMP daily soft-cap) — **DEFERRED as a safety-net (decided 2026-06-24, measured):** FMP usage = 88/250 today after Phase 2 cut it ~6× from the pre-fix ~650/day runaway; free plan confirmed adequate, no build/buy. Revisit only if a weekday creeps toward ~200. Plan: [docs/plans/rate-limit-resilience.md](docs/plans/rate-limit-resilience.md) §Phase 3.
-- **Today's-P&L cash/flows + broker reconciliation** — **PARKED by user decision 2026-06-24:** Tier B (positions-scope equity-delta) is honest and sufficient; full account parity would need a manual cash ledger or a broker-statement import (no broker API), not worth the complexity for a personal app. Don't re-propose unless the user asks.
+- **Today's-P&L cash/flows + broker reconciliation** — **PARKED 2026-06-24 (Tier B is sufficient).** Robinhood Agentic Trading / MCP path analyzed (read access to all accounts via `agent.robinhood.com/mcp/trading`; Claude is a supported agent; auth is interactive/desktop-only so the app/cron can't be the MCP client → Model C = Claude bridges RH→Supabase snapshot→app renders). **Decision: HOLD until beta matures** (user chose). Full analysis + revisit triggers in memory `project_today_pnl_scope`. Don't re-propose unless asked.
 - **NYSE calendar** — extend `NYSE_HOLIDAYS`/`NYSE_EARLY_CLOSES` before 2029 (hardcoded, last year = 2028; not urgent mid-2026).
 - **Deferred (low priority):** pullback-awareness Phase 3 market-risk dial · deterioration-card hysteresis.
 
