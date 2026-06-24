@@ -34,6 +34,8 @@ from stock_analyzer.constants import (
     SECTOR_CEILING,
     UNCLASSIFIED_SECTOR,
     MACRO_IMMINENT_DAYS,
+    EARNINGS_IMMINENT_DAYS,
+    EARNINGS_MANAGEABLE_DAYS,
     RISK_PCT_PER_TRADE,
     ADD_WINNER_MIN_GAP_PCT,
     ADD_WINNER_COOLDOWN_DAYS,
@@ -252,14 +254,14 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         earn_date = (held_data[ticker] or {}).get("earnings")
     if earn_date:
         earn_days = _days_until(earn_date, today)
-        if earn_days is not None and 0 <= earn_days <= 7:
+        if earn_days is not None and 0 <= earn_days <= EARNINGS_IMMINENT_DAYS:
             label = "today" if earn_days == 0 else f"in {earn_days}d"
             conflicts.append(
                 f"Earnings {label} ({earn_date}) — binary event risk; "
                 "signals may not hold post-release"
             )
             earnings_conflict = True
-        elif earn_days is not None and 8 <= earn_days <= 21:
+        elif earn_days is not None and EARNINGS_IMMINENT_DAYS < earn_days <= EARNINGS_MANAGEABLE_DAYS:
             agreed.append(f"Earnings in {earn_days}d — manageable window")
 
     # ── Layer 5: Analyst revisions (held positions with held_data) ────────────
@@ -1592,7 +1594,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if not earn_date or ticker in seen_earn:
             continue
         days = _days_until(earn_date, today)
-        if days is None or not (0 <= days <= 7):
+        if days is None or not (0 <= days <= EARNINGS_IMMINENT_DAYS):
             continue
         seen_earn.add(ticker)
         pm = port_df[port_df["Ticker"] == ticker]

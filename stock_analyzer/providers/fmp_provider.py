@@ -423,7 +423,10 @@ class FMPProvider(DataProvider):
         except Exception:
             return None
         rows = payload if isinstance(payload, list) else []
-        today = date.today().isoformat()
+        # ET, not UTC: Streamlit Cloud runs UTC, and "is this earnings date still
+        # in the future" flips by a day at the UTC/ET boundary — a name reporting
+        # TODAY (ET) must not be dropped as past because UTC already rolled over.
+        today = datetime.now(_ET).date().isoformat()
         future = sorted(str(r.get("date"))[:10] for r in rows
                         if r.get("date") and str(r.get("date"))[:10] >= today)
         return future[0] if future else None

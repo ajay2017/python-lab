@@ -316,7 +316,9 @@ COMPOSITE_WEIGHTS = {
 }
 
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
-EARNINGS_IMMINENT_DAYS = 7       # any trade within this window = caution
+EARNINGS_IMMINENT_DAYS      = 7  # any trade within this window = caution (binary-event conflict)
+EARNINGS_MANAGEABLE_DAYS    = 21 # Brief verdict: imminent < window <= this = "manageable window" (agreed signal, not a conflict)
+EARNINGS_URGENCY_SOON_DAYS  = 14 # Catalyst Watch playbook urgency tier: imminent < window <= this = "SOON", beyond = "AHEAD"
 MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = suppress new picks in affected sector
 
 # Forward window (days) for the Catalyst Watch panel — upcoming earnings for

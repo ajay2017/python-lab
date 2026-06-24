@@ -28,6 +28,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     RR_ENTRY_MIN,
+    EARNINGS_IMMINENT_DAYS,
 )
 
 
@@ -178,7 +179,7 @@ def build_watchlist_recommendation(
     revisions   = data.get("revisions") or {}
 
     earn_days   = _earn_days_until(earn_str)
-    earn_soon   = earn_days is not None and 0 <= earn_days <= 7
+    earn_soon   = earn_days is not None and 0 <= earn_days <= EARNINGS_IMMINENT_DAYS
 
     # Risk/reward
     base_target = _f(targets.get("base")) if targets.get("base") else None

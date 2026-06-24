@@ -10,6 +10,11 @@ during the report itself.
 import pytz as _pytz
 from datetime import date as _date, datetime as _datetime
 
+from stock_analyzer.constants import (
+    EARNINGS_IMMINENT_DAYS,
+    EARNINGS_URGENCY_SOON_DAYS,
+)
+
 _ET = _pytz.timezone("America/New_York")
 
 
@@ -384,8 +389,8 @@ def build_earnings_playbook(
         earn_risk = round(est_move / 100 * mval)
 
         urgency = (
-            "IMMINENT" if days_until <= 7
-            else "SOON" if days_until <= 14
+            "IMMINENT" if days_until <= EARNINGS_IMMINENT_DAYS
+            else "SOON" if days_until <= EARNINGS_URGENCY_SOON_DAYS
             else "AHEAD"
         )
 

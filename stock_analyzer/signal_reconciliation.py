@@ -24,6 +24,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     NEWS_SENTIMENT_NEGATIVE,
+    EARNINGS_IMMINENT_DAYS,
 )
 
 
@@ -87,7 +88,7 @@ def reconcile_signals(
         + (f" {composite_score:.0f}" if composite_score is not None else "")
     )
 
-    earnings_imminent = earnings_days is not None and 0 <= earnings_days <= 7
+    earnings_imminent = earnings_days is not None and 0 <= earnings_days <= EARNINGS_IMMINENT_DAYS
     earnings_label    = (
         "today" if earnings_days == 0 else
         f"in {earnings_days}d" if earnings_imminent else None

@@ -18,7 +18,7 @@ testable and decoupled from yfinance.
 
 from datetime import date, timedelta
 
-from stock_analyzer.constants import MEANINGFUL_INTRADAY_PCT
+from stock_analyzer.constants import MEANINGFUL_INTRADAY_PCT, EARNINGS_IMMINENT_DAYS
 
 
 def _opt(val):
@@ -301,7 +301,7 @@ def _tomorrow_setup(macro_events: list | None, held_data: dict | None,
         except Exception:
             continue
         days = (ed_d - today).days
-        if 1 <= days <= 7:
+        if 1 <= days <= EARNINGS_IMMINENT_DAYS:
             earnings_imminent.append({
                 "ticker": str(tk).upper(),
                 "date":   ed_d.isoformat(),
