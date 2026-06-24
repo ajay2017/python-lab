@@ -73,8 +73,10 @@ When adding a new advisor or recommendation feature, **always** check whether it
 Last reconciled 2026-06-23 (audited against code, not memory). The macro/regime Phase-4 cluster is **done** (CPI NSA swap, drift detection, FRED `actual` — all shipped); don't re-chase it.
 
 **Genuinely not yet done** (verify against code before starting — statuses live in the named plan/memory):
-- **Exit-discipline Phase 3 — out-of-app email alerts** (GitHub Actions cron). Highest-leverage: makes deterioration EXIT + risk-off de-risk + fragility reach the user without opening the app. **Unifies three queued crons into one** (this + pullback-awareness Phase 2 + Today's-P&L EOD snapshot). Plan: [docs/plans/exit-discipline.md](docs/plans/exit-discipline.md) §Phase 3.
 - **Rate-limit resilience Phase 3** — FMP daily-budget soft-cap (`FMP_DAILY_SOFT_CAP`). Phase 1+2 shipped. Plan: [docs/plans/rate-limit-resilience.md](docs/plans/rate-limit-resilience.md).
+- **Pullback-awareness Phase 2 + Today's-P&L EOD job** — now cheap: ADD jobs to the shipped headless cron (`cron_runner.py` / `headless_alert_engine.py` / `.github/workflows/alerts.yml`), not a new pipeline.
+
+**Recently shipped (do not re-chase):** Exit-discipline Phase 3 — out-of-app protective email alerts via GitHub Actions cron — SHIPPED + LIVE 2026-06-24 (commits 9add28f→37f4b9e; plan docs/plans/email-alerts-cron.md). First non-Streamlit runtime.
 - **Bundle-load leftovers** — Yahoo 401/crumb handling; cross-check validator-health gate.
 - **Brief tone staleness** — annotate stale Brief tone vs live pre-market futures (annotate only, never flip the tone).
 - **Action Log Phase B** — log trim/exit actions + stop re-nagging (Phase A = stops, done).
