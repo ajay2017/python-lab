@@ -47,7 +47,18 @@ window. Guard: if ALL providers are in cooldown, fall through and try anyway
 - Touches: `api_health.py` (add `in_cooldown(provider)` helper),
   `orchestrator.py:201-219` + `:115-171`, `constants.py`.
 
-### Phase 3 — FMP daily-budget guard · medium risk
+### Phase 3 — FMP daily-budget guard · DEFERRED as a safety-net (not building now)
+**Decision 2026-06-24 (measured, not built):** the FMP dashboard showed the
+free-tier cap is no longer a problem — **88/250 today, ~108 the prior weekday**,
+after Phase 2 (circuit-breaker + SPY dedup, `d400e7a`) cut usage ~6× from the
+pre-fix runaway (**~650–660/day on Jun 18–19**, which was the actual exhaustion /
+"Could not load" cause). With ~3× headroom and no withheld-verdict symptoms, the
+free plan is confirmed **adequate** — no paid upgrade, no hard cap needed. Phase 2
+already prevents the runaway organically, so a hard soft-cap would solve a problem
+that no longer occurs. **Revisit ONLY if a weekday creeps back toward ~200** (watch
+the FMP dashboard, or add the optional persistent "FMP: N/250" Data-Health gauge).
+The design below stays on the shelf for that trigger.
+
 Track FMP calls per ET day; stop calling FMP at `FMP_DAILY_SOFT_CAP` to
 preserve last-resort headroom.
 - Touches: `fmp_provider.py` (ET-day counter + soft-cap), `constants.py`.
