@@ -5548,7 +5548,7 @@ if page == "🏠 Home":
                     "Negative news on positions you currently hold, ranked by "
                     "position size × sentiment strength × source credibility."
                 )
-                for _al in _ni_alts:
+                for _ni_ai, _al in enumerate(_ni_alts):
                     _al_border = "#ef4444" if _al["alert_level"] == "critical" else "#f59e0b"
                     _al_bg     = "#1a0000" if _al["alert_level"] == "critical" else "#1a1000"
                     _al_tag    = "🔴 CRITICAL" if _al["alert_level"] == "critical" else "🟡 WATCH"
@@ -5570,7 +5570,7 @@ if page == "🏠 Home":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if st.button(f"▶ Analyze {_al['ticker']}", key=f"_ni_analyze_{_al['ticker']}_{_al.get('ts',0)}"):
+                    if st.button(f"▶ Analyze {_al['ticker']}", key=f"_ni_analyze_{_al['ticker']}_{_al.get('ts',0)}_{_ni_ai}"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _al["ticker"]
                         st.rerun()
@@ -5582,7 +5582,7 @@ if page == "🏠 Home":
                     "Positive news on quality positions you already hold. "
                     "These may support adding on a pullback — not a signal to chase the gap."
                 )
-                for _op in _ni_opps[:5]:
+                for _ni_oi, _op in enumerate(_ni_opps[:5]):
                     _op_link = _safe_link(_op.get("url", ""), _op.get("title", ""), max_len=90)
                     st.markdown(
                         f"<div style='background:#001a08;border-left:4px solid #00C851;"
@@ -5601,7 +5601,7 @@ if page == "🏠 Home":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if st.button(f"▶ Analyze {_op['ticker']}", key=f"_ni_opp_{_op['ticker']}_{_op.get('ts',0)}"):
+                    if st.button(f"▶ Analyze {_op['ticker']}", key=f"_ni_opp_{_op['ticker']}_{_op.get('ts',0)}_{_ni_oi}"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _op["ticker"]
                         st.rerun()
