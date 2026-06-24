@@ -18,6 +18,10 @@ on:
         description: "Bypass the trading-day / hour / once-per-day guards (test)"
         type: boolean
         default: false
+      test_email:
+        description: "Send a delivery-test email (proves Resend → inbox), then stop without touching dedup state"
+        type: boolean
+        default: false
 
 concurrency:
   group: protective-alerts
@@ -51,4 +55,5 @@ jobs:
           ALERT_EMAIL_TO:   ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '' }}
+          ALERT_TEST_EMAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email && '1' || '' }}
         run: python cron_runner.py

@@ -31,7 +31,7 @@ from stock_analyzer import db
 from stock_analyzer.constants import ALERT_EMAIL_HOUR_ET
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import compute_protective_alerts
-from stock_analyzer.notify import render_alert_email, send_email_resend
+from stock_analyzer.notify import render_alert_email, render_test_email, send_email_resend
 
 _ET = pytz.timezone("America/New_York")
 
@@ -51,12 +51,13 @@ def _fingerprint(alerts: list[dict]) -> str:
 
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
+    test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
     today_str = now_et.date().isoformat()
-    _log(f"start · {now_et.isoformat()} ET · force={force}")
+    _log(f"start · {now_et.isoformat()} ET · force={force} · test_email={test_email}")
 
-    # ── Guards (skipped under ALERT_FORCE for manual smoke-tests) ─────────────
-    if not force:
+    # ── Guards (skipped under ALERT_FORCE or the delivery-test, both manual) ──
+    if not force and not test_email:
         if not is_trading_day(now_et.date()):
             _log("not an ET trading day — skip.")
             return 0
@@ -77,6 +78,23 @@ def main() -> int:
         _log(f"engine note: {e}")
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
+
+    # ── Delivery test (ALERT_TEST_EMAIL=1) — send a synthetic email proving the
+    # Resend → inbox path, then stop WITHOUT touching dedup state (so a later real
+    # alert still sends). Independent of whether there are alerts today.
+    if os.environ.get("ALERT_TEST_EMAIL", "") == "1":
+        api_key = os.environ.get("RESEND_API_KEY", "")
+        to      = os.environ.get("ALERT_EMAIL_TO", "")
+        sender  = os.environ.get("ALERT_EMAIL_FROM", "")
+        subject, html = render_test_email(len(alerts), payload.get("built_at", today_str))
+        if not api_key:
+            _log("TEST: no RESEND_API_KEY — cannot send the delivery test.")
+        else:
+            ok = send_email_resend(api_key=api_key, sender=sender, to=to,
+                                   subject=subject, html=html)
+            _log(f"TEST email send {'OK' if ok else 'FAILED'} → {to or '(no ALERT_EMAIL_TO)'}")
+        _log("test mode — dedup state untouched; done.")
+        return 0
 
     fp = _fingerprint(alerts)
     last_fp = state.get("last_fingerprint")

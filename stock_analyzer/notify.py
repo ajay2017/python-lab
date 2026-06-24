@@ -78,6 +78,32 @@ def render_alert_email(alerts: list[dict], built_at: str) -> tuple[str, str]:
     return subject, body
 
 
+def render_test_email(n_alerts: int, built_at: str) -> tuple[str, str]:
+    """A delivery-test email (subject, html) — proves the Resend → inbox path
+    without waiting for a real protective trigger. Includes today's computed count
+    so it also confirms the engine ran."""
+    subject = "DRISHTA · alerts pipeline test — delivery OK"
+    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
+      <div style="max-width:640px;margin:0 auto;font-family:Arial,Helvetica,sans-serif">
+        <div style="color:#f9fafb;font-size:18px;font-weight:700">DRISHTA · Pipeline Test</div>
+        <div style="color:#22c55e;font-size:14px;margin-top:10px">
+          ✅ If you're reading this, the protective-alert email path works
+          (Resend → your inbox).
+        </div>
+        <div style="color:#a8a29e;font-size:13px;margin-top:10px">
+          The engine ran and found <b style="color:#e5e7eb">{n_alerts}</b> protective
+          action{'s' if n_alerts != 1 else ''} today. Real alerts (stop breaches ·
+          deterioration EXIT · risk-off trim) arrive here automatically, once per ET
+          trading day, only when the set changes.
+        </div>
+        <div style="color:#6b7280;font-size:11px;margin-top:16px;border-top:1px solid #292524;padding-top:10px">
+          Sent by a manual test run · built {_html.escape(str(built_at))[:19]} ET. No action needed.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
+
+
 def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html: str,
                       timeout: int = 20) -> bool:
     """POST one email via Resend. Returns True on a 2xx, else False. Never raises.
