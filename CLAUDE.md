@@ -79,17 +79,16 @@ This is a decision-making app: a **wrong value in a doc erodes trust in the app 
 
 ## What's queued
 
-Last reconciled 2026-06-23 (audited against code, not memory). The macro/regime Phase-4 cluster is **done** (CPI NSA swap, drift detection, FRED `actual` — all shipped); don't re-chase it.
+Last reconciled 2026-06-24 (audited against code, not memory). The macro/regime Phase-4 cluster is **done** (CPI NSA swap, drift detection, FRED `actual` — all shipped); don't re-chase it.
 
 **Genuinely not yet done** (verify against code before starting — statuses live in the named plan/memory):
 - **Rate-limit resilience Phase 3** (FMP daily soft-cap) — **DEFERRED as a safety-net (decided 2026-06-24, measured):** FMP usage = 88/250 today after Phase 2 cut it ~6× from the pre-fix ~650/day runaway; free plan confirmed adequate, no build/buy. Revisit only if a weekday creeps toward ~200. Plan: [docs/plans/rate-limit-resilience.md](docs/plans/rate-limit-resilience.md) §Phase 3.
-- **Smaller items:** Today's-P&L cash/flows + broker reconciliation · NYSE calendar extend (pre-2029, currently covered through 2028 — not urgent) · bundle-load 401/crumb + validator-health gate · pullback-awareness Phase 3 market-risk dial (lowest priority).
-- *(Shipped 2026-06-24, 307cac6: Brief tone-staleness annotation + Action Log Phase B "log this trim" — don't re-chase.)*
+- **Today's-P&L** — cash/flows + broker reconciliation (Tier B equity-delta IS live; this is the last tier).
+- **Bundle-load leftovers** — Yahoo 401/crumb handling + cross-check validator-health gate (verified absent in `providers/` 2026-06-24). Memory `project_bundle_load_resilience`.
+- **NYSE calendar** — extend `NYSE_HOLIDAYS`/`NYSE_EARLY_CLOSES` before 2029 (hardcoded, last year = 2028; not urgent mid-2026).
+- **Deferred (low priority):** pullback-awareness Phase 3 market-risk dial · deterioration-card hysteresis.
 
-**Recently shipped (do not re-chase):** the headless GitHub Actions alert cron (first non-Streamlit runtime; `cron_runner.py` / `headless_alert_engine.py` / `.github/workflows/alerts.yml`) now delivers ALL three out-of-app jobs — exit-discipline Phase 3 protective alerts (premarket), pullback-awareness Phase 2 reactive drawdown email + Today's-P&L EOD snapshot (eod). LIVE 2026-06-24 (commits 9add28f→cb37862; plan docs/plans/email-alerts-cron.md).
-- **Bundle-load leftovers** — Yahoo 401/crumb handling; cross-check validator-health gate.
-- **Brief tone staleness** — annotate stale Brief tone vs live pre-market futures (annotate only, never flip the tone).
-- **Action Log Phase B** — log trim/exit actions + stop re-nagging (Phase A = stops, done).
-- **Today's P&L** — cash/flows + broker reconciliation (Tier B equity-delta is live).
-- **NYSE calendar** — extend `NYSE_HOLIDAYS`/`NYSE_EARLY_CLOSES` before 2029 (hardcoded, ends 2028).
-- Deferred (low priority): deterioration-card hysteresis; pullback-awareness Phase 3 market-risk dial.
+**Recently shipped (do not re-chase):**
+- Headless GitHub Actions alert cron (first non-Streamlit runtime; `cron_runner.py` / `headless_alert_engine.py` / `.github/workflows/alerts.yml`) delivers ALL three out-of-app jobs — exit Phase 3 protective alerts (premarket), pullback Phase 2 reactive drawdown email + Today's-P&L EOD snapshot (eod). LIVE 2026-06-24 (9add28f→cb37862; plan docs/plans/email-alerts-cron.md).
+- Brief tone-staleness annotation + Action Log Phase B "log this trim" (307cac6).
+- SDLC docs backfill + zero-hallucination doc-integrity rule (b3d444f, a4d9db4).
