@@ -1018,24 +1018,42 @@ def _cached_price_xcheck(tickers_key: tuple) -> dict:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _cached_earnings_cal_map(from_str: str, to_str: str) -> dict:
-    """{TICKER: soonest-future earnings 'YYYY-MM-DD'} from the FMP market-wide
-    calendar (one cached call/day, unfiltered). Used to backfill HELD names'
-    earnings dates in Catalyst Watch when the per-name bundle date (yfinance) is
-    missing — the same source the Radar tier uses, so held names get the coverage
-    non-held names already do. Awareness-only display (F-37a); not a gate source."""
-    _m: dict = {}
+def _cached_held_earnings_dates(tickers_tuple: tuple, from_str: str, to_str: str) -> dict:
+    """{TICKER: soonest upcoming earnings 'YYYY-MM-DD'} for HELD names, used to
+    backfill the Catalyst Watch holdings tier when the bundle (yfinance) date is
+    missing. Mirrors the Radar tier's coverage EXACTLY: the FMP market-wide
+    calendar first (one cheap call), THEN a light per-name yfinance fallback
+    (threaded `fetch_next_earnings`) for names FMP didn't cover — so held names get
+    the SAME earnings coverage watchlist/universe names already get, instead of
+    going blank when both the bundle date and the sparse FMP free-tier calendar
+    miss (the MU case). Awareness-only display (F-37a); never a gate source.
+    24h-cached; re-keys on the holdings set + date range."""
+    held = {str(t).strip().upper() for t in tickers_tuple}
+    out: dict = {}
     try:
         for _r in (fetch_earnings_calendar(from_str, to_str) or []):
             _tk = str(_r.get("ticker", "")).strip().upper()
             _dt = str(_r.get("date", ""))[:10]
-            if not _tk or not _dt:
-                continue
-            if _tk not in _m or _dt < _m[_tk]:   # keep the soonest future date
-                _m[_tk] = _dt
+            if _tk in held and _dt and (_tk not in out or _dt < out[_tk]):
+                out[_tk] = _dt          # soonest upcoming date per held ticker
     except Exception:
         pass
-    return _m
+    _missing = [t for t in held if t not in out]
+    if _missing:
+        from concurrent.futures import ThreadPoolExecutor
+        def _one(_t):
+            try:
+                return (_t, fetch_next_earnings(_t))
+            except Exception:
+                return (_t, None)
+        try:
+            with ThreadPoolExecutor(max_workers=8) as _ex:
+                for _t, _d in _ex.map(_one, _missing):
+                    if _d:
+                        out[_t] = str(_d)[:10]
+        except Exception:
+            pass
+    return out
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1291,15 +1309,22 @@ def _render_holdings_earnings(port_df, held_data):
 
     # Build earnings rows from already-loaded held_data
     _today = datetime.now().date()
-    # Calendar fallback: when a held name's bundle (yfinance) earnings date is
-    # missing, fill from the FMP market-wide calendar (same source the Radar tier
-    # uses, proven to return data) so held names don't go blank on a Yahoo hiccup.
+    # Backfill: when a held name's bundle (yfinance) earnings date is missing, fill
+    # from the same two-source path the Radar tier uses — FMP market-wide calendar
+    # then a per-name yfinance fallback — so held names get equal coverage instead
+    # of going blank when both the bundle date and the sparse FMP free-tier calendar
+    # miss (the MU case). Display-only awareness (F-37a), never a gate source.
     from datetime import timedelta as _cw_td
-    _cal_map = _cached_earnings_cal_map(_today.isoformat(), (_today + _cw_td(days=90)).isoformat())
+    _held_tuple = tuple(sorted(
+        str(_pr["Ticker"]).strip().upper() for _, _pr in port_df.iterrows()
+    ))
+    _earn_dates = _cached_held_earnings_dates(
+        _held_tuple, _today.isoformat(), (_today + _cw_td(days=90)).isoformat()
+    )
     _earn_rows = []
     for _, _pr in port_df.iterrows():
         _t   = _pr["Ticker"]
-        _d   = held_data.get(_t, {}).get("earnings") or _cal_map.get(str(_t).strip().upper())
+        _d   = held_data.get(_t, {}).get("earnings") or _earn_dates.get(str(_t).strip().upper())
         _inf = held_data.get(_t, {}).get("info", {}) or {}
         _name = _inf.get("shortName") or _inf.get("longName") or _t
         _fwd_eps  = _inf.get("forwardEps")
