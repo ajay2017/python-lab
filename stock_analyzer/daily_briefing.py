@@ -94,7 +94,7 @@ def _days_until(date_str: str, today: date) -> int | None:
 # instead of Act Today — §2B: Act Today = decisions to make TODAY; a Sharpe drag
 # is a standing portfolio-quality issue, not a same-day call. Concentration
 # breaches are NOT here — they stay in Act (structural, user-flagged act-worthy).
-_TUNEUP_RISK_TYPES = frozenset({"beta", "sharpe", "volatility", "drawdown", "tail_risk"})
+_TUNEUP_RISK_TYPES = frozenset({"beta", "sharpe", "volatility", "drawdown", "tail_risk", "single_name_concentration"})
 
 
 def _portfolio_tuneup(risk_recs: list | None) -> list[dict]:
@@ -1190,7 +1190,8 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             continue
         # Slow-moving metric drags (Sharpe/beta/vol/drawdown/tail) are NOT
         # same-day decisions — they go to the Portfolio Tune-up awareness lane
-        # (_portfolio_tuneup), not Act Today. Concentration breaches stay here.
+        # (_portfolio_tuneup), not Act Today. (single_name_concentration is
+        # MEDIUM + in _TUNEUP_RISK_TYPES, so it never reaches this HIGH loop.)
         if rec.get("type") in _TUNEUP_RISK_TYPES:
             continue
         rt = rec.get("root_tickers", [])

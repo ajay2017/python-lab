@@ -18,6 +18,8 @@ from stock_analyzer.constants import (
     PORTFOLIO_BETA_TARGET,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
+    SINGLE_NAME_CEILING,
+    WEAK_CONVICTION_SCORE,
     UNCLASSIFIED_SECTOR,
 )
 
@@ -635,6 +637,55 @@ def build_risk_advisor_recommendations(
                     "a sector spike to 0.7-0.9 in stress, while inter-sector correlations stay "
                     "near 0.4 — diversification across sectors is what actually pays off when "
                     "things go wrong."
+                ),
+            })
+
+    # ── Single-name concentration (conviction-INDEPENDENT overweight) ──────────
+    # The weak-large flag (daily_briefing) catches overweight + WEAK names
+    # (score < WEAK_CONVICTION_SCORE). It misses overweight + STRONG names — a
+    # high-conviction name at 23% trips no alarm today, yet the 15% single-name
+    # cap is a RISK limit, not a conviction call. Fill exactly that gap (score ≥
+    # WEAK_CONVICTION_SCORE so we never double-surface with weak-large). MEDIUM →
+    # Portfolio Tune-up (structural/standing, not Act-Today churn).
+    for t, tr in tr_map.items():
+        w = tr["weight"]
+        score = tr["score"]
+        if w >= SINGLE_NAME_CEILING and score >= WEAK_CONVICTION_SCORE:
+            excess_pp     = w - SINGLE_NAME_CEILING
+            excess_dollar = round(excess_pp / 100.0 * pv)
+            recs.append({
+                "priority": "MEDIUM",
+                "type":     "single_name_concentration",
+                "title":    f"{t} {w:.1f}% — Single-Name Overweight",
+                "problem": (
+                    f"**{t} is {w:.1f}% of your book** — above the "
+                    f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling. Conviction is fine "
+                    f"(score {score:.0f}); this is a SIZE limit. At this weight one bad "
+                    f"print or downgrade on a single name can swing the whole portfolio — "
+                    f"roughly **${w / 100.0 * pv:,.0f}** rides on {t} alone."
+                ),
+                "root_cause": f"{t} weight {w:.1f}% (score {score:.0f} — a size issue, not a quality one).",
+                "root_tickers": [{
+                    "ticker":       t,
+                    "value":        round(w, 1),
+                    "weight":       w,
+                    "market_value": tr["market_value"],
+                    "label":        f"{w:.1f}% weight  ·  score {score:.0f}",
+                }],
+                "recommendation": (
+                    f"Trim **{t}** by ~**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** back toward the "
+                    f"{SINGLE_NAME_CEILING:.0f}% ceiling. Keep the thesis — just cap the size so a "
+                    "single name can't dominate the outcome."
+                ),
+                "expected_outcome": (
+                    f"Bringing {t} from {w:.1f}% to {SINGLE_NAME_CEILING:.0f}% frees "
+                    f"~${excess_dollar:,.0f} to diversify and bounds single-name shock."
+                ),
+                "institutional_lens": (
+                    "The single-name ceiling is a risk limit INDEPENDENT of conviction. Funds "
+                    "cap position size precisely so that being wrong on one name — however "
+                    "high-conviction — can't blow up the book. Sizing is risk management; "
+                    "conviction is idea generation. They are separate disciplines."
                 ),
             })
 

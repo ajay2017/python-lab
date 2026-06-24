@@ -15,6 +15,19 @@ _ET_TZ = _pytz.timezone("America/New_York")
 def _today_et():
     return datetime.now(_ET_TZ).date()
 
+
+def _f(v, default=0.0):
+    """Best-effort float coerce — returns `default` on None / non-numeric.
+
+    Used at the concentration surfaces (Part 1 entry nudge, Part 2b high-beta
+    share) to tolerate missing/blank cells without crashing the broad try-blocks
+    they live in. Mirrors the `_f` helpers in the stock_analyzer modules.
+    """
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
 import html as _html
 import time
 from stock_analyzer.data import (
@@ -50,7 +63,9 @@ from stock_analyzer.constants import (
     TICKER_BETA_HIGH,
     TICKER_BETA_CRITICAL,
     SECTOR_CEILING,
+    SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
+    CONCENTRATION_HIGHBETA_SHARE_WARN,
     DIVERSIFY_DISPLAY_TOP,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
@@ -92,9 +107,10 @@ from stock_analyzer.targets import (
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
-    annotate_add_candidates,
+    annotate_add_candidates, resolve_sector,
     holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
+from stock_analyzer.concentration import assess_add_concentration, high_beta_share
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
 from stock_analyzer.discovery_universe import discovery_tickers
 from stock_analyzer.macro import (
@@ -2242,6 +2258,23 @@ if page == "🏠 Home":
             _fragility = None
         st.session_state["_fragility_cache"] = _fragility
 
+        # High-beta cluster share (Part 2b) — standing "correlated exposure" read:
+        # what % of the book sits in high-beta (β ≥ PORTFOLIO_BETA_ELEVATED) names.
+        # A cheap, honest proxy for the "ten tech names that all fall together"
+        # risk that per-name diversification hides. Computed here where port_df +
+        # per-name betas are both in scope; rendered under the fragility gauge.
+        try:
+            _hb_positions = [
+                (_f(_r.get("Weight (%)")),
+                 (held_data.get(_r["Ticker"]) or {}).get("risk_metrics", {}).get("beta"))
+                for _, _r in port_df.iterrows()
+            ]
+            st.session_state["_highbeta_share"] = high_beta_share(
+                _hb_positions, PORTFOLIO_BETA_ELEVATED
+            )
+        except Exception:
+            st.session_state["_highbeta_share"] = None
+
         # Risk Advisor recommendations — generated from portfolio risk metrics
         try:
             _risk_advisor_recs = build_risk_advisor_recommendations(
@@ -3613,6 +3646,23 @@ if page == "🏠 Home":
                     "color:#9ca3af;font-size:0.8em'>"
                     "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
                     "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # High-beta cluster share (Part 2b) — standing correlated-exposure
+            # proxy: per-name diversification hides the "many high-beta names that
+            # all fall together" risk. Warns above CONCENTRATION_HIGHBETA_SHARE_WARN.
+            _hb = st.session_state.get("_highbeta_share")
+            if _hb is not None and _hb > 0:
+                _hb_warn  = _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN
+                _hb_color = "#f59e0b" if _hb_warn else "#9ca3af"
+                st.markdown(
+                    f"<div style='color:{_hb_color};font-size:0.78em;margin-top:-6px;margin-bottom:8px'>"
+                    f"🔗 <b>{_hb:.0f}%</b> of measured exposure is in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
+                    + (" — they tend to fall together on risk-off days, so per-name "
+                       "diversification is partly illusory."
+                       if _hb_warn else " — moderate correlated exposure.")
+                    + "</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -12488,6 +12538,71 @@ elif page == "📒 Trade Journal":
                             )
                         db.save_holdings(h_df)
                         st.session_state.holdings_df = h_df
+
+                        # ── Concentration nudge (NON-blocking) ──────────────
+                        # The journal records trades already executed at the
+                        # broker, so we never block — but a BUY that pushes a
+                        # name past the single-name (or sector) ceiling is
+                        # exactly how SPCX quietly grew to 23%. Surface the
+                        # resulting weight + the trim-back math so the discipline
+                        # is visible at the moment it's breached. Enforcement was
+                        # previously asymmetric (recommendations gated, manual
+                        # buys unchecked). See concentration.assess_add_concentration.
+                        try:
+                            _cc_pdf = st.session_state.get("_last_port_df")
+                            _cc_pv  = _f(st.session_state.get("_portfolio_value"), 0.0)
+                            if _cc_pdf is not None and not _cc_pdf.empty and _cc_pv > 0:
+                                _cc_match = _cc_pdf[_cc_pdf["Ticker"] == ticker_input]
+                                _cc_existing_mv = (
+                                    float(_cc_match["Market Value"].iloc[0])
+                                    if not _cc_match.empty else 0.0
+                                )
+                                _cc_sector = (
+                                    str(_cc_match["Sector"].iloc[0]) if not _cc_match.empty
+                                    else resolve_sector(ticker_input, None)
+                                )
+                                _cc_sector_mv = (
+                                    float(_cc_pdf[_cc_pdf["Sector"] == _cc_sector]["Market Value"].sum())
+                                    if "Sector" in _cc_pdf.columns else 0.0
+                                )
+                                _cc = assess_add_concentration(
+                                    ticker=ticker_input, add_shares=shares_val, price=price_val,
+                                    existing_name_mv=_cc_existing_mv, sector_mv=_cc_sector_mv,
+                                    portfolio_value=_cc_pv,
+                                    single_ceiling=SINGLE_NAME_CEILING,
+                                    sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
+                                )
+                                if _cc:
+                                    _cc_msgs = []
+                                    if _cc["name_breach"]:
+                                        _cc_trim = _cc["suggested_trim_shares"]
+                                        _cc_msgs.append(
+                                            f"**{ticker_input}** is now ~**{_cc['post_name_wt']:.0f}%** of your "
+                                            f"book (single-name ceiling {SINGLE_NAME_CEILING:.0f}%)."
+                                            + (f" To get back under, trim ~**{_cc_trim} share(s)**."
+                                               if _cc_trim > 0 else "")
+                                        )
+                                    if _cc["sector_hard"]:
+                                        _cc_msgs.append(
+                                            f"Sector **{_cc_sector}** is now ~**{_cc['post_sector_wt']:.0f}%** "
+                                            f"— above the {SECTOR_CEILING:.0f}% sector cap."
+                                        )
+                                    elif _cc["sector_elevated"]:
+                                        _cc_msgs.append(
+                                            f"Sector **{_cc_sector}** is now ~**{_cc['post_sector_wt']:.0f}%** "
+                                            f"— approaching the {SECTOR_CEILING:.0f}% cap "
+                                            f"(warn {SECTOR_ELEVATED:.0f}%)."
+                                        )
+                                    if _cc_msgs:
+                                        st.warning(
+                                            "⚠️ **Concentration check** — "
+                                            + "  ".join(_cc_msgs)
+                                            + "\n\nNot blocked (this is a record of a real trade), but a "
+                                            "concentrated position amplifies every loss. Consider trimming, "
+                                            "or knowingly accept the higher single-name risk."
+                                        )
+                        except Exception:
+                            pass
 
                     # Consume the prefill now that the trade was recorded —
                     # any future visit to this page should start with a clean

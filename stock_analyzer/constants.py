@@ -30,6 +30,13 @@ FRAGILITY_PULLBACK_PCT = -10.0   # routine-correction yardstick (~1–2×/yr); m
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
 SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
+# High-beta cluster share — the standing "correlated exposure" read under the
+# fragility gauge: when this fraction of the book sits in high-beta (β ≥
+# PORTFOLIO_BETA_ELEVATED) names, they tend to fall TOGETHER on risk-off days, so
+# the per-name diversification is illusory. Above this % the cluster line renders
+# as a warning rather than neutral info. Operational display threshold (not a
+# gate) — tune from observation.
+CONCENTRATION_HIGHBETA_SHARE_WARN = 60.0
 
 # The catch-all bucket a holding lands in when it has no curated sector mapping
 # AND no provider .info sector. It is NOT a real correlated sector — it's a
