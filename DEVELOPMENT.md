@@ -25,6 +25,16 @@ The "decides not informs" push turned several informational surfaces into concre
 - **Two-column offense/defense Brief** — left = Grow Today + More Buy Candidates; right = Act Today + Review Before Close. Buy Candidates de-duped against Grow Today.
 - **SELL integrity guard + double-submit dedupe** — SELL validates against `recalculate_from_trades()` (same source as the drift detector); identical `(ticker, action, shares)` within 15 s rejected. Fixed the COIN double-SELL drift. See memory `feedback_validation_reads_detector_source`.
 
+## Recently shipped (June 2026)
+
+The loss-protection / discipline push — exit logic, concentration enforcement, and the first out-of-app runtime:
+
+- **Concentration / sizing discipline** (`ebdf255`, `concentration.py`) — closes the entry-time enforcement gap where manual journal buys bypassed sizing ceilings (a name had hit ~23%). Entry nudge + `single_name_concentration` rec + high-beta cluster line. See memory `project_concentration_discipline`.
+- **Exit-discipline** (`exit_advisor.py`) — Phase 1 (`753c851`) idiosyncratic deterioration WATCH/TRIM/EXIT off drawdown-from-peak; Phase 1.1 (`88f0355`) peak re-anchor on material adds; Phase 2 (`1c5c56d`) market-wide `risk_off_derisk` overlay (fragile book AND SPY<200-DMA-or-VIX≥25 → trim top-3 beta contributors, single-surface). See memory `project_exit_discipline`.
+- **Headless protective-alert cron — the SECOND runtime** (`9add28f`→`cb37862`; `cron_runner.py` / `headless_alert_engine.py` / `notify.py` / `bundle_loader.py` / `.github/workflows/alerts.yml`) — GitHub Actions, no Streamlit. Delivers all three out-of-app jobs: exit Phase 3 protective email (premarket), pullback-awareness Phase 2 reactive drawdown email + Today's-P&L EOD snapshot (eod). Resend HTTP email; `alert_state` per-ET-day dedup; DST-straddling UTC slots; inert without secrets. See memory `project_email_alerts_cron`.
+- **Brief tone-staleness reconciliation** (`307cac6`) — annotate-only amber note when a stale pre-market tone contradicts live futures; never flips tone/gates. See memory `project_brief_tone_staleness`.
+- **Today's-P&L Tier B** (`bafcf8d`) — true positions day-P&L via equity-delta against the `daily_snapshots` baseline (needs one-time DDL; inert until then). See memory `project_today_pnl_scope`.
+
 ---
 
 ## Coming back to this project — checklist
@@ -238,7 +248,7 @@ _Remaining (genuinely minor, optional):_ the macro pick-gate uses the static eve
 
 **Future expansion (optional) — discovery universe:** widen `discovery_universe` to full S&P 500 (~500) or Russell 1000 (~1000) — bigger net, slower scan, more yfinance flakiness. Or swap the static list for a live source (Wikipedia SP500 scrape needs lxml; paid screener API = Polygon/Twelvedata/Alpha Vantage, reliable but adds key plumbing). The curated static list was chosen first for zero new deps and zero runtime-scrape risk; cost is a manual refresh a few times a year. The mover signal is also 1-day gain only — could add sustained-momentum and most-active lenses later.
 
-**Action Log — Phase B/C (queued):** Phase A (manual stop override) shipped. Phase B = in-context Sell/Trim button directly on Review Before Close items (act without leaving the Brief); Phase C = protective-trim variant. See memory `project_action_log_subsystem`.
+**Action Log — Phase B/C ✅ SHIPPED (2026-06-24, `307cac6`):** Phase A (manual stop override) + Phase B "📒 Log this trim" button on Review trim cards (pre-fills the Trade Journal SELL form, then the rec stops re-firing once holdings recompute). Phase C (protective-trim variant) folded into B — `PROTECTIVE_TRIM` resolves its `trim_ticker` before the button gate, per-render card index keeps keys collision-proof. See memory `project_action_log_subsystem`.
 
 **Multi-source market-data layer — ✅ SHIPPED & LIVE (2026-06-01):** the single-source yfinance dependency is removed. Code in `stock_analyzer/providers/` (base abstraction + yfinance/finnhub/fmp adapters + orchestrator + `_util` + `selftest`); `data.py` keeps the SAME public `fetch_*` signatures and routes through the orchestrator when `DATA_MULTISOURCE_ENABLED` (instant rollback = set False).
 - **Live prices:** Finnhub real-time PRIMARY, gap-fill to yfinance(delayed)→FMP (`DATA_LIVE_PRICE_ORDER`).
