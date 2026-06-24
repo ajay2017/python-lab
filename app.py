@@ -3190,6 +3190,13 @@ if page == "🏠 Home":
         # Catalyst Watch moved to its own nav page (🔔 Catalyst Watch) to keep
         # the Home brief lean — see the `elif page == "🔔 Catalyst Watch"` block.
 
+        # Captured inside the pre-market block below and consumed by the tone-banner
+        # staleness reconciliation: the LIVE futures direction, so a stale "Protect
+        # Mode" tone can note when futures currently disagree. None outside the
+        # pre-market window (NameError-safe — the banner always renders).
+        _pm_futures_tone = None
+        _pm_es_pct = None
+
         # ── Pre-Market Intel panel (visible 4:00–9:29 AM ET weekdays) ─────────
         if is_premarket():
             try:
@@ -3317,6 +3324,9 @@ if page == "🏠 Home":
                 )
                 es_row  = next((f for f in _pm["futures"] if f["symbol"] == "ES=F"), None)
                 es_str  = f"ES {es_row['chg_pct']:+.2f}%" if es_row else ""
+                # Hand the live futures direction to the tone-banner reconciliation.
+                _pm_futures_tone = _pm_tone
+                _pm_es_pct = es_row["chg_pct"] if es_row else None
 
                 st.markdown(
                     f"<div style='background:{_pm_color};border:1px solid {_pm_bdr};"
@@ -3489,6 +3499,24 @@ if page == "🏠 Home":
         if not mkt["is_open"] and _db_last_close != _today_et():
             _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
 
+        # Tone-staleness reconciliation (annotate, NEVER flip): pre-market, the tone
+        # reflects the LAST close while futures are live and can disagree. A red
+        # "Protect Mode" sitting above green live futures is misleading. Note the
+        # mismatch only — futures ≠ the open, so we never let them change the tone /
+        # gates / recommendations. Material direction mismatch only (reuses
+        # futures_tone's own bull/bear classification — no new threshold).
+        _tone_reconcile = ""
+        _tone_is_stale = (not mkt["is_open"]) and (_db_last_close != _today_et())
+        if _tone_is_stale and _pm_futures_tone in ("bull", "bear"):
+            if (_db_tone == "bear" and _pm_futures_tone == "bull") or \
+               (_db_tone == "bull" and _pm_futures_tone == "bear"):
+                _rec_dir = "higher" if _pm_futures_tone == "bull" else "lower"
+                _rec_es  = f" (ES {_pm_es_pct:+.2f}%)" if _pm_es_pct is not None else ""
+                _tone_reconcile = (
+                    f"Reflects {_db_last_close.strftime('%a %b %d')} close — live futures "
+                    f"currently {_rec_dir}{_rec_es}; refresh after the open for today's read."
+                )
+
         # ── Market tone + fragility, side by side ─────────────────────────────
         # The market context (left) and YOUR exposure to it (right) are a natural
         # pair — show them together to keep the brief header compact. Matched
@@ -3510,7 +3538,10 @@ if page == "🏠 Home":
                 f"{len(_db_act)} urgent action{'s' if len(_db_act) != 1 else ''} · "
                 f"{len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))} growth setup{'s' if (len(_db_grow.get('new_picks',[]))+len(_db_grow.get('add_positions',[]))) != 1 else ''} · "
                 f"{len(_db_review)} to review before close</div>"
-                f"</div>",
+                + (f"<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
+                   f"border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
+                   f"⚠️ {_tone_reconcile}</div>" if _tone_reconcile else "")
+                + f"</div>",
                 unsafe_allow_html=True,
             )
 
@@ -4420,7 +4451,7 @@ if page == "🏠 Home":
                         st.session_state["_analysis_ticker"] = _db_ticker
                         st.rerun()
 
-            def _render_review_card(_db_rev):
+            def _render_review_card(_db_rev, _card_idx=0):
                 _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
                 _db_bg      = "#1c1917"
                 _db_ticker  = _db_rev.get("ticker")
@@ -4543,23 +4574,62 @@ if page == "🏠 Home":
                             unsafe_allow_html=True,
                         )
 
-                if _db_ticker:
+                _action_type = _action.get("type")
+
+                # Trim subject computed UP FRONT (before the _db_ticker gate): a
+                # PROTECTIVE_TRIM card carries ticker=None with its real subject in
+                # action.trim_ticker (the weakest sector holding), so it must NOT be
+                # gated behind the headline ticker — that's the macro de-risk trim
+                # the whole Phase-B logging affordance is for.
+                _trim_tkr = ""
+                _trim_sh_f = 0.0
+                if _action_type in ("TRIM_TO_TARGET", "TRIM_AND_TIGHTEN", "PROTECTIVE_TRIM"):
+                    _trim_tkr = str(_action.get("trim_ticker") or _db_ticker or "").upper()
+                    try:
+                        _trim_sh_f = float(_action.get("trim_shares") or 0)
+                    except (TypeError, ValueError):
+                        _trim_sh_f = 0.0
+                _has_trim = bool(_trim_tkr) and _trim_sh_f > 0
+
+                if _db_ticker or _has_trim:
                     _btn_c1, _btn_c2 = st.columns([1, 5])
                     with _btn_c1:
-                        if st.button(f"▶ Analyze {_db_ticker}",
+                        if _db_ticker and st.button(f"▶ Analyze {_db_ticker}",
                                      key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
                                      use_container_width=False):
                             st.session_state["_pending_page"]    = "📈 Analysis"
                             st.session_state["_analysis_ticker"] = _db_ticker
                             st.rerun()
 
+                    # Action Log Phase B — in-context "log this trim". The app has no
+                    # brokerage execution path, so the loop closes by RECORDING the
+                    # trade you placed: one click pre-fills the Trade Journal SELL
+                    # form (ticker + suggested shares + decision context) so you don't
+                    # navigate away; once logged, holdings recompute and this trim
+                    # recommendation stops re-firing. Key uses the per-render card
+                    # index so two macro cards trimming the same name can't collide.
+                    if _has_trim:
+                        _trim_px = (st.session_state.get("_live_prices", {}).get(_trim_tkr, {}) or {}).get("price")
+                        with _btn_c2:
+                            _render_trade_button(
+                                ticker=_trim_tkr,
+                                suggested_action="SELL",
+                                shares=_trim_sh_f,
+                                price=float(_trim_px) if _trim_px else None,
+                                trigger="RECOMMENDATION",
+                                signal_context=(f"{_act_label}: {_act_text}")[:140],
+                                followed_intent="yes",
+                                notes=(f"Trim per Daily Brief — {_act_text}")[:240],
+                                key_suffix=f"trimlog_{_card_idx}",
+                                label=f"📒 Log this trim ({int(_trim_sh_f)} sh {_trim_tkr})",
+                            )
+
                     # "Mark Done" form for stop-raise actions. The app can't place
                     # the order at your brokerage — but it can record that YOU did,
                     # so the same recommendation stops re-firing every render. Two
                     # action types qualify: TIGHTEN_ONLY (raise stop) and
-                    # TRIM_AND_TIGHTEN (the stop-raise half — the trim half is
-                    # logged separately via the Trade Journal in Phase B).
-                    _action_type = _action.get("type")
+                    # TRIM_AND_TIGHTEN (its stop-raise half — the trim half logs via
+                    # the "📒 Log this trim" button above).
                     if _action_type in ("TIGHTEN_ONLY", "TRIM_AND_TIGHTEN"):
                         _rec_stop = _action.get("new_stop")
                         with _btn_c2:
@@ -4629,9 +4699,9 @@ if page == "🏠 Home":
                                             )
                                             st.rerun()
 
-            def _render_defensive_card(_item):
+            def _render_defensive_card(_item, _card_idx=0):
                 if _item.get("_source") == "review":
-                    _render_review_card(_item)
+                    _render_review_card(_item, _card_idx)
                 else:
                     _render_act_card(_item)
 
@@ -4659,8 +4729,8 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
             else:
-                for _item in _act_bucket:
-                    _render_defensive_card(_item)
+                for _ci, _item in enumerate(_act_bucket):
+                    _render_defensive_card(_item, _ci)
 
             # Monitoring / Awareness — FYI, nothing to execute
             st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
@@ -4676,8 +4746,8 @@ if page == "🏠 Home":
             if not _aware_bucket:
                 st.caption("Nothing to monitor today — every position is steady.")
             else:
-                for _item in _aware_bucket:
-                    _render_defensive_card(_item)
+                for _ci, _item in enumerate(_aware_bucket):
+                    _render_defensive_card(_item, 1000 + _ci)
 
             # Portfolio Tune-up — slow-moving risk-metric improvements (Sharpe /
             # beta / volatility / drawdown / tail). NOT time-boxed decisions, so
