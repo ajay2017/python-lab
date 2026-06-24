@@ -28,13 +28,26 @@ def _f(v, default=0.0):
     except (TypeError, ValueError):
         return default
 
+
+def _provider_label(name: str) -> str:
+    """Human label for a data-provider source key (provider `.name` / api_health
+    source). Used by the price-strip and the cross-check 'paused' note."""
+    return {
+        "yahoo_finance": "Yahoo Finance",
+        "finnhub": "Finnhub",
+        "fmp": "FMP",
+        "fred": "FRED",
+        "supabase": "Supabase",
+    }.get(name, str(name).replace("_", " ").title())
+
 import html as _html
 import time
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
     fetch_spy, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
-    crosscheck_price, crosscheck_prices, fetch_earnings_calendar, fetch_next_earnings,
+    crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
+    fetch_earnings_calendar, fetch_next_earnings,
     is_trading_day,
 )
 from stock_analyzer.catalyst_watch import build_catalyst_watch
@@ -1691,6 +1704,13 @@ if page == "🏠 Home":
     # "decides, fail loud" posture, a breach is surfaced as a red banner, not
     # buried — the user decides whether to trust the figure.
     if held_tickers:
+        # Validator health is LIVE; the cross-check result is 5-min cached. A
+        # disagreement computed while the validator was healthy can be served from
+        # cache for ≤5 min after it goes red — so the red banner can outlive the
+        # outage briefly. That's the SAFE direction (a real fault is never
+        # suppressed, only cleared slightly late); do NOT "fix" it by gating the
+        # banner on live health, which would mask genuine integrity faults.
+        _xc_validator_down = crosscheck_validator_degraded()
         _xc = _cached_price_xcheck(tuple(sorted(held_tickers)))
         _xc_bad = {t: r for t, r in _xc.items() if not r.get("ok", True)}
         if _xc_bad:
@@ -1713,6 +1733,13 @@ if page == "🏠 Home":
                 "differs from an independent source beyond tolerance for:\n\n"
                 + "\n".join(_xc_lines)
                 + "\n\nTreat stops / P&L for these names with caution and verify against your broker."
+            )
+        elif _xc_validator_down:
+            # Cross-check skipped because its validator is the degraded source —
+            # surface why (don't silently drop the integrity readout). Clears on recovery.
+            st.caption(
+                f"ℹ️ Price cross-check paused — the validator ({_provider_label(_xc_validator_down)}) "
+                "is degraded; the integrity check resumes automatically when it recovers."
             )
         st.session_state["_price_xcheck_cache"] = _xc
 
@@ -10243,6 +10270,7 @@ elif page == "📈 Analysis":
     # researched (often not-held) name carries the same trust signal as the
     # Portfolio page. Reuses the 5-min-cached batch cross-check. prev_close
     # mismatch (strict) = real integrity fault; live gap (loose) = latency.
+    _an_validator_down = crosscheck_validator_degraded()
     _an_xc = _cached_price_xcheck(tuple(sorted(results.keys())))
     if _an_xc:
         _an_bad = {t: r for t, r in _an_xc.items() if not r.get("ok", True)}
@@ -10265,6 +10293,11 @@ elif page == "📈 Analysis":
                 f"✓ Price cross-checked — {_an_one.get('primary_source', '—')} vs "
                 f"{_an_one.get('validator', '—')} agree within tolerance."
             )
+    elif _an_validator_down:
+        st.caption(
+            f"ℹ️ Price cross-check paused — the validator ({_provider_label(_an_validator_down)}) "
+            "is degraded; the integrity check resumes automatically when it recovers."
+        )
 
     # ── Per-ticker tabs ────────────────────────────────────────────────────
     st.subheader("Detailed Analysis")

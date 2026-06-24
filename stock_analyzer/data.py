@@ -36,6 +36,15 @@ def crosscheck_prices(tickers: list[str]) -> dict[str, dict]:
     return _orch.crosscheck_batch(tickers)
 
 
+def crosscheck_validator_degraded() -> str | None:
+    """Validator source name when the live-price cross-check validator is RED in
+    api_health (so the cross-check is being skipped), else None. Lets the UI show
+    a 'cross-check paused — validator degraded' note (see orchestrator)."""
+    if not _C.DATA_MULTISOURCE_ENABLED:
+        return None
+    return _orch.live_price_validator_degraded()
+
+
 DEFAULT_TICKERS = {
     "Micron Technology": "MU",
     "AMD": "AMD",

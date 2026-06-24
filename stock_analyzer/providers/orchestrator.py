@@ -317,6 +317,14 @@ def crosscheck_batch(tickers: list[str]) -> dict[str, dict]:
         return {}
     primary = provs[0]
     validator = provs[1]
+    # Validator-health gate: when the validator source is RED in api_health
+    # (rate-limited / hard-erroring — e.g. Yahoo 401 Invalid Crumb or 429 from a
+    # datacenter IP), its returned prices can't be trusted, so any "disagreement"
+    # is the validator's own degradation, not a real integrity fault. Surfacing a
+    # red "sources disagree" banner then is a false alarm. Skip the cross-check
+    # this cycle; it auto-resumes when the validator recovers (api_health clears).
+    if _is_red(validator.name):
+        return {}
     try:
         prim = primary.live_prices(list(tickers))
     except Exception:
@@ -345,3 +353,25 @@ def crosscheck_batch(tickers: list[str]) -> dict[str, dict]:
         res["validator"] = validator.name
         out[t] = res
     return out
+
+
+def _is_red(source: str) -> bool:
+    """True when an api_health source is at its 'red' level (rate-limited /
+    erroring hard). Single predicate so the validator-health gate and the UI
+    'paused' note share one threshold definition (api_health.get_health)."""
+    return _ah.get_health(source).get("level") == "red"
+
+
+def live_price_validator_degraded() -> str | None:
+    """Name of the live-price cross-check validator if it is currently RED in
+    api_health, else None. The held-position cross-check (crosscheck_batch) skips
+    when this is set — a 'disagreement' against a degraded validator is a false
+    alarm, not an integrity fault. Lets the UI show a transparent 'cross-check
+    paused' note instead of either a red banner or silent nothing."""
+    if "price" not in C.DATA_XCHECK_FIELDS:
+        return None
+    provs = _live_price_providers()
+    if len(provs) < 2:
+        return None
+    validator = provs[1]
+    return validator.name if _is_red(validator.name) else None
