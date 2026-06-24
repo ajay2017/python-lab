@@ -10,10 +10,22 @@ name: Protective Alerts (daily)
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"   # 12:00 UTC — 08:00 EDT (summer) / 07:00 EST (winter, gated out as too-early)
-    - cron: "0 13 * * 1-5"   # 13:00 UTC — 09:00 EDT (gated as already-done) / 08:00 EST (winter run)
-  workflow_dispatch:          # manual smoke-test button (Actions tab → Run workflow)
+    # Pre-market PROTECTIVE run (~08:00 ET). Two UTC slots straddle EST/EDT; the
+    # cron derives mode=premarket for ET hour < 12.
+    - cron: "0 12 * * 1-5"   # 12:00 UTC — 08:00 EDT / 07:00 EST (gated too-early in winter)
+    - cron: "0 13 * * 1-5"   # 13:00 UTC — 09:00 EDT (already-done) / 08:00 EST (winter run)
+    # EOD run (~16:30 ET, post-close) — snapshot write + reactive pullback. Two UTC
+    # slots straddle EST/EDT; the cron derives mode=eod for ET hour >= 12 and gates
+    # on ET hour >= 16 so the close is final.
+    - cron: "30 20 * * 1-5"  # 20:30 UTC — 16:30 EDT (summer run) / 15:30 EST (gated too-early)
+    - cron: "30 21 * * 1-5"  # 21:30 UTC — 17:30 EDT (already-done) / 16:30 EST (winter run)
+  workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
+      mode:
+        description: "Run mode (auto = derive from ET hour)"
+        type: choice
+        options: [auto, premarket, eod]
+        default: auto
       force:
         description: "Bypass the trading-day / hour / once-per-day guards (test)"
         type: boolean
@@ -56,4 +68,5 @@ jobs:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '' }}
           ALERT_TEST_EMAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email && '1' || '' }}
+          ALERT_RUN_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode || '' }}
         run: python cron_runner.py

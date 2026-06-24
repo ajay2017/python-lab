@@ -33,6 +33,7 @@ from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_CEILING,
     FRAGILITY_PULLBACK_PCT,
+    PULLBACK_ALERT_INDEX_PCT,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -56,29 +57,22 @@ def _vix_level() -> float | None:
         return None
 
 
-def compute_protective_alerts(today: date | None = None) -> dict:
-    """Return {"alerts": [...], "built_at": <ET iso>, "errors": [...]}.
-
-    Each alert is a normalised dict: {kind, ticker, action, directive, why,
-    trigger, weight, pnl_pct}. `kind` ∈ {stop_breach, deterioration_exit,
-    risk_off_derisk}. An empty `alerts` list means "nothing to act on" — the
-    caller sends no email. Never raises; faults are collected in `errors`.
-    """
+def _build_context(today: date) -> dict:
+    """Shared headless data-prep: db inputs → market data → per-ticker bundles →
+    port_df → fragility. Returns {ok, errors, port_df, held_data, fragility,
+    spy_6mo, spy_1y, vix}. `ok=False` (reason in `errors`) when there's no DB / no
+    holdings / the frame is empty — callers short-circuit to an empty result.
+    Never raises. One prep path feeds BOTH the pre-market protective run and the
+    EOD snapshot/pullback run, so they can never disagree about the book."""
     errors: list[str] = []
-    today = today or datetime.now(_ET).date()
-
     if not db.has_db():
-        return {"alerts": [], "built_at": datetime.now(_ET).isoformat(),
-                "errors": ["no Supabase credentials (SUPABASE_URL/SUPABASE_KEY)"]}
-
-    # ── Persistent inputs ────────────────────────────────────────────────────
+        return {"ok": False, "errors": ["no Supabase credentials (SUPABASE_URL/SUPABASE_KEY)"]}
     try:
         holdings_df = db.load_holdings()
     except Exception as e:
-        return {"alerts": [], "built_at": datetime.now(_ET).isoformat(),
-                "errors": [f"load_holdings failed: {e}"]}
+        return {"ok": False, "errors": [f"load_holdings failed: {e}"]}
     if holdings_df is None or holdings_df.empty:
-        return {"alerts": [], "built_at": datetime.now(_ET).isoformat(), "errors": []}
+        return {"ok": False, "errors": ["no holdings"]}
 
     try:
         trades_df = db.load_trades()
@@ -89,7 +83,6 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     except Exception:
         manual_stops = {}
 
-    # ── Market data ──────────────────────────────────────────────────────────
     try:
         rfr = fetch_risk_free_rate()
     except Exception:
@@ -105,7 +98,6 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         spy_1y = None
     vix = _vix_level()
 
-    # ── Per-ticker bundles (shared loader) + position-age enrichment ──────────
     held_tickers = [
         str(t).strip().upper() for t in holdings_df["Ticker"].tolist() if str(t).strip()
     ]
@@ -127,19 +119,15 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         held_data[t] = bundle
 
     if not held_data:
-        return {"alerts": [], "built_at": datetime.now(_ET).isoformat(),
-                "errors": errors + ["no holdings could be loaded"]}
+        return {"ok": False, "errors": errors + ["no holdings could be loaded"]}
 
-    # ── Portfolio frame + fragility ───────────────────────────────────────────
-    # NB: unlike the live app (app.py merges intraday live prices into held_data
-    # before building port_df), this pre-market cron uses load_bundle's last close.
-    # That's intentional and correct here: at ~08:00 ET there is no intraday tape,
-    # and the stop rule is "CLOSED below stop" — same semantics as the Daily Brief.
+    # NB: no intraday live-price merge (unlike the live app). The pre-market run
+    # uses last close (stop rule = "CLOSED below stop"); the EOD run is post-close
+    # so last close IS today's final close — correct for the snapshot too.
     holdings = holdings_df.to_dict("records")
     port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
     if port_df is None or port_df.empty:
-        return {"alerts": [], "built_at": datetime.now(_ET).isoformat(),
-                "errors": errors + ["portfolio frame empty after load"]}
+        return {"ok": False, "errors": errors + ["portfolio frame empty after load"]}
 
     try:
         port_risk = compute_portfolio_risk_metrics(port_df, held_data, spy_6mo, rfr)
@@ -157,6 +145,28 @@ def compute_protective_alerts(today: date | None = None) -> dict:
                                          PORTFOLIO_BETA_CEILING, FRAGILITY_PULLBACK_PCT)
     except Exception:
         fragility = None
+
+    return {"ok": True, "errors": errors, "port_df": port_df, "held_data": held_data,
+            "fragility": fragility, "spy_6mo": spy_6mo, "spy_1y": spy_1y, "vix": vix}
+
+
+def compute_protective_alerts(today: date | None = None) -> dict:
+    """Return {"alerts": [...], "built_at": <ET iso>, "errors": [...]}.
+
+    Each alert is a normalised dict: {kind, ticker, action, directive, why,
+    trigger, weight, pnl_pct}. `kind` ∈ {stop_breach, deterioration_exit,
+    risk_off_derisk}. An empty `alerts` list means "nothing to act on" — the
+    caller sends no email. Never raises; faults are collected in `errors`.
+    """
+    today = today or datetime.now(_ET).date()
+    ctx = _build_context(today)
+    built_at = datetime.now(_ET).isoformat()
+    if not ctx.get("ok"):
+        return {"alerts": [], "built_at": built_at, "errors": ctx.get("errors", [])}
+
+    errors = list(ctx["errors"])
+    port_df, held_data = ctx["port_df"], ctx["held_data"]
+    spy_6mo, spy_1y, vix, fragility = ctx["spy_6mo"], ctx["spy_1y"], ctx["vix"], ctx["fragility"]
 
     # ── Protective signals (same rules as the Brief, single-surface) ──────────
     alerts: list[dict] = []
@@ -222,4 +232,67 @@ def compute_protective_alerts(today: date | None = None) -> dict:
             "pnl_pct": c.get("pnl_pct"),
         })
 
-    return {"alerts": alerts, "built_at": datetime.now(_ET).isoformat(), "errors": errors}
+    return {"alerts": alerts, "built_at": built_at, "errors": errors}
+
+
+def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:
+    """Reactive drawdown read: did the broad market ACTUALLY fall ≥ `threshold`
+    (a negative %) on the latest session? Returns the exposure framing or None.
+
+    This observes reality (the index IS down), the most reliable leg of the
+    pullback-awareness frame — distinct from the pre-market REGIME risk-off. The
+    book-implied move reuses the fragility ×-market multiplier so the displayed
+    numbers tie out with the Home fragility gauge."""
+    try:
+        if spy_6mo is None or getattr(spy_6mo, "empty", True) or "Close" not in spy_6mo.columns:
+            return None
+        c = spy_6mo["Close"].dropna()
+        if len(c) < 2:
+            return None
+        prev = float(c.iloc[-2])
+        if prev <= 0:
+            return None
+        idx_pct = (float(c.iloc[-1]) / prev - 1.0) * 100.0
+    except Exception:
+        return None
+    if idx_pct > threshold:        # threshold is negative; fire only on a deep-enough drop
+        return None
+    frag = fragility or {}
+    mult = frag.get("mult")
+    book_implied = round(mult * idx_pct, 1) if mult else None   # mult>0, idx_pct<0 → negative
+    return {
+        "index_pct": round(idx_pct, 1),
+        "book_implied_pct": book_implied,
+        "severity": frag.get("severity"),
+        "mult": mult,
+        "exposed": frag.get("exposed") or [],
+    }
+
+
+def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_ALERT_INDEX_PCT) -> dict:
+    """End-of-day job inputs: today's snapshot rows (for the Today's-P&L baseline)
+    + a reactive pullback read. Returns {"snapshot_rows": [...], "pullback": {...}|None,
+    "built_at": <ET iso>, "errors": [...]}. Never raises.
+
+    snapshot_rows shape matches db.save_daily_snapshot: {ticker, shares, close_price}.
+    Reuses the SAME _build_context as the protective run (post-close → last close
+    is final)."""
+    today = today or datetime.now(_ET).date()
+    ctx = _build_context(today)
+    built_at = datetime.now(_ET).isoformat()
+    if not ctx.get("ok"):
+        return {"snapshot_rows": [], "pullback": None, "built_at": built_at,
+                "errors": ctx.get("errors", [])}
+
+    port_df = ctx["port_df"]
+    snapshot_rows = []
+    for _, row in port_df.iterrows():
+        px = _f(row.get("Price"))
+        sh = _f(row.get("Shares"))
+        t = str(row.get("Ticker", "")).upper()
+        if t and px and px > 0 and sh and sh > 0:
+            snapshot_rows.append({"ticker": t, "shares": sh, "close_price": px})
+
+    pullback = _assess_pullback(ctx["spy_6mo"], ctx["fragility"], pullback_threshold)
+    return {"snapshot_rows": snapshot_rows, "pullback": pullback,
+            "built_at": built_at, "errors": list(ctx["errors"])}

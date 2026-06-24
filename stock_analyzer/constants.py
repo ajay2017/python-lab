@@ -224,6 +224,14 @@ RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position
 # guard fires only the first run each ET trading day at/after this hour.
 ALERT_EMAIL_HOUR_ET = 8
 
+# 📉 Pullback-awareness Phase 2 — reactive drawdown email (EOD cron). OPERATIONAL
+# alert-sensitivity knob, not an investment-decision threshold. Email an awareness
+# ping when the broad market (SPY) closes down ≥ this % on the day. Kept deep so it
+# stays RARE & meaningful (a ~3% index day happens only a few × / year) — calm
+# advisor, not a panic feed (§2B).
+PULLBACK_ALERT_INDEX_PCT = -3.0
+ALERT_EOD_HOUR_ET        = 16   # EOD run fires only after this ET hour (post-close → final price)
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down

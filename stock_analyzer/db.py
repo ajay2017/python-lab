@@ -1108,16 +1108,18 @@ def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
 # gated (the cron runs outside the app anyway). Degrades to "always send" if the
 # table is absent — the feature works before the DDL, just without dedup.
 
-def load_alert_state() -> dict | None:
+def load_alert_state(row_id: int = 1) -> dict | None:
     """Return {"last_emailed_date": "<YYYY-MM-DD>", "last_fingerprint": "<hex>"}
-    or None (DB offline / table missing / no row). Never raises."""
+    or None (DB offline / table missing / no row). `row_id` selects the cron lane:
+    1 = pre-market protective run, 2 = EOD pullback run (independent dedup, same
+    table — no extra DDL). Never raises."""
     if not has_db():
         return None
     try:
         rows = (
             _client().table("alert_state")
             .select("last_emailed_date,last_fingerprint")
-            .eq("id", 1).limit(1).execute().data
+            .eq("id", row_id).limit(1).execute().data
         )
         if not rows:
             return None
@@ -1130,14 +1132,15 @@ def load_alert_state() -> dict | None:
         return None
 
 
-def save_alert_state(emailed_date: str, fingerprint: str) -> bool:
-    """Upsert the cron's dedup state (id=1). Best-effort; swallows failures."""
+def save_alert_state(emailed_date: str, fingerprint: str, row_id: int = 1) -> bool:
+    """Upsert a cron lane's dedup state (row_id 1=protective, 2=EOD pullback).
+    Best-effort; swallows failures."""
     if not has_db():
         return False
     try:
         from datetime import datetime, timezone
         record = {
-            "id":                1,
+            "id":                row_id,
             "last_emailed_date": str(emailed_date),
             "last_fingerprint":  str(fingerprint),
             "updated_at":        datetime.now(timezone.utc).isoformat(),
