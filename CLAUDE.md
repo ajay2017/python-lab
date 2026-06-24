@@ -52,7 +52,16 @@ When adding a new advisor or recommendation feature, **always** check whether it
 **Conventional Commits**: `type(scope): summary` — imperative, lowercase, ≤72 chars, no trailing period; a body explaining **why**; trailers in the footer. Types: `feat fix docs refactor perf test build ci chore revert`. Full spec + the one-time `git config commit.template .gitmessage.txt` setup live in [DEVELOPMENT.md](DEVELOPMENT.md); the template is [`.gitmessage.txt`](.gitmessage.txt).
 
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — call them out in the body and name the constant + old→new value.
+- **Feature commits must sync the docs that describe behaviour:** a user-facing feature or gate touches `docs/requirements.md` (the functional spec), not just `docs/architecture.md`. requirements.md silently drifted ~3 weeks once because per-feature docs commits hit architecture but skipped requirements — don't repeat that.
 - **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with Claude Opus 4.8 <ajay.x.ku@accenture.com>`, written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling).
+
+## Documentation integrity (zero-hallucination)
+
+This is a decision-making app: a **wrong value in a doc erodes trust in the app itself**, so docs are held to the same bar as code.
+
+- **Transcribe every threshold / constant / file:line from the source, never from memory.** Before writing a number into any doc, open `stock_analyzer/constants.py` (or the actual code) and copy it. Recalled values in `MEMORY.md`/summaries reflect what was true *when written* — verify against HEAD.
+- **Never invent** function names, constant names, session keys, UI text, or dates. If you can't confirm it in code, don't write it.
+- **Doc edits that carry policy values stay on the Opus lead** — do not delegate constants-table / gate / requirements writes to the Haiku doc-writer (it has hallucinated exactly these: invented function names, a wrong constant value, a fabricated date). The doc-writer is for prose/comments after the facts are pinned.
 
 ---
 
