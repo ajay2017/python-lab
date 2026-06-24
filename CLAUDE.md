@@ -92,3 +92,4 @@ Last reconciled 2026-06-24 (audited against code, not memory). The macro/regime 
 - Brief tone-staleness annotation + Action Log Phase B "log this trim" (307cac6).
 - SDLC docs backfill + zero-hallucination doc-integrity rule (b3d444f, a4d9db4).
 - Cross-check validator-health gate (220ab44) — no false "sources disagree" banner during a Yahoo outage; also closes the 401/crumb item (absorbed, no fragile retry). Bundle-load deferred queue now empty.
+- Catalyst Watch holdings-earnings fix (19ba98a + f49ace0 + ca12cce) — decoupled FMP earnings backfill from `.info`-sparse (re-arms earnings gates), gave the holdings tier the SAME FMP-calendar→per-name-yfinance fallback as Radar (coverage parity), and ET-corrected the FMP earnings date. Confirmed working. Earnings-window literals → named constants (5b8306b). Future lever: Finnhub as a 3rd earnings source if yfinance per-name also fails from the datacenter IP.
