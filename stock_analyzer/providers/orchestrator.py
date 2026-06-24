@@ -164,21 +164,34 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
             if not _info_sparse(other_info):
                 primary["info"] = other_info
                 primary["_info_source"] = prov.name
-                # Backfill earnings/revisions too if the primary lacked them —
-                # via the LIGHT per-field accessors (1 call each), not a second
-                # full bundle(). A full bundle would re-fetch info (redundant —
-                # just got it) AND history (discarded, we keep the primary's),
-                # roughly tripling the free-tier quota cost per backfill.
-                if not primary.get("earnings") and hasattr(prov, "earnings"):
-                    try:
-                        primary["earnings"] = prov.earnings(ticker)
-                    except Exception:
-                        pass
-                if not primary.get("revisions") and hasattr(prov, "revisions"):
-                    try:
-                        primary["revisions"] = prov.revisions(ticker)
-                    except Exception:
-                        pass
+                break
+
+    # Backfill the earnings DATE and revisions INDEPENDENTLY of .info. yfinance
+    # routinely returns usable `.info` (so the composite scores fine) yet NO
+    # earnings date — they come from different yfinance endpoints. Coupling the
+    # date backfill to info-sparse (as before) therefore left held names with a
+    # blank earnings date whenever `.info` happened to be present — surfacing as
+    # Catalyst Watch "No date found" AND silently disarming the earnings-proximity
+    # gates (which read this same field). Fill from the first OTHER bundle-capable
+    # provider's LIGHT per-field accessor (1 call each, not a full second bundle)
+    # only when the field is missing — so it can never regress; an FMP miss leaves
+    # the field exactly as it was. The circuit-breaker (_providers_for) still skips
+    # any provider currently cooled-down, so this won't hammer an exhausted source.
+    if not primary.get("earnings") or not primary.get("revisions"):
+        for prov in providers:
+            if prov.name == primary.get("_source"):
+                continue
+            if not primary.get("earnings") and hasattr(prov, "earnings"):
+                try:
+                    primary["earnings"] = prov.earnings(ticker)
+                except Exception:
+                    pass
+            if not primary.get("revisions") and hasattr(prov, "revisions"):
+                try:
+                    primary["revisions"] = prov.revisions(ticker)
+                except Exception:
+                    pass
+            if primary.get("earnings") and primary.get("revisions"):
                 break
     return primary
 

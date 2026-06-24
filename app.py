@@ -1018,6 +1018,27 @@ def _cached_price_xcheck(tickers_key: tuple) -> dict:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+def _cached_earnings_cal_map(from_str: str, to_str: str) -> dict:
+    """{TICKER: soonest-future earnings 'YYYY-MM-DD'} from the FMP market-wide
+    calendar (one cached call/day, unfiltered). Used to backfill HELD names'
+    earnings dates in Catalyst Watch when the per-name bundle date (yfinance) is
+    missing — the same source the Radar tier uses, so held names get the coverage
+    non-held names already do. Awareness-only display (F-37a); not a gate source."""
+    _m: dict = {}
+    try:
+        for _r in (fetch_earnings_calendar(from_str, to_str) or []):
+            _tk = str(_r.get("ticker", "")).strip().upper()
+            _dt = str(_r.get("date", ""))[:10]
+            if not _tk or not _dt:
+                continue
+            if _tk not in _m or _dt < _m[_tk]:   # keep the soonest future date
+                _m[_tk] = _dt
+    except Exception:
+        pass
+    return _m
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
 def _cached_catalyst_calendar(tracked_tuple: tuple, from_str: str, to_str: str) -> list:
     """24h-cached upcoming-earnings rows for the tracked universe, used by the
     Catalyst Watch page. Tries the FMP market-wide calendar first (one cheap
@@ -1264,15 +1285,21 @@ def _render_holdings_earnings(port_df, held_data):
     st.caption(
         "Upcoming earnings dates for all holdings. "
         "Earnings are high-volatility events — positions within 7 days warrant extra attention. "
-        "Dates sourced from Yahoo Finance; confirm with the company's IR page before trading."
+        "Dates from Yahoo Finance, with Financial Modeling Prep as a fallback; "
+        "confirm with the company's IR page before trading."
     )
 
     # Build earnings rows from already-loaded held_data
     _today = datetime.now().date()
+    # Calendar fallback: when a held name's bundle (yfinance) earnings date is
+    # missing, fill from the FMP market-wide calendar (same source the Radar tier
+    # uses, proven to return data) so held names don't go blank on a Yahoo hiccup.
+    from datetime import timedelta as _cw_td
+    _cal_map = _cached_earnings_cal_map(_today.isoformat(), (_today + _cw_td(days=90)).isoformat())
     _earn_rows = []
     for _, _pr in port_df.iterrows():
         _t   = _pr["Ticker"]
-        _d   = held_data.get(_t, {}).get("earnings")
+        _d   = held_data.get(_t, {}).get("earnings") or _cal_map.get(str(_t).strip().upper())
         _inf = held_data.get(_t, {}).get("info", {}) or {}
         _name = _inf.get("shortName") or _inf.get("longName") or _t
         _fwd_eps  = _inf.get("forwardEps")
@@ -1310,7 +1337,7 @@ def _render_holdings_earnings(port_df, held_data):
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
     _ek1.metric("Within 7 days",  len(_in_7d),  help="Earnings in the next week — highest risk")
     _ek2.metric("Within 30 days", len(_in_30d), help="Earnings in the next month")
-    _ek3.metric("No date found",  len(_no_date),help="yfinance returned no upcoming date")
+    _ek3.metric("No date found",  len(_no_date),help="No upcoming date from Yahoo Finance or the FMP calendar")
     _ek4.metric("Recently passed",len(_past),   help="Earnings date already passed in the data")
 
     # Timeline chart
