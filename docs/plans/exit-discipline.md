@@ -128,9 +128,62 @@ Opus plan (this) → inline/Sonnet build the decided edits → **mandatory Opus
 review** (exit recommendation logic + new policy constants) → push → Streamlit
 Cloud validate. Logged in `docs/cost-routing.md`.
 
+## Phase 2 — Risk-off protective de-risk (SHIPPED 2026-06-23)
+
+Closes the market-wide down-day bucket Phase 1's relative-strength filter
+deliberately skips (the −$396 Nasdaq-pulldown day, 2026-06-09). Promotes the
+existing Fragility gauge + Protect-Mode tone from awareness → a concrete
+per-holding TRIM directive. **Industry-grounded** (user asked to follow PM
+standards, not bespoke): regime-based trigger + risk-budgeting action.
+
+**Trigger — ALL of:**
+- **Fragile book:** `_fragility_cache.severity ∈ {caution, fragile}` (already
+  encodes elevated portfolio beta, so no separate beta knob).
+- **Market risk-off REGIME** — either leg (NOT a single-day price drop, to avoid
+  selling the dip; vol-targeting is documented to *reduce* panic selling):
+  - **Trend:** SPY below its `RISK_OFF_TREND_MA` (200)-day MA. *Basis: Faber,
+    "A Quantitative Approach to Tactical Asset Allocation" (SSRN 962461) —
+    10-month/200-day trend; below = de-risk.*
+  - **Vol:** VIX ≥ `RISK_OFF_VIX_LEVEL` (25). *Basis: regime literature —
+    <15 complacent, 15–20 normal, 20–30 elevated, 30+ stress; dynamic-allocation
+    studies use ≥25 as the high-vol cut.*
+
+**Selection:** rank holdings by **beta-contribution** (β × weight%; reuse the
+`risk_advisor.py:123` pattern); take top `RISK_OFF_TRIM_TOP_N` (3) with
+β ≥ `RISK_OFF_NAME_MIN_BETA` (1.2); **exclude any ticker already carrying a
+higher-priority reduce** (stop/sell/deterioration/weak-large/macro-trim).
+
+**Action (per name):** `🛡️ TRIM — Risk-Off` Act-Today card — suggest trim
+~`RISK_OFF_TRIM_PCT` (25%) **or** tighten the stop to the `STOP_TIGHTEN_ATR_MULT`
+level ("don't sell into weakness" option). directive names the β driver + book's
+implied pullback move; trigger = deepen→reduce / stabilize→hold.
+
+**Coordination:** new kind `risk_off_derisk`, **lowest-priority reduce** in
+`_KIND_RANK` (after `deterioration_trim`) + added to `_REDUCE_ACT_KINDS`.
+Computed in `build_daily_briefing` AFTER act+review are built, excluding
+already-reduced tickers → single-surface guaranteed (no double-reduce).
+
+**Constants (investment-policy, grounded):**
+| Constant | Default | Basis |
+|---|---|---|
+| `RISK_OFF_TREND_MA` | 200 | Faber 10-month/200-day trend rule |
+| `RISK_OFF_VIX_LEVEL` | 25.0 | high-vol regime cut (20–30 elevated) |
+| `RISK_OFF_NAME_MIN_BETA` | 1.2 | only genuinely high-beta drivers |
+| `RISK_OFF_TRIM_TOP_N` | 3 | top beta contributors |
+| `RISK_OFF_TRIM_PCT` | 25.0 | modest reduction |
+
+**Data deps (small):** the 200-day MA needs ~1y SPY history (currently cache
+6mo → add a 1y fetch for the trend check); VIX must be threaded into the brief
+(available in `macro_calendar`). Pass `fragility` (+ VIX/SPY-1y) into
+`build_daily_briefing` like `spy_df`.
+
+**Posture:** a LIGHT overlay, not a market-timing engine — consistent with §2B
+and the evidence that aggressive tactical de-risking underperforms after
+whipsaw/taxes. Most risk stays managed at entry (sizing + concentration caps).
+
 ## Out of scope (deferred)
-- **Phase 2** — risk-off protective de-risk (fragility → per-holding trim on
-  market-wide down days; the Nasdaq-pulldown bucket).
+- Full **volatility-targeting** leverage scaling / **beta-target optimizer** /
+  sector-overlay selection (names in the leading-down sectors) — Phase 2.x.
 - **Phase 3** — out-of-app email alerts (GitHub Actions cron) so the above reach
   the user without opening the app.
 - No auto-execution — directives only; the user decides.

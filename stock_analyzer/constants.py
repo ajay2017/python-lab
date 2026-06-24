@@ -203,6 +203,21 @@ REL_STRENGTH_LOOKBACK_DAYS     = 20     # relative-strength-vs-SPY lookback (neg
 DETERIORATION_PEAK_FALLBACK_BARS = 63   # peak-window lookback (~3mo) when position age is unknown (no journal)
 MATERIAL_ADD_RESET_THRESHOLD   = 25.0   # a non-initial lot ≥ this % of the position re-anchors the deterioration PEAK window to "since the add" (averaging-down guard; cost basis stays blended — see exit_advisor.material_add_window_days)
 
+# 🛡️ Risk-off protective de-risk (exit-discipline Phase 2).
+# Promotes the Fragility gauge + Protect-Mode tone from awareness to a concrete
+# per-holding TRIM directive, but ONLY in a genuine market-wide risk-off REGIME
+# (not a single down day — that would sell the dip). Industry-grounded, not
+# bespoke: the trigger is a trend OR volatility regime gate and the action is a
+# risk-budgeting (β-contribution) trim. A LIGHT overlay — most risk stays managed
+# at entry (sizing + concentration). Trigger fires only when the book is also
+# fragile (_fragility severity caution/fragile), so these are investment-policy
+# thresholds (set with the user), not operational knobs.
+RISK_OFF_TREND_MA       = 200    # SPY below its N-day MA = de-risk. Basis: Faber, "A Quantitative Approach to Tactical Asset Allocation" (SSRN 962461) — 10-month/200-day trend rule.
+RISK_OFF_VIX_LEVEL      = 25.0   # VIX ≥ this = high-vol regime. Basis: regime literature (<15 complacent, 15–20 normal, 20–30 elevated, 30+ stress); dynamic-allocation studies use ≥25 as the high-vol cut.
+RISK_OFF_NAME_MIN_BETA  = 1.2    # only trim genuinely high-beta drivers (β ≥ this); leaves defensives alone.
+RISK_OFF_TRIM_TOP_N     = 3      # act on the top-N beta contributors (β × weight), not the whole book.
+RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position (or tighten the stop instead).
+
 # 📅 Earnings overweight — trim-down rule.
 # Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
 # expected earnings move would breach the per-trade risk budget; trim down

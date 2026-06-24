@@ -19,7 +19,7 @@ from stock_analyzer.constants import (
 )
 
 # act_today `kind`s that are genuine same-day trade decisions.
-_ACT_KINDS = frozenset({"stop_breach", "sell_signal", "risk"})
+_ACT_KINDS = frozenset({"stop_breach", "sell_signal", "risk", "risk_off_derisk"})
 # review `action.type`s that are genuine trades (free/raise capital, reduce risk).
 _ACT_REVIEW_TYPES = frozenset({"TRIM_AND_TIGHTEN", "TRIM_TO_TARGET", "PROTECTIVE_TRIM"})
 
@@ -30,7 +30,8 @@ _ACT_REVIEW_TYPES = frozenset({"TRIM_AND_TIGHTEN", "TRIM_TO_TARGET", "PROTECTIVE
 # headline folds into it. Reduce cards from BOTH streams count (act-origin
 # stop/sell/risk/deterioration + review-origin trim variants).
 _REDUCE_ACT_KINDS = frozenset(
-    {"stop_breach", "sell_signal", "risk", "deterioration_exit", "deterioration_trim"}
+    {"stop_breach", "sell_signal", "risk", "deterioration_exit", "deterioration_trim",
+     "risk_off_derisk"}
 )
 
 

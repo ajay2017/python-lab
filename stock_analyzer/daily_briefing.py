@@ -1230,6 +1230,7 @@ _KIND_RANK = {
     "sell_signal":        1,
     "deterioration_exit": 2,
     "deterioration_trim": 3,
+    "risk_off_derisk":    4,   # lowest-priority reduce (market-wide overlay, not name-specific)
 }
 
 
@@ -1911,6 +1912,9 @@ def build_daily_briefing(
     grow_composites: dict | None = None,
     movers:          list | None = None,
     spy_df:          object | None = None,
+    fragility:       dict | None = None,
+    spy_trend_df:    object | None = None,
+    vix_level:       float | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -1948,6 +1952,26 @@ def build_daily_briefing(
     review = _review_list(port_df, news_items, macro_events, held_data, today,
                           portfolio_value=portfolio_value, act_today=act,
                           deterioration=deterioration)
+
+    # Risk-off protective de-risk (exit-discipline Phase 2) — computed AFTER act +
+    # review so we can exclude any ticker already carrying a higher-priority reduce
+    # (single-surface: never double-reduce a name). Only arms when the book is
+    # fragile AND the market is in a risk-off regime; otherwise returns []. These
+    # are the lowest-priority reduce, so they append to the end of Act Today.
+    _reduced = {str(it.get("ticker")).upper() for it in act if it.get("ticker")}
+    for _it in review:
+        _at = str((_it.get("action") or {}).get("type", ""))
+        if _at in ("TRIM_AND_TIGHTEN", "TRIM_TO_TARGET", "PROTECTIVE_TRIM"):
+            _rt = _it.get("ticker") or (_it.get("action") or {}).get("trim_ticker")
+            if _rt:
+                _reduced.add(str(_rt).upper())
+    _risk_off = exit_advisor.assess_risk_off_derisk(
+        port_df, held_data,
+        fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
+        exclude_tickers=_reduced,
+    )
+    if _risk_off:
+        act = act + _risk_off
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,

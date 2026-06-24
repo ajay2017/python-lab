@@ -158,6 +158,14 @@ def fetch_spy(period: str = "6mo") -> pd.DataFrame:
     return fetch_price_history("SPY", period)
 
 
+def fetch_vix(period: str = "1mo") -> pd.DataFrame:
+    """CBOE Volatility Index (^VIX) price history — the fear gauge.
+
+    Used by the risk-off de-risk overlay (exit-discipline Phase 2) for the
+    volatility regime leg. Same provider path as fetch_spy."""
+    return fetch_price_history("^VIX", period)
+
+
 def fetch_risk_free_rate(fallback: float = 0.045) -> float:
     """
     Return the current annualised risk-free rate from the 13-week T-bill (^IRX).

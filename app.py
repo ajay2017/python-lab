@@ -32,7 +32,7 @@ import html as _html
 import time
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
-    fetch_spy, fetch_live_prices, fetch_market_indices, market_status,
+    fetch_spy, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, fetch_earnings_calendar, fetch_next_earnings,
     is_trading_day,
@@ -973,6 +973,21 @@ def _get_rfr() -> float:
 @st.cache_data(ttl=1800)
 def _cached_spy(period: str = "6mo"):
     return fetch_spy(period)
+
+
+# VIX latest close (cached) — fear gauge for the risk-off de-risk regime check.
+# One download/day class of call; ttl matches the SPY/RFR window. Returns None on
+# any provider failure so the de-risk overlay degrades to the trend leg alone.
+@st.cache_data(ttl=1800)
+def _cached_vix(period: str = "1mo"):
+    try:
+        _v = fetch_vix(period)
+        if _v is None or getattr(_v, "empty", True) or "Close" not in _v.columns:
+            return None
+        _c = _v["Close"].dropna()
+        return float(_c.iloc[-1]) if not _c.empty else None
+    except Exception:
+        return None
 
 
 # ── Price cross-check (held positions) — periodic integrity guardrail ────────
@@ -2489,6 +2504,11 @@ if page == "🏠 Home":
                     grow_composites = st.session_state.get("_grow_composites", {}),
                     movers          = st.session_state.get("_movers_candidates", []),
                     spy_df          = _cached_spy("6mo"),
+                    # Risk-off de-risk (Phase 2): fragile-book gate + regime legs.
+                    # spy_trend_df needs ~1y for the 200-DMA; vix is the vol leg.
+                    fragility       = st.session_state.get("_fragility_cache"),
+                    spy_trend_df    = _cached_spy("1y"),
+                    vix_level       = _cached_vix(),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.

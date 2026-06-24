@@ -53,6 +53,12 @@ from stock_analyzer.constants import (
     DETERIORATION_PEAK_FALLBACK_BARS,
     MATERIAL_ADD_RESET_THRESHOLD,
     POSITION_SETTLING_DAYS,
+    RISK_OFF_TREND_MA,
+    RISK_OFF_VIX_LEVEL,
+    RISK_OFF_NAME_MIN_BETA,
+    RISK_OFF_TRIM_TOP_N,
+    RISK_OFF_TRIM_PCT,
+    STOP_TIGHTEN_ATR_MULT,
 )
 
 WATCH = "WATCH"
@@ -305,3 +311,159 @@ def assess_holding(
         "shares": int(shares),
         "dollar_risk": round(float(price) * shares, 0),   # position size — Act-Today sort tiebreak
     }
+
+
+# ── Risk-off protective de-risk (Phase 2) ─────────────────────────────────────
+# Phase 1 (above) handles IDIOSYNCRATIC deterioration and deliberately SKIPS
+# market-wide down days (the relative-strength gate). This layer closes that gap:
+# when the whole market is in a risk-off REGIME and THIS book is fragile, promote
+# the standing Fragility awareness into a concrete trim on the names actually
+# driving the risk. Regime (not a single down day) so we don't sell the dip.
+
+def risk_off_regime(spy_trend_df, vix_level, *, trend_ma, vix_threshold):
+    """Is the market in a risk-off regime? Returns (bool, reasons: list[str]).
+
+    Two independent legs — EITHER trips it (a trend break or a vol spike is each
+    sufficient grounds to de-risk):
+      • Trend: SPY's latest close below its `trend_ma`-day SMA (Faber).
+      • Vol:   VIX ≥ `vix_threshold` (high-vol regime).
+    Each leg degrades to "not tripped" on missing/short data — never fabricates a
+    risk-off read from absent inputs.
+    """
+    reasons: list[str] = []
+    close = _series_close(spy_trend_df)
+    if close is not None and len(close) >= trend_ma:
+        sma = float(close.tail(trend_ma).mean())
+        last = float(close.iloc[-1])
+        if sma > 0 and last < sma:
+            reasons.append(f"S&P 500 is below its {trend_ma}-day average (downtrend)")
+    try:
+        if vix_level is not None and float(vix_level) >= float(vix_threshold):
+            reasons.append(f"VIX {float(vix_level):.0f} ≥ {float(vix_threshold):.0f} (elevated volatility)")
+    except (TypeError, ValueError):
+        pass
+    return (len(reasons) > 0, reasons)
+
+
+def assess_risk_off_derisk(
+    port_df,
+    held_data,
+    *,
+    fragility,
+    spy_trend_df,
+    vix_level,
+    exclude_tickers=None,
+    trend_ma: int = RISK_OFF_TREND_MA,
+    vix_threshold: float = RISK_OFF_VIX_LEVEL,
+    name_min_beta: float = RISK_OFF_NAME_MIN_BETA,
+    top_n: int = RISK_OFF_TRIM_TOP_N,
+    trim_pct: float = RISK_OFF_TRIM_PCT,
+    stop_tighten_atr_mult: float = STOP_TIGHTEN_ATR_MULT,
+) -> list[dict]:
+    """Risk-off de-risk cards for the top beta contributors — or [] if not armed.
+
+    Two AND-gates (a LIGHT overlay, not a market-timer):
+      1. The book is fragile — `fragility["severity"]` in {caution, fragile}
+         (already encodes elevated portfolio beta, so no separate beta knob).
+      2. The market is in a risk-off regime (`risk_off_regime`).
+    Then rank holdings by beta-contribution (β × weight), keep those with
+    β ≥ `name_min_beta`, take the top `top_n`, and EXCLUDE any ticker already
+    carrying a higher-priority reduce (passed in `exclude_tickers`) so a name is
+    never double-surfaced. Each card suggests a modest trim OR a stop-tighten
+    ("don't sell into weakness" option) — directives only, the user decides.
+    """
+    if port_df is None or getattr(port_df, "empty", True):
+        return []
+    sev = (fragility or {}).get("severity")
+    if sev not in ("caution", "fragile"):
+        return []
+    armed, reasons = risk_off_regime(
+        spy_trend_df, vix_level, trend_ma=trend_ma, vix_threshold=vix_threshold
+    )
+    if not armed:
+        return []
+
+    exclude = {str(t).upper() for t in (exclude_tickers or [])}
+    contribs: list[dict] = []
+    for _, row in port_df.iterrows():
+        t = str(row.get("Ticker", "")).upper()
+        if not t or t in exclude:
+            continue
+        rm = ((held_data or {}).get(t) or {}).get("risk_metrics") or {}
+        beta = rm.get("beta")
+        try:
+            beta = float(beta) if beta is not None else None
+        except (TypeError, ValueError):
+            beta = None
+        try:
+            w = float(row.get("Weight (%)"))
+        except (TypeError, ValueError):
+            w = 0.0
+        if beta is None or beta < name_min_beta or w <= 0:
+            continue
+        try:
+            price = float(row.get("Price"))
+        except (TypeError, ValueError):
+            price = 0.0
+        try:
+            shares = float(row.get("Shares"))
+        except (TypeError, ValueError):
+            shares = 0.0
+        try:
+            pnl = float(row.get("P&L (%)"))
+        except (TypeError, ValueError):
+            pnl = None
+        atr = ((held_data or {}).get(t) or {}).get("atr")
+        contribs.append({
+            "ticker": t, "beta": beta, "weight": w, "price": price,
+            "shares": shares, "pnl_pct": pnl, "atr": atr,
+            "contrib": beta * w / 100.0,
+        })
+
+    if not contribs:
+        return []
+    contribs.sort(key=lambda x: -x["contrib"])
+
+    reason_txt = " and ".join(reasons)
+    implied = (fragility or {}).get("implied_move")
+    pullback = (fragility or {}).get("pullback_pct")
+    book_line = (
+        f" A {abs(pullback):.0f}% market pullback implies ~{abs(implied):.0f}% on this book."
+        if implied is not None and pullback else ""
+    )
+
+    cards: list[dict] = []
+    for c in contribs[:top_n]:
+        t = c["ticker"]
+        trim_shares = int(c["shares"] * trim_pct / 100.0) if c["shares"] else 0
+        # Stop-tighten alternative: ATR-based level under the current price.
+        tighten_txt = ""
+        if c["atr"] and c["price"] > 0:
+            new_stop = c["price"] - stop_tighten_atr_mult * float(c["atr"])
+            if new_stop > 0:
+                tighten_txt = f" — or, if you'd rather not sell into weakness, tighten the stop to ~${new_stop:.2f}"
+        trim_clause = (
+            f"Trim ~{trim_pct:.0f}% ({trim_shares} share{'s' if trim_shares != 1 else ''}) of {t}"
+            if trim_shares > 0 else f"Trim ~{trim_pct:.0f}% of {t}"
+        )
+        cards.append({
+            "priority": "high",
+            "icon": "🛡️",
+            "ticker": t,
+            "kind": "risk_off_derisk",
+            "action": "TRIM — Risk-Off",
+            "directive": f"{trim_clause}{tighten_txt}.",
+            "why": (
+                f"Your book is {sev} and the market is risk-off ({reason_txt}). "
+                f"{t} is a top risk driver (β {c['beta']:.2f} · {c['weight']:.1f}% of book)."
+                f"{book_line}"
+            ),
+            "trigger": (
+                "If the market keeps deepening below trend → reduce further; "
+                "if it stabilises back above trend → hold the rest."
+            ),
+            "weight": round(c["weight"], 1),
+            "pnl_pct": c["pnl_pct"],
+            "dollar_risk": round(c["price"] * c["shares"], 0),
+        })
+    return cards
