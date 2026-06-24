@@ -15570,7 +15570,26 @@ It reads two things together: how far a name has fallen **from its highest point
 
 **If you averaged down:** when you add materially to a position, it re-measures the decline **from your add**, not from an old pre-add high — so doubling down won't trigger a false exit signal.
 
-**What it does *not* do (yet):** it flags names weakening *on their own*. It does **not** yet act on broad market-wide down days (when everything falls together) — that protection is a planned next step. And every call is **advisory — you decide and act**; nothing is auto-sold. If a name already has a hard stop breach or a full Sell signal, that takes precedence and you'll see *that* instead (one card per position, strongest call wins).
+**Two layers — idiosyncratic *and* market-wide:** the calls above flag a name weakening *on its own*. A second layer handles **broad market-wide down days** (when everything falls together): when the market is in a genuine **risk-off regime** — its long-term trend has broken (price below the 200-day line) *or* volatility has spiked (VIX ≥ 25) — **and** your book is fragile (carries outsized market exposure), it names the few highest-risk positions (your biggest beta drivers) and suggests a modest trim *or* a tighter stop. It deliberately waits for a *regime*, not a single red day, so it doesn't sell the dip.
+
+**Every call is advisory — you decide and act; nothing is auto-sold.** If a name already has a hard stop breach or a full Sell signal, that takes precedence and you'll see *that* instead (one card per position, strongest call wins). Most risk is still managed at *entry* (position sizing + concentration caps), where it's cheapest to control.
+"""
+        )
+
+    with st.expander("⏰ Daily automation & email alerts (works while the app is closed)", expanded=False):
+        st.markdown(
+            """
+The app's intelligence is computed live in your browser — so it can only reach you while a tab is open. To make sure **protection finds you even when the app is closed**, a small scheduled job runs in the background (a free GitHub Actions cron) on every market day and emails you when — and *only* when — something genuinely needs you. It re-uses the exact same logic the Home brief uses, so the email and the app never disagree.
+
+**Two runs each trading day:**
+
+- **🔴 Pre-market (~8:00 AM ET) — Protective alerts.** Re-checks every holding and emails you **only if there's a real same-day reduce decision**: a **stop breached**, a **deterioration EXIT**, or a **risk-off trim**. If nothing qualifies, you get **no email** — silence means "nothing to act on." It also won't nag: the same alert won't re-send day after day — only when the set of actions *changes*.
+
+- **🌙 After the close (~4:30 PM ET) — End of day.** Two things: **(1)** it saves a daily snapshot of your holdings so **"Today's P&L"** has an accurate prior-day baseline tomorrow — even on days you never opened the app. **(2)** If the **broad market actually fell sharply that day (about −3% or worse)**, it sends a brief **awareness** email showing roughly how far your book likely moved (your exposure × the drop) and your most-exposed names. That one is *awareness, not a directive* — pullback timing can't be predicted; the actionable de-risk, if warranted, comes in the next pre-market protective email.
+
+**Exception-based by design.** A quiet inbox is the normal, healthy state — these are meant to be **rare and meaningful** (a ~3% market day happens only a few times a year), not a notification feed. This matches the app's whole posture: surface what matters *now*, stay calm otherwise.
+
+**Delivery & privacy.** Alerts are sent to the email address you configured, via an email service (Resend). Everything is **advisory — you decide and act; nothing is ever auto-traded.** The job reads your holdings to compute the alert and sends only to you.
 """
         )
 
