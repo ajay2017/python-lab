@@ -74,9 +74,9 @@ Last reconciled 2026-06-23 (audited against code, not memory). The macro/regime 
 
 **Genuinely not yet done** (verify against code before starting — statuses live in the named plan/memory):
 - **Rate-limit resilience Phase 3** — FMP daily-budget soft-cap (`FMP_DAILY_SOFT_CAP`). Phase 1+2 shipped. Plan: [docs/plans/rate-limit-resilience.md](docs/plans/rate-limit-resilience.md).
-- **Pullback-awareness Phase 2 + Today's-P&L EOD job** — now cheap: ADD jobs to the shipped headless cron (`cron_runner.py` / `headless_alert_engine.py` / `.github/workflows/alerts.yml`), not a new pipeline.
+- **Smaller items:** Brief tone-staleness annotation · Action Log Phase B (trim/exit logging) · Today's-P&L cash/flows + broker reconciliation · NYSE calendar extend (pre-2029) · bundle-load 401/crumb + validator-health gate · pullback-awareness Phase 3 market-risk dial (lowest priority).
 
-**Recently shipped (do not re-chase):** Exit-discipline Phase 3 — out-of-app protective email alerts via GitHub Actions cron — SHIPPED + LIVE 2026-06-24 (commits 9add28f→37f4b9e; plan docs/plans/email-alerts-cron.md). First non-Streamlit runtime.
+**Recently shipped (do not re-chase):** the headless GitHub Actions alert cron (first non-Streamlit runtime; `cron_runner.py` / `headless_alert_engine.py` / `.github/workflows/alerts.yml`) now delivers ALL three out-of-app jobs — exit-discipline Phase 3 protective alerts (premarket), pullback-awareness Phase 2 reactive drawdown email + Today's-P&L EOD snapshot (eod). LIVE 2026-06-24 (commits 9add28f→cb37862; plan docs/plans/email-alerts-cron.md).
 - **Bundle-load leftovers** — Yahoo 401/crumb handling; cross-check validator-health gate.
 - **Brief tone staleness** — annotate stale Brief tone vs live pre-market futures (annotate only, never flip the tone).
 - **Action Log Phase B** — log trim/exit actions + stop re-nagging (Phase A = stops, done).
