@@ -83,7 +83,7 @@ Last reconciled 2026-06-24 (audited against code, not memory). The macro/regime 
 
 **Genuinely not yet done** (verify against code before starting — statuses live in the named plan/memory):
 - **Rate-limit resilience Phase 3** (FMP daily soft-cap) — **DEFERRED as a safety-net (decided 2026-06-24, measured):** FMP usage = 88/250 today after Phase 2 cut it ~6× from the pre-fix ~650/day runaway; free plan confirmed adequate, no build/buy. Revisit only if a weekday creeps toward ~200. Plan: [docs/plans/rate-limit-resilience.md](docs/plans/rate-limit-resilience.md) §Phase 3.
-- **Today's-P&L** — cash/flows + broker reconciliation (Tier B equity-delta IS live; this is the last tier). **← next up.**
+- **Today's-P&L cash/flows + broker reconciliation** — **PARKED by user decision 2026-06-24:** Tier B (positions-scope equity-delta) is honest and sufficient; full account parity would need a manual cash ledger or a broker-statement import (no broker API), not worth the complexity for a personal app. Don't re-propose unless the user asks.
 - **NYSE calendar** — extend `NYSE_HOLIDAYS`/`NYSE_EARLY_CLOSES` before 2029 (hardcoded, last year = 2028; not urgent mid-2026).
 - **Deferred (low priority):** pullback-awareness Phase 3 market-risk dial · deterioration-card hysteresis.
 
