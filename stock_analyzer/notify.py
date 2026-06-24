@@ -105,13 +105,21 @@ def render_test_email(n_alerts: int, built_at: str) -> tuple[str, str]:
 
 
 def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html: str,
-                      timeout: int = 20) -> bool:
-    """POST one email via Resend. Returns True on a 2xx, else False. Never raises.
+                      timeout: int = 20) -> tuple[bool, str]:
+    """POST one email via Resend. Returns (ok, detail). `detail` carries the HTTP
+    status + truncated Resend error body on failure (NOT echoing the recipient or
+    key — safe to log), or "" on success. Never raises.
 
     `sender` must be a verified Resend sender (e.g. 'DRISHTA <alerts@yourdomain>'
-    or the onboarding 'onboarding@resend.dev'). `to` is a single address."""
-    if not api_key or not sender or not to:
-        return False
+    or the onboarding 'onboarding@resend.dev'). `to` is a single address. NB:
+    Resend's onboarding sender is sandboxed — it can ONLY deliver to the account
+    owner's own email until a custom domain is verified."""
+    if not api_key:
+        return False, "no api_key"
+    if not sender:
+        return False, "no sender (ALERT_EMAIL_FROM)"
+    if not to:
+        return False, "no recipient (ALERT_EMAIL_TO)"
     try:
         resp = requests.post(
             _RESEND_ENDPOINT,
@@ -119,6 +127,8 @@ def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html:
             json={"from": sender, "to": [to], "subject": subject, "html": html},
             timeout=timeout,
         )
-        return 200 <= resp.status_code < 300
-    except Exception:
-        return False
+        if 200 <= resp.status_code < 300:
+            return True, ""
+        return False, f"HTTP {resp.status_code}: {(resp.text or '')[:300]}"
+    except Exception as e:
+        return False, f"exception: {type(e).__name__}: {e}"

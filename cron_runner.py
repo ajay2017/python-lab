@@ -90,9 +90,10 @@ def main() -> int:
         if not api_key:
             _log("TEST: no RESEND_API_KEY — cannot send the delivery test.")
         else:
-            ok = send_email_resend(api_key=api_key, sender=sender, to=to,
-                                   subject=subject, html=html)
-            _log(f"TEST email send {'OK' if ok else 'FAILED'} → {to or '(no ALERT_EMAIL_TO)'}")
+            ok, detail = send_email_resend(api_key=api_key, sender=sender, to=to,
+                                           subject=subject, html=html)
+            _log(f"TEST email send {'OK' if ok else 'FAILED'} → {to or '(no ALERT_EMAIL_TO)'}"
+                 + (f" · {detail}" if detail else ""))
         _log("test mode — dedup state untouched; done.")
         return 0
 
@@ -113,9 +114,10 @@ def main() -> int:
         if not api_key:
             _log(f"INERT: would email '{subject}' (no RESEND_API_KEY set) — skipping send.")
         else:
-            sent = send_email_resend(api_key=api_key, sender=sender, to=to,
-                                     subject=subject, html=html)
-            _log(f"email send {'OK' if sent else 'FAILED'} → {to or '(no ALERT_EMAIL_TO)'} · '{subject}'")
+            sent, detail = send_email_resend(api_key=api_key, sender=sender, to=to,
+                                             subject=subject, html=html)
+            _log(f"email send {'OK' if sent else 'FAILED'} → {to or '(no ALERT_EMAIL_TO)'} · '{subject}'"
+                 + (f" · {detail}" if detail else ""))
 
     # ── Persist dedup state (mark today processed; store the set fingerprint) ──
     # Always update so the same alert doesn't re-send, and a cleared alert today
