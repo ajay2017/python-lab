@@ -70,4 +70,14 @@ When adding a new advisor or recommendation feature, **always** check whether it
 
 ## What's queued
 
-Phase 4 cleanup items (macro-calendar drift detection, FRED `actual` placeholder, CPI SA→NSA series swap, etc.) live in the todo list at the start of each session if loaded. Check before starting unrelated work.
+Last reconciled 2026-06-23 (audited against code, not memory). The macro/regime Phase-4 cluster is **done** (CPI NSA swap, drift detection, FRED `actual` — all shipped); don't re-chase it.
+
+**Genuinely not yet done** (verify against code before starting — statuses live in the named plan/memory):
+- **Exit-discipline Phase 3 — out-of-app email alerts** (GitHub Actions cron). Highest-leverage: makes deterioration EXIT + risk-off de-risk + fragility reach the user without opening the app. **Unifies three queued crons into one** (this + pullback-awareness Phase 2 + Today's-P&L EOD snapshot). Plan: [docs/plans/exit-discipline.md](docs/plans/exit-discipline.md) §Phase 3.
+- **Rate-limit resilience Phase 3** — FMP daily-budget soft-cap (`FMP_DAILY_SOFT_CAP`). Phase 1+2 shipped. Plan: [docs/plans/rate-limit-resilience.md](docs/plans/rate-limit-resilience.md).
+- **Bundle-load leftovers** — Yahoo 401/crumb handling; cross-check validator-health gate.
+- **Brief tone staleness** — annotate stale Brief tone vs live pre-market futures (annotate only, never flip the tone).
+- **Action Log Phase B** — log trim/exit actions + stop re-nagging (Phase A = stops, done).
+- **Today's P&L** — cash/flows + broker reconciliation (Tier B equity-delta is live).
+- **NYSE calendar** — extend `NYSE_HOLIDAYS`/`NYSE_EARLY_CLOSES` before 2029 (hardcoded, ends 2028).
+- Deferred (low priority): deterioration-card hysteresis; pullback-awareness Phase 3 market-risk dial.
