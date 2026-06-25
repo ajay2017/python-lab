@@ -14601,16 +14601,26 @@ elif page == "💰 Account":
     if _cash is not None and _have_pf:
         _total_acct = _equity + _cash
         _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
+        _levered = _cash < 0   # negative net cash = a margin debit (borrowed)
         _ac1, _ac2, _ac3, _ac4 = st.columns(4)
         _ac1.metric("Total Account Value", _m(f"${_total_acct:,.0f}"),
-                    help="Invested equity + uninvested cash.")
+                    help="Invested equity + net cash (cash − any margin debit) = your net worth in the account.")
         _ac2.metric("Invested Equity", _m(f"${_equity:,.0f}"))
-        _ac3.metric("Cash", _m(f"${_cash:,.0f}"))
-        _ac4.metric("Cash % of Account", f"{_cash_pct:.1f}%")
+        _ac3.metric("Net Cash" if _levered else "Cash", _m(f"${_cash:,.0f}"),
+                    help="Uninvested cash you own; NEGATIVE = a margin debit (you've borrowed to hold more stock than your cash covers).")
+        _ac4.metric("Cash % of Account", f"{_cash_pct:.1f}%",
+                    help="Negative = you're net-levered (carrying a margin debit).")
         if _acct.get("updated_at"):
             st.caption(
                 f"Cash as of {str(_acct['updated_at'])[:10]}"
                 + (f" · {_acct['note']}" if _acct.get("note") else "")
+            )
+        if _levered:
+            st.caption(
+                f"⚖️ **Margin debit ${abs(_cash):,.0f}** — you hold ${_equity:,.0f} of stock on "
+                f"${_total_acct:,.0f} of your own money. Total value & growth correctly net out the "
+                "loan; account-level concentration below runs HIGHER than equity weight because "
+                "leverage amplifies exposure relative to your own capital."
             )
         if _total_acct > 0:
             _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
@@ -14621,7 +14631,7 @@ elif page == "💰 Account":
             )
             st.caption(
                 "True concentration — each holding as % of your **whole account** "
-                "(equity + cash) vs % of invested equity. The concentration gates still "
+                "(equity + net cash) vs % of invested equity. The concentration gates still "
                 "use equity weight; this is the honest exposure view."
             )
             st.dataframe(
@@ -14629,7 +14639,8 @@ elif page == "💰 Account":
                 hide_index=True, use_container_width=True,
             )
     elif _cash is not None and not _have_pf:
-        st.metric("Cash", _m(f"${_cash:,.0f}"))
+        st.metric("Net Cash" if _cash < 0 else "Cash", _m(f"${_cash:,.0f}"),
+                  help="Negative = a margin debit (borrowed).")
         if _acct.get("updated_at"):
             st.caption(
                 f"Cash as of {str(_acct['updated_at'])[:10]}"
@@ -14655,27 +14666,39 @@ elif page == "💰 Account":
     if not db.is_readonly():
         st.divider()
         with st.form("_account_cash_form", clear_on_submit=False):
+            # No min_value: negative = a margin debit. This lets Total / Growth /
+            # Return / account-concentration all net out the loan correctly (they
+            # derive from total = equity + cash). Tip in the help reconciles it.
             _new_cash = st.number_input(
-                "Uninvested cash balance ($)",
-                min_value=0.0, value=float(_cash or 0.0), step=100.0, format="%.2f",
-                help=(f"Reference: your invested equity is ${_equity:,.0f}." if _have_pf
-                      else "Open Home to load your equity as a reference."),
+                "Net cash / margin ($)",
+                value=float(_cash or 0.0), step=100.0, format="%.2f",
+                help=(
+                    "Uninvested cash you own. NEGATIVE = a margin debit (borrowed to hold more "
+                    "stock than your cash covers). Tip: enter Robinhood's Total portfolio value "
+                    "− your stock holdings value — that nets out any margin loan and keeps the "
+                    "app reconciled. "
+                    + (f"Your invested equity is ${_equity:,.0f}." if _have_pf
+                       else "Open Home to load your equity as a reference.")
+                ),
             )
             _new_note = st.text_input(
                 "Note (optional)", value=(_acct.get("note") if _acct else "") or ""
             )
             _cash_submit = st.form_submit_button("Save cash balance")
         if _cash_submit:
-            # Soft-sanity: a value wildly larger than invested equity is likely a typo —
-            # warn loudly but don't hard-block (a mostly-cash account is legitimate).
-            # Negatives are already blocked by min_value=0.
+            # Soft-sanity (warn, never block — both mostly-cash and on-margin are legit):
             if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
                 st.warning(
                     f"⚠️ ${_new_cash:,.0f} is far larger than your ${_equity:,.0f} invested "
                     "equity — double-check this before relying on account figures."
                 )
+            if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
+                st.warning(
+                    f"⚠️ A margin debit of ${abs(_new_cash):,.0f} exceeds your ${_equity:,.0f} "
+                    "equity — that implies negative net worth. Double-check the sign/amount."
+                )
             if db.save_account_cash(_new_cash, _new_note or None):
-                st.success("Cash balance saved.")
+                st.success("Saved.")
                 st.rerun()
             else:
                 st.error("Couldn't save — database offline or read-only.")

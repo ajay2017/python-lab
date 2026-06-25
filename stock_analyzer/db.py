@@ -193,10 +193,11 @@ the user acted on it):
     create policy "Allow all (service role)" on public.alert_state
         for all to service_role using (true) with check (true);
 
-    -- account_cash: single-row (id=1) uninvested-cash balance for account-level
-    -- views (account-baseline v1). Until created, load returns None and the app
-    -- behaves exactly as today (equity-only, with a nudge to set cash). The same
-    -- table the Robinhood MCP sync would later auto-populate.
+    -- account_cash: single-row (id=1) NET cash balance for account-level views
+    -- (account-baseline v1; v4 allows NEGATIVE = a margin debit, so the column is
+    -- signed numeric). Until created, load returns None and the app behaves exactly
+    -- as today (equity-only, with a nudge to set cash). The same table the
+    -- Robinhood MCP sync would later auto-populate.
     create table if not exists public.account_cash (
         id            integer primary key,
         cash_balance  numeric not null default 0,
