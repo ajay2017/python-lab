@@ -33,8 +33,12 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
 
 - **v1 — account-total awareness (this plan).** Cash balance entry + total
   account value + cash% + true concentration (displayed alongside equity weight).
-- **v2 — contributions & growth.** `account_flows` ledger (deposit / withdrawal /
-  dividend / fee). Growth vs net-contributed-capital — the first real return.
+- **v2 — contributions & growth. ✅ SHIPPED (15b87b1).** `account_flows` ledger
+  (baseline + deposit/withdrawal); `stock_analyzer/account.py` pure calc
+  (net_contributed_capital, account_growth, has_baseline); Growth$/Growth%/NCC
+  on the 💰 Account page. Display-only, feeds no gate. Inert until the
+  `account_flows` DDL is run. (Dividend/fee rows deferred — internal events are
+  already captured in the value delta; not needed for growth-vs-contributions.)
 - **v3 — time-weighted return (TWR/IRR).** Uses the existing `daily_snapshots`
   equity series (written daily by the EOD cron) + v2 flows.
 - **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
