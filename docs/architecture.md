@@ -91,6 +91,7 @@ python-lab/
     ├── sentiment.py                VADER-based news sentiment scoring
     ├── scoring.py                  Composite score weights and recommendation tiers
     ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
+    ├── account.py                  Account-level pure calc (net contributed capital, growth, money-weighted/Modified-Dietz return); signed net cash nets margin
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
     ├── targets.py                  Price targets, support/resistance, entry zones
     ├── ranking.py                  Cross-portfolio stock ranking (composite score sort)
@@ -573,6 +574,34 @@ CREATE TABLE bundle_cache (
 ```
 
 **Last-known-good resilience cache.** `db.save_bundle_cache` write-throughs raw history+info on every successful `load_all`; `db.load_bundle_cache` serves it (age-gated by `BUNDLE_CACHE_MAX_AGE_DAYS`) when all providers fail. **Optional** — until created, `load_all` keeps its honest 'Could not load' failure. When the cache exists and all live providers are down, a bundle ≤ `BUNDLE_CACHE_MAX_AGE_DAYS` old is served with a `stale_as_of` tag + Home staleness banner; news/earnings degrade to empty in that mode; cache I/O is wrapped so it can never break the success path; the stale result is TTL-cached (~30 min) to avoid hammering the disk. RLS: `FOR ALL TO service_role` like all tables; `save_bundle_cache` is read-only-viewer no-op.
+
+### 6.7 `account_cash` table
+
+```sql
+CREATE TABLE account_cash (
+    id           INTEGER PRIMARY KEY,   -- always 1 (single row, single user)
+    cash_balance NUMERIC NOT NULL DEFAULT 0,
+    note         TEXT,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**Account-baseline NET cash (single row).** Holds the user-entered uninvested cash. The value is **signed: NEGATIVE = a margin debit** (account-baseline v4) — so `Total Account Value = Σ Market Value + cash` nets out any margin loan, and everything derived from it (true concentration, growth, return) nets it too. `db.load_account_cash()` / `save_account_cash()` (writer is read-only-viewer no-op — USER data). **Optional** — until created, load returns None and the app behaves as today (invested-equity only, with a nudge to set cash). The same field the Robinhood MCP sync would later auto-populate. RLS: `FOR ALL TO service_role`.
+
+### 6.8 `account_flows` table
+
+```sql
+CREATE TABLE account_flows (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    flow_date  DATE    NOT NULL,
+    flow_type  TEXT    NOT NULL,        -- 'baseline' | 'deposit' | 'withdrawal'
+    amount     NUMERIC NOT NULL,        -- always POSITIVE; type carries the sign
+    note       TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**External cash-flow ledger (account-baseline v2/v3).** Separates contributions from performance: `baseline` = the opening contributed-capital anchor, `deposit`/`withdrawal` = external cash in/out. Net Contributed Capital = baseline + Σ deposits − Σ withdrawals; **Growth $** = total account value − NCC; **money-weighted (Modified Dietz) return** + annualized (period ≥ 30d) over the tracked window. Pure calc in `stock_analyzer/account.py`. `db.load_account_flows()` / `add_account_flow()` / `delete_account_flow()` (writers are read-only-viewer no-ops). **Optional** — until created, load returns `[]` and the growth view stays hidden. **Display-only — feeds no gate.** RLS: `FOR ALL TO service_role`.
 
 ---
 

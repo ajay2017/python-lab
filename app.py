@@ -15995,10 +15995,41 @@ The app's intelligence is computed live in your browser — so it can only reach
 """
         )
 
+    with st.expander("💰 Maintaining your Account (cash, margin, growth & return)", expanded=False):
+        st.markdown(
+            """
+By default the app reasons only about the **stocks it can see** (shares × live price). The **💰 Account** page adds the rest of the picture — your cash, your true total, and how much you've actually *earned* — by letting you record a couple of things the app can't fetch yet.
+
+**1. Set your cash (the one input that unlocks everything).**
+On the 💰 Account page, enter your **Net cash / margin ($)**:
+- The simplest reliable rule: **enter your broker's "Total portfolio value" minus your stock holdings' value.** That nets out anything tricky and keeps the app reconciled to your broker.
+- A **positive** number = uninvested cash you own.
+- A **negative** number = a **margin debit** (you've borrowed to hold more stock than your cash covers). The app handles this correctly — your Total, Growth, and Return all subtract the loan.
+- **Don't enter "margin available"** — that's borrowing *capacity*, not money you own.
+
+Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money).
+
+**2. Set a baseline + log deposits/withdrawals (to see real growth).**
+Under **Growth & Contributions**, set a **baseline** (your contributed capital — default = today's total, which tracks growth from today; or enter your lifetime net deposits for all-time gain). Then log **deposits** and **withdrawals** as they happen. The app computes:
+- **Net Contributed Capital** = baseline + deposits − withdrawals (what you put in).
+- **Growth $** = total value − contributed capital (what the *market* made you — a deposit never counts as growth).
+- **Return (money-weighted)** and **Annualized** — a proper return that accounts for *when* you added money (annualized once you've tracked ≥ 30 days).
+
+**3. Keeping it in sync with your broker (it's manual for now).**
+The app doesn't auto-connect to your brokerage yet, so you keep it current with a light routine:
+- **When you trade:** log the buy/sell in the **📒 Trade Journal** (this is what keeps your holdings — and everything derived from them — correct).
+- **When cash changes** (a trade, deposit, withdrawal, dividend): re-enter your net cash on the Account page. Don't chase pennies — update it after activity.
+- **When you deposit or withdraw:** also log it as a flow so growth stays honest.
+
+**Your built-in sync check:** compare the app's **Total Account Value** to your broker's total. If they match, you're in sync. **If the app reads higher than your broker, the gap is usually your margin balance** (set your net cash to a lower/negative number) or an unlogged trade. Everything is advisory and view-only — nothing here ever places a trade.
+"""
+        )
+
     with st.expander("🗺️ The pages, at a glance", expanded=False):
         st.markdown(
             """
 - **🏠 Home** — Today's Brief: the daily decision summary (above).
+- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
