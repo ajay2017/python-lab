@@ -192,6 +192,21 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.alert_state;
     create policy "Allow all (service role)" on public.alert_state
         for all to service_role using (true) with check (true);
+
+    -- account_cash: single-row (id=1) uninvested-cash balance for account-level
+    -- views (account-baseline v1). Until created, load returns None and the app
+    -- behaves exactly as today (equity-only, with a nudge to set cash). The same
+    -- table the Robinhood MCP sync would later auto-populate.
+    create table if not exists public.account_cash (
+        id            integer primary key,
+        cash_balance  numeric not null default 0,
+        note          text,
+        updated_at    timestamptz not null default now()
+    );
+    alter table public.account_cash enable row level security;
+    drop policy if exists "Allow all (service role)" on public.account_cash;
+    create policy "Allow all (service role)" on public.account_cash
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -1119,6 +1134,51 @@ def save_alert_state(emailed_date: str, fingerprint: str, row_id: int = 1) -> bo
             "updated_at":        datetime.now(timezone.utc).isoformat(),
         }
         _client().table("alert_state").upsert(record, on_conflict="id").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_account_cash() -> dict | None:
+    """Return {"cash_balance": float, "note": str|None, "updated_at": str} for the
+    single account-cash row, or None (DB offline / table missing / no row set yet).
+    None means "cash unknown" — the app then behaves exactly as today (equity-only).
+    Never raises."""
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("account_cash")
+            .select("cash_balance,note,updated_at")
+            .eq("id", 1).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "cash_balance": float(row.get("cash_balance") or 0.0),
+            "note":         row.get("note"),
+            "updated_at":   row.get("updated_at"),
+        }
+    except Exception:
+        return None
+
+
+def save_account_cash(cash_balance: float, note: str | None = None) -> bool:
+    """Upsert the single account-cash row (id=1). USER data → honours the
+    read-only viewer guard. Best-effort; swallows failures."""
+    if _READONLY: return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        record = {
+            "id":           1,
+            "cash_balance": float(cash_balance),
+            "note":         (str(note) if note else None),
+            "updated_at":   datetime.now(timezone.utc).isoformat(),
+        }
+        _client().table("account_cash").upsert(record, on_conflict="id").execute()
         return True
     except Exception:
         return False

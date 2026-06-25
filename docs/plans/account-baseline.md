@@ -1,0 +1,100 @@
+# Account Baseline & Cash/Flows — plan
+
+## Problem
+
+The app reasons only about **held equity positions** (`shares × current price`).
+It has **no account-level model**: no cash balance, no deposits/withdrawals
+(flows), no total-account baseline. Consequences:
+
+- "Concentration" is a % of *invested equity*, not the *whole account* — a name
+  at 23% of equity may be 11% of an account that's half cash.
+- There is no honest **total account value** (equity + cash).
+- **Growth/return cannot be computed correctly** — without flows you can't
+  separate "I deposited more" from "it performed".
+
+Established basis (verified in code): `portfolio.build_portfolio_df` →
+`Market Value = current_price × shares`; `Weight (%) = MV ÷ Σ MV`
+(`portfolio.py:126,188-190`). Rebalancer target = equal weight `100/n`
+(`rebalancer.py:36`). No cash/buying-power/account-value concept exists anywhere.
+
+## Decisions (user, 2026-06-25)
+
+- **Seed manually now** (not wait for the Robinhood MCP auto-path). The manual
+  model uses the SAME Supabase tables the broker sync would later auto-populate —
+  so it's a drop-in upgrade, not a rebuild. (Robinhood path: HOLD until beta
+  matures — see memory `project_today_pnl_scope`.)
+- **v1 = account-total awareness (minimal).** Cash + total account value + true
+  (account-level) concentration. NOT growth/return (needs flows = v2).
+- **Gates stay on equity-basis in v1** (display-only true concentration). Moving
+  the 15%/35% ceilings to account-basis is an investment-policy decision deferred
+  to its own explicit discussion — it must not ride in silently on this build.
+
+## Roadmap
+
+- **v1 — account-total awareness (this plan).** Cash balance entry + total
+  account value + cash% + true concentration (displayed alongside equity weight).
+- **v2 — contributions & growth.** `account_flows` ledger (deposit / withdrawal /
+  dividend / fee). Growth vs net-contributed-capital — the first real return.
+- **v3 — time-weighted return (TWR/IRR).** Uses the existing `daily_snapshots`
+  equity series (written daily by the EOD cron) + v2 flows.
+- **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
+  `account_flows`) — same schema, no rework.
+
+## v1 design
+
+### Data model — `account_cash` (single row, mirrors `alert_state`)
+```
+create table if not exists public.account_cash (
+    id            integer primary key,        -- always 1 (single user)
+    cash_balance  numeric not null default 0,
+    note          text,
+    updated_at    timestamptz not null default now()
+);
+-- RLS: enable + "Allow all (service role)" FOR ALL, matching every other table.
+```
+- DDL lives in the `db.py` module docstring (same place as `alert_state`); until
+  created, `load_account_cash()` returns None and the app behaves exactly as today
+  (cash unknown → equity-only, with a one-line nudge to set it).
+- `db.load_account_cash() -> dict | None` and `db.save_account_cash(balance, note)
+  -> bool`. The **writer gets the `_READONLY` guard** (it's user data, unlike the
+  system caches). Reads/writes are best-effort and never raise (house pattern).
+
+### Entry UI (Home — small "Account" panel)
+- Input to set/update cash balance, with an "as of <updated_at>" badge.
+- **Data-sanity validation** (per `feedback_data_sanity_validation`): reject
+  negatives; show current **equity** as a reference value; soft-confirm an
+  implausible entry (e.g. cash > 10× equity) with an override, never hard-swallow.
+- When cash is unset: render today's behavior + a one-line nudge
+  ("Set your cash balance to see total-account value and true concentration").
+  Transparent, never silent.
+
+### Derived / display (v1)
+- **Total account value** = `Σ Market Value + cash_balance`.
+- **Cash %** of the account.
+- **True concentration** = name MV ÷ total account value — shown ALONGSIDE the
+  existing equity-based `Weight (%)`, clearly labelled (equity-weight vs
+  account-weight). Gates unchanged (still equity-weight).
+- Coordination: publish total-account-value / cash to a session cache so any
+  consumer reads one consistent number (per CLAUDE.md coordination pattern).
+
+### Explicitly OUT of v1
+- Growth / return of any kind (needs flows = v2).
+- Any change to the 15% / 35% concentration GATES (policy decision, separate).
+- Flows, dividends, fees, TWR/IRR.
+
+## Routing & review
+- db table + load/save + entry UI: Sonnet-buildable from this spec.
+- The true-concentration **display wiring** sits next to gate inputs → Opus lead;
+  **Opus review before commit** (concentration-adjacent surface). The review must
+  confirm v1 changed NO gate behavior (ceilings still fire on equity-weight).
+- Docs: sync `requirements.md` (new F-rows under §3.1 My Portfolio) + the
+  constants table if any new constant is introduced (none expected in v1).
+
+## Verification (Streamlit Cloud only — push, ~2 min, Ctrl+F5)
+1. Cash unset → app behaves exactly as today + the set-cash nudge appears.
+2. Set cash → Total account value = equity + cash; cash% correct; true
+   concentration appears next to equity weight.
+3. A name over 15% of equity but under 15% of the total account: the **gate still
+   fires** (equity-basis), while the displayed account-weight shows the lower true
+   number — proving v1 is display-only, no silent policy change.
+4. Bad input (negative / absurd) is caught at the form per the data-sanity rule.
