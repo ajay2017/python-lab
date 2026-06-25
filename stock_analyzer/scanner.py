@@ -91,7 +91,9 @@ def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
             if len(volume) >= 20 and volume.iloc[-20:].mean() > 0 else 1.0
         )
 
-        # Signal label
+        # Signal label — momentum-only scale, independent of the composite policy
+        # gates in constants.py (COMPOSITE_BUY=65 coincides but is not the same
+        # concept; the scanner label is awareness only, not a buy recommendation).
         if score >= 80:
             signal = "⬆⬆ Strong Buy"
         elif score >= 65:
