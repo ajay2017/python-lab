@@ -260,9 +260,11 @@ def crosscheck_price(ticker: str, primary_price: float,
     the AND of whichever checks could run; the caller surfaces `not ok` loudly."""
     if "price" not in C.DATA_XCHECK_FIELDS or not primary_price:
         return None
-    order = C.DATA_LIVE_PRICE_ORDER or C.DATA_PROVIDER_ORDER
-    primary_name = order[0] if order else None
-    for prov in _live_price_providers():
+    _provs = _live_price_providers()
+    if not _provs:
+        return None
+    primary_name = _provs[0].name  # mirrors crosscheck_batch: actual capable primary, not config list
+    for prov in _provs:
         if prov.name == primary_name:
             continue  # need an INDEPENDENT source to validate
         try:
