@@ -133,7 +133,10 @@ from stock_analyzer.macro import (
 from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternatives, tier_label
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
-from stock_analyzer.account import net_contributed_capital, account_growth, has_baseline
+from stock_analyzer.account import (
+    net_contributed_capital, account_growth, has_baseline,
+    baseline_anchor, money_weighted_return,
+)
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
@@ -14719,18 +14722,39 @@ elif page == "💰 Account":
                 else:
                     st.error("Couldn't save — database offline or read-only.")
     else:
-        _gc1, _gc2, _gc3 = st.columns(3)
+        # v3: money-weighted (Modified Dietz) return — corrects for deposit/withdrawal
+        # timing, the distortion v2's naive gain/NCC ignores. Equals simple growth%
+        # when there are no mid-period flows. Pure calc in account.py; display-only.
+        _base = baseline_anchor(_flows)
+        _mdr = None
+        if _base is not None and _total_value is not None:
+            _mdr = money_weighted_return(
+                _base["value"], _base["date"], _total_value, _today_et().isoformat(),
+                [f for f in _flows if str(f.get("flow_type", "")).lower() != "baseline"],
+            )
+        _gc1, _gc2, _gc3, _gc4 = st.columns(4)
         _gc1.metric("Net Contributed Capital", _m(f"${_g['ncc']:,.0f}"),
                     help="Baseline + deposits − withdrawals — what you've put in.")
         if _g["growth"] is not None:
             _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"),
                         delta_color="normal" if _g["growth"] >= 0 else "inverse")
-            _gc3.metric("Growth (%)",
-                        f"{_g['growth_pct']:+.1f}%" if _g["growth_pct"] is not None else "—")
         else:
             _gc2.metric("Growth ($)", "—",
                         help="Open 🏠 Home and set your cash balance so total account value can be computed.")
-            _gc3.metric("Growth (%)", "—")
+        if _mdr is not None:
+            _gc3.metric("Return (money-weighted)", f"{_mdr['period_return_pct']:+.1f}%",
+                        help=(f"Modified Dietz over {_mdr['days']} day(s) — corrects for the timing of your "
+                              "deposits/withdrawals. Equals simple growth% when there are no mid-period flows."))
+            _gc4.metric(
+                "Annualized",
+                f"{_mdr['annualized_pct']:+.1f}%" if _mdr["annualized_pct"] is not None else "—",
+                help=(f"Annualized money-weighted return — populates once the tracking period ≥ 30 days "
+                      f"(currently {_mdr['days']}d, too short to annualize meaningfully)."),
+            )
+        else:
+            _gc3.metric("Return (money-weighted)", "—",
+                        help="Needs a baseline + a loaded portfolio (open 🏠 Home and set your cash).")
+            _gc4.metric("Annualized", "—")
 
         # Cash-flow ledger (with delete) + add a deposit/withdrawal.
         if _flows:
