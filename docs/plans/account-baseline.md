@@ -59,7 +59,12 @@ create table if not exists public.account_cash (
   -> bool`. The **writer gets the `_READONLY` guard** (it's user data, unlike the
   system caches). Reads/writes are best-effort and never raise (house pattern).
 
-### Entry UI (Home — small "Account" panel)
+### Entry UI (dedicated **💰 Account** nav page, between Home and Market Scanner)
+Own page (not on Home) so it stays out of the Home hot path — no per-rerun cost on
+Home — and has room to grow (v2 flows, v3 returns). Reads the portfolio the Home
+brief already built (`_last_port_df` in session); does NOT recompute `load_all`
+(mirrors the Catalyst Watch pattern). If Home hasn't been opened this session, the
+totals/concentration prompt "open Home", but the cash-entry form always works.
 - Input to set/update cash balance, with an "as of <updated_at>" badge.
 - **Data-sanity validation** (per `feedback_data_sanity_validation`): reject
   negatives; show current **equity** as a reference value; soft-confirm an

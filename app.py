@@ -850,7 +850,7 @@ with st.sidebar:
     _render_brand(large=False)
     page = st.radio(
         "Navigate",
-        ["🏠 Home", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "🔔 Catalyst Watch", "📅 Economic Calendar", "📖 User Guide"],
+        ["🏠 Home", "💰 Account", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "🔔 Catalyst Watch", "📅 Economic Calendar", "📖 User Guide"],
         key="nav_page",
         label_visibility="collapsed",
     )
@@ -2903,78 +2903,6 @@ if page == "🏠 Home":
         )
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-
-    # ── Account panel (account-baseline v1: cash + total account value) ─────────
-    # The app otherwise reasons only about invested equity. Setting a cash balance
-    # unlocks an account-level view: total value, cash %, and TRUE concentration
-    # (% of the whole account). Display-only — the 15%/35% concentration GATES are
-    # deliberately unchanged (still equity-weight); moving them to account-basis is
-    # a separate investment-policy decision. See docs/plans/account-baseline.md.
-    _acct = db.load_account_cash()
-    _cash = float(_acct["cash_balance"]) if _acct else None
-    with st.expander("💰 Account — Cash & Total Value", expanded=False):
-        if _cash is not None:
-            _total_acct = float(total_val) + _cash
-            _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
-            _ac1, _ac2, _ac3 = st.columns(3)
-            _ac1.metric("Total Account Value", _m(f"${_total_acct:,.0f}"),
-                        help="Invested equity + uninvested cash.")
-            _ac2.metric("Cash", _m(f"${_cash:,.0f}"))
-            _ac3.metric("Cash % of Account", f"{_cash_pct:.1f}%")
-            if _acct.get("updated_at"):
-                st.caption(
-                    f"Cash as of {str(_acct['updated_at'])[:10]}"
-                    + (f" · {_acct['note']}" if _acct.get("note") else "")
-                )
-            # True (account-level) concentration vs equity weight — display only.
-            if _total_acct > 0:
-                _conc = port_df[["Ticker", "Market Value", "Weight (%)"]].copy()
-                _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)
-                _conc = (
-                    _conc.rename(columns={"Weight (%)": "Equity Wt (%)"})
-                    .sort_values("Account Wt (%)", ascending=False)
-                )
-                st.caption(
-                    "True concentration — each holding as % of your **whole account** "
-                    "(equity + cash) vs % of invested equity. The concentration gates "
-                    "still use equity weight; this is the honest exposure view."
-                )
-                st.dataframe(
-                    _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
-                    hide_index=True, use_container_width=True,
-                )
-        else:
-            st.info(
-                "💡 Set your uninvested **cash balance** below to see total-account value, "
-                "cash %, and true (account-level) concentration. Until then, every figure in "
-                "the app is **invested-equity only** (it excludes cash it can't see)."
-            )
-        # Cash entry — data-sanity validated; honours the read-only viewer guard.
-        if not db.is_readonly():
-            with st.form("_account_cash_form", clear_on_submit=False):
-                _new_cash = st.number_input(
-                    "Uninvested cash balance ($)",
-                    min_value=0.0, value=float(_cash or 0.0), step=100.0, format="%.2f",
-                    help=f"Reference: your invested equity is ${float(total_val):,.0f}.",
-                )
-                _new_note = st.text_input(
-                    "Note (optional)", value=(_acct.get("note") if _acct else "") or ""
-                )
-                _cash_submit = st.form_submit_button("Save cash balance")
-            if _cash_submit:
-                # Soft-sanity: a value wildly larger than invested equity is likely a
-                # typo — warn loudly, but don't hard-block (a mostly-cash account is
-                # legitimate). Negatives are already blocked by min_value=0.
-                if _new_cash > max(float(total_val) * 10.0, 1_000_000.0):
-                    st.warning(
-                        f"⚠️ ${_new_cash:,.0f} is far larger than your ${float(total_val):,.0f} "
-                        "invested equity — double-check this before relying on account figures."
-                    )
-                if db.save_account_cash(_new_cash, _new_note or None):
-                    st.success("Cash balance saved.")
-                    st.rerun()
-                else:
-                    st.error("Couldn't save — database offline or read-only.")
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
     _db_act_n   = len(_daily_brief["act_today"])
@@ -14644,6 +14572,112 @@ delete from recommendations where rec_date < '2026-05-27';
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — CATALYST WATCH (forward earnings awareness)
 # ═════════════════════════════════════════════════════════════════════════════
+elif page == "💰 Account":
+    # Account-level view (account-baseline v1) — own page so it stays out of the
+    # Home hot path (no per-rerun cost on Home) and has room to grow (v2 flows,
+    # v3 returns). Reads the portfolio the Home brief already built (_last_port_df
+    # in session) — NO heavy recompute — mirroring the Catalyst Watch pattern.
+    # Display-only: the 15%/35% concentration GATES are unchanged (equity-weight);
+    # account-level concentration here is the honest exposure view, not a gate.
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("💰 Account")
+    st.caption(
+        "Your account-level view — cash, total value, and true (account-level) "
+        "concentration. The rest of the app reasons about invested equity; setting your "
+        "cash balance here unlocks the whole-account picture. Entered manually for now — "
+        "the same field a future broker sync would auto-fill."
+    )
+
+    _acct = db.load_account_cash()
+    _cash = float(_acct["cash_balance"]) if _acct else None
+    _acc_pdf = st.session_state.get("_last_port_df")
+    _have_pf = _acc_pdf is not None and hasattr(_acc_pdf, "empty") and not _acc_pdf.empty
+    _equity = float(_acc_pdf["Market Value"].sum()) if _have_pf else None
+
+    if _cash is not None and _have_pf:
+        _total_acct = _equity + _cash
+        _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
+        _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+        _ac1.metric("Total Account Value", _m(f"${_total_acct:,.0f}"),
+                    help="Invested equity + uninvested cash.")
+        _ac2.metric("Invested Equity", _m(f"${_equity:,.0f}"))
+        _ac3.metric("Cash", _m(f"${_cash:,.0f}"))
+        _ac4.metric("Cash % of Account", f"{_cash_pct:.1f}%")
+        if _acct.get("updated_at"):
+            st.caption(
+                f"Cash as of {str(_acct['updated_at'])[:10]}"
+                + (f" · {_acct['note']}" if _acct.get("note") else "")
+            )
+        if _total_acct > 0:
+            _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
+            _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)
+            _conc = (
+                _conc.rename(columns={"Weight (%)": "Equity Wt (%)"})
+                .sort_values("Account Wt (%)", ascending=False)
+            )
+            st.caption(
+                "True concentration — each holding as % of your **whole account** "
+                "(equity + cash) vs % of invested equity. The concentration gates still "
+                "use equity weight; this is the honest exposure view."
+            )
+            st.dataframe(
+                _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
+                hide_index=True, use_container_width=True,
+            )
+    elif _cash is not None and not _have_pf:
+        st.metric("Cash", _m(f"${_cash:,.0f}"))
+        if _acct.get("updated_at"):
+            st.caption(
+                f"Cash as of {str(_acct['updated_at'])[:10]}"
+                + (f" · {_acct['note']}" if _acct.get("note") else "")
+            )
+        st.info(
+            "Open the 🏠 Home page once this session to load your holdings — then total "
+            "account value, cash %, and true concentration appear here."
+        )
+        if st.button("▶ Go to Home", key="_acct_go_home"):
+            st.session_state["_pending_page"] = "🏠 Home"
+            st.rerun()
+    else:
+        st.info(
+            "💡 Set your uninvested **cash balance** below to unlock total-account value, "
+            "cash %, and true (account-level) concentration. Until then, every figure in "
+            "the app is **invested-equity only** (it excludes cash it can't see)."
+        )
+        if not _have_pf:
+            st.caption("Tip: open 🏠 Home once this session to load your holdings for the full view.")
+
+    # Cash entry — always available; data-sanity validated; read-only-viewer aware.
+    if not db.is_readonly():
+        st.divider()
+        with st.form("_account_cash_form", clear_on_submit=False):
+            _new_cash = st.number_input(
+                "Uninvested cash balance ($)",
+                min_value=0.0, value=float(_cash or 0.0), step=100.0, format="%.2f",
+                help=(f"Reference: your invested equity is ${_equity:,.0f}." if _have_pf
+                      else "Open Home to load your equity as a reference."),
+            )
+            _new_note = st.text_input(
+                "Note (optional)", value=(_acct.get("note") if _acct else "") or ""
+            )
+            _cash_submit = st.form_submit_button("Save cash balance")
+        if _cash_submit:
+            # Soft-sanity: a value wildly larger than invested equity is likely a typo —
+            # warn loudly but don't hard-block (a mostly-cash account is legitimate).
+            # Negatives are already blocked by min_value=0.
+            if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
+                st.warning(
+                    f"⚠️ ${_new_cash:,.0f} is far larger than your ${_equity:,.0f} invested "
+                    "equity — double-check this before relying on account figures."
+                )
+            if db.save_account_cash(_new_cash, _new_note or None):
+                st.success("Cash balance saved.")
+                st.rerun()
+            else:
+                st.error("Couldn't save — database offline or read-only.")
+    else:
+        st.caption("🔒 Read-only viewer — cash balance is view-only.")
+
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("🔔 Catalyst Watch")
