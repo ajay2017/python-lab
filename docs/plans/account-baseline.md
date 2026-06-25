@@ -39,8 +39,14 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
   on the 💰 Account page. Display-only, feeds no gate. Inert until the
   `account_flows` DDL is run. (Dividend/fee rows deferred — internal events are
   already captured in the value delta; not needed for growth-vs-contributions.)
-- **v3 — time-weighted return (TWR/IRR).** Uses the existing `daily_snapshots`
-  equity series (written daily by the EOD cron) + v2 flows.
+- **v3 — money-weighted return. ✅ SHIPPED (0488cdc).** `account.money_weighted_return`
+  (Modified Dietz) + `baseline_anchor`; Return% (timing-corrected) + Annualized
+  (period ≥ 30d) on the Account page. Reuses `account_flows` (no new DDL).
+  **Chose Modified Dietz over daily TWR:** true TWR needs total account value at
+  each sub-period boundary, but we have daily EQUITY (snapshots) and no daily CASH
+  history — Modified Dietz needs only endpoints + dated flows. FUTURE refinement
+  (when the snapshot series is long AND daily cash is reconstructable): a daily-
+  linked TWR on the equity bucket using snapshots + the trades ledger.
 - **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
   `account_flows`) — same schema, no rework.
 
