@@ -207,6 +207,25 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.account_cash;
     create policy "Allow all (service role)" on public.account_cash
         for all to service_role using (true) with check (true);
+
+    -- account_flows: external cash-flow ledger for growth-vs-contributions
+    -- (account-baseline v2). Rows: 'baseline' (opening contributed-capital
+    -- anchor), 'deposit' (+), 'withdrawal' (-). amount is always POSITIVE; the
+    -- type carries the sign. Until created, load returns [] and the growth view
+    -- stays hidden (cash + total-value v1 still works). The same ledger a broker
+    -- sync would later auto-populate from transfer history.
+    create table if not exists public.account_flows (
+        id          bigint generated always as identity primary key,
+        flow_date   date not null,
+        flow_type   text not null,
+        amount      numeric not null,
+        note        text,
+        created_at  timestamptz not null default now()
+    );
+    alter table public.account_flows enable row level security;
+    drop policy if exists "Allow all (service role)" on public.account_flows;
+    create policy "Allow all (service role)" on public.account_flows
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -1179,6 +1198,67 @@ def save_account_cash(cash_balance: float, note: str | None = None) -> bool:
             "updated_at":   datetime.now(timezone.utc).isoformat(),
         }
         _client().table("account_cash").upsert(record, on_conflict="id").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_account_flows() -> list[dict]:
+    """Return the external cash-flow ledger [{id, flow_date, flow_type, amount,
+    note}], oldest-first, or [] (DB offline / table missing / no rows). [] means
+    "no flows yet" → the growth view stays hidden. Never raises."""
+    if not has_db():
+        return []
+    try:
+        rows = (
+            _client().table("account_flows")
+            .select("id,flow_date,flow_type,amount,note")
+            .order("flow_date", desc=False).order("id", desc=False)
+            .execute().data
+        ) or []
+        out = []
+        for r in rows:
+            out.append({
+                "id":        r.get("id"),
+                "flow_date": r.get("flow_date"),
+                "flow_type": r.get("flow_type"),
+                "amount":    float(r.get("amount") or 0.0),
+                "note":      r.get("note"),
+            })
+        return out
+    except Exception:
+        return []
+
+
+def add_account_flow(flow_date: str, flow_type: str, amount: float,
+                     note: str | None = None) -> bool:
+    """Insert one cash-flow row (baseline / deposit / withdrawal). `amount` is
+    stored POSITIVE (the type carries the sign). USER data → honours the
+    read-only viewer guard. Best-effort; swallows failures."""
+    if _READONLY: return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        record = {
+            "flow_date": str(flow_date),
+            "flow_type": str(flow_type),
+            "amount":    abs(float(amount)),
+            "note":      (str(note) if note else None),
+        }
+        _client().table("account_flows").insert(record).execute()
+        return True
+    except Exception:
+        return False
+
+
+def delete_account_flow(flow_id) -> bool:
+    """Delete one cash-flow row by id. USER data → honours the read-only viewer
+    guard. Best-effort; swallows failures."""
+    if _READONLY: return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        _client().table("account_flows").delete().eq("id", flow_id).execute()
         return True
     except Exception:
         return False

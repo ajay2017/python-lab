@@ -133,6 +133,7 @@ from stock_analyzer.macro import (
 from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternatives, tier_label
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
+from stock_analyzer.account import net_contributed_capital, account_growth, has_baseline
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing
@@ -14677,6 +14678,99 @@ elif page == "💰 Account":
                 st.error("Couldn't save — database offline or read-only.")
     else:
         st.caption("🔒 Read-only viewer — cash balance is view-only.")
+
+    # ── Growth & Contributions (account-baseline v2) ────────────────────────────
+    # Separate money DEPOSITED from money the market MADE you: growth = total
+    # account value − net contributed capital (baseline + deposits − withdrawals).
+    # Pure calc in stock_analyzer/account.py; display-only (feeds no gate).
+    st.divider()
+    st.markdown("### 📈 Growth & Contributions")
+    st.caption(
+        "Separates money you **deposited** from money the market **made you**. "
+        "Growth = total account value − net contributed capital (baseline + deposits − withdrawals)."
+    )
+    _flows = db.load_account_flows()
+    _total_value = (_equity + _cash) if (_have_pf and _cash is not None) else None
+    _ncc = net_contributed_capital(_flows)
+    _g = account_growth(_total_value, _ncc)
+    _has_base = has_baseline(_flows)
+
+    if not _has_base:
+        st.info(
+            "Set a starting **baseline** (your contributed capital) to begin tracking growth. "
+            "Default = your current total account value (growth from today); or enter your lifetime "
+            "net deposits (deposits − withdrawals) if you know them — then it reads as all-time gain."
+        )
+        if not db.is_readonly():
+            with st.form("_account_baseline_form", clear_on_submit=False):
+                _bdate = st.date_input("Baseline as of", value=date.today(), key="_acct_bdate")
+                _bamt = st.number_input(
+                    "Contributed capital ($)", min_value=0.0,
+                    value=float(_total_value or 0.0), step=100.0, format="%.2f",
+                    help="Default = current total account value. Or enter lifetime net deposits for all-time gain.",
+                )
+                _bsub = st.form_submit_button("Set baseline")
+            if _bsub:
+                if _bamt <= 0:
+                    st.warning("Enter your contributed capital (greater than 0).")
+                elif db.add_account_flow(_bdate.isoformat(), "baseline", _bamt, "Baseline"):
+                    st.success("Baseline set.")
+                    st.rerun()
+                else:
+                    st.error("Couldn't save — database offline or read-only.")
+    else:
+        _gc1, _gc2, _gc3 = st.columns(3)
+        _gc1.metric("Net Contributed Capital", _m(f"${_g['ncc']:,.0f}"),
+                    help="Baseline + deposits − withdrawals — what you've put in.")
+        if _g["growth"] is not None:
+            _gc2.metric("Growth ($)", _m(f"${_g['growth']:+,.0f}"),
+                        delta_color="normal" if _g["growth"] >= 0 else "inverse")
+            _gc3.metric("Growth (%)",
+                        f"{_g['growth_pct']:+.1f}%" if _g["growth_pct"] is not None else "—")
+        else:
+            _gc2.metric("Growth ($)", "—",
+                        help="Open 🏠 Home and set your cash balance so total account value can be computed.")
+            _gc3.metric("Growth (%)", "—")
+
+        # Cash-flow ledger (with delete) + add a deposit/withdrawal.
+        if _flows:
+            st.markdown("**Cash-flow ledger**")
+            for _fi, _fl in enumerate(_flows):
+                _fc1, _fc2, _fc3, _fc4, _fc5 = st.columns([2, 2, 2, 4, 1])
+                _fc1.write(str(_fl.get("flow_date") or "—"))
+                _fc2.write(str(_fl.get("flow_type", "")).title())
+                _sign = "−" if _fl.get("flow_type") == "withdrawal" else "+"
+                _fc3.write(f"{_sign}${_fl.get('amount', 0):,.2f}")
+                _fc4.write(_fl.get("note") or "")
+                if not db.is_readonly():
+                    # Key on the loop index (collision-proof even if an id were
+                    # ever None) plus the id for stability across reruns.
+                    if _fc5.button("🗑", key=f"_flow_del_{_fi}_{_fl.get('id')}", help="Delete this flow"):
+                        db.delete_account_flow(_fl.get("id"))
+                        st.rerun()
+
+        if not db.is_readonly():
+            with st.expander("➕ Log a deposit or withdrawal", expanded=False):
+                with st.form("_account_flow_form", clear_on_submit=True):
+                    _ftype = st.selectbox("Type", ["deposit", "withdrawal"])
+                    _fdate = st.date_input("Date", value=date.today(), key="_acct_fdate")
+                    _famt = st.number_input("Amount ($)", min_value=0.0, value=0.0,
+                                            step=100.0, format="%.2f")
+                    _fnote = st.text_input("Note (optional)")
+                    _fsub = st.form_submit_button("Add")
+                if _fsub:
+                    if _famt <= 0:
+                        st.warning("Enter an amount greater than 0.")
+                    elif db.add_account_flow(_fdate.isoformat(), _ftype, _famt, _fnote or None):
+                        st.success(f"{_ftype.title()} logged.")
+                        st.rerun()
+                    else:
+                        st.error("Couldn't save — database offline or read-only.")
+                st.caption(
+                    "After a deposit/withdrawal, also update your **cash balance** above and log any "
+                    "resulting buy/sell in the Trade Journal, so total account value stays current. "
+                    "(A deposit raises contributed capital, so it never shows up as growth.)"
+                )
 
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
