@@ -1947,10 +1947,6 @@ def build_daily_briefing(
 
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                         deterioration=deterioration)
-    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
-                             act_today=act, risk_recs=risk_recs,
-                             earnings_lookup=earnings_lookup,
-                             composites=grow_composites or {})
     review = _review_list(port_df, news_items, macro_events, held_data, today,
                           portfolio_value=portfolio_value, act_today=act,
                           deterioration=deterioration)
@@ -1960,6 +1956,8 @@ def build_daily_briefing(
     # (single-surface: never double-reduce a name). Only arms when the book is
     # fragile AND the market is in a risk-off regime; otherwise returns []. These
     # are the lowest-priority reduce, so they append to the end of Act Today.
+    # _buy_candidates runs after this block so it sees the complete act list and
+    # cannot surface an ADD for a ticker that risk-off just flagged for TRIM.
     _reduced = {str(it.get("ticker")).upper() for it in act if it.get("ticker")}
     for _it in review:
         _at = str((_it.get("action") or {}).get("type", ""))
@@ -1974,6 +1972,10 @@ def build_daily_briefing(
     )
     if _risk_off:
         act = act + _risk_off
+    buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
+                             act_today=act, risk_recs=risk_recs,
+                             earnings_lookup=earnings_lookup,
+                             composites=grow_composites or {})
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
