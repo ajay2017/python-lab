@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR
+from stock_analyzer.constants import COMPOSITE_BUY, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -248,10 +248,10 @@ def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[di
             })
 
         # Concentration
-        if w > 20:
+        if w > SINGLE_NAME_CEILING:
             result.append({
                 "level": "warning", "category": "concentration",
-                "msg": f"⚠️ **{ticker}** is {w:.1f}% of portfolio — above 20% concentration threshold",
+                "msg": f"⚠️ **{ticker}** is {w:.1f}% of portfolio — above {SINGLE_NAME_CEILING}% concentration threshold",
             })
 
         # Bearish signal on profitable or losing position
@@ -269,7 +269,7 @@ def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[di
     # Sector concentration
     sector_exp = sector_exposure(portfolio_df)
     for _, row in sector_exp.iterrows():
-        if row["Pct"] > 40:
+        if row["Pct"] > SECTOR_CEILING:
             result.append({
                 "level": "warning", "category": "concentration",
                 "msg": f"🏭 **{row['Sector']}** represents {row['Pct']:.0f}% of portfolio — high sector concentration",

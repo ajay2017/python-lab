@@ -8097,7 +8097,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                                         # Score line: show composite if loaded, momentum always
                                         if _dp_cscore is not None:
                                             _comp_sc_clr = (
-                                                "#00C851" if _dp_cscore >= 65 else
+                                                "#00C851" if _dp_cscore >= COMPOSITE_BUY else
                                                 "#ffbb33" if _dp_cscore >= 55 else "#888"
                                             )
                                             _score_line = (

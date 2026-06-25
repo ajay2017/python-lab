@@ -48,7 +48,8 @@ def get_secret(name: str) -> str | None:
 
 def http_get_json(url: str, params: dict | None = None, timeout: int = _TIMEOUT):
     """GET `url` and return parsed JSON. Raises on HTTP error (incl. 429) so the
-    caller can classify rate-limit vs other errors and record api_health."""
+    caller can classify rate-limit vs other errors and record api_health.
+    No per-call retry by design — the orchestrator fails over to the next provider."""
     resp = requests.get(url, params=params, timeout=timeout)
     resp.raise_for_status()
     return resp.json()

@@ -179,7 +179,7 @@ def compute_portfolio_risk_metrics(
 
     sharpe = round(float((excess.mean() / std_ret) * np.sqrt(252)), 2) if std_ret > 0 else 0.0
 
-    downside_std = port_returns[port_returns < rf_daily].std()
+    downside_std = excess[excess < 0].std()  # downside deviation on excess returns (standard Sortino)
     sortino = (
         round(float((excess.mean() / downside_std) * np.sqrt(252)), 2)
         if (downside_std and not np.isnan(downside_std) and downside_std > 0)
