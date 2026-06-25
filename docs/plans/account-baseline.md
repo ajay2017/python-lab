@@ -47,6 +47,12 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
   history — Modified Dietz needs only endpoints + dated flows. FUTURE refinement
   (when the snapshot series is long AND daily cash is reconstructable): a daily-
   linked TWR on the equity bucket using snapshots + the trades ledger.
+- **v4 — margin / liability awareness. ✅ SHIPPED (f0abdf7).** The `account_cash`
+  value is now SIGNED — negative = a margin debit. Because Total = equity + cash
+  and Growth/Return/account-concentration all derive from Total, one signed field
+  makes them all net out the loan (no new subsystem, no new DDL). UI: "Net cash /
+  margin" input (no min), leverage caption, debit>equity soft-warn. Gates still
+  equity-weight. Motivated by the user trading on margin often.
 - **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
   `account_flows`) — same schema, no rework.
 
