@@ -7313,7 +7313,7 @@ if page == "🏠 Home":
                         half_val = half * act["price"]
                         full_val = act["shares"] * act["price"]
                         if f_score is not None and t_score is not None:
-                            if f_score < 44:
+                            if f_score < COMPOSITE_HOLD:
                                 action_text = (
                                     f"**Fundamental-driven weakness — act with urgency.**  \n"
                                     f"Sell **{half} shares** (~${half_val:,.0f}) at market now to bank the "
