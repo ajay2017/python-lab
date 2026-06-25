@@ -436,9 +436,9 @@ def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
 # keeps its honest "Could not load" failure exactly as before. See DDL at top.
 
 def _json_safe(obj):
-    """Recursively coerce to JSON-serializable: NaN/inf → None, numpy scalars →
-    python, anything exotic → str. Keeps Supabase's JSON encoder from choking on
-    a yfinance .info dict (numpy floats, NaN, odd types). Never raises."""
+    """Recursively coerce to JSON-serializable: NaN/inf → None, numpy/pandas
+    scalars → python native, anything exotic → str. Keeps Supabase's JSON
+    encoder from choking on yfinance .info or fundamentals dicts. Never raises."""
     import math
     if obj is None or isinstance(obj, bool) or isinstance(obj, (int, str)):
         return obj
@@ -448,12 +448,11 @@ def _json_safe(obj):
         return {str(k): _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_json_safe(v) for v in obj]
-    try:
-        import numpy as _np
-        if isinstance(obj, _np.generic):
+    if hasattr(obj, "item"):  # numpy / pandas scalar
+        try:
             return _json_safe(obj.item())
-    except Exception:
-        pass
+        except Exception:
+            return None
     try:
         return str(obj)
     except Exception:
@@ -1053,32 +1052,6 @@ def load_fundamentals_cache(ticker: str) -> dict | None:
     except Exception:
         return None
 
-
-def _json_safe(obj):
-    """Coerce a value tree to JSON/jsonb-safe Python primitives.
-
-    The fundamentals dict can carry numpy scalars (yfinance/pandas) or non-finite
-    floats (NaN/inf) — neither survives the JSON serialisation the Supabase
-    client does, and because save_* swallows errors that would fail the write
-    SILENTLY (cache never populates, invisibly). Normalise here so the write is
-    robust: numpy scalars → native via .item(); NaN/inf → None; recurse dict/list.
-    """
-    import math
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    if isinstance(obj, bool):
-        return obj
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
-    if hasattr(obj, "item"):          # numpy / pandas scalar
-        try:
-            v = obj.item()
-            return _json_safe(v)
-        except Exception:
-            return None
-    return obj
 
 
 def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
