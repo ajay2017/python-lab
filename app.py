@@ -16003,6 +16003,8 @@ By default the app reasons only about the **stocks it can see** (shares × live 
 **1. Set your cash (the one input that unlocks everything).**
 On the 💰 Account page, enter your **Net cash / margin ($)**:
 - The simplest reliable rule: **enter your broker's "Total portfolio value" minus your stock holdings' value.** That nets out anything tricky and keeps the app reconciled to your broker.
+- Most brokers also show this number directly as a **cash line** (e.g. Robinhood's *"Individual cash"*) — when they do, just copy that figure straight in.
+- **Saving overwrites the field** — it always holds your *current* net cash, never a running total. Re-saving a new number simply replaces the old one; it does **not** log a deposit or change your contributed capital. So you can update it as often as you like with no risk of double-counting.
 - A **positive** number = uninvested cash you own.
 - A **negative** number = a **margin debit** (you've borrowed to hold more stock than your cash covers). The app handles this correctly — your Total, Growth, and Return all subtract the loan.
 - **Don't enter "margin available"** — that's borrowing *capacity*, not money you own.
@@ -16016,12 +16018,12 @@ Under **Growth & Contributions**, set a **baseline** (your contributed capital �
 - **Return (money-weighted)** and **Annualized** — a proper return that accounts for *when* you added money (annualized once you've tracked ≥ 30 days).
 
 **3. Keeping it in sync with your broker (it's manual for now).**
-The app doesn't auto-connect to your brokerage yet, so you keep it current with a light routine:
-- **When you trade:** log the buy/sell in the **📒 Trade Journal** (this is what keeps your holdings — and everything derived from them — correct).
-- **When cash changes** (a trade, deposit, withdrawal, dividend): re-enter your net cash on the Account page. Don't chase pennies — update it after activity.
-- **When you deposit or withdraw:** also log it as a flow so growth stays honest.
+The app doesn't auto-connect to your brokerage yet, so you keep it current with two light habits — and they map to the app's only two inputs:
+- **When you trade:** log the buy/sell in the **📒 Trade Journal**. This keeps your holdings — and the *equity* side of every account number — correct.
+- **When cash changes** (a trade, deposit, withdrawal, dividend): re-enter your net cash on the Account page (copy your broker's cash line). This keeps the *cash* side correct. Don't chase pennies — update it after activity, or on a regular cadence like weekly.
+- **When you deposit or withdraw:** also log it as a flow under Growth & Contributions so growth stays honest. (A plain trade is **not** a flow — only money moving in/out of the account is.)
 
-**Your built-in sync check:** compare the app's **Total Account Value** to your broker's total. If they match, you're in sync. **If the app reads higher than your broker, the gap is usually your margin balance** (set your net cash to a lower/negative number) or an unlogged trade. Everything is advisory and view-only — nothing here ever places a trade.
+**Your built-in sync check:** the app's **Total Account Value** should match your broker's total portfolio value, within a few dollars of quote timing. The precise test is **broker Total − your stock value = the net cash you entered.** Only two things can break it: an **unlogged trade** (equity is off) or a **stale cash figure** (cash is off) — fix whichever side is wrong. If the app reads *higher* than your broker, the gap is usually a margin balance you haven't entered as a negative number. Everything is advisory and view-only — nothing here ever places a trade.
 """
         )
 
