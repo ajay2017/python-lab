@@ -148,6 +148,88 @@ def render_pullback_email(pb: dict, built_at: str) -> tuple[str, str]:
     return subject, body
 
 
+def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
+    """Return (subject, html_body) for the morning high-conviction buy-list email.
+
+    `picks` are `new_pick` dicts from build_daily_briefing's Grow Today — the
+    gated "New Positions to Initiate" (caller filters to the Go / composite-
+    confirms set and guarantees non-empty). Built to be ACTED ON from a phone:
+    ticker · momentum + composite · entry zone · suggested shares/$ · stop, with
+    an entry-zone guard since the user may act later than the scan."""
+    n = len(picks)
+    tickers = ", ".join(dict.fromkeys(str(p.get("ticker") or "") for p in picks if p.get("ticker")))
+    subject = f"DRISHTA · {n} buy setup{'s' if n != 1 else ''} today — {tickers}"
+
+    cards = []
+    for p in picks:
+        ticker = _html.escape(str(p.get("ticker") or ""))
+        sector = _html.escape(str(p.get("sector") or ""))
+        score  = p.get("score")
+        comp   = p.get("composite_score")
+        comp_label = _html.escape(str(p.get("composite_label") or ""))
+        conv   = _html.escape(str(p.get("conviction") or ""))
+        day    = p.get("day_change")
+        thesis = _html.escape(str(p.get("thesis") or ""))[:240]
+        sz     = p.get("sizing") or {}
+        _lo, _hi = sz.get("entry_lo"), sz.get("entry_hi")
+        _sh, _tc = sz.get("shares"), sz.get("total_cost")
+        _stop, _pp = sz.get("stop"), sz.get("port_pct")
+
+        score_bits = []
+        if score is not None: score_bits.append(f"Momentum {float(score):.0f}")
+        if comp  is not None: score_bits.append(f"Composite {float(comp):.0f}" + (f" ({comp_label})" if comp_label else ""))
+        if day   is not None and float(day) >= 4: score_bits.append(f"<b style='color:#22c55e'>+{float(day):.1f}% today</b>")
+        score_str = "  ·  ".join(score_bits)
+
+        # The actionable line — only render numbers we actually have.
+        act_bits = []
+        if _lo is not None and _hi is not None:
+            _buy = f"Buy in <b style='color:#e5e7eb'>${float(_lo):.2f}–${float(_hi):.2f}</b>"
+            if _sh: _buy += f", ~<b style='color:#e5e7eb'>{int(_sh)} shares</b>"
+            if _tc: _buy += f" (~${float(_tc):,.0f}" + (f", {float(_pp):.1f}% of book" if _pp is not None else "") + ")"
+            act_bits.append(_buy)
+        if _stop is not None:
+            act_bits.append(f"stop <b style='color:#e5e7eb'>${float(_stop):.2f}</b>")
+        act_str = "  ·  ".join(act_bits)
+        guard = (f"Only act if price is still inside ${float(_lo):.2f}–${float(_hi):.2f}."
+                 if _lo is not None and _hi is not None else "")
+
+        cards.append(f"""
+        <div style="border-left:4px solid #22c55e;background:#1c1917;border-radius:0 6px 6px 0;
+                    padding:12px 16px;margin:0 0 10px 0;font-family:Arial,Helvetica,sans-serif">
+          <div style="color:#22c55e;font-weight:700;font-size:13px;letter-spacing:.3px">
+            🟢 GO — COMPOSITE CONFIRMS &nbsp;·&nbsp; <span style="color:#e5e7eb">{ticker}</span>
+            {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;{sector}</span>' if sector else ''}
+            {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;{conv} conviction</span>' if conv else ''}
+          </div>
+          {f'<div style="color:#cbd5e1;font-size:12px;margin-top:5px">{score_str}</div>' if score_str else ''}
+          {f'<div style="color:#f1f5f9;font-size:14px;margin-top:6px"><b style="color:#22c55e">→ BUY:</b> {act_str}</div>' if act_str else ''}
+          {f'<div style="color:#fbbf24;font-size:12px;margin-top:3px">⚠️ {guard}</div>' if guard else ''}
+          {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{thesis}</div>' if thesis else ''}
+        </div>""")
+
+    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
+      <div style="max-width:640px;margin:0 auto">
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;font-weight:700;margin-bottom:4px">
+          DRISHTA · New Positions to Initiate
+        </div>
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;margin-bottom:16px">
+          {n} high-conviction setup{'s' if n != 1 else ''} · scores as of the {_html.escape(str(built_at))[:19]} ET morning scan
+        </div>
+        {''.join(cards)}
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
+                    border-top:1px solid #292524;padding-top:10px">
+          High-conviction new-position setups that cleared the gates as of the morning scan — momentum + full
+          composite agree, conflicts and over-cap sectors excluded. <b>Verify price is still in the entry zone
+          before acting</b> (intraday moves can leave it). Advisory — you decide and place the trade; nothing is
+          auto-traded. Check the Economic Calendar for any imminent macro event. You receive this only when the
+          set of setups changes; silence means nothing cleared the bar.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
+
+
 def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html: str,
                       timeout: int = 20) -> tuple[bool, str]:
     """POST one email via Resend. Returns (ok, detail). `detail` carries the HTTP

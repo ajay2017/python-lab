@@ -28,12 +28,13 @@ from stock_analyzer.portfolio import build_portfolio_df
 from stock_analyzer.risk import compute_portfolio_risk_metrics
 from stock_analyzer.stress_test import SCENARIOS, run_scenario, assess_fragility
 from stock_analyzer.tax_advisor import _build_open_lots
-from stock_analyzer.daily_briefing import deterioration_signals
+from stock_analyzer.daily_briefing import deterioration_signals, build_daily_briefing
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_CEILING,
     FRAGILITY_PULLBACK_PCT,
     PULLBACK_ALERT_INDEX_PCT,
+    GROW_CANDIDATE_POOL,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -233,6 +234,119 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         })
 
     return {"alerts": alerts, "built_at": built_at, "errors": errors}
+
+
+def compute_morning_picks(today: date | None = None, scanner_results=None) -> dict:
+    """Return {"picks": [...new_picks...], "built_at": <ET iso>, "errors": [...]}.
+
+    The OFFENSE counterpart to compute_protective_alerts: the headless equivalent
+    of the Home brief's Grow Today "New Positions to Initiate". Reuses _build_context
+    and assembles the SAME inputs build_daily_briefing uses in the app — market
+    tone, per-pick composites, and news (derived from the already-loaded bundles) —
+    then calls the SAME build_daily_briefing so the gating (tone / composite /
+    sector-cap / conflict exclusion) is identical, no logic drift. The caller
+    filters to the high-conviction "Go" set and emails it. Empty `picks` → caller
+    sends no email. Never raises; faults collected in `errors`.
+
+    Mirrors the app's full input assembly (tone + composites + news + macro
+    calendar) so the gating — including the imminent-macro sector suppression —
+    matches Grow Today and the email never surfaces a pick the app would suppress.
+    """
+    today = today or datetime.now(_ET).date()
+    built_at = datetime.now(_ET).isoformat()
+    if scanner_results is None or getattr(scanner_results, "empty", True):
+        return {"picks": [], "built_at": built_at, "errors": ["no scanner results"]}
+
+    ctx = _build_context(today)
+    if not ctx.get("ok"):
+        return {"picks": [], "built_at": built_at, "errors": ctx.get("errors", [])}
+    errors = list(ctx["errors"])
+    port_df, held_data = ctx["port_df"], ctx["held_data"]
+    spy_6mo, spy_1y, vix, fragility = ctx["spy_6mo"], ctx["spy_1y"], ctx["vix"], ctx["fragility"]
+    try:
+        portfolio_value = float(port_df["Market Value"].sum()) if not port_df.empty else 0.0
+    except Exception:
+        portfolio_value = 0.0
+
+    # Market tone (drives the bull-only new-pick gate) — mirrors the app's
+    # _market_context assembly (S&P daily move → bull/bear/flat). leading_sectors
+    # is left empty headlessly: it only flavours the thesis text, not the gating.
+    market_context = {"tone": "flat", "sp500_pct": 0.0, "nasdaq_pct": 0.0, "leading_sectors": []}
+    try:
+        from stock_analyzer.data import fetch_market_indices
+        _idx = fetch_market_indices()
+        _sp = next((i for i in _idx if i.get("short") == "S&P 500"), None)
+        _nq = next((i for i in _idx if i.get("short") == "NASDAQ"), None)
+        _sp_pct = float(_sp["change_pct"]) if _sp else 0.0
+        market_context = {
+            "tone": "bull" if _sp_pct >= 0.5 else "bear" if _sp_pct <= -0.5 else "flat",
+            "sp500_pct": _sp_pct,
+            "nasdaq_pct": float(_nq["change_pct"]) if _nq else 0.0,
+            "leading_sectors": [],
+        }
+    except Exception as e:
+        errors.append(f"market tone fetch failed: {e}")
+
+    # Per-pick composites for the top scanner names — mirrors the app's
+    # grow-composites loop (load_bundle is what app.load_all wraps). Without these
+    # picks fall to "unverified" and never reach the Go set.
+    held_set = {str(t).upper() for t in held_data.keys()}
+    try:
+        rfr = fetch_risk_free_rate()
+    except Exception:
+        rfr = 0.045
+    try:
+        _top = (scanner_results[~scanner_results["Ticker"].str.upper().isin(held_set)]
+                .head(GROW_CANDIDATE_POOL)["Ticker"].tolist())
+    except Exception:
+        _top = []
+    grow_composites: dict = {}
+    for _tc in _top:
+        _t = str(_tc).strip().upper()
+        if not _t:
+            continue
+        try:
+            grow_composites[_t] = load_bundle(_t, "6mo", spy_df=spy_6mo, rfr=rfr)
+        except Exception:
+            continue
+
+    # News from the already-loaded bundles (held + composites) so _cross_reference
+    # still suppresses negative-news conflicts — no extra network calls.
+    try:
+        from stock_analyzer.data import curate_news_items
+        _news_src = dict(held_data)
+        _news_src.update(grow_composites)
+        news_items = curate_news_items(_news_src)
+    except Exception:
+        news_items = []
+
+    # Macro calendar — MUST pass it (not []), else the imminent-HIGH-impact-event
+    # sector gate is disabled headlessly and the buy email could surface a pick
+    # the app would suppress on a binary-catalyst day (FOMC/CPI/jobs). The static
+    # backbone gives the event dates even without a FRED key. (Streamlit-free.)
+    macro_events: list = []
+    try:
+        import os as _os
+        from stock_analyzer.macro_calendar import build_macro_calendar
+        macro_events = build_macro_calendar(
+            port_df, fred_key=(_os.environ.get("FRED_API_KEY") or None), today=today,
+        ) or []
+    except Exception as e:
+        errors.append(f"macro calendar failed: {e}")
+
+    try:
+        brief = build_daily_briefing(
+            port_df=port_df, alert_list=[], risk_recs=[], news_items=news_items,
+            macro_events=macro_events, held_data=held_data, scanner_results=scanner_results,
+            portfolio_value=portfolio_value, today=today, market_context=market_context,
+            grow_composites=grow_composites, movers=[], spy_df=spy_6mo,
+            fragility=fragility, spy_trend_df=spy_1y, vix_level=vix,
+        )
+    except Exception as e:
+        return {"picks": [], "built_at": built_at,
+                "errors": errors + [f"build_daily_briefing failed: {e}"]}
+
+    return {"picks": brief.get("new_picks", []) or [], "built_at": built_at, "errors": errors}
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:

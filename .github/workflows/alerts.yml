@@ -14,12 +14,15 @@ on:
     # cron derives mode=premarket for ET hour < 12.
     - cron: "0 12 * * 1-5"   # 12:00 UTC — 08:00 EDT / 07:00 EST (gated too-early in winter)
     - cron: "0 13 * * 1-5"   # 13:00 UTC — 09:00 EDT (already-done) / 08:00 EST (winter run)
-    # Mid-morning SCAN run — run the sector scanner headlessly and persist results
-    # so Home shows buy candidates on a cold load. Single slot (the write is an
-    # overwrite, no dedup needed); the ALERT_RUN_MODE mapping below forces
-    # mode=scan for this cron string (its ET hour < 12 would otherwise derive
-    # premarket). 14:00 UTC = 10:00 EDT / 09:00 EST — post-open either way.
-    - cron: "0 14 * * 1-5"   # 14:00 UTC — 10:00 EDT / 09:00 EST (post-open scan)
+    # Mid-morning SCAN + buy-list run (~9:45 ET). Scans the sector universe,
+    # persists it to scanner_cache (cold-load buy candidates) AND emails the
+    # high-conviction "New Positions to Initiate". Two UTC slots straddle EST/EDT;
+    # cron_runner gates on post-open (ET ≥ 9:30) so the pre-open winter slot is
+    # skipped, and the buy-email dedups (alert_state row 3) so the redundant
+    # post-open slot doesn't double-send. The ALERT_RUN_MODE mapping forces
+    # mode=scan for these cron strings (their ET hour < 12 would else derive premarket).
+    - cron: "45 13 * * 1-5"  # 13:45 UTC — 09:45 EDT (summer run) / 08:45 EST (gated pre-open)
+    - cron: "45 14 * * 1-5"  # 14:45 UTC — 10:45 EDT (already-done) / 09:45 EST (winter run)
     # EOD run (~16:30 ET, post-close) — snapshot write + reactive pullback. Two UTC
     # slots straddle EST/EDT; the cron derives mode=eod for ET hour >= 12 and gates
     # on ET hour >= 16 so the close is final.
@@ -79,6 +82,6 @@ jobs:
           # schedule slots leave it blank so the cron derives premarket/eod by hour.
           ALERT_RUN_MODE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
-            || (github.event.schedule == '0 14 * * 1-5' && 'scan')
+            || ((github.event.schedule == '45 13 * * 1-5' || github.event.schedule == '45 14 * * 1-5') && 'scan')
             || '' }}
         run: python cron_runner.py

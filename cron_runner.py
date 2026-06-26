@@ -35,14 +35,18 @@ import pytz
 from stock_analyzer import db
 from stock_analyzer.constants import ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET
 from stock_analyzer.data import is_trading_day
-from stock_analyzer.headless_alert_engine import compute_protective_alerts, compute_eod
+from stock_analyzer.headless_alert_engine import (
+    compute_protective_alerts, compute_eod, compute_morning_picks,
+)
 from stock_analyzer.notify import (
-    render_alert_email, render_test_email, render_pullback_email, send_email_resend,
+    render_alert_email, render_test_email, render_pullback_email,
+    render_buy_picks_email, send_email_resend,
 )
 
 _ET = pytz.timezone("America/New_York")
 _PROTECTIVE_ROW = 1   # alert_state lane: pre-market protective dedup
 _EOD_ROW = 2          # alert_state lane: EOD pullback dedup
+_BUY_ROW = 3          # alert_state lane: morning buy-list dedup
 
 
 def _log(msg: str) -> None:
@@ -168,15 +172,34 @@ def _run_eod(now_et, force: bool) -> int:
     return 0
 
 
+def _buy_fingerprint(picks: list[dict]) -> str:
+    """Stable hash of the buy-list SET by ticker — re-send only when the set of
+    tickers changes (not on re-ordering / wording). Empty set → 'none'."""
+    if not picks:
+        return "none"
+    keys = sorted(str(p.get("ticker") or "").upper() for p in picks if p.get("ticker"))
+    return hashlib.sha1("|".join(keys).encode("utf-8")).hexdigest()[:16]
+
+
 def _run_scan(now_et, force: bool) -> int:
-    """Mid-morning headless sector scan → persist the result so the Home page's
-    buy-candidate / Grow-Today new-pick lists populate on a COLD load without the
-    user running the ~20s scanner. Overwrites the single-row scanner_cache (no
-    dedup needed). Inert until the scanner_cache table exists. Always exits 0."""
+    """Mid-morning headless run (~9:45 ET): (1) sector scan → persist to
+    scanner_cache so the Home buy-candidate / Grow-Today lists populate on a COLD
+    load without the user running the ~20s scanner; (2) email the high-conviction
+    "New Positions to Initiate" (Go — composite confirms) so the user can act from
+    mobile. Post-open gated (today's price action must be real). Persist is inert
+    until the scanner_cache table exists; the email is inert without RESEND_API_KEY.
+    Always exits 0."""
     today_str = now_et.date().isoformat()
-    if not force and not is_trading_day(now_et.date()):
-        _log("scan: not an ET trading day — skip.")
-        return 0
+    if not force:
+        if not is_trading_day(now_et.date()):
+            _log("scan: not an ET trading day — skip.")
+            return 0
+        # Post-open only — scanning pre-open scores on a stale/forming bar and the
+        # buy list must reflect today's action. (DST: the earlier UTC slot lands
+        # pre-open in winter and is skipped here; the later slot runs post-open.)
+        if now_et.hour < 9 or (now_et.hour == 9 and now_et.minute < 30):
+            _log(f"scan: too early (ET {now_et.strftime('%H:%M')} — pre-open) — wait for post-open slot.")
+            return 0
     from stock_analyzer.scanner import scan_sectors, SECTOR_UNIVERSE
     try:
         results_df = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
@@ -191,6 +214,42 @@ def _run_scan(now_et, force: bool) -> int:
         _log(f"scan: persisted {n} results (date={today_str}).")
     else:
         _log(f"scan: NOT persisted ({n} results; DB offline / table missing / read-only).")
+
+    # ── Morning buy-list email — high-conviction New Positions to Initiate ──────
+    sent = False
+    payload = compute_morning_picks(today=now_et.date(), scanner_results=results_df)
+    for e in payload.get("errors", []):
+        _log(f"engine note: {e}")
+    picks = payload.get("picks", [])
+    # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
+    # field the Home badge reads — the reconciliation engine's verdict
+    # (xref.verdict_reconciled.verdict == "go", signal_reconciliation.py) — so the
+    # email can't silently drift from the badge if either detector changes.
+    # Composite must be present. Excludes unverified / movers-only / conflicted noise.
+    hi = [p for p in picks
+          if ((p.get("xref") or {}).get("verdict_reconciled") or {}).get("verdict") == "go"
+          and p.get("composite_score") is not None]
+    _log(f"morning picks: {len(picks)} new pick(s), {len(hi)} high-conviction (Go): "
+         + (", ".join(str(p.get("ticker")) for p in hi) or "(none)"))
+    if not hi:
+        _log("no high-conviction buy setups — no email.")
+    else:
+        fp = _buy_fingerprint(hi)
+        state = db.load_alert_state(_BUY_ROW) or {}
+        if (state.get("last_emailed_date") == today_str
+                and state.get("last_fingerprint") == fp and not force):
+            _log(f"buy-list unchanged since last send (fp={fp}) — no email.")
+        else:
+            subject, html = render_buy_picks_email(hi, payload.get("built_at", today_str))
+            sent = _send_email("buy-setups", subject, html)
+            # Save dedup state ONLY on a real send — so a transient Resend failure
+            # (key present, send errored) is retried by the later DST slot rather
+            # than silently suppressed. (Inert/no-key also won't save → harmless.)
+            if sent and db.save_alert_state(today_str, fp, _BUY_ROW):
+                _log(f"buy state saved (row={_BUY_ROW}, date={today_str}, fp={fp}).")
+            elif not sent:
+                _log("buy email not sent (inert/failed) — state NOT saved (later slot may retry).")
+    _log(f"scan done · persisted={n} · buy_sent={sent}")
     return 0
 
 
