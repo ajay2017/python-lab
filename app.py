@@ -1676,8 +1676,65 @@ if page == "🏠 Home":
         for _, r in st.session_state.holdings_df.iterrows()
         if str(r.get("Ticker", "")).strip()
     ]
+    # ── Instant snapshot — live-price-first progressive render ────────────────
+    # The per-ticker _parallel_load_all below blocks ~8-15s on a COLD load (6-mo
+    # history + fundamentals per name). Paint a cheap live-price snapshot FIRST
+    # (portfolio value + today's held P&L + open P&L, from holdings × live quotes —
+    # no history bundle needed) so the user sees their book in ~2s instead of a
+    # blank spinner. Streamlit streams elements as they render, so this shows
+    # before the load below finishes; it's CLEARED once the full scored view is
+    # ready (the Command Center supersedes it). First cold load per session only
+    # (warm reruns hit the load_all cache and don't wait). Best-effort — a failure
+    # here never blocks or alters the real load.
+    _snap_ph = st.empty()
+    if held_tickers and not st.session_state.get("_home_loaded_once"):
+        try:
+            _snap_live = fetch_live_prices(held_tickers)
+            if _snap_live:
+                _s_total = _s_day = _s_open = 0.0
+                _s_rows = []
+                for _, _hr in st.session_state.holdings_df.iterrows():
+                    _st = str(_hr.get("Ticker", "")).strip().upper()
+                    _lp = _snap_live.get(_st)
+                    if not _st or not _lp:
+                        continue
+                    _sh  = float(_hr.get("Shares") or 0)
+                    _ac  = float(_hr.get("Avg Cost ($)") or 0)
+                    _px  = float(_lp.get("price") or 0)
+                    _chg = float(_lp.get("change_pct") or 0)
+                    if _sh <= 0 or _px <= 0:
+                        continue
+                    _prev = _px / (1 + _chg / 100.0) if _chg > -100 else _px
+                    _s_total += _sh * _px
+                    _s_day   += _sh * (_px - _prev)
+                    _s_open  += _sh * (_px - _ac) if _ac > 0 else 0.0
+                    _s_rows.append({"Ticker": _st, "Last": _px, "Day %": _chg,
+                                    "Value": _sh * _px})
+                if _s_rows:
+                    with _snap_ph.container():
+                        st.caption("⚡ Live snapshot — full analysis loading below…")
+                        _sc = st.columns(3)
+                        _sc[0].metric("Portfolio Value", f"${_s_total:,.0f}")
+                        _s_prev_total = _s_total - _s_day
+                        _sc[1].metric(
+                            "Today (held)", f"${_s_day:+,.0f}",
+                            f"{(_s_day / _s_prev_total * 100 if _s_prev_total > 0 else 0):+.2f}%",
+                        )
+                        _sc[2].metric("Open P&L", f"${_s_open:+,.0f}")
+                        st.dataframe(
+                            pd.DataFrame(_s_rows),
+                            hide_index=True, use_container_width=True,
+                            column_config={
+                                "Last":  st.column_config.NumberColumn(format="$%.2f"),
+                                "Day %": st.column_config.NumberColumn(format="%+.2f%%"),
+                                "Value": st.column_config.NumberColumn(format="$%.0f"),
+                            },
+                        )
+        except Exception:
+            pass
+
     held_data: dict = {}
-    with st.spinner("Loading portfolio data…"):
+    with st.spinner("Loading full analysis…"):
         _hd_results = _parallel_load_all(held_tickers)
         # Position age (calm-advisor / settling grace): days since the OLDEST
         # still-held lot was opened, via FIFO replay of the trade journal. None
@@ -1710,6 +1767,12 @@ if page == "🏠 Home":
                     bundle["days_since_last_buy"] = None
                     bundle["material_add_age_days"] = None
                 held_data[t] = bundle
+
+    # Full scored view is ready — clear the instant snapshot (the Command Center
+    # below supersedes it) and mark the cold load done so warm reruns skip the
+    # snapshot (they hit the load_all cache and don't wait).
+    _snap_ph.empty()
+    st.session_state["_home_loaded_once"] = True
 
     # Data-resilience: surface when any holding is rendering on the last-known-good
     # cache (a provider was down) — never silently pass aged data off as live.
