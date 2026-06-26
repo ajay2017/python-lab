@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -399,7 +399,7 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
             # Treat unknown gap as elevated urgency — without a stop in place,
             # a profitable Sell signal needs manual review now, not later.
             _gap_close = (gap is None) or (gap < 5)
-            urgency = "high" if (score < 30 or _gap_close) else "medium"
+            urgency = "high" if (score < COMPOSITE_SELL or _gap_close) else "medium"
             half_shares = max(1, shares // 2)
             actions.append({
                 "type":       "review",

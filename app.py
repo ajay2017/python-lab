@@ -7281,7 +7281,7 @@ if page == "🏠 Home":
                         earn_flag = False
                         if earn:
                             try:
-                                days_to_earn = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
+                                days_to_earn = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
                                 if 0 <= days_to_earn <= 14:
                                     _check("🔴", f"Earnings in {days_to_earn}d ({earn}) — bearish signal + near earnings = reduce now.", "#ff4444")
                                     earn_flag = True
@@ -10412,7 +10412,7 @@ elif page == "📈 Analysis":
         earn_label = "—"
         if earn:
             try:
-                days = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
+                days = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
                 earn_label = f"{earn} ({days}d)" if days >= 0 else earn
             except Exception:
                 earn_label = earn
@@ -11003,7 +11003,7 @@ elif page == "📈 Analysis":
                         _earn_note = ""
                         try:
                             if _earn_str:
-                                _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - date.today()).days
+                                _earn_d = (datetime.strptime(_earn_str, "%Y-%m-%d").date() - _today_et()).days
                                 if 0 <= _earn_d <= 21:
                                     _earn_note = (
                                         f" Earnings in **{_earn_d} days** ({_earn_str}) — "
@@ -11119,7 +11119,7 @@ elif page == "📈 Analysis":
                 earn = r["earnings"]
                 if earn:
                     try:
-                        days = (datetime.strptime(earn, "%Y-%m-%d").date() - date.today()).days
+                        days = (datetime.strptime(earn, "%Y-%m-%d").date() - _today_et()).days
                         if 0 <= days <= 21:
                             # For held tickers on a Buy signal the earnings note is already
                             # merged into the "Already held" info box above — skip the duplicate.

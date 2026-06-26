@@ -615,7 +615,8 @@ def load_watchlist() -> list[str]:
             rows = _client().table("watchlist").select("ticker").execute().data
             return [r["ticker"] for r in rows] if rows else []
         except Exception as e:
-            st.warning(f"Watchlist read error: {e}")
+            st.warning(f"Could not load watchlist — using empty list until restored. ({e})")
+            return []
     return list(_DEFAULT_WATCHLIST)
 
 

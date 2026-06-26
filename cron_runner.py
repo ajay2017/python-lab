@@ -95,15 +95,10 @@ def _run_premarket(now_et, force: bool) -> int:
         if not is_trading_day(now_et.date()):
             _log("premarket: not an ET trading day — skip.")
             return 0
-        state = db.load_alert_state(_PROTECTIVE_ROW) or {}
-        if state.get("last_emailed_date") == today_str:
-            _log("premarket: already processed today — skip (second UTC slot).")
-            return 0
         if now_et.hour < ALERT_EMAIL_HOUR_ET:
             _log(f"premarket: too early (ET hour {now_et.hour} < {ALERT_EMAIL_HOUR_ET}) — skip.")
             return 0
-    else:
-        state = db.load_alert_state(_PROTECTIVE_ROW) or {}
+    state = db.load_alert_state(_PROTECTIVE_ROW) or {}
 
     payload = compute_protective_alerts(today=now_et.date())
     alerts = payload.get("alerts", [])
@@ -122,10 +117,16 @@ def _run_premarket(now_et, force: bool) -> int:
         subject, html = render_alert_email(alerts, payload.get("built_at", today_str))
         sent = _send_email("protective", subject, html)
 
-    if db.save_alert_state(today_str, fp, _PROTECTIVE_ROW):
-        _log(f"state saved (row={_PROTECTIVE_ROW}, date={today_str}, fp={fp}).")
+    if sent or not alerts:
+        # Save dedup state ONLY on a real send or a legitimately empty run — so a
+        # transient Resend failure is retried by the later DST slot rather than
+        # silently suppressed (matches buy-lane dedup contract).
+        if db.save_alert_state(today_str, fp, _PROTECTIVE_ROW):
+            _log(f"state saved (row={_PROTECTIVE_ROW}, date={today_str}, fp={fp}).")
+        else:
+            _log("state NOT saved (DB offline / table missing) — dedup degrades to always-send.")
     else:
-        _log("state NOT saved (DB offline / table missing) — dedup degrades to always-send.")
+        _log("email not sent — state NOT saved so later slot can retry.")
     _log(f"premarket done · sent={sent}")
     return 0
 
