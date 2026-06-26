@@ -634,7 +634,7 @@ st.session_state["_nav_origin"]     # saved when navigating TO Stock Analysis
 | `_last_port_df` | My Portfolio | Trade Journal decision context |
 | `_signals_computed_at` | My Portfolio (after port_df build) | Portfolio table caption, Trade Journal signal pre-fill help |
 | `_portfolio_value` | My Portfolio | Sidebar display |
-| `scanner_results` | Market Scanner | Today's Brief buy candidates |
+| `scanner_results` | Market Scanner, **or hydrated once/session from the `scanner_cache` Supabase table** (written by the cron `scan` mode ~10:00 ET, or a manual full-universe Home scan) | Today's Brief buy candidates + Grow Today new picks — now populated on a cold load without a manual scan (`_scanner_results_meta` carries the freshness stamp; hydrate bumps `_scanner_ver`) |
 | `_sidebar_news` | My Portfolio / Stock Analysis | Sidebar news slot |
 | `_qr_result` | Today's Brief quick research | Today's Brief (persists result) |
 | `_tj_last_submit_sig` / `_tj_last_submit_ts` | Trade Journal (on submit) | Trade Journal double-submit dedupe (next submit) |

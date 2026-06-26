@@ -14,6 +14,12 @@ on:
     # cron derives mode=premarket for ET hour < 12.
     - cron: "0 12 * * 1-5"   # 12:00 UTC — 08:00 EDT / 07:00 EST (gated too-early in winter)
     - cron: "0 13 * * 1-5"   # 13:00 UTC — 09:00 EDT (already-done) / 08:00 EST (winter run)
+    # Mid-morning SCAN run — run the sector scanner headlessly and persist results
+    # so Home shows buy candidates on a cold load. Single slot (the write is an
+    # overwrite, no dedup needed); the ALERT_RUN_MODE mapping below forces
+    # mode=scan for this cron string (its ET hour < 12 would otherwise derive
+    # premarket). 14:00 UTC = 10:00 EDT / 09:00 EST — post-open either way.
+    - cron: "0 14 * * 1-5"   # 14:00 UTC — 10:00 EDT / 09:00 EST (post-open scan)
     # EOD run (~16:30 ET, post-close) — snapshot write + reactive pullback. Two UTC
     # slots straddle EST/EDT; the cron derives mode=eod for ET hour >= 12 and gates
     # on ET hour >= 16 so the close is final.
@@ -24,7 +30,7 @@ on:
       mode:
         description: "Run mode (auto = derive from ET hour)"
         type: choice
-        options: [auto, premarket, eod]
+        options: [auto, premarket, eod, scan]
         default: auto
       force:
         description: "Bypass the trading-day / hour / once-per-day guards (test)"
@@ -68,5 +74,11 @@ jobs:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '' }}
           ALERT_TEST_EMAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email && '1' || '' }}
-          ALERT_RUN_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode || '' }}
+          # workflow_dispatch input wins; else the 14:00 UTC schedule slot forces
+          # mode=scan (its ET hour would otherwise derive premarket); all other
+          # schedule slots leave it blank so the cron derives premarket/eod by hour.
+          ALERT_RUN_MODE: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
+            || (github.event.schedule == '0 14 * * 1-5' && 'scan')
+            || '' }}
         run: python cron_runner.py

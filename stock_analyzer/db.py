@@ -179,6 +179,26 @@ the user acted on it):
     create policy "Allow all (service role)" on public.bundle_cache
         for all to service_role using (true) with check (true);
 
+    -- scanner_cache: single-row (id=1) snapshot of the LATEST sector scan, so the
+    -- Home buy-candidate / Grow-Today new-pick lists populate on a COLD load
+    -- WITHOUT the user running the ~20s scanner. The GitHub Actions cron writes it
+    -- post-open each trading day (mode=scan); a manual full scan refreshes it too.
+    -- The whole scan DataFrame is stored as JSON so Home reconstructs
+    -- scanner_results EXACTLY (every column preserved). Until created, load returns
+    -- None and the app behaves exactly as today (candidates empty until a manual
+    -- scan). System cache (not user data) — gated by the read-only guard anyway.
+    create table if not exists public.scanner_cache (
+        id           integer primary key,        -- always 1 (single user)
+        results_json text not null,
+        scan_date    date,
+        source       text,                        -- 'cron' | 'app'
+        scanned_at   timestamptz not null default now()
+    );
+    alter table public.scanner_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.scanner_cache;
+    create policy "Allow all (service role)" on public.scanner_cache
+        for all to service_role using (true) with check (true);
+
     -- alert_state: single-row (id=1) dedup state for the protective-alert cron
     -- (exit-discipline Phase 3). Until created, load returns None / save no-ops,
     -- so the cron degrades to "always send" (no double-send guard) but still works.
@@ -839,6 +859,69 @@ def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
 _REC_COLS = ["id", "ticker", "rec_date", "rec_type", "surfaced_at",
              "price_at_surface", "composite_score", "momentum_score",
              "sector", "conviction", "verdict", "thesis"]
+
+
+def save_scanner_cache(results_df, scan_date, source: str = "cron") -> bool:
+    """Upsert the single-row (id=1) latest-scan snapshot.
+
+    Stores the WHOLE scan DataFrame as JSON (orient="split") so Home can
+    reconstruct `scanner_results` exactly — every column preserved, no schema
+    mapping to drift. Written by the headless cron (source="cron") post-open and
+    by a manual full scan (source="app"). System cache, but honours the read-only
+    guard (it's a write). Best-effort; never raises.
+    """
+    if _READONLY:
+        return False
+    if not has_db() or results_df is None or getattr(results_df, "empty", True):
+        return False
+    try:
+        _date = (scan_date.isoformat() if hasattr(scan_date, "isoformat")
+                 else (str(scan_date)[:10] if scan_date else None))
+        record = {
+            "id":           1,
+            "results_json": results_df.to_json(orient="split", date_format="iso"),
+            "scan_date":    _date,
+            "source":       str(source)[:16],
+            "scanned_at":   pd.Timestamp.now(tz="UTC").isoformat(),
+        }
+        _client().table("scanner_cache").upsert(record, on_conflict="id").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_scanner_cache() -> dict | None:
+    """Return {"df": DataFrame, "scan_date": str|None, "source": str|None,
+    "scanned_at": str|None} for the latest persisted scan, or None (DB offline /
+    table missing / no scan yet / parse error). Never raises — None means "no
+    persisted scan", so the app behaves exactly as today (empty until a manual
+    scan)."""
+    if not has_db():
+        return None
+    try:
+        from io import StringIO
+        rows = (
+            _client().table("scanner_cache")
+            .select("results_json,scan_date,source,scanned_at")
+            .eq("id", 1).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        _json = row.get("results_json")
+        if not _json:
+            return None
+        df = pd.read_json(StringIO(_json), orient="split")
+        if df is None or df.empty:
+            return None
+        return {
+            "df":         df,
+            "scan_date":  row.get("scan_date"),
+            "source":     row.get("source"),
+            "scanned_at": row.get("scanned_at"),
+        }
+    except Exception:
+        return None
 
 
 def save_recommendations(records: list[dict]) -> dict:

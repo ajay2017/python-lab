@@ -3,16 +3,20 @@
 Headless alert cron entry point (exit-discipline Phase 3 + pullback Phase 2 +
 Today's-P&L EOD snapshot). Run by GitHub Actions (.github/workflows/alerts.yml).
 
-TWO modes (one per ET trading day each):
+THREE modes (one per ET trading day each):
   • premarket (~08:00 ET) — recompute PROTECTIVE signals (stop / EXIT / risk-off)
     and email only when the action set changed. (exit-discipline Phase 3)
+  • scan (~10:00 ET, post-open) — run the sector scanner headlessly and persist
+    the result to scanner_cache so the Home buy-candidate / Grow-Today new-pick
+    lists populate on a COLD load without the user running the ~20s scanner.
   • eod (~16:30 ET, post-close) — (a) write today's daily_snapshot so the
     Today's-P&L baseline is deterministic even on unviewed days; (b) a REACTIVE
     pullback email if the market actually fell ≥ threshold today. (pullback P2 +
     Today's-P&L EOD)
 
-Mode = $ALERT_RUN_MODE if set (workflow_dispatch), else derived from the ET hour
-(≥12:00 ET ⇒ eod). All output → stdout (the Actions log). Ships INERT: no
+Mode = $ALERT_RUN_MODE if set (workflow_dispatch input, OR the scan schedule slot
+maps its cron expression to mode=scan), else derived from the ET hour (≥12:00 ET
+⇒ eod, else premarket). All output → stdout (the Actions log). Ships INERT: no
 RESEND_API_KEY ⇒ compute + log, send nothing. Always exits 0.
 
 Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
@@ -164,6 +168,32 @@ def _run_eod(now_et, force: bool) -> int:
     return 0
 
 
+def _run_scan(now_et, force: bool) -> int:
+    """Mid-morning headless sector scan → persist the result so the Home page's
+    buy-candidate / Grow-Today new-pick lists populate on a COLD load without the
+    user running the ~20s scanner. Overwrites the single-row scanner_cache (no
+    dedup needed). Inert until the scanner_cache table exists. Always exits 0."""
+    today_str = now_et.date().isoformat()
+    if not force and not is_trading_day(now_et.date()):
+        _log("scan: not an ET trading day — skip.")
+        return 0
+    from stock_analyzer.scanner import scan_sectors, SECTOR_UNIVERSE
+    try:
+        results_df = scan_sectors(list(SECTOR_UNIVERSE.keys()), period="6mo")
+    except Exception as e:
+        _log(f"scan: scan_sectors error — {str(e)[:120]}")
+        return 0
+    n = 0 if results_df is None or results_df.empty else len(results_df)
+    if n == 0:
+        _log("scan: no results (provider miss from datacenter IP?) — nothing persisted.")
+        return 0
+    if db.save_scanner_cache(results_df, now_et.date(), source="cron"):
+        _log(f"scan: persisted {n} results (date={today_str}).")
+    else:
+        _log(f"scan: NOT persisted ({n} results; DB offline / table missing / read-only).")
+    return 0
+
+
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
@@ -174,6 +204,8 @@ def main() -> int:
 
     if test_email:
         return _run_test_email(now_et)
+    if mode == "scan":
+        return _run_scan(now_et, force)
     if mode == "eod":
         return _run_eod(now_et, force)
     return _run_premarket(now_et, force)

@@ -721,6 +721,30 @@ _check_password()
 # ── Session state — load from DB once per session ────────────────────────────
 if "scanner_results" not in st.session_state:
     st.session_state.scanner_results = None
+# One-time hydrate: pull the latest persisted scan (written by the headless cron
+# post-open each trading day, or a prior manual full scan) into scanner_results so
+# the Home buy-candidate / Grow-Today new-pick lists populate on a COLD load
+# WITHOUT the user running the ~20s scanner. Best-effort, once per session (the
+# flag prevents a DB read every rerun); a manual scan still overrides + re-persists.
+# Inert (no-op) until the scanner_cache table exists → behaves exactly as today.
+if (st.session_state.scanner_results is None
+        and not st.session_state.get("_scanner_cache_checked")):
+    st.session_state["_scanner_cache_checked"] = True
+    try:
+        _persisted_scan = db.load_scanner_cache()
+    except Exception:
+        _persisted_scan = None
+    if (_persisted_scan and _persisted_scan.get("df") is not None
+            and not _persisted_scan["df"].empty):
+        st.session_state.scanner_results = _persisted_scan["df"]
+        st.session_state["_scanner_results_meta"] = {
+            "scan_date":  _persisted_scan.get("scan_date"),
+            "source":     _persisted_scan.get("source"),
+            "scanned_at": _persisted_scan.get("scanned_at"),
+        }
+        # Invalidate the Home synthesis cache so the Brief rebuilds against the
+        # hydrated scanner results (same signal a manual scan raises).
+        st.session_state["_scanner_ver"] = st.session_state.get("_scanner_ver", 0) + 1
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
 if "nav_page" not in st.session_state:
@@ -3141,6 +3165,14 @@ if page == "🏠 Home":
                 # rebuilds against the fresh scanner results.
                 st.session_state["_scanner_ver"] = \
                     st.session_state.get("_scanner_ver", 0) + 1
+                # Persist (full-universe scan) so the next cold load / session
+                # shows candidates without re-scanning. Mirrors what the cron writes.
+                _today_d = _today_et().date()
+                db.save_scanner_cache(_fresh_results, _today_d, source="app")
+                st.session_state["_scanner_results_meta"] = {
+                    "scan_date": _today_d.isoformat(), "source": "app",
+                    "scanned_at": _today_d.isoformat(),
+                }
                 # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
                 # (= 12) non-held scanner picks. Pool size matches _grow_today's
                 # candidate window (max_picks_bull × over-fetch) so every candidate
@@ -4954,6 +4986,12 @@ if page == "🏠 Home":
             if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
             if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
             _db_c2_sub = " · ".join(_db_c2_parts)
+            # Freshness stamp — when the candidates came from a persisted scan
+            # (cron post-open, or a prior manual scan) rather than a live in-session
+            # run, say so + when, so the list never reads as silently stale.
+            _scan_meta  = st.session_state.get("_scanner_results_meta") or {}
+            _scan_src   = {"cron": "auto-scan", "app": "your scan"}.get(_scan_meta.get("source"), "scan")
+            _scan_stamp = f"📡 From the {_scan_meta['scan_date']} {_scan_src}." if _scan_meta.get("scan_date") else ""
             st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
             st.markdown(
                 f"<div style='background:#14532d;border-left:4px solid #22c55e;"
@@ -4964,7 +5002,10 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
             if not _db_buys:
-                st.caption("No scanner results available. Run Market Scanner to populate buy candidates.")
+                st.caption(
+                    "No scan results yet. The pre-market **auto-scan** populates this "
+                    "each trading day (~10:00 AM ET) — or run the Market Scanner now."
+                )
                 if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
                     st.session_state["_pending_page"] = "🔍 Market Scanner"
                     st.rerun()
@@ -4979,6 +5020,7 @@ if page == "🏠 Home":
                 st.caption(
                     "📊 Scanner momentum picks beyond today's gated list. "
                     "🔍 Verify via Analysis before acting."
+                    + (f"  {_scan_stamp}" if _scan_stamp else "")
                 )
                 for _db_buy in _db_buys_unique:
                     _xref       = _db_buy.get("xref", {})
@@ -9483,6 +9525,10 @@ elif page == "🔍 Market Scanner":
             # scanner_results) so it rebuilds when the user returns to Home.
             st.session_state["_scanner_ver"] = \
                 st.session_state.get("_scanner_ver", 0) + 1
+            # NOTE: this Market Scanner page scans a user-chosen sector SUBSET
+            # (+ watchlist), so it is intentionally NOT persisted to scanner_cache
+            # — only the full-universe Home scan + the cron seed the cache, so the
+            # cold-load candidate list is never a non-representative subset.
             st.success(f"Scan complete — {len(results_df)} stocks analyzed.")
         else:
             st.error("Scan returned no results. Check connection.")
