@@ -16142,6 +16142,14 @@ Every stock gets a **Composite score (0–100)** blending three factors:
 
 A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not* enough — a hot breakout (high momentum) is **skipped** if the full composite says Hold/Sell ("composite contradicts momentum").
 
+**The bar for a *new* entry moves with the market tape.** Composite ≥ 65 is the baseline, but how strong a brand-new position must be depends on how much the market is helping you that day:
+
+- **Bull day** (S&P 500 up ≥ +0.5%): bar = **65**, up to **3** new picks. A rising tide assists a merely-good setup, so a solid "Buy" is worth initiating.
+- **Flat day** (S&P roughly −0.5% to +0.5%): bar jumps to **78**, capped at **1** pick. With no tailwind, a new name has to be strong enough to work *on its own* — a 67–77 "Buy" that would qualify on a bull day is held back here.
+- **Down day** (S&P down ≥ −0.5%): **no new entries** — the app defers initiating until the tape stabilises and focuses on protecting what you hold.
+
+This is why a name can show up as a Grow Today pick in the morning (bull open) and quietly drop off by the afternoon (tape gone flat): the *stock* didn't change — the bar it had to clear did. It's the same medium-term discipline as the loss protection below: don't chase risk the market isn't rewarding.
+
 **"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy.
 """
         )
@@ -16155,6 +16163,7 @@ When a name looks strong but isn't recommended, one of these gates fired — and
 - **Single-name ceiling (15%)** — one position can't exceed this share of the portfolio; beyond it, a Strong Buy is a *KEEP, not an add*.
 - **Imminent macro event** — a HIGH-impact release (jobs, CPI, Fed) is within a few days and hits that sector; opening into a known binary catalyst is the anti-pattern this blocks.
 - **Composite contradicts momentum** — momentum is hot but the full composite is below the Buy threshold; skip until it confirms.
+- **Market tape raised the bar** — on a flat day the bar for a *new* entry rises from 65 to **78** (and the cap drops to 1 pick); on a down day new entries are deferred entirely. A good-but-not-great name (composite 67–77) clears at a bull open and gets held back later the same day if the tape goes flat — see *"How stocks are scored"* above.
 - **Recently added (cooldown)** — you already added to this winner in the last ~2 weeks; the app waits for the new shares to settle before suggesting more (anti-churn).
 """
         )
