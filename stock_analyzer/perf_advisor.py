@@ -7,6 +7,7 @@ with dollar impact, thesis status, and institutional context.
 """
 
 import pandas as pd
+from stock_analyzer.constants import COMPOSITE_HOLD
 
 
 def _f(val, default=0.0):
@@ -279,7 +280,7 @@ def build_perf_recommendations(
                     "If composite score drops below 55 OR the alpha gap widens further, reduce immediately. "
                     "The fundamentals justify patience; the performance does not justify complacency."
                 )
-            elif score >= 44:
+            elif score >= COMPOSITE_HOLD:
                 thesis = (
                     f"Score {score:.0f}/100 — borderline. Fundamental conviction is fading "
                     "and price action confirms the weakness."

@@ -2015,10 +2015,12 @@ if page == "🏠 Home":
                             "trigger_type": "REBALANCE",
                         })
                         st.session_state.trades_df = db.load_trades()
-                    except Exception:
-                        # Don't block the split adjustment on the synthetic-row write;
-                        # the user has already approved the holdings change.
-                        pass
+                    except Exception as _split_err:
+                        st.warning(
+                            f"Split applied to holdings but the SPLIT history row was not saved "
+                            f"({_split_err}). Do not use 'Rebuild from trades' until this is "
+                            f"corrected — replaying pre-split BUYs would overwrite your holdings."
+                        )
                     # Invalidate caches so portfolio rebuilds with new values
                     for _k in list(st.session_state.keys()):
                         if _k.startswith("_split_check_") or _k.startswith("_live_prices"):

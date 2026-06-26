@@ -126,6 +126,24 @@ _SECTOR_NORMS: dict[str, dict] = {
     ),
 }
 
+# Cross-sector scoring band thresholds — metrics that are not sector-relative.
+# Changing these is a policy decision; keep them visible next to _SECTOR_NORMS.
+_FUND_BANDS = {
+    # Earnings growth %
+    "earn_accel":  25,   # above this = Accelerating
+    "earn_solid":  10,   # above this = Solid
+
+    # Debt-to-equity ratio (reported as %)
+    "de_low":      30,   # below this = Very low debt
+    "de_mid":      80,   # below this = Manageable
+    "de_high":    150,   # below this = Elevated; above = High leverage
+
+    # FCF yield %
+    "fcf_excel":    5,   # >= this = Excellent
+    "fcf_good":     3,   # >= this = Good
+    "fcf_modest":   1,   # >= this = Modest; >= 0 = Low; < 0 = Negative
+}
+
 
 def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     """
@@ -180,10 +198,10 @@ def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     if earn_growth is not None:
         max_points += 20
         pct = earn_growth * 100
-        if pct > 25:
+        if pct > _FUND_BANDS["earn_accel"]:
             points += 20
             signals["Earnings Growth"] = f"{pct:.1f}% — Accelerating"
-        elif pct > 10:
+        elif pct > _FUND_BANDS["earn_solid"]:
             points += 15
             signals["Earnings Growth"] = f"{pct:.1f}% — Solid"
         elif pct > 0:
@@ -220,13 +238,13 @@ def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     de = financials.get("debt_to_equity")
     if de is not None:
         max_points += 20
-        if de < 30:
+        if de < _FUND_BANDS["de_low"]:
             points += 20
             signals["Debt/Equity"] = f"{de:.0f}% — Very low debt"
-        elif de < 80:
+        elif de < _FUND_BANDS["de_mid"]:
             points += 14
             signals["Debt/Equity"] = f"{de:.0f}% — Manageable"
-        elif de < 150:
+        elif de < _FUND_BANDS["de_high"]:
             points += 8
             signals["Debt/Equity"] = f"{de:.0f}% — Elevated"
         else:
@@ -237,13 +255,13 @@ def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     fcf_yield = financials.get("fcf_yield")
     if fcf_yield is not None:
         max_points += 20
-        if fcf_yield >= 5:
+        if fcf_yield >= _FUND_BANDS["fcf_excel"]:
             points += 20
             signals["FCF Yield"] = f"{fcf_yield:.1f}% — Excellent cash generation"
-        elif fcf_yield >= 3:
+        elif fcf_yield >= _FUND_BANDS["fcf_good"]:
             points += 15
             signals["FCF Yield"] = f"{fcf_yield:.1f}% — Good"
-        elif fcf_yield >= 1:
+        elif fcf_yield >= _FUND_BANDS["fcf_modest"]:
             points += 8
             signals["FCF Yield"] = f"{fcf_yield:.1f}% — Modest"
         elif fcf_yield >= 0:
