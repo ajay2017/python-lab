@@ -82,6 +82,26 @@ def _f(val, default=0.0):
         return default
 
 
+def _gate_wt(row) -> float:
+    """Weight a concentration GATE compares against the 15%/35% ceilings.
+
+    Reads "Gate Weight (%)" (the tighter-of-both net-capital basis injected by
+    app.py when a margin debit is present) and falls back to the equity-basis
+    "Weight (%)" when the column is absent (cash unknown/stale, or any non-app
+    caller like the headless cron). See concentration.gating_denominator.
+    """
+    _gw = row.get("Gate Weight (%)")
+    # NaN-safe (`_gw == _gw` is False for NaN): a NaN gate weight falls back to
+    # the equity column, matching _f's own NaN handling — strict parity with the
+    # equity-basis path when Market Value is missing.
+    return _f(_gw if (_gw is not None and _gw == _gw) else row.get("Weight (%)"), 0)
+
+
+def _gate_wt_col(port_df) -> str:
+    """Column name the sector gate sums — gate-basis if present, else equity."""
+    return "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
+
+
 def _days_until(date_str: str, today: date) -> int | None:
     try:
         d = date.fromisoformat(str(date_str)[:10])
@@ -522,7 +542,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # signal must defer to the protect-capital signal. Mirrors the macro gate.
     _breached_sectors: set = set()
     if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
-        _sec_wt = port_df.groupby("Sector")["Weight (%)"].sum()
+        _sec_wt = port_df.groupby("Sector")[_gate_wt_col(port_df)].sum()
         # "Other" is a classification artifact (unclassified holdings), not a
         # real correlated sector — exclude it so picks/adds aren't suppressed by
         # a phantom cap breach. Mirrors risk_advisor's UNCLASSIFIED_SECTOR exclusion.
@@ -885,7 +905,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # No matter how strong the signal, additional concentration here
                 # creates asymmetric idiosyncratic risk that the institutional
                 # framework caps at SINGLE_NAME_CEILING.
-                _cur_wt = _f(row.get("Weight (%)"), 0)
+                _cur_wt = _gate_wt(row)
                 if _cur_wt >= SINGLE_NAME_CEILING:
                     concentration_blocked_adds.append({
                         "ticker":    ticker,
@@ -1404,7 +1424,7 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             if ticker.upper() in _trim_set:
                 continue
             # Single-name ceiling — hard suppress; concentration risk overrides signal
-            if _f(row.get("Weight (%)"), 0) >= SINGLE_NAME_CEILING:
+            if _gate_wt(row) >= SINGLE_NAME_CEILING:
                 continue
             # Drift-trim conflict — position is drift-overweight; don't add
             if ticker.upper() in _drift_trim_set:

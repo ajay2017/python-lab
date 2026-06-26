@@ -37,6 +37,13 @@ SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner abo
 # as a warning rather than neutral info. Operational display threshold (not a
 # gate) — tune from observation.
 CONCENTRATION_HIGHBETA_SHARE_WARN = 60.0
+# Concentration gates use the "tighter-of-both" basis: margin (signed net cash
+# < 0) tightens the 15%/35% ceilings to a net-capital denominator; cash never
+# loosens them. A manually-entered cash/margin figure older than this many days
+# is treated as unknown → the gate degrades to equity-basis (see
+# concentration.gating_denominator). OPERATIONAL knob (gate-safety freshness
+# window), NOT an investment-decision threshold — tune from observation.
+ACCOUNT_CASH_STALE_DAYS = 7
 
 # The catch-all bucket a holding lands in when it has no curated sector mapping
 # AND no provider .info sector. It is NOT a real correlated sector — it's a

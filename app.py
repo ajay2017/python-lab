@@ -80,6 +80,7 @@ from stock_analyzer.constants import (
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
     CONCENTRATION_HIGHBETA_SHARE_WARN,
+    ACCOUNT_CASH_STALE_DAYS,
     DIVERSIFY_DISPLAY_TOP,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
@@ -124,7 +125,7 @@ from stock_analyzer.portfolio import (
     annotate_add_candidates, resolve_sector,
     holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
-from stock_analyzer.concentration import assess_add_concentration, high_beta_share
+from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
 from stock_analyzer.discovery_universe import discovery_tickers
 from stock_analyzer.macro import (
@@ -1966,6 +1967,42 @@ if page == "🏠 Home":
     total_pnl   = port_df["P&L ($)"].sum()
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
+
+    # ── Concentration-gate basis: "tighter-of-both" (equity vs net capital) ────
+    # The 15%/35% ceilings gate on a "Gate Weight (%)" that nets margin: when the
+    # account carries a margin debit (signed net cash < 0), the true capital base
+    # is smaller than invested equity, so each name is a LARGER share of what you
+    # actually own and the gate tightens. Cash on hand never loosens the gate, and
+    # a stale (> ACCOUNT_CASH_STALE_DAYS) or unknown cash figure falls back to
+    # equity-basis. Display weights ("Weight (%)") stay equity-basis EVERYWHERE;
+    # only the gate comparisons read "Gate Weight (%)". Investment-policy decision
+    # 2026-06-26 — see docs/plans/account-baseline.md.
+    _gate_denom, _gate_basis = float(total_val), "equity"
+    try:
+        _acct_cash = db.load_account_cash()
+        _cash_stale = False
+        if _acct_cash and _acct_cash.get("updated_at"):
+            _cash_age_days = (pd.Timestamp.now(tz="UTC")
+                              - pd.to_datetime(_acct_cash["updated_at"], utc=True)).days
+            _cash_stale = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
+        _acct_total = (float(total_val) + _acct_cash["cash_balance"]) if _acct_cash else None
+        _gate_denom, _gate_basis = gating_denominator(
+            float(total_val), _acct_total, stale=_cash_stale,
+        )
+    except Exception:
+        _gate_denom, _gate_basis = float(total_val), "equity"
+    if not port_df.empty:
+        if _gate_basis in ("account", "over-levered") and _gate_denom > 0:
+            port_df["Gate Weight (%)"] = (port_df["Market Value"] / _gate_denom * 100).round(1)
+        else:
+            port_df["Gate Weight (%)"] = port_df["Weight (%)"]
+    # Published for the entry nudge (Trade Journal) + suppression-banner annotation
+    # (CLAUDE.md coordination pattern — one consistent number for all consumers).
+    st.session_state["_acct_gate_cache"] = {
+        "denom":        _gate_denom,
+        "basis":        _gate_basis,
+        "over_levered": _gate_basis == "over-levered",
+    }
 
     # Today's P&L — mark-to-market of CURRENTLY-HELD shares vs prior close.
     # SCOPE (surfaced in the metric label "(held)" + tooltip): this is a
@@ -4204,6 +4241,17 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
 
+            # When a margin debit tightened the gate (account-basis), say so — the
+            # suppression weights run higher than the equity-only view shown
+            # elsewhere, and the user should know WHY (CLAUDE.md: never silently).
+            _gate_margin_note = (
+                "<div style='color:#fcd34d;font-size:0.74em;margin-top:6px;font-style:italic'>"
+                "⚖️ Tightened by margin — gated on your net capital, not gross stock holdings."
+                "</div>"
+                if (st.session_state.get("_acct_gate_cache") or {}).get("basis")
+                   in ("account", "over-levered") else ""
+            )
+
             # Single-name concentration ceiling suppressed an add — surface why
             # so the user understands the position is capped, not signal-weak.
             if conc_blocked:
@@ -4223,7 +4271,9 @@ if page == "🏠 Home":
                     "These winners qualify on signal but already exceed the institutional "
                     "single-name ceiling. Adding more would concentrate idiosyncratic risk. "
                     "Trim back to target before considering further adds."
-                    "</div></div>",
+                    "</div>"
+                    + _gate_margin_note
+                    + "</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -4247,7 +4297,9 @@ if page == "🏠 Home":
                     "These names qualify on signal, but their sector is already over the "
                     "institutional hard cap. Adding more would deepen a concentration the "
                     "Risk Advisor is recommending you trim. A Strong Buy here is a KEEP, not an add."
-                    "</div></div>",
+                    "</div>"
+                    + _gate_margin_note
+                    + "</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -12619,6 +12671,12 @@ elif page == "📒 Trade Journal":
                         try:
                             _cc_pdf = st.session_state.get("_last_port_df")
                             _cc_pv  = _f(st.session_state.get("_portfolio_value"), 0.0)
+                            # Tighter-of-both gate basis (margin nets the denominator
+                            # down so the nudge fires sooner); falls back to equity
+                            # when cash is unknown/stale. See gating_denominator.
+                            _cc_gate   = st.session_state.get("_acct_gate_cache") or {}
+                            _cc_denom  = _f(_cc_gate.get("denom"), 0.0) or _cc_pv
+                            _cc_margin = _cc_gate.get("basis") in ("account", "over-levered")
                             if _cc_pdf is not None and not _cc_pdf.empty and _cc_pv > 0:
                                 _cc_match = _cc_pdf[_cc_pdf["Ticker"] == ticker_input]
                                 _cc_existing_mv = (
@@ -12636,7 +12694,7 @@ elif page == "📒 Trade Journal":
                                 _cc = assess_add_concentration(
                                     ticker=ticker_input, add_shares=shares_val, price=price_val,
                                     existing_name_mv=_cc_existing_mv, sector_mv=_cc_sector_mv,
-                                    portfolio_value=_cc_pv,
+                                    portfolio_value=_cc_denom,
                                     single_ceiling=SINGLE_NAME_CEILING,
                                     sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
                                 )
@@ -12665,6 +12723,9 @@ elif page == "📒 Trade Journal":
                                         st.warning(
                                             "⚠️ **Concentration check** — "
                                             + "  ".join(_cc_msgs)
+                                            + ("\n\n⚖️ _Measured on your **net capital** (margin nets the "
+                                               "denominator down) — these weights run higher than the "
+                                               "equity-only view._" if _cc_margin else "")
                                             + "\n\nNot blocked (this is a record of a real trade), but a "
                                             "concentrated position amplifies every loss. Consider trimming, "
                                             "or knowingly accept the higher single-name risk."

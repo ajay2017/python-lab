@@ -53,6 +53,19 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
   makes them all net out the loan (no new subsystem, no new DDL). UI: "Net cash /
   margin" input (no min), leverage caption, debit>equity soft-warn. Gates still
   equity-weight. Motivated by the user trading on margin often.
+- **Gate-basis decision — Phase 1 ✅ SHIPPED (2026-06-26).** The deferred
+  question ("move the 15%/35% concentration GATES off equity-basis?") was decided:
+  **"tighter-of-both"** — gates compare a margin-aware `Gate Weight (%)` =
+  `MV ÷ min(equity, total_account_value)`. Margin tightens the ceilings; cash on
+  hand never loosens them; unknown/stale (> `ACCOUNT_CASH_STALE_DAYS`=7) cash
+  degrades to equity-basis. Pure `concentration.gating_denominator`; `Gate Weight
+  (%)` column injected at the boundary; display weights stay equity-basis.
+  **Phase 1 = hard gates (Grow Today single-name + sector suppressions) + the
+  Trade Journal entry nudge.** **Phase 2 (queued) = `risk_advisor` trim recs
+  (`single_name_concentration` / `sector_concentration`) re-based with consistent
+  account-basis weight AND trim-dollar math, plus the peripheral entry-advice
+  surfaces (`watchlist_advisor`, `quick_research`, `comparison`).** See
+  requirements.md G-19 / F-12b and architecture.md known-behaviours.
 - **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
   `account_flows`) — same schema, no rework.
 

@@ -84,6 +84,48 @@ def assess_add_concentration(
     }
 
 
+def gating_denominator(
+    equity_value: float,
+    account_total: float | None,
+    *,
+    stale: bool = False,
+) -> tuple[float, str]:
+    """Denominator for the concentration GATES under the 'tighter-of-both' policy.
+
+    A position's *gate weight* is ``MV / denom``. We pick the denominator that
+    makes the gate STRICTER, never looser, relative to the equity-only basis:
+
+    - **Margin** (signed net cash < 0 → ``account_total`` < equity): gate on the
+      smaller ``account_total`` (your true net capital). Weights run HIGHER, so
+      the 15%/35% ceilings bite sooner — borrowed money amplifies single-name /
+      sector risk to the capital you actually own.
+    - **Cash on hand** (``account_total`` >= equity): keep the equity
+      denominator. Cash must NOT relax a hard suppression — the cash figure is
+      manually seeded and can be stale or transient, so only its *sign* (margin)
+      is trusted to tighten, never its magnitude to loosen.
+    - **Unknown / stale cash** (``account_total`` is None or ``stale``): fall back
+      to equity-basis — the gate degrades to today's behaviour rather than firing
+      on missing/old data.
+    - **Net capital wiped** (``account_total`` <= 0 while levered): no positive
+      base to divide by; the book is maximally levered. Floor the denom tiny so
+      every name reads over the ceiling (gate suppresses all adds), and return
+      basis ``"over-levered"`` so the UI can say so instead of showing nonsense.
+
+    Returns ``(denom, basis)``; basis in {"equity", "account", "over-levered"}.
+    Pure — no I/O. ``account_total`` = equity + signed net cash (negative = margin
+    debit). See docs/plans/account-baseline.md (gate-basis decision, 2026-06-26).
+    """
+    eq = float(equity_value or 0.0)
+    if account_total is None or stale or eq <= 0:
+        return eq, "equity"
+    acct = float(account_total)
+    if acct >= eq:
+        return eq, "equity"               # cash never loosens the gate
+    if acct <= 0:
+        return max(eq * 0.01, 1.0), "over-levered"
+    return acct, "account"                # margin: tighter denominator
+
+
 def high_beta_share(positions, beta_threshold: float) -> float:
     """Share (%) of the book in high-beta names, over the names with KNOWN beta.
 
