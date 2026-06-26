@@ -88,7 +88,7 @@ If `$ARGUMENTS` is provided, scope the review to that file or path only. Otherwi
 
 ## Step 3 — Reporting format
 
-Produce a single markdown report with these sections in this order:
+Produce a single markdown report with these sections in this order, then **write it to `docs/reviews/<YYYY-MM-DD>-review.md`** using today's date in America/New_York timezone.
 
 ### 1. Executive summary
 5–10 lines. Overall health, top 3 risks, recommended next action.
@@ -114,6 +114,23 @@ Patterns that appear repeatedly (e.g. "error handling is inconsistent across all
 
 ### 8. Open questions
 Things that couldn't be determined from the code alone and need the author to clarify.
+
+After writing the file, commit and push it:
+
+```
+git add docs/reviews/<YYYY-MM-DD>-review.md
+git commit -F .git/COMMIT_MSG.txt   # write message to that file first (see below)
+git push
+```
+
+Commit message format (write to `.git/COMMIT_MSG.txt` before committing):
+```
+docs(review): <YYYY-MM-DD> code audit — <N> critical, <N> high, <N> medium findings
+
+Full findings in docs/reviews/<YYYY-MM-DD>-review.md.
+
+Co-Authored-By: Ajay with Claude Opus 4.8 <ajay.x.ku@accenture.com>
+```
 
 ---
 
