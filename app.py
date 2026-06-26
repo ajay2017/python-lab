@@ -2302,7 +2302,8 @@ if page == "🏠 Home":
         # Risk Advisor recommendations — generated from portfolio risk metrics
         try:
             _risk_advisor_recs = build_risk_advisor_recommendations(
-                port_df, held_data, _port_risk, h_rets, total_val
+                port_df, held_data, _port_risk, h_rets, total_val,
+                gate_denom=_gate_denom,
             )
         except Exception:
             _risk_advisor_recs = []
@@ -3758,8 +3759,11 @@ if page == "🏠 Home":
                     _qr_held_row = port_df[port_df["Ticker"] == _t]
                     _qr_is_held  = not _qr_held_row.empty
                     _qr_sector   = _qr_raw.get("sector", "")
+                    # Margin-aware gate basis (Phase 2): sum the net-capital Gate
+                    # Weight when present so the entry caution matches the hard gate.
+                    _qr_gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
                     _qr_sec_wt   = (
-                        float(port_df[port_df["Sector"] == _qr_sector]["Weight (%)"].sum())
+                        float(port_df[port_df["Sector"] == _qr_sector][_qr_gcol].sum())
                         if _qr_sector else 0.0
                     )
                     # Sector-level Act Today awareness — when the user asks about
@@ -11573,7 +11577,9 @@ elif page == "📋 Watchlist":
         _wl_sector = str(_wd.get("sector", "")) if isinstance(_wd, dict) else ""
         _wl_sec_wt = 0.0
         if _wl_sector and not _wl_port_df.empty and "Sector" in _wl_port_df.columns:
-            _wl_sec_wt = float(_wl_port_df[_wl_port_df["Sector"] == _wl_sector]["Weight (%)"].sum())
+            # Margin-aware gate basis (Phase 2): prefer the net-capital Gate Weight.
+            _wl_gcol = "Gate Weight (%)" if "Gate Weight (%)" in _wl_port_df.columns else "Weight (%)"
+            _wl_sec_wt = float(_wl_port_df[_wl_port_df["Sector"] == _wl_sector][_wl_gcol].sum())
         _wl_pctx = {
             "sector_of_ticker":        _wl_sector,
             "sector_weight_pct":       _wl_sec_wt,

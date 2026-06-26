@@ -52,6 +52,7 @@ def build_risk_advisor_recommendations(
     port_risk: dict,
     h_rets: dict,
     portfolio_value: float,
+    gate_denom: float | None = None,
 ) -> list[dict]:
     """
     Returns a ranked list of recommendation dicts.  Each dict has:
@@ -91,6 +92,20 @@ def build_risk_advisor_recommendations(
     if portfolio_value is None or portfolio_value <= 0:
         return []
     pv = portfolio_value
+
+    # ── Concentration-rec basis: "tighter-of-both" (margin-aware, Phase 2) ────
+    # The single-name / sector CONCENTRATION recs below scale their weights by
+    # _acct_f so a margin debit tightens them exactly as the hard Grow-Today gates
+    # do (gate_denom = min(equity, net capital) < equity ⇒ f > 1 ⇒ weights run
+    # higher, ceilings bite sooner). Every weight scales by the SAME factor, and
+    # the "$ riding on a name" is unchanged (it's just market value); only the
+    # TRIM pp/$ grow — hence the trim-$ multiplier is _gd, not pv. Falls back to
+    # equity-basis (f = 1.0, no change) when there's no margin / gate_denom is
+    # absent. Only these concentration recs use it — beta/Sharpe recs keep equity
+    # weight (a different risk dimension). See concentration.gating_denominator.
+    _acct_f     = (pv / gate_denom) if (gate_denom and 0 < gate_denom < pv) else 1.0
+    _acct_basis = _acct_f > 1.0
+    _gd         = gate_denom if _acct_basis else pv   # denominator for trim-$ math
 
     # ── Per-ticker risk lookup ────────────────────────────────────────────────
     tr_map: dict[str, dict] = {}
@@ -556,7 +571,9 @@ def build_risk_advisor_recommendations(
         })
 
     if real_sector_weights:
-        top_sec, top_wt = max(real_sector_weights.items(), key=lambda x: x[1])
+        top_sec, _top_wt_eq = max(real_sector_weights.items(), key=lambda x: x[1])
+        # Account-basis (tighter-of-both): == equity weight when there's no margin.
+        top_wt = _top_wt_eq * _acct_f
         if top_wt >= SECTOR_CEILING:
             sec_priority = "HIGH"
         elif top_wt >= SECTOR_ELEVATED:
@@ -572,23 +589,25 @@ def build_risk_advisor_recommendations(
             root_tickers = [
                 {
                     "ticker":       h["ticker"],
-                    "value":        round(h["weight"], 1),
-                    "weight":       h["weight"],
+                    "value":        round(h["weight"] * _acct_f, 1),
+                    "weight":       h["weight"] * _acct_f,
                     "market_value": h["market_value"],
-                    "label":        f"{h['weight']:.1f}% weight  ·  P&L {h['pnl_pct']:+.1f}%",
+                    "label":        f"{h['weight'] * _acct_f:.1f}% weight  ·  P&L {h['pnl_pct']:+.1f}%",
                 }
                 for h in sec_top_holdings
             ]
             top_names_str = "  ·  ".join(
-                f"**{h['ticker']}** ({h['weight']:.1f}%)"
+                f"**{h['ticker']}** ({h['weight'] * _acct_f:.1f}%)"
                 for h in sec_top_holdings
             )
             # Excess over the elevated threshold = how much weight needs to move
             excess_pp     = top_wt - SECTOR_ELEVATED
-            excess_dollar = round(excess_pp / 100.0 * pv)
-            # Other sectors with low weight — natural redeployment targets
+            excess_dollar = round(excess_pp / 100.0 * _gd)
+            # Other sectors with low weight — natural redeployment targets (also
+            # account-basis so the redeploy figures match the top-sector number).
             under_sectors = sorted(
-                [(s, w) for s, w in real_sector_weights.items() if s != top_sec and w < SECTOR_ELEVATED],
+                [(s, w * _acct_f) for s, w in real_sector_weights.items()
+                 if s != top_sec and w * _acct_f < SECTOR_ELEVATED],
                 key=lambda x: x[1],
             )[:3]
             under_str = (
@@ -608,9 +627,11 @@ def build_risk_advisor_recommendations(
                     f"**{top_wt:.1f}% of your portfolio sits in {top_sec}** — "
                     f"{'above' if sec_priority == 'HIGH' else 'approaching'} the "
                     f"{SECTOR_CEILING:.0f}% institutional sector ceiling "
-                    f"(elevated warn level {SECTOR_ELEVATED:.0f}%). "
-                    f"A single sector-wide shock (regulatory action, earnings cycle, "
-                    f"macro regime change) hits roughly **${top_wt / 100.0 * pv:,.0f}** of "
+                    f"(elevated warn level {SECTOR_ELEVATED:.0f}%)."
+                    + (" _Measured on your **net capital** — a margin debit nets the base "
+                       "down, so the sector runs hotter than the equity-only view._" if _acct_basis else "")
+                    + f" A single sector-wide shock (regulatory action, earnings cycle, "
+                    f"macro regime change) hits roughly **${top_wt / 100.0 * _gd:,.0f}** of "
                     f"capital at once — diversification breaks down precisely when you need it."
                 ),
                 "root_cause": f"Largest {top_sec} positions: {top_names_str}.",
@@ -626,7 +647,7 @@ def build_risk_advisor_recommendations(
                     f"Pulling {top_sec} from {top_wt:.1f}% to {SECTOR_ELEVATED:.0f}% cuts your "
                     f"single-sector exposure by roughly **${excess_dollar:,.0f}** while preserving "
                     f"capital deployment. Sector-shock loss in a -10% {top_sec} move drops "
-                    f"by ~${round(excess_pp / 100.0 * pv * 0.10):,.0f}."
+                    f"by ~${round(excess_pp / 100.0 * _gd * 0.10):,.0f}."
                 ),
                 "institutional_lens": (
                     "Sector concentration is the most under-priced risk in retail portfolios. "
@@ -648,11 +669,11 @@ def build_risk_advisor_recommendations(
     # WEAK_CONVICTION_SCORE so we never double-surface with weak-large). MEDIUM →
     # Portfolio Tune-up (structural/standing, not Act-Today churn).
     for t, tr in tr_map.items():
-        w = tr["weight"]
+        w = tr["weight"] * _acct_f        # account-basis (== equity when no margin)
         score = tr["score"]
         if w >= SINGLE_NAME_CEILING and score >= WEAK_CONVICTION_SCORE:
             excess_pp     = w - SINGLE_NAME_CEILING
-            excess_dollar = round(excess_pp / 100.0 * pv)
+            excess_dollar = round(excess_pp / 100.0 * _gd)
             recs.append({
                 "priority": "MEDIUM",
                 "type":     "single_name_concentration",
@@ -660,9 +681,12 @@ def build_risk_advisor_recommendations(
                 "problem": (
                     f"**{t} is {w:.1f}% of your book** — above the "
                     f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling. Conviction is fine "
-                    f"(score {score:.0f}); this is a SIZE limit. At this weight one bad "
+                    f"(score {score:.0f}); this is a SIZE limit."
+                    + (" _Measured on your **net capital** — margin nets the base down, so "
+                       "the position runs hotter than the equity-only view._" if _acct_basis else "")
+                    + f" At this weight one bad "
                     f"print or downgrade on a single name can swing the whole portfolio — "
-                    f"roughly **${w / 100.0 * pv:,.0f}** rides on {t} alone."
+                    f"roughly **${w / 100.0 * _gd:,.0f}** rides on {t} alone."
                 ),
                 "root_cause": f"{t} weight {w:.1f}% (score {score:.0f} — a size issue, not a quality one).",
                 "root_tickers": [{

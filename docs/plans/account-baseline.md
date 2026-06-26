@@ -60,11 +60,14 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
   hand never loosens them; unknown/stale (> `ACCOUNT_CASH_STALE_DAYS`=7) cash
   degrades to equity-basis. Pure `concentration.gating_denominator`; `Gate Weight
   (%)` column injected at the boundary; display weights stay equity-basis.
-  **Phase 1 = hard gates (Grow Today single-name + sector suppressions) + the
-  Trade Journal entry nudge.** **Phase 2 (queued) = `risk_advisor` trim recs
+  **Phase 1 ✅ = hard gates (Grow Today single-name + sector suppressions) + the
+  Trade Journal entry nudge.** **Phase 2 ✅ SHIPPED = `risk_advisor` trim recs
   (`single_name_concentration` / `sector_concentration`) re-based with consistent
-  account-basis weight AND trim-dollar math, plus the peripheral entry-advice
-  surfaces (`watchlist_advisor`, `quick_research`, `comparison`).** See
+  account-basis weight AND trim-dollar math (every weight scales by
+  `equity/gate_denom`; "$ at risk" = unchanged market value, only the trim pp/$
+  grow), plus the peripheral entry-advice surfaces (`watchlist_advisor`,
+  `quick_research`, `comparison` — each sums the `Gate Weight (%)` column).**
+  Beta/Sharpe recs stay equity-basis (different risk dimension). See
   requirements.md G-19 / F-12b and architecture.md known-behaviours.
 - **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
   `account_flows`) — same schema, no rework.
