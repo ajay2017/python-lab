@@ -31,9 +31,9 @@ on:
   workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
       mode:
-        description: "Run mode (auto = derive from ET hour)"
+        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan"
         type: choice
-        options: [auto, premarket, eod, scan]
+        options: [auto, scan]
         default: auto
       force:
         description: "Bypass the trading-day / hour / once-per-day guards (test)"
