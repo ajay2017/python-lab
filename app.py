@@ -16183,11 +16183,13 @@ It reads two things together: how far a name has fallen **from its highest point
     with st.expander("⏰ Daily automation & email alerts (works while the app is closed)", expanded=False):
         st.markdown(
             """
-The app's intelligence is computed live in your browser — so it can only reach you while a tab is open. To make sure **protection finds you even when the app is closed**, a small scheduled job runs in the background (a free GitHub Actions cron) on every market day and emails you when — and *only* when — something genuinely needs you. It re-uses the exact same logic the Home brief uses, so the email and the app never disagree.
+The app's intelligence is computed live in your browser — so it can only reach you while a tab is open. To make sure **protection finds you even when the app is closed** — and so the app is **ready the moment you open it** — small scheduled jobs run in the background (a free GitHub Actions cron) on every market day. They **keep your buy-candidate list fresh** and **email you when — and *only* when — something genuinely needs you.** They re-use the exact same logic the Home brief uses, so the emails and the app never disagree.
 
-**Two runs each trading day:**
+**Three runs each trading day:**
 
 - **🔴 Pre-market (~8:00 AM ET) — Protective alerts.** Re-checks every holding and emails you **only if there's a real same-day reduce decision**: a **stop breached**, a **deterioration EXIT**, or a **risk-off trim**. If nothing qualifies, you get **no email** — silence means "nothing to act on." It also won't nag: the same alert won't re-send day after day — only when the set of actions *changes*.
+
+- **📡 Mid-morning (~10:00 AM ET) — Market scan.** Runs the full sector scan in the background and saves the result, so when you open the app your **buy candidates and new-pick ideas are already there** — no need to run the Market Scanner yourself or wait ~20 seconds for it. The Home brief stamps these as *"📡 from today's auto-scan."* **This run never emails** — it just keeps the brief fresh. (You can still hit **Refresh Signals** any time to re-score on live prices intraday.)
 
 - **🌙 After the close (~4:30 PM ET) — End of day.** Two things: **(1)** it saves a daily snapshot of your holdings so **"Today's P&L"** has an accurate prior-day baseline tomorrow — even on days you never opened the app. **(2)** If the **broad market actually fell sharply that day (about −3% or worse)**, it sends a brief **awareness** email showing roughly how far your book likely moved (your exposure × the drop) and your most-exposed names. That one is *awareness, not a directive* — pullback timing can't be predicted; the actionable de-risk, if warranted, comes in the next pre-market protective email.
 
