@@ -10,7 +10,7 @@ SECTOR_UNIVERSE = {
     "AI & Data Platforms": ["PLTR", "AI", "MDB", "SNOW", "PATH", "IONQ"],
     "EV & Clean Energy": ["TSLA", "ENPH", "FSLR", "NEE", "RIVN"],
     "Healthcare & Biotech": ["LLY", "NVO", "ABBV", "ISRG", "MRNA", "REGN", "AMGN"],
-    "Financials & Fintech": ["JPM", "V", "MA", "GS", "SQ", "COIN", "PYPL"],
+    "Financials & Fintech": ["JPM", "V", "MA", "GS", "XYZ", "COIN", "PYPL"],
     "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP"],
     "Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA"],
     "Energy": ["XOM", "CVX", "OXY", "COP", "SLB"],

@@ -45,7 +45,7 @@ TICKER_SECTORS = {
     "MRK": "Healthcare", "TMO": "Healthcare", "ABT": "Healthcare",
     "AMGN": "Healthcare", "BMY": "Healthcare", "MDT": "Healthcare", "DHR": "Healthcare",
     "JPM": "Financials", "V": "Financials", "MA": "Financials",
-    "GS": "Financials", "SQ": "Financials", "COIN": "Financials",
+    "GS": "Financials", "XYZ": "Financials", "COIN": "Financials",
     "BX": "Financials", "BAC": "Financials", "WFC": "Financials",
     "C": "Financials", "MS": "Financials", "SCHW": "Financials", "BLK": "Financials",
     "LMT": "Defense", "RTX": "Defense", "NOC": "Defense", "GD": "Defense",

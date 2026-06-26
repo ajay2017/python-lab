@@ -39,7 +39,7 @@ DISCOVERY_UNIVERSE: dict[str, list[str]] = {
     ],
     "Internet & Media": [
         "NFLX", "DIS", "CMCSA", "SHOP", "UBER", "ABNB", "DASH", "SPOT", "PINS",
-        "SNAP", "RBLX", "ROKU", "PYPL", "SQ", "COIN", "HOOD", "SE", "MELI",
+        "SNAP", "RBLX", "ROKU", "PYPL", "XYZ", "COIN", "HOOD", "SE", "MELI",
         "BABA", "PDD", "JD",
     ],
     "Consumer & Retail": [
