@@ -274,8 +274,8 @@ def assess_holding(
     spy_ret = _pct_return(_series_close(spy_df), REL_STRENGTH_LOOKBACK_DAYS)
     rel_strength = ((name_ret - spy_ret) * 100.0) if (name_ret is not None and spy_ret is not None) else 0.0
 
-    avg_cost = float(avg_cost) if avg_cost else float(price)
-    shares = float(shares) if shares else 0.0
+    avg_cost = float(avg_cost) if avg_cost is not None else float(price)
+    shares = float(shares) if shares is not None else 0.0
     dollar_pnl = (float(price) - avg_cost) * shares
 
     tier = classify_deterioration_tier(

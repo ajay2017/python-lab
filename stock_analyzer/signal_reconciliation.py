@@ -184,6 +184,23 @@ def reconcile_signals(
     }
 
 
+def classify_signal_change(from_sig: str, to_sig: str) -> dict:
+    """
+    Given a previous and current signal label, return a dict with:
+      degraded : bool — moved from buy-words to sell-words
+      improved : bool — moved from sell-words to buy-words
+    """
+    _degraded = (
+        any(w in to_sig for w in _SELL_WORDS)
+        and any(w in from_sig for w in _BUY_WORDS)
+    )
+    _improved = (
+        any(w in to_sig for w in _BUY_WORDS)
+        and any(w in from_sig for w in _SELL_WORDS)
+    )
+    return {"degraded": _degraded, "improved": _improved}
+
+
 def lookup_composite(ticker: str, port_df, composites: dict | None) -> tuple[str | None, float | None]:
     """
     Resolve composite (signal, score) for a ticker from any available source:

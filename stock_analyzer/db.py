@@ -413,7 +413,7 @@ def save_holdings(df: pd.DataFrame) -> bool:
                 "(bypasses RLS), not the publishable/anon key."
             )
         else:
-            st.error(f"⛔ Failed to save holdings: {err}")
+            st.error("⛔ Failed to save holdings — see Data Health tab for details.")
         return False
 
 
@@ -667,7 +667,9 @@ def save_trade(record: dict) -> bool:
         _client().table("trades").insert(record).execute()
         return True
     except Exception as e:
-        st.error(f"⛔ Failed to save trade: {e}")
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        st.error("⛔ Failed to save trade — see Data Health tab for details.")
         return False
 
 
@@ -679,7 +681,9 @@ def delete_trade(trade_id: int) -> bool:
         _client().table("trades").delete().eq("id", int(trade_id)).execute()
         return True
     except Exception as e:
-        st.error(f"⛔ Failed to delete trade: {e}")
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        st.error("⛔ Failed to delete trade — see Data Health tab for details.")
         return False
 
 
@@ -700,7 +704,9 @@ def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
         _client().table("trades").update(update_record).eq("id", int(trade_id)).execute()
         return True
     except Exception as e:
-        st.error(f"⛔ Failed to update trade {trade_id}: {e}")
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        st.error(f"⛔ Failed to update trade {trade_id} — see Data Health tab for details.")
         return False
 
 
@@ -1055,7 +1061,9 @@ def save_watchlist(tickers: list[str]) -> bool:
         sweep.execute()
         return True
     except Exception as e:
-        st.error(f"⛔ Failed to save watchlist: {e}")
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        st.error("⛔ Failed to save watchlist — see Data Health tab for details.")
         return False
 
 
@@ -1126,7 +1134,9 @@ def save_manual_stop(ticker: str, stop_price: float,
         _client().table("manual_stops").upsert(record, on_conflict="ticker").execute()
         return True
     except Exception as e:
-        st.error(f"⛔ Failed to save manual stop for {t}: {e}")
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        st.error(f"⛔ Failed to save manual stop for {t} — see Data Health tab for details.")
         return False
 
 
@@ -1140,7 +1150,9 @@ def clear_manual_stop(ticker: str) -> bool:
         _client().table("manual_stops").delete().eq("ticker", t).execute()
         return True
     except Exception as e:
-        st.error(f"⛔ Failed to clear manual stop for {t}: {e}")
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        st.error(f"⛔ Failed to clear manual stop for {t} — see Data Health tab for details.")
         return False
 
 

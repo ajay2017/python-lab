@@ -92,6 +92,8 @@ class FMPProvider(DataProvider):
     # while yfinance is actually down. Bundle failover chain is now yfinance→fmp.
     capabilities = frozenset({CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE})
 
+    _INFO_CACHE_MAXSIZE = 50  # evict oldest when exceeded; ~watchlist+holdings headroom
+
     def __init__(self):
         self._key = get_secret("FMP_API_KEY")
         # Process-local fundamentals cache {ticker: (fetched_at, info)} — one
@@ -266,6 +268,9 @@ class FMPProvider(DataProvider):
         if info and any(info.get(k) is not None for k in
                         ("marketCap", "trailingPE", "profitMargins",
                          "revenueGrowth", "returnOnEquity")):
+            if len(self._info_cache) >= self._INFO_CACHE_MAXSIZE:
+                # Evict the oldest entry (insertion order preserved in Python 3.7+)
+                self._info_cache.pop(next(iter(self._info_cache)))
             self._info_cache[ticker] = (time.time(), info)
         return info
 

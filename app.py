@@ -147,7 +147,7 @@ from stock_analyzer.trade_review import (
     cumulative_pnl_series, rolling_win_rate,
     position_size_discipline, sector_mix,
 )
-from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite
+from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite, classify_signal_change
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.premarket_stance import (
@@ -2229,13 +2229,10 @@ if page == "🏠 Home":
     for _t, _sig in _curr_signals.items():
         _prev = _prev_signals.get(_t)
         if _prev and _prev != _sig:
-            _bearish = ("Sell", "Avoid", "Weak")
-            _bullish = ("Strong Buy", "Buy")
-            _degraded = any(w in _sig for w in _bearish) and any(w in _prev for w in _bullish)
-            _improved = any(w in _sig for w in _bullish) and any(w in _prev for w in _bearish)
+            _chg = classify_signal_change(_prev, _sig)
             _signal_changes.append({
                 "ticker": _t, "from": _prev, "to": _sig,
-                "degraded": _degraded, "improved": _improved,
+                "degraded": _chg["degraded"], "improved": _chg["improved"],
             })
 
     # ── Synthesis memoization (perf) ─────────────────────────
@@ -2293,6 +2290,7 @@ if page == "🏠 Home":
         # have mutated them since the last rebuild).
         st.session_state["_port_risk_cache"]          = _port_risk
         st.session_state["_fragility_cache"]          = _fragility
+        st.session_state["_highbeta_share"]           = _b["_highbeta_share"]
         st.session_state["_risk_high_alerts_cache"]   = _b["_risk_high_alerts_cache"]
         st.session_state["_grow_composites"]          = _grow_composites
         st.session_state["_grow_composites_coverage"] = _b["_grow_composites_coverage"]
@@ -2868,6 +2866,7 @@ if page == "🏠 Home":
                 "div_score": div_score, "avg_corr": avg_corr, "risk_pairs": risk_pairs,
                 "_div_label": _div_label, "div_recs": div_recs, "h_rets": h_rets,
                 "_port_risk": _port_risk, "_fragility": _fragility,
+                "_highbeta_share": st.session_state.get("_highbeta_share"),
                 "_risk_advisor_recs": _risk_advisor_recs,
                 "_rag_label": _rag_label, "_rag_color": _rag_color,
                 "_macro_events": _macro_events, "_market_context": _market_context,

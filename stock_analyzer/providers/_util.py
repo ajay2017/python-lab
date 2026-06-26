@@ -7,6 +7,7 @@ an environment variable fallback so the adapters can be smoke-tested offline
 """
 
 import os
+import re
 import requests
 
 _TIMEOUT = 10  # seconds — REST calls must not hang the page
@@ -46,12 +47,22 @@ def get_secret(name: str) -> str | None:
     return val.strip() if val else None
 
 
+def _redact_url(url: str) -> str:
+    """Strip apikey/token query-param values from a URL before logging."""
+    return re.sub(r'(?i)([?&](apikey|api_key|token|key)=)[^&]+', r'\1***', url)
+
+
 def http_get_json(url: str, params: dict | None = None, timeout: int = _TIMEOUT):
     """GET `url` and return parsed JSON. Raises on HTTP error (incl. 429) so the
     caller can classify rate-limit vs other errors and record api_health.
-    No per-call retry by design — the orchestrator fails over to the next provider."""
+    No per-call retry by design — the orchestrator fails over to the next provider.
+    API key query params are redacted from any raised exception message."""
     resp = requests.get(url, params=params, timeout=timeout)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        safe_msg = _redact_url(str(exc))
+        raise requests.HTTPError(safe_msg, response=resp) from None
     return resp.json()
 
 

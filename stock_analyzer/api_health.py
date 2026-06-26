@@ -41,7 +41,8 @@ def _blank():
 
 _stats: dict = {
     "yahoo_finance": _blank(),
-    "fmp":           _blank(),   # kept for any legacy references
+    "fmp":           _blank(),
+    "finnhub":       _blank(),
     "fred":          _blank(),
     "supabase":      _blank(),
 }
@@ -53,7 +54,7 @@ def record(source: str, event: str, msg: str = "") -> None:
 
     Parameters
     ----------
-    source : "yahoo_finance" | "fmp" | "supabase" (or any string)
+    source : "yahoo_finance" | "fmp" | "finnhub" | "fred" | "supabase" (or any string)
     event  : "success" | "error" | "rate_limit" | "empty"
     msg    : optional error message (truncated to 120 chars)
     """

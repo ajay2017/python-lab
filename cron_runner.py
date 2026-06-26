@@ -280,8 +280,13 @@ def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
-    mode = (os.environ.get("ALERT_RUN_MODE", "").strip().lower()
-            or ("eod" if now_et.hour >= 12 else "premarket"))
+    # Derive mode from ET hour so the logic is self-contained — a YAML schedule
+    # change can't accidentally fire the wrong lane.  Only "scan" (test-only) is
+    # still overrideable via ALERT_RUN_MODE; eod/premarket are inferred from time.
+    _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
+    mode = _mode_override if _mode_override == "scan" else (
+        "eod" if now_et.hour >= 12 else "premarket"
+    )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
 
     if test_email:

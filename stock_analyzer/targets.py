@@ -41,11 +41,14 @@ def compute_price_targets(
     df: pd.DataFrame, financials: dict, current_price: float
 ) -> dict:
     analyst_target = financials.get("analyst_target")
-    week52_high = financials.get("52_week_high") or current_price * 1.3
-    week52_low = financials.get("52_week_low") or current_price * 0.7
+    _w52h = financials.get("52_week_high")
+    week52_high = _w52h if _w52h is not None else current_price * 1.3
+    _w52l = financials.get("52_week_low")
+    week52_low = _w52l if _w52l is not None else current_price * 0.7
 
     sr = support_resistance(df)
-    nearest_support = sr["nearest_support"] or current_price * 0.88
+    _sup = sr["nearest_support"]
+    nearest_support = _sup if _sup is not None else current_price * 0.88
     nearest_resistance = sr["nearest_resistance"]
 
     # Momentum-based upside: 6-month price trend extrapolated
