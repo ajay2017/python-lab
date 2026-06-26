@@ -11549,7 +11549,12 @@ elif page == "📋 Watchlist":
         _wl_data = _parallel_load_all(list(_wl), period="6mo")
 
     # ── Build portfolio-fit context (consumed by ENTER_NOW risk gate) ─────────
-    _wl_port_df    = st.session_state.get("holdings_df", pd.DataFrame())
+    # Use the ENRICHED portfolio frame (Sector + Weight + Gate Weight columns),
+    # not the raw holdings_df (Ticker/Shares/cost only) — the latter has no
+    # "Sector" column, so the sector entry-fit below never fired. Mirrors the
+    # Comparison page (_port_df_enriched). Empty until Home builds it this
+    # session → the sector check falls back to 0.0 (inert, safe), same as before.
+    _wl_port_df    = st.session_state.get("_port_df_enriched", pd.DataFrame())
     _wl_port_risk  = st.session_state.get("_port_risk_cache", {}) or {}
     _wl_high_alerts = st.session_state.get("_risk_high_alerts_cache", []) or []
     _wl_grow_sectors_raw = st.session_state.get("_grow_today_sectors_cache")
