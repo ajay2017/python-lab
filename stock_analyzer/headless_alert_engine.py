@@ -35,6 +35,8 @@ from stock_analyzer.constants import (
     FRAGILITY_PULLBACK_PCT,
     PULLBACK_ALERT_INDEX_PCT,
     GROW_CANDIDATE_POOL,
+    COMPOSITE_BUY,
+    COMPOSITE_BUY_FLAT_DAY,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -346,7 +348,23 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
         return {"picks": [], "built_at": built_at,
                 "errors": errors + [f"build_daily_briefing failed: {e}"]}
 
-    return {"picks": brief.get("new_picks", []) or [], "built_at": built_at, "errors": errors}
+    # Diagnostic so a 0-pick run is self-explaining in the cron log (a flat tape
+    # raises the new-pick bar to 78 and caps at 1, a bull tape lets 65+ through —
+    # so "0 picks" next to a Home page showing morning picks is usually the tone
+    # gate, not a fault). bar=None on bear (new entries suppressed outright).
+    _tone = brief.get("tone", "flat")
+    _bar = None if _tone == "bear" else (COMPOSITE_BUY if _tone == "bull" else COMPOSITE_BUY_FLAT_DAY)
+    diag = {
+        "tone":             _tone,
+        "sp500_pct":        brief.get("sp500_pct"),
+        "bar":              _bar,
+        "sector_blocked":   len(brief.get("sector_blocked_picks", []) or []),
+        "macro_blocked":    len(brief.get("macro_blocked_picks", []) or []),
+        "composite_short":  len(brief.get("composite_skipped", []) or []),
+        "composite_unavail": len(brief.get("composite_unavailable", []) or []),
+    }
+    return {"picks": brief.get("new_picks", []) or [], "built_at": built_at,
+            "errors": errors, "diag": diag}
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:

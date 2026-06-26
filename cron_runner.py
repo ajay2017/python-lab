@@ -232,7 +232,29 @@ def _run_scan(now_et, force: bool) -> int:
     _log(f"morning picks: {len(picks)} new pick(s), {len(hi)} high-conviction (Go): "
          + (", ".join(str(p.get("ticker")) for p in hi) or "(none)"))
     if not hi:
-        _log("no high-conviction buy setups — no email.")
+        # Self-explaining 0: a 0-pick run almost always means the tone gate, not a
+        # fault. Flat tape raises the new-pick bar to 78 (bull = 65); bear suppresses
+        # new entries outright. So "0 picks" next to a Home page showing morning
+        # picks (scored 65–77) is the bar moving, not a broken scan.
+        d = payload.get("diag") or {}
+        _tone = d.get("tone", "?")
+        _sp = d.get("sp500_pct")
+        _spr = f"{_sp:+.2f}%" if isinstance(_sp, (int, float)) else "n/a"
+        if _tone == "bear":
+            _why = f"tone=bear (S&P {_spr}) — new entries suppressed on a risk-off tape"
+        elif d.get("bar") is not None:
+            _why = (f"tone={_tone} (S&P {_spr}) · new-pick bar={d['bar']}"
+                    + (" (flat-day — bull-day bar=65)" if _tone == "flat" else ""))
+            _drop = []
+            if d.get("sector_blocked"):    _drop.append(f"{d['sector_blocked']} sector-capped")
+            if d.get("macro_blocked"):     _drop.append(f"{d['macro_blocked']} macro-gated")
+            if d.get("composite_short"):   _drop.append(f"{d['composite_short']} below Buy(65)")
+            if d.get("composite_unavail"): _drop.append(f"{d['composite_unavail']} no composite")
+            if _drop:
+                _why += " · dropped: " + ", ".join(_drop)
+        else:
+            _why = f"tone={_tone} (S&P {_spr})"
+        _log(f"no high-conviction buy setups — no email · {_why}.")
     else:
         fp = _buy_fingerprint(hi)
         state = db.load_alert_state(_BUY_ROW) or {}
