@@ -3202,10 +3202,30 @@ if page == "🏠 Home":
                 else:
                     st.caption(f"Signals last refreshed {_sig_age // 3600}h ago — **stale, refresh recommended**")
             else:
-                st.caption(
-                    "Signals reflect the last scanner run — click **Refresh Signals** ~15 min after open "
-                    "to score today's price action."
-                )
+                # Auto-scan-aware: the cron `scan` mode persists a scan ~10 AM ET
+                # and the app hydrates it on cold load (see scanner_cache), so the
+                # signals already reflect today without a manual click. Reframe the
+                # button as an optional intraday re-score, and tell the truth about
+                # where the current signals came from (_scanner_results_meta).
+                _ssm      = st.session_state.get("_scanner_results_meta") or {}
+                _ssm_date = _ssm.get("scan_date")
+                if _ssm_date == _today_et().isoformat():
+                    _src_phrase = ("auto-scan (~10 AM ET)" if _ssm.get("source") == "cron"
+                                   else "scan")
+                    st.caption(
+                        f"📡 Signals from today's {_src_phrase}. Click **Refresh Signals** to "
+                        "re-score on live prices intraday."
+                    )
+                elif _ssm_date:
+                    st.caption(
+                        f"Signals from the {_ssm_date} scan — click **Refresh Signals** to "
+                        "score today's price action."
+                    )
+                else:
+                    st.caption(
+                        "Signals reflect the last scanner run — click **Refresh Signals** ~15 min "
+                        "after open to score today's price action."
+                    )
 
         if _do_refresh:
             _refresh_gate_arm("data")
@@ -3230,7 +3250,8 @@ if page == "🏠 Home":
                     st.session_state.get("_scanner_ver", 0) + 1
                 # Persist (full-universe scan) so the next cold load / session
                 # shows candidates without re-scanning. Mirrors what the cron writes.
-                _today_d = _today_et().date()
+                # (_today_et() already returns a date — no .date().)
+                _today_d = _today_et()
                 db.save_scanner_cache(_fresh_results, _today_d, source="app")
                 st.session_state["_scanner_results_meta"] = {
                     "scan_date": _today_d.isoformat(), "source": "app",
