@@ -1790,8 +1790,6 @@ if st.session_state.get("_readonly"):
     )
 
 if page == "🏠 Home":
-    st.title("🏠 Home")
-
 
     # Load data for all held tickers
     held_tickers = [
