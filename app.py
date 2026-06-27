@@ -3215,7 +3215,7 @@ if page == "🏠 Home":
                 return ""
 
         # ── Status bar — built-at chip + refresh controls + lock, single row ──
-        _sb_c1, _sb_c2, _sb_c3, _sb_c4 = st.columns([4, 2, 2, 2])
+        _sb_c1, _sb_c2, _sb_c3, _sb_c4 = st.columns([6, 2, 2, 2])
 
         # Col 1 — built-at / locked chip (dark-bordered, same style as before)
         with _sb_c1:
@@ -3235,7 +3235,7 @@ if page == "🏠 Home":
                     f"border-radius:8px;padding:8px 14px;color:#cbd5e1;font-size:0.92em'>"
                     f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
                     f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
-                    f"recommendations refresh when scanner reruns or composite cache expires (30 min)."
+                    f"refreshes on rescan or in 30 min."
                     f"</div>",
                     unsafe_allow_html=True,
                 )
