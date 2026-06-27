@@ -3753,7 +3753,7 @@ if page == "🏠 Home":
                         mode="gauge+number",
                         value=_fg_mult_val,
                         number={"suffix": "×", "font": {"size": 28, "color": "#f0f2f5"}},
-                        title={"text": f"{_fg_icon} {_fg_lead}", "font": {"size": 11, "color": "#9ca3af"}},
+                        title={"text": f"{_fg_icon} {_fg_lead}<br><span style='font-size:10px'>A {abs(_frag['pullback_pct']):.0f}% pullback → ~{_frag['implied_move']:+.0f}%{_fg_why}</span>", "font": {"size": 11, "color": "#9ca3af"}},
                         gauge={
                             "axis": {
                                 "range": [0, 3],
@@ -3780,19 +3780,11 @@ if page == "🏠 Home":
                         },
                     ))
                     _fg_fig.update_layout(
-                        height=165, margin={"l": 5, "r": 5, "t": 28, "b": 0},
+                        height=150, margin={"l": 5, "r": 5, "t": 40, "b": 0},
                         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                     )
                     st.plotly_chart(_fg_fig, use_container_width=True,
                                     config={"displayModeBar": False})
-                    st.markdown(
-                        f"<div style='color:#d1d5db;font-size:0.8em;margin-top:-10px'>"
-                        f"A {abs(_frag['pullback_pct']):.0f}% pullback → roughly "
-                        f"<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
-                        f"<div style='color:#6b7280;font-size:0.72em;margin-top:3px'>"
-                        f"Exposure not a forecast. Full breakdown: Risk → Stress Testing.</div>",
-                        unsafe_allow_html=True,
-                    )
                 elif not port_df.empty:
                     # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
                     # computed — say so rather than imply zero exposure. Matches the
