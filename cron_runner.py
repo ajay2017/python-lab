@@ -293,21 +293,22 @@ def _run_thesis(now_et, force: bool) -> int:
         return 0
 
     from stock_analyzer import thesis_advisor as _ta
-    from stock_analyzer.data import load_all
+    from stock_analyzer.headless_alert_engine import _build_context
 
-    # Load open positions
+    # Load open positions via the shared headless data-prep path
+    today = now_et.date()
     try:
-        bundle = load_all()
+        ctx = _build_context(today)
     except Exception as e:
-        _log(f"thesis: load_all failed — {str(e)[:120]}")
+        _log(f"thesis: _build_context failed — {str(e)[:120]}")
         return 0
 
-    holdings_df = bundle.get("holdings_df")
-    if holdings_df is None or holdings_df.empty:
-        _log("thesis: no open positions — nothing to review.")
+    if not ctx.get("ok"):
+        _log(f"thesis: context load failed — {'; '.join(ctx.get('errors', []))}")
         return 0
 
-    open_tickers = set(holdings_df["Ticker"].astype(str).str.upper())
+    held_data   = ctx.get("held_data", {})
+    open_tickers = set(held_data.keys())
 
     # Load trades and find BUYs with a thesis for open positions
     trades_df = db.load_trades()
@@ -334,7 +335,6 @@ def _run_thesis(now_et, force: bool) -> int:
          + ", ".join(buys_with_thesis["ticker"].astype(str).str.upper()))
 
     # Build positions list for batch review
-    held_data = bundle.get("held_data", {})
     positions = []
     for _, row in buys_with_thesis.iterrows():
         ticker = str(row["ticker"]).upper()
