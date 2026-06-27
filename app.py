@@ -16280,6 +16280,31 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 """
         )
 
+    with st.expander("🚦 Signal severity — what the colors mean", expanded=False):
+        st.markdown(
+            """
+The app uses three color bands across all pages — the color always carries the same meaning, even when the words differ by page.
+
+| Color | Meaning | When to act |
+|---|---|---|
+| 🔴 **Red** | Act today — time-sensitive decision | Before the market moves past it |
+| 🟡 **Amber** | Watch — developing, no action yet | Monitor; revisit next session |
+| 🟢 **Green** | Clear — no action needed | No change required |
+
+**How each page's vocabulary maps to these bands:**
+
+| Page | 🔴 Red (act today) | 🟡 Amber (watch) | 🟢 Green (clear) |
+|---|---|---|---|
+| 🏠 Home — Act Today | EXIT · TRIM · Stop Breached | WATCH · MONITOR | ✅ You're set for today |
+| 🔔 Signal badges | ❌ Skip — Signals Disagree | ⚠️ Caution · 🔍 Verify | ✅ Go — All Signals Agree |
+| 📋 Watchlist | REMOVE | WAIT_ENTRY · WAIT_CATALYST · HOLD_OFF_EARNINGS | ENTER_NOW · NEAR_ENTRY |
+| 📅 Economic Calendar | PROTECT | WATCH | OPPORTUNITY · HOLD |
+| Risk Advisor cards | HIGH | MEDIUM | OK |
+
+**Rule of thumb:** red = decide today; amber = keep in view, don't trade yet; green = the app has nothing to add right now.
+"""
+        )
+
     with st.expander("🛡️ Risk & portfolio-quality terms", expanded=False):
         st.markdown(
             """
