@@ -3749,42 +3749,55 @@ if page == "🏠 Home":
                     _fg_bar_color = {"calm": "#22c55e", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
                     _fg_why       = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
                     _fg_mult_val  = _frag.get("mult") or 1.0
-                    _fg_fig = go.Figure(go.Indicator(
-                        mode="gauge+number",
-                        value=_fg_mult_val,
-                        number={"suffix": "×", "font": {"size": 28, "color": "#f0f2f5"}},
-                        title={"text": f"{_fg_icon} {_fg_lead}<br><span style='font-size:10px'>A {abs(_frag['pullback_pct']):.0f}% pullback → ~{_frag['implied_move']:+.0f}%{_fg_why}</span>", "font": {"size": 11, "color": "#9ca3af"}},
-                        gauge={
-                            "axis": {
-                                "range": [0, 3],
-                                "tickvals": [0, 1, 2, 3],
-                                "ticktext": ["0", "1×", "2×", "3×"],
-                                "tickwidth": 1, "tickcolor": "#4b5563",
-                                "tickfont": {"size": 9, "color": "#6b7280"},
+                    _fg_left, _fg_right = st.columns([2, 3])
+                    with _fg_left:
+                        _fg_fig = go.Figure(go.Indicator(
+                            mode="gauge+number",
+                            value=_fg_mult_val,
+                            number={"suffix": "×", "font": {"size": 26, "color": "#f0f2f5"}},
+                            title={"text": ""},
+                            gauge={
+                                "axis": {
+                                    "range": [0, 3],
+                                    "tickvals": [0, 1, 2, 3],
+                                    "ticktext": ["0", "1×", "2×", "3×"],
+                                    "tickwidth": 1, "tickcolor": "#4b5563",
+                                    "tickfont": {"size": 9, "color": "#6b7280"},
+                                },
+                                "bar": {"color": _fg_bar_color, "thickness": 0.28},
+                                "bgcolor": "rgba(0,0,0,0)",
+                                "borderwidth": 0,
+                                "steps": [
+                                    {"range": [0, PORTFOLIO_BETA_ELEVATED],
+                                     "color": "rgba(34,197,94,0.10)"},
+                                    {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
+                                     "color": "rgba(245,158,11,0.14)"},
+                                    {"range": [PORTFOLIO_BETA_CEILING, 3],
+                                     "color": "rgba(239,68,68,0.10)"},
+                                ],
+                                "threshold": {
+                                    "line": {"color": "#6b7280", "width": 1},
+                                    "thickness": 0.75, "value": 1.0,
+                                },
                             },
-                            "bar": {"color": _fg_bar_color, "thickness": 0.28},
-                            "bgcolor": "rgba(0,0,0,0)",
-                            "borderwidth": 0,
-                            "steps": [
-                                {"range": [0, PORTFOLIO_BETA_ELEVATED],
-                                 "color": "rgba(34,197,94,0.10)"},
-                                {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
-                                 "color": "rgba(245,158,11,0.14)"},
-                                {"range": [PORTFOLIO_BETA_CEILING, 3],
-                                 "color": "rgba(239,68,68,0.10)"},
-                            ],
-                            "threshold": {
-                                "line": {"color": "#6b7280", "width": 1},
-                                "thickness": 0.75, "value": 1.0,
-                            },
-                        },
-                    ))
-                    _fg_fig.update_layout(
-                        height=150, margin={"l": 5, "r": 5, "t": 40, "b": 0},
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(_fg_fig, use_container_width=True,
-                                    config={"displayModeBar": False})
+                        ))
+                        _fg_fig.update_layout(
+                            height=130, margin={"l": 5, "r": 5, "t": 10, "b": 0},
+                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_fg_fig, use_container_width=True,
+                                        config={"displayModeBar": False})
+                    with _fg_right:
+                        st.markdown(
+                            f"<div style='padding-top:24px'>"
+                            f"<div style='color:#9ca3af;font-size:0.85em'>"
+                            f"{_fg_icon} {_fg_lead}</div>"
+                            f"<div style='color:#d1d5db;font-size:0.80em;margin-top:8px'>"
+                            f"A {abs(_frag['pullback_pct']):.0f}% pullback → "
+                            f"~<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
                 elif not port_df.empty:
                     # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
                     # computed — say so rather than imply zero exposure. Matches the
