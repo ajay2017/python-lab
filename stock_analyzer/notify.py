@@ -231,59 +231,96 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
 
 
 def render_debrief_email(debrief: dict) -> str:
-    """Render the weekly portfolio debrief as an HTML email."""
+    """Render the weekly portfolio debrief as a professional HTML email (light-mode-first)."""
+    import re
+
     week_ending  = debrief.get("week_ending", "—")
     generated_at = str(debrief.get("generated_at", ""))[:10]
     perf  = debrief.get("performance_pct")
     spy   = debrief.get("spy_pct")
     alpha = debrief.get("alpha_pct")
 
-    def _pct_span(v: float | None) -> str:
-        if v is None:
-            return "N/A"
-        colour = "#22c55e" if v >= 0 else "#ef4444"
-        return f"<span style='color:{colour};font-weight:600'>{v:+.1f}%</span>"
+    def _md_inline(text: str) -> str:
+        """Convert **bold** and *italic* markdown to HTML inline."""
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
+        return text
 
-    perf_row = ""
-    if perf is not None:
-        perf_row = (
-            "<table style='margin:12px 0;border-collapse:collapse'>"
-            f"<tr><td style='padding:4px 16px 4px 0;color:#94a3b8;font-size:0.9em'>Portfolio</td>"
-            f"<td style='font-weight:600'>{_pct_span(perf)}</td></tr>"
-            f"<tr><td style='padding:4px 16px 4px 0;color:#94a3b8;font-size:0.9em'>SPY</td>"
-            f"<td>{_pct_span(spy)}</td></tr>"
-            f"<tr><td style='padding:4px 16px 4px 0;color:#94a3b8;font-size:0.9em'>Alpha</td>"
-            f"<td style='font-weight:600'>{_pct_span(alpha)}</td></tr>"
-            "</table>"
+    def _pct_cell(label: str, v: float | None, bold: bool = False) -> str:
+        if v is None:
+            val_html = "<span style='color:#6b7280'>N/A</span>"
+        else:
+            colour   = "#16a34a" if v >= 0 else "#dc2626"
+            weight   = "700" if bold else "600"
+            val_html = f"<span style='color:{colour};font-weight:{weight}'>{v:+.1f}%</span>"
+        lw = "700" if bold else "400"
+        return (
+            f"<td style='padding:14px 20px;text-align:center;border-right:1px solid #e5e7eb'>"
+            f"<div style='font-size:0.75em;color:#6b7280;text-transform:uppercase;"
+            f"letter-spacing:0.05em;font-weight:600;margin-bottom:4px'>{label}</div>"
+            f"<div style='font-size:1.4em;font-weight:{lw}'>{val_html}</div>"
+            f"</td>"
         )
+
+    perf_block = ""
+    if perf is not None:
+        perf_block = (
+            "<table width='100%' style='border-collapse:collapse;background:#f8fafc;"
+            "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0;overflow:hidden'>"
+            "<tr>"
+            + _pct_cell("Portfolio", perf, bold=True)
+            + _pct_cell("S&P 500", spy)
+            + _pct_cell("Alpha", alpha, bold=True).replace("border-right:1px solid #e5e7eb", "border-right:none")
+            + "</tr></table>"
+        )
+
+    # Section accent colours (left-border strip)
+    _SECTION_COLOURS = {
+        "What happened":       "#3b82f6",   # blue
+        "Decisions you made":  "#8b5cf6",   # purple
+        "Patterns this week":  "#f59e0b",   # amber
+        "One thing to watch":  "#10b981",   # green
+    }
 
     def _section(title: str, content: str) -> str:
         if not content:
             return ""
-        lines = content.split("\n")
+        accent = _SECTION_COLOURS.get(title, "#6b7280")
+        lines   = content.split("\n")
         parts: list[str] = []
         in_list = False
         for ln in lines:
             stripped = ln.strip()
             if stripped.startswith(("• ", "- ", "* ")):
+                item = _md_inline(stripped[2:])
                 if not in_list:
-                    parts.append("<ul style='margin:4px 0;padding-left:18px'>")
+                    parts.append(
+                        "<ul style='margin:8px 0 8px 0;padding-left:20px;color:#374151'>"
+                    )
                     in_list = True
-                parts.append(f"<li style='margin:3px 0;color:#cbd5e1'>{stripped[2:]}</li>")
+                parts.append(
+                    f"<li style='margin:6px 0;line-height:1.55;color:#374151'>{item}</li>"
+                )
             else:
                 if in_list:
                     parts.append("</ul>")
                     in_list = False
                 if stripped:
-                    parts.append(f"<p style='margin:4px 0;color:#cbd5e1'>{stripped}</p>")
+                    parts.append(
+                        f"<p style='margin:6px 0;color:#374151;line-height:1.6'>"
+                        f"{_md_inline(stripped)}</p>"
+                    )
         if in_list:
             parts.append("</ul>")
         body = "\n".join(parts)
         return (
-            f"<div style='margin:16px 0'>"
-            f"<div style='font-weight:600;color:#e2e8f0;font-size:0.95em;"
-            f"border-bottom:1px solid #334155;padding-bottom:4px;margin-bottom:8px'>{title}</div>"
-            f"<div style='line-height:1.6;font-size:0.9em'>{body}</div>"
+            f"<div style='margin:20px 0;background:#ffffff;border-radius:8px;"
+            f"border:1px solid #e5e7eb;border-left:4px solid {accent};overflow:hidden'>"
+            f"<div style='padding:10px 16px 8px;background:#f9fafb;"
+            f"border-bottom:1px solid #e5e7eb'>"
+            f"<span style='font-weight:700;font-size:0.85em;color:{accent};"
+            f"text-transform:uppercase;letter-spacing:0.06em'>{title}</span></div>"
+            f"<div style='padding:14px 16px;font-size:0.9em'>{body}</div>"
             f"</div>"
         )
 
@@ -295,19 +332,37 @@ def render_debrief_email(debrief: dict) -> str:
     )
 
     return (
-        "<!DOCTYPE html><html>"
-        "<body style='background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;"
-        "max-width:600px;margin:0 auto;padding:32px 24px'>"
-        "<div style='font-size:1.3em;font-weight:700;color:#e2e8f0;margin-bottom:4px'>"
-        "📊 DRISHTA Weekly Debrief</div>"
-        f"<div style='color:#94a3b8;font-size:0.85em;margin-bottom:16px'>"
-        f"Week ending {week_ending} · generated {generated_at}</div>"
-        f"{perf_row}"
-        "<hr style='border:none;border-top:1px solid #1e293b;margin:16px 0'>"
+        "<!DOCTYPE html><html lang='en'>"
+        "<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width'></head>"
+        "<body style='background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"
+        "\"Segoe UI\",Roboto,sans-serif;margin:0;padding:32px 16px'>"
+
+        # Outer card
+        "<div style='max-width:600px;margin:0 auto;background:#ffffff;"
+        "border-radius:12px;box-shadow:0 1px 8px rgba(0,0,0,0.08);overflow:hidden'>"
+
+        # Header band
+        "<div style='background:linear-gradient(135deg,#1e3a5f 0%,#1e40af 100%);"
+        "padding:28px 28px 22px'>"
+        "<div style='font-size:1.35em;font-weight:800;color:#ffffff;letter-spacing:-0.01em'>"
+        "DRISHTA Weekly Debrief</div>"
+        f"<div style='color:#93c5fd;font-size:0.82em;margin-top:4px'>"
+        f"Week ending {week_ending} &nbsp;·&nbsp; Generated {generated_at}</div>"
+        "</div>"
+
+        # Body
+        f"<div style='padding:24px 24px 20px'>"
+        f"{perf_block}"
         f"{sections_html}"
-        "<hr style='border:none;border-top:1px solid #1e293b;margin:24px 0 12px'>"
-        "<div style='color:#475569;font-size:0.75em'>"
-        "DRISHTA · AI-generated retrospective · Not financial advice</div>"
+        "</div>"
+
+        # Footer
+        "<div style='background:#f9fafb;border-top:1px solid #e5e7eb;"
+        "padding:12px 24px;font-size:0.75em;color:#9ca3af;text-align:center'>"
+        "DRISHTA &nbsp;·&nbsp; AI-generated retrospective &nbsp;·&nbsp; Not financial advice"
+        "</div>"
+
+        "</div>"  # close card
         "</body></html>"
     )
 
