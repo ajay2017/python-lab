@@ -969,6 +969,9 @@ with st.sidebar:
             ("Catalyst Watch",    "🔔 Catalyst Watch",    ":material/bolt:"),
             ("Economic Calendar", "📅 Economic Calendar", ":material/calendar_month:"),
         ]),
+        ("AI", [
+            ("AI Insights", "🧠 AI Insights", ":material/psychology:"),
+        ]),
     ]
 
     for _grp_label, _grp_items in _NAV_GROUPS:
@@ -1420,9 +1423,9 @@ def _index_strip():
         up         = idx["change_pct"] >= 0
         bg         = "rgba(0,180,70,0.10)"   if up else "rgba(220,38,38,0.10)"
         border     = "#00a040"               if up else "#cc2222"
-        lbl_clr    = "#555"
-        price_clr  = "#111"
-        val_clr    = "#006b2a"               if up else "#aa1111"
+        lbl_clr    = "#aaa"
+        price_clr  = "#f0f0f0"
+        val_clr    = "#4ade80"               if up else "#f87171"
         arrow      = "▲" if up else "▼"
         sign       = "+" if up else ""
         price_str  = f"{idx['price']:,.2f}"
@@ -12596,6 +12599,38 @@ elif page == "📒 Trade Journal":
                 placeholder="e.g. Added on dip",
             )
 
+            # Thesis capture — BUY only; pre-populate from existing thesis for
+            # this ticker (add-to-winner flow) so the user edits rather than rewrites.
+            _thesis_prefill = ""
+            if _live_action == "BUY":
+                _tj_ticker_now = (st.session_state.get("_tj_ticker") or "").strip().upper()
+                if _tj_ticker_now and prefill.get("user_thesis") is not None:
+                    _thesis_prefill = prefill.get("user_thesis", "")
+                elif _tj_ticker_now:
+                    # Look up most-recent thesis for this ticker from existing trades
+                    _prior_trades = st.session_state.get("trades_df", pd.DataFrame())
+                    if not _prior_trades.empty and "user_thesis" in _prior_trades.columns:
+                        _prior = _prior_trades[
+                            (_prior_trades["ticker"].astype(str).str.upper() == _tj_ticker_now) &
+                            (_prior_trades["action"] == "BUY") &
+                            (_prior_trades["user_thesis"].notna())
+                        ]
+                        if not _prior.empty:
+                            _thesis_prefill = str(_prior.iloc[0]["user_thesis"])
+
+                user_thesis_val = st.text_area(
+                    "Investment thesis (optional — but recommended)",
+                    value=_thesis_prefill,
+                    placeholder=(
+                        "Why do you believe in this position? "
+                        "What would need to change for you to reconsider?"
+                    ),
+                    height=90,
+                    help="Saved and reviewed weekly by AI Insights to check if your conviction still holds.",
+                )
+            else:
+                user_thesis_val = None
+
             submitted = st.form_submit_button("✅ Record Trade", type="primary",
                                                disabled=st.session_state.get("_readonly", False),
                                                help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None)
@@ -12628,12 +12663,13 @@ elif page == "📒 Trade Journal":
             # filled on validation failure (otherwise clear_on_submit=True wipes
             # the user's input on every error and they'd have to retype).
             _stash_failed_entry = {
-                "ticker":   ticker_input,
-                "action":   action,
-                "shares":   shares_val,
-                "price":    price_val,
-                "trigger":  trigger_type,
-                "notes":    notes_val,
+                "ticker":      ticker_input,
+                "action":      action,
+                "shares":      shares_val,
+                "price":       price_val,
+                "trigger":     trigger_type,
+                "notes":       notes_val,
+                "user_thesis": user_thesis_val,
             }
 
             # ── Price sanity check ────────────────────────────────────────────
@@ -12821,6 +12857,7 @@ elif page == "📒 Trade Journal":
                     "followed_signal":  _dc_followed,
                     "deviation_reason": (st.session_state.get("_tj_deviation_reason") or "").strip() or None,
                     "lesson":           (st.session_state.get("_tj_lesson") or "").strip() or None,
+                    "user_thesis":      (user_thesis_val or "").strip() or None if action == "BUY" else None,
                 }
                 # ── SELL: hold for confirmation — don't write to DB yet ──────
                 if action == "SELL":
@@ -16437,5 +16474,240 @@ Learn more: [Investopedia ↗](https://www.investopedia.com/) · data terms vary
 **This app is a decision-support tool, not financial advice. You are responsible for your own trades.**
 """
         )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — AI INSIGHTS
+# Additive layer — zero runtime dependency on LLM connectivity.
+# Core pages are unaffected if this page is offline.
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🧠 AI Insights":
+    from stock_analyzer import db as _ai_db
+    from stock_analyzer import thesis_advisor as _ta
+
+    st.title("🧠 AI Insights")
+    st.caption(
+        "LLM-powered awareness layer. The rule-based engine continues to make all "
+        "decisions and issue all recommendations — this page adds language and "
+        "context. If the AI layer is offline, every other page is unaffected."
+    )
+
+    _ai_api_key = st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
+
+    # ── Thesis Reviews ────────────────────────────────────────────────────────
+    st.subheader("📋 Thesis Reviews")
+    st.markdown(
+        "Weekly AI check: does your original investment conviction still hold "
+        "against current news, fundamentals, and price trend?"
+    )
+
+    # Load data
+    _thesis_reviews_df = _ai_db.load_thesis_reviews()
+    _trades_with_thesis = pd.DataFrame()
+    if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
+        _tdf = st.session_state.trades_df
+        if "user_thesis" in _tdf.columns:
+            _buys_with_thesis = _tdf[
+                (_tdf["action"] == "BUY") &
+                (_tdf["user_thesis"].notna()) &
+                (_tdf["user_thesis"].astype(str).str.strip() != "")
+            ].copy()
+            # Deduplicate: one row per ticker (most recent BUY with a thesis)
+            _trades_with_thesis = (
+                _buys_with_thesis
+                .sort_values("traded_at", ascending=False)
+                .drop_duplicates(subset="ticker")
+                .reset_index(drop=True)
+            )
+
+    # Load current holdings to know which positions are still open
+    _open_tickers = set()
+    if "holdings_df" in st.session_state and not st.session_state.holdings_df.empty:
+        _open_tickers = set(st.session_state.holdings_df["Ticker"].astype(str).str.upper())
+
+    # Filter to open positions only
+    if not _trades_with_thesis.empty:
+        _trades_with_thesis = _trades_with_thesis[
+            _trades_with_thesis["ticker"].astype(str).str.upper().isin(_open_tickers)
+        ]
+
+    if _trades_with_thesis.empty:
+        st.info(
+            "No investment theses on record yet. "
+            "Add a thesis when recording a BUY in the Trade Journal — "
+            "the field appears under Notes."
+        )
+    else:
+        # Build a lookup: ticker → most recent review
+        _review_by_ticker: dict = {}
+        if not _thesis_reviews_df.empty:
+            for _, _rv in _thesis_reviews_df.iterrows():
+                _t = str(_rv["ticker"]).upper()
+                if _t not in _review_by_ticker:
+                    _review_by_ticker[_t] = _rv
+
+        _status_colour = {"INTACT": "#22c55e", "WEAKENING": "#f59e0b", "BROKEN": "#ef4444"}
+        _status_icon   = {"INTACT": "✅", "WEAKENING": "⚠️", "BROKEN": "🔴"}
+
+        for _, _pos in _trades_with_thesis.iterrows():
+            _ticker  = str(_pos["ticker"]).upper()
+            _thesis  = str(_pos["user_thesis"])
+            _rv      = _review_by_ticker.get(_ticker)
+            _status  = _rv["status"] if _rv is not None else None
+            _summary = _rv["summary"] if _rv is not None else None
+            _rev_at  = _rv["reviewed_at"] if _rv is not None else None
+
+            # Chip colour
+            if _status:
+                _chip_colour = _status_colour.get(_status, "#6b7280")
+                _chip_icon   = _status_icon.get(_status, "")
+                _chip_html   = (
+                    f"<span style='background:{_chip_colour}22;border:1px solid {_chip_colour};"
+                    f"color:{_chip_colour};border-radius:4px;padding:2px 8px;"
+                    f"font-size:0.85em;font-weight:600'>"
+                    f"{_chip_icon} {_status}</span>"
+                )
+            else:
+                _chip_html = (
+                    "<span style='background:#374151;border:1px solid #4b5563;"
+                    "color:#9ca3af;border-radius:4px;padding:2px 8px;"
+                    "font-size:0.85em'>Not yet reviewed</span>"
+                )
+
+            with st.expander(
+                f"**{_ticker}** — " + (_status or "awaiting review"),
+                expanded=(_status == "BROKEN"),
+            ):
+                # Status chip + timestamp
+                _ts_text = ""
+                if _rev_at:
+                    try:
+                        _ts_text = f" · reviewed {str(_rev_at)[:10]}"
+                    except Exception:
+                        pass
+                st.markdown(
+                    _chip_html + f"<span style='color:#6b7280;font-size:0.82em'>{_ts_text}</span>",
+                    unsafe_allow_html=True,
+                )
+
+                # Thesis text
+                st.markdown(f"**Your thesis:**")
+                st.markdown(
+                    f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
+                    f"padding:8px 12px;border-radius:4px;color:#cbd5e1;"
+                    f"font-style:italic;margin:4px 0 12px'>{_thesis}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # AI review summary
+                if _summary:
+                    st.markdown("**AI assessment:**")
+                    st.markdown(_summary)
+                elif _status is None:
+                    st.caption("Click Re-evaluate to run the first AI review for this position.")
+
+                # Re-evaluate button
+                _btn_key = f"_ai_reeval_{_ticker}"
+                if st.button(f"Re-evaluate {_ticker}", key=_btn_key, disabled=not _ai_api_key):
+                    if not _ai_api_key:
+                        st.warning("Anthropic API key not set in Streamlit secrets (`[anthropic] api_key`).")
+                    else:
+                        with st.spinner(f"Reviewing thesis for {_ticker}..."):
+                            # Assemble evidence from currently loaded data
+                            _held_data = st.session_state.get("held_data", {})
+                            _tech = {}
+                            _fund = {}
+                            _news_h: list = []
+                            if _ticker in _held_data:
+                                _hd = _held_data[_ticker]
+                                _ind = _hd.get("indicators", {})
+                                _tech = {
+                                    "above_sma50":     bool(_ind.get("above_sma50", False)),
+                                    "rsi":             _ind.get("rsi"),
+                                    "momentum_1m_pct": _ind.get("momentum_1m_pct"),
+                                }
+                                _fund = {
+                                    "revenue_growth": _hd.get("revenue_growth"),
+                                    "profit_margin":  _hd.get("profit_margin"),
+                                }
+                                _raw_news = _hd.get("news") or []
+                                _news_h = [
+                                    n.get("headline", n.get("title", "")) for n in _raw_news
+                                    if n.get("headline") or n.get("title")
+                                ][:15]
+
+                            _ev_inputs = _ta.build_review_inputs(
+                                technical=_tech,
+                                fundamentals=_fund,
+                                news_headlines=_news_h,
+                            )
+                            _result = _ta.review_thesis(
+                                ticker=_ticker,
+                                user_thesis=_thesis,
+                                inputs=_ev_inputs,
+                                api_key=_ai_api_key,
+                            )
+                            if _result is None:
+                                st.error("AI review failed — LLM offline or API key invalid. Try again shortly.")
+                            else:
+                                _trade_date = str(_pos.get("traded_at", ""))[:10] or str(date.today())
+                                _saved = _ai_db.save_thesis_review({
+                                    "ticker":      _ticker,
+                                    "trade_date":  _trade_date,
+                                    "reviewed_at": _result["reviewed_at"],
+                                    "status":      _result["status"],
+                                    "summary":     _result["summary"],
+                                    "inputs_hash": _ta.inputs_hash(_ev_inputs),
+                                })
+                                if _saved:
+                                    st.success(f"Review saved — {_result['status']}")
+                                    st.rerun()
+                                else:
+                                    # Show inline even if save failed (DB offline)
+                                    st.markdown(f"**{_result['status']}**")
+                                    st.markdown(_result["summary"])
+
+    st.divider()
+
+    # ── Weekly Debrief placeholder ────────────────────────────────────────────
+    st.subheader("📊 Weekly Portfolio Debrief")
+    st.markdown(
+        "A weekly retrospective: what happened to your portfolio, which signals "
+        "you acted on or ignored, and what behavioural patterns showed up."
+    )
+
+    _weekly_debriefs_df = pd.DataFrame()
+    try:
+        if _ai_db.has_db():
+            _wd_rows = (
+                _ai_db._client().table("weekly_debriefs")
+                .select("*")
+                .order("week_ending", desc=True)
+                .limit(1)
+                .execute().data
+            )
+            if _wd_rows:
+                _weekly_debriefs_df = pd.DataFrame(_wd_rows)
+    except Exception:
+        pass
+
+    if _weekly_debriefs_df.empty:
+        st.info(
+            "No weekly debriefs yet. The first debrief will be generated on Sunday once "
+            "`daily_snapshots` has accumulated at least 7 days of data. "
+            "You can also trigger one on-demand once the feature is fully active."
+        )
+    else:
+        _latest = _weekly_debriefs_df.iloc[0]
+        st.caption(f"Week ending {_latest.get('week_ending', '—')} · generated {str(_latest.get('generated_at', ''))[:10]}")
+        for _label, _col in [
+            ("What happened", "section_facts"),
+            ("Decisions you made", "section_decisions"),
+            ("Patterns this week", "section_patterns"),
+            ("One thing to watch", "section_watchnext"),
+        ]:
+            if _latest.get(_col):
+                st.markdown(f"**{_label}**")
+                st.markdown(_latest[_col])
+                st.markdown("")
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
