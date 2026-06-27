@@ -11149,7 +11149,7 @@ elif page == "📈 Analysis":
                     except Exception:
                         st.info(f"📅 Next earnings: {earn}")
 
-                with st.expander("Key Support & Resistance"):
+                with st.expander("Key Support & Resistance", expanded=True):
                     lc1, lc2 = st.columns(2)
                     with lc1:
                         st.markdown("**Resistance**")
