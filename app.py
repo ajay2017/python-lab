@@ -1833,7 +1833,7 @@ if page == "🏠 Home":
                                     "Value": _sh * _px})
                 if _s_rows:
                     with _snap_ph.container():
-                        st.caption("⚡ Live snapshot — full analysis loading below…")
+                        st.caption("Loading full analysis…")
                         _sc = st.columns(3)
                         _sc[0].metric("Portfolio Value", f"${_s_total:,.0f}")
                         _s_prev_total = _s_total - _s_day
@@ -1948,7 +1948,7 @@ if page == "🏠 Home":
         _src_labels = {
             "finnhub":       "Finnhub (real-time)",
             "yahoo_finance": "Yahoo Finance (15-min delayed)",
-            "fmp":           "FMP",
+            "fmp":           "FMP (end-of-day)",
         }
         _srcs = {v.get("source") for v in live.values() if v.get("source")}
         _src_str = " + ".join(_src_labels.get(s, s) for s in sorted(_srcs)) or "Yahoo Finance"
@@ -2066,7 +2066,7 @@ if page == "🏠 Home":
     _sp_check_key = f"_split_check_{_today_et()}"
     if _sp_check_key not in st.session_state:
         _dismissed_sp = st.session_state.get("_dismissed_splits", set())
-        with st.spinner("Checking for unaccounted stock splits…"):
+        with st.spinner("Checking for splits…"):
             st.session_state[_sp_check_key] = detect_portfolio_splits(
                 st.session_state.holdings_df,
                 st.session_state.get("_live_prices", {}),
@@ -3978,7 +3978,7 @@ if page == "🏠 Home":
                 # Action buttons
                 _qr_bc1, _qr_bc2 = st.columns([3, 1])
                 with _qr_bc1:
-                    if st.button(f"▶ Full Analysis — {_qr_res['ticker']}", key="_qr_full_btn"):
+                    if st.button(f"▶ Analyze {_qr_res['ticker']}", key="_qr_full_btn"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _qr_res["ticker"]
                         st.session_state["_nav_origin"]      = "📋 Today's Brief"
@@ -4044,6 +4044,9 @@ if page == "🏠 Home":
                 + (f"<span style='color:#86efac;font-size:0.82em;margin-left:8px'>"
                    f"Sector leaders: {', '.join(ls['sector'] for ls in lead_secs_ui[:2])}</span>"
                    if lead_secs_ui and tone == "bull" else "")
+                + (f"<div style='color:#86efac;font-size:0.78em;margin-top:4px'>"
+                   f"Cleared all 5 portfolio checks — vetted for entry.</div>"
+                   if tone != "bear" else "")
                 + f"</div>",
                 unsafe_allow_html=True,
             )
@@ -4529,8 +4532,8 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
 
-        # ── Two-column layout: Grow Today (left) | Act Today (right) ────────
-        _db_col_left, _db_col_right = st.columns([1, 1])
+        # ── Two-column layout: Act Today (left) | Grow Today (right) ────────
+        _db_col_right, _db_col_left = st.columns([1, 1])
 
         with _db_col_left:
             _render_grow_today(_db_grow, _db_tone)
@@ -5110,8 +5113,8 @@ if page == "🏠 Home":
                 )
             else:
                 st.caption(
-                    "📊 Scanner momentum picks beyond today's gated list. "
-                    "🔍 Verify via Analysis before acting."
+                    "📡 Scanner picks — not yet validated by the full portfolio check. "
+                    "Run Analysis before entering."
                     + (f"  {_scan_stamp}" if _scan_stamp else "")
                 )
                 for _db_buy in _db_buys_unique:
