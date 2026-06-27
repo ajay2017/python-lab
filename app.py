@@ -210,6 +210,50 @@ st.markdown("""
     font-weight: 600 !important;
     letter-spacing: 0.02em;
 }
+
+/* ── Sidebar grouped nav ──────────────────────────────────────────────── */
+/* Section header labels */
+.nav-group-header {
+    font-size: 0.62rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: #4b5563 !important;
+    padding: 10px 4px 2px !important;
+    margin: 0 !important;
+    line-height: 1.2 !important;
+}
+/* All sidebar nav buttons — flat, left-aligned, full-width */
+[data-testid="stSidebar"] [data-testid="stButton"] > button {
+    width: 100% !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 5px 10px !important;
+    color: #9ca3af !important;
+    font-size: 0.86rem !important;
+    font-weight: 400 !important;
+    transition: background 0.1s, color 0.1s !important;
+    box-shadow: none !important;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
+    background: rgba(255,255,255,0.07) !important;
+    color: #f0f2f5 !important;
+    border: none !important;
+}
+/* Selected state: disabled=True on the active page button.
+   Override Streamlit's default disabled (gray/faded) to look highlighted. */
+[data-testid="stSidebar"] [data-testid="stButton"] > button:disabled {
+    background: rgba(59,130,246,0.18) !important;
+    border-left: 3px solid #3b82f6 !important;
+    color: #f0f2f5 !important;
+    font-weight: 600 !important;
+    opacity: 1 !important;
+    cursor: default !important;
+    box-shadow: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -926,12 +970,65 @@ with st.sidebar:
         )
 
     _render_brand(large=False)
-    page = st.radio(
-        "Navigate",
-        ["🏠 Home", "💰 Account", "🔍 Market Scanner", "📈 Analysis", "⚖️ Compare", "📋 Watchlist", "📒 Trade Journal", "🪞 Trade Review", "📜 Recommendations History", "🔔 Catalyst Watch", "📅 Economic Calendar", "📖 User Guide"],
-        key="nav_page",
-        label_visibility="collapsed",
-    )
+
+    # ── Grouped nav buttons ───────────────────────────────────────────────
+    # Active page comes from nav_page (set by _pending_page consumer at top
+    # of script). Buttons set _pending_page + rerun — never write nav_page
+    # directly (raises StreamlitAPIException per CLAUDE.md).
+    _cur_page = st.session_state.get("nav_page", "🏠 Home")
+    _cw_alerts = len(st.session_state.get("_risk_high_alerts_cache") or [])
+
+    _NAV_GROUPS = [
+        ("MAIN", [
+            ("Home",    "🏠 Home",                    ":material/home:"),
+            ("Account", "💰 Account",                 ":material/account_balance_wallet:"),
+            ("Scanner", "🔍 Market Scanner",           ":material/radar:"),
+        ]),
+        ("ANALYSIS", [
+            ("Analysis", "📈 Analysis",               ":material/trending_up:"),
+            ("Compare",  "⚖️ Compare",                ":material/compare_arrows:"),
+            ("Watchlist","📋 Watchlist",               ":material/bookmarks:"),
+            ("Macro",    "🏠 Home",                    ":material/public:"),
+        ]),
+        ("PORTFOLIO", [
+            ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
+            ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
+            ("Recommendations", "📜 Recommendations History",  ":material/history:"),
+        ]),
+        ("ALERTS", [
+            ("Catalyst Watch",    "🔔 Catalyst Watch",    ":material/bolt:"),
+            ("Economic Calendar", "📅 Economic Calendar", ":material/calendar_month:"),
+            ("User Guide",        "📖 User Guide",        ":material/help:"),
+        ]),
+    ]
+
+    for _grp_label, _grp_items in _NAV_GROUPS:
+        st.markdown(
+            f"<div class='nav-group-header'>{_grp_label}</div>",
+            unsafe_allow_html=True,
+        )
+        for _disp, _dest, _icon in _grp_items:
+            # Catalyst Watch gets a live alert badge appended to its label
+            if _dest == "🔔 Catalyst Watch" and _cw_alerts > 0:
+                _btn_label = f"Catalyst Watch  🔴 {_cw_alerts}"
+            else:
+                _btn_label = _disp
+            # Macro plants a tab-selection hook for Release 2 wiring
+            _is_macro = (_disp == "Macro")
+            # Active: disabled=True (CSS renders as selected highlight)
+            _is_active = (_cur_page == _dest) and not _is_macro
+            if st.button(
+                _btn_label,
+                key=f"_nav_{_disp.lower().replace(' ', '_')}",
+                icon=_icon,
+                disabled=_is_active,
+                use_container_width=True,
+            ):
+                if _is_macro:
+                    st.session_state["_pending_home_tab"] = "🌐 Macro"
+                st.session_state["_pending_page"] = _dest
+                st.rerun()
+
     st.divider()
 
     # Market status
