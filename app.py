@@ -3230,12 +3230,23 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
             elif _b_built_at:
+                try:
+                    _b_age_mins = int((_b_now_et - _b_built_at).total_seconds() // 60)
+                except Exception:
+                    _b_age_mins = 0
+                _b_remaining = max(0, 30 - _b_age_mins)
+                _b_freshness = (
+                    f"auto-refreshes in {_b_remaining} min · or click Refresh Signals"
+                    if _b_remaining > 0 else
+                    "stale · click Refresh Signals to update"
+                )
+                _b_border = "#334155" if _b_remaining > 0 else "#92400e"
                 st.markdown(
-                    f"<div style='background:#0f172a;border:1px solid #334155;"
+                    f"<div style='background:#0f172a;border:1px solid {_b_border};"
                     f"border-radius:8px;padding:8px 14px;color:#cbd5e1;font-size:0.92em'>"
                     f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
                     f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
-                    f"auto-refreshes in 30 min · or click Refresh Signals"
+                    f"{_b_freshness}"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
