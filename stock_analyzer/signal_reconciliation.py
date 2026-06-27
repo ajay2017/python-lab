@@ -84,8 +84,8 @@ def reconcile_signals(
     # Display strings used inside the one-liner
     mom_str  = f"Momentum {momentum_score:.0f}"
     comp_str = (
-        f"composite {composite_signal or 'n/a'}"
-        + (f" {composite_score:.0f}" if composite_score is not None else "")
+        f"Score: {composite_signal or 'n/a'}"
+        + (f" ({composite_score:.0f}/100)" if composite_score is not None else "")
     )
 
     earnings_imminent = earnings_days is not None and 0 <= earnings_days <= EARNINGS_IMMINENT_DAYS
@@ -101,11 +101,11 @@ def reconcile_signals(
         verb = "Sell" if comp_class == "sell" else "Hold"
         return {
             "verdict":   "skip",
-            "label":     "❌ Skip — Composite Contradicts",
+            "label":     "❌ Skip — Signals Disagree",
             "one_liner": (
                 f"{mom_str} but {comp_str} — full multi-factor analysis says {verb}. "
-                "Momentum is a single-factor breakout signal; "
-                "composite adds fundamentals + sentiment. Skip until composite recovers."
+                "Technical momentum is a breakout signal; the full score also weighs fundamentals and sentiment. "
+                "Skip until scores align."
             ),
             "color": "#ef4444",
             "icon":  "❌",
@@ -148,8 +148,8 @@ def reconcile_signals(
             "verdict":   "verify",
             "label":     "🔍 Verify — Run Analysis First",
             "one_liner": (
-                f"{mom_str} suggests a breakout, but composite (Fundamentals + Sentiment) "
-                "hasn't loaded for this ticker. Open Analysis to confirm before acting."
+                f"{mom_str} suggests a breakout, but the full score hasn't loaded yet. "
+                "Open Analysis to confirm before acting."
             ),
             "color": "#f59e0b",
             "icon":  "🔍",
@@ -160,10 +160,10 @@ def reconcile_signals(
     if comp_class == "buy":
         return {
             "verdict":   "go",
-            "label":     "✅ Go — Composite Confirms",
+            "label":     "✅ Go — All Signals Agree",
             "one_liner": (
-                f"{mom_str} and {comp_str} — momentum and full multi-factor "
-                "analysis agree. Cleared to act within position-sizing rules."
+                f"{mom_str} · {comp_str} — technical momentum and full-score analysis agree. "
+                "Cleared to act within position-sizing rules."
             ),
             "color": "#22c55e",
             "icon":  "✅",
@@ -175,8 +175,8 @@ def reconcile_signals(
         "verdict":   "verify",
         "label":     "🔍 Verify — Mixed Conviction",
         "one_liner": (
-            f"{mom_str} · {comp_str} — momentum is positive but composite "
-            "is neutral. Review the Analysis page before acting."
+            f"{mom_str} · {comp_str} — momentum is positive but the full score is neutral. "
+            "Review the Analysis page before acting."
         ),
         "color": "#f59e0b",
         "icon":  "🔍",
