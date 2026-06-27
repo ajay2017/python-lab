@@ -12657,8 +12657,9 @@ elif page == "📒 Trade Journal":
                     "Investment thesis (optional — but recommended)",
                     value=_thesis_prefill,
                     placeholder=(
-                        "Why do you believe in this position? "
-                        "What would need to change for you to reconsider?"
+                        "E.g. NVDA benefits from AI training chip demand with no credible competitor "
+                        "for 18–24 months. Holds as long as hyperscaler capex keeps growing. "
+                        "Breaks if AMD closes the architectural gap or a major customer pulls their design win."
                     ),
                     height=90,
                     help="Saved and reviewed weekly by AI Insights to check if your conviction still holds.",
