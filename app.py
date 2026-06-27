@@ -3186,6 +3186,34 @@ if page == "🏠 Home":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
+    # If the sidebar "Macro" nav item was clicked, auto-select the Macro tab.
+    # Consume the flag here (pop removes it so it doesn't re-fire on reruns).
+    # JS runs after the browser renders all elements, so the tab buttons exist
+    # regardless of where this component sits relative to st.tabs().
+    if st.session_state.pop("_pending_home_tab", None) == "🌐 Macro":
+        import streamlit.components.v1 as _stc_tab
+        _stc_tab.html(
+            """<script>
+            (function() {
+                function _clickMacro() {
+                    var tabs = window.parent.document.querySelectorAll(
+                        'button[role="tab"]'
+                    );
+                    for (var i = 0; i < tabs.length; i++) {
+                        if (tabs[i].innerText.trim().includes('Macro')) {
+                            tabs[i].click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                // Try immediately, retry once if tabs not yet in DOM
+                if (!_clickMacro()) { setTimeout(_clickMacro, 350); }
+            })();
+            </script>""",
+            height=0,
+        )
+
     _db_act_n   = len(_daily_brief["act_today"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
