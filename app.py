@@ -3729,7 +3729,7 @@ if page == "🏠 Home":
         with _tone_col:
             st.markdown(
                 f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
-                f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px'>"
+                f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:165px'>"
                 f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
                 f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
                 f"{_tone_label}</span>"
@@ -3799,6 +3799,15 @@ if page == "🏠 Home":
                         st.plotly_chart(_fg_fig, use_container_width=True,
                                         config={"displayModeBar": False})
                     with _fg_right:
+                        _hb = st.session_state.get("_highbeta_share")
+                        _hb_warn  = (_hb is not None and _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN)
+                        _hb_color = "#f59e0b" if _hb_warn else "#6b7280"
+                        _hb_line  = (
+                            f"<div style='color:{_hb_color};font-size:0.75em;margin-top:8px'>"
+                            f"🔗 <b>{_hb:.0f}%</b> in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
+                            + (" — correlated on risk-off days." if _hb_warn else " — moderate.")
+                            + "</div>"
+                        ) if (_hb is not None and _hb > 0) else ""
                         st.markdown(
                             f"<div style='padding-top:24px'>"
                             f"<div style='color:#9ca3af;font-size:0.85em'>"
@@ -3806,6 +3815,7 @@ if page == "🏠 Home":
                             f"<div style='color:#d1d5db;font-size:0.80em;margin-top:8px'>"
                             f"A {abs(_frag['pullback_pct']):.0f}% pullback → "
                             f"~<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
+                            + _hb_line +
                             f"</div>",
                             unsafe_allow_html=True,
                         )
@@ -3831,7 +3841,7 @@ if page == "🏠 Home":
             _act_border = "#ef4444" if _act_n > 0 else "#334155"
             st.markdown(
                 f"<div style='background:{_act_color};border:1px solid {_act_border};"
-                f"border-radius:12px;padding:14px 20px;min-height:96px'>"
+                f"border-radius:12px;padding:14px 20px;min-height:165px'>"
                 f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
                 f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
                 f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
@@ -3840,23 +3850,6 @@ if page == "🏠 Home":
                 f"🟡 {_review_n} to review"
                 f"</div>"
                 f"</div>",
-                unsafe_allow_html=True,
-            )
-
-        # High-beta cluster share (Part 2b) — standing correlated-exposure
-        # proxy: per-name diversification hides the "many high-beta names that
-        # all fall together" risk. Warns above CONCENTRATION_HIGHBETA_SHARE_WARN.
-        _hb = st.session_state.get("_highbeta_share")
-        if _hb is not None and _hb > 0:
-            _hb_warn  = _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN
-            _hb_color = "#f59e0b" if _hb_warn else "#9ca3af"
-            st.markdown(
-                f"<div style='color:{_hb_color};font-size:0.78em;margin-top:-6px;margin-bottom:8px'>"
-                f"🔗 <b>{_hb:.0f}%</b> of measured exposure is in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
-                + (" — they tend to fall together on risk-off days, so per-name "
-                   "diversification is partly illusory."
-                   if _hb_warn else " — moderate correlated exposure.")
-                + "</div>",
                 unsafe_allow_html=True,
             )
 
