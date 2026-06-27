@@ -2001,7 +2001,7 @@ if page == "🏠 Home":
                 if r.get("live_ok") is False:
                     _bits.append(f"live-price gap {r.get('live_gap_pct')}%")
                 _xc_lines.append(
-                    f"- **{t}**: {r.get('primary_source')} vs independent check "
+                    f"- **{t}**: {r.get('primary_source')} vs {r.get('validator', 'independent source')} "
                     f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
                 )
             st.error(
@@ -4655,6 +4655,28 @@ if page == "🏠 Home":
                 _alts.sort(key=lambda x: -(x[1] or 0))
                 return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
 
+            # Load BROKEN thesis tickers once per render — additive only; no-ops
+            # if AI Insights has never been used or the table doesn't exist yet.
+            if "_broken_thesis_tickers" not in st.session_state:
+                try:
+                    _rv_df = db.load_thesis_reviews()
+                    if not _rv_df.empty:
+                        # Keep only the most-recent review per ticker
+                        _rv_latest = (
+                            _rv_df.sort_values("reviewed_at", ascending=False)
+                            .drop_duplicates(subset="ticker")
+                        )
+                        st.session_state["_broken_thesis_tickers"] = set(
+                            _rv_latest.loc[
+                                _rv_latest["status"] == "BROKEN", "ticker"
+                            ].astype(str).str.upper()
+                        )
+                    else:
+                        st.session_state["_broken_thesis_tickers"] = set()
+                except Exception:
+                    st.session_state["_broken_thesis_tickers"] = set()
+            _broken_thesis_tickers = st.session_state.get("_broken_thesis_tickers", set())
+
             def _render_act_card(_db_item):
                 _db_is_crit = _db_item["priority"] == "critical"
                 _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
@@ -4722,11 +4744,24 @@ if page == "🏠 Home":
                     unsafe_allow_html=True,
                 )
                 if _db_ticker:
-                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
-                                 use_container_width=False):
-                        st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _db_ticker
-                        st.rerun()
+                    _act_cols = st.columns([2, 3, 5])
+                    with _act_cols[0]:
+                        if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
+                                     use_container_width=False):
+                            st.session_state["_pending_page"]    = "📈 Analysis"
+                            st.session_state["_analysis_ticker"] = _db_ticker
+                            st.rerun()
+                    # Combined elevated card: when BROKEN thesis + TRIM/EXIT coincide,
+                    # show a lightweight AI note link (core card is complete without it).
+                    if str(_db_ticker).upper() in _broken_thesis_tickers:
+                        with _act_cols[1]:
+                            if st.button(
+                                "🔴 Thesis broken — view AI note →",
+                                key=f"_db_act_ainote_{_db_ticker}_{_db_item['action'][:10]}",
+                                use_container_width=False,
+                            ):
+                                st.session_state["_pending_page"] = "🧠 AI Insights"
+                                st.rerun()
 
             def _render_review_card(_db_rev, _card_idx=0):
                 _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
