@@ -28,6 +28,10 @@ on:
     # on ET hour >= 16 so the close is final.
     - cron: "30 20 * * 1-5"  # 20:30 UTC — 16:30 EDT (summer run) / 15:30 EST (gated too-early)
     - cron: "30 21 * * 1-5"  # 21:30 UTC — 17:30 EDT (already-done) / 16:30 EST (winter run)
+    # Weekly THESIS REVIEW — Sunday evening. Two UTC slots straddle EST/EDT;
+    # cron_runner gates on mode=thesis and runs only on Sunday (weekday=6).
+    - cron: "0 22 * * 0"     # 22:00 UTC Sunday — 18:00 EDT / 17:00 EST
+    - cron: "0 23 * * 0"     # 23:00 UTC Sunday — 19:00 EDT / 18:00 EST (winter run)
   workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
       mode:
@@ -72,16 +76,17 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           FMP_API_KEY:     ${{ secrets.FMP_API_KEY }}
           FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-          RESEND_API_KEY:  ${{ secrets.RESEND_API_KEY }}
+          RESEND_API_KEY:   ${{ secrets.RESEND_API_KEY }}
           ALERT_EMAIL_TO:   ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ALERT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '' }}
           ALERT_TEST_EMAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email && '1' || '' }}
-          # workflow_dispatch input wins; else the 14:00 UTC schedule slot forces
-          # mode=scan (its ET hour would otherwise derive premarket); all other
-          # schedule slots leave it blank so the cron derives premarket/eod by hour.
+          # workflow_dispatch input wins; else named schedule slots force their mode;
+          # all other slots leave it blank so the cron derives premarket/eod by hour.
           ALERT_RUN_MODE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
             || ((github.event.schedule == '45 13 * * 1-5' || github.event.schedule == '45 14 * * 1-5') && 'scan')
+            || ((github.event.schedule == '0 22 * * 0'   || github.event.schedule == '0 23 * * 0')   && 'thesis')
             || '' }}
         run: python cron_runner.py

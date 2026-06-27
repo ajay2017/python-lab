@@ -23,6 +23,10 @@ Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
 FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_FROM
 · ALERT_RUN_MODE (premarket|eod) · ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1
 (synthetic delivery test) · ALERT_PROTECTIVE_ROW=1 / EOD lane uses row 2 in alert_state.
+  • thesis (~18:00 ET Sunday) — AI thesis reviews for all open positions that
+    have a user_thesis written at BUY entry. One LLM call per position, saves to
+    thesis_reviews table. Inert without ANTHROPIC_API_KEY.
+
 """
 
 import hashlib
@@ -276,15 +280,111 @@ def _run_scan(now_et, force: bool) -> int:
     return 0
 
 
+def _run_thesis(now_et, force: bool) -> int:
+    """Sunday evening: AI thesis review for all open positions with a user thesis.
+    One LLM call per position. Inert without ANTHROPIC_API_KEY."""
+    if not force and now_et.weekday() != 6:   # 6 = Sunday
+        _log("thesis: not Sunday — skip.")
+        return 0
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        _log("thesis: INERT — no ANTHROPIC_API_KEY set. Add it to GitHub secrets to activate.")
+        return 0
+
+    from stock_analyzer import thesis_advisor as _ta
+    from stock_analyzer.data import load_all
+
+    # Load open positions
+    try:
+        bundle = load_all()
+    except Exception as e:
+        _log(f"thesis: load_all failed — {str(e)[:120]}")
+        return 0
+
+    holdings_df = bundle.get("holdings_df")
+    if holdings_df is None or holdings_df.empty:
+        _log("thesis: no open positions — nothing to review.")
+        return 0
+
+    open_tickers = set(holdings_df["Ticker"].astype(str).str.upper())
+
+    # Load trades and find BUYs with a thesis for open positions
+    trades_df = db.load_trades()
+    if trades_df.empty or "user_thesis" not in trades_df.columns:
+        _log("thesis: no trades with user_thesis found — add theses via Trade Journal.")
+        return 0
+
+    buys_with_thesis = (
+        trades_df[
+            (trades_df["action"] == "BUY") &
+            (trades_df["user_thesis"].notna()) &
+            (trades_df["user_thesis"].astype(str).str.strip() != "") &
+            (trades_df["ticker"].astype(str).str.upper().isin(open_tickers))
+        ]
+        .sort_values("traded_at", ascending=False)
+        .drop_duplicates(subset="ticker")
+    )
+
+    if buys_with_thesis.empty:
+        _log("thesis: no open positions have a user thesis yet — skip.")
+        return 0
+
+    _log(f"thesis: reviewing {len(buys_with_thesis)} position(s): "
+         + ", ".join(buys_with_thesis["ticker"].astype(str).str.upper()))
+
+    # Build positions list for batch review
+    held_data = bundle.get("held_data", {})
+    positions = []
+    for _, row in buys_with_thesis.iterrows():
+        ticker = str(row["ticker"]).upper()
+        hd     = held_data.get(ticker, {})
+        ind    = hd.get("indicators", {})
+        tech   = {
+            "above_sma50":     bool(ind.get("above_sma50", False)),
+            "rsi":             ind.get("rsi"),
+            "momentum_1m_pct": ind.get("momentum_1m_pct"),
+        }
+        fund = {
+            "revenue_growth": hd.get("revenue_growth"),
+            "profit_margin":  hd.get("profit_margin"),
+        }
+        raw_news = hd.get("news") or []
+        headlines = [
+            n.get("headline", n.get("title", "")) for n in raw_news
+            if n.get("headline") or n.get("title")
+        ][:15]
+        positions.append({
+            "ticker":      ticker,
+            "trade_date":  str(row.get("traded_at", ""))[:10],
+            "user_thesis": str(row["user_thesis"]),
+            "inputs":      _ta.build_review_inputs(
+                technical=tech, fundamentals=fund, news_headlines=headlines,
+            ),
+        })
+
+    results = _ta.run_batch_review(positions, api_key=api_key)
+    _log(f"thesis: LLM returned {len(results)} review(s).")
+
+    saved = 0
+    for rec in results:
+        if db.save_thesis_review(rec):
+            saved += 1
+            _log(f"  {rec['ticker']}: {rec['status']} — saved.")
+        else:
+            _log(f"  {rec['ticker']}: {rec['status']} — save FAILED (DB offline?).")
+
+    _log(f"thesis done · reviewed={len(results)} · saved={saved}")
+    return 0
+
+
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
-    # Derive mode from ET hour so the logic is self-contained — a YAML schedule
-    # change can't accidentally fire the wrong lane.  Only "scan" (test-only) is
-    # still overrideable via ALERT_RUN_MODE; eod/premarket are inferred from time.
+    # Derive mode from ET hour; named overrides (scan, thesis) bypass time-inference.
     _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
-    mode = _mode_override if _mode_override == "scan" else (
+    mode = _mode_override if _mode_override in ("scan", "thesis") else (
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
@@ -293,6 +393,8 @@ def main() -> int:
         return _run_test_email(now_et)
     if mode == "scan":
         return _run_scan(now_et, force)
+    if mode == "thesis":
+        return _run_thesis(now_et, force)
     if mode == "eod":
         return _run_eod(now_et, force)
     return _run_premarket(now_et, force)

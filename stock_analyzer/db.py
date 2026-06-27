@@ -625,7 +625,7 @@ def load_watchlist() -> list[str]:
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "cost_basis", "realized_pnl", "notes", "trigger_type",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
-               "traded_at"]
+               "traded_at", "user_thesis"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -640,8 +640,9 @@ def load_trades() -> pd.DataFrame:
             )
             if rows:
                 df = pd.DataFrame(rows)
-                # Backfill decision-journal columns for rows pre-dating the feature
-                for col in ("signal_seen", "followed_signal", "deviation_reason", "lesson"):
+                # Backfill columns for rows pre-dating each feature addition
+                for col in ("signal_seen", "followed_signal", "deviation_reason",
+                            "lesson", "user_thesis"):
                     if col not in df.columns:
                         df[col] = None
                 return df
@@ -707,6 +708,50 @@ def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
         from stock_analyzer import api_health as _ah
         _ah.record("supabase", "error", msg=str(e)[:120])
         st.error(f"⛔ Failed to update trade {trade_id} — see Data Health tab for details.")
+        return False
+
+
+# ── Thesis Reviews (AI Insights — F-1) ───────────────────────────────────────
+
+_THESIS_REVIEW_COLS = ["id", "ticker", "trade_date", "reviewed_at",
+                       "status", "summary", "inputs_hash", "created_at"]
+
+
+def load_thesis_reviews() -> pd.DataFrame:
+    """Return all thesis reviews, most-recent first. Empty DataFrame when table
+    does not exist yet (inert until DDL is applied in Supabase)."""
+    empty = pd.DataFrame(columns=_THESIS_REVIEW_COLS)
+    if not has_db():
+        return empty
+    try:
+        rows = (
+            _client().table("thesis_reviews")
+            .select("*")
+            .order("reviewed_at", desc=True)
+            .execute().data
+        )
+        if rows:
+            df = pd.DataFrame(rows)
+            for col in _THESIS_REVIEW_COLS:
+                if col not in df.columns:
+                    df[col] = None
+            return df
+        return empty
+    except Exception:
+        return empty
+
+
+def save_thesis_review(record: dict) -> bool:
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("thesis_reviews").insert(record).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
         return False
 
 
