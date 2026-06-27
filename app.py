@@ -3154,7 +3154,7 @@ if page == "🏠 Home":
     _db_act_n   = len(_daily_brief["act_today"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
-    tab_daily, tab_evening, tab_ov, tab_perf, tab_pnl, tab_act, tab_risk, tab_rs, tab_macro, tab_heat, tab_rank, tab_brief = st.tabs([
+    tab_daily, tab_evening, tab_ov, tab_perf, tab_pnl, tab_act, tab_risk, tab_rs, tab_heat, tab_rank, tab_brief = st.tabs([
         f"📋 Today's Brief{_db_icon}",
         "🌙 Evening Debrief",
         "📊 Overview",
@@ -3163,7 +3163,6 @@ if page == "🏠 Home":
         f"⚠️ Alerts & Actions{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
         "🔗 Risk Analysis",
         "📈 Relative Strength",
-        "🌐 Macro",
         "🔥 Sector Rotation",
         "🏆 Rankings",
         "🤖 AI Brief",
@@ -8810,182 +8809,6 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                             f"**{_best['Alpha (%)']:+.1f}%** above its sector ETF ({_best['ETF']}) — "
                             f"stock-specific strength, not just a sector tailwind."
                         )
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 5 — MACRO
-    # ═══════════════════════════════════════════════════════════════════════════
-    with tab_macro:
-        st.info("Macro analysis has moved to its own page. Use **Macro** in the sidebar (under ANALYSIS) for the full view.")
-        if st.button("→ Open Macro page", key="_macro_redirect_btn"):
-            st.session_state["_pending_page"] = "🌐 Macro"
-            st.rerun()
-        if st.button("📡 Load macro signals (TLT · SPY · VIX)", key="_macro_load_btn"):
-            _macro_raw = {}
-            for _sym, _period in [("TLT", "3mo"), ("SPY", "3mo"), ("^VIX", "5d")]:
-                try:
-                    with st.spinner(f"Loading {_sym}…"):
-                        _h = fetch_price_history(_sym, period=_period)
-                    if not _h.empty and "Close" in _h.columns:
-                        _cl = _h["Close"].dropna()
-                        if len(_cl) >= 2:
-                            if _sym == "^VIX":
-                                _macro_raw["vix"] = float(_cl.iloc[-1])
-                            elif float(_cl.iloc[0]) > 0:
-                                _macro_raw[_sym.lower() + "_ret"] = round(
-                                    float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1
-                                )
-                except Exception:
-                    pass
-            st.session_state["_macro_raw"] = _macro_raw
-
-        if st.session_state.get("_macro_raw"):
-            _mr = st.session_state["_macro_raw"]
-            _tlt = _mr.get("tlt_ret", 0.0)
-            _spy = _mr.get("spy_ret", 0.0)
-            _vix = _mr.get("vix", 18.0)
-            regime = detect_macro_regime(_tlt, _spy, _vix)
-
-            # ── Regime banner ─────────────────────────────────────────────────
-            _regime_colors = {
-                "rising_rates":  "#ffbb33",
-                "falling_rates": "#00C851",
-                "risk_off":      "#ff4444",
-                "risk_on":       "#00C851",
-                "neutral":       "#888888",
-            }
-            _rc = _regime_colors.get(regime["combined"], "#888888")
-            st.markdown(
-                f"<div style='background:{_rc}22;border-left:4px solid {_rc};"
-                f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
-                f"<b style='color:{_rc};font-size:1.1em'>Current Regime: {regime['label']}</b>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-            # Signal strip
-            _s1, _s2, _s3 = st.columns(3)
-            _sig = regime["signals"]
-            _s1.metric("Rates (TLT 3mo)", f"{_tlt:+.1f}%",
-                       help=_sig.get("Rates (TLT)", ""))
-            _s2.metric("Volatility (VIX)", f"{_vix:.0f}",
-                       delta="risk-off" if _vix >= 25 else "risk-on" if _vix <= 15 else "neutral",
-                       delta_color="inverse" if _vix >= 25 else "normal",
-                       help=_sig.get("Volatility (VIX)", ""))
-            _s3.metric("Market (SPY 3mo)", f"{_spy:+.1f}%",
-                       help=_sig.get("Market (SPY)", ""))
-
-            # ── Rotation playbook ─────────────────────────────────────────────
-            _fav = REGIME_FAVORED[regime["combined"]]
-            st.markdown("---")
-            st.markdown("**Sector Rotation Playbook for this Regime**")
-            st.caption(_fav["reason"])
-            _pb1, _pb2 = st.columns(2)
-            with _pb1:
-                if _fav["overweight"]:
-                    st.markdown("🟢 **Overweight**")
-                    for _s in _fav["overweight"]:
-                        rs = RATE_SENSITIVITY.get(_s, 0)
-                        st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
-                                    unsafe_allow_html=True)
-                else:
-                    st.markdown("🟢 **Overweight** — none flagged")
-            with _pb2:
-                if _fav["underweight"]:
-                    st.markdown("🔴 **Underweight / Reduce**")
-                    for _s in _fav["underweight"]:
-                        rs = RATE_SENSITIVITY.get(_s, 0)
-                        st.markdown(f"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*",
-                                    unsafe_allow_html=True)
-                else:
-                    st.markdown("🔴 **Underweight** — none flagged")
-
-            # ── Portfolio exposure table ──────────────────────────────────────
-            st.markdown("---")
-            st.markdown("**Your Portfolio — Macro Alignment**")
-            expo_df = portfolio_macro_exposure(port_df, regime)
-            if not expo_df.empty:
-                # Summary counts
-                _nt = int((expo_df["Macro Alignment"] == "Tailwind ↑").sum())
-                _nh = int((expo_df["Macro Alignment"] == "Headwind ↓").sum())
-                _nn = int((expo_df["Macro Alignment"] == "Neutral ↔").sum())
-                _headwind_weight = expo_df.loc[
-                    expo_df["Macro Alignment"] == "Headwind ↓", "Weight (%)"
-                ].sum()
-
-                _ec1, _ec2, _ec3, _ec4 = st.columns(4)
-                _ec1.metric("Tailwind positions", _nt,  help="Sector favored in current regime")
-                _ec2.metric("Neutral positions",  _nn)
-                _ec3.metric("Headwind positions", _nh,  help="Sector disfavored in current regime")
-                _ec4.metric("% in headwind sectors", f"{_headwind_weight:.0f}%",
-                            help="Combined weight of positions facing macro headwinds")
-
-                # Rate sensitivity bar chart
-                _expo_sorted = expo_df.sort_values("Rate Sensitivity")
-                _bar_colors = [
-                    "#00C851" if a == "Tailwind ↑" else "#ff4444" if a == "Headwind ↓" else "#888888"
-                    for a in _expo_sorted["Macro Alignment"]
-                ]
-                _labels = [
-                    f"{row['Ticker']} ({row['Weight (%)']:.0f}%)"
-                    for _, row in _expo_sorted.iterrows()
-                ]
-                rs_fig = go.Figure(go.Bar(
-                    x=_expo_sorted["Rate Sensitivity"],
-                    y=_labels,
-                    orientation="h",
-                    marker_color=_bar_colors,
-                    text=[f"{v:+.2f}" for v in _expo_sorted["Rate Sensitivity"]],
-                    textposition="outside",
-                ))
-                rs_fig.add_vline(x=0, line_color="white", line_dash="dot", line_width=1)
-                rs_fig.update_layout(
-                    title="Rate Sensitivity by Position (right = rate beneficiary)",
-                    template="plotly_dark", height=max(280, 35 * len(_expo_sorted)),
-                    xaxis_title="Rate Sensitivity Score",
-                    margin=dict(l=0, r=60, t=40, b=0),
-                )
-                st.plotly_chart(rs_fig, use_container_width=True)
-                st.caption(
-                    "🟢 Green = sector benefits from current macro regime  |  "
-                    "⬜ Gray = neutral  |  "
-                    "🔴 Red = sector faces headwind in current regime"
-                )
-
-                # Styled table
-                def _align_col(val):
-                    if "Tailwind" in str(val):  return "color:#00C851;font-weight:bold"
-                    if "Headwind" in str(val):  return "color:#ff4444"
-                    return "color:#888888"
-
-                def _rate_col(val):
-                    if isinstance(val, float):
-                        if val >= 0.3:  return "color:#00C851"
-                        if val <= -0.4: return "color:#ff4444"
-                    return ""
-
-                _disp_cols = ["Icon", "Ticker", "Sector", "Weight (%)", "Rate Sensitivity", "Macro Alignment"]
-                _styled_expo = (
-                    expo_df[_disp_cols].style
-                    .map(_align_col, subset=["Macro Alignment"])
-                    .map(_rate_col,  subset=["Rate Sensitivity"])
-                    .format({"Weight (%)": "{:.1f}%", "Rate Sensitivity": "{:+.2f}"})
-                )
-                st.dataframe(_styled_expo, use_container_width=True)
-
-                # Actionable callout
-                if _headwind_weight > 30:
-                    _heads = expo_df[expo_df["Macro Alignment"] == "Headwind ↓"]["Sector"].unique().tolist()
-                    st.warning(
-                        f"⚠️ **{_headwind_weight:.0f}% of your portfolio is in macro headwind sectors** "
-                        f"({', '.join(_heads)}) given the *{regime['label']}* environment. "
-                        f"Best practice would recommend trimming these and rotating to "
-                        f"{', '.join(_fav['overweight'][:2]) if _fav['overweight'] else 'defensive sectors'}."
-                    )
-                elif _nt > _nh:
-                    st.success(
-                        f"✅ **Your portfolio is well-positioned for {regime['label']}** — "
-                        f"{_nt} of {len(expo_df)} positions are in macro-favored sectors."
-                    )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 6 — SECTOR ROTATION HEATMAP
