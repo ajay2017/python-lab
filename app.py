@@ -3207,29 +3207,85 @@ if page == "🏠 Home":
             except Exception:
                 return ""
 
-        _fs_c1, _fs_c2 = st.columns([4, 1])
-        with _fs_c1:
+        # ── Status bar — built-at chip + refresh controls + lock, single row ──
+        _sb_c1, _sb_c2, _sb_c3, _sb_c4 = st.columns([4, 2, 2, 2])
+
+        # Col 1 — built-at / locked chip (dark-bordered, same style as before)
+        with _sb_c1:
             if _b_locked and _b_locked_at:
                 st.markdown(
                     f"<div style='background:#172554;border:1px solid #3b82f6;"
-                    f"border-radius:8px;padding:8px 14px;margin-bottom:8px;color:#bfdbfe'>"
+                    f"border-radius:8px;padding:8px 14px;color:#bfdbfe'>"
                     f"🔒 <b>Today's Setup Locked</b> at {_fmt_et(_b_locked_at)} "
                     f"<span style='color:#93c5fd;font-size:0.85em'>({_fmt_age(_b_locked_at)})</span> — "
-                    f"recommendations are frozen for the day. Risk, holdings, and prices continue updating."
+                    f"recommendations frozen for the day."
                     f"</div>",
                     unsafe_allow_html=True,
                 )
             elif _b_built_at:
                 st.markdown(
                     f"<div style='background:#0f172a;border:1px solid #334155;"
-                    f"border-radius:8px;padding:8px 14px;margin-bottom:8px;color:#cbd5e1;font-size:0.92em'>"
+                    f"border-radius:8px;padding:8px 14px;color:#cbd5e1;font-size:0.92em'>"
                     f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
                     f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
                     f"recommendations refresh when scanner reruns or composite cache expires (30 min)."
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-        with _fs_c2:
+
+        # Col 2 — Refresh macro
+        with _sb_c2:
+            _macro_src = (
+                "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
+                else "Static only (add FRED key in Economic Calendar)"
+            )
+            if st.button(
+                "🔄 Refresh macro",
+                key="_refresh_macro_home",
+                help=f"Source: {_macro_src} · cache invalidates at midnight ET. Re-fetch FRED actuals + release dates mid-day when the calendar looks stale.",
+                use_container_width=True,
+            ):
+                _mc_clear_key = f"_macro_cal_{_today_et()}"
+                if _mc_clear_key in st.session_state:
+                    del st.session_state[_mc_clear_key]
+                st.session_state["_brief_refresh_nonce"] = \
+                    st.session_state.get("_brief_refresh_nonce", 0) + 1
+                st.rerun()
+
+        # Col 3 — Refresh Signals
+        with _sb_c3:
+            _rs_locked, _rs_rem = _refresh_gate("data")
+            # Build dynamic help text from signal-age state
+            if _rs_locked:
+                _rs_help = f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
+            else:
+                _sig_ts = st.session_state.get("_brief_signals_ts")
+                _ssm    = st.session_state.get("_scanner_results_meta") or {}
+                if _sig_ts:
+                    _sig_age = int((datetime.now() - _sig_ts).total_seconds())
+                    if _sig_age < 60:
+                        _rs_help = f"Signals refreshed {_sig_age}s ago — live prices current."
+                    elif _sig_age < 3600:
+                        _rs_help = f"Signals refreshed {_sig_age // 60}m ago. Click to pull latest."
+                    else:
+                        _rs_help = f"Signals last refreshed {_sig_age // 3600}h ago — stale, refresh recommended."
+                elif _ssm.get("scan_date") == _today_et().isoformat():
+                    _src_phrase = "auto-scan (~10 AM ET)" if _ssm.get("source") == "cron" else "scan"
+                    _rs_help = f"Signals from today's {_src_phrase}. Click to re-score on live prices intraday."
+                elif _ssm.get("scan_date"):
+                    _rs_help = f"Signals from {_ssm['scan_date']} scan — click to score today's price action."
+                else:
+                    _rs_help = "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
+            _do_refresh = st.button(
+                "🔄 Refresh Signals",
+                key="_db_refresh_signals",
+                use_container_width=True,
+                disabled=_rs_locked,
+                help=_rs_help,
+            )
+
+        # Col 4 — Lock Setup / Unlock
+        with _sb_c4:
             if _b_locked:
                 if st.button(
                     "🔓 Unlock",
@@ -3241,8 +3297,6 @@ if page == "🏠 Home":
                     st.session_state.pop("_brief_locked_snapshot", None)
                     st.session_state.pop("_brief_locked_for_date", None)
                     st.session_state.pop("_brief_locked_at", None)
-                    # Force a synthesis rebuild so unlock serves a fresh (non-frozen)
-                    # brief rather than a bundle that was cached under the lock.
                     st.session_state["_brief_refresh_nonce"] = \
                         st.session_state.get("_brief_refresh_nonce", 0) + 1
                     st.rerun()
@@ -3258,90 +3312,9 @@ if page == "🏠 Home":
                     st.session_state["_brief_locked_snapshot"] = _daily_brief
                     st.session_state["_brief_locked_for_date"] = _today_et()
                     st.session_state["_brief_locked_at"]       = _b_now_et
-                    # Rebuild once so the lock transition is captured cleanly in
-                    # the synthesis cache (the snapshot is sourced from _daily_brief).
                     st.session_state["_brief_refresh_nonce"] = \
                         st.session_state.get("_brief_refresh_nonce", 0) + 1
                     st.rerun()
-
-        # ── Refresh controls — macro + signals, side by side ──────────────────
-        # Both are "refresh" actions, so group them in one row (button + caption
-        # stacked per column). Refresh macro bypasses the per-day _macro_cal_{date}
-        # cache to force a fresh FRED pull mid-day (e.g. right after CPI prints when
-        # the static date and the actual release time disagree; cache otherwise
-        # only invalidates at midnight ET). Refresh Signals re-fetches live prices
-        # + re-runs the scanner. The scan handler follows immediately so a press is
-        # acted on (and rerun) before the rest of the brief renders.
-        # Both buttons' deps are module-level / defined far above (held_tickers
-        # @~1580, _parallel_load_all @~1128) — safe this high in the page.
-        _rmd_c1, _rmd_c2 = st.columns(2)
-        with _rmd_c1:
-            if st.button(
-                "🔄 Refresh macro",
-                key="_refresh_macro_home",
-                help="Re-fetch FRED actuals + release dates. Use mid-day when the calendar looks stale.",
-                use_container_width=True,
-            ):
-                _mc_clear_key = f"_macro_cal_{_today_et()}"
-                if _mc_clear_key in st.session_state:
-                    del st.session_state[_mc_clear_key]
-                # Bump the nonce so the (memoized) synthesis rebuilds and the
-                # freshly-pulled FRED calendar actually reaches the Brief.
-                st.session_state["_brief_refresh_nonce"] = \
-                    st.session_state.get("_brief_refresh_nonce", 0) + 1
-                st.rerun()
-            _macro_src = (
-                "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
-                else "Static only (add FRED key in Economic Calendar)"
-            )
-            st.caption(f"Macro data source: **{_macro_src}** · cache invalidates at midnight ET.")
-        with _rmd_c2:
-            _rs_locked, _rs_rem = _refresh_gate("data")
-            _do_refresh = st.button(
-                "🔄 Refresh Signals",
-                key="_db_refresh_signals",
-                use_container_width=True,
-                disabled=_rs_locked,
-                help=(
-                    f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
-                    if _rs_locked else
-                    "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
-                ),
-            )
-            _sig_ts = st.session_state.get("_brief_signals_ts")
-            if _sig_ts:
-                _sig_age = int((datetime.now() - _sig_ts).total_seconds())
-                if _sig_age < 60:
-                    st.caption(f"Signals refreshed {_sig_age}s ago — live prices current")
-                elif _sig_age < 3600:
-                    st.caption(f"Signals refreshed {_sig_age // 60}m {_sig_age % 60}s ago — click to pull latest market data")
-                else:
-                    st.caption(f"Signals last refreshed {_sig_age // 3600}h ago — **stale, refresh recommended**")
-            else:
-                # Auto-scan-aware: the cron `scan` mode persists a scan ~10 AM ET
-                # and the app hydrates it on cold load (see scanner_cache), so the
-                # signals already reflect today without a manual click. Reframe the
-                # button as an optional intraday re-score, and tell the truth about
-                # where the current signals came from (_scanner_results_meta).
-                _ssm      = st.session_state.get("_scanner_results_meta") or {}
-                _ssm_date = _ssm.get("scan_date")
-                if _ssm_date == _today_et().isoformat():
-                    _src_phrase = ("auto-scan (~10 AM ET)" if _ssm.get("source") == "cron"
-                                   else "scan")
-                    st.caption(
-                        f"📡 Signals from today's {_src_phrase}. Click **Refresh Signals** to "
-                        "re-score on live prices intraday."
-                    )
-                elif _ssm_date:
-                    st.caption(
-                        f"Signals from the {_ssm_date} scan — click **Refresh Signals** to "
-                        "score today's price action."
-                    )
-                else:
-                    st.caption(
-                        "Signals reflect the last scanner run — click **Refresh Signals** ~15 min "
-                        "after open to score today's price action."
-                    )
 
         if _do_refresh:
             _refresh_gate_arm("data")
