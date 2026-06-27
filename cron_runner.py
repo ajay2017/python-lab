@@ -378,13 +378,117 @@ def _run_thesis(now_et, force: bool) -> int:
     return 0
 
 
+def _run_debrief(now_et, force: bool) -> int:
+    """Sunday evening: generate weekly portfolio debrief via LLM and email it.
+    Runs after thesis reviews in the same Sunday cron slot. Requires
+    daily_snapshots to have >= 5 trading days of data."""
+    if not force and now_et.weekday() != 6:   # 6 = Sunday
+        _log("debrief: not Sunday — skip.")
+        return 0
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        _log("debrief: INERT — no ANTHROPIC_API_KEY set.")
+        return 0
+
+    from stock_analyzer import debrief_advisor as _da
+    from stock_analyzer import notify as _notify
+
+    week_ending = now_et.date()
+    week_start  = week_ending - __import__("datetime").timedelta(days=6)
+
+    # Load snapshot data for the week
+    snapshots_df = db.load_daily_snapshots(start_date=week_start, end_date=week_ending)
+    days_available = len(snapshots_df["snapshot_date"].unique()) if not snapshots_df.empty else 0
+
+    if days_available < 5:
+        _log(f"debrief: only {days_available} snapshot day(s) available — need 5. "
+             f"Earliest full debrief after {week_start + __import__('datetime').timedelta(days=5 - days_available)}.")
+        return 0
+
+    # Load recommendations and trades for the week
+    recs_df   = db.load_recommendations(start_date=week_start, end_date=week_ending)
+    trades_df = db.load_trades()
+
+    # Fetch SPY return for the week
+    spy_week_pct = None
+    try:
+        import yfinance as yf
+        spy = yf.download("SPY", start=str(week_start), end=str(week_ending), progress=False, auto_adjust=True)
+        if not spy.empty and len(spy) >= 2:
+            spy_pct = float((spy["Close"].iloc[-1] - spy["Close"].iloc[0]) / spy["Close"].iloc[0] * 100)
+            spy_week_pct = round(spy_pct, 2)
+    except Exception:
+        pass
+
+    # Collect BROKEN theses from thesis_reviews
+    broken_theses: list[str] = []
+    try:
+        reviews_df = db.load_thesis_reviews()
+        if not reviews_df.empty:
+            broken_theses = (
+                reviews_df[reviews_df["status"] == "BROKEN"]["ticker"]
+                .astype(str).str.upper().unique().tolist()
+            )
+    except Exception:
+        pass
+
+    # Build data package and call LLM
+    package = _da.build_debrief_package(
+        week_ending   = week_ending,
+        snapshots_df  = snapshots_df,
+        recs_df       = recs_df,
+        trades_df     = trades_df,
+        spy_week_pct  = spy_week_pct,
+        broken_theses = broken_theses,
+    )
+    _log(f"debrief: {days_available} snapshot day(s) · "
+         f"{len(recs_df) if not recs_df.empty else 0} rec(s) · "
+         f"SPY {spy_week_pct:+.1f}%" if spy_week_pct is not None else
+         f"debrief: {days_available} snapshot day(s) · "
+         f"{len(recs_df) if not recs_df.empty else 0} rec(s) · SPY N/A")
+
+    result = _da.generate_debrief(package, api_key)
+    if result is None:
+        _log("debrief: LLM call failed or insufficient snapshot data — skip.")
+        return 0
+
+    saved = db.save_weekly_debrief(result)
+    _log(f"debrief: saved={saved} · week_ending={result['week_ending']} · "
+         f"perf={result.get('performance_pct')} · alpha={result.get('alpha_pct')}")
+
+    # Email
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    email_to   = os.environ.get("ALERT_EMAIL_TO", "").strip()
+    email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
+    if resend_key and email_to and email_from:
+        html    = _notify.render_debrief_email(result)
+        subject = f"DRISHTA Weekly Debrief — week of {result['week_ending']}"
+        ok, detail = _notify.send_email_resend(
+            api_key=resend_key, sender=email_from, to=email_to,
+            subject=subject, html=html,
+        )
+        _log(f"debrief: email {'sent' if ok else 'FAILED'}" + (f" — {detail}" if detail else ""))
+        if ok:
+            try:
+                db._client().table("weekly_debriefs").update(
+                    {"email_sent": True, "email_sent_at": __import__("datetime").datetime.utcnow().isoformat()}
+                ).eq("week_ending", str(result["week_ending"])).execute()
+            except Exception:
+                pass
+    else:
+        _log("debrief: no Resend credentials — debrief saved but not emailed.")
+
+    return 0
+
+
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
-    # Derive mode from ET hour; named overrides (scan, thesis) bypass time-inference.
+    # Derive mode from ET hour; named overrides (scan, thesis, debrief) bypass time-inference.
     _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
-    mode = _mode_override if _mode_override in ("scan", "thesis") else (
+    mode = _mode_override if _mode_override in ("scan", "thesis", "debrief") else (
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
@@ -394,7 +498,10 @@ def main() -> int:
     if mode == "scan":
         return _run_scan(now_et, force)
     if mode == "thesis":
-        return _run_thesis(now_et, force)
+        _run_thesis(now_et, force)
+        return _run_debrief(now_et, force)
+    if mode == "debrief":
+        return _run_debrief(now_et, force)
     if mode == "eod":
         return _run_eod(now_et, force)
     return _run_premarket(now_et, force)

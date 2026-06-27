@@ -16728,46 +16728,137 @@ elif page == "🧠 AI Insights":
 
     st.divider()
 
-    # ── Weekly Debrief placeholder ────────────────────────────────────────────
+    # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
     st.subheader("📊 Weekly Portfolio Debrief")
     st.markdown(
         "A weekly retrospective: what happened to your portfolio, which signals "
         "you acted on or ignored, and what behavioural patterns showed up."
     )
 
-    _weekly_debriefs_df = pd.DataFrame()
-    try:
-        if _ai_db.has_db():
-            _wd_rows = (
-                _ai_db._client().table("weekly_debriefs")
-                .select("*")
-                .order("week_ending", desc=True)
-                .limit(1)
-                .execute().data
-            )
-            if _wd_rows:
-                _weekly_debriefs_df = pd.DataFrame(_wd_rows)
-    except Exception:
-        pass
+    from stock_analyzer import debrief_advisor as _dba
 
-    if _weekly_debriefs_df.empty:
+    _wd_df = _ai_db.load_weekly_debriefs(limit=1)
+
+    # On-demand generation
+    if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
+                 help="Generate a debrief for the trailing 7 days using current snapshot data."):
+        with st.spinner("Assembling data and calling AI..."):
+            _wd_today      = date.today()
+            _wd_week_start = _wd_today - timedelta(days=6)
+            _wd_snaps = _ai_db.load_daily_snapshots(start_date=_wd_week_start, end_date=_wd_today)
+            _wd_days  = len(_wd_snaps["snapshot_date"].unique()) if not _wd_snaps.empty else 0
+            if _wd_days < 5:
+                st.warning(
+                    f"Only {_wd_days} trading day(s) of snapshot data available — need 5. "
+                    f"Check back after more days accumulate (DDL activated 2026-06-27)."
+                )
+            else:
+                _wd_recs   = _ai_db.load_recommendations(
+                    start_date=_wd_week_start, end_date=_wd_today
+                )
+                _wd_trades = st.session_state.get("trades_df", pd.DataFrame())
+                _wd_broken = list(
+                    _thesis_reviews_df[_thesis_reviews_df["status"] == "BROKEN"]["ticker"]
+                    .astype(str).str.upper().unique()
+                ) if not _thesis_reviews_df.empty and "status" in _thesis_reviews_df.columns else []
+
+                # Fetch SPY return
+                _wd_spy_pct = None
+                try:
+                    import yfinance as _yf
+                    _spy = _yf.download("SPY", start=str(_wd_week_start), end=str(_wd_today),
+                                        progress=False, auto_adjust=True)
+                    if _spy is not None and not _spy.empty and len(_spy) >= 2:
+                        _wd_spy_pct = round(float(
+                            (_spy["Close"].iloc[-1] - _spy["Close"].iloc[0])
+                            / _spy["Close"].iloc[0] * 100
+                        ), 2)
+                except Exception:
+                    pass
+
+                _wd_pkg = _dba.build_debrief_package(
+                    week_ending   = _wd_today,
+                    snapshots_df  = _wd_snaps,
+                    recs_df       = _wd_recs,
+                    trades_df     = _wd_trades,
+                    spy_week_pct  = _wd_spy_pct,
+                    broken_theses = _wd_broken,
+                )
+                _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
+                if _wd_result is None:
+                    st.error("AI debrief failed — LLM offline or insufficient snapshot data.")
+                else:
+                    _saved = _ai_db.save_weekly_debrief(_wd_result)
+                    if _saved:
+                        st.success("Debrief generated and saved.")
+                        st.rerun()
+                    else:
+                        st.warning("Generated but save failed (DB offline) — showing inline:")
+                        for _lbl, _col in [
+                            ("What happened", "section_facts"),
+                            ("Decisions you made", "section_decisions"),
+                            ("Patterns this week", "section_patterns"),
+                            ("One thing to watch", "section_watchnext"),
+                        ]:
+                            if _wd_result.get(_col):
+                                st.markdown(f"**{_lbl}**")
+                                st.markdown(_wd_result[_col])
+
+    # Display most recent debrief
+    if _wd_df.empty:
         st.info(
-            "No weekly debriefs yet. The first debrief will be generated on Sunday once "
-            "`daily_snapshots` has accumulated at least 7 days of data. "
-            "You can also trigger one on-demand once the feature is fully active."
+            "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
+            "or wait for the Sunday evening cron (runs automatically once "
+            "`daily_snapshots` has ≥5 trading days of data — DDL activated 2026-06-27)."
         )
     else:
-        _latest = _weekly_debriefs_df.iloc[0]
-        st.caption(f"Week ending {_latest.get('week_ending', '—')} · generated {str(_latest.get('generated_at', ''))[:10]}")
-        for _label, _col in [
+        _wd = _wd_df.iloc[0]
+        _wd_perf  = _wd.get("performance_pct")
+        _wd_spy   = _wd.get("spy_pct")
+        _wd_alpha = _wd.get("alpha_pct")
+
+        st.caption(
+            f"Week ending {_wd.get('week_ending', '—')} · "
+            f"generated {str(_wd.get('generated_at', ''))[:10]}"
+            + (" · ✉ emailed" if _wd.get("email_sent") else "")
+        )
+
+        # Performance summary row
+        if _wd_perf is not None:
+            _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
+            def _wd_colour(v):
+                return "#22c55e" if v and v >= 0 else "#ef4444"
+            with _wd_col1:
+                st.markdown(
+                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Portfolio</div>"
+                    f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_perf)}'>{_wd_perf:+.1f}%</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with _wd_col2:
+                st.markdown(
+                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>SPY</div>"
+                    f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_spy)}'>"
+                    f"{'N/A' if _wd_spy is None else f'{_wd_spy:+.1f}%'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with _wd_col3:
+                st.markdown(
+                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Alpha</div>"
+                    f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_alpha)}'>"
+                    f"{'N/A' if _wd_alpha is None else f'{_wd_alpha:+.1f}%'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+            st.markdown("")
+
+        for _wd_label, _wd_col in [
             ("What happened", "section_facts"),
             ("Decisions you made", "section_decisions"),
             ("Patterns this week", "section_patterns"),
             ("One thing to watch", "section_watchnext"),
         ]:
-            if _latest.get(_col):
-                st.markdown(f"**{_label}**")
-                st.markdown(_latest[_col])
+            if _wd.get(_wd_col):
+                st.markdown(f"**{_wd_label}**")
+                st.markdown(_wd.get(_wd_col))
                 st.markdown("")
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

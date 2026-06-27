@@ -447,6 +447,25 @@ def load_recent_snapshots(days: int = 10) -> pd.DataFrame:
         return empty
 
 
+def load_daily_snapshots(start_date=None, end_date=None) -> "pd.DataFrame":
+    """Load daily portfolio snapshots for a date range.
+    Returns DataFrame with columns: snapshot_date, ticker, shares, close_price."""
+    import pandas as pd
+    empty = pd.DataFrame(columns=["snapshot_date", "ticker", "shares", "close_price"])
+    if not has_db():
+        return empty
+    try:
+        q = _client().table("daily_snapshots").select("*")
+        if start_date is not None:
+            q = q.gte("snapshot_date", str(start_date)[:10])
+        if end_date is not None:
+            q = q.lte("snapshot_date", str(end_date)[:10])
+        rows = q.order("snapshot_date", desc=False).execute().data
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return empty
+
+
 def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
     """Upsert the snapshot for `snapshot_date` (today's held positions at the
     final, market-closed close price). Sweeps tickers no longer held for that
@@ -777,6 +796,53 @@ def update_user_thesis(ticker: str, thesis: str) -> bool:
             return False
         trade_id = rows[0]["id"]
         _client().table("trades").update({"user_thesis": thesis.strip()}).eq("id", trade_id).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return False
+
+
+# ── Weekly Debriefs (AI Insights — F-3) ──────────────────────────────────────
+
+_WEEKLY_DEBRIEF_COLS = [
+    "id", "week_ending", "generated_at", "performance_pct", "spy_pct",
+    "alpha_pct", "section_facts", "section_decisions", "section_patterns",
+    "section_watchnext", "email_sent", "email_sent_at",
+]
+
+
+def load_weekly_debriefs(limit: int = 4) -> "pd.DataFrame":
+    """Load the most recent weekly debriefs, newest first."""
+    import pandas as pd
+    empty = pd.DataFrame(columns=_WEEKLY_DEBRIEF_COLS)
+    if not has_db():
+        return empty
+    try:
+        rows = (
+            _client()
+            .table("weekly_debriefs")
+            .select("*")
+            .order("week_ending", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return empty
+
+
+def save_weekly_debrief(record: dict) -> bool:
+    """Upsert a weekly debrief record (unique on week_ending)."""
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("weekly_debriefs").upsert(
+            record, on_conflict="week_ending"
+        ).execute()
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah

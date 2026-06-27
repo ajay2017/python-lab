@@ -230,6 +230,88 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
     return subject, body
 
 
+def render_debrief_email(debrief: dict) -> str:
+    """Render the weekly portfolio debrief as an HTML email."""
+    week_ending  = debrief.get("week_ending", "—")
+    generated_at = str(debrief.get("generated_at", ""))[:10]
+    perf  = debrief.get("performance_pct")
+    spy   = debrief.get("spy_pct")
+    alpha = debrief.get("alpha_pct")
+
+    def _pct_span(v: float | None) -> str:
+        if v is None:
+            return "N/A"
+        colour = "#22c55e" if v >= 0 else "#ef4444"
+        return f"<span style='color:{colour};font-weight:600'>{v:+.1f}%</span>"
+
+    perf_row = ""
+    if perf is not None:
+        perf_row = (
+            "<table style='margin:12px 0;border-collapse:collapse'>"
+            f"<tr><td style='padding:4px 16px 4px 0;color:#94a3b8;font-size:0.9em'>Portfolio</td>"
+            f"<td style='font-weight:600'>{_pct_span(perf)}</td></tr>"
+            f"<tr><td style='padding:4px 16px 4px 0;color:#94a3b8;font-size:0.9em'>SPY</td>"
+            f"<td>{_pct_span(spy)}</td></tr>"
+            f"<tr><td style='padding:4px 16px 4px 0;color:#94a3b8;font-size:0.9em'>Alpha</td>"
+            f"<td style='font-weight:600'>{_pct_span(alpha)}</td></tr>"
+            "</table>"
+        )
+
+    def _section(title: str, content: str) -> str:
+        if not content:
+            return ""
+        lines = content.split("\n")
+        parts: list[str] = []
+        in_list = False
+        for ln in lines:
+            stripped = ln.strip()
+            if stripped.startswith(("• ", "- ", "* ")):
+                if not in_list:
+                    parts.append("<ul style='margin:4px 0;padding-left:18px'>")
+                    in_list = True
+                parts.append(f"<li style='margin:3px 0;color:#cbd5e1'>{stripped[2:]}</li>")
+            else:
+                if in_list:
+                    parts.append("</ul>")
+                    in_list = False
+                if stripped:
+                    parts.append(f"<p style='margin:4px 0;color:#cbd5e1'>{stripped}</p>")
+        if in_list:
+            parts.append("</ul>")
+        body = "\n".join(parts)
+        return (
+            f"<div style='margin:16px 0'>"
+            f"<div style='font-weight:600;color:#e2e8f0;font-size:0.95em;"
+            f"border-bottom:1px solid #334155;padding-bottom:4px;margin-bottom:8px'>{title}</div>"
+            f"<div style='line-height:1.6;font-size:0.9em'>{body}</div>"
+            f"</div>"
+        )
+
+    sections_html = (
+        _section("What happened",       debrief.get("section_facts", ""))
+        + _section("Decisions you made",  debrief.get("section_decisions", ""))
+        + _section("Patterns this week",  debrief.get("section_patterns", ""))
+        + _section("One thing to watch",  debrief.get("section_watchnext", ""))
+    )
+
+    return (
+        "<!DOCTYPE html><html>"
+        "<body style='background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;"
+        "max-width:600px;margin:0 auto;padding:32px 24px'>"
+        "<div style='font-size:1.3em;font-weight:700;color:#e2e8f0;margin-bottom:4px'>"
+        "📊 DRISHTA Weekly Debrief</div>"
+        f"<div style='color:#94a3b8;font-size:0.85em;margin-bottom:16px'>"
+        f"Week ending {week_ending} · generated {generated_at}</div>"
+        f"{perf_row}"
+        "<hr style='border:none;border-top:1px solid #1e293b;margin:16px 0'>"
+        f"{sections_html}"
+        "<hr style='border:none;border-top:1px solid #1e293b;margin:24px 0 12px'>"
+        "<div style='color:#475569;font-size:0.75em'>"
+        "DRISHTA · AI-generated retrospective · Not financial advice</div>"
+        "</body></html>"
+    )
+
+
 def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html: str,
                       timeout: int = 20) -> tuple[bool, str]:
     """POST one email via Resend. Returns (ok, detail). `detail` carries the HTTP
