@@ -164,6 +164,55 @@ _BRAND_LOGO_PATH = "assets/drishta_logo.png"
 _BRAND_PAGE_ICON = _BRAND_LOGO_PATH if os.path.exists(_BRAND_LOGO_PATH) else "👁"
 st.set_page_config(page_title="DRISHTA · Beyond Noise", page_icon=_BRAND_PAGE_ICON, layout="wide")
 
+# ── Global UI theme ──────────────────────────────────────────────────────────
+# Injected once per page load. config.toml sets the base dark palette;
+# this block handles component-level overrides that config.toml can't reach.
+st.markdown("""
+<style>
+/* Metric value — larger + bolder so portfolio numbers read at a glance */
+[data-testid="stMetricValue"] {
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.01em;
+}
+/* Metric label — small-caps category tag */
+[data-testid="stMetricLabel"] > div {
+    font-size: 0.68rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.07em !important;
+    opacity: 0.65;
+}
+/* Metric delta — compact */
+[data-testid="stMetricDelta"] svg { vertical-align: middle; }
+[data-testid="stMetricDelta"] { font-size: 0.82rem !important; }
+
+/* Sidebar nav — tighter items, subtle hover highlight */
+[data-testid="stSidebar"] .stRadio > div { gap: 2px !important; }
+[data-testid="stSidebar"] .stRadio label {
+    padding: 4px 10px !important;
+    border-radius: 6px !important;
+    font-size: 0.86rem !important;
+    transition: background 0.12s;
+}
+[data-testid="stSidebar"] .stRadio label:hover {
+    background: rgba(59,130,246,0.12) !important;
+}
+
+/* Expander header — bolder so it reads as a section title */
+.streamlit-expanderHeader p {
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+}
+
+/* Tab labels — slightly more prominent */
+[data-testid="stTabs"] button[role="tab"] {
+    font-size: 0.84rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.02em;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 @st.cache_data(show_spinner=False)
 def _brand_logo_data_uri_cached(mtime: float) -> str | None:
@@ -3789,29 +3838,59 @@ if page == "🏠 Home":
         with _frag_col:
             _frag = st.session_state.get("_fragility_cache")
             if _frag:
-                _fg_sev   = _frag["severity"]
-                _fg_color = {"calm": "#1c1917", "caution": "#78350f", "fragile": "#7f1d1d"}[_fg_sev]
-                _fg_bdr   = {"calm": "#4b5563", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
-                _fg_icon  = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
-                _fg_lead  = {
+                _fg_sev       = _frag["severity"]
+                _fg_icon      = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
+                _fg_lead      = {
                     "calm":    "Your book moves roughly with the market.",
                     "caution": "Your book is more volatile than the market.",
                     "fragile": "Your book is fragile to a pullback.",
                 }[_fg_sev]
-                _fg_why  = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
-                _fg_mult = f" · about <b>{_frag['mult']:.1f}×</b> the market's move" if _frag.get("mult") else ""
+                _fg_bar_color = {"calm": "#22c55e", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
+                _fg_why       = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
+                _fg_mult_val  = _frag.get("mult") or 1.0
+                # Plotly semi-dial: range 0–3×, zones mirror the PORTFOLIO_BETA thresholds
+                _fg_fig = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=_fg_mult_val,
+                    number={"suffix": "×", "font": {"size": 28, "color": "#f0f2f5"}},
+                    title={"text": f"{_fg_icon} {_fg_lead}", "font": {"size": 11, "color": "#9ca3af"}},
+                    gauge={
+                        "axis": {
+                            "range": [0, 3],
+                            "tickvals": [0, 1, 2, 3],
+                            "ticktext": ["0", "1×", "2×", "3×"],
+                            "tickwidth": 1, "tickcolor": "#4b5563",
+                            "tickfont": {"size": 9, "color": "#6b7280"},
+                        },
+                        "bar": {"color": _fg_bar_color, "thickness": 0.28},
+                        "bgcolor": "rgba(0,0,0,0)",
+                        "borderwidth": 0,
+                        "steps": [
+                            {"range": [0, PORTFOLIO_BETA_ELEVATED],
+                             "color": "rgba(34,197,94,0.10)"},
+                            {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
+                             "color": "rgba(245,158,11,0.14)"},
+                            {"range": [PORTFOLIO_BETA_CEILING, 3],
+                             "color": "rgba(239,68,68,0.10)"},
+                        ],
+                        "threshold": {
+                            "line": {"color": "#6b7280", "width": 1},
+                            "thickness": 0.75, "value": 1.0,
+                        },
+                    },
+                ))
+                _fg_fig.update_layout(
+                    height=165, margin={"l": 5, "r": 5, "t": 28, "b": 0},
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(_fg_fig, use_container_width=True,
+                                config={"displayModeBar": False})
                 st.markdown(
-                    f"<div style='background:{_fg_color};border:1px solid {_fg_bdr};"
-                    f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px'>"
-                    f"<span style='font-size:1.0em;font-weight:700;color:#f9fafb'>"
-                    f"{_fg_icon} {_fg_lead}</span>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
-                    f"A routine {abs(_frag['pullback_pct']):.0f}% market pullback would take your book to roughly "
-                    f"<b>{_frag['implied_move']:+.0f}%</b>{_fg_mult}{_fg_why}</div>"
-                    f"<div style='color:#9ca3af;font-size:0.74em;margin-top:4px'>"
-                    f"Exposure if a pullback hits — not a forecast of when. "
-                    f"Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>"
-                    f"</div>",
+                    f"<div style='color:#d1d5db;font-size:0.8em;margin-top:-10px'>"
+                    f"A {abs(_frag['pullback_pct']):.0f}% pullback → roughly "
+                    f"<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
+                    f"<div style='color:#6b7280;font-size:0.72em;margin-top:3px'>"
+                    f"Exposure not a forecast. Full breakdown: Risk → Stress Testing.</div>",
                     unsafe_allow_html=True,
                 )
             elif not port_df.empty:
