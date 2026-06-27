@@ -12288,6 +12288,81 @@ elif page == "📒 Trade Journal":
     if prefill.get("action"):
         st.session_state["_tj_action"] = _prefill_action
 
+    # ── SELL confirmation card ─────────────────────────────────────────────
+    _pending_sell = st.session_state.get("_tj_pending_sell")
+    if _pending_sell:
+        _ps_ticker = _pending_sell["ticker"]
+        _ps_shares = _pending_sell["shares"]
+        _ps_price  = _pending_sell["price"]
+        _ps_cb     = _pending_sell.get("cost_basis")
+        _ps_pnl    = _pending_sell.get("realized_pnl")
+        _ps_pnl_line = ""
+        if _ps_pnl is not None:
+            _ps_pnl_sign = "+" if _ps_pnl >= 0 else "−"
+            _ps_pnl_line = f"  ·  Realized P&L: **{_ps_pnl_sign}${abs(_ps_pnl):,.2f}**"
+        st.warning(
+            f"⚠️ **Confirm this SELL before it's recorded**\n\n"
+            f"SELL **{_ps_shares:g} shares of {_ps_ticker}** "
+            f"at **${_ps_price:,.2f}**"
+            f"{_ps_pnl_line}\n\n"
+            f"This will update your holdings and P&L — the record cannot be undone without a manual correction."
+        )
+        _ps_c1, _ps_c2 = st.columns([1, 1])
+        if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", use_container_width=True):
+            _ps_saved = db.save_trade(_pending_sell)
+            if _ps_saved or not db.has_db():
+                if not db.has_db():
+                    _ps_new_row = pd.DataFrame([{**_pending_sell, "id": None, "traded_at": datetime.now().isoformat()}])
+                    st.session_state.trades_df = pd.concat(
+                        [_ps_new_row, st.session_state.trades_df], ignore_index=True
+                    )
+                else:
+                    st.session_state.trades_df = db.load_trades()
+                _ps_h_df = st.session_state.holdings_df.copy()
+                _ps_h_mask = _ps_h_df["Ticker"] == _ps_ticker
+                if _ps_h_mask.any():
+                    _ps_h_idx = _ps_h_df[_ps_h_mask].index[0]
+                    _ps_cur   = float(_ps_h_df.at[_ps_h_idx, "Shares"])
+                    _ps_new   = _ps_cur - _ps_shares
+                    if _ps_new <= 0:
+                        _ps_h_df = _ps_h_df.drop(_ps_h_idx).reset_index(drop=True)
+                        st.success(f"✅ **{_ps_ticker}** fully exited — position removed from portfolio.")
+                    else:
+                        _ps_h_df.at[_ps_h_idx, "Shares"] = (
+                            int(_ps_new) if _ps_new == int(_ps_new) else _ps_new
+                        )
+                        _ps_pnl_str = f"${_ps_pnl:+,.2f}" if _ps_pnl is not None else "—"
+                        _ps_pnl_pct = ((_ps_price - _ps_cb) / _ps_cb * 100 if _ps_cb else 0)
+                        st.success(
+                            f"✅ Sold **{_ps_shares:.0f} shares of {_ps_ticker}** "
+                            f"@ ${_ps_price:.2f}  ·  "
+                            f"Holdings: {_ps_cur:.0f} → {_ps_new:.0f} shares  ·  "
+                            f"Realized P&L: **{_ps_pnl_str}** ({_ps_pnl_pct:+.1f}%)"
+                        )
+                    db.save_holdings(_ps_h_df)
+                    st.session_state.holdings_df = _ps_h_df
+                else:
+                    st.success(
+                        f"✅ SELL recorded for **{_ps_ticker}** "
+                        f"(not in current holdings — logged as historical trade)."
+                    )
+                st.session_state.pop("_tj_pending_sell", None)
+                st.session_state.pop("_tj_prefill", None)
+                st.session_state.pop("_tj_override_price_check", None)
+                st.session_state.pop("_tj_drift_checked", None)
+                st.session_state.pop("_tj_drift_state", None)
+                st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
+            st.rerun()
+        if _ps_c2.button("✗ Cancel", key="_tj_cancel_sell", use_container_width=True):
+            st.session_state["_tj_prefill"] = {
+                "ticker": _ps_ticker,
+                "action": "SELL",
+                "shares": _ps_shares,
+                "price":  _ps_price,
+            }
+            st.session_state.pop("_tj_pending_sell", None)
+            st.rerun()
+
     with st.expander("➕ Log a Trade", expanded=bool(prefill)):
         # ── Action + Ticker live OUTSIDE the form so changes trigger a rerun
         # and cost basis can be auto-looked-up before the form renders.
@@ -12730,6 +12805,10 @@ elif page == "📒 Trade Journal":
                     "deviation_reason": (st.session_state.get("_tj_deviation_reason") or "").strip() or None,
                     "lesson":           (st.session_state.get("_tj_lesson") or "").strip() or None,
                 }
+                # ── SELL: hold for confirmation — don't write to DB yet ──────
+                if action == "SELL":
+                    st.session_state["_tj_pending_sell"] = record
+                    st.rerun()
                 saved = db.save_trade(record)
                 if saved or not db.has_db():
                     if not db.has_db():
