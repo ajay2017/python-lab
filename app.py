@@ -16538,123 +16538,131 @@ elif page == "🧠 AI Insights":
 
     # Load data
     _thesis_reviews_df = _ai_db.load_thesis_reviews()
-    _trades_with_thesis = pd.DataFrame()
+
+    # Build thesis lookup: ticker → most recent BUY with a thesis
+    _thesis_by_ticker: dict = {}
+    _trade_date_by_ticker: dict = {}
     if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
         _tdf = st.session_state.trades_df
         if "user_thesis" in _tdf.columns:
-            _buys_with_thesis = _tdf[
-                (_tdf["action"] == "BUY") &
-                (_tdf["user_thesis"].notna()) &
-                (_tdf["user_thesis"].astype(str).str.strip() != "")
-            ].copy()
-            # Deduplicate: one row per ticker (most recent BUY with a thesis)
-            _trades_with_thesis = (
-                _buys_with_thesis
-                .sort_values("traded_at", ascending=False)
-                .drop_duplicates(subset="ticker")
-                .reset_index(drop=True)
-            )
+            _buys = _tdf[_tdf["action"] == "BUY"].sort_values("traded_at", ascending=False)
+            for _, _brow in _buys.iterrows():
+                _bt = str(_brow["ticker"]).upper()
+                if _bt not in _trade_date_by_ticker:
+                    _trade_date_by_ticker[_bt] = str(_brow.get("traded_at", ""))[:10]
+                if _bt not in _thesis_by_ticker:
+                    _th = _brow.get("user_thesis")
+                    if _th and str(_th).strip():
+                        _thesis_by_ticker[_bt] = str(_th).strip()
 
-    # Load current holdings to know which positions are still open
+    # All open positions
     _open_tickers = set()
     if "holdings_df" in st.session_state and not st.session_state.holdings_df.empty:
         _open_tickers = set(st.session_state.holdings_df["Ticker"].astype(str).str.upper())
 
-    # Filter to open positions only
-    if not _trades_with_thesis.empty:
-        _trades_with_thesis = _trades_with_thesis[
-            _trades_with_thesis["ticker"].astype(str).str.upper().isin(_open_tickers)
-        ]
+    # Build review lookup: ticker → most recent review row
+    _review_by_ticker: dict = {}
+    if not _thesis_reviews_df.empty:
+        for _, _rv in _thesis_reviews_df.iterrows():
+            _t = str(_rv["ticker"]).upper()
+            if _t not in _review_by_ticker:
+                _review_by_ticker[_t] = _rv
 
-    if _trades_with_thesis.empty:
-        st.info(
-            "No investment theses on record yet. "
-            "Add a thesis when recording a BUY in the Trade Journal — "
-            "the field appears under Notes."
-        )
+    if not _open_tickers:
+        st.info("No open positions found — add holdings via the Trade Journal.")
     else:
-        # Build a lookup: ticker → most recent review
-        _review_by_ticker: dict = {}
-        if not _thesis_reviews_df.empty:
-            for _, _rv in _thesis_reviews_df.iterrows():
-                _t = str(_rv["ticker"]).upper()
-                if _t not in _review_by_ticker:
-                    _review_by_ticker[_t] = _rv
-
         _status_colour = {"INTACT": "#22c55e", "WEAKENING": "#f59e0b", "BROKEN": "#ef4444"}
         _status_icon   = {"INTACT": "✅", "WEAKENING": "⚠️", "BROKEN": "🔴"}
 
-        for _, _pos in _trades_with_thesis.iterrows():
-            _ticker  = str(_pos["ticker"]).upper()
-            _thesis  = str(_pos["user_thesis"])
+        for _ticker in sorted(_open_tickers):
+            _thesis  = _thesis_by_ticker.get(_ticker, "")
             _rv      = _review_by_ticker.get(_ticker)
             _status  = _rv["status"] if _rv is not None else None
             _summary = _rv["summary"] if _rv is not None else None
             _rev_at  = _rv["reviewed_at"] if _rv is not None else None
 
-            # Chip colour
-            if _status:
-                _chip_colour = _status_colour.get(_status, "#6b7280")
-                _chip_icon   = _status_icon.get(_status, "")
-                _chip_html   = (
-                    f"<span style='background:{_chip_colour}22;border:1px solid {_chip_colour};"
-                    f"color:{_chip_colour};border-radius:4px;padding:2px 8px;"
-                    f"font-size:0.85em;font-weight:600'>"
-                    f"{_chip_icon} {_status}</span>"
-                )
+            # Expander label
+            if not _thesis:
+                _exp_label = f"**{_ticker}** — no thesis yet"
             else:
-                _chip_html = (
-                    "<span style='background:#374151;border:1px solid #4b5563;"
-                    "color:#9ca3af;border-radius:4px;padding:2px 8px;"
-                    "font-size:0.85em'>Not yet reviewed</span>"
-                )
+                _exp_label = f"**{_ticker}** — " + (_status or "awaiting review")
 
-            with st.expander(
-                f"**{_ticker}** — " + (_status or "awaiting review"),
-                expanded=(_status == "BROKEN"),
-            ):
-                # Status chip + timestamp
-                _ts_text = ""
-                if _rev_at:
-                    try:
-                        _ts_text = f" · reviewed {str(_rev_at)[:10]}"
-                    except Exception:
-                        pass
-                st.markdown(
-                    _chip_html + f"<span style='color:#6b7280;font-size:0.82em'>{_ts_text}</span>",
-                    unsafe_allow_html=True,
-                )
+            with st.expander(_exp_label, expanded=(_status == "BROKEN")):
 
-                # Thesis text
-                st.markdown(f"**Your thesis:**")
-                st.markdown(
-                    f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
-                    f"padding:8px 12px;border-radius:4px;color:#cbd5e1;"
-                    f"font-style:italic;margin:4px 0 12px'>{_thesis}</div>",
-                    unsafe_allow_html=True,
-                )
+                if not _thesis:
+                    # ── No thesis — show Set Thesis form ─────────────────────
+                    st.caption("No investment thesis on record for this position. Set one below so the AI can review it weekly.")
+                    _set_val = st.text_area(
+                        "Investment thesis",
+                        value="",
+                        height=120,
+                        placeholder=(
+                            "E.g. NVDA benefits from AI training chip demand with no credible competitor "
+                            "for 18–24 months. Holds as long as hyperscaler capex keeps growing. "
+                            "Breaks if AMD closes the architectural gap or a major customer pulls their design win."
+                        ),
+                        key=f"_ai_thesis_set_{_ticker}",
+                    )
+                    if st.button(f"Save thesis for {_ticker}", key=f"_ai_thesis_save_{_ticker}"):
+                        if not _set_val.strip():
+                            st.warning("Thesis cannot be blank.")
+                        else:
+                            _ok = _ai_db.update_user_thesis(_ticker, _set_val.strip())
+                            if _ok:
+                                st.success("Thesis saved — will be reviewed in the next weekly cron run.")
+                                st.rerun()
+                            else:
+                                st.error("Save failed — DB offline or no BUY trade found for this ticker.")
 
-                # AI review summary
-                if _summary:
-                    st.markdown("**AI assessment:**")
-                    st.markdown(_summary)
-                elif _status is None:
-                    st.caption("Click Re-evaluate to run the first AI review for this position.")
-
-                # Re-evaluate button
-                _btn_key = f"_ai_reeval_{_ticker}"
-                if st.button(f"Re-evaluate {_ticker}", key=_btn_key, disabled=not _ai_api_key):
-                    if not _ai_api_key:
-                        st.warning("Anthropic API key not set in Streamlit secrets (`[anthropic] api_key`).")
+                else:
+                    # ── Has thesis — show review + re-evaluate + edit ─────────
+                    # Status chip + timestamp
+                    if _status:
+                        _chip_colour = _status_colour.get(_status, "#6b7280")
+                        _chip_icon   = _status_icon.get(_status, "")
+                        _chip_html   = (
+                            f"<span style='background:{_chip_colour}22;border:1px solid {_chip_colour};"
+                            f"color:{_chip_colour};border-radius:4px;padding:2px 8px;"
+                            f"font-size:0.85em;font-weight:600'>"
+                            f"{_chip_icon} {_status}</span>"
+                        )
                     else:
+                        _chip_html = (
+                            "<span style='background:#374151;border:1px solid #4b5563;"
+                            "color:#9ca3af;border-radius:4px;padding:2px 8px;"
+                            "font-size:0.85em'>Not yet reviewed</span>"
+                        )
+                    _ts_text = f" · reviewed {str(_rev_at)[:10]}" if _rev_at else ""
+                    st.markdown(
+                        _chip_html + f"<span style='color:#6b7280;font-size:0.82em'>{_ts_text}</span>",
+                        unsafe_allow_html=True,
+                    )
+
+                    # Thesis text
+                    st.markdown("**Your thesis:**")
+                    st.markdown(
+                        f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
+                        f"padding:8px 12px;border-radius:4px;color:#cbd5e1;"
+                        f"font-style:italic;margin:4px 0 12px'>{_thesis}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    # AI review summary
+                    if _summary:
+                        st.markdown("**AI assessment:**")
+                        st.markdown(_summary)
+                    else:
+                        st.caption("Click Re-evaluate to run the first AI review for this position.")
+
+                    # Re-evaluate button
+                    if st.button(f"Re-evaluate {_ticker}", key=f"_ai_reeval_{_ticker}", disabled=not _ai_api_key):
                         with st.spinner(f"Reviewing thesis for {_ticker}..."):
-                            # Assemble evidence from currently loaded data
                             _held_data = st.session_state.get("held_data", {})
                             _tech = {}
                             _fund = {}
                             _news_h: list = []
                             if _ticker in _held_data:
-                                _hd = _held_data[_ticker]
+                                _hd  = _held_data[_ticker]
                                 _ind = _hd.get("indicators", {})
                                 _tech = {
                                     "above_sma50":     bool(_ind.get("above_sma50", False)),
@@ -16672,20 +16680,16 @@ elif page == "🧠 AI Insights":
                                 ][:15]
 
                             _ev_inputs = _ta.build_review_inputs(
-                                technical=_tech,
-                                fundamentals=_fund,
-                                news_headlines=_news_h,
+                                technical=_tech, fundamentals=_fund, news_headlines=_news_h,
                             )
                             _result = _ta.review_thesis(
-                                ticker=_ticker,
-                                user_thesis=_thesis,
-                                inputs=_ev_inputs,
-                                api_key=_ai_api_key,
+                                ticker=_ticker, user_thesis=_thesis,
+                                inputs=_ev_inputs, api_key=_ai_api_key,
                             )
                             if _result is None:
-                                st.error("AI review failed — LLM offline or API key invalid. Try again shortly.")
+                                st.error("AI review failed — LLM offline or API key invalid.")
                             else:
-                                _trade_date = str(_pos.get("traded_at", ""))[:10] or str(date.today())
+                                _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
                                 _saved = _ai_db.save_thesis_review({
                                     "ticker":      _ticker,
                                     "trade_date":  _trade_date,
@@ -16698,9 +16702,29 @@ elif page == "🧠 AI Insights":
                                     st.success(f"Review saved — {_result['status']}")
                                     st.rerun()
                                 else:
-                                    # Show inline even if save failed (DB offline)
                                     st.markdown(f"**{_result['status']}**")
                                     st.markdown(_result["summary"])
+
+                    # Edit existing thesis
+                    st.divider()
+                    _edit_val = st.text_area(
+                        "Update thesis",
+                        value=_thesis,
+                        height=100,
+                        key=f"_ai_thesis_edit_{_ticker}",
+                    )
+                    if st.button(f"Save updated thesis for {_ticker}", key=f"_ai_thesis_upd_{_ticker}"):
+                        if not _edit_val.strip():
+                            st.warning("Thesis cannot be blank.")
+                        elif _edit_val.strip() == _thesis:
+                            st.info("No change detected.")
+                        else:
+                            _ok = _ai_db.update_user_thesis(_ticker, _edit_val.strip())
+                            if _ok:
+                                st.success("Thesis updated — Re-evaluate to refresh the AI assessment.")
+                                st.rerun()
+                            else:
+                                st.error("Save failed — DB offline or no BUY trade found for this ticker.")
 
     st.divider()
 

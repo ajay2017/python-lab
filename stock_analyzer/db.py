@@ -755,6 +755,35 @@ def save_thesis_review(record: dict) -> bool:
         return False
 
 
+def update_user_thesis(ticker: str, thesis: str) -> bool:
+    """Update user_thesis on the most recent BUY trade for `ticker`."""
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        resp = (
+            _client()
+            .table("trades")
+            .select("id")
+            .eq("ticker", ticker.upper())
+            .eq("action", "BUY")
+            .order("traded_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data if resp else []
+        if not rows:
+            return False
+        trade_id = rows[0]["id"]
+        _client().table("trades").update({"user_thesis": thesis.strip()}).eq("id", trade_id).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return False
+
+
 def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
     """
     Replay every trade chronologically to derive the truthful holdings table
