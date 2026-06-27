@@ -14750,13 +14750,15 @@ elif page == "📜 Recommendations History":
         )
         _rh_tickers = sorted({r["Ticker"] for r in _rh_rows if r.get("Ticker") and r["Ticker"] != "—"})
         if _rh_tickers:
+            st.caption("▶ Pick a ticker from the table to jump to its current Analysis:")
             _rh_j1, _rh_j2 = st.columns([3, 1])
             _rh_jump = _rh_j1.selectbox(
                 "Jump to Analysis:", ["—"] + _rh_tickers,
                 key="_rh_jump_sel", label_visibility="collapsed",
             )
             with _rh_j2:
-                if st.button("▶ Analyze", key="_rh_jump_btn", use_container_width=True,
+                if st.button(f"▶ Analyze {_rh_jump}" if _rh_jump != "—" else "▶ Analyze",
+                             key="_rh_jump_btn", use_container_width=True,
                              disabled=(_rh_jump == "—")):
                     st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _rh_jump
