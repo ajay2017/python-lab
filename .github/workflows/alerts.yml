@@ -35,9 +35,9 @@ on:
   workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
       mode:
-        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan"
+        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan, thesis=force weekly thesis review"
         type: choice
-        options: [auto, scan]
+        options: [auto, scan, thesis]
         default: auto
       force:
         description: "Bypass the trading-day / hour / once-per-day guards (test)"
