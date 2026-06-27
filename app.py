@@ -3235,7 +3235,7 @@ if page == "🏠 Home":
                     f"border-radius:8px;padding:8px 14px;color:#cbd5e1;font-size:0.92em'>"
                     f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
                     f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
-                    f"refreshes on rescan or in 30 min."
+                    f"auto-refreshes in 30 min · or click Refresh Signals"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
