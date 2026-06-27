@@ -952,6 +952,7 @@ with st.sidebar:
             ("Home",    "🏠 Home",                    ":material/home:"),
             ("Account", "💰 Account",                 ":material/account_balance_wallet:"),
             ("Scanner", "🔍 Market Scanner",           ":material/radar:"),
+            ("User Guide", "📖 User Guide",           ":material/help:"),
         ]),
         ("ANALYSIS", [
             ("Analysis", "📈 Analysis",               ":material/trending_up:"),
@@ -967,7 +968,6 @@ with st.sidebar:
         ("ALERTS", [
             ("Catalyst Watch",    "🔔 Catalyst Watch",    ":material/bolt:"),
             ("Economic Calendar", "📅 Economic Calendar", ":material/calendar_month:"),
-            ("User Guide",        "📖 User Guide",        ":material/help:"),
         ]),
     ]
 
@@ -1755,7 +1755,7 @@ def _render_holdings_earnings(port_df, held_data):
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    st.markdown(f"**Composite Score:** {_pb['score']:.0f}/100 · **Signal:** {_pb['signal']}")
+                    st.markdown(f"**Score:** {_pb['score']:.0f}/100 · **Signal:** {_pb['signal']}")
 
                 # Action recommendation
                 st.markdown(
@@ -1904,7 +1904,7 @@ if page == "🏠 Home":
         _stale_oldest = min(d for _, d in _stale_held if d)
         _stale_names  = ", ".join(t for t, _ in _stale_held)
         st.warning(
-            f"📦 **Showing last-known-good data** (as of {_stale_oldest}) for "
+            f"📦 **Showing cached data** (as of {_stale_oldest}) for "
             f"{len(_stale_held)} name{'s' if len(_stale_held) != 1 else ''}: {_stale_names}. "
             "The live history/fundamentals provider is down — live prices in the strip remain "
             "current, but signals & analysis for these names may be slightly stale."
@@ -1990,7 +1990,7 @@ if page == "🏠 Home":
                 if r.get("live_ok") is False:
                     _bits.append(f"live-price gap {r.get('live_gap_pct')}%")
                 _xc_lines.append(
-                    f"- **{t}**: {r.get('primary_source')} vs {r.get('validator')} "
+                    f"- **{t}**: {r.get('primary_source')} vs independent check "
                     f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
                 )
             st.error(
@@ -2003,7 +2003,7 @@ if page == "🏠 Home":
             # Cross-check skipped because its validator is the degraded source —
             # surface why (don't silently drop the integrity readout). Clears on recovery.
             st.caption(
-                f"ℹ️ Price cross-check paused — the validator ({_provider_label(_xc_validator_down)}) "
+                f"ℹ️ Price cross-check paused — an independent source ({_provider_label(_xc_validator_down)}) "
                 "is degraded; the integrity check resumes automatically when it recovers."
             )
         st.session_state["_price_xcheck_cache"] = _xc
@@ -4265,7 +4265,7 @@ if page == "🏠 Home":
                     _steady_chip = (
                         f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
                         f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
-                        f"title='Composite and verdict barely changed since yesterday'>"
+                        f"title='Position unchanged from the previous trading session — score and verdict held steady'>"
                         f"↔ Steady vs yesterday</span>"
                     )
 
@@ -4319,7 +4319,7 @@ if page == "🏠 Home":
                     _ga_steady_chip = (
                         f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
                         f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
-                        f"title='Score and verdict barely changed since yesterday'>"
+                        f"title='Position unchanged from the previous trading session — score and verdict held steady'>"
                         f"↔ Steady vs yesterday</span>"
                     )
                 st.markdown(
@@ -11816,6 +11816,10 @@ elif page == "📋 Watchlist":
             f"| Readiness {_wr['readiness_pct']}%",
             expanded=_expand,
         ):
+            st.caption(
+                "**Readiness** = % of entry criteria currently met "
+                "(price in zone, score, trend, R:R, sector fit)."
+            )
             # Metrics strip
             _wm = st.columns(5)
             _wm[0].metric("Price",      f"${_price:.2f}" if _price else "—")
@@ -12183,13 +12187,9 @@ elif page == "⚖️ Compare":
                     st.rerun()
 
     elif _cmp_should_run and not (_cmp_a_in and _cmp_b_in):
-        st.info("Enter both Ticker A and Ticker B to run a comparison.")
+        st.info("Enter two tickers and click ⚖️ Compare to see a side-by-side analysis.")
     elif not _cmp_cached:
-        st.info(
-            "Pick two tickers above (or use a quick-pick) and click **⚖️ Compare**. "
-            "The verdict block highlights which composite is stronger, with sub-factor "
-            "tie-breakers when scores are close."
-        )
+        st.info("Enter two tickers and click ⚖️ Compare to see a side-by-side analysis.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -13413,7 +13413,7 @@ elif page == "📒 Trade Journal":
         # saved with wrong realized_pnl (because holdings_df was stale at
         # save-time) need a one-shot recalc against the full trade history.
         with st.expander(
-            "🔄 Rebuild holdings & realized P&L from trade history",
+            "⚠️ Fix drift between trades and holdings",
             expanded=False,
         ):
             st.caption(
@@ -14682,7 +14682,7 @@ elif page == "📜 Recommendations History":
                 "to recalibrate. Read the α columns, not raw %, in a trending market."
             )
         else:
-            st.caption("No composite-banded data in this range yet.")
+            st.caption("No score-banded data in this range yet.")
 
     # ── By rec type ─────────────────────────────────────────────────────────
     with st.expander("🧭 Breakdown by rec type", expanded=False):
@@ -14748,6 +14748,19 @@ elif page == "📜 Recommendations History":
             use_container_width=True,
             height=min(560, 60 + 35 * len(_rh_rows)),
         )
+        _rh_tickers = sorted({r["Ticker"] for r in _rh_rows if r.get("Ticker") and r["Ticker"] != "—"})
+        if _rh_tickers:
+            _rh_j1, _rh_j2 = st.columns([3, 1])
+            _rh_jump = _rh_j1.selectbox(
+                "Jump to Analysis:", ["—"] + _rh_tickers,
+                key="_rh_jump_sel", label_visibility="collapsed",
+            )
+            with _rh_j2:
+                if st.button("▶ Analyze", key="_rh_jump_btn", use_container_width=True,
+                             disabled=(_rh_jump == "—")):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _rh_jump
+                    st.rerun()
 
     st.caption(
         "_Outcome math — Acted BUY: mark-to-market vs entry price; Acted SELL: "
