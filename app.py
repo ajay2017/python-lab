@@ -1029,6 +1029,11 @@ with st.sidebar:
                 st.session_state["_pending_page"] = _dest
                 st.rerun()
 
+    # Expose the active page as `page` — replaces the value st.radio used to return.
+    # Must be inside the sidebar block so the variable is in scope for all page
+    # dispatch logic that follows (if page == "🏠 Home": etc.).
+    page = st.session_state.get("nav_page", "🏠 Home")
+
     st.divider()
 
     # Market status
