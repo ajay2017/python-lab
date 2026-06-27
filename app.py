@@ -214,7 +214,7 @@ st.markdown("""
 /* ── Sidebar grouped nav ──────────────────────────────────────────────── */
 /* Section header labels */
 .nav-group-header {
-    font-size: 0.62rem !important;
+    font-size: 0.80rem !important;
     font-weight: 700 !important;
     letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
@@ -927,47 +927,9 @@ def _refresh_gate_arm(bucket: str) -> None:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    # ── Portfolio value banner — always at the very top ──────────────────
     _pv = st.session_state.get("_portfolio_value", 0)
     # Privacy toggle — persists across reruns within the session
     _priv_on = st.session_state.get("_privacy", True)
-
-    if _pv > 0:
-        _risk_val = _pv * MODERATE_RISK_PCT
-        _pv_label    = _m(f"${_pv:,.0f}")
-        _risk_label  = _m(f"${_risk_val:,.0f}")
-        _eye_icon    = "👁" if _priv_on else "🙈"
-        st.markdown(
-            f"<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
-            f"margin-bottom:4px;color:#fff'>"
-            f"<div style='display:flex;align-items:center;justify-content:space-between;"
-            f"font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
-            f"text-transform:uppercase;opacity:0.8;margin-bottom:4px'>"
-            f"<span>Portfolio Value</span>"
-            f"</div>"
-            f"<div style='font-size:1.5em;font-weight:700;line-height:1.1'>{_pv_label}</div>"
-            f"<div style='font-size:0.74em;margin-top:6px;opacity:0.9'>"
-            f"Risk/trade: <b>{_risk_label}</b>&nbsp;"
-            f"<span style='opacity:0.65'>· 1.5% moderate</span></div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button(f"{_eye_icon} {'Show' if _priv_on else 'Hide'} values",
-                     key="_privacy_toggle", use_container_width=True,
-                     help="Hide or show all dollar amounts — useful in public"):
-            st.session_state["_privacy"] = not _priv_on
-            st.rerun()
-    else:
-        st.markdown(
-            "<div style='background:#1565C0;border-radius:8px;padding:12px 14px 10px;"
-            "margin-bottom:12px;color:#fff'>"
-            "<div style='font-size:0.68em;font-weight:700;letter-spacing:0.1em;"
-            "text-transform:uppercase;opacity:0.8;margin-bottom:4px'>Portfolio Value</div>"
-            "<div style='font-size:1.1em;font-weight:600;opacity:0.65'>Loading…</div>"
-            "<div style='font-size:0.74em;margin-top:6px;opacity:0.5'>Open Portfolio tab</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
 
     _render_brand(large=False)
 
@@ -1013,10 +975,8 @@ with st.sidebar:
                 _btn_label = f"Catalyst Watch  🔴 {_cw_alerts}"
             else:
                 _btn_label = _disp
-            # Macro plants a tab-selection hook for Release 2 wiring
-            _is_macro = (_disp == "Macro")
             # Active: disabled=True (CSS renders as selected highlight)
-            _is_active = (_cur_page == _dest) and not _is_macro
+            _is_active = (_cur_page == _dest)
             if st.button(
                 _btn_label,
                 key=f"_nav_{_disp.lower().replace(' ', '_')}",
@@ -1024,8 +984,6 @@ with st.sidebar:
                 disabled=_is_active,
                 use_container_width=True,
             ):
-                if _is_macro:
-                    st.session_state["_pending_home_tab"] = "🌐 Macro"
                 st.session_state["_pending_page"] = _dest
                 st.rerun()
 
@@ -1033,6 +991,13 @@ with st.sidebar:
     # Must be inside the sidebar block so the variable is in scope for all page
     # dispatch logic that follows (if page == "🏠 Home": etc.).
     page = st.session_state.get("nav_page", "🏠 Home")
+
+    _eye_icon = "👁" if _priv_on else "🙈"
+    if st.button(f"{_eye_icon} {'Show' if _priv_on else 'Hide'} values",
+                 key="_privacy_toggle", use_container_width=True,
+                 help="Hide or show all dollar amounts — useful in public"):
+        st.session_state["_privacy"] = not _priv_on
+        st.rerun()
 
     st.divider()
 
