@@ -1781,6 +1781,14 @@ def _render_holdings_earnings(port_df, held_data):
                     st.markdown("")
                     st.info(f"**Institutional Lens** · {_pb['institutional_lens']}")
 
+                # For MONITOR: surface the re-evaluate date so the user knows when to return.
+                if _action == "MONITOR" and _pb.get("earnings_date"):
+                    st.info(
+                        f"🗓️ **Re-evaluate after earnings ({_earn_dt_str})** — "
+                        f"return once results are in to reassess the position. "
+                        f"If the report is negative, be prepared to exit at the open."
+                    )
+
 
 
 if st.session_state.get("_readonly"):
@@ -11850,6 +11858,15 @@ elif page == "📋 Watchlist":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+            # For HOLD_OFF_EARNINGS: show when to return once earnings clear.
+            if _action == "HOLD_OFF_EARNINGS" and _earn_d is not None and _earn_d >= 0:
+                from datetime import timedelta as _hoe_td
+                _hoe_date = (datetime.now() + _hoe_td(days=_earn_d)).strftime("%b %d")
+                st.info(
+                    f"🗓️ **Re-evaluate after {_hoe_date}** — hold off until earnings clear, "
+                    f"then reassess the post-earnings setup before entering."
+                )
 
             # Portfolio fit caution — shown when ENTER_NOW (or downgraded NEAR_ENTRY)
             # was issued but portfolio-level risk state warrants caution / blocking.
