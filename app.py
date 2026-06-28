@@ -14784,6 +14784,80 @@ elif page == "📜 Recommendations History":
             unsafe_allow_html=True,
         )
 
+    # ── Signal flow Sankey ────────────────────────────────────────────────────
+    _rh_n_total  = len(_rh_enriched)
+    _rh_n_acted  = sum(1 for r in _rh_enriched if r["acted_on"])
+    _rh_n_missed = _rh_n_total - _rh_n_acted
+
+    def _rh_oc(acted, label):
+        return sum(1 for r in _rh_enriched if r["acted_on"] == acted and r["outcome_label"] == label)
+
+    _rh_aw = _rh_oc(True,  "win");  _rh_al = _rh_oc(True,  "loss")
+    _rh_af = _rh_n_acted  - _rh_aw - _rh_al
+    _rh_mw = _rh_oc(False, "win");  _rh_ml = _rh_oc(False, "loss")
+    _rh_mf = _rh_n_missed - _rh_mw - _rh_ml
+
+    if _rh_n_total > 0:
+        import plotly.graph_objects as _rh_go
+        _rh_sk_labels = [
+            "All Surfaced",
+            "Acted",       "Missed",
+            "Win (acted)", "Loss (acted)", "Flat / Open (acted)",
+            "Rose (missed)", "Fell — dodged", "Flat / Open (missed)",
+        ]
+        _rh_sk_ncolor = [
+            "#60a5fa",
+            "#34d399", "#94a3b8",
+            "#22c55e", "#ef4444", "#64748b",
+            "#4ade80", "#f87171", "#475569",
+        ]
+        _rh_sk_src = [0, 0, 1, 1, 1, 2, 2, 2]
+        _rh_sk_tgt = [1, 2, 3, 4, 5, 6, 7, 8]
+        _rh_sk_val = [_rh_n_acted, _rh_n_missed, _rh_aw, _rh_al, _rh_af, _rh_mw, _rh_ml, _rh_mf]
+        _rh_sk_lc  = [
+            "rgba(99,179,237,0.45)",  "rgba(148,163,184,0.3)",
+            "rgba(134,239,172,0.45)", "rgba(252,165,165,0.45)", "rgba(100,116,139,0.3)",
+            "rgba(134,239,172,0.3)",  "rgba(248,113,113,0.3)",  "rgba(71,85,105,0.2)",
+        ]
+        _rh_sk_pairs = [
+            (s, t, v, c)
+            for s, t, v, c in zip(_rh_sk_src, _rh_sk_tgt, _rh_sk_val, _rh_sk_lc)
+            if v > 0
+        ]
+        if _rh_sk_pairs:
+            _rh_s, _rh_t, _rh_v, _rh_c = zip(*_rh_sk_pairs)
+            _rh_sk_fig = _rh_go.Figure(_rh_go.Sankey(
+                arrangement="snap",
+                node=dict(
+                    label=_rh_sk_labels,
+                    color=_rh_sk_ncolor,
+                    pad=22, thickness=18,
+                    line=dict(color="rgba(255,255,255,0.08)", width=0.5),
+                ),
+                link=dict(
+                    source=list(_rh_s), target=list(_rh_t),
+                    value=list(_rh_v),  color=list(_rh_c),
+                ),
+            ))
+            _rh_sk_fig.update_layout(
+                height=360,
+                margin=dict(l=0, r=0, t=36, b=8),
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(size=11, color="#cbd5e1"),
+                title=dict(
+                    text="Signal flow — surfaced → acted / missed → outcome",
+                    font=dict(size=13), x=0,
+                ),
+            )
+            st.plotly_chart(_rh_sk_fig, use_container_width=True)
+            st.caption(
+                "Band width = rec count. **Acted** outcomes are mark-to-market (BUY) or "
+                "realized (SELL). **Missed** outcomes are surface-price → now on $1k notional. "
+                f"Flat / Open includes maturing recs (⏳, younger than {REC_SCORE_MIN_DAYS} days) "
+                "and priced recs within ±0.5% of surface price."
+            )
+
     # ── Missed Opportunity — what you skipped and what it cost ───────────────
     # Distinct names surfaced but NEVER acted on, graded from their FIRST surfacing.
     # Honest framing: per-$1k notional + named outliers — never a fabricated
