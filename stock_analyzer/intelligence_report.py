@@ -108,6 +108,7 @@ def build_report_package(
     spy_close_by_date: dict | None = None,
     weekly_rows: list[dict] | None = None,
     min_graded: int = 5,
+    rec_types: tuple = ("new_pick",),
 ) -> dict:
     """
     Assemble the structured scorecard package for the monthly report.
@@ -117,6 +118,13 @@ def build_report_package(
         match_recs_to_trades → compute_outcomes(min_days=REC_SCORE_MIN_DAYS)
         → summary_stats / by_composite_band / by_verdict
 
+    `rec_types` scopes the report to ACTIONABLE recommendations. Default =
+    ("new_pick",): only names surfaced as "New Positions to Initiate" (they cleared
+    all gates). The awareness-only "More Buy Candidates" feed (Conflicted / Unverified
+    names the App steers you away from) is excluded — the report judges the engine's
+    actual entry picks and whether you acted on them, not the awareness feed. Pass
+    rec_types=None to include every surfacing.
+
     recs_df:            recommendations surfaced in [period_start, period_end].
     trades_df:          all trades (to detect acted-on signals).
     current_prices:     {ticker: price} for marking open positions (caller fetches).
@@ -124,8 +132,8 @@ def build_report_package(
     weekly_rows:        recent weekly_debriefs dicts (perf/spy/alpha) for trajectory.
     min_graded:         matured graded recs required before Q0 is narrated.
 
-    Returns a dict consumed by generate_report(). has_data=False when no recs
-    surfaced in the window (caller surfaces "nothing to report yet").
+    Returns a dict consumed by generate_report(). has_data=False when no actionable
+    recs surfaced in the window (caller surfaces "nothing to report yet").
     """
     from stock_analyzer.recommendations_history import (
         match_recs_to_trades, compute_outcomes, summary_stats,
@@ -136,6 +144,7 @@ def build_report_package(
     package: dict = {
         "period_start":   str(period_start),
         "period_end":     str(period_end),
+        "rec_scope":      ", ".join(rec_types) if rec_types else "all",
         "has_data":       False,
         "q0_ready":       False,
         "min_graded":     min_graded,
@@ -159,6 +168,14 @@ def build_report_package(
 
     if recs_df is None or (hasattr(recs_df, "empty") and recs_df.empty):
         return package
+
+    # Scope to actionable recs (default: New Positions to Initiate). The awareness-
+    # only "More Buy Candidates" feed is excluded — the report judges the engine's
+    # actual entry picks, not names it surfaced for awareness and steered you away from.
+    if rec_types is not None and "rec_type" in getattr(recs_df, "columns", []):
+        recs_df = recs_df[recs_df["rec_type"].isin(rec_types)]
+        if recs_df.empty:
+            return package
 
     matched  = match_recs_to_trades(recs_df, trades_df)
     enriched = compute_outcomes(
@@ -204,8 +221,15 @@ def _format_prompt(package: dict) -> str:
     lines = [
         f"Period: {package['period_start']} to {package['period_end']}",
         "",
-        f"Recommendations surfaced: {package['n_total']} "
-        f"(acted on {package['n_acted']}, missed {package['n_missed']}); "
+        "SCOPE: these are the App's ACTIONABLE entry recommendations only — names "
+        "surfaced as \"New Positions to Initiate\" (they cleared all gates, composite "
+        "≥ the entry threshold). The awareness-only \"More Buy Candidates\" feed "
+        "(names the App surfaced but flagged to skip) is EXCLUDED. So a high miss "
+        "count is not awareness noise — every one is a name the App told you to "
+        "consider initiating. Do not reference the awareness feed.",
+        "",
+        f"New-position recommendations surfaced: {package['n_total']} "
+        f"(acted on {package['n_acted']}, not acted on {package['n_missed']}); "
         f"{package['n_graded']} matured enough to grade (≥ measurement window).",
     ]
     if not package.get("q0_ready"):

@@ -406,16 +406,23 @@ def by_composite_band(enriched: list[dict]) -> list[dict]:
     return out
 
 
-def distinct_missed(enriched: list[dict]) -> list[dict]:
+def distinct_missed(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> list[dict]:
     """
-    Collapse MISSED recommendations to one row per distinct ticker — the honest
-    "names you surfaced but never acted on" view (the user's "which of the 241?").
+    Collapse MISSED **actionable** recommendations to one row per distinct ticker —
+    the honest "new positions you were told to initiate but skipped" view.
 
-    A ticker counts as missed only if NONE of its surfacings in the window were
-    acted on (a name acted on later isn't a miss). The representative outcome is
-    taken from the EARLIEST priced + mature surfacing — the first time the App
-    flagged it, i.e. the full opportunity window. Younger-than-maturity surfacings
-    are ignored for the outcome but still counted toward n_surfaced.
+    `rec_types` scopes what counts as actionable. Default = ("new_pick",): only names
+    surfaced as "New Positions to Initiate" (they cleared all gates). The awareness-
+    only "More Buy Candidates" feed (rec_type 'buy_candidate', incl. Conflicted /
+    Unverified names the App steers you *away* from) is excluded — skipping those is
+    correct behaviour, not a missed opportunity. Pass rec_types=None for all types.
+
+    A ticker counts as missed only if NONE of its surfacings (ANY rec_type) were acted
+    on — so a name you bought on a day it surfaced as a buy_candidate is not wrongly
+    flagged. But the representative outcome and n_surfaced come from the ACTIONABLE
+    surfacings only, taken from the EARLIEST priced + mature one (the first time the
+    App told you to initiate it = the full opportunity window). Younger-than-maturity
+    surfacings are ignored for the outcome but still counted toward n_surfaced.
 
     `outcome_dollars` here is per-$1k NOTIONAL (compute_outcomes normalises missed
     recs to $1000) — the honest cross-ticker magnitude, NOT a portfolio-level claim
@@ -424,7 +431,7 @@ def distinct_missed(enriched: list[dict]) -> list[dict]:
     Returns rows sorted by alpha_pct desc (biggest missed winners first), each:
         ticker, first_rec_date, n_surfaced, verdict, outcome_pct, alpha_pct,
         outcome_dollars (per-$1k), outcome_label
-    Tickers with no priced + mature surfacing are skipped (can't grade).
+    Tickers with no actionable priced + mature surfacing are skipped (can't grade).
     """
     by_tk: dict[str, list[dict]] = defaultdict(list)
     for r in enriched:
@@ -433,9 +440,11 @@ def distinct_missed(enriched: list[dict]) -> list[dict]:
     rows: list[dict] = []
     for tk, items in by_tk.items():
         if any(r.get("acted_on") for r in items):
-            continue   # acted on at least once → not a missed name
+            continue   # acted on via ANY surfacing → not a missed name
+        # Actionable surfacings only (default: New Positions to Initiate).
+        pool = [r for r in items if (rec_types is None or r.get("rec_type") in rec_types)]
         gradable = [
-            r for r in items
+            r for r in pool
             if r.get("outcome_pct") is not None
             and not r.get("outcome_maturing")
             and r.get("rec_date") is not None
@@ -446,7 +455,7 @@ def distinct_missed(enriched: list[dict]) -> list[dict]:
         rows.append({
             "ticker":          tk,
             "first_rec_date":  rep["rec_date"],
-            "n_surfaced":      len(items),
+            "n_surfaced":      len(pool),
             "verdict":         rep.get("verdict") or "",
             "outcome_pct":     round(rep["outcome_pct"], 2),
             "alpha_pct":       rep.get("alpha_pct"),

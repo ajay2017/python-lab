@@ -14796,12 +14796,18 @@ elif page == "📜 Recommendations History":
         _rh_bd  = _rh_ms.get("biggest_dodge")
         _rh_p1k = _rh_ms.get("avg_per_1k")
 
-        st.markdown("### 🎯 Missed Opportunity — names you surfaced but skipped")
+        st.markdown("### 🎯 Missed Opportunity — New Positions to Initiate you skipped")
+        st.caption(
+            "Scoped to **New Positions to Initiate** (`new_pick` — names that cleared "
+            "all gates). The awareness-only **More Buy Candidates** feed (Conflicted / "
+            "Unverified names the App flags to skip, e.g. a sub-65 composite) is "
+            "**excluded** — skipping those was the correct call, not a miss."
+        )
         st.markdown(
             f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
             f"padding:12px 16px;margin:6px 0;color:#cbd5e1;font-size:0.92em;line-height:1.65'>"
-            f"Of <b>{_rh_ms['n_distinct']}</b> distinct name(s) the App surfaced that you "
-            f"<b>never acted on</b> (graded from first surfacing): "
+            f"Of <b>{_rh_ms['n_distinct']}</b> distinct name(s) surfaced as <b>New Positions "
+            f"to Initiate</b> that you <b>never acted on</b> (graded from first surfacing): "
             f"<span style='color:#86efac'><b>{_rh_ms['n_winners']}</b> rose</span> "
             f"(missed winners) · <span style='color:#fca5a5'><b>{_rh_ms['n_dodged']}</b> fell</span> "
             f"(dodged). "
@@ -17194,9 +17200,10 @@ elif page == "🧠 AI Insights":
             )
             st.plotly_chart(_mr_fig, use_container_width=True)
             st.caption(
-                f"Of **{_mr_sp['n_distinct']}** name(s) surfaced but never acted on this period: "
-                f"**{_mr_sp['n_winners']}** rose (missed), **{_mr_sp['n_dodged']}** fell (dodged). "
-                "Green = rose after surfacing; red = fell. Full ranked table + per-$1k "
+                f"Of **{_mr_sp['n_distinct']}** name(s) surfaced as **New Positions to Initiate** "
+                f"but never acted on this period: **{_mr_sp['n_winners']}** rose (missed), "
+                f"**{_mr_sp['n_dodged']}** fell (dodged). Green = rose after surfacing; red = fell. "
+                "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
                 "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
             )
 
