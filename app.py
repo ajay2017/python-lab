@@ -16759,7 +16759,7 @@ It reads two things together: how far a name has fallen **from its highest point
 
 **If you averaged down:** when you add materially to a position, it re-measures the decline **from your add**, not from an old pre-add high — so doubling down won't trigger a false exit signal.
 
-**Two layers — idiosyncratic *and* market-wide:** the calls above flag a name weakening *on its own*. A second layer handles **broad market-wide down days** (when everything falls together): when the market is in a genuine **risk-off regime** — its long-term trend has broken (price below the 200-day line) *or* volatility has spiked (VIX ≥ 25) — **and** your book is fragile (carries outsized market exposure), it names the few highest-risk positions (your biggest beta drivers) and suggests a modest trim *or* a tighter stop. It deliberately waits for a *regime*, not a single red day, so it doesn't sell the dip.
+**Two layers — idiosyncratic *and* market-wide:** the calls above flag a name weakening *on its own*. A second layer handles **broad market-wide down days** (when everything falls together): when the market is in a genuine **risk-off regime** — its long-term trend has broken (price below the 200-day line) *or* volatility has spiked (VIX ≥ 25) — **and** your book is fragile (carries outsized market exposure), it names the few highest-risk positions (your biggest beta drivers) and suggests a modest trim *or* a tighter stop. It deliberately waits for a *regime*, not a single red day, so it doesn't sell the dip. You can read this at a glance on the **🧭 Market-Risk Posture** dial (Home → **🔗 Risk Analysis** tab): it folds *how fragile your book is* together with *whether the market is risk-off* into one posture — 🛡️ Steady → 🌥️ Watchful → ⚠️ Defensive → 🔴 Risk-off & fragile. It's a *posture read, not a forecast* (it never predicts a pullback's timing), and when both legs are elevated it simply points you back to the de-risk suggestions above.
 
 **Every call is advisory — you decide and act; nothing is auto-sold.** If a name already has a hard stop breach or a full Sell signal, that takes precedence and you'll see *that* instead (one card per position, strongest call wins). Most risk is still managed at *entry* (position sizing + concentration caps), where it's cheapest to control.
 """
@@ -16784,6 +16784,26 @@ The app's intelligence is computed live in your browser — so it can only reach
 """
         )
 
+    with st.expander("🧠 AI Insights — thesis tracking, weekly debrief & monthly review", expanded=False):
+        st.markdown(
+            """
+The **🧠 AI Insights** page is a *reflective* layer that sits **on top of** the rule-based engine. Everything else in the app decides and gates with fixed rules; this page uses AI to **narrate the patterns** in what those rules have been doing — your picks, your trades, your theses — over weeks and months. Two promises never change: the AI only ever **describes numbers the engine already computed** (it cannot invent a recommendation, a trade, or an outcome), and it **never moves a gate or sets a threshold** — that stays a rules decision. If the AI is ever unavailable, every other page and every protection still works exactly the same; this layer is purely additive.
+
+Three things live here:
+
+- **📌 Thesis Tracking — "is my reason for owning this still true?"** When you log a buy you can jot a one-line *thesis* (why you're in it). For each holding that has one, the app weighs that original reason against current evidence — recent headlines, the fundamental and technical trend, the last earnings result — and labels it **INTACT**, **WEAKENING**, or **BROKEN**, with a short written read. It's deliberately conservative (leans WEAKENING when unsure; BROKEN needs a clear contradiction). **BROKEN does *not* sell anything** — it's awareness that your original reason has changed; the rule-based Trim/Exit protection fires on its own, separately. Reviews refresh weekly and on demand.
+
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch. It's emailed to you on Sundays and can be generated on demand. (It needs about a week of history before the first one.)
+
+- **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on the slower questions:
+   - **Entry quality** — of the names the engine surfaced as high-conviction *New Positions to Initiate*, did they actually **beat the market**? Broken down by conviction tier, so you can see whether the highest-conviction picks really did best.
+   - **Signal discipline** — of those names, which did you **act on**, and did acting help or hurt? It shows what you *skipped* and what that cost or saved.
+  The report is **visual**: a flow chart (surfaced → acted / not-acted → outcome), a bar of average market-beating return by conviction tier, and a ranked *"what you skipped"* chart. Counts are **distinct names** (a name that surfaced on many days counts once), and each report is **frozen the moment it's generated** — so it reads the same whenever you reopen it. Once you have more than one month, a **month picker** lets you browse past reports.
+
+Everything on this page is **reflection, not instruction** — it helps you understand your own and the engine's behaviour; it never tells you to buy or sell a specific name.
+"""
+        )
+
     with st.expander("💰 Maintaining your Account (cash, margin, growth & return)", expanded=False):
         st.markdown(
             """
@@ -16798,7 +16818,7 @@ On the 💰 Account page, enter your **Net cash / margin ($)**:
 - A **negative** number = a **margin debit** (you've borrowed to hold more stock than your cash covers). The app handles this correctly — your Total, Growth, and Return all subtract the loan.
 - **Don't enter "margin available"** — that's borrowing *capacity*, not money you own.
 
-Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money).
+Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money). One thing to know: this account-level view is **informational** — the app's entry and sizing **gates still measure concentration against your invested stocks** (equity-weight), not the whole account, so a name can read smaller here than the figure a gate is acting on.
 
 **2. Set a baseline + log deposits/withdrawals (to see real growth).**
 Under **Growth & Contributions**, set a **baseline** (your contributed capital — default = today's total, which tracks growth from today; or enter your lifetime net deposits for all-time gain). Then log **deposits** and **withdrawals** as they happen. The app computes:
@@ -16830,6 +16850,29 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — upcoming earnings for held + watchlist + sector names (awareness, not a buy signal).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report (it narrates patterns, it never gates).
+"""
+        )
+
+    with st.expander("📜 Recommendations History — the engine's report card", expanded=False):
+        st.markdown(
+            """
+The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every pick the app has surfaced, graded after the fact against what actually happened. It's the raw data the Monthly Intelligence Report narrates.
+
+- **The scorecard** matches each past recommendation to your trades to see whether you **acted** on it, then grades the outcome on **alpha** — its return *minus the market's* over the same window. (Beating the market in a down month is a win; trailing it in an up month isn't — raw return alone would credit or blame you for the market's move, not your pick.) It rolls up by conviction band and by cross-check verdict, and only grades picks old enough to have a meaningful outcome.
+- **🎯 Missed Opportunity** answers *"which names did I skip, and what did it cost?"* — names that surfaced as *New Positions to Initiate* but you never bought, ranked by how they did. To stay honest, magnitudes are shown **per $1,000** (you can't buy every name, so it never claims "your portfolio would have gained X%"). Names the app *steered you away from* (the awareness-only "more buy candidates") are excluded — skipping those was correct, not a miss.
+- **The flow chart** visualises the same funnel: everything surfaced → acted vs. not-acted → win / loss / flat.
+
+It's a **learning** surface, not a recommendation surface — it shows how the engine *and* your own decisions have actually been doing.
+"""
+        )
+
+    with st.expander("🔔 Catalyst Watch — forward earnings awareness", expanded=False):
+        st.markdown(
+            """
+The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report never blindsides you, across three tiers: **your holdings**, your **watchlist**, and the broader **sector universe** the scanner follows. A 🔥 flag marks a sector heating up with near-term reports.
+
+It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
 """
         )
 
