@@ -65,6 +65,7 @@
 python-lab/
 ├── app.py                          Main application (UI + orchestration)
 ├── main.py                         Entry point alias
+├── cron_runner.py                  Headless cron entry point (GitHub Actions) — dispatch modes: auto / scan / thesis / debrief / monthly / eod
 ├── requirements.txt                Python dependencies
 ├── runtime.txt                     Python version (3.12)
 ├── docs/
@@ -84,21 +85,28 @@ python-lab/
     │   ├── _util.py                Secret reader (st.secrets→env, section-nesting tolerant) + http helper
     │   └── selftest.py             Offline provider smoke-test (env-var keys)
     ├── indicators.py               Pure technical indicator calculations
-    ├── indicators.py               Pure technical indicator calculations
     ├── technicals.py               Technical scoring from indicator output
     ├── fundamentals.py             Fundamental scoring — sector-relative benchmarks
     ├── catalyst_watch.py           Catalyst Watch — forward earnings awareness (pure logic)
     ├── sentiment.py                VADER-based news sentiment scoring
     ├── scoring.py                  Composite score weights and recommendation tiers
+    ├── signal_reconciliation.py    Central authority resolving scanner vs. composite vs. context into one buy/skip verdict (reconcile_signals) — every recommendation surface calls it
     ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
     ├── account.py                  Account-level pure calc (net contributed capital, growth, money-weighted/Modified-Dietz return); signed net cash nets margin
+    ├── daily_pnl.py                Positions-scope day-over-day P&L (Tier B): broker-style equity-delta vs persisted daily_snapshots baseline + the day's trades
     ├── risk.py                     ATR stop loss, position sizing, risk metrics
     ├── targets.py                  Price targets, support/resistance, entry zones
     ├── ranking.py                  Cross-portfolio stock ranking (composite score sort)
+    ├── comparison.py               2-ticker side-by-side comparison engine + one-line verdict (Compare page)
     ├── scanner.py                  Market scanner (curated ~73-ticker universe + Watchlist extension); scan_movers() 1-day-gainer pass
     ├── discovery_universe.py       Broad ~200-name discovery universe (by sector) for movers; discovery_tickers() flatten/dedup
     ├── daily_briefing.py           Daily briefing engine (Act Today / Grow Today + Movers / Buy Candidates / Review); structured directives + per-ticker consolidation
+    ├── decision_bucket.py          Brief defensive-item bucketing: Act Today vs Monitoring/Awareness split (calm-advisor, pure)
+    ├── position_lifecycle.py       Held-position state (settling → established → winning; at_risk/exit override) — calm-advisor nudge-cadence gate
+    ├── signal_hysteresis.py        Calm-advisor "steady vs yesterday" damper — annotate-only continuity marker (Tier 2C)
+    ├── evening_debrief.py          Evening Debrief: PM companion to Today's Brief (plan-vs-reality, today's trades, tomorrow's setup)
     ├── premarket.py                Pre-market intelligence (futures, global markets, movers)
+    ├── premarket_stance.py         Pre-Market Stance: AI narrative + Defensive/Neutral/Constructive verdict for the open (cached per day)
     ├── quick_research.py           Ad-hoc ticker research with entry timing + portfolio-fit verdict
     ├── news_intelligence.py        News aggregation and attention flagging
     ├── sentiment_velocity.py       Sentiment trend tracking over time
@@ -109,8 +117,10 @@ python-lab/
     ├── perf_advisor.py             Performance attribution and recommendations
     ├── risk_advisor.py             Risk flags and advisor recommendations (exact beta impact)
     ├── exit_advisor.py             Exit-discipline + market-risk: deterioration WATCH/TRIM/EXIT ladder, risk-off de-risk overlay, Market-Risk Posture dial (classify_deterioration_tier · risk_off_regime · assess_risk_off_derisk · market_risk_posture — pure logic)
+    ├── concentration.py            Concentration & sizing discipline: single-name ceiling enforcement + high-beta cluster awareness (pure logic)
     ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
     ├── trade_analytics.py          Trade history analytics
+    ├── trade_review.py             Trade Review: behavioural retrospective (app-followed vs deviated trades, panic-day reactivity, per-trade outcome vs SPY)
     ├── trades.py                   Trade-record helpers (realised PnL, performance stats)
     ├── tax_advisor.py              Tax-lot analysis; HARVEST subordinated to investment view
     ├── rebalancer.py               Portfolio rebalancing; ADD cross-checks news + risk trim
@@ -121,6 +131,9 @@ python-lab/
     ├── thesis_advisor.py           AI Intelligence F-1: per-holding thesis review → INTACT/WEAKENING/BROKEN (thesis_reviews table)
     ├── debrief_advisor.py          AI Intelligence F-3: weekly portfolio debrief — 4-section narrative + Sunday email (weekly_debriefs table)
     ├── intelligence_report.py      AI Intelligence F-4: monthly retrospective — Q0 entry-quality + Q1 signal-discipline; build_report_package + frozen viz_json snapshot (monthly_reports table)
+    ├── bundle_loader.py            Shared market-data bundle loader (load_all) — the app AND the headless cron load through the SAME path
+    ├── headless_alert_engine.py    Headless alert computation for the cron: protective signals (stops / EXIT / risk-off), reactive pullback, EOD snapshot
+    ├── notify.py                   Email rendering (weekly debrief / monthly intelligence / pullback / protective) + Resend delivery
     ├── db.py                       Supabase ops (holdings/watchlist/trades/manual_stops); trade-replay; fractional shares
     └── api_health.py               API call health event recording
 ```
@@ -669,6 +682,55 @@ CREATE TABLE monthly_reports (
 ```
 
 **AI Intelligence F-4 monthly intelligence report (one row per period).** A monthly retrospective: Q0 entry-quality (does the engine pick well, by composite band) + Q1 signal-discipline (acted vs. missed, on alpha). Narrative built by `intelligence_report.build_report_package` → `generate_report` from the `recommendations_history` scorecard — the LLM narrates the aggregates, it never recomputes them. **`viz_json`** stores the frozen `recommendations_history.report_viz_snapshot` (decision-flow Sankey + alpha-by-band bar + ranked missed bar) so the report is an **immutable dated artifact** — re-rendered verbatim rather than drifting on a live recompute; display falls back to a live recompute only for rows saved before freezing. **Unique on `period_end`** → upsert-safe. First-Sunday-of-month cron + on-demand. Headline acted/missed counts are **distinct tickers** (`signal_flow`), not surfacings. `db.load_monthly_reports(limit)` / `save_monthly_report()` (writer is read-only-viewer no-op). Optional — inert until the DDL is applied (the freeze adds the column to an existing table: `alter table monthly_reports add column if not exists viz_json jsonb;`). RLS: `FOR ALL TO service_role`.
+
+### 6.12 `recommendations` table
+
+```sql
+CREATE TABLE recommendations (
+    id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticker           TEXT NOT NULL,
+    rec_date         DATE NOT NULL,
+    rec_type         TEXT NOT NULL,            -- 'new_pick' | 'add_winner' | 'buy_candidate'
+    price_at_surface NUMERIC,                  -- first-seen price (NULL when ≤ 0 / unknown)
+    composite_score  NUMERIC,
+    momentum_score   NUMERIC,
+    sector           TEXT,
+    conviction       TEXT,
+    verdict          TEXT,                     -- cross-check verdict (Confirmed / Conflicted / …)
+    thesis           TEXT,                     -- short rationale snapshot (≤ 600 chars)
+    surfaced_at      TIMESTAMPTZ NOT NULL DEFAULT now(),   -- server-authoritative first-seen
+    UNIQUE (ticker, rec_date, rec_type)
+);
+```
+
+**The recommendation audit log (scorecard substrate).** Every pick Today's Brief surfaces is logged once per `(ticker, rec_date, rec_type)` — `save_recommendations` upserts with `ignore_duplicates`, so the first-seen row (and its `surfaced_at` + `price_at_surface`) is authoritative and never overwritten. `rec_type` separates the **actionable** `new_pick` / `add_winner` from the awareness-only `buy_candidate` feed. Read by `recommendations_history.py` (the scorecard) and the F-4 monthly report. `db.save_recommendations()` (read-only-viewer no-op) / `load_recommendations(start_date, end_date)`. Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
+
+### 6.13 `scanner_cache` table
+
+```sql
+CREATE TABLE scanner_cache (
+    id           INTEGER PRIMARY KEY,          -- always 1 (single row)
+    results_json TEXT,                          -- scanner DataFrame (pandas to_json, orient='split')
+    scan_date    DATE,
+    source       TEXT,                          -- which run wrote it (cron 'scan' vs. manual full scan)
+    scanned_at   TIMESTAMPTZ
+);
+```
+
+**Cross-session scanner persistence (single row).** Lets a cold app load — or the cron — hydrate `scanner_results` without a manual ~20-second scan: written by the cron `scan` mode (~10:00 ET) or a manual full-universe Home scan, read once per session into `st.session_state["scanner_results"]` (freshness via `_scanner_results_meta`; see §7). `db.save_scanner_cache()` / `load_scanner_cache()`. Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
+
+### 6.14 `alert_state` table
+
+```sql
+CREATE TABLE alert_state (
+    id                INTEGER PRIMARY KEY,      -- cron lane: 1 = pre-market protective, 2 = EOD pullback
+    last_emailed_date TEXT,                      -- 'YYYY-MM-DD' of the last send (once-per-ET-day gate)
+    last_fingerprint  TEXT,                      -- hash of the protective set (skip when unchanged)
+    updated_at        TIMESTAMPTZ
+);
+```
+
+**Headless-cron dedup state (system state, not user data).** Used ONLY by the email-alerts cron to (a) fire at most once per ET trading day and (b) skip an email whose protective set is unchanged since the last send (`last_fingerprint`). One row per cron lane (`id` 1 = pre-market protective, 2 = EOD pullback) — independent dedup, no extra DDL. **Not `_READONLY`-gated** (the cron runs outside the app). Degrades to "always send" when the table is absent — the alerts work before the DDL, just without dedup. `db.load_alert_state(row_id)` / `save_alert_state(...)`. RLS: `FOR ALL TO service_role`.
 
 ---
 
