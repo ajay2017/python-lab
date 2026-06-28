@@ -267,6 +267,13 @@ def crosscheck_price(ticker: str, primary_price: float,
     for prov in _provs:
         if prov.name == primary_name:
             continue  # need an INDEPENDENT source to validate
+        if _is_red(prov.name):
+            # Validator degraded (rate-limited / hard-erroring) → its prices can't
+            # be trusted, so a "disagreement" would be its own degradation, not a
+            # real fault. Skip rather than raise a false "sources disagree" (mirrors
+            # the crosscheck_batch validator-health gate). If no healthy independent
+            # validator remains, the loop exhausts → returns None (no opinion).
+            continue
         try:
             rec = (prov.live_prices([ticker]) or {}).get(ticker)
         except Exception:

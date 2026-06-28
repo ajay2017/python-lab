@@ -221,8 +221,9 @@ class YFinanceProvider(DataProvider):
                     if ticker not in close.columns:
                         # Don't silently fall back to the first column — that would
                         # re-label one index's prices as another (e.g. NASDAQ shown
-                        # as DOW). Bail and let _ah record an empty payload.
-                        _ah.record("yahoo_finance", "empty", msg=f"index {ticker} missing")
+                        # as DOW). Skip; the batch-level success/empty is recorded
+                        # after the loop. No per-index "empty" record — it polluted
+                        # the circuit-breaker counters (M7).
                         continue
                     col = close[ticker].dropna()
                     if len(col) < 1:
@@ -265,8 +266,12 @@ class YFinanceProvider(DataProvider):
                     if t not in close.columns:
                         # Same trap as market_indices: a missing ticker would
                         # silently inherit the first column's prices, writing e.g.
-                        # NVDA prices under INTC. Skip the ticker instead.
-                        _ah.record("yahoo_finance", "empty", msg=f"price {t} missing")
+                        # NVDA prices under INTC. Skip the ticker. Do NOT record a
+                        # per-ticker "empty" health event — a few missing names in an
+                        # otherwise-good batch is a coverage gap, not a provider fault;
+                        # per-ticker records polluted the circuit-breaker counters and
+                        # could keep a healthy source "red" (M7). One batch-level
+                        # success/empty is recorded after the loop.
                         continue
                     col = close[t].dropna()
                     if len(col) < 1:

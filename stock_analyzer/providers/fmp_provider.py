@@ -385,6 +385,25 @@ class FMPProvider(DataProvider):
                 info["targetMedianPrice"] = _pick(tgt, "targetMedian", "targetConsensus")
         except Exception:
             pass
+        # Forward P/E: FMP's TTM endpoints only give a TRAILING PE, so the 20-pt
+        # valuation leg in fundamentals.fundamental_score (keyed on forward_pe)
+        # would silently drop on the FMP path — the same name scoring differently
+        # by provider (cross-source composite drift). Derive a forward estimate
+        # from the trailing PE and the already-fetched earnings growth:
+        #   forwardPE ≈ trailingPE / (1 + earningsGrowth)
+        # Directionally correct (positive growth → forward PE below trailing);
+        # assumes the reported growth proxies forward. Only when both are present
+        # and the denominator is positive. See docs/reviews/2026-06-28-review.md (H4).
+        if info.get("forwardPE") is None:
+            try:
+                _tpe = info.get("trailingPE")
+                _g   = info.get("earningsGrowth")
+                if _tpe is not None and _g is not None:
+                    _tpe = float(_tpe); _denom = 1.0 + float(_g)
+                    if _tpe > 0 and _denom > 0:
+                        info["forwardPE"] = round(_tpe / _denom, 2)
+            except (TypeError, ValueError):
+                pass
         return info
 
     def _fetch_news(self, ticker: str, limit: int = 8) -> list:
