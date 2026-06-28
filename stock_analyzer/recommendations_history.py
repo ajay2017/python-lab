@@ -406,6 +406,96 @@ def by_composite_band(enriched: list[dict]) -> list[dict]:
     return out
 
 
+def distinct_missed(enriched: list[dict]) -> list[dict]:
+    """
+    Collapse MISSED recommendations to one row per distinct ticker — the honest
+    "names you surfaced but never acted on" view (the user's "which of the 241?").
+
+    A ticker counts as missed only if NONE of its surfacings in the window were
+    acted on (a name acted on later isn't a miss). The representative outcome is
+    taken from the EARLIEST priced + mature surfacing — the first time the App
+    flagged it, i.e. the full opportunity window. Younger-than-maturity surfacings
+    are ignored for the outcome but still counted toward n_surfaced.
+
+    `outcome_dollars` here is per-$1k NOTIONAL (compute_outcomes normalises missed
+    recs to $1000) — the honest cross-ticker magnitude, NOT a portfolio-level claim
+    (you cannot buy every surfaced name; capital + concentration caps + gates bind).
+
+    Returns rows sorted by alpha_pct desc (biggest missed winners first), each:
+        ticker, first_rec_date, n_surfaced, verdict, outcome_pct, alpha_pct,
+        outcome_dollars (per-$1k), outcome_label
+    Tickers with no priced + mature surfacing are skipped (can't grade).
+    """
+    by_tk: dict[str, list[dict]] = defaultdict(list)
+    for r in enriched:
+        by_tk[r["ticker"]].append(r)
+
+    rows: list[dict] = []
+    for tk, items in by_tk.items():
+        if any(r.get("acted_on") for r in items):
+            continue   # acted on at least once → not a missed name
+        gradable = [
+            r for r in items
+            if r.get("outcome_pct") is not None
+            and not r.get("outcome_maturing")
+            and r.get("rec_date") is not None
+        ]
+        if not gradable:
+            continue
+        rep = min(gradable, key=lambda r: r["rec_date"])
+        rows.append({
+            "ticker":          tk,
+            "first_rec_date":  rep["rec_date"],
+            "n_surfaced":      len(items),
+            "verdict":         rep.get("verdict") or "",
+            "outcome_pct":     round(rep["outcome_pct"], 2),
+            "alpha_pct":       rep.get("alpha_pct"),
+            "outcome_dollars": rep.get("outcome_dollars"),
+            "outcome_label":   rep.get("outcome_label"),
+        })
+
+    rows.sort(
+        key=lambda x: (x["alpha_pct"] if x["alpha_pct"] is not None else x["outcome_pct"]),
+        reverse=True,
+    )
+    return rows
+
+
+def missed_split(distinct_rows: list[dict]) -> dict:
+    """
+    Summarise distinct-missed names into 'missed winners' (rose — a process miss)
+    vs 'dodged losers' (fell — discretion paid off), with magnitudes. Split on
+    outcome_label (win/loss by ±0.5%); alpha is the regime-adjusted companion read.
+
+    All dollar figures are per-$1k notional (see distinct_missed) — selection
+    quality, never a portfolio-level "you would have gained X%" counterfactual.
+    """
+    winners = [r for r in distinct_rows if r.get("outcome_label") == "win"]
+    dodged  = [r for r in distinct_rows if r.get("outcome_label") == "loss"]
+    flats   = [r for r in distinct_rows if r.get("outcome_label") == "flat"]
+
+    def _avg(items, key):
+        vals = [it[key] for it in items if it.get(key) is not None]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    biggest_miss  = max(distinct_rows, key=lambda r: r["outcome_pct"]) if distinct_rows else None
+    biggest_dodge = min(distinct_rows, key=lambda r: r["outcome_pct"]) if distinct_rows else None
+
+    return {
+        "n_distinct":       len(distinct_rows),
+        "n_winners":        len(winners),
+        "n_dodged":         len(dodged),
+        "n_flat":           len(flats),
+        "avg_winner_pct":   _avg(winners, "outcome_pct"),
+        "avg_winner_alpha": _avg(winners, "alpha_pct"),
+        "avg_dodged_pct":   _avg(dodged, "outcome_pct"),
+        "avg_dodged_alpha": _avg(dodged, "alpha_pct"),
+        "avg_per_1k":       _avg(distinct_rows, "outcome_dollars"),
+        "biggest_miss":     biggest_miss,
+        "biggest_dodge":    biggest_dodge,
+    }
+
+
 def daily_volume(enriched: list[dict]) -> list[dict]:
     """
     For the recs-per-day chart: count of recs surfaced per rec_date, split

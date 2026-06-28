@@ -14584,6 +14584,8 @@ elif page == "📜 Recommendations History":
         by_verdict,
         by_composite_band,
         daily_volume,
+        distinct_missed,
+        missed_split,
     )
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
     import pandas as _rh_pd
@@ -14712,7 +14714,11 @@ elif page == "📜 Recommendations History":
     _rh_m1.metric(
         "Total recs",
         f"{_rh_stats['n_total']:,}",
-        help="Distinct picks surfaced in the selected range.",
+        help=(
+            "Recommendation *surfacings* in range — a name recurs each day it "
+            "qualifies, so this exceeds the distinct-ticker count. The 'Missed "
+            "Opportunity' section below collapses to distinct names."
+        ),
     )
     _rh_m2.metric(
         "Action rate",
@@ -14777,6 +14783,102 @@ elif page == "📜 Recommendations History":
             f"</div>",
             unsafe_allow_html=True,
         )
+
+    # ── Missed Opportunity — what you skipped and what it cost ───────────────
+    # Distinct names surfaced but NEVER acted on, graded from their FIRST surfacing.
+    # Honest framing: per-$1k notional + named outliers — never a fabricated
+    # portfolio-% counterfactual (you can't buy every surfaced name; capital,
+    # concentration caps and the gates all bind).
+    _rh_missed = distinct_missed(_rh_enriched)
+    if _rh_missed:
+        _rh_ms  = missed_split(_rh_missed)
+        _rh_bm  = _rh_ms.get("biggest_miss")
+        _rh_bd  = _rh_ms.get("biggest_dodge")
+        _rh_p1k = _rh_ms.get("avg_per_1k")
+
+        st.markdown("### 🎯 Missed Opportunity — names you surfaced but skipped")
+        st.markdown(
+            f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
+            f"padding:12px 16px;margin:6px 0;color:#cbd5e1;font-size:0.92em;line-height:1.65'>"
+            f"Of <b>{_rh_ms['n_distinct']}</b> distinct name(s) the App surfaced that you "
+            f"<b>never acted on</b> (graded from first surfacing): "
+            f"<span style='color:#86efac'><b>{_rh_ms['n_winners']}</b> rose</span> "
+            f"(missed winners) · <span style='color:#fca5a5'><b>{_rh_ms['n_dodged']}</b> fell</span> "
+            f"(dodged). "
+            + (f"Biggest miss: <b>{_rh_bm['ticker']}</b> "
+               f"<span style='color:#86efac'>{_rh_bm['outcome_pct']:+.1f}%</span>. "
+               if _rh_bm else "")
+            + (f"Biggest dodge: <b>{_rh_bd['ticker']}</b> "
+               f"<span style='color:#fca5a5'>{_rh_bd['outcome_pct']:+.1f}%</span>. "
+               if _rh_bd else "")
+            + "<br>"
+            + (f"Per <b>$1k</b> deployed, the average skipped name would have moved "
+               f"<b>{('+' if _rh_p1k >= 0 else '')}${_rh_p1k:,.0f}</b> — a read on your "
+               f"<i>selection</i> among surfaced names, <u>not</u> a claim you could have "
+               f"bought all {_rh_ms['n_distinct']} (capital, concentration caps and the "
+               f"gates bind)." if _rh_p1k is not None else
+               "Per-$1k magnitudes are still maturing.")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Ranked visual — top missed winners (green) + dodged losers (red) by outcome%.
+        import plotly.graph_objects as go
+        _rh_by_out = sorted(_rh_missed, key=lambda r: r["outcome_pct"], reverse=True)
+        _rh_top = _rh_by_out[:10]
+        _rh_bot = [r for r in _rh_by_out[-10:] if id(r) not in {id(x) for x in _rh_top}]
+        _rh_chart = sorted(_rh_top + _rh_bot, key=lambda r: r["outcome_pct"])  # asc → biggest on top
+        if _rh_chart:
+            _rh_xc = [r["outcome_pct"] for r in _rh_chart]
+            _rh_yc = [r["ticker"] for r in _rh_chart]
+            _rh_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _rh_xc]
+            _rh_hover = [
+                (f"{r['ticker']}: {r['outcome_pct']:+.1f}%"
+                 + (f" · α {r['alpha_pct']:+.1f}pp vs SPY" if r.get("alpha_pct") is not None else "")
+                 + f" · surfaced {r['n_surfaced']}×")
+                for r in _rh_chart
+            ]
+            _rh_fig = go.Figure(go.Bar(
+                x=_rh_xc, y=_rh_yc, orientation="h", marker_color=_rh_cc,
+                text=[f"{v:+.1f}%" for v in _rh_xc], textposition="outside",
+                hovertext=_rh_hover, hoverinfo="text",
+            ))
+            _rh_fig.update_layout(
+                height=max(220, 40 + 26 * len(_rh_chart)),
+                margin=dict(l=8, r=24, t=28, b=8),
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                title=dict(text="Skipped names — return since first surfaced", font=dict(size=13)),
+                xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                yaxis=dict(title=None),
+                showlegend=False,
+            )
+            st.plotly_chart(_rh_fig, use_container_width=True)
+            st.caption(
+                "Green = names that rose after the App surfaced them (process misses — "
+                "worth asking why you skipped); red = names that fell (your discretion "
+                "paid off). Hover for SPY-relative alpha. Shows up to the 10 biggest "
+                "each way; the full list is in the table below."
+            )
+
+        # Full distinct-missed table (sortable).
+        _rh_mt = _rh_pd.DataFrame([
+            {
+                "Ticker":        m["ticker"],
+                "First surfaced": m["first_rec_date"].isoformat() if m["first_rec_date"] else "—",
+                "Surfacings":    m["n_surfaced"],
+                "Verdict":       m["verdict"] or "—",
+                "Outcome":       f"{m['outcome_pct']:+.1f}%",
+                "α vs SPY":      f"{m['alpha_pct']:+.1f}pp" if m.get("alpha_pct") is not None else "—",
+                "Per $1k":       f"${m['outcome_dollars']:+,.0f}" if m.get("outcome_dollars") is not None else "—",
+            }
+            for m in _rh_missed
+        ])
+        with st.expander(f"📄 All {_rh_ms['n_distinct']} skipped names (table)", expanded=False):
+            st.dataframe(
+                _rh_mt, hide_index=True, use_container_width=True,
+                height=min(480, 60 + 35 * len(_rh_mt)),
+            )
 
     # ── Trends ──────────────────────────────────────────────────────────────
     with st.expander("📈 Trends — recs over time & action discipline", expanded=True):
