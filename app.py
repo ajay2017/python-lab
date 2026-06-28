@@ -16861,4 +16861,161 @@ elif page == "🧠 AI Insights":
                 st.markdown(_wd.get(_wd_col))
                 st.markdown("")
 
+    st.divider()
+
+    # ── Monthly Portfolio Intelligence (F-4) ──────────────────────────────────
+    st.subheader("🧭 Monthly Portfolio Intelligence")
+    st.markdown(
+        "A monthly retrospective on **how decisions were made** — is the engine "
+        "picking well (entry quality), and do you act on what it surfaces (signal "
+        "discipline)? It surfaces patterns; it never changes a gate."
+    )
+
+    from stock_analyzer import intelligence_report as _ir
+    from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
+
+    _mr_df = _ai_db.load_monthly_reports(limit=1)
+
+    if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
+                 help="Generate an intelligence report for the trailing ~4 weeks from recommendation history."):
+        with st.spinner("Assembling scorecard and calling AI..."):
+            _mr_end   = date.today()
+            _mr_start = _mr_end - timedelta(days=28)
+            _mr_recs  = _ai_db.load_recommendations(start_date=_mr_start, end_date=_mr_end)
+            if _mr_recs is None or _mr_recs.empty:
+                st.warning(
+                    "No recommendations recorded in the trailing 4 weeks yet. As Today's "
+                    "Brief surfaces picks day after day, this report will fill in."
+                )
+            else:
+                _mr_trades = st.session_state.get("trades_df", pd.DataFrame())
+
+                # Current prices for the rec tickers (marks open BUYs + missed-rec gains).
+                _mr_prices: dict = {}
+                _mr_tickers = sorted({
+                    str(t).strip().upper()
+                    for t in _mr_recs["ticker"].dropna().tolist() if str(t).strip()
+                })
+                if _mr_tickers:
+                    try:
+                        _mpx = fetch_live_prices(_mr_tickers)
+                        _mr_prices = {
+                            t: float(d.get("price", 0))
+                            for t, d in (_mpx or {}).items() if d and d.get("price")
+                        }
+                    except Exception:
+                        _mr_prices = {}
+
+                # SPY close-by-date for the regime/alpha benchmark.
+                _mr_spy_by_date: dict = {}
+                try:
+                    _mr_spy_hist = _cached_spy("6mo")
+                    if _mr_spy_hist is not None and not _mr_spy_hist.empty and "Close" in _mr_spy_hist.columns:
+                        for _sidx, _srow in _mr_spy_hist.iterrows():
+                            _sd = _sidx.date() if hasattr(_sidx, "date") else None
+                            try:
+                                _sc = float(_srow["Close"])
+                            except (TypeError, ValueError):
+                                _sc = None
+                            if _sd is not None and _sc and _sc > 0:
+                                _mr_spy_by_date[_sd] = _sc
+                except Exception:
+                    _mr_spy_by_date = {}
+
+                # Recent weekly debriefs for the trajectory line.
+                _mr_weekly: list = []
+                try:
+                    _mr_wdf = _ai_db.load_weekly_debriefs(limit=5)
+                    if _mr_wdf is not None and not _mr_wdf.empty:
+                        _mr_weekly = _mr_wdf.to_dict("records")
+                except Exception:
+                    _mr_weekly = []
+
+                _mr_pkg = _ir.build_report_package(
+                    period_start=_mr_start, period_end=_mr_end,
+                    recs_df=_mr_recs, trades_df=_mr_trades,
+                    current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
+                    weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
+                )
+                _mr_result = _ir.generate_report(_mr_pkg, _ai_api_key)
+                if _mr_result is None:
+                    st.error("AI report failed — LLM offline, or no recommendations to analyse.")
+                else:
+                    if not _mr_pkg.get("q0_ready"):
+                        st.caption(
+                            f"Note: only {_mr_pkg['n_graded']} matured graded entr(ies) — "
+                            f"entry-quality grading firms up at {_MR_MIN_GRADED}+."
+                        )
+                    _mr_saved = _ai_db.save_monthly_report(_mr_result)
+                    if _mr_saved:
+                        st.success("Monthly report generated and saved.")
+                        st.rerun()
+                    else:
+                        st.warning("Generated but save failed (DB offline) — showing inline:")
+                        for _lbl, _col in [
+                            ("Entry quality", "section_entry_quality"),
+                            ("Signal discipline", "section_signal_discipline"),
+                            ("Pattern & focus", "section_patterns"),
+                        ]:
+                            if _mr_result.get(_col):
+                                st.markdown(f"**{_lbl}**")
+                                st.markdown(_mr_result[_col])
+
+    # Display most recent report
+    if _mr_df.empty:
+        st.info(
+            "No monthly reports yet. Click **Generate Monthly Report** for an on-demand "
+            "run, or wait for the first-Sunday-of-month cron (needs the `monthly_reports` "
+            "table — run the DDL in Supabase to activate)."
+        )
+    else:
+        _mr = _mr_df.iloc[0]
+        _mr_alpha  = _mr.get("engine_alpha_pct")
+        _mr_acted  = _mr.get("acted_count")
+        _mr_missed = _mr.get("missed_count")
+
+        st.caption(
+            f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
+            f"generated {str(_mr.get('generated_at', ''))[:10]}"
+            + (" · ✉ emailed" if _mr.get("email_sent") else "")
+        )
+
+        def _mr_colour(v):
+            try:
+                return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
+            except (TypeError, ValueError):
+                return "#94a3b8"
+
+        _mrc1, _mrc2, _mrc3 = st.columns(3)
+        with _mrc1:
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
+                f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
+                f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
+                unsafe_allow_html=True,
+            )
+        with _mrc2:
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on</div>"
+                f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted if _mr_acted is not None else '—'}</div></div>",
+                unsafe_allow_html=True,
+            )
+        with _mrc3:
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Missed</div>"
+                f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed if _mr_missed is not None else '—'}</div></div>",
+                unsafe_allow_html=True,
+            )
+        st.markdown("")
+
+        for _mr_label, _mr_col in [
+            ("Entry quality", "section_entry_quality"),
+            ("Signal discipline", "section_signal_discipline"),
+            ("Pattern & focus", "section_patterns"),
+        ]:
+            if _mr.get(_mr_col):
+                st.markdown(f"**{_mr_label}**")
+                st.markdown(_mr.get(_mr_col))
+                st.markdown("")
+
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

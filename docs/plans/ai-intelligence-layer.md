@@ -1,6 +1,6 @@
 # Plan: AI Intelligence Layer — Thesis, Earnings Transcripts, Portfolio Debrief, Intelligence Report
 
-**Status:** F-1 **shipped** 2026-06-27 · F-3 **shipped** 2026-06-27 · F-2 deferred (pending transcript API budget) · F-4 **proposed** 2026-06-27  
+**Status:** F-1 **shipped** 2026-06-27 · F-3 **shipped** 2026-06-27 · F-2 deferred (pending transcript API budget) · F-4 **approved 2026-06-27 — build now (Q0+Q1)**  
 **Date:** 2026-06-27  
 **Scope:** Four new capabilities (build sequentially in order listed)  
 **Philosophy:** LLM narrates and synthesizes; rule-based engine continues to decide and gate. No LLM output issues a buy/sell recommendation — that remains the composite score + gate system.
@@ -603,11 +603,13 @@ To guard against scope creep as build progresses:
 - [x] Multi-week pattern analysis: **deferred — week-scoped only in v1** (F-4 takes up the multi-week behavioural view)
 - [x] Prerequisite: **`daily_snapshots` activated; build-time guard is ≥5 trading days of snapshots**
 
-**F-4 — Proposed 2026-06-27. Decisions pending:**
-- [ ] v1 = **Q0 (entry quality) + Q1 (signal discipline)**; Q2 (thesis discipline) + Q3 (patterns) deferred until data matures?
-- [ ] Maturity floors: `N` (matured graded entries for Q0) and `M` (thesis reviews for Q2)? (recommended `N ≥ 5`, `M ≥ 3`)
-- [ ] Cadence: **first Sunday of month**, reusing the existing Sunday cron lane with a first-Sunday gate?
-- [ ] **Boundary locked:** report surfaces gate-quality patterns but **never tunes a threshold** (CLAUDE.md hard rule #1)?
+**F-4 — Approved 2026-06-27. Decisions locked:**
+- [x] v1 = **Q0 (entry quality) + Q1 (signal discipline)**; Q2 (thesis discipline) + Q3 (patterns) deferred until data matures (also what current data supports)
+- [x] Maturity floors: **`N = 5`** matured graded entries (Q0), **`M = 3`** thesis reviews (Q2) — measurement windows, not gates
+- [x] Cadence: **first Sunday of month**, reusing the existing Sunday cron lane with a first-Sunday gate
+- [x] **Build now with maturity guards on** (validate plumbing early, same as F-3); shows data-accumulation messages until ~4 weeks of recs/debrief history accrue
+- [x] **Boundary locked:** report surfaces gate-quality patterns but **never tunes a threshold** (CLAUDE.md hard rule #1)
+- [x] Model: **Sonnet** (consistent with F-1/F-3 batch jobs)
 
 **All features:**
 - [x] LLM provider: **Claude (Anthropic)**. Model: **Sonnet** (cost-efficient for weekly/monthly batch jobs; Opus reserved for review/planning tasks per existing cost-routing policy)

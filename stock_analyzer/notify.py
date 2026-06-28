@@ -367,6 +367,115 @@ def render_debrief_email(debrief: dict) -> str:
     )
 
 
+def render_intelligence_email(report: dict) -> str:
+    """Render the monthly Portfolio Intelligence Report as a professional HTML
+    email (light-mode-first; same template family as render_debrief_email)."""
+    import re
+
+    period_start = str(report.get("period_start", "—"))[:10]
+    period_end   = str(report.get("period_end", "—"))[:10]
+    generated_at = str(report.get("generated_at", ""))[:10]
+    engine_alpha = report.get("engine_alpha_pct")
+    acted        = report.get("acted_count")
+    missed       = report.get("missed_count")
+
+    def _md_inline(text: str) -> str:
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
+        return text
+
+    # Headline metric strip — engine alpha (Q0) + acted/missed (Q1)
+    def _alpha_html(v) -> str:
+        if v is None:
+            return "<span style='color:#6b7280'>N/A</span>"
+        colour = "#16a34a" if v >= 0 else "#dc2626"
+        return f"<span style='color:{colour};font-weight:700'>{v:+.1f}%</span>"
+
+    def _metric_cell(label: str, inner: str, last: bool = False) -> str:
+        border = "" if last else "border-right:1px solid #e5e7eb"
+        return (
+            f"<td style='padding:14px 20px;text-align:center;{border}'>"
+            f"<div style='font-size:0.72em;color:#6b7280;text-transform:uppercase;"
+            f"letter-spacing:0.05em;font-weight:600;margin-bottom:4px'>{label}</div>"
+            f"<div style='font-size:1.3em;font-weight:700'>{inner}</div></td>"
+        )
+
+    perf_block = (
+        "<table width='100%' style='border-collapse:collapse;background:#f8fafc;"
+        "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0;overflow:hidden'><tr>"
+        + _metric_cell("Engine alpha (acted)", _alpha_html(engine_alpha))
+        + _metric_cell("Acted on", f"{acted if acted is not None else '—'}")
+        + _metric_cell("Missed", f"{missed if missed is not None else '—'}", last=True)
+        + "</tr></table>"
+    )
+
+    _SECTION_COLOURS = {
+        "Entry quality":     "#3b82f6",   # blue — the engine's half
+        "Signal discipline": "#8b5cf6",   # purple — the user's half
+        "Pattern & focus":   "#f59e0b",   # amber
+    }
+
+    def _section(title: str, content: str) -> str:
+        if not content:
+            return ""
+        accent = _SECTION_COLOURS.get(title, "#6b7280")
+        parts: list[str] = []
+        in_list = False
+        for ln in content.split("\n"):
+            stripped = ln.strip()
+            if stripped.startswith(("• ", "- ", "* ")):
+                if not in_list:
+                    parts.append("<ul style='margin:8px 0;padding-left:20px;color:#374151'>")
+                    in_list = True
+                parts.append(f"<li style='margin:6px 0;line-height:1.55;color:#374151'>{_md_inline(stripped[2:])}</li>")
+            else:
+                if in_list:
+                    parts.append("</ul>")
+                    in_list = False
+                if stripped:
+                    parts.append(f"<p style='margin:6px 0;color:#374151;line-height:1.6'>{_md_inline(stripped)}</p>")
+        if in_list:
+            parts.append("</ul>")
+        body = "\n".join(parts)
+        return (
+            f"<div style='margin:20px 0;background:#ffffff;border-radius:8px;"
+            f"border:1px solid #e5e7eb;border-left:4px solid {accent};overflow:hidden'>"
+            f"<div style='padding:10px 16px 8px;background:#f9fafb;border-bottom:1px solid #e5e7eb'>"
+            f"<span style='font-weight:700;font-size:0.85em;color:{accent};"
+            f"text-transform:uppercase;letter-spacing:0.06em'>{title}</span></div>"
+            f"<div style='padding:14px 16px;font-size:0.9em'>{body}</div></div>"
+        )
+
+    sections_html = (
+        _section("Entry quality",     report.get("section_entry_quality", ""))
+        + _section("Signal discipline", report.get("section_signal_discipline", ""))
+        + _section("Pattern & focus",   report.get("section_patterns", ""))
+    )
+
+    return (
+        "<!DOCTYPE html><html lang='en'>"
+        "<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width'></head>"
+        "<body style='background:#f3f4f6;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"
+        "\"Segoe UI\",Roboto,sans-serif;margin:0;padding:32px 16px'>"
+        "<div style='max-width:600px;margin:0 auto;background:#ffffff;"
+        "border-radius:12px;box-shadow:0 1px 8px rgba(0,0,0,0.08);overflow:hidden'>"
+        # Header band
+        "<div style='background:linear-gradient(135deg,#1e3a5f 0%,#1e40af 100%);padding:28px 28px 22px'>"
+        "<div style='font-size:1.35em;font-weight:800;color:#ffffff;letter-spacing:-0.01em'>"
+        "DRISHTA Monthly Intelligence</div>"
+        f"<div style='color:#93c5fd;font-size:0.82em;margin-top:4px'>"
+        f"{period_start} → {period_end} &nbsp;·&nbsp; Generated {generated_at}</div></div>"
+        # Body
+        f"<div style='padding:24px 24px 20px'>{perf_block}{sections_html}</div>"
+        # Footer
+        "<div style='background:#f9fafb;border-top:1px solid #e5e7eb;padding:12px 24px;"
+        "font-size:0.75em;color:#9ca3af;text-align:center'>"
+        "DRISHTA &nbsp;·&nbsp; AI-generated retrospective &nbsp;·&nbsp; "
+        "Surfaces patterns; never changes a gate &nbsp;·&nbsp; Not financial advice</div>"
+        "</div></body></html>"
+    )
+
+
 def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html: str,
                       timeout: int = 20) -> tuple[bool, str]:
     """POST one email via Resend. Returns (ok, detail). `detail` carries the HTTP

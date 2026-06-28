@@ -850,6 +850,55 @@ def save_weekly_debrief(record: dict) -> bool:
         return False
 
 
+# ── Monthly Intelligence Reports (AI Insights — F-4) ─────────────────────────
+
+_MONTHLY_REPORT_COLS = [
+    "id", "period_start", "period_end", "generated_at", "engine_alpha_pct",
+    "acted_count", "missed_count", "section_entry_quality",
+    "section_signal_discipline", "section_thesis", "section_patterns",
+    "email_sent", "email_sent_at",
+]
+
+
+def load_monthly_reports(limit: int = 3) -> "pd.DataFrame":
+    """Load the most recent monthly intelligence reports, newest first. Empty
+    DataFrame when the table does not exist yet (inert until DDL is applied)."""
+    import pandas as pd
+    empty = pd.DataFrame(columns=_MONTHLY_REPORT_COLS)
+    if not has_db():
+        return empty
+    try:
+        rows = (
+            _client()
+            .table("monthly_reports")
+            .select("*")
+            .order("period_end", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return empty
+
+
+def save_monthly_report(record: dict) -> bool:
+    """Upsert a monthly intelligence report (unique on period_end)."""
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("monthly_reports").upsert(
+            record, on_conflict="period_end"
+        ).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return False
+
+
 def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
     """
     Replay every trade chronologically to derive the truthful holdings table

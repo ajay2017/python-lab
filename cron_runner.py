@@ -482,13 +482,128 @@ def _run_debrief(now_et, force: bool) -> int:
     return 0
 
 
+def _run_monthly_report(now_et, force: bool) -> int:
+    """First Sunday of the month: generate the monthly Portfolio Intelligence
+    Report (F-4) via LLM and email it. Runs after the weekly debrief in the same
+    Sunday cron lane. v1 grades engine entry quality (Q0) + signal discipline (Q1).
+    Inert without ANTHROPIC_API_KEY."""
+    import datetime as _dt
+
+    # First-Sunday-of-month gate (Sunday AND day-of-month ≤ 7). force bypasses.
+    if not force and not (now_et.weekday() == 6 and now_et.day <= 7):
+        _log("monthly: not the first Sunday of the month — skip.")
+        return 0
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        _log("monthly: INERT — no ANTHROPIC_API_KEY set.")
+        return 0
+
+    from stock_analyzer import intelligence_report as _ir
+    from stock_analyzer import notify as _notify
+    from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED
+
+    period_end   = now_et.date()
+    period_start = period_end - _dt.timedelta(days=28)   # trailing ~4 weeks
+
+    recs_df   = db.load_recommendations(start_date=period_start, end_date=period_end)
+    trades_df = db.load_trades()
+
+    if recs_df is None or recs_df.empty:
+        _log(f"monthly: no recommendations in {period_start}→{period_end} — nothing to report yet.")
+        return 0
+
+    # Current prices for the rec tickers (marks open BUYs + missed-rec would-have-gained).
+    prices: dict = {}
+    try:
+        from stock_analyzer.data import fetch_live_prices
+        tickers = sorted({
+            str(t).strip().upper() for t in recs_df["ticker"].dropna().tolist() if str(t).strip()
+        })
+        if tickers:
+            px = fetch_live_prices(tickers) or {}
+            prices = {t: float(d.get("price", 0)) for t, d in px.items() if d and d.get("price")}
+    except Exception as e:
+        _log(f"monthly: live-price fetch failed ({str(e)[:80]}) — graded outcomes degrade gracefully.")
+
+    # SPY close-by-date series for the regime/alpha benchmark.
+    spy_by_date: dict = {}
+    try:
+        import yfinance as yf
+        spy = yf.download("SPY", start=str(period_start - _dt.timedelta(days=5)),
+                          end=str(period_end + _dt.timedelta(days=1)),
+                          progress=False, auto_adjust=True)
+        if spy is not None and not spy.empty and "Close" in spy.columns:
+            for idx, row in spy.iterrows():
+                d = idx.date() if hasattr(idx, "date") else None
+                try:
+                    c = float(row["Close"])
+                except (TypeError, ValueError):
+                    c = None
+                if d is not None and c and c > 0:
+                    spy_by_date[d] = c
+    except Exception:
+        pass
+
+    # Recent weekly debriefs for the trajectory line.
+    weekly_rows: list = []
+    try:
+        wdf = db.load_weekly_debriefs(limit=5)
+        if wdf is not None and not wdf.empty:
+            weekly_rows = wdf.to_dict("records")
+    except Exception:
+        pass
+
+    package = _ir.build_report_package(
+        period_start=period_start, period_end=period_end,
+        recs_df=recs_df, trades_df=trades_df,
+        current_prices=prices, spy_close_by_date=spy_by_date,
+        weekly_rows=weekly_rows, min_graded=MONTHLY_REPORT_MIN_GRADED,
+    )
+    _log(f"monthly: {package['n_total']} rec(s) · acted={package['n_acted']} · "
+         f"graded={package['n_graded']} · q0_ready={package['q0_ready']} · "
+         f"engine_alpha={package.get('engine_alpha_pct')}")
+
+    result = _ir.generate_report(package, api_key)
+    if result is None:
+        _log("monthly: LLM call failed or no data — skip.")
+        return 0
+
+    saved = db.save_monthly_report(result)
+    _log(f"monthly: saved={saved} · period={result['period_start']}→{result['period_end']} · "
+         f"engine_alpha={result.get('engine_alpha_pct')}")
+
+    # Email
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    email_to   = os.environ.get("ALERT_EMAIL_TO", "").strip()
+    email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
+    if resend_key and email_to and email_from:
+        html    = _notify.render_intelligence_email(result)
+        subject = f"DRISHTA Monthly Intelligence — {result['period_end']}"
+        ok, detail = _notify.send_email_resend(
+            api_key=resend_key, sender=email_from, to=email_to, subject=subject, html=html,
+        )
+        _log(f"monthly: email {'sent' if ok else 'FAILED'}" + (f" — {detail}" if detail else ""))
+        if ok:
+            try:
+                db._client().table("monthly_reports").update(
+                    {"email_sent": True, "email_sent_at": _dt.datetime.utcnow().isoformat()}
+                ).eq("period_end", str(result["period_end"])).execute()
+            except Exception:
+                pass
+    else:
+        _log("monthly: no Resend credentials — report saved but not emailed.")
+
+    return 0
+
+
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
-    # Derive mode from ET hour; named overrides (scan, thesis, debrief) bypass time-inference.
+    # Derive mode from ET hour; named overrides (scan, thesis, debrief, monthly) bypass time-inference.
     _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
-    mode = _mode_override if _mode_override in ("scan", "thesis", "debrief") else (
+    mode = _mode_override if _mode_override in ("scan", "thesis", "debrief", "monthly") else (
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
@@ -498,10 +613,14 @@ def main() -> int:
     if mode == "scan":
         return _run_scan(now_et, force)
     if mode == "thesis":
+        # Sunday lane: thesis review → weekly debrief → (first Sunday only) monthly report.
         _run_thesis(now_et, force)
-        return _run_debrief(now_et, force)
+        _run_debrief(now_et, force)
+        return _run_monthly_report(now_et, force)
     if mode == "debrief":
         return _run_debrief(now_et, force)
+    if mode == "monthly":
+        return _run_monthly_report(now_et, force)
     if mode == "eod":
         return _run_eod(now_et, force)
     return _run_premarket(now_et, force)

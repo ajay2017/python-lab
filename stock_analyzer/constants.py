@@ -521,3 +521,12 @@ PROVIDER_RL_COOLDOWN_SEC = 120
 # scorecard — NOT a decision gate; it never affects what the engine recommends,
 # only how long we wait before grading. Safe to tune from observation.
 REC_SCORE_MIN_DAYS = 5
+
+# Minimum number of MATURED graded entries before the Monthly Intelligence Report
+# (F-4 / F-153) will narrate "entry quality" (question 0 — did the engine pick
+# well?). Below this the entry-quality section is suppressed with a "not enough
+# matured entries yet" note rather than narrating a trend off 1–2 data points.
+# Like REC_SCORE_MIN_DAYS this is a MEASUREMENT floor for the retrospective report,
+# NOT a decision gate — it never affects what the engine recommends, only whether
+# the report has enough graded history to comment. Safe to tune from observation.
+MONTHLY_REPORT_MIN_GRADED = 5
