@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -290,6 +292,7 @@ def generate_debrief(
             max_tokens=max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text     = response.content[0].text if response.content else ""
         sections = _parse_response(text)

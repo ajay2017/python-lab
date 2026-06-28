@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
 
@@ -374,6 +376,7 @@ def generate_report(
             max_tokens=max_tokens,
             system=_system_prompt(),
             messages=[{"role": "user", "content": prompt}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text     = response.content[0].text if response.content else ""
         sections = _parse_response(text)

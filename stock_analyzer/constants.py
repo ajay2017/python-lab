@@ -512,6 +512,15 @@ REFRESH_COOLDOWN_SEC = 60
 # observation; NOT an investment-decision threshold.
 PROVIDER_RL_COOLDOWN_SEC = 120
 
+# ── Advisory-AI request timeout (operational infra knob, NOT an investment
+# threshold) ─────────────────────────────────────────────────────────────────
+# Per-request wall-clock cap (seconds) on each Anthropic LLM call in the AI
+# Intelligence layer (thesis review/authoring, weekly debrief, monthly report).
+# Without it the SDK default (~10 min) can tie up the headless Sunday cron, which
+# makes one call per open position. Advisory-only modules — a timeout just yields
+# the offline/None fallback. Safe to tune from observation.
+LLM_REQUEST_TIMEOUT_SEC = 30
+
 # ── Recommendations-history scorecard ────────────────────────────────────────
 # Minimum age (calendar days) before a surfaced rec's OUTCOME is scored on the
 # Recommendations History page. A rec measured the day after it surfaces is just

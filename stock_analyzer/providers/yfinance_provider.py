@@ -70,6 +70,12 @@ class YFinanceProvider(DataProvider):
         def _fetch():
             df = yf.Ticker(ticker).history(period=period)
             df.index = pd.to_datetime(df.index)
+            # Strip NaN-Close bars at the boundary so every consumer of this frame
+            # sees the same invariant as the FMP path (fmp_provider.price_history)
+            # and the indicator layer — a NaN Close is truthy and has slipped past
+            # max()/.iloc[-1]/$-format guards on the live path before.
+            if "Close" in df.columns:
+                df = df[df["Close"].notna()]
             return df
         return _retry(_fetch)
 
@@ -80,6 +86,8 @@ class YFinanceProvider(DataProvider):
             t = yf.Ticker(ticker)
             hist = t.history(period=period)
             hist.index = pd.to_datetime(hist.index)
+            if "Close" in hist.columns:        # same NaN-Close boundary strip as price_history
+                hist = hist[hist["Close"].notna()]
             info = {}
             try:
                 info = t.info or {}

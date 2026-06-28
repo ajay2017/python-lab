@@ -171,8 +171,14 @@ def _run_eod(now_et, force: bool) -> int:
         else:
             subject, html = render_pullback_email(pb, payload.get("built_at", today_str))
             sent = _send_email("pullback", subject, html)
-            if db.save_alert_state(today_str, "pullback", _EOD_ROW):
+            # Save dedup state ONLY on a real send — so a transient Resend failure
+            # (key present, send errored) is retried by the later DST slot rather
+            # than silently suppressed for the day (matches the premarket/buy-lane
+            # contract above). Inert/no-key also won't save → harmless.
+            if sent and db.save_alert_state(today_str, "pullback", _EOD_ROW):
                 _log(f"state saved (row={_EOD_ROW}, date={today_str}).")
+            elif not sent:
+                _log("pullback email not sent (inert/failed) — state NOT saved so later slot can retry.")
     _log(f"eod done · snapshot={bool(rows)} · pullback_sent={sent}")
     return 0
 
@@ -603,10 +609,20 @@ def main() -> int:
     if mode == "scan":
         return _run_scan(now_et, force)
     if mode == "thesis":
-        # Sunday lane: thesis review → weekly debrief → (first Sunday only) monthly report.
-        _run_thesis(now_et, force)
-        _run_debrief(now_et, force)
-        return _run_monthly_report(now_et, force)
+        # Sunday lane: thesis review → weekly debrief → (first Sunday only) monthly
+        # report. Isolate each lane so one's uncaught exception can't take down the
+        # others (the monthly report, last in line, is the most valuable of the three).
+        # A non-zero aggregate exit lets Actions mark the run failed → feeds the
+        # failure notification (dead-man's-switch).
+        rc = 0
+        for _job, _fn in (("thesis", _run_thesis), ("debrief", _run_debrief),
+                          ("monthly", _run_monthly_report)):
+            try:
+                _fn(now_et, force)
+            except Exception as exc:
+                _log(f"{_job}: UNCAUGHT — {str(exc)[:160]}")
+                rc = 1
+        return rc
     if mode == "debrief":
         return _run_debrief(now_et, force)
     if mode == "monthly":

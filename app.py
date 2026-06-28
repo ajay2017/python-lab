@@ -4964,7 +4964,7 @@ if page == "🏠 Home":
                             _parts.append(
                                 f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
                                 f"📒 <b>Your entry thesis</b>{_date_tag}: "
-                                f"<span style='color:#e7e5e4;font-style:italic'>“{_t_clip}”</span></div>"
+                                f"<span style='color:#e7e5e4;font-style:italic'>“{_html.escape(str(_t_clip))}”</span></div>"
                             )
                         for _ln in _jctx.get("lessons", []):
                             _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
@@ -5545,7 +5545,7 @@ if page == "🏠 Home":
                         f"{_rpnl_str}</span></div>"
                         f"<div style='margin-top:3px'>{_comp_chip}</div>"
                         + (f"<div style='color:#cbd5e1;font-size:0.82em;margin-top:3px;font-style:italic'>"
-                           f"{t['notes']}</div>" if t.get('notes') else "")
+                           f"{_html.escape(str(t['notes']))}</div>" if t.get('notes') else "")
                         + "</div>",
                         unsafe_allow_html=True,
                     )
@@ -5811,7 +5811,7 @@ if page == "🏠 Home":
 
         # Per-position drill-down
         st.subheader("Position Drill-Down")
-        sel = st.selectbox("Select position to drill down", port_df["Ticker"].tolist())
+        sel = st.selectbox("Select position to drill down", port_df["Ticker"].tolist(), key="_home_drilldown_pick")
         if sel and sel in held_data:
             r = held_data[sel]
             price = r["current_price"]
@@ -9378,6 +9378,8 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                 _prov_cfg   = _AI_PROVIDERS[_sel_provider]
                 _model_opts = _prov_cfg["models"]
                 with _bp2:
+                    if st.session_state.get("_brief_model") not in _model_opts:
+                        st.session_state.pop("_brief_model", None)
                     _sel_model = st.selectbox(
                         "Model",
                         list(_model_opts.keys()),

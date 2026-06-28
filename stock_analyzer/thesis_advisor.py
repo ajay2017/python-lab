@@ -22,6 +22,8 @@ import hashlib
 import json
 from datetime import date, datetime, timezone
 
+from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -183,6 +185,7 @@ def review_thesis(
             max_tokens=max_tokens,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text   = response.content[0].text if response.content else ""
         parsed = _parse_response(text)
@@ -407,6 +410,7 @@ def draft_thesis(
             max_tokens=max_tokens,
             system=_DRAFT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text = response.content[0].text.strip() if response.content else ""
         if not text:
