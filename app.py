@@ -16740,7 +16740,7 @@ When a name looks strong but isn't recommended, one of these gates fired — and
 - **Imminent macro event** — a HIGH-impact release (jobs, CPI, Fed) is within a few days and hits that sector; opening into a known binary catalyst is the anti-pattern this blocks.
 - **Composite contradicts momentum** — momentum is hot but the full composite is below the Buy threshold; skip until it confirms.
 - **Market tape raised the bar** — on a flat day the bar for a *new* entry rises from 65 to **78** (and the cap drops to 1 pick); on a down day new entries are deferred entirely. A good-but-not-great name (composite 67–77) clears at a bull open and gets held back later the same day if the tape goes flat — see *"How stocks are scored"* above.
-- **Recently added (cooldown)** — you already added to this winner in the last ~2 weeks; the app waits for the new shares to settle before suggesting more (anti-churn).
+- **Recently added (cooldown)** — you already added to this winner in the last ~10 days; the app waits for the new shares to settle before suggesting more (anti-churn).
 """
         )
 
