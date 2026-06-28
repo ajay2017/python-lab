@@ -295,6 +295,10 @@ def summary_stats(enriched: list[dict]) -> dict:
     )
     avg_acted_alpha  = _mean(acted_priced,  "alpha_pct")
     avg_missed_alpha = _mean(missed_priced, "alpha_pct")
+    # Combined alpha across ALL graded (mature + priced) recs — acted or not.
+    # The "did this band/verdict beat SPY?" read, regardless of whether the user
+    # acted. Used by the AI Insights entry-quality-by-band bar (by_composite_band).
+    avg_alpha = _mean(priced, "alpha_pct")
 
     best  = max(priced, key=lambda r: r["outcome_pct"]) if priced else None
     worst = min(priced, key=lambda r: r["outcome_pct"]) if priced else None
@@ -321,6 +325,7 @@ def summary_stats(enriched: list[dict]) -> dict:
         "missed_alpha":     missed_alpha,
         "avg_acted_alpha":  avg_acted_alpha,
         "avg_missed_alpha": avg_missed_alpha,
+        "avg_alpha":        avg_alpha,
         "best":  _bw(best)  if best  else None,
         "worst": _bw(worst) if worst else None,
     }

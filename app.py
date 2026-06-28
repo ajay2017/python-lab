@@ -1159,6 +1159,54 @@ def _cached_vix(period: str = "1mo"):
         return None
 
 
+# ── Signal-flow Sankey (shared) ──────────────────────────────────────────────
+# Builds the New-Positions → acted/missed → win/loss/flat Sankey figure from a
+# recommendations_history.signal_flow() dict. Shared by the Recommendations
+# History page and the AI Insights monthly report so the two can never drift.
+# Returns a go.Figure, or None when there's nothing to draw.
+def _signal_flow_sankey(flow: dict, title: str):
+    _labels = [
+        "New Positions Surfaced",
+        "Acted",        "Not acted",
+        "Win (acted)",  "Loss (acted)",  "Flat / Open (acted)",
+        "Rose (missed)", "Fell — dodged", "Flat / Open (missed)",
+    ]
+    _ncolor = [
+        "#60a5fa",
+        "#34d399", "#94a3b8",
+        "#22c55e", "#ef4444", "#64748b",
+        "#4ade80", "#f87171", "#475569",
+    ]
+    _src = [0, 0, 1, 1, 1, 2, 2, 2]
+    _tgt = [1, 2, 3, 4, 5, 6, 7, 8]
+    _val = [
+        flow["n_acted"],    flow["n_missed"],
+        flow["acted_win"],  flow["acted_loss"],  flow["acted_flat"],
+        flow["missed_win"], flow["missed_loss"], flow["missed_flat"],
+    ]
+    _lc = [
+        "rgba(99,179,237,0.45)",  "rgba(148,163,184,0.3)",
+        "rgba(134,239,172,0.45)", "rgba(252,165,165,0.45)", "rgba(100,116,139,0.3)",
+        "rgba(134,239,172,0.3)",  "rgba(248,113,113,0.3)",  "rgba(71,85,105,0.2)",
+    ]
+    _pairs = [(s, t, v, c) for s, t, v, c in zip(_src, _tgt, _val, _lc) if v > 0]
+    if not _pairs:
+        return None
+    _s, _t, _v, _c = zip(*_pairs)
+    _fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        node=dict(label=_labels, color=_ncolor, pad=22, thickness=18,
+                  line=dict(color="rgba(255,255,255,0.08)", width=0.5)),
+        link=dict(source=list(_s), target=list(_t), value=list(_v), color=list(_c)),
+    ))
+    _fig.update_layout(
+        height=360, margin=dict(l=0, r=0, t=36, b=8), template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)", font=dict(size=11, color="#cbd5e1"),
+        title=dict(text=title, font=dict(size=13), x=0),
+    )
+    return _fig
+
+
 # ── Price cross-check (held positions) — periodic integrity guardrail ────────
 # Compares the live-price primary (Finnhub) against an independent source
 # (yfinance) for held tickers. 5-min TTL: this is a periodic data-integrity
@@ -14928,62 +14976,11 @@ elif page == "📜 Recommendations History":
     _rh_flow = signal_flow(_rh_enriched_all, rec_types=("new_pick",))
 
     if _rh_flow["n_total"] > 0:
-        import plotly.graph_objects as _rh_go
-        _rh_sk_labels = [
-            "New Positions Surfaced",
-            "Acted",        "Not acted",
-            "Win (acted)",  "Loss (acted)",  "Flat / Open (acted)",
-            "Rose (missed)", "Fell — dodged", "Flat / Open (missed)",
-        ]
-        _rh_sk_ncolor = [
-            "#60a5fa",
-            "#34d399", "#94a3b8",
-            "#22c55e", "#ef4444", "#64748b",
-            "#4ade80", "#f87171", "#475569",
-        ]
-        _rh_sk_src = [0, 0, 1, 1, 1, 2, 2, 2]
-        _rh_sk_tgt = [1, 2, 3, 4, 5, 6, 7, 8]
-        _rh_sk_val = [
-            _rh_flow["n_acted"],     _rh_flow["n_missed"],
-            _rh_flow["acted_win"],   _rh_flow["acted_loss"],  _rh_flow["acted_flat"],
-            _rh_flow["missed_win"],  _rh_flow["missed_loss"], _rh_flow["missed_flat"],
-        ]
-        _rh_sk_lc  = [
-            "rgba(99,179,237,0.45)",  "rgba(148,163,184,0.3)",
-            "rgba(134,239,172,0.45)", "rgba(252,165,165,0.45)", "rgba(100,116,139,0.3)",
-            "rgba(134,239,172,0.3)",  "rgba(248,113,113,0.3)",  "rgba(71,85,105,0.2)",
-        ]
-        _rh_sk_pairs = [
-            (s, t, v, c)
-            for s, t, v, c in zip(_rh_sk_src, _rh_sk_tgt, _rh_sk_val, _rh_sk_lc)
-            if v > 0
-        ]
-        if _rh_sk_pairs:
-            _rh_s, _rh_t, _rh_v, _rh_c = zip(*_rh_sk_pairs)
-            _rh_sk_fig = _rh_go.Figure(_rh_go.Sankey(
-                arrangement="snap",
-                node=dict(
-                    label=_rh_sk_labels,
-                    color=_rh_sk_ncolor,
-                    pad=22, thickness=18,
-                    line=dict(color="rgba(255,255,255,0.08)", width=0.5),
-                ),
-                link=dict(
-                    source=list(_rh_s), target=list(_rh_t),
-                    value=list(_rh_v),  color=list(_rh_c),
-                ),
-            ))
-            _rh_sk_fig.update_layout(
-                height=360,
-                margin=dict(l=0, r=0, t=36, b=8),
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(size=11, color="#cbd5e1"),
-                title=dict(
-                    text="Signal flow — New Positions to Initiate → acted / missed → outcome",
-                    font=dict(size=13), x=0,
-                ),
-            )
+        _rh_sk_fig = _signal_flow_sankey(
+            _rh_flow,
+            "Signal flow — New Positions to Initiate → acted / missed → outcome",
+        )
+        if _rh_sk_fig is not None:
             st.plotly_chart(_rh_sk_fig, use_container_width=True)
             st.caption(
                 f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
@@ -17055,7 +17052,7 @@ elif page == "🧠 AI Insights":
 
     from stock_analyzer import debrief_advisor as _dba
 
-    _wd_df = _ai_db.load_weekly_debriefs(limit=1)
+    _wd_df = _ai_db.load_weekly_debriefs(limit=8)
 
     # On-demand generation
     if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
@@ -17166,6 +17163,34 @@ elif page == "🧠 AI Insights":
                     f"{'N/A' if _wd_alpha is None else f'{_wd_alpha:+.1f}%'}</div></div>",
                     unsafe_allow_html=True,
                 )
+            st.markdown("")
+
+        # Weekly alpha trajectory — are you beating SPY, week over week?
+        # Per-week alpha (portfolio − SPY) from the saved debriefs, oldest → newest.
+        _wt = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
+        if len(_wt) >= 2:
+            _wt = _wt.iloc[::-1]   # load is newest-first; chart reads left→right in time
+            _wt_x = [str(w)[:10] for w in _wt["week_ending"]]
+            _wt_a = [float(a) for a in _wt["alpha_pct"]]
+            _wt_fig = go.Figure(go.Bar(
+                x=_wt_x, y=_wt_a,
+                marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _wt_a],
+                text=[f"{v:+.1f}" for v in _wt_a], textposition="outside",
+            ))
+            _wt_fig.update_layout(
+                title=dict(text="Weekly alpha vs SPY (percentage points)", font=dict(size=13), x=0),
+                height=240, margin=dict(l=8, r=8, t=36, b=8),
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                xaxis=dict(title=None), showlegend=False,
+            )
+            st.plotly_chart(_wt_fig, use_container_width=True)
+            _wt_beat = sum(1 for v in _wt_a if v > 0)
+            st.caption(
+                f"Portfolio return minus SPY, per week — green = beat the market. "
+                f"You beat SPY in **{_wt_beat} of {len(_wt_a)}** tracked week(s). "
+                f"This is the trend the metrics above show for just the latest week."
+            )
             st.markdown("")
 
         for _wd_label, _wd_col in [
@@ -17326,27 +17351,19 @@ elif page == "🧠 AI Insights":
             )
         st.markdown("")
 
-        for _mr_label, _mr_col in [
-            ("Entry quality", "section_entry_quality"),
-            ("Signal discipline", "section_signal_discipline"),
-            ("Pattern & focus", "section_patterns"),
-        ]:
-            if _mr.get(_mr_col):
-                st.markdown(f"**{_mr_label}**")
-                st.markdown(_mr.get(_mr_col))
-                st.markdown("")
-
-        # ── Compact missed-opportunity visual companion (full analytics on the
-        # 📊 Recommendations History page). Reuses the SAME pure helpers; computed
-        # live over the displayed report's exact window. Fail-soft — any failure
-        # just hides the chart, never breaks the narrative above.
+        # Compute the enriched recs ONCE — shared by all three monthly visuals
+        # (decision-flow Sankey, alpha-by-band bar, missed-opportunity bar). Reuses
+        # the SAME pure helpers as Recommendations History; live over the report's
+        # exact window. Fail-soft — any failure just hides the visuals, the
+        # narrative is untouched.
         from stock_analyzer.recommendations_history import (
             match_recs_to_trades as _mrm, compute_outcomes as _mrco,
             distinct_missed as _mrdm, missed_split as _mrms,
+            signal_flow as _mrsf, by_composite_band as _mrbb,
         )
         from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
 
-        _mr_miss: list = []
+        _mr_en2: list = []
         try:
             _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
             _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
@@ -17381,40 +17398,99 @@ elif page == "🧠 AI Insights":
                     _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
                     spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
                 )
-                _mr_miss = _mrdm(_mr_en2)
         except Exception:
-            _mr_miss = []
+            _mr_en2 = []
 
-        if _mr_miss:
-            _mr_sp = _mrms(_mr_miss)
-            st.markdown("**🎯 What you skipped this period**")
-            import plotly.graph_objects as go
-            _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
-            _mr_sel = sorted(
-                _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
-                key=lambda r: r["outcome_pct"],
-            )
-            _mr_xc = [r["outcome_pct"] for r in _mr_sel]
-            _mr_yc = [r["ticker"] for r in _mr_sel]
-            _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
-            _mr_fig = go.Figure(go.Bar(
-                x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
-                text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
-            ))
-            _mr_fig.update_layout(
-                height=max(200, 40 + 24 * len(_mr_sel)),
-                margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
-                yaxis=dict(title=None), showlegend=False,
-            )
-            st.plotly_chart(_mr_fig, use_container_width=True)
-            st.caption(
-                f"Of **{_mr_sp['n_distinct']}** name(s) surfaced as **New Positions to Initiate** "
-                f"but never acted on this period: **{_mr_sp['n_winners']}** rose (missed), "
-                f"**{_mr_sp['n_dodged']}** fell (dodged). Green = rose after surfacing; red = fell. "
-                "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
-                "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
-            )
+        # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
+        # loop the whole report is built on. Same engine as Recommendations History.
+        if _mr_en2:
+            _mr_flow = _mrsf(_mr_en2, rec_types=("new_pick",))
+            if _mr_flow["n_total"] > 0:
+                _mr_sk = _signal_flow_sankey(
+                    _mr_flow,
+                    "This month's signal flow — New Positions → acted / missed → outcome",
+                )
+                if _mr_sk is not None:
+                    st.plotly_chart(_mr_sk, use_container_width=True)
+                    st.caption(
+                        "New Positions to Initiate this period → acted / missed → outcome "
+                        "(distinct by ticker, matured only). Same engine as Recommendations "
+                        "History, scoped to this report's window."
+                    )
+
+        # Narrative
+        for _mr_label, _mr_col in [
+            ("Entry quality", "section_entry_quality"),
+            ("Signal discipline", "section_signal_discipline"),
+            ("Pattern & focus", "section_patterns"),
+        ]:
+            if _mr.get(_mr_col):
+                st.markdown(f"**{_mr_label}**")
+                st.markdown(_mr.get(_mr_col))
+                st.markdown("")
+
+        # Q0 evidence — average alpha by composite band. Does higher conviction
+        # actually deliver higher alpha? Scoped to new_pick to match the report's Q0.
+        if _mr_en2:
+            _mr_np    = [r for r in _mr_en2 if r.get("rec_type") == "new_pick"]
+            _mr_bands = [b for b in _mrbb(_mr_np) if b.get("avg_alpha") is not None]
+            if len(_mr_bands) >= 2:
+                _mb_x = [b["band"] for b in _mr_bands]
+                _mb_y = [b["avg_alpha"] for b in _mr_bands]
+                _mb_fig = go.Figure(go.Bar(
+                    x=_mb_x, y=_mb_y,
+                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
+                    text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
+                ))
+                _mb_fig.update_layout(
+                    title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
+                               font=dict(size=13), x=0),
+                    height=240, margin=dict(l=8, r=8, t=36, b=8),
+                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                    xaxis=dict(title=None), showlegend=False,
+                )
+                st.plotly_chart(_mb_fig, use_container_width=True)
+                st.caption(
+                    "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
+                    "Buy (65–74), the engine's top tier underperformed this period — the "
+                    "narrative above flags whether that's worth your own review."
+                )
+                st.markdown("")
+
+        # Q1 evidence — missed-opportunity ranked bar (named, ranked magnitudes —
+        # the one thing a Sankey can't show). Reuses the same _mr_en2.
+        if _mr_en2:
+            _mr_miss = _mrdm(_mr_en2)
+            if _mr_miss:
+                _mr_sp = _mrms(_mr_miss)
+                st.markdown("**🎯 What you skipped this period**")
+                _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
+                _mr_sel = sorted(
+                    _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
+                    key=lambda r: r["outcome_pct"],
+                )
+                _mr_xc = [r["outcome_pct"] for r in _mr_sel]
+                _mr_yc = [r["ticker"] for r in _mr_sel]
+                _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
+                _mr_fig = go.Figure(go.Bar(
+                    x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
+                    text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
+                ))
+                _mr_fig.update_layout(
+                    height=max(200, 40 + 24 * len(_mr_sel)),
+                    margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                    yaxis=dict(title=None), showlegend=False,
+                )
+                st.plotly_chart(_mr_fig, use_container_width=True)
+                st.caption(
+                    f"Of **{_mr_sp['n_distinct']}** name(s) surfaced as **New Positions to Initiate** "
+                    f"but never acted on this period: **{_mr_sp['n_winners']}** rose (missed), "
+                    f"**{_mr_sp['n_dodged']}** fell (dodged). Green = rose after surfacing; red = fell. "
+                    "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
+                    "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
+                )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
