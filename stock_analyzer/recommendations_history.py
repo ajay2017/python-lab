@@ -505,6 +505,70 @@ def missed_split(distinct_rows: list[dict]) -> dict:
     }
 
 
+def signal_flow(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> dict:
+    """
+    Distinct-ticker funnel for the signal-flow Sankey:
+        actionable recs → acted / missed → win / loss / flat-or-open
+
+    Consistent with `distinct_missed` and the rest of the page:
+    - **Distinct by TICKER**, not instance counts — a name surfaced 15× counts once
+      (avoids the surfacings-vs-distinct inflation).
+    - Scoped to `rec_types` (default ("new_pick",) = New Positions to Initiate); the
+      awareness-only buy_candidate feed is excluded.
+    - **Acted** if the ticker was acted on via ANY surfacing (same safeguard as
+      distinct_missed — a name bought on a buy-candidate day isn't called missed).
+    - Win/loss counted on **MATURE** outcomes only (`outcome_maturing` excluded, per
+      REC_SCORE_MIN_DAYS); maturing / ungraded tickers fall into 'flat-or-open' so the
+      Sankey can never disagree with the win/loss aggregates elsewhere on the page.
+      Representative = earliest mature surfacing (acted: earliest mature acted one).
+
+    Returns a flat dict of counts:
+        n_total, n_acted, n_missed,
+        acted_win, acted_loss, acted_flat,
+        missed_win, missed_loss, missed_flat
+    """
+    acted_tickers = {r["ticker"] for r in enriched if r.get("acted_on")}
+    by_tk: dict[str, list[dict]] = defaultdict(list)
+    for r in enriched:
+        if rec_types is None or r.get("rec_type") in rec_types:
+            by_tk[r["ticker"]].append(r)
+
+    out = {
+        "n_total": 0, "n_acted": 0, "n_missed": 0,
+        "acted_win": 0, "acted_loss": 0, "acted_flat": 0,
+        "missed_win": 0, "missed_loss": 0, "missed_flat": 0,
+    }
+
+    def _bucket(items, acted: bool):
+        mature = [
+            r for r in items
+            if r.get("outcome_pct") is not None
+            and not r.get("outcome_maturing")
+            and r.get("rec_date") is not None
+        ]
+        pool = [r for r in mature if r.get("acted_on")] if acted else mature
+        pool = pool or mature
+        rep = min(pool, key=lambda r: r["rec_date"]) if pool else None
+        return rep["outcome_label"] if rep else None
+
+    for tk, items in by_tk.items():
+        out["n_total"] += 1
+        if tk in acted_tickers:
+            out["n_acted"] += 1
+            lbl = _bucket(items, acted=True)
+            out["acted_win"]  += lbl == "win"
+            out["acted_loss"] += lbl == "loss"
+            out["acted_flat"] += lbl not in ("win", "loss")
+        else:
+            out["n_missed"] += 1
+            lbl = _bucket(items, acted=False)
+            out["missed_win"]  += lbl == "win"
+            out["missed_loss"] += lbl == "loss"
+            out["missed_flat"] += lbl not in ("win", "loss")
+
+    return out
+
+
 def daily_volume(enriched: list[dict]) -> list[dict]:
     """
     For the recs-per-day chart: count of recs surfaced per rec_date, split

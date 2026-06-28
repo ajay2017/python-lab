@@ -5540,14 +5540,89 @@ if page == "🏠 Home":
                 text=[f"{v:.0f}%" for v in sector_df["Pct"]],
                 textposition="outside",
             ))
-            sec_fig.add_hline(y=40, line_dash="dash", line_color="red",
-                              annotation_text="40% concentration limit")
+            sec_fig.add_hline(y=SECTOR_CEILING, line_dash="dash", line_color="red",
+                              annotation_text=f"{SECTOR_CEILING:.0f}% sector hard cap")
             sec_fig.update_layout(
                 template="plotly_dark", height=260,
                 yaxis_title="% of Portfolio",
                 margin=dict(l=0, r=0, t=10, b=0),
             )
             st.plotly_chart(sec_fig, use_container_width=True)
+
+        # ── Composition Sankey — Portfolio → Sector → Position ───────────────
+        # One view of where the money sits and how concentrated it is. Band width
+        # = % of portfolio. Sectors over the hard cap and single names over the
+        # ceiling are flagged red so concentration reads at a glance.
+        _cmp_df = port_df[["Ticker", "Sector", "Market Value"]].copy()
+        _cmp_df = _cmp_df[_cmp_df["Market Value"] > 0]
+        _cmp_tot = float(_cmp_df["Market Value"].sum())
+        if not _cmp_df.empty and _cmp_tot > 0:
+            _cmp_sectors = (
+                _cmp_df.groupby("Sector")["Market Value"].sum()
+                .sort_values(ascending=False)
+            )
+            # Node index map: 0 = Portfolio, then sectors, then tickers.
+            _cmp_nodes = ["Portfolio"]
+            _cmp_idx = {}
+            for _s in _cmp_sectors.index:
+                _cmp_idx[("sec", _s)] = len(_cmp_nodes)
+                _cmp_nodes.append(str(_s))
+            for _t in _cmp_df["Ticker"]:
+                _cmp_idx[("tk", _t)] = len(_cmp_nodes)
+                _cmp_nodes.append(str(_t))
+
+            # Node colours: sector red if over the hard cap; ticker red if over the
+            # single-name ceiling; otherwise neutral palette.
+            _cmp_ncolor = ["#60a5fa"]
+            for _s, _sv in _cmp_sectors.items():
+                _spct = _sv / _cmp_tot * 100
+                _cmp_ncolor.append("#ef4444" if _spct > SECTOR_CEILING else "#38bdf8")
+            for _, _row in _cmp_df.iterrows():
+                _tpct = float(_row["Market Value"]) / _cmp_tot * 100
+                _cmp_ncolor.append("#f87171" if _tpct > SINGLE_NAME_CEILING else "#94a3b8")
+
+            _cmp_src, _cmp_tgt, _cmp_val, _cmp_lab = [], [], [], []
+            for _s, _sv in _cmp_sectors.items():
+                _cmp_src.append(0)
+                _cmp_tgt.append(_cmp_idx[("sec", _s)])
+                _cmp_val.append(float(_sv))
+                _cmp_lab.append(f"{_s}: {_sv / _cmp_tot * 100:.1f}% of portfolio")
+            for _, _row in _cmp_df.iterrows():
+                _cmp_src.append(_cmp_idx[("sec", _row["Sector"])])
+                _cmp_tgt.append(_cmp_idx[("tk", _row["Ticker"])])
+                _cmp_val.append(float(_row["Market Value"]))
+                _cmp_lab.append(f"{_row['Ticker']}: {float(_row['Market Value']) / _cmp_tot * 100:.1f}% of portfolio")
+
+            _cmp_fig = go.Figure(go.Sankey(
+                arrangement="snap",
+                node=dict(
+                    label=_cmp_nodes, color=_cmp_ncolor,
+                    pad=16, thickness=16,
+                    line=dict(color="rgba(255,255,255,0.08)", width=0.5),
+                    hovertemplate="%{label}<extra></extra>",
+                ),
+                link=dict(
+                    source=_cmp_src, target=_cmp_tgt, value=_cmp_val,
+                    customdata=_cmp_lab,
+                    hovertemplate="%{customdata}<extra></extra>",
+                    color="rgba(148,163,184,0.25)",
+                ),
+            ))
+            _cmp_fig.update_layout(
+                title="Composition — Portfolio → Sector → Position",
+                template="plotly_dark",
+                height=max(320, 30 + 26 * len(_cmp_df)),
+                margin=dict(l=0, r=0, t=40, b=0),
+                font=dict(size=11, color="#cbd5e1"),
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(_cmp_fig, use_container_width=True)
+            st.caption(
+                f"Band width = share of portfolio value. **Red** flags concentration: a "
+                f"sector over the **{SECTOR_CEILING:.0f}%** hard cap or a single name over the "
+                f"**{SINGLE_NAME_CEILING:.0f}%** ceiling. Reads where your capital actually sits "
+                f"and where it's bunched — in one view."
+            )
 
         # Position table
         st.subheader("Position Detail & Protective Stops")
@@ -14586,6 +14661,7 @@ elif page == "📜 Recommendations History":
         daily_volume,
         distinct_missed,
         missed_split,
+        signal_flow,
     )
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
     import pandas as _rh_pd
@@ -14697,6 +14773,9 @@ elif page == "📜 Recommendations History":
         _rh_matched, _rh_prices, today=_today_et(),
         spy_close_by_date=_rh_spy_by_date, min_days=REC_SCORE_MIN_DAYS,
     )
+    # Pre-status-filter snapshot — the signal-flow Sankey funnel must always show
+    # BOTH branches regardless of the acted/missed status filter below.
+    _rh_enriched_all = list(_rh_enriched)
 
     # Status filter (after enrichment so the dropdown shows the right counts)
     if _rh_status_filter == "Acted only":
@@ -14785,24 +14864,18 @@ elif page == "📜 Recommendations History":
         )
 
     # ── Signal flow Sankey ────────────────────────────────────────────────────
-    _rh_n_total  = len(_rh_enriched)
-    _rh_n_acted  = sum(1 for r in _rh_enriched if r["acted_on"])
-    _rh_n_missed = _rh_n_total - _rh_n_acted
+    # Scoped to New Positions to Initiate (new_pick), distinct by ticker, mature
+    # outcomes only — consistent with Missed Opportunity + F-4. Built from the
+    # pre-status-filter snapshot so both branches always show. Pure logic in
+    # recommendations_history.signal_flow().
+    _rh_flow = signal_flow(_rh_enriched_all, rec_types=("new_pick",))
 
-    def _rh_oc(acted, label):
-        return sum(1 for r in _rh_enriched if r["acted_on"] == acted and r["outcome_label"] == label)
-
-    _rh_aw = _rh_oc(True,  "win");  _rh_al = _rh_oc(True,  "loss")
-    _rh_af = _rh_n_acted  - _rh_aw - _rh_al
-    _rh_mw = _rh_oc(False, "win");  _rh_ml = _rh_oc(False, "loss")
-    _rh_mf = _rh_n_missed - _rh_mw - _rh_ml
-
-    if _rh_n_total > 0:
+    if _rh_flow["n_total"] > 0:
         import plotly.graph_objects as _rh_go
         _rh_sk_labels = [
-            "All Surfaced",
-            "Acted",       "Missed",
-            "Win (acted)", "Loss (acted)", "Flat / Open (acted)",
+            "New Positions Surfaced",
+            "Acted",        "Not acted",
+            "Win (acted)",  "Loss (acted)",  "Flat / Open (acted)",
             "Rose (missed)", "Fell — dodged", "Flat / Open (missed)",
         ]
         _rh_sk_ncolor = [
@@ -14813,7 +14886,11 @@ elif page == "📜 Recommendations History":
         ]
         _rh_sk_src = [0, 0, 1, 1, 1, 2, 2, 2]
         _rh_sk_tgt = [1, 2, 3, 4, 5, 6, 7, 8]
-        _rh_sk_val = [_rh_n_acted, _rh_n_missed, _rh_aw, _rh_al, _rh_af, _rh_mw, _rh_ml, _rh_mf]
+        _rh_sk_val = [
+            _rh_flow["n_acted"],     _rh_flow["n_missed"],
+            _rh_flow["acted_win"],   _rh_flow["acted_loss"],  _rh_flow["acted_flat"],
+            _rh_flow["missed_win"],  _rh_flow["missed_loss"], _rh_flow["missed_flat"],
+        ]
         _rh_sk_lc  = [
             "rgba(99,179,237,0.45)",  "rgba(148,163,184,0.3)",
             "rgba(134,239,172,0.45)", "rgba(252,165,165,0.45)", "rgba(100,116,139,0.3)",
@@ -14846,16 +14923,18 @@ elif page == "📜 Recommendations History":
                 paper_bgcolor="rgba(0,0,0,0)",
                 font=dict(size=11, color="#cbd5e1"),
                 title=dict(
-                    text="Signal flow — surfaced → acted / missed → outcome",
+                    text="Signal flow — New Positions to Initiate → acted / missed → outcome",
                     font=dict(size=13), x=0,
                 ),
             )
             st.plotly_chart(_rh_sk_fig, use_container_width=True)
             st.caption(
-                "Band width = rec count. **Acted** outcomes are mark-to-market (BUY) or "
-                "realized (SELL). **Missed** outcomes are surface-price → now on $1k notional. "
-                f"Flat / Open includes maturing recs (⏳, younger than {REC_SCORE_MIN_DAYS} days) "
-                "and priced recs within ±0.5% of surface price."
+                f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
+                f"a name recurring across days counts once. The awareness-only More Buy "
+                f"Candidates feed is excluded. Win/Loss count **matured** outcomes only "
+                f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recs within ±0.5%, "
+                f"fall into Flat / Open) — so this never disagrees with the metrics above. "
+                f"Acted = mark-to-market (BUY) / realized (SELL); missed = surface-price → now."
             )
 
     # ── Missed Opportunity — what you skipped and what it cost ───────────────
