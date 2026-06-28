@@ -2567,19 +2567,24 @@ if page == "🏠 Home":
         except Exception:
             st.session_state["_highbeta_share"] = None
 
-        # Risk Advisor recommendations — generated from portfolio risk metrics
+        # Risk Advisor recommendations — generated from portfolio risk metrics.
+        # Cache HIGH-priority alert titles so other pages (e.g. Watchlist) can gate
+        # ENTER_NOW recommendations against active portfolio risk state. On a build
+        # failure publish None (offline sentinel), NOT [] — an empty list reads as
+        # "no active HIGH risks" and the Watchlist's risk-alert caution silently
+        # vanishes (fail-open). None trips the Watchlist's existing offline banner so
+        # the disabled gate is visible (house contract: producers fail to None).
         try:
             _risk_advisor_recs = build_risk_advisor_recommendations(
                 port_df, held_data, _port_risk, h_rets, total_val,
                 gate_denom=_gate_denom,
             )
+            st.session_state["_risk_high_alerts_cache"] = [
+                r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
+            ]
         except Exception:
             _risk_advisor_recs = []
-        # Cache HIGH-priority alert titles so other pages (e.g. Watchlist) can gate
-        # ENTER_NOW recommendations against active portfolio risk state.
-        st.session_state["_risk_high_alerts_cache"] = [
-            r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
-        ]
+            st.session_state["_risk_high_alerts_cache"] = None
 
 
         if n_danger > 0 or (div_score is not None and div_score < 30):
@@ -11999,6 +12004,9 @@ elif page == "📋 Watchlist":
     _wl_brief_offline = (
         st.session_state.get("_daily_brief_offline", False)
         or _wl_grow_sectors_raw is None
+        # Risk Advisor crashed → its cache is None (not []), so the active-risk-alert
+        # caution can't run; surface it rather than silently fail-open (M1).
+        or st.session_state.get("_risk_high_alerts_cache") is None
     )
     _wl_grow_sectors = set(_wl_grow_sectors_raw or [])
     _wl_port_beta  = _wl_port_risk.get("beta")
