@@ -62,6 +62,7 @@ One systematic behavioural pattern grounded only in this data (examples: "you ac
 
 Rules:
 - Only use facts from the data package. Never invent recommendations, trades, prices, tickers, or events.
+- Counts of names, recommendations, or outcomes are DISTINCT tickers and must match the figures in the data package exactly. NEVER state a count larger than the total names surfaced, and NEVER invent a separate "graded outcomes" tally — the reader sees the exact counts in a header and chart above your text, and your words must agree with them.
 - Never recommend buying or selling a specific name. Never state, suggest, or change a threshold/gate value.
 - No disclaimers, no preamble. End after the third section."""
 
@@ -89,7 +90,7 @@ def _band_line(row: dict) -> str:
     if ar is not None:
         bits.append(f"acted {ar:.0f}%")
     if npr:
-        bits.append(f"{npr} graded")
+        bits.append(f"{npr} matured")
         if ao is not None:
             bits.append(f"avg acted {_pct(ao)}")
         if aa is not None:
@@ -236,21 +237,33 @@ def _format_prompt(package: dict) -> str:
         "count is not awareness noise — every one is a name the App told you to "
         "consider initiating. Do not reference the awareness feed.",
         "",
-        f"Distinct New-Position names surfaced: {package['n_total']} — you acted on "
-        f"{package['n_acted']}, did not act on {package['n_missed']}. (Counts are distinct "
-        f"tickers, not daily surfacings. {package['n_graded']} surfacings matured enough to "
-        f"grade outcomes.)",
+        f"Distinct New-Position names surfaced this period: {package['n_total']}. "
+        f"You acted on {package['n_acted']} and did not act on {package['n_missed']}. "
+        "Every count here is a DISTINCT ticker — a name that surfaced on many days counts "
+        "once. These are the only name counts that exist for this report.",
+        "",
+        "COUNT DISCIPLINE — the reader sees these exact distinct counts in a header and a "
+        "flow chart directly above your text, so your words must agree with them:",
+        f"  - surfaced = {package['n_total']}, acted on = {package['n_acted']}, "
+        f"not acted on = {package['n_missed']}.",
+        f"  - NEVER state a count of names, recommendations, or outcomes greater than "
+        f"{package['n_total']}. There is NO separate, larger 'graded outcomes' tally — do "
+        "not invent one. Refer to how many have matured in WORDS (e.g. 'most have matured', "
+        "'only a few have matured'), never as a new number.",
+        "  - Percentages (alpha, outcome %, action rate) should be quoted as given; only "
+        "raw NAME counts are constrained to the distinct figures above.",
     ]
     if not package.get("q0_ready"):
         lines.append(
-            f"NOTE: only {package['n_graded']} matured graded recommendation(s) — "
-            f"below the {package['min_graded']} needed to fairly grade entry quality. "
-            "Keep the Entry quality section to one honest sentence."
+            f"NOTE: too few of these names have matured enough to grade entry quality "
+            f"fairly (the engine needs at least {package['min_graded']} matured before its "
+            "pick quality can be judged). Keep the Entry quality section to one honest "
+            "sentence and do not over-read the band table."
         )
 
     lines += [
         "",
-        "Overall outcomes (matured, graded only):",
+        "Average outcomes across matured positions (alpha = return minus SPY, same window):",
         f"  Action rate: {package['action_rate']:.0f}%" if package.get("action_rate") is not None else "  Action rate: N/A",
         f"  Avg outcome — acted: {_pct(package.get('avg_acted_pct'))} · missed: {_pct(package.get('avg_missed_pct'))}",
         f"  Avg ALPHA vs SPY — acted: {_pct(package.get('avg_acted_alpha'))} · missed: {_pct(package.get('avg_missed_alpha'))}",
