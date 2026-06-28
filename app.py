@@ -140,7 +140,7 @@ from stock_analyzer.account import (
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
-from stock_analyzer.daily_briefing import build_daily_briefing, gate_funnel_counts
+from stock_analyzer.daily_briefing import build_daily_briefing
 from stock_analyzer.evening_debrief import build_evening_debrief
 from stock_analyzer.trade_review import (
     build_trade_review, build_insights, build_recommendations,
@@ -4066,53 +4066,6 @@ if page == "🏠 Home":
                 st.caption(f"🛡️ {bear_msg}")
                 return
 
-            # ── Gate funnel Sankey — how today's candidates cleared the gates ──
-            # Honest one-hop fan-out from the recorded new-position buckets (no
-            # fabricated universe). Only candidates that reached a gate DECISION
-            # are counted; names filtered earlier (Act Today, hard conflict) are
-            # silent — see gate_funnel_counts() + the caption.
-            _gf = gate_funnel_counts(grow)
-            if _gf["evaluated"] >= 2 and _gf["new_picks"] < _gf["evaluated"]:
-                with st.expander("🔎 How today's candidates cleared the gates", expanded=True):
-                    _gf_targets = [
-                        ("✅ New Positions to Initiate", _gf["new_picks"],             "#22c55e", "rgba(34,197,94,0.45)"),
-                        ("Composite below Buy bar",      _gf["composite_skipped"],     "#f59e0b", "rgba(245,158,11,0.35)"),
-                        ("Sector at hard cap",           _gf["sector_blocked"],        "#ef4444", "rgba(239,68,68,0.35)"),
-                        ("Imminent macro event",         _gf["macro_blocked"],         "#fb923c", "rgba(251,146,60,0.35)"),
-                        ("Couldn't verify (data)",       _gf["composite_unavailable"], "#94a3b8", "rgba(148,163,184,0.3)"),
-                    ]
-                    _gf_labels  = ["Candidates evaluated"] + [t[0] for t in _gf_targets]
-                    _gf_ncolor  = ["#60a5fa"] + [t[2] for t in _gf_targets]
-                    _gf_src, _gf_tgt, _gf_val, _gf_lc = [], [], [], []
-                    for _i, (_lbl, _n, _nc, _lc) in enumerate(_gf_targets, start=1):
-                        if _n > 0:
-                            _gf_src.append(0); _gf_tgt.append(_i)
-                            _gf_val.append(_n); _gf_lc.append(_lc)
-                    if _gf_src:
-                        _gf_fig = go.Figure(go.Sankey(
-                            arrangement="snap",
-                            node=dict(
-                                label=_gf_labels, color=_gf_ncolor,
-                                pad=18, thickness=16,
-                                line=dict(color="rgba(255,255,255,0.08)", width=0.5),
-                            ),
-                            link=dict(source=_gf_src, target=_gf_tgt, value=_gf_val, color=_gf_lc),
-                        ))
-                        _gf_fig.update_layout(
-                            height=max(240, 30 + 30 * len(_gf_src)),
-                            margin=dict(l=0, r=0, t=10, b=0),
-                            template="plotly_dark",
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            font=dict(size=11, color="#cbd5e1"),
-                        )
-                        st.plotly_chart(_gf_fig, use_container_width=True)
-                        st.caption(
-                            f"Today's scan put **{_gf['evaluated']}** candidate(s) through the "
-                            f"new-position gates; band width = count, each lands in exactly one "
-                            f"outcome. **Names already in Act Today or in a hard cross-ref conflict "
-                            f"are filtered earlier and not shown here** — this is the recorded-decision "
-                            f"funnel, not the full scanner universe. Add-to-winner has its own gates."
-                        )
 
             # Reach line: make the screening funnel visible — the brief draws
             # from the curated SECTOR_UNIVERSE + watchlist + the broad discovery
@@ -4143,6 +4096,62 @@ if page == "🏠 Home":
                     )
                 else:
                     st.caption(f"🔭 Screened {_reach_src} names — run Refresh Signals for a fresh pass.")
+
+                # ── Reach-funnel Sankey — the SAME real numbers drawn to scale ──
+                # universe → reached composite scoring → New Positions to Initiate.
+                # Pure subtraction off the reach counts above, so it ALWAYS balances
+                # and never fabricates: "not scored" = universe − scored; the scored
+                # split = picks + below-buy-bar + other-filters (residual).
+                _fn_universe = _tracked_n + _wl_extra_n + (_disc_extra_n if _movers_ran else 0)
+                _fn_scored   = _finalists_n
+                _fn_picks    = len(new_picks)
+                if _fn_scored > 0 and _fn_universe >= _fn_scored >= _fn_picks:
+                    with st.expander("🔎 How today's screen funnelled down to picks", expanded=True):
+                        _fn_notscored = _fn_universe - _fn_scored
+                        _fn_belowbar  = min(len(comp_skipped), _fn_scored - _fn_picks)
+                        _fn_other     = (_fn_scored - _fn_picks) - _fn_belowbar
+                        _fn_labels = [
+                            f"Screened ({_fn_universe})",
+                            f"Reached composite scoring ({_fn_scored})",
+                            f"Not scored this pass ({_fn_notscored})",
+                            f"✅ New Positions to Initiate ({_fn_picks})",
+                            f"Composite below Buy bar ({_fn_belowbar})",
+                            f"Other filters ({_fn_other})",
+                        ]
+                        _fn_ncolor = ["#60a5fa", "#38bdf8", "#475569", "#22c55e", "#f59e0b", "#64748b"]
+                        _fn_links = [
+                            (0, 1, _fn_scored,    "rgba(56,189,248,0.45)"),
+                            (0, 2, _fn_notscored, "rgba(71,85,105,0.25)"),
+                            (1, 3, _fn_picks,     "rgba(34,197,94,0.5)"),
+                            (1, 4, _fn_belowbar,  "rgba(245,158,11,0.35)"),
+                            (1, 5, _fn_other,     "rgba(100,116,139,0.3)"),
+                        ]
+                        _fn_links = [(s, t, v, c) for (s, t, v, c) in _fn_links if v > 0]
+                        if _fn_links:
+                            _fs, _ft, _fv, _fc = zip(*_fn_links)
+                            _fn_fig = go.Figure(go.Sankey(
+                                arrangement="snap",
+                                node=dict(
+                                    label=_fn_labels, color=_fn_ncolor, pad=18, thickness=16,
+                                    line=dict(color="rgba(255,255,255,0.08)", width=0.5),
+                                ),
+                                link=dict(source=list(_fs), target=list(_ft),
+                                          value=list(_fv), color=list(_fc)),
+                            ))
+                            _fn_fig.update_layout(
+                                height=300, margin=dict(l=0, r=0, t=10, b=0),
+                                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                                font=dict(size=11, color="#cbd5e1"),
+                            )
+                            st.plotly_chart(_fn_fig, use_container_width=True)
+                            st.caption(
+                                f"The funnel above, drawn to scale. Of **{_fn_universe}** names "
+                                f"screened, **{_fn_scored}** reached full composite scoring and "
+                                f"**{_fn_picks}** cleared every gate into New Positions to Initiate. "
+                                f"**Other filters** = scored names dropped for sector-cap / macro / "
+                                f"data / flat-day caution (the banners below name the specifics). "
+                                f"Every band is a real count — pure subtraction, nothing fabricated."
+                            )
 
             # Composite-fetch failure banner — picks where load_all() couldn't
             # fetch composite data (yfinance transient errors, etc) are held
