@@ -4002,6 +4002,12 @@ if page == "🏠 Home":
             else:
                 _qr_e = _qr_res["entry"]
                 # Header strip: ticker | name | sector | price | entry verdict badge
+                # Composite chip shows "{score}/100" only when the verdict is real;
+                # a withheld verdict (fundamentals missing) carries score=None so the
+                # chip reads "🚫 Verdict withheld" with no fabricated number (§9 P1).
+                _qr_score_sfx = (
+                    f" {_qr_res['score']:.0f}/100" if _qr_res.get("score") is not None else ""
+                )
                 st.markdown(
                     f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
                     f"border-top:1px solid #374151;padding-top:10px;margin-top:4px'>"
@@ -4017,7 +4023,7 @@ if page == "🏠 Home":
                     f"font-size:0.78em;font-weight:700'>{_qr_e['icon']} {_qr_e['label']}</span>"
                     f"<span style='background:{_qr_res['signal_color']}22;border:1px solid {_qr_res['signal_color']};"
                     f"color:{_qr_res['signal_color']};padding:2px 10px;border-radius:10px;"
-                    f"font-size:0.78em;font-weight:700'>{_qr_res['signal_icon']} {_qr_res['signal']} {_qr_res['score']:.0f}/100</span>"
+                    f"font-size:0.78em;font-weight:700'>{_qr_res['signal_icon']} {_qr_res['signal']}{_qr_score_sfx}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )

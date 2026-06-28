@@ -196,14 +196,29 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     fins     = data["financials"]
     revs     = data.get("revisions", {})
     earnings = data.get("earnings")
+    # Honor load_all's fundamentals gate (bundle_loader sets fundamentals_available):
+    # when company data can't be sourced from ANY provider, `total` is a FABRICATED
+    # neutral 50, and showing it as a confident "Hold 50/100" contradicts the Analysis
+    # page, which WITHHOLDS the verdict (the PINS/HUBS fundamentals-gate class). Withhold
+    # here too so the two surfaces can't disagree on the same name. Momentum and entry
+    # timing below are purely technical and stay valid. (Audit §9 P1.)
+    fundamentals_available = data.get("fundamentals_available", True)
 
     target     = fins.get("analyst_target")
     upside_pct = float((target - price) / price * 100) if target and price else None
 
-    # Bullet 1: overall signal + composite score
-    b1 = (
-        f"**Signal: {rec['icon']} {rec['label']} ({score:.0f}/100)** — {rec['rationale']}"
-    )
+    # Bullet 1: overall signal + composite score — withheld when fundamentals absent.
+    if fundamentals_available:
+        b1 = f"**Signal: {rec['icon']} {rec['label']} ({score:.0f}/100)** — {rec['rationale']}"
+        sig_label, sig_icon, sig_color, sig_score = rec["label"], rec["icon"], rec["color"], score
+    else:
+        b1 = (
+            "**Signal: 🚫 Verdict withheld** — fundamentals couldn't be sourced "
+            "(company data unavailable from all providers), so a composite score "
+            "would be guessing rather than measuring. Momentum and entry timing "
+            "below are still valid."
+        )
+        sig_label, sig_icon, sig_color, sig_score = "Verdict withheld", "🚫", "#dc2626", None
 
     # Bullet 2: momentum snapshot
     b2_parts = [p for p in [
@@ -254,10 +269,11 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
         "name":           data.get("name", ticker),
         "sector":         data.get("sector", ""),
         "price":          price,
-        "score":          score,
-        "signal":         rec["label"],
-        "signal_color":   rec["color"],
-        "signal_icon":    rec["icon"],
+        "score":          sig_score,
+        "signal":         sig_label,
+        "signal_color":   sig_color,
+        "signal_icon":    sig_icon,
+        "fundamentals_available": fundamentals_available,
         "entry":          entry,
         "bullets":        bullets,
         "move_1d":        move_1d,
