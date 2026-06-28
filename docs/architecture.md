@@ -108,6 +108,7 @@ python-lab/
     ├── earnings_advisor.py         Earnings risk and playbook
     ├── perf_advisor.py             Performance attribution and recommendations
     ├── risk_advisor.py             Risk flags and advisor recommendations (exact beta impact)
+    ├── exit_advisor.py             Exit-discipline + market-risk: deterioration WATCH/TRIM/EXIT ladder, risk-off de-risk overlay, Market-Risk Posture dial (classify_deterioration_tier · risk_off_regime · assess_risk_off_derisk · market_risk_posture — pure logic)
     ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
     ├── trade_analytics.py          Trade history analytics
     ├── trades.py                   Trade-record helpers (realised PnL, performance stats)
@@ -116,6 +117,10 @@ python-lab/
     ├── stress_test.py              Macro stress scenario modelling
     ├── split_detector.py           Stock split detection and adjustment
     ├── decision_journal.py         Signal-vs-override pattern analysis
+    ├── recommendations_history.py  Retrospective scorecard (rule-based, no LLM): acted/missed outcomes graded on alpha, by-band/by-verdict rollups, distinct-ticker signal_flow + report_viz_snapshot (drives 📜 Recommendations History + the F-4 monthly visuals)
+    ├── thesis_advisor.py           AI Intelligence F-1: per-holding thesis review → INTACT/WEAKENING/BROKEN (thesis_reviews table)
+    ├── debrief_advisor.py          AI Intelligence F-3: weekly portfolio debrief — 4-section narrative + Sunday email (weekly_debriefs table)
+    ├── intelligence_report.py      AI Intelligence F-4: monthly retrospective — Q0 entry-quality + Q1 signal-discipline; build_report_package + frozen viz_json snapshot (monthly_reports table)
     ├── db.py                       Supabase ops (holdings/watchlist/trades/manual_stops); trade-replay; fractional shares
     └── api_health.py               API call health event recording
 ```
@@ -603,6 +608,67 @@ CREATE TABLE account_flows (
 ```
 
 **External cash-flow ledger (account-baseline v2/v3).** Separates contributions from performance: `baseline` = the opening contributed-capital anchor, `deposit`/`withdrawal` = external cash in/out. Net Contributed Capital = baseline + Σ deposits − Σ withdrawals; **Growth $** = total account value − NCC; **money-weighted (Modified Dietz) return** + annualized (period ≥ 30d) over the tracked window. Pure calc in `stock_analyzer/account.py`. `db.load_account_flows()` / `add_account_flow()` / `delete_account_flow()` (writers are read-only-viewer no-ops). **Optional** — until created, load returns `[]` and the growth view stays hidden. **Display-only — feeds no gate.** RLS: `FOR ALL TO service_role`.
+
+### 6.9 `thesis_reviews` table
+
+```sql
+CREATE TABLE thesis_reviews (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticker      TEXT        NOT NULL,
+    trade_date  DATE,                          -- the BUY lot whose thesis is reviewed
+    reviewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status      TEXT        NOT NULL,           -- 'INTACT' | 'WEAKENING' | 'BROKEN'
+    summary     TEXT,                           -- ~100-word LLM read
+    inputs_hash TEXT,                           -- staleness key (skip re-review when inputs unchanged)
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**AI Intelligence F-1 thesis reviews (append-only history).** For each held position carrying a `trades.user_thesis`, an LLM grades the original conviction against current evidence and stores INTACT/WEAKENING/BROKEN + a short summary. **Append-only** (`save_thesis_review` inserts, never upserts) so review history accumulates; `inputs_hash` lets the app skip a re-review when nothing material changed. `db.load_thesis_reviews()` / `save_thesis_review()` (writer is read-only-viewer no-op). **Surfaced on 🧠 AI Insights only — no chip on core pages, and BROKEN does NOT issue an exit** (the rule-based deterioration ladder fires independently). Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
+
+### 6.10 `weekly_debriefs` table
+
+```sql
+CREATE TABLE weekly_debriefs (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    week_ending       DATE        NOT NULL UNIQUE,
+    generated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    performance_pct   NUMERIC,                  -- portfolio % for the week
+    spy_pct           NUMERIC,                  -- SPY % for the week
+    alpha_pct         NUMERIC,                  -- performance_pct − spy_pct
+    section_facts     TEXT,                     -- "What happened"
+    section_decisions TEXT,                     -- "Decisions you made"
+    section_patterns  TEXT,                     -- "Patterns this week"
+    section_watchnext TEXT,                     -- "One thing to watch"
+    email_sent        BOOLEAN     NOT NULL DEFAULT false,
+    email_sent_at     TIMESTAMPTZ
+);
+```
+
+**AI Intelligence F-3 weekly debrief (one row per week).** A 4-section narrative the LLM writes from a Python-assembled package (portfolio-vs-SPY + alpha, contributors/detractors, recs surfaced vs. acted). **Unique on `week_ending`** → upsert-safe. Emailed Sunday (Resend) via the thesis cron lane + on-demand. `db.load_weekly_debriefs(limit)` / `save_weekly_debrief()` (writer is read-only-viewer no-op). The in-app view adds a weekly alpha-trajectory bar once ≥ 2 weeks exist. Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
+
+### 6.11 `monthly_reports` table
+
+```sql
+CREATE TABLE monthly_reports (
+    id                        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    period_start              DATE        NOT NULL,
+    period_end                DATE        NOT NULL UNIQUE,
+    generated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    engine_alpha_pct          NUMERIC,                 -- mean alpha across acted picks (Q0 headline)
+    acted_count               INTEGER,                 -- DISTINCT acted New-Position tickers
+    missed_count              INTEGER,                 -- DISTINCT not-acted New-Position tickers
+    section_entry_quality     TEXT,                    -- Q0 narrative
+    section_signal_discipline TEXT,                    -- Q1 narrative
+    section_thesis            TEXT,                    -- Q2 (deferred — NULL in v1)
+    section_patterns          TEXT,                    -- pattern + focus
+    viz_json                  JSONB,                   -- FROZEN visual snapshot (flow + bands + missed)
+    email_sent                BOOLEAN     NOT NULL DEFAULT false,
+    email_sent_at             TIMESTAMPTZ
+);
+```
+
+**AI Intelligence F-4 monthly intelligence report (one row per period).** A monthly retrospective: Q0 entry-quality (does the engine pick well, by composite band) + Q1 signal-discipline (acted vs. missed, on alpha). Narrative built by `intelligence_report.build_report_package` → `generate_report` from the `recommendations_history` scorecard — the LLM narrates the aggregates, it never recomputes them. **`viz_json`** stores the frozen `recommendations_history.report_viz_snapshot` (decision-flow Sankey + alpha-by-band bar + ranked missed bar) so the report is an **immutable dated artifact** — re-rendered verbatim rather than drifting on a live recompute; display falls back to a live recompute only for rows saved before freezing. **Unique on `period_end`** → upsert-safe. First-Sunday-of-month cron + on-demand. Headline acted/missed counts are **distinct tickers** (`signal_flow`), not surfacings. `db.load_monthly_reports(limit)` / `save_monthly_report()` (writer is read-only-viewer no-op). Optional — inert until the DDL is applied (the freeze adds the column to an existing table: `alter table monthly_reports add column if not exists viz_json jsonb;`). RLS: `FOR ALL TO service_role`.
 
 ---
 
