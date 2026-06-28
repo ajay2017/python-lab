@@ -1,6 +1,6 @@
 # Plan: AI Intelligence Layer — Thesis, Earnings Transcripts, Portfolio Debrief, Intelligence Report
 
-**Status:** F-1 **shipped** 2026-06-27 · F-3 **shipped** 2026-06-27 · F-2 deferred (pending transcript API budget) · F-4 **approved 2026-06-27 — build now (Q0+Q1)**  
+**Status:** F-1 **shipped** 2026-06-27 · F-3 **shipped** 2026-06-27 · F-2 deferred (pending transcript API budget) · F-4 **shipped** 2026-06-27 (v1 = Q0 entry-quality + Q1 signal-discipline; Q2 thesis-discipline / Q3 cross-month patterns deferred until data matures) — distinct-count headline, narration count-discipline, `viz_json` snapshot freeze, period picker, and per-band all-graded alpha hardened 2026-06-28 (`5a23206`→`f2f5d21`)  
 **Date:** 2026-06-27  
 **Scope:** Four new capabilities (build sequentially in order listed)  
 **Philosophy:** LLM narrates and synthesizes; rule-based engine continues to decide and gate. No LLM output issues a buy/sell recommendation — that remains the composite score + gate system.
