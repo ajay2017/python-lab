@@ -3727,6 +3727,9 @@ if page == "🏠 Home":
         _db_grow   = _daily_brief.get("grow_today", {})
         _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
         _db_tone   = _market_context.get("tone", "flat")
+        # F-5: publish market tone so the Trade Journal thesis-draft can add regime
+        # context (best-effort; degrades to no regime if Home hasn't rendered yet).
+        st.session_state["_market_tone_cache"] = _db_tone
         _db_sp_pct = _market_context.get("sp500_pct", 0.0)
         _db_nq_pct = _market_context.get("nasdaq_pct", 0.0)
 
@@ -12823,6 +12826,117 @@ elif page == "📒 Trade Journal":
         if _cb_info:
             st.caption(_cb_info)
 
+        # ── F-5 Thesis Authoring — "✨ Draft thesis" (BUY only) ──────────────
+        # Lives OUTSIDE the form below (a form may contain only its submit
+        # button). On click it assembles the engine's entry-time evidence for the
+        # ticker and asks the LLM to draft a CANDIDATE thesis, then seeds the
+        # in-form thesis field via session_state. The user edits and OWNS the
+        # final text — the draft is never auto-saved (author-of-record invariant).
+        # Zero-dependency: no key / offline → button disabled, plain text field.
+        if _live_action == "BUY":
+            from stock_analyzer import thesis_advisor as _ta_auth
+            _tj_tk_draft  = (st.session_state.get("_tj_ticker") or "").strip().upper()
+            _ai_key_draft = (
+                st.secrets.get("anthropic", {}).get("api_key", "")
+                if hasattr(st, "secrets") else ""
+            )
+            _dc1, _dc2 = st.columns([1, 3])
+            with _dc1:
+                _draft_clicked = st.button(
+                    "✨ Draft thesis",
+                    key="_tj_draft_btn",
+                    disabled=(
+                        not _tj_tk_draft or not _ai_key_draft
+                        or st.session_state.get("_readonly", False)
+                    ),
+                    help=(
+                        "Draft an editable investment thesis from the engine's "
+                        "analysis of this ticker. You edit and own the final text."
+                    ),
+                )
+            with _dc2:
+                if not _ai_key_draft:
+                    st.caption("✨ AI drafting unavailable (no Anthropic key) — write your thesis below.")
+                elif not _tj_tk_draft:
+                    st.caption("Enter a ticker above to enable AI thesis drafting.")
+            if _draft_clicked and _tj_tk_draft:
+                with st.spinner(f"Drafting thesis for {_tj_tk_draft}…"):
+                    _b = st.session_state.get("_grow_composites", {}).get(_tj_tk_draft)
+                    if _b is None:
+                        try:
+                            _b = load_all(_tj_tk_draft, period="6mo")
+                        except Exception:
+                            _b = None
+                    if _b is None:
+                        _draft_inputs = _ta_auth.build_authoring_inputs()
+                    else:
+                        def _pct100(x):
+                            try:
+                                return float(x) * 100
+                            except Exception:
+                                return None
+                        _fin  = _b.get("financials", {}) or {}
+                        _bdf  = _b.get("df")
+                        _btech = {}
+                        try:
+                            if _bdf is not None and not _bdf.empty:
+                                _bc    = _bdf["Close"].dropna()
+                                _sma50 = _bdf["SMA_50"].iloc[-1] if "SMA_50" in _bdf.columns else None
+                                _btech = {
+                                    "above_sma50": (bool(_bc.iloc[-1] > _sma50)
+                                                    if _sma50 is not None and not _bc.empty else None),
+                                    "rsi": (float(_bdf["RSI"].iloc[-1])
+                                            if "RSI" in _bdf.columns and not _bdf["RSI"].dropna().empty else None),
+                                    "momentum_1m_pct": (float((_bc.iloc[-1] / _bc.iloc[-21] - 1) * 100)
+                                                        if len(_bc) > 21 else None),
+                                }
+                        except Exception:
+                            _btech = {}
+                        _eg     = _fin.get("earnings_growth")
+                        _etrend = None
+                        try:
+                            if _eg is not None:
+                                _etrend = (f"{'growing' if float(_eg) >= 0 else 'contracting'} "
+                                           f"~{abs(float(_eg)) * 100:.0f}% YoY")
+                        except Exception:
+                            _etrend = None
+                        _draft_inputs = _ta_auth.build_authoring_inputs(
+                            company_name=_b.get("name"),
+                            sector=_b.get("sector"),
+                            engine={
+                                "composite": _b.get("total"),
+                                "band":      (_b.get("rec") or {}).get("label"),
+                            },
+                            fundamentals={
+                                "revenue_growth": _pct100(_fin.get("revenue_growth")),
+                                "profit_margin":  _pct100(_fin.get("profit_margins")),
+                                "earnings_trend": _etrend,
+                            },
+                            catalyst={"next_earnings_date": _b.get("earnings")},
+                            news_headlines=[
+                                h.get("headline", "") for h in (_b.get("headlines") or [])
+                                if h.get("headline")
+                            ][:12],
+                            technical=_btech,
+                            regime={
+                                "bull": "market trending up",
+                                "bear": "market trending down",
+                                "flat": "mixed / range-bound market",
+                            }.get(st.session_state.get("_market_tone_cache")),
+                        )
+                    _draft_res = _ta_auth.draft_thesis(_tj_tk_draft, _draft_inputs, _ai_key_draft)
+                if _draft_res and _draft_res.get("draft"):
+                    st.session_state["_tj_thesis_seed"]         = _draft_res["draft"]
+                    st.session_state["_tj_thesis_seed_pending"] = True
+                    st.session_state["_tj_thesis_draft_text"]   = _draft_res["draft"]
+                    st.session_state["_tj_thesis_draft_for"]    = _tj_tk_draft
+                    st.rerun()
+                else:
+                    st.warning(
+                        "Couldn't draft a thesis — the AI layer may be offline or "
+                        "rate-limited. Write your thesis below."
+                    )
+
         # st.form prevents double-submission on rerun (shares / price / notes only)
         with st.form("log_trade_form", clear_on_submit=True):
             f_col3, f_col4, f_col5 = st.columns(3)
@@ -12883,35 +12997,48 @@ elif page == "📒 Trade Journal":
                 placeholder="e.g. Added on dip",
             )
 
-            # Thesis capture — BUY only; pre-populate from existing thesis for
-            # this ticker (add-to-winner flow) so the user edits rather than rewrites.
-            _thesis_prefill = ""
+            # Thesis capture — BUY only. The field is seeded from (a) a freshly
+            # generated AI draft (F-5; the "✨ Draft thesis" button OUTSIDE this
+            # form sets _tj_thesis_seed + _tj_thesis_seed_pending), else (b) the
+            # existing thesis for this ticker (add-to-winner). Uses an explicit
+            # key + seed-ONCE-before-instantiation so user edits are never wiped
+            # on rerun (see feedback_streamlit_widget_options_state). We seed only
+            # on two events: a pending draft, or the active ticker changing.
             if _live_action == "BUY":
                 _tj_ticker_now = (st.session_state.get("_tj_ticker") or "").strip().upper()
-                if _tj_ticker_now and prefill.get("user_thesis") is not None:
-                    _thesis_prefill = prefill.get("user_thesis", "")
-                elif _tj_ticker_now:
-                    # Look up most-recent thesis for this ticker from existing trades
-                    _prior_trades = st.session_state.get("trades_df", pd.DataFrame())
-                    if not _prior_trades.empty and "user_thesis" in _prior_trades.columns:
-                        _prior = _prior_trades[
-                            (_prior_trades["ticker"].astype(str).str.upper() == _tj_ticker_now) &
-                            (_prior_trades["action"] == "BUY") &
-                            (_prior_trades["user_thesis"].notna())
-                        ]
-                        if not _prior.empty:
-                            _thesis_prefill = str(_prior.iloc[0]["user_thesis"])
+                _seed_val = None
+                if st.session_state.pop("_tj_thesis_seed_pending", False):
+                    _seed_val = st.session_state.get("_tj_thesis_seed", "")
+                elif _tj_ticker_now != st.session_state.get("_tj_thesis_loaded_for"):
+                    # Ticker changed → seed with prior/add-to-winner thesis (may be "").
+                    if prefill.get("user_thesis") is not None:
+                        _seed_val = prefill.get("user_thesis", "")
+                    else:
+                        _seed_val = ""
+                        _prior_trades = st.session_state.get("trades_df", pd.DataFrame())
+                        if (_tj_ticker_now and not _prior_trades.empty
+                                and "user_thesis" in _prior_trades.columns):
+                            _prior = _prior_trades[
+                                (_prior_trades["ticker"].astype(str).str.upper() == _tj_ticker_now) &
+                                (_prior_trades["action"] == "BUY") &
+                                (_prior_trades["user_thesis"].notna())
+                            ]
+                            if not _prior.empty:
+                                _seed_val = str(_prior.iloc[0]["user_thesis"])
+                    st.session_state["_tj_thesis_loaded_for"] = _tj_ticker_now
+                if _seed_val is not None:
+                    st.session_state["_tj_thesis_input"] = _seed_val
 
                 user_thesis_val = st.text_area(
                     "Investment thesis (optional — but recommended)",
-                    value=_thesis_prefill,
+                    key="_tj_thesis_input",
                     placeholder=(
                         "E.g. NVDA benefits from AI training chip demand with no credible competitor "
                         "for 18–24 months. Holds as long as hyperscaler capex keeps growing. "
                         "Breaks if AMD closes the architectural gap or a major customer pulls their design win."
                     ),
-                    height=90,
-                    help="Saved and reviewed weekly by AI Insights to check if your conviction still holds.",
+                    height=110,
+                    help="Use ✨ Draft thesis above for an editable starting point. Saved and reviewed weekly by AI Insights.",
                 )
             else:
                 user_thesis_val = None
@@ -13080,12 +13207,21 @@ elif page == "📒 Trade Journal":
             elif not ticker_input:
                 st.error("Enter a ticker symbol.")
                 st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             elif shares_val <= 0:
                 st.error("Shares must be greater than 0.")
                 st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             elif price_val <= 0:
                 st.error("Price must be greater than 0.")
                 st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             elif _shares_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -13096,6 +13232,9 @@ elif page == "📒 Trade Journal":
                     unsafe_allow_html=True,
                 )
                 st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             elif _ticker_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -13106,6 +13245,9 @@ elif page == "📒 Trade Journal":
                     unsafe_allow_html=True,
                 )
                 st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             elif _price_block_reason:
                 st.markdown(
                     f"<div style='background:#3f1d1d;border:1px solid #ef4444;"
@@ -13116,6 +13258,9 @@ elif page == "📒 Trade Journal":
                     unsafe_allow_html=True,
                 )
                 st.session_state["_tj_prefill"] = _stash_failed_entry
+                if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
+                    st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                    st.session_state["_tj_thesis_seed_pending"] = True
             else:
                 realized_pnl = (
                     compute_realized_pnl(shares_val, price_val, cost_basis_val)
@@ -13129,6 +13274,17 @@ elif page == "📒 Trade Journal":
                     else "discretionary" if "discretionary" in _dc_followed_raw
                     else None
                 )
+                # F-5: tag how the thesis was authored — ai_draft = saved verbatim
+                # from the LLM draft; ai_edited = user changed the draft; manual =
+                # typed without using the draft. None for non-BUY / blank thesis.
+                _final_thesis  = (user_thesis_val or "").strip()
+                _thesis_source = None
+                if action == "BUY" and _final_thesis:
+                    _dft = (st.session_state.get("_tj_thesis_draft_text") or "").strip()
+                    if _dft and st.session_state.get("_tj_thesis_draft_for") == ticker_input:
+                        _thesis_source = "ai_draft" if _final_thesis == _dft else "ai_edited"
+                    else:
+                        _thesis_source = "manual"
                 record = {
                     "ticker":           ticker_input,
                     "action":           action,
@@ -13142,7 +13298,8 @@ elif page == "📒 Trade Journal":
                     "followed_signal":  _dc_followed,
                     "deviation_reason": (st.session_state.get("_tj_deviation_reason") or "").strip() or None,
                     "lesson":           (st.session_state.get("_tj_lesson") or "").strip() or None,
-                    "user_thesis":      (user_thesis_val or "").strip() or None if action == "BUY" else None,
+                    "user_thesis":      (_final_thesis or None) if action == "BUY" else None,
+                    "thesis_source":    _thesis_source,
                 }
                 # ── SELL: hold for confirmation — don't write to DB yet ──────
                 if action == "SELL":
@@ -13150,6 +13307,14 @@ elif page == "📒 Trade Journal":
                     st.rerun()
                 saved = db.save_trade(record)
                 if saved or not db.has_db():
+                    # F-5: reset thesis seeding so the field refreshes next run.
+                    # Only touch non-widget keys here (the text_area's own key must
+                    # not be mutated post-instantiation); loaded_for=None forces a
+                    # reseed on the next run, clearing the just-saved draft.
+                    st.session_state["_tj_thesis_loaded_for"] = None
+                    st.session_state.pop("_tj_thesis_draft_text", None)
+                    st.session_state.pop("_tj_thesis_draft_for", None)
+                    st.session_state.pop("_tj_thesis_seed", None)
                     if not db.has_db():
                         new_row = pd.DataFrame([{**record, "id": None, "traded_at": datetime.now().isoformat()}])
                         st.session_state.trades_df = pd.concat(

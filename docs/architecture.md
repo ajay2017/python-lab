@@ -128,7 +128,7 @@ python-lab/
     ├── split_detector.py           Stock split detection and adjustment
     ├── decision_journal.py         Signal-vs-override pattern analysis
     ├── recommendations_history.py  Retrospective scorecard (rule-based, no LLM): acted/missed outcomes graded on alpha, by-band/by-verdict rollups, distinct-ticker signal_flow + report_viz_snapshot (drives 📜 Recommendations History + the F-4 monthly visuals)
-    ├── thesis_advisor.py           AI Intelligence F-1: per-holding thesis review → INTACT/WEAKENING/BROKEN (thesis_reviews table)
+    ├── thesis_advisor.py           AI Intelligence F-1 review (per-holding thesis → INTACT/WEAKENING/BROKEN, thesis_reviews table) + F-5 authoring (draft_thesis: editable candidate thesis at BUY → trades.user_thesis / thesis_source)
     ├── debrief_advisor.py          AI Intelligence F-3: weekly portfolio debrief — 4-section narrative + Sunday email (weekly_debriefs table)
     ├── intelligence_report.py      AI Intelligence F-4: monthly retrospective — Q0 entry-quality + Q1 signal-discipline; build_report_package + frozen viz_json snapshot (monthly_reports table)
     ├── bundle_loader.py            Shared market-data bundle loader (load_all) — the app AND the headless cron load through the SAME path
@@ -545,11 +545,13 @@ CREATE TABLE trades (
     followed_signal  TEXT,                       -- 'yes' | 'no' | 'discretionary'
     deviation_reason TEXT,                       -- reason if signal not followed
     lesson           TEXT,                       -- lesson learned (post-trade)
+    user_thesis      TEXT,                       -- F-1: investor's conviction at entry (reviewed weekly by AI Insights)
+    thesis_source    TEXT,                       -- F-5: 'manual' | 'ai_draft' | 'ai_edited' (thesis-draft provenance)
     traded_at        TIMESTAMPTZ DEFAULT now()
 );
 ```
 
-The `signal_seen`, `followed_signal`, `deviation_reason`, and `lesson` columns were added after initial deployment. The `db.load_trades()` function backfills `None` for these columns in older rows to maintain backward compatibility.
+The `signal_seen`, `followed_signal`, `deviation_reason`, `lesson`, `user_thesis` (F-1), and `thesis_source` (F-5) columns were added after initial deployment. `db.load_trades()` backfills `None` for these columns in older rows to maintain backward compatibility. `save_trade` additionally retries the insert without `thesis_source` if that column does not yet exist, so trade logging never breaks before the one-time additive `ALTER TABLE trades ADD COLUMN thesis_source TEXT;` DDL is applied.
 
 ### 6.4 `manual_stops` table
 

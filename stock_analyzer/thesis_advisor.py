@@ -238,3 +238,183 @@ def run_batch_review(
         })
 
     return results
+
+
+# ── Thesis authoring (F-5) ──────────────────────────────────────────────────
+#
+# Generative complement to the reviewer above. Given the engine's evidence for a
+# candidate the user is about to buy, draft a CANDIDATE investment thesis the
+# user then edits and owns. Advisory only — this never gates and never decides.
+#
+# Two invariants (see docs/plans/thesis-authoring-analyst-desk.md):
+#   - The user is always the author of record. The draft is offered into an
+#     editable field and is NEVER persisted without the user accepting it.
+#   - The author (this module) reads entry-time evidence; the reviewer
+#     (review_thesis) weights post-entry evidence — they are not the same call.
+
+_DRAFT_SYSTEM_PROMPT = """You are helping an individual investor write the investment thesis for a stock they are about to buy. You draft a CANDIDATE thesis; the investor will edit it and own the final words.
+
+Write the thesis as flowing prose (not labelled sections), covering three things:
+1. The durable claim — why this company wins over the medium term: competitive position, demand, a catalyst. This is the conviction, not the entry timing.
+2. The supporting evidence — drawn ONLY from the evidence provided below. Do not invent a number, an order book, an analyst opinion, or an event.
+3. A falsifiable condition — end with one sentence beginning "Breaks if " that names the specific developments which would invalidate the thesis.
+
+Rules:
+- Ground every claim in the evidence given. If the evidence is thin, write a shorter, honest thesis — never pad it with invented facts.
+- Price levels, moving averages, RSI and momentum are ENTRY TIMING, not the thesis. Do not build the thesis on them.
+- No price targets. No probabilities or odds of success. No buy/sell/hold language. No gate or score values.
+- Plain language. No preamble, no disclaimer, no bullet points. Prose only.
+- Keep it under 500 characters.
+- End with exactly one sentence starting "Breaks if "."""
+
+
+def _format_authoring_prompt(ticker: str, inputs: dict) -> str:
+    lines = [f"Ticker: {ticker}"]
+    if inputs.get("company_name"):
+        lines.append(f"Company: {inputs['company_name']}")
+    if inputs.get("sector"):
+        lines.append(f"Sector: {inputs['sector']}")
+
+    lines.append("\nEvidence available:")
+
+    eng = inputs.get("engine", {})
+    if eng:
+        parts = []
+        if eng.get("composite") is not None:
+            parts.append(f"Composite score {eng['composite']:.0f}/100")
+        if eng.get("band"):
+            parts.append(f"({eng['band']})")
+        if eng.get("conviction"):
+            parts.append(f"conviction {eng['conviction']}")
+        if parts:
+            lines.append(
+                "Engine read (context only — do not restate as a recommendation): "
+                + " ".join(parts) + "."
+            )
+        gates = eng.get("gates_cleared") or []
+        if gates:
+            lines.append("Cleared entry checks: " + ", ".join(gates) + ".")
+
+    fund = inputs.get("fundamentals", {})
+    if fund:
+        parts = []
+        if fund.get("revenue_growth") is not None:
+            parts.append(f"Revenue growth {fund['revenue_growth']:+.1f}%.")
+        if fund.get("profit_margin") is not None:
+            parts.append(f"Profit margin {fund['profit_margin']:.1f}%.")
+        if fund.get("earnings_trend"):
+            parts.append(f"Earnings trend: {fund['earnings_trend']}.")
+        if parts:
+            lines.append("Fundamentals: " + " ".join(parts))
+
+    cat = inputs.get("catalyst", {})
+    if cat:
+        parts = []
+        if cat.get("next_earnings_date"):
+            parts.append(f"Next earnings {cat['next_earnings_date']}.")
+        if cat.get("note"):
+            parts.append(str(cat["note"]))
+        if parts:
+            lines.append("Catalyst: " + " ".join(parts))
+
+    headlines = inputs.get("news_headlines", [])
+    if headlines:
+        lines.append(f"Recent news ({len(headlines)} headlines):")
+        for h in headlines[:12]:
+            lines.append(f"  - {h}")
+
+    tech = inputs.get("technical", {})
+    if tech:
+        trend = "above" if tech.get("above_sma50") else "below"
+        parts = [f"Price is {trend} the 50-day moving average."]
+        if tech.get("rsi") is not None:
+            parts.append(f"RSI {tech['rsi']:.0f}.")
+        if tech.get("momentum_1m_pct") is not None:
+            parts.append(f"1-month change {tech['momentum_1m_pct']:+.1f}%.")
+        lines.append("Entry timing (NOT the thesis): " + " ".join(parts))
+
+    if inputs.get("regime"):
+        lines.append(f"Market regime: {inputs['regime']}.")
+
+    lines.append("\nWrite the candidate thesis now.")
+    return "\n".join(lines)
+
+
+def build_authoring_inputs(
+    company_name: str | None = None,
+    sector: str | None = None,
+    engine: dict | None = None,
+    fundamentals: dict | None = None,
+    catalyst: dict | None = None,
+    news_headlines: list[str] | None = None,
+    technical: dict | None = None,
+    regime: str | None = None,
+) -> dict:
+    """
+    Assemble the structured evidence package passed to draft_thesis().
+
+    engine keys (all optional):
+        composite (float 0-100), band (str e.g. "Strong Buy"),
+        conviction (str), gates_cleared (list[str])
+    fundamentals keys (all optional):
+        revenue_growth (float, %), profit_margin (float, %), earnings_trend (str)
+    catalyst keys (all optional):
+        next_earnings_date (str), note (str)
+    news_headlines: list of plain-text headline strings (last ~30 days)
+    technical keys (all optional, labelled to the LLM as entry timing only):
+        above_sma50 (bool), rsi (float), momentum_1m_pct (float)
+    regime: short market-regime tag string
+    """
+    return {
+        "company_name":   company_name,
+        "sector":         sector,
+        "engine":         engine         or {},
+        "fundamentals":   fundamentals   or {},
+        "catalyst":       catalyst       or {},
+        "news_headlines": news_headlines or [],
+        "technical":      technical      or {},
+        "regime":         regime,
+    }
+
+
+def draft_thesis(
+    ticker: str,
+    inputs: dict,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+    max_tokens: int = 300,
+) -> dict | None:
+    """
+    Draft a CANDIDATE investment thesis for `ticker` from the engine's evidence.
+
+    Returns a dict with keys:
+        draft        — the candidate thesis text (prose; ends with "Breaks if ...")
+        model        — model used
+        generated_at — ISO timestamp (UTC)
+
+    Returns None on any failure — the caller must surface an explicit offline
+    state and fall back to a plain manual text field. The returned draft is a
+    CANDIDATE only; the user edits and owns the final text (never auto-saved).
+    """
+    if not api_key:
+        return None
+    try:
+        import anthropic
+        client      = anthropic.Anthropic(api_key=api_key)
+        user_prompt = _format_authoring_prompt(ticker, inputs)
+        response    = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=_DRAFT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text = response.content[0].text.strip() if response.content else ""
+        if not text:
+            return None
+        return {
+            "draft":        text,
+            "model":        model,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception:
+        return None

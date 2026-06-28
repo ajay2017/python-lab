@@ -644,7 +644,7 @@ def load_watchlist() -> list[str]:
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "cost_basis", "realized_pnl", "notes", "trigger_type",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
-               "traded_at", "user_thesis"]
+               "traded_at", "user_thesis", "thesis_source"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -661,7 +661,7 @@ def load_trades() -> pd.DataFrame:
                 df = pd.DataFrame(rows)
                 # Backfill columns for rows pre-dating each feature addition
                 for col in ("signal_seen", "followed_signal", "deviation_reason",
-                            "lesson", "user_thesis"):
+                            "lesson", "user_thesis", "thesis_source"):
                     if col not in df.columns:
                         df[col] = None
                 return df
@@ -687,6 +687,17 @@ def save_trade(record: dict) -> bool:
         _client().table("trades").insert(record).execute()
         return True
     except Exception as e:
+        # Graceful degradation: an additive optional column (thesis_source, F-5)
+        # may not exist yet in Supabase (DDL not applied). Drop it and retry once
+        # so trade logging never breaks while the column ships inert until DDL.
+        if "thesis_source" in str(e) and "thesis_source" in record:
+            try:
+                _client().table("trades").insert(
+                    {k: v for k, v in record.items() if k != "thesis_source"}
+                ).execute()
+                return True
+            except Exception as e2:
+                e = e2
         from stock_analyzer import api_health as _ah
         _ah.record("supabase", "error", msg=str(e)[:120])
         st.error("⛔ Failed to save trade — see Data Health tab for details.")
