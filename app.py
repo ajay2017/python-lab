@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import pytz as _pytz
 
 # All date comparisons use ET so the calendar never flips at midnight UTC.
