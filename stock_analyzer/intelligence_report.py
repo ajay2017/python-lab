@@ -138,7 +138,7 @@ def build_report_package(
     """
     from stock_analyzer.recommendations_history import (
         match_recs_to_trades, compute_outcomes, summary_stats,
-        by_composite_band, by_verdict, signal_flow,
+        by_composite_band, by_verdict, report_viz_snapshot,
     )
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
 
@@ -149,6 +149,7 @@ def build_report_package(
         "has_data":       False,
         "q0_ready":       False,
         "min_graded":     min_graded,
+        "viz":            None,
         "n_total":        0,
         "n_acted":        0,
         "n_missed":       0,
@@ -170,37 +171,46 @@ def build_report_package(
     if recs_df is None or (hasattr(recs_df, "empty") and recs_df.empty):
         return package
 
-    # Scope to actionable recs (default: New Positions to Initiate). The awareness-
-    # only "More Buy Candidates" feed is excluded — the report judges the engine's
-    # actual entry picks, not names it surfaced for awareness and steered you away from.
-    if rec_types is not None and "rec_type" in getattr(recs_df, "columns", []):
-        recs_df = recs_df[recs_df["rec_type"].isin(rec_types)]
-        if recs_df.empty:
-            return package
-
-    matched  = match_recs_to_trades(recs_df, trades_df)
-    enriched = compute_outcomes(
+    # Compute outcomes over the FULL window (every rec_type) FIRST. The visual snapshot
+    # and the distinct acted/missed counts depend on "acted on via ANY surfacing"
+    # detection that SPANS rec_types — a name bought on a day it surfaced as a buy-
+    # candidate must not read as a missed New Position. (Pre-filtering to new_pick here,
+    # as an earlier version did, silently dropped that safeguard and made the saved
+    # counts disagree with the live Recommendations-History view.) The aggregate MEANS
+    # are scoped to actionable rec_types afterwards, so Q0/Q1 still judge only the
+    # engine's real entry picks, not the awareness feed.
+    matched      = match_recs_to_trades(recs_df, trades_df)
+    enriched_all = compute_outcomes(
         matched, current_prices or {}, today=period_end,
         spy_close_by_date=spy_close_by_date or {}, min_days=REC_SCORE_MIN_DAYS,
     )
-    if not enriched:
+    if not enriched_all:
         return package
 
-    stats = summary_stats(enriched)
-    # Behavioural counts are DISTINCT-by-ticker (a name recurring across days counts
-    # once) — the same basis as the signal-flow Sankey, so the headline "acted / not
-    # acted" can never disagree with the chart. summary_stats counts surfacings
-    # (instances), which would read as misleadingly large name counts (the 253-vs-
-    # ~dozen-names issue), so it's used only for the graded-outcome aggregates below.
-    flow = signal_flow(enriched)   # enriched is already rec_types-scoped above
-    package["has_data"]   = flow["n_total"] > 0
-    package["n_total"]    = flow["n_total"]
-    package["n_acted"]    = flow["n_acted"]
-    package["n_missed"]   = flow["n_missed"]
-    package["n_graded"]   = stats["n_priced"]   # surfacings matured enough to grade (internal)
+    # Visual snapshot (decision-flow Sankey + alpha-by-band bar + ranked missed bar).
+    # DISTINCT-by-ticker counts (a name recurring across days counts once — the basis
+    # the chart uses, never the misleadingly large surfacing count). FROZEN with the
+    # report (db viz_json) and re-rendered verbatim; the app shares this exact helper on
+    # its live-fallback path so a frozen report and a recompute can never diverge.
+    viz  = report_viz_snapshot(enriched_all, rec_types=rec_types)
+    flow = viz["flow"]
+    package["viz"]         = viz
+    package["has_data"]    = flow["n_total"] > 0
+    package["n_total"]     = flow["n_total"]
+    package["n_acted"]     = flow["n_acted"]
+    package["n_missed"]    = flow["n_missed"]
     package["action_rate"] = (
         round(flow["n_acted"] / flow["n_total"] * 100.0, 1) if flow["n_total"] else None
     )
+    if not package["has_data"]:
+        return package   # no actionable (New Position) names surfaced in the window
+
+    # Aggregate means / bands / verdicts — scoped to actionable rec_types (the report's
+    # Q0/Q1 subject). summary_stats counts surfacings, used only for the graded-outcome
+    # aggregates (alpha, best/worst), never for the headline name counts above.
+    scoped = [r for r in enriched_all if rec_types is None or r.get("rec_type") in rec_types]
+    stats  = summary_stats(scoped)
+    package["n_graded"]   = stats["n_priced"]   # surfacings matured enough to grade (internal)
     package["engine_alpha_pct"] = stats["avg_acted_alpha"]   # Q0 headline (mean over acted picks)
     package["avg_acted_pct"]    = stats["avg_acted_pct"]
     package["avg_missed_pct"]   = stats["avg_missed_pct"]
@@ -211,8 +221,8 @@ def build_report_package(
     package["worst"]  = stats["worst"]
     package["q0_ready"] = stats["n_priced"] >= min_graded
 
-    package["band_rows"]    = by_composite_band(enriched)
-    package["verdict_rows"] = by_verdict(enriched)
+    package["band_rows"]    = by_composite_band(scoped)
+    package["verdict_rows"] = by_verdict(scoped)
 
     if weekly_rows:
         for w in weekly_rows:
@@ -368,6 +378,9 @@ def generate_report(
             "engine_alpha_pct": package.get("engine_alpha_pct"),
             "acted_count":   package.get("n_acted"),
             "missed_count":  package.get("n_missed"),
+            # Freeze the visual snapshot so the report is an immutable dated artifact —
+            # the chart re-renders verbatim later instead of drifting on a live recompute.
+            "viz_json":      package.get("viz"),
             **sections,
             "section_thesis": None,   # Q2 deferred until enough matured thesis reviews
             "email_sent":    False,

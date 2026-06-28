@@ -856,7 +856,7 @@ _MONTHLY_REPORT_COLS = [
     "id", "period_start", "period_end", "generated_at", "engine_alpha_pct",
     "acted_count", "missed_count", "section_entry_quality",
     "section_signal_discipline", "section_thesis", "section_patterns",
-    "email_sent", "email_sent_at",
+    "viz_json", "email_sent", "email_sent_at",
 ]
 
 

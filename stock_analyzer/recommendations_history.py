@@ -574,6 +574,60 @@ def signal_flow(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> dict:
     return out
 
 
+def report_viz_snapshot(enriched: list[dict], rec_types: tuple = ("new_pick",)) -> dict:
+    """
+    Everything the F-4 Monthly report's THREE visuals need, computed from ONE
+    full (all-rec_type) enriched set so the decision-flow Sankey, the alpha-by-band
+    bar, and the ranked missed-opportunity bar can never disagree with each other,
+    with the headline counts, or with the Recommendations History page.
+
+    Pass the FULL enriched (every rec_type in the window): `signal_flow` and
+    `distinct_missed` detect "acted on via ANY surfacing" across rec_types (so a name
+    bought on a buy-candidate day isn't mislabelled missed) and then scope the COUNTED
+    names to `rec_types`. `by_composite_band` has no rec_type arg, so it is scoped here.
+
+    The return is JSON-serialisable (ints, floats, strings, None) so it can be FROZEN
+    alongside the saved report (db column `viz_json`) and re-rendered verbatim later —
+    making a monthly report an immutable dated artifact rather than a live recompute
+    that drifts as prices move and names mature. The app re-renders this same shape on
+    the live-fallback path for reports saved before freezing.
+
+        {
+          "flow":         {n_total, n_acted, n_missed,
+                           acted_win/loss/flat, missed_win/loss/flat},   # signal_flow
+          "bands":        [{"band": str, "avg_alpha": float}, ...],      # scoped, avg_alpha not None
+          "missed":       [{"ticker": str, "outcome_pct": float}, ...],  # distinct missed, for the bar
+          "missed_split": {n_distinct, n_winners, n_dodged, n_flat},     # JSON-safe scalars only
+        }
+    """
+    flow   = signal_flow(enriched, rec_types=rec_types)
+    scoped = [r for r in enriched if rec_types is None or r.get("rec_type") in rec_types]
+    bands  = [
+        {"band": b["band"], "avg_alpha": b["avg_alpha"]}
+        for b in by_composite_band(scoped)
+        if b.get("avg_alpha") is not None
+    ]
+    missed_rows = distinct_missed(enriched, rec_types=rec_types)
+    missed = [
+        {"ticker": r["ticker"], "outcome_pct": r["outcome_pct"]}
+        for r in missed_rows
+    ]
+    split = missed_split(missed_rows)
+    # Keep only JSON-safe scalars from the split (biggest_miss/dodge carry date objects).
+    missed_split_safe = {
+        "n_distinct": split["n_distinct"],
+        "n_winners":  split["n_winners"],
+        "n_dodged":   split["n_dodged"],
+        "n_flat":     split["n_flat"],
+    }
+    return {
+        "flow":         flow,
+        "bands":        bands,
+        "missed":       missed,
+        "missed_split": missed_split_safe,
+    }
+
+
 def daily_volume(enriched: list[dict]) -> list[dict]:
     """
     For the recs-per-day chart: count of recs surfaced per rec_date, split

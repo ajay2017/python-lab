@@ -1,4 +1,5 @@
 import os
+import json
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -17217,7 +17218,7 @@ elif page == "🧠 AI Insights":
     from stock_analyzer import intelligence_report as _ir
     from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
 
-    _mr_df = _ai_db.load_monthly_reports(limit=1)
+    _mr_df = _ai_db.load_monthly_reports(limit=12)
 
     if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
                  help="Generate an intelligence report for the trailing ~4 weeks from recommendation history."):
@@ -17312,10 +17313,41 @@ elif page == "🧠 AI Insights":
             "table — run the DDL in Supabase to activate)."
         )
     else:
-        _mr = _mr_df.iloc[0]
-        _mr_alpha  = _mr.get("engine_alpha_pct")
-        _mr_acted  = _mr.get("acted_count")
-        _mr_missed = _mr.get("missed_count")
+        # Month-by-month archive: one entry per calendar month (the row with the latest
+        # period_end in each month wins, since an on-demand re-run within a month would
+        # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
+        # first row seen per (year, month) is that month's latest. Labelled by the month
+        # the report's window ends in.
+        _mr_opts: list = []
+        _mr_seen: set = set()
+        for _ri in range(len(_mr_df)):
+            try:
+                _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
+                _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
+            except Exception:
+                _key, _lbl = (_ri,), f"Report {_ri + 1}"
+            if _key in _mr_seen:
+                continue
+            _mr_seen.add(_key)
+            _mr_opts.append((_lbl, _ri))
+
+        if len(_mr_opts) > 1:
+            # Harden the variable-options widget: drop a stored selection that has aged
+            # out of the window (a month falling past limit=12), else Streamlit raises on
+            # an out-of-range persisted value (feedback_streamlit_widget_options_state).
+            if st.session_state.get("_mr_period_select") not in range(len(_mr_opts)):
+                st.session_state.pop("_mr_period_select", None)
+            _mr_sel_i = st.selectbox(
+                "Report month", options=list(range(len(_mr_opts))),
+                format_func=lambda i: _mr_opts[i][0], key="_mr_period_select",
+                help="Browse past monthly reports. Each is frozen exactly as it was generated.",
+            )
+            _mr_idx = _mr_opts[_mr_sel_i][1]
+        else:
+            _mr_idx = _mr_opts[0][1] if _mr_opts else 0
+
+        _mr = _mr_df.iloc[_mr_idx]
+        _mr_alpha = _mr.get("engine_alpha_pct")
 
         st.caption(
             f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
@@ -17323,64 +17355,81 @@ elif page == "🧠 AI Insights":
             + (" · ✉ emailed" if _mr.get("email_sent") else "")
         )
 
-        # Compute the enriched recs + signal-flow ONCE, UP FRONT — they drive both
-        # the headline counts AND every visual, so the header can never disagree
-        # with the Sankey. Reuses the SAME pure helpers as Recommendations History;
-        # live over the report's window. Fail-soft — any failure falls back to the
-        # saved counts / hides the visuals; the narrative is untouched.
-        from stock_analyzer.recommendations_history import (
-            match_recs_to_trades as _mrm, compute_outcomes as _mrco,
-            distinct_missed as _mrdm, missed_split as _mrms,
-            signal_flow as _mrsf, by_composite_band as _mrbb,
-        )
-        from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
+        # Visuals come from ONE snapshot so the header, Sankey, band bar and missed bar
+        # can never disagree. Prefer the FROZEN snapshot saved with the report (immutable,
+        # and needs no price fetch); fall back to a LIVE recompute for reports saved
+        # before freezing — via the SAME pure helper, so both paths render identically.
+        from stock_analyzer.recommendations_history import report_viz_snapshot as _mr_vizfn
 
-        _mr_en2: list = []
-        try:
-            _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
-            _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
-            _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
-            if _mr_recs2 is not None and not _mr_recs2.empty:
-                _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
-                _mr_tk2 = sorted({
-                    str(t).strip().upper()
-                    for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
-                })
-                _mr_px2: dict = {}
+        _mr_viz = None
+        _mr_frozen = False
+        _raw_viz = _mr.get("viz_json")
+        if isinstance(_raw_viz, float):          # NaN placeholder for a missing jsonb cell
+            _raw_viz = None
+        if isinstance(_raw_viz, str):
+            try:
+                _raw_viz = json.loads(_raw_viz)
+            except Exception:
+                _raw_viz = None
+        if isinstance(_raw_viz, dict) and _raw_viz.get("flow"):
+            _mr_viz, _mr_frozen = _raw_viz, True
+
+        if _mr_viz is None:
+            # Live fallback: rebuild the enriched recs over the report's window, then the
+            # shared snapshot. Fail-soft — any failure just hides the visuals.
+            from stock_analyzer.recommendations_history import (
+                match_recs_to_trades as _mrm, compute_outcomes as _mrco,
+            )
+            from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
+            _mr_en2: list = []
+            try:
+                _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
+                _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
+                _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
+                if _mr_recs2 is not None and not _mr_recs2.empty:
+                    _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
+                    _mr_tk2 = sorted({
+                        str(t).strip().upper()
+                        for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
+                    })
+                    _mr_px2: dict = {}
+                    try:
+                        _p2 = fetch_live_prices(_mr_tk2) if _mr_tk2 else {}
+                        _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
+                    except Exception:
+                        _mr_px2 = {}
+                    _mr_spy2: dict = {}
+                    try:
+                        _h2 = _cached_spy("6mo")
+                        if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
+                            for _i2, _r2 in _h2.iterrows():
+                                _d2 = _i2.date() if hasattr(_i2, "date") else None
+                                try:
+                                    _c2 = float(_r2["Close"])
+                                except (TypeError, ValueError):
+                                    _c2 = None
+                                if _d2 is not None and _c2 and _c2 > 0:
+                                    _mr_spy2[_d2] = _c2
+                    except Exception:
+                        _mr_spy2 = {}
+                    _mr_en2 = _mrco(
+                        _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
+                        spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
+                    )
+            except Exception:
+                _mr_en2 = []
+            if _mr_en2:
                 try:
-                    _p2 = fetch_live_prices(_mr_tk2) if _mr_tk2 else {}
-                    _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
+                    _mr_viz = _mr_vizfn(_mr_en2, rec_types=("new_pick",))
                 except Exception:
-                    _mr_px2 = {}
-                _mr_spy2: dict = {}
-                try:
-                    _h2 = _cached_spy("6mo")
-                    if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
-                        for _i2, _r2 in _h2.iterrows():
-                            _d2 = _i2.date() if hasattr(_i2, "date") else None
-                            try:
-                                _c2 = float(_r2["Close"])
-                            except (TypeError, ValueError):
-                                _c2 = None
-                            if _d2 is not None and _c2 and _c2 > 0:
-                                _mr_spy2[_d2] = _c2
-                except Exception:
-                    _mr_spy2 = {}
-                _mr_en2 = _mrco(
-                    _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
-                    spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
-                )
-        except Exception:
-            _mr_en2 = []
+                    _mr_viz = None
 
-        _mr_flow = _mrsf(_mr_en2, rec_types=("new_pick",)) if _mr_en2 else None
+        _mr_flow = _mr_viz.get("flow") if _mr_viz else None
 
-        # Headline counts: DISTINCT new-position tickers (matches the Sankey). Fall
-        # back to the saved record only if the live recompute failed. A saved report
-        # generated before the distinct-count fix may store surfacing counts, so the
-        # live flow is preferred whenever available.
-        _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr_acted
-        _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr_missed
+        # Headline counts: DISTINCT New-Position tickers (matches the Sankey). Fall back
+        # to the saved scalar counts only if no snapshot could be produced.
+        _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr.get("acted_count")
+        _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr.get("missed_count")
 
         def _mr_colour(v):
             try:
@@ -17410,7 +17459,10 @@ elif page == "🧠 AI Insights":
             )
         st.caption(
             "Counts are **distinct New-Position tickers** this period — a name surfaced "
-            "across many days counts once (not daily surfacings)."
+            "across many days counts once (not daily surfacings). "
+            + ("Frozen as generated, so the report reads the same whenever you open it."
+               if _mr_frozen
+               else "Recomputed live (saved before report-freezing was added).")
         )
         st.markdown("")
 
@@ -17441,67 +17493,64 @@ elif page == "🧠 AI Insights":
                 st.markdown("")
 
         # Q0 evidence — average alpha by composite band. Does higher conviction
-        # actually deliver higher alpha? Scoped to new_pick to match the report's Q0.
-        if _mr_en2:
-            _mr_np    = [r for r in _mr_en2 if r.get("rec_type") == "new_pick"]
-            _mr_bands = [b for b in _mrbb(_mr_np) if b.get("avg_alpha") is not None]
-            if len(_mr_bands) >= 2:
-                _mb_x = [b["band"] for b in _mr_bands]
-                _mb_y = [b["avg_alpha"] for b in _mr_bands]
-                _mb_fig = go.Figure(go.Bar(
-                    x=_mb_x, y=_mb_y,
-                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
-                    text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
-                ))
-                _mb_fig.update_layout(
-                    title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
-                               font=dict(size=13), x=0),
-                    height=240, margin=dict(l=8, r=8, t=36, b=8),
-                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
-                    xaxis=dict(title=None), showlegend=False,
-                )
-                st.plotly_chart(_mb_fig, use_container_width=True)
-                st.caption(
-                    "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
-                    "Buy (65–74), the engine's top tier underperformed this period — the "
-                    "narrative above flags whether that's worth your own review."
-                )
-                st.markdown("")
+        # actually deliver higher alpha? From the same snapshot (scoped to new_pick).
+        _mr_bands = _mr_viz.get("bands") if _mr_viz else None
+        if _mr_bands and len(_mr_bands) >= 2:
+            _mb_x = [b["band"] for b in _mr_bands]
+            _mb_y = [b["avg_alpha"] for b in _mr_bands]
+            _mb_fig = go.Figure(go.Bar(
+                x=_mb_x, y=_mb_y,
+                marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
+                text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
+            ))
+            _mb_fig.update_layout(
+                title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
+                           font=dict(size=13), x=0),
+                height=240, margin=dict(l=8, r=8, t=36, b=8),
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                xaxis=dict(title=None), showlegend=False,
+            )
+            st.plotly_chart(_mb_fig, use_container_width=True)
+            st.caption(
+                "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
+                "Buy (65–74), the engine's top tier underperformed this period — the "
+                "narrative above flags whether that's worth your own review."
+            )
+            st.markdown("")
 
         # Q1 evidence — missed-opportunity ranked bar (named, ranked magnitudes —
-        # the one thing a Sankey can't show). Reuses the same _mr_en2.
-        if _mr_en2:
-            _mr_miss = _mrdm(_mr_en2)
-            if _mr_miss:
-                _mr_sp = _mrms(_mr_miss)
-                st.markdown("**🎯 What you skipped this period**")
-                _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
-                _mr_sel = sorted(
-                    _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
-                    key=lambda r: r["outcome_pct"],
-                )
-                _mr_xc = [r["outcome_pct"] for r in _mr_sel]
-                _mr_yc = [r["ticker"] for r in _mr_sel]
-                _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
-                _mr_fig = go.Figure(go.Bar(
-                    x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
-                    text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
-                ))
-                _mr_fig.update_layout(
-                    height=max(200, 40 + 24 * len(_mr_sel)),
-                    margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
-                    yaxis=dict(title=None), showlegend=False,
-                )
-                st.plotly_chart(_mr_fig, use_container_width=True)
-                st.caption(
-                    f"Of **{_mr_sp['n_distinct']}** name(s) surfaced as **New Positions to Initiate** "
-                    f"but never acted on this period: **{_mr_sp['n_winners']}** rose (missed), "
-                    f"**{_mr_sp['n_dodged']}** fell (dodged). Green = rose after surfacing; red = fell. "
-                    "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
-                    "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
-                )
+        # the one thing a Sankey can't show). From the same snapshot.
+        _mr_miss = _mr_viz.get("missed") if _mr_viz else None
+        if _mr_miss:
+            _mr_sp = _mr_viz.get("missed_split", {})
+            st.markdown("**🎯 What you skipped this period**")
+            _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
+            _mr_sel = sorted(
+                _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
+                key=lambda r: r["outcome_pct"],
+            )
+            _mr_xc = [r["outcome_pct"] for r in _mr_sel]
+            _mr_yc = [r["ticker"] for r in _mr_sel]
+            _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
+            _mr_fig = go.Figure(go.Bar(
+                x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
+                text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
+            ))
+            _mr_fig.update_layout(
+                height=max(200, 40 + 24 * len(_mr_sel)),
+                margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                yaxis=dict(title=None), showlegend=False,
+            )
+            st.plotly_chart(_mr_fig, use_container_width=True)
+            st.caption(
+                f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **New Positions to Initiate** "
+                f"but never acted on this period: **{_mr_sp.get('n_winners', 0)}** rose (missed), "
+                f"**{_mr_sp.get('n_dodged', 0)}** fell (dodged). Green = rose after surfacing; red = fell. "
+                "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
+                "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
+            )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
