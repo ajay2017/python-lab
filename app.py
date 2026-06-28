@@ -4073,7 +4073,7 @@ if page == "🏠 Home":
             # silent — see gate_funnel_counts() + the caption.
             _gf = gate_funnel_counts(grow)
             if _gf["evaluated"] >= 2 and _gf["new_picks"] < _gf["evaluated"]:
-                with st.expander("🔎 How today's candidates cleared the gates", expanded=False):
+                with st.expander("🔎 How today's candidates cleared the gates", expanded=True):
                     _gf_targets = [
                         ("✅ New Positions to Initiate", _gf["new_picks"],             "#22c55e", "rgba(34,197,94,0.45)"),
                         ("Composite below Buy bar",      _gf["composite_skipped"],     "#f59e0b", "rgba(245,158,11,0.35)"),
