@@ -52,7 +52,7 @@ Background you must use correctly:
 Write EXACTLY three sections with these bold headers and nothing before the first header:
 
 **Entry quality**
-How well did the ENGINE pick this period? Use the composite-band and verdict breakdowns: did higher-composite / Confirmed recommendations actually convert and beat SPY? Where did quality cluster or weaken (e.g. a band or sector)? If the engine's high-conviction band underperformed a lower band, you MAY flag that the entry threshold is worth the investor's own review — but NEVER state a new threshold number, NEVER recommend a specific change, and NEVER tell the investor to change a gate; that is their policy decision alone. If there are too few matured recommendations to grade, say exactly that in one sentence and move on.
+How well did the ENGINE pick this period? Use the composite-band and verdict breakdowns: did higher-composite / Confirmed recommendations actually convert and beat SPY? The per-band / per-verdict "engine alpha" figures given to you are across ALL graded names in that band (acted or not) — the exact numbers shown in the band chart the reader sees; quote those, never an acted-only subset, so your text matches the chart. Where did quality cluster or weaken (e.g. a band or sector)? If the engine's high-conviction band underperformed a lower band, you MAY flag that the entry threshold is worth the investor's own review — but NEVER state a new threshold number, NEVER recommend a specific change, and NEVER tell the investor to change a gate; that is their policy decision alone. If there are too few matured recommendations to grade, say exactly that in one sentence and move on.
 
 **Signal discipline**
 Did the investor ACT on what the engine surfaced, and did acting help? Use the action rate, acted-vs-missed average outcome and alpha, and the best/worst named outcomes. Was money left on the table by ignoring signals, or did acting add value? Be specific and factual; name tickers from the data.
@@ -79,22 +79,24 @@ def _pct(v) -> str:
 
 
 def _band_line(row: dict) -> str:
-    """One scorecard row → a compact prompt line."""
+    """One scorecard row → a compact prompt line. The band/verdict ALPHA reported here is
+    `avg_alpha` — the engine's alpha across ALL graded names in the band (acted or not),
+    the SAME figure the entry-quality band chart plots — so the narrative's per-band
+    numbers match the chart. (Acted-vs-missed is an overall, not per-band, figure and
+    lives in the signal-discipline inputs; quoting a per-band acted-only alpha here is
+    what made the prose say a band was -3.0% while the chart showed it +0.8%.)"""
     name = row.get("band") or row.get("verdict") or "—"
     n    = row.get("n_total", 0)
     ar   = row.get("action_rate")
     npr  = row.get("n_priced", 0)
-    ao   = row.get("avg_acted_pct")
-    aa   = row.get("avg_acted_alpha")
+    al   = row.get("avg_alpha")   # ALL-graded band alpha — matches the band chart
     bits = [f"{name}: {n} rec(s)"]
     if ar is not None:
         bits.append(f"acted {ar:.0f}%")
     if npr:
         bits.append(f"{npr} matured")
-        if ao is not None:
-            bits.append(f"avg acted {_pct(ao)}")
-        if aa is not None:
-            bits.append(f"alpha {_pct(aa)}")
+        if al is not None:
+            bits.append(f"engine alpha {_pct(al)}")
     return "  " + " · ".join(bits)
 
 
@@ -288,7 +290,11 @@ def _format_prompt(package: dict) -> str:
 
     if package.get("band_rows"):
         lines.append("")
-        lines.append("By composite band (the engine's own conviction tiers — higher should perform better):")
+        lines.append(
+            "By composite band — 'engine alpha' is across ALL graded names in the band "
+            "(acted or not), the engine-quality view the band chart plots; quote these "
+            "for entry quality (higher-conviction tiers should sit higher):"
+        )
         for row in package["band_rows"]:
             lines.append(_band_line(row))
 
