@@ -99,6 +99,7 @@ from stock_analyzer.constants import (
     DATA_LOAD_MAX_WORKERS,
     DATA_LOAD_STAGGER_SEC,
     BUNDLE_CACHE_MAX_AGE_DAYS,
+    DEFAULT_PORTFOLIO_VALUE,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -1119,7 +1120,7 @@ with st.sidebar:
     )
     _news_slot = st.container()   # placeholder — filled by page code below
 
-    portfolio_value = _pv if _pv > 0 else 50_000
+    portfolio_value = _pv if _pv > 0 else DEFAULT_PORTFOLIO_VALUE
     st.divider()
     if db.has_db():
         st.markdown("🟢 **Supabase connected** — data persists")
@@ -12114,7 +12115,7 @@ elif page == "📋 Watchlist":
         _earn_d   = _wr["earn_days"]
 
         # Position sizing for this watchlist candidate
-        _pv_now = st.session_state.get("_portfolio_value") or 50_000
+        _pv_now = st.session_state.get("_portfolio_value") or DEFAULT_PORTFOLIO_VALUE
         _wl_ps = None
         if _price and _stop and _price > _stop and _pv_now > 0:
             try:

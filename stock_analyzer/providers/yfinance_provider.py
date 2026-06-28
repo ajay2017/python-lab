@@ -306,7 +306,14 @@ class YFinanceProvider(DataProvider):
         try:
             hist = _retry(lambda: yf.Ticker("^IRX").history(period="5d"))
             if hist is not None and not hist.empty:
-                return round(float(hist["Close"].iloc[-1]) / 100, 4)
+                rate = round(float(hist["Close"].iloc[-1]) / 100, 4)
+                # Sanity-bound: a bad/zero ^IRX close would feed a 0.0 / negative
+                # risk-free rate into Sharpe / valuation math. Accept only a
+                # plausible value (0 < r < 25%); otherwise fall through so the
+                # orchestrator uses the caller's default rather than scoring on a
+                # garbage rate.
+                if 0 < rate < 0.25:
+                    return rate
         except Exception as exc:
             raise ProviderUnavailable(str(exc)) from exc
-        raise ProviderUnavailable("^IRX returned no data")
+        raise ProviderUnavailable("^IRX returned no / implausible data")

@@ -109,6 +109,12 @@ RR_ENTRY_MIN = 2.0
 # ── Risk per trade (position sizing) ─────────────────────────────────────────
 RISK_PCT_PER_TRADE = 0.015       # 1.5% portfolio risk per trade (Moderate)
 
+# Display-only fallback portfolio value when the real total can't be determined
+# yet (no holdings priced / session value missing). Feeds position-sizing DISPLAY
+# math only — never a gate. Operational/display default, not an investment
+# threshold. Hoisted from two duplicated literals in app.py so they can't drift.
+DEFAULT_PORTFOLIO_VALUE = 50_000
+
 # ── Add-to-winner / approaching-stop boundaries ──────────────────────────────
 # A position must be at least this far above its stop before Grow Today will
 # recommend adding to it (same threshold also marks the "Approaching Stop"

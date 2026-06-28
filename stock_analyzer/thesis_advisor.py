@@ -102,21 +102,23 @@ def _parse_response(text: str) -> dict:
     summary = text.strip()
 
     lines = [ln.strip() for ln in text.strip().splitlines()]
-    for ln in reversed(lines):
-        low = ln.lower()
-        if "verdict:" in low:
-            if "intact" in low:
-                status = "INTACT"
-            elif "broken" in low:
-                status = "BROKEN"
-            else:
-                status = "WEAKENING"
-            # Summary is everything before the verdict line
-            verdict_idx = next(
-                (i for i, l in enumerate(lines) if "verdict:" in l.lower()), -1
-            )
-            summary = " ".join(lines[:verdict_idx]).strip() if verdict_idx > 0 else summary
-            break
+    # Use the LAST "verdict:" line for BOTH the status and the summary boundary, so
+    # a stray "verdict:" in the body prose can't truncate the summary at an earlier
+    # line than the one the status was read from (the two indices used to disagree).
+    verdict_idx = next(
+        (i for i in range(len(lines) - 1, -1, -1) if "verdict:" in lines[i].lower()),
+        -1,
+    )
+    if verdict_idx >= 0:
+        low = lines[verdict_idx].lower()
+        if "intact" in low:
+            status = "INTACT"
+        elif "broken" in low:
+            status = "BROKEN"
+        else:
+            status = "WEAKENING"
+        if verdict_idx > 0:
+            summary = " ".join(lines[:verdict_idx]).strip()
 
     return {"status": status, "summary": summary}
 
