@@ -418,3 +418,73 @@ def draft_thesis(
         }
     except Exception:
         return None
+
+
+def bundle_evidence(bundle: dict) -> dict:
+    """Extract the thesis-relevant evidence — technical trend, fundamentals, and
+    recent news headlines — from a load_bundle() result.
+
+    Shared by F-1 review and F-5 authoring so the two paths can NEVER drift on
+    the bundle's key names. The bundle stores technicals in the `df` DataFrame
+    (Close / SMA_50 / RSI columns), fundamentals under nested `financials`
+    (yfinance FRACTIONS → converted to percent here), and processed news under
+    `headlines` — NOT under `indicators` / `revenue_growth` / `news` (reading
+    those silently fed the LLM empty evidence: the bug this helper closes).
+
+    Pure (no Streamlit; duck-typed DataFrame access, no pandas import). Every
+    field degrades to None / empty on absence, so a thin/empty bundle yields a
+    thin — but honest — package rather than an error.
+
+    Returns {"technical": {...}, "fundamentals": {...}, "news_headlines": [...]}
+    shaped to drop straight into build_review_inputs() / build_authoring_inputs().
+    """
+    fin = bundle.get("financials") or {}
+
+    def _pct(x):
+        try:
+            return float(x) * 100
+        except Exception:
+            return None
+
+    technical = {}
+    df = bundle.get("df")
+    try:
+        if df is not None and not df.empty:
+            close = df["Close"].dropna()
+            sma50 = df["SMA_50"].iloc[-1] if "SMA_50" in df.columns else None
+            technical = {
+                "above_sma50": (bool(close.iloc[-1] > sma50)
+                                if sma50 is not None and not close.empty else None),
+                "rsi": (float(df["RSI"].iloc[-1])
+                        if "RSI" in df.columns and not df["RSI"].dropna().empty else None),
+                "momentum_1m_pct": (float((close.iloc[-1] / close.iloc[-21] - 1) * 100)
+                                    if len(close) > 21 else None),
+            }
+    except Exception:
+        technical = {}
+
+    eg = fin.get("earnings_growth")
+    earnings_trend = None
+    try:
+        if eg is not None:
+            earnings_trend = (f"{'growing' if float(eg) >= 0 else 'contracting'} "
+                              f"~{abs(float(eg)) * 100:.0f}% YoY")
+    except Exception:
+        earnings_trend = None
+
+    fundamentals = {
+        "revenue_growth": _pct(fin.get("revenue_growth")),
+        "profit_margin":  _pct(fin.get("profit_margins")),
+        "earnings_trend": earnings_trend,
+    }
+
+    news_headlines = [
+        h.get("headline", "") for h in (bundle.get("headlines") or [])
+        if isinstance(h, dict) and h.get("headline")
+    ][:15]
+
+    return {
+        "technical":      technical,
+        "fundamentals":   fundamentals,
+        "news_headlines": news_headlines,
+    }

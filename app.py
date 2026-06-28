@@ -12870,36 +12870,9 @@ elif page == "📒 Trade Journal":
                     if _b is None:
                         _draft_inputs = _ta_auth.build_authoring_inputs()
                     else:
-                        def _pct100(x):
-                            try:
-                                return float(x) * 100
-                            except Exception:
-                                return None
-                        _fin  = _b.get("financials", {}) or {}
-                        _bdf  = _b.get("df")
-                        _btech = {}
-                        try:
-                            if _bdf is not None and not _bdf.empty:
-                                _bc    = _bdf["Close"].dropna()
-                                _sma50 = _bdf["SMA_50"].iloc[-1] if "SMA_50" in _bdf.columns else None
-                                _btech = {
-                                    "above_sma50": (bool(_bc.iloc[-1] > _sma50)
-                                                    if _sma50 is not None and not _bc.empty else None),
-                                    "rsi": (float(_bdf["RSI"].iloc[-1])
-                                            if "RSI" in _bdf.columns and not _bdf["RSI"].dropna().empty else None),
-                                    "momentum_1m_pct": (float((_bc.iloc[-1] / _bc.iloc[-21] - 1) * 100)
-                                                        if len(_bc) > 21 else None),
-                                }
-                        except Exception:
-                            _btech = {}
-                        _eg     = _fin.get("earnings_growth")
-                        _etrend = None
-                        try:
-                            if _eg is not None:
-                                _etrend = (f"{'growing' if float(_eg) >= 0 else 'contracting'} "
-                                           f"~{abs(float(_eg)) * 100:.0f}% YoY")
-                        except Exception:
-                            _etrend = None
+                        # Shared extractor — same bundle-key handling as the F-1
+                        # review path, so authoring and review can't drift.
+                        _ev = _ta_auth.bundle_evidence(_b)
                         _draft_inputs = _ta_auth.build_authoring_inputs(
                             company_name=_b.get("name"),
                             sector=_b.get("sector"),
@@ -12907,17 +12880,10 @@ elif page == "📒 Trade Journal":
                                 "composite": _b.get("total"),
                                 "band":      (_b.get("rec") or {}).get("label"),
                             },
-                            fundamentals={
-                                "revenue_growth": _pct100(_fin.get("revenue_growth")),
-                                "profit_margin":  _pct100(_fin.get("profit_margins")),
-                                "earnings_trend": _etrend,
-                            },
+                            fundamentals=_ev["fundamentals"],
                             catalyst={"next_earnings_date": _b.get("earnings")},
-                            news_headlines=[
-                                h.get("headline", "") for h in (_b.get("headlines") or [])
-                                if h.get("headline")
-                            ][:12],
-                            technical=_btech,
+                            news_headlines=_ev["news_headlines"],
+                            technical=_ev["technical"],
                             regime={
                                 "bull": "market trending up",
                                 "bear": "market trending down",
@@ -17250,29 +17216,19 @@ elif page == "🧠 AI Insights":
                     if st.button(f"Re-evaluate {_ticker}", key=f"_ai_reeval_{_ticker}", disabled=not _ai_api_key):
                         with st.spinner(f"Reviewing thesis for {_ticker}..."):
                             _held_data = st.session_state.get("held_data", {})
-                            _tech = {}
-                            _fund = {}
-                            _news_h: list = []
+                            # Evidence comes from the bundle via the shared
+                            # extractor so F-1 review and F-5 authoring never drift
+                            # on bundle key names (the bundle has financials/df/
+                            # headlines — not indicators/revenue_growth/news, the
+                            # mismatch that had been feeding the LLM empty evidence).
                             if _ticker in _held_data:
-                                _hd  = _held_data[_ticker]
-                                _ind = _hd.get("indicators", {})
-                                _tech = {
-                                    "above_sma50":     bool(_ind.get("above_sma50", False)),
-                                    "rsi":             _ind.get("rsi"),
-                                    "momentum_1m_pct": _ind.get("momentum_1m_pct"),
-                                }
-                                _fund = {
-                                    "revenue_growth": _hd.get("revenue_growth"),
-                                    "profit_margin":  _hd.get("profit_margin"),
-                                }
-                                _raw_news = _hd.get("news") or []
-                                _news_h = [
-                                    n.get("headline", n.get("title", "")) for n in _raw_news
-                                    if n.get("headline") or n.get("title")
-                                ][:15]
-
+                                _ev = _ta.bundle_evidence(_held_data[_ticker])
+                            else:
+                                _ev = {"technical": {}, "fundamentals": {}, "news_headlines": []}
                             _ev_inputs = _ta.build_review_inputs(
-                                technical=_tech, fundamentals=_fund, news_headlines=_news_h,
+                                technical=_ev["technical"],
+                                fundamentals=_ev["fundamentals"],
+                                news_headlines=_ev["news_headlines"],
                             )
                             _result = _ta.review_thesis(
                                 ticker=_ticker, user_thesis=_thesis,

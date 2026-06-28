@@ -338,28 +338,18 @@ def _run_thesis(now_et, force: bool) -> int:
     positions = []
     for _, row in buys_with_thesis.iterrows():
         ticker = str(row["ticker"]).upper()
-        hd     = held_data.get(ticker, {})
-        ind    = hd.get("indicators", {})
-        tech   = {
-            "above_sma50":     bool(ind.get("above_sma50", False)),
-            "rsi":             ind.get("rsi"),
-            "momentum_1m_pct": ind.get("momentum_1m_pct"),
-        }
-        fund = {
-            "revenue_growth": hd.get("revenue_growth"),
-            "profit_margin":  hd.get("profit_margin"),
-        }
-        raw_news = hd.get("news") or []
-        headlines = [
-            n.get("headline", n.get("title", "")) for n in raw_news
-            if n.get("headline") or n.get("title")
-        ][:15]
+        # Bundle evidence via the shared extractor (same path as the app's
+        # on-demand review) — reads financials/df/headlines, not indicators/
+        # revenue_growth/news, so the weekly review actually sees current data.
+        ev = _ta.bundle_evidence(held_data.get(ticker, {}))
         positions.append({
             "ticker":      ticker,
             "trade_date":  str(row.get("traded_at", ""))[:10],
             "user_thesis": str(row["user_thesis"]),
             "inputs":      _ta.build_review_inputs(
-                technical=tech, fundamentals=fund, news_headlines=headlines,
+                technical=ev["technical"],
+                fundamentals=ev["fundamentals"],
+                news_headlines=ev["news_headlines"],
             ),
         })
 
