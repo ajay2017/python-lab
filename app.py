@@ -17323,39 +17323,11 @@ elif page == "🧠 AI Insights":
             + (" · ✉ emailed" if _mr.get("email_sent") else "")
         )
 
-        def _mr_colour(v):
-            try:
-                return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
-            except (TypeError, ValueError):
-                return "#94a3b8"
-
-        _mrc1, _mrc2, _mrc3 = st.columns(3)
-        with _mrc1:
-            st.markdown(
-                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
-                f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
-                f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
-                unsafe_allow_html=True,
-            )
-        with _mrc2:
-            st.markdown(
-                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on</div>"
-                f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted if _mr_acted is not None else '—'}</div></div>",
-                unsafe_allow_html=True,
-            )
-        with _mrc3:
-            st.markdown(
-                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Missed</div>"
-                f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed if _mr_missed is not None else '—'}</div></div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown("")
-
-        # Compute the enriched recs ONCE — shared by all three monthly visuals
-        # (decision-flow Sankey, alpha-by-band bar, missed-opportunity bar). Reuses
-        # the SAME pure helpers as Recommendations History; live over the report's
-        # exact window. Fail-soft — any failure just hides the visuals, the
-        # narrative is untouched.
+        # Compute the enriched recs + signal-flow ONCE, UP FRONT — they drive both
+        # the headline counts AND every visual, so the header can never disagree
+        # with the Sankey. Reuses the SAME pure helpers as Recommendations History;
+        # live over the report's window. Fail-soft — any failure falls back to the
+        # saved counts / hides the visuals; the narrative is untouched.
         from stock_analyzer.recommendations_history import (
             match_recs_to_trades as _mrm, compute_outcomes as _mrco,
             distinct_missed as _mrdm, missed_split as _mrms,
@@ -17401,22 +17373,61 @@ elif page == "🧠 AI Insights":
         except Exception:
             _mr_en2 = []
 
+        _mr_flow = _mrsf(_mr_en2, rec_types=("new_pick",)) if _mr_en2 else None
+
+        # Headline counts: DISTINCT new-position tickers (matches the Sankey). Fall
+        # back to the saved record only if the live recompute failed. A saved report
+        # generated before the distinct-count fix may store surfacing counts, so the
+        # live flow is preferred whenever available.
+        _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr_acted
+        _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr_missed
+
+        def _mr_colour(v):
+            try:
+                return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
+            except (TypeError, ValueError):
+                return "#94a3b8"
+
+        _mrc1, _mrc2, _mrc3 = st.columns(3)
+        with _mrc1:
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
+                f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
+                f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
+                unsafe_allow_html=True,
+            )
+        with _mrc2:
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on (names)</div>"
+                f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted_n if _mr_acted_n is not None else '—'}</div></div>",
+                unsafe_allow_html=True,
+            )
+        with _mrc3:
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Not acted (names)</div>"
+                f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed_n if _mr_missed_n is not None else '—'}</div></div>",
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "Counts are **distinct New-Position tickers** this period — a name surfaced "
+            "across many days counts once (not daily surfacings)."
+        )
+        st.markdown("")
+
         # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
-        # loop the whole report is built on. Same engine as Recommendations History.
-        if _mr_en2:
-            _mr_flow = _mrsf(_mr_en2, rec_types=("new_pick",))
-            if _mr_flow["n_total"] > 0:
-                _mr_sk = _signal_flow_sankey(
-                    _mr_flow,
-                    "This month's signal flow — New Positions → acted / missed → outcome",
+        # loop the whole report is built on. Same flow that drives the counts above.
+        if _mr_flow and _mr_flow["n_total"] > 0:
+            _mr_sk = _signal_flow_sankey(
+                _mr_flow,
+                "This month's signal flow — New Positions → acted / missed → outcome",
+            )
+            if _mr_sk is not None:
+                st.plotly_chart(_mr_sk, use_container_width=True)
+                st.caption(
+                    "New Positions to Initiate this period → acted / missed → outcome "
+                    "(distinct by ticker, matured only). Same engine as Recommendations "
+                    "History, scoped to this report's window."
                 )
-                if _mr_sk is not None:
-                    st.plotly_chart(_mr_sk, use_container_width=True)
-                    st.caption(
-                        "New Positions to Initiate this period → acted / missed → outcome "
-                        "(distinct by ticker, matured only). Same engine as Recommendations "
-                        "History, scoped to this report's window."
-                    )
 
         # Narrative
         for _mr_label, _mr_col in [

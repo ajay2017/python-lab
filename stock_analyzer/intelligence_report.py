@@ -137,7 +137,7 @@ def build_report_package(
     """
     from stock_analyzer.recommendations_history import (
         match_recs_to_trades, compute_outcomes, summary_stats,
-        by_composite_band, by_verdict,
+        by_composite_band, by_verdict, signal_flow,
     )
     from stock_analyzer.constants import REC_SCORE_MIN_DAYS
 
@@ -186,13 +186,21 @@ def build_report_package(
         return package
 
     stats = summary_stats(enriched)
-    package["has_data"]   = stats["n_total"] > 0
-    package["n_total"]    = stats["n_total"]
-    package["n_acted"]    = stats["n_acted"]
-    package["n_missed"]   = stats["n_total"] - stats["n_acted"]
-    package["n_graded"]   = stats["n_priced"]
-    package["action_rate"]      = stats["action_rate"]
-    package["engine_alpha_pct"] = stats["avg_acted_alpha"]   # Q0 headline
+    # Behavioural counts are DISTINCT-by-ticker (a name recurring across days counts
+    # once) — the same basis as the signal-flow Sankey, so the headline "acted / not
+    # acted" can never disagree with the chart. summary_stats counts surfacings
+    # (instances), which would read as misleadingly large name counts (the 253-vs-
+    # ~dozen-names issue), so it's used only for the graded-outcome aggregates below.
+    flow = signal_flow(enriched)   # enriched is already rec_types-scoped above
+    package["has_data"]   = flow["n_total"] > 0
+    package["n_total"]    = flow["n_total"]
+    package["n_acted"]    = flow["n_acted"]
+    package["n_missed"]   = flow["n_missed"]
+    package["n_graded"]   = stats["n_priced"]   # surfacings matured enough to grade (internal)
+    package["action_rate"] = (
+        round(flow["n_acted"] / flow["n_total"] * 100.0, 1) if flow["n_total"] else None
+    )
+    package["engine_alpha_pct"] = stats["avg_acted_alpha"]   # Q0 headline (mean over acted picks)
     package["avg_acted_pct"]    = stats["avg_acted_pct"]
     package["avg_missed_pct"]   = stats["avg_missed_pct"]
     package["missed_alpha"]     = stats["missed_alpha"]
@@ -228,9 +236,10 @@ def _format_prompt(package: dict) -> str:
         "count is not awareness noise — every one is a name the App told you to "
         "consider initiating. Do not reference the awareness feed.",
         "",
-        f"New-position recommendations surfaced: {package['n_total']} "
-        f"(acted on {package['n_acted']}, not acted on {package['n_missed']}); "
-        f"{package['n_graded']} matured enough to grade (≥ measurement window).",
+        f"Distinct New-Position names surfaced: {package['n_total']} — you acted on "
+        f"{package['n_acted']}, did not act on {package['n_missed']}. (Counts are distinct "
+        f"tickers, not daily surfacings. {package['n_graded']} surfacings matured enough to "
+        f"grade outcomes.)",
     ]
     if not package.get("q0_ready"):
         lines.append(
