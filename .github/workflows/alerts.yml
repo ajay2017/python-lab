@@ -90,3 +90,37 @@ jobs:
             || ((github.event.schedule == '0 22 * * 0'   || github.event.schedule == '0 23 * * 0')   && 'thesis')
             || '' }}
         run: python cron_runner.py
+
+      # Dead-man's-switch — if any step above fails (install error, uncaught
+      # exception, or a lane returning a non-zero exit), email a failure notice so
+      # a broken cron isn't invisible. Reuses the same Resend secrets; inert if
+      # they aren't set. NOTE: this fires only on an ACTIVE failure — it cannot
+      # catch GitHub silently disabling the schedule after 60d repo inactivity, nor
+      # a "ran green but fetched nothing" run; pair with an external heartbeat
+      # monitor (e.g. healthchecks.io) for those.
+      - name: Notify on failure (dead-man's-switch)
+        if: ${{ failure() }}
+        env:
+          RESEND_API_KEY:   ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO:   ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$RESEND_API_KEY" ] || [ -z "$ALERT_EMAIL_TO" ] || [ -z "$ALERT_EMAIL_FROM" ]; then
+            echo "failure-notify: Resend secrets not set — skipping (inert)."
+            exit 0
+          fi
+          payload=$(jq -n --arg from "$ALERT_EMAIL_FROM" --arg to "$ALERT_EMAIL_TO" --arg url "$RUN_URL" \
+            '{from:$from, to:[$to],
+              subject:"⚠️ DRISHTA protective-alerts cron FAILED",
+              html:("<p>The protective-alerts cron run failed — protective emails for this slot may NOT have been sent.</p><p><a href=\"" + $url + "\">View the failed run</a></p>")}')
+          code=$(curl -sS -o /tmp/resend_resp -w "%{http_code}" -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$payload" || echo "000")
+          echo "failure-notify: HTTP $code"
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "failure-notify: sent."
+          else
+            echo "failure-notify: send failed."; cat /tmp/resend_resp 2>/dev/null || true
+          fi

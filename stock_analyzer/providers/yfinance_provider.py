@@ -10,12 +10,14 @@ providers. See `base.py` for the canonical schemas.
 """
 
 import time
+import concurrent.futures
 from datetime import datetime
 import yfinance as yf
 import pandas as pd
 import pytz
 
 from stock_analyzer import api_health as _ah
+from stock_analyzer.constants import DATA_YF_REQUEST_TIMEOUT_SEC
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable,
     CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE, CAP_INDICES, CAP_RISK_FREE,
@@ -30,20 +32,43 @@ _INDICES = [
 ]
 
 
+def _call_with_timeout(fn, args, kwargs, timeout: float):
+    """Run fn in a worker thread, bounded by a wall-clock `timeout` (seconds).
+
+    yfinance exposes no request-level timeout, so a TCP-level hang would block
+    until the OS socket timeout (minutes) or — in the headless cron — the 15-min
+    job kill. Bounding each call lets the orchestrator fail over to Finnhub/FMP
+    instead. On breach we ABANDON the worker (shutdown(wait=False)) rather than
+    block on it — a hung socket would make wait=True re-block here; the orphaned
+    thread dies with the process / OS socket timeout. Exceptions raised inside fn
+    (e.g. a 429) propagate unchanged via .result(), so the retry logic below still
+    sees them.
+    """
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        return ex.submit(fn, *args, **kwargs).result(timeout=timeout)
+    finally:
+        ex.shutdown(wait=False)
+
+
 def _retry(fn, *args, retries: int = 3, backoff: float = 1.0, **kwargs):
     """Retry fn on Yahoo Finance 429 / rate-limit errors with linear backoff.
 
     Backoff is intentionally small (default 1.0s, sleep = backoff * attempt+1
-    so total wait <= ~3s across all retries). yfinance has no usable
-    request-level timeout knob, so the page can still hang on TCP-level
-    failures — but compounded 3s/6s/9s linear backoff on top of that is the
-    biggest user-visible chunk and is what's being reduced here.
-    Non-rate-limit exceptions still raise immediately; only 429-style errors
-    sleep and retry.
+    so total wait <= ~3s across all retries). Each attempt is wrapped in a
+    wall-clock timeout (DATA_YF_REQUEST_TIMEOUT_SEC) since yfinance has no
+    request-level timeout knob and could otherwise hang on a TCP-level failure.
+    A timeout is NOT retried (it already waited the full budget — retrying just
+    multiplies the stall); it is recorded and raised so the orchestrator fails
+    over. Other non-rate-limit exceptions also raise immediately; only 429-style
+    errors sleep and retry.
     """
     for attempt in range(retries):
         try:
-            return fn(*args, **kwargs)
+            return _call_with_timeout(fn, args, kwargs, DATA_YF_REQUEST_TIMEOUT_SEC)
+        except concurrent.futures.TimeoutError:
+            _ah.record("yahoo_finance", "error", msg=f"timeout >{DATA_YF_REQUEST_TIMEOUT_SEC}s")
+            raise
         except Exception as exc:
             msg = str(exc).lower()
             if any(k in msg for k in ("429", "too many", "rate limit", "rate-limit")):

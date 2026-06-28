@@ -403,6 +403,16 @@ DATA_MULTISOURCE_ENABLED = True
 DATA_LOAD_MAX_WORKERS = 2     # was 4 — halve the simultaneous heavy requests to Yahoo
 DATA_LOAD_STAGGER_SEC = 0.1   # gap between thread submits so starts aren't synchronized
 
+# Per-call wall-clock cap (seconds) on each yfinance request. yfinance exposes no
+# request-level timeout, so a TCP-level hang would otherwise block until the OS
+# socket timeout (minutes) or — in the headless cron — the 15-min job kill. The
+# provider runs each yfinance call in a worker thread and abandons it past this
+# cap so the orchestrator can fail over to Finnhub/FMP instead of hanging the
+# whole page/run. Operational knob — NOT an investment threshold; set above a
+# legitimately slow bundle (history+info+news+earnings) but well under the job
+# budget. Tune from observation.
+DATA_YF_REQUEST_TIMEOUT_SEC = 20
+
 # Last-known-good bundle cache (data-resilience; bundle_cache table). When the
 # history/bundle providers (Yahoo→FMP) ALL fail, load_all serves the last cached
 # bundle (real data, aged) so the portfolio still renders WITH a staleness banner
