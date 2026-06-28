@@ -1,8 +1,8 @@
-# Plan: AI Intelligence Layer — Thesis, Earnings Transcripts, Portfolio Debrief
+# Plan: AI Intelligence Layer — Thesis, Earnings Transcripts, Portfolio Debrief, Intelligence Report
 
-**Status:** F-1 approved 2026-06-27 · F-3 approved 2026-06-27 · F-2 deferred (pending transcript API budget)  
+**Status:** F-1 **shipped** 2026-06-27 · F-3 **shipped** 2026-06-27 · F-2 deferred (pending transcript API budget) · F-4 **proposed** 2026-06-27  
 **Date:** 2026-06-27  
-**Scope:** Three new capabilities (build sequentially in order listed)  
+**Scope:** Four new capabilities (build sequentially in order listed)  
 **Philosophy:** LLM narrates and synthesizes; rule-based engine continues to decide and gate. No LLM output issues a buy/sell recommendation — that remains the composite score + gate system.
 
 ---
@@ -15,11 +15,12 @@ The three opportunities are:
 
 | # | Capability | What closes | Status |
 |---|---|---|---|
-| F-1 | Thesis Tracking | The gap between "why I bought" and "does that reason still hold" | **Approved — build next** |
+| F-1 | Thesis Tracking | The gap between "why I bought" and "does that reason still hold" | **Shipped 2026-06-27** |
 | F-2 | Earnings Call Intelligence | The gap between knowing *when* earnings is and knowing *what management said* | **Deferred — transcript API budget pending** |
-| F-3 | Portfolio Debrief | The gap between the app's forward decisions and retrospective pattern recognition | **Approved — build after F-1 + daily_snapshots live** |
+| F-3 | Portfolio Debrief (weekly) | The gap between the app's forward decisions and retrospective pattern recognition | **Shipped 2026-06-27** |
+| F-4 | Portfolio Intelligence Report (monthly) | The gap between *one week* of retrospection and the slower questions — is the engine picking well, do I act on what it surfaces, am I repeating a bias | **Proposed 2026-06-27** |
 
-None exist today. F-1 and F-2 are position-level. F-3 is portfolio-level. All three are awareness surfaces — they do not move a gate or issue a recommendation.
+None existed before this layer. F-1 and F-2 are position-level. F-3 and F-4 are portfolio-level (F-3 weekly, F-4 monthly behavioural). All are awareness surfaces — they do not move a gate or issue a recommendation.
 
 ---
 
@@ -403,6 +404,138 @@ F-3 requires `daily_snapshots` to be live to compute per-week and per-position P
 
 ---
 
+## F-4 · Portfolio Intelligence Report (Monthly Retrospective)
+
+### Problem
+
+F-3 (Weekly Debrief) looks back **one week** at *what happened*. It cannot answer the slower questions that only surface across weeks — the questions an investment committee asks at month/quarter end:
+
+- Is the **entry engine itself** picking well? (Of everything that cleared the gates and surfaced as a high-conviction buy, did it actually beat the market?)
+- Do I **act** on the signals it surfaces — and does acting help or hurt?
+- Are my **thesis calls** calibrated — did WEAKENING/BROKEN actually precede deterioration?
+- Am I repeating a **systematic bias** (trim winners early, hold losers long, chase a sector)?
+
+These require pattern recognition across the accumulated history, not a single week. F-4 is the monthly reflection layer over the data F-1/F-3 and the rule-based scorecard have been accumulating.
+
+### Why "question 0" comes first
+
+Every position in the book traces back to one origin: a ticker cleared **all gates**, scored **Composite ≥ `COMPOSITE_BUY` (65)**, and surfaced under **"📈 High-Conviction Entries Only → 🆕 New Positions to Initiate"** (`app.py`). Everything downstream — whether the user acted, the thesis they wrote, the later hold/trim/exit — is *conditioned on that entry decision*. Judging the user's behaviour without first judging the engine's picks would mislead: perfect discipline on bad picks still loses money.
+
+So the report leads with the engine's own pick quality (**question 0**), then the user's response to it (**question 1**), folding in thesis discipline (**2**) and cross-cutting behavioural patterns (**3**) as the data matures.
+
+| # | Question | Judges | Data maturity needed |
+|---|---|---|---|
+| **0** | Entry quality | Does the *engine* pick well? (composite band → alpha vs SPY) | Highest — entries must age |
+| **1** | Signal discipline | Does the user *act* on surfaced signals, and at what cost/benefit? | Lowest — measurable from month 1 |
+| **2** | Thesis discipline | Are WEAKENING/BROKEN calls calibrated against actual outcomes? | Medium |
+| **3** | Behavioural patterns | Systematic biases across 0–2 | Highest — needs ≥2 months of reports |
+
+**v1 ships 0 + 1** — the closed loop: engine picks → user action → outcome. 2 and 3 fold in as the history deepens.
+
+### What exists today (rule-based — do NOT rebuild)
+
+The scorecard math already exists and is mature in [`stock_analyzer/recommendations_history.py`](../../stock_analyzer/recommendations_history.py):
+
+- `match_recs_to_trades()` — joins surfaced recs to actual trades (**acted vs. missed**)
+- `compute_outcomes()` — `outcome_pct`, `spy_return_pct`, `alpha_pct` (= outcome − SPY, the **regime-adjusted** read); flags recs younger than `REC_SCORE_MIN_DAYS` (5 calendar days) as `outcome_maturing` and excludes them from graded aggregates
+- `summary_stats()` — acted-vs-missed rollup with alpha
+- `by_verdict()` — action-rate + outcome + alpha by verdict bucket
+- `by_composite_band()` — Strong Buy (≥75) / Buy (65–74) / Hold-zone (44–64) / Sell-zone (<44) / Unscored
+
+The first engine-health review (2026-06-18) judged the engine **HEALTHY** on these aggregates (memory `project_rec_engine_evaluation`).
+
+**F-4's job is NOT to recompute this.** A Python builder calls these existing functions; the LLM reads the resulting aggregates plus the matured matched recs and writes the *narrative the numbers can't* — e.g. "your 65–74 composite band underperformed your ≥75 band by X this period; the weakness clustered in [sector]."
+
+### Design
+
+#### 4.1 Cadence and trigger
+
+- **Monthly:** first Sunday of the month, delivered as email (Resend + GitHub Actions cron — same pattern as the F-140s). Runs in the **existing Sunday cron lane** alongside thesis (F-1) and debrief (F-3); gated to fire the report only on the first Sunday of the month.
+- **On-demand:** "Generate Monthly Report" button on the AI Insights page, for the trailing ~4 weeks.
+
+#### 4.2 Inputs (Python builder assembles; LLM only narrates)
+
+The builder runs the existing pipeline over the trailing ~4–8 weeks:
+`match_recs_to_trades` → `compute_outcomes(min_days=REC_SCORE_MIN_DAYS)` → `summary_stats` / `by_verdict` / `by_composite_band`, plus:
+
+- `weekly_debriefs` rows for the period (already-computed weekly performance + alpha — the monthly view stitches these, it does not re-derive them)
+- `thesis_reviews` verdict history (for question 2, once it matures)
+- macro/regime context per the existing macro tag
+
+**Only matured recs** (`days_since ≥ REC_SCORE_MIN_DAYS`) feed the graded aggregates — consistent with the on-page scorecard. Younger recs are excluded, never fabricated into a trend.
+
+#### 4.3 LLM task — sections
+
+| Section | Question | Content |
+|---|---|---|
+| 1 — Entry quality | Q0 | How did the engine's high-conviction picks perform on **alpha vs. SPY**? Which composite band converted and performed best; where weakness clustered (sector/regime). Facts only. |
+| 2 — Signal discipline | Q1 | Acted vs. ignored, and what each **cost or saved**. Closes the loop Q0 opens. |
+| 3 — Thesis discipline *(when data matures)* | Q2 | Did WEAKENING/BROKEN precede real deterioration, or was it noise? |
+| 4 — Pattern + one focus | Q3 | One systematic pattern (named-pattern library, reused from F-3 §3.4) + one thing to focus on next month. |
+
+Target length ~500–700 words. Second person, neutral/factual tone (observation, not judgement) — same voice as F-3.
+
+#### 4.4 Hard boundary — AI surfaces patterns, never tunes gates
+
+This is the non-negotiable line for question 0. The report **MAY** say: *"the 65–74 composite band underperformed the ≥75 band by X this period — you may want to review the entry threshold."* It **MAY NOT** change `COMPOSITE_BUY`, move any gate, or auto-issue a buy/sell. Threshold changes remain an **investment-policy decision** ([CLAUDE.md](../../CLAUDE.md) hard rule #1; [`constants.py`](../../stock_analyzer/constants.py)) made in conversation with the user — never automated. The report is read-only awareness over the engine's *own* behaviour.
+
+#### 4.5 Data-maturity guards
+
+| Question | Guard | If unmet |
+|---|---|---|
+| Q0 — entry quality | ≥ N matured graded entries (alpha computable) | "Not enough matured entries yet to grade pick quality" |
+| Q1 — signal discipline | available from month 1 (acted/missed needs no maturity) | — |
+| Q2 — thesis discipline | ≥ M thesis reviews with an outcome window | section suppressed |
+| Q3 — patterns | ≥ 2 monthly reports of history | section suppressed |
+
+`N` and `M` are **measurement floors, not gates** (same philosophy as `REC_SCORE_MIN_DAYS`) — safe to tune from observation; they never affect what the engine recommends. Proposed floors: `N ≥ 5`, `M ≥ 3` (confirm at build).
+
+#### 4.6 Data model
+
+```
+monthly_reports table (new):
+  id                       UUID   PK
+  period_start             DATE   NOT NULL
+  period_end               DATE   NOT NULL   -- first-Sunday boundary (unique key)
+  generated_at             TIMESTAMPTZ NOT NULL
+  engine_alpha_pct         NUMERIC NULL      -- avg alpha of matured high-conviction acted entries (Q0 headline)
+  acted_count              INTEGER NULL      -- # surfaced recs acted on in period
+  missed_count             INTEGER NULL      -- # surfaced recs not acted on
+  section_entry_quality    TEXT   NOT NULL   -- Section 1 (Q0)
+  section_signal_discipline TEXT  NOT NULL   -- Section 2 (Q1)
+  section_thesis           TEXT   NULL       -- Section 3 (Q2; null until matured)
+  section_patterns         TEXT   NOT NULL   -- Section 4 (Q3 / pattern + focus)
+  email_sent               BOOLEAN DEFAULT FALSE
+  email_sent_at            TIMESTAMPTZ NULL
+```
+
+Unique on `period_end` → **upsert-safe** (same convention as `weekly_debriefs`). RLS: `FOR ALL TO service_role` policy required (CLAUDE.md hard rule #2). Ships **inert** until the DDL is run in Supabase.
+
+#### 4.7 Surface
+
+- **AI Insights page:** new "Monthly Portfolio Intelligence" section **below** the Weekly Debrief — most recent report + "Generate Monthly Report" button. Same offline/staleness banner pattern as the rest of the page.
+- **Email:** first Sunday of the month. Subject: "DRISHTA Monthly Intelligence — [month YYYY]". Reuses the light-mode-first `render_debrief_email` template pattern (the F-3 redesign), extended for the report's section set.
+
+#### 4.8 Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| LLM invents an outcome or trade | Builder pre-computes every number from `recommendations_history` against real tables; the LLM narrates only the package — it cannot add facts |
+| LLM prescribes a threshold value as if actionable | System prompt forbids quantifying or changing gates; "you may want to review" framing only (§4.4). No LLM output touches `constants.py` |
+| Small sample in early months | Maturity guards (§4.5) suppress a section rather than fabricate a trend |
+| Double-counts the weekly debrief | Monthly reads **matured** outcomes + already-saved weekly alpha; framed as the longer-horizon behavioural view, not a re-summary of the weeks |
+| API cost | One LLM call per month (+ on-demand). Negligible at Claude API pricing |
+
+#### 4.9 Open questions (resolve before build)
+
+1. **v1 scope:** ship Q0 (entry quality) + Q1 (signal discipline) only, fold Q2/Q3 in as data matures? (Recommended: **yes**)
+2. **Maturity floors:** `N` (graded entries for Q0) and `M` (thesis reviews for Q2)? (Recommended: `N ≥ 5`, `M ≥ 3`)
+3. **Cadence:** first Sunday of month, reusing the existing Sunday cron lane with a first-Sunday gate? (Recommended: **yes**)
+4. **Model:** Sonnet, consistent with F-1/F-3 batch jobs? (Recommended: **yes**)
+5. **Confirm the boundary:** the report surfaces gate-quality *patterns* but never tunes a threshold (CLAUDE.md hard rule #1). (Recommended: **locked, non-negotiable**)
+
+---
+
 ## Build sequence
 
 Build one feature at a time. Each is independent at the code level. F-2 optionally integrates with F-1 (thesis linkage in transcript card) — wire that integration only after both are live.
@@ -422,12 +555,21 @@ F-2 Earnings Call Intelligence
   → Catalyst Watch page: transcript card
   → (optional, after F-1) thesis linkage chip
 
-F-3 Portfolio Debrief
+F-3 Portfolio Debrief                                    [shipped 2026-06-27]
   → prerequisite: activate daily_snapshots (one-time DDL in Supabase)
-  → prerequisite: ≥7 days of snapshots accumulated
-  → new weekly_debriefs table
-  → weekly cron job: data package builder + LLM call + email
-  → Evening Debrief page: "Last Weekly Debrief" section + "Generate Now" button
+  → prerequisite: ≥5 trading days of snapshots accumulated (build-time guard)
+  → new weekly_debriefs table (unique on week_ending → upsert-safe)
+  → Sunday cron lane: thesis → debrief chained; data package builder + LLM + email
+  → AI Insights page: "Weekly Debrief" section + "Generate Now" button
+  → light-mode-first email template (render_debrief_email; **bold** → HTML)
+
+F-4 Portfolio Intelligence Report (monthly)              [proposed 2026-06-27]
+  → reuses recommendations_history scorecard (match → compute_outcomes → rollups)
+  → new monthly_reports table (unique on period_end → upsert-safe; RLS service_role)
+  → first-Sunday-of-month gate in the existing Sunday cron lane
+  → AI Insights page: "Monthly Portfolio Intelligence" section + Generate button
+  → v1 = Q0 entry quality + Q1 signal discipline; Q2/Q3 fold in as data matures
+  → BOUNDARY: surfaces gate-quality patterns, never tunes a threshold
 ```
 
 ---
@@ -437,9 +579,10 @@ F-3 Portfolio Debrief
 To guard against scope creep as build progresses:
 
 - **Not a recommendation engine.** No LLM output changes a composite score or issues an entry/exit signal.
-- **Not a real-time feature.** All three run weekly (F-1, F-3) or post-earnings (F-2). None require intraday LLM calls.
+- **Not a gate tuner.** F-4 may *surface* that a composite band underperforms, but it never changes `COMPOSITE_BUY` or any threshold — that stays an investment-policy decision with the user (CLAUDE.md hard rule #1).
+- **Not a real-time feature.** These run weekly (F-1, F-3), monthly (F-4), or post-earnings (F-2). None require intraday LLM calls.
 - **Not a chatbot.** Portfolio Q&A (O4 from the strategy plan) is a future phase — not part of this plan.
-- **Not a replacement for the rule-based gates.** The exit ladder, concentration caps, and composite thresholds are the decision authority. These three features add language and context around those decisions.
+- **Not a replacement for the rule-based gates.** The exit ladder, concentration caps, and composite thresholds are the decision authority. These features add language and context around those decisions.
 
 ---
 
@@ -455,10 +598,16 @@ To guard against scope creep as build progresses:
 - [ ] Held-only or include watchlist in v1?
 - [ ] Does overall_tone feed any gate in v1?
 
-**F-3 — Approved 2026-06-27. Decisions locked:**
-- [x] Delivery: **weekly email (primary) + in-app on-demand** (Last Weekly Debrief section in Evening Debrief page + "Generate Now" button — already in design)
-- [x] Multi-week pattern analysis: **deferred — week-scoped only in v1**
-- [x] Prerequisite: **activate `daily_snapshots` in Supabase before build starts; wait ≥7 days for data to accumulate**
+**F-3 — Approved 2026-06-27. Shipped. Decisions locked:**
+- [x] Delivery: **weekly email (primary) + in-app on-demand** ("Weekly Debrief" section on the **AI Insights** page + "Generate Now" button — shipped here, not Evening Debrief, to keep core pages LLM-free per the UI Placement boundary)
+- [x] Multi-week pattern analysis: **deferred — week-scoped only in v1** (F-4 takes up the multi-week behavioural view)
+- [x] Prerequisite: **`daily_snapshots` activated; build-time guard is ≥5 trading days of snapshots**
+
+**F-4 — Proposed 2026-06-27. Decisions pending:**
+- [ ] v1 = **Q0 (entry quality) + Q1 (signal discipline)**; Q2 (thesis discipline) + Q3 (patterns) deferred until data matures?
+- [ ] Maturity floors: `N` (matured graded entries for Q0) and `M` (thesis reviews for Q2)? (recommended `N ≥ 5`, `M ≥ 3`)
+- [ ] Cadence: **first Sunday of month**, reusing the existing Sunday cron lane with a first-Sunday gate?
+- [ ] **Boundary locked:** report surfaces gate-quality patterns but **never tunes a threshold** (CLAUDE.md hard rule #1)?
 
 **All features:**
-- [x] LLM provider: **Claude (Anthropic)**. Model: **Sonnet** (cost-efficient for weekly batch jobs; Opus reserved for review/planning tasks per existing cost-routing policy)
+- [x] LLM provider: **Claude (Anthropic)**. Model: **Sonnet** (cost-efficient for weekly/monthly batch jobs; Opus reserved for review/planning tasks per existing cost-routing policy)
