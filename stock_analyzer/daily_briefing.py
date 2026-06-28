@@ -995,6 +995,40 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     }
 
 
+def gate_funnel_counts(grow: dict | None) -> dict:
+    """
+    Count the NEW-POSITION gate funnel from a build_grow_today() result — the data
+    behind the "how today's candidates cleared the gates" Sankey.
+
+    Every candidate that reaches a recorded gate decision lands in exactly ONE
+    bucket: it either became a new pick or was dropped for a named reason (composite
+    below the Buy bar, sector at the hard cap, an imminent macro event, or it
+    couldn't be verified). `evaluated` is the sum of those buckets.
+
+    HONESTY NOTE: `evaluated` is *candidates that reached a recorded gate decision*,
+    NOT the full scanner universe. Candidates filtered earlier are silent (already
+    actioned in Act Today, hard cross-ref conflict, flat-day caution, or the
+    sector-diversity / max-picks selection overflow) and are intentionally not
+    counted here — so the funnel never fabricates a universe size. Add-to-winner has
+    its own separate gates and is excluded. Counts only; no judgement.
+    """
+    g = grow or {}
+
+    def _n(key: str) -> int:
+        v = g.get(key)
+        return len(v) if isinstance(v, list) else 0
+
+    counts = {
+        "new_picks":             _n("new_picks"),
+        "composite_skipped":     _n("composite_skipped"),
+        "sector_blocked":        _n("sector_blocked_picks"),
+        "macro_blocked":         _n("macro_blocked_picks"),
+        "composite_unavailable": _n("composite_unavailable"),
+    }
+    counts["evaluated"] = sum(counts.values())
+    return counts
+
+
 # ── Act Today ─────────────────────────────────────────────────────────────────
 
 def deterioration_signals(port_df, held_data, spy_df=None) -> list[dict]:

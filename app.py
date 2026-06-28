@@ -140,7 +140,7 @@ from stock_analyzer.account import (
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
-from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.daily_briefing import build_daily_briefing, gate_funnel_counts
 from stock_analyzer.evening_debrief import build_evening_debrief
 from stock_analyzer.trade_review import (
     build_trade_review, build_insights, build_recommendations,
@@ -4065,6 +4065,54 @@ if page == "🏠 Home":
             if bear_msg:
                 st.caption(f"🛡️ {bear_msg}")
                 return
+
+            # ── Gate funnel Sankey — how today's candidates cleared the gates ──
+            # Honest one-hop fan-out from the recorded new-position buckets (no
+            # fabricated universe). Only candidates that reached a gate DECISION
+            # are counted; names filtered earlier (Act Today, hard conflict) are
+            # silent — see gate_funnel_counts() + the caption.
+            _gf = gate_funnel_counts(grow)
+            if _gf["evaluated"] >= 2 and _gf["new_picks"] < _gf["evaluated"]:
+                with st.expander("🔎 How today's candidates cleared the gates", expanded=False):
+                    _gf_targets = [
+                        ("✅ New Positions to Initiate", _gf["new_picks"],             "#22c55e", "rgba(34,197,94,0.45)"),
+                        ("Composite below Buy bar",      _gf["composite_skipped"],     "#f59e0b", "rgba(245,158,11,0.35)"),
+                        ("Sector at hard cap",           _gf["sector_blocked"],        "#ef4444", "rgba(239,68,68,0.35)"),
+                        ("Imminent macro event",         _gf["macro_blocked"],         "#fb923c", "rgba(251,146,60,0.35)"),
+                        ("Couldn't verify (data)",       _gf["composite_unavailable"], "#94a3b8", "rgba(148,163,184,0.3)"),
+                    ]
+                    _gf_labels  = ["Candidates evaluated"] + [t[0] for t in _gf_targets]
+                    _gf_ncolor  = ["#60a5fa"] + [t[2] for t in _gf_targets]
+                    _gf_src, _gf_tgt, _gf_val, _gf_lc = [], [], [], []
+                    for _i, (_lbl, _n, _nc, _lc) in enumerate(_gf_targets, start=1):
+                        if _n > 0:
+                            _gf_src.append(0); _gf_tgt.append(_i)
+                            _gf_val.append(_n); _gf_lc.append(_lc)
+                    if _gf_src:
+                        _gf_fig = go.Figure(go.Sankey(
+                            arrangement="snap",
+                            node=dict(
+                                label=_gf_labels, color=_gf_ncolor,
+                                pad=18, thickness=16,
+                                line=dict(color="rgba(255,255,255,0.08)", width=0.5),
+                            ),
+                            link=dict(source=_gf_src, target=_gf_tgt, value=_gf_val, color=_gf_lc),
+                        ))
+                        _gf_fig.update_layout(
+                            height=max(240, 30 + 30 * len(_gf_src)),
+                            margin=dict(l=0, r=0, t=10, b=0),
+                            template="plotly_dark",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            font=dict(size=11, color="#cbd5e1"),
+                        )
+                        st.plotly_chart(_gf_fig, use_container_width=True)
+                        st.caption(
+                            f"Today's scan put **{_gf['evaluated']}** candidate(s) through the "
+                            f"new-position gates; band width = count, each lands in exactly one "
+                            f"outcome. **Names already in Act Today or in a hard cross-ref conflict "
+                            f"are filtered earlier and not shown here** — this is the recorded-decision "
+                            f"funnel, not the full scanner universe. Add-to-winner has its own gates."
+                        )
 
             # Reach line: make the screening funnel visible — the brief draws
             # from the curated SECTOR_UNIVERSE + watchlist + the broad discovery
