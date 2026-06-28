@@ -8133,6 +8133,74 @@ if page == "🏠 Home":
                     "for a growth-tilted equity portfolio."
                 )
 
+            # ── 🧭 Market-Risk Posture (pullback-awareness Phase 3) ───────────────────
+            # Read-only EXPOSURE posture = book fragility × current market regime. Composes
+            # two already-computed reads (no recomputation, no new threshold): fragility
+            # severity (_fragility_cache) and risk_off_regime (SPY<200DMA or VIX≥level).
+            # NOT a forecast, NOT a directive — when both legs are elevated it POINTS to the
+            # Daily Brief's risk-off de-risk cards (single-surface), never duplicates them.
+            from stock_analyzer.exit_advisor import risk_off_regime as _ro_regime, market_risk_posture as _mk_posture
+            from stock_analyzer.constants import RISK_OFF_TREND_MA as _RO_MA, RISK_OFF_VIX_LEVEL as _RO_VIX
+            try:
+                _ro_armed, _ro_reasons = _ro_regime(
+                    _cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA, vix_threshold=_RO_VIX,
+                )
+            except Exception:
+                _ro_armed, _ro_reasons = False, []
+            _posture = _mk_posture(
+                st.session_state.get("_fragility_cache"), risk_off=_ro_armed, reasons=_ro_reasons,
+            )
+            st.markdown("#### 🧭 Market-Risk Posture")
+            if _posture is None:
+                st.caption(
+                    "Posture unavailable — portfolio beta / fragility isn't computed yet (data "
+                    "offline). No reading is shown rather than a falsely-calm one."
+                )
+            else:
+                _pcolor = {0: "#22c55e", 1: "#22c55e", 2: "#f59e0b", 3: "#ef4444"}[_posture["score"]]
+                _pg1, _pg2 = st.columns([1, 2])
+                with _pg1:
+                    _pfig = go.Figure(go.Indicator(
+                        mode="gauge",
+                        value=_posture["score"],
+                        gauge={
+                            "axis": {"range": [0, 3], "tickvals": [0, 1, 2, 3], "tickwidth": 1},
+                            "bar": {"color": _pcolor},
+                            "steps": [
+                                {"range": [0, 1], "color": "rgba(34,197,94,0.18)"},
+                                {"range": [1, 2], "color": "rgba(245,158,11,0.18)"},
+                                {"range": [2, 3], "color": "rgba(239,68,68,0.18)"},
+                            ],
+                        },
+                        domain={"x": [0, 1], "y": [0, 1]},
+                    ))
+                    _pfig.update_layout(
+                        height=180, margin=dict(l=10, r=10, t=10, b=10),
+                        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_pfig, use_container_width=True)
+                with _pg2:
+                    st.markdown(
+                        f"<div style='font-size:1.3em;font-weight:700;color:{_pcolor}'>"
+                        f"{_posture['emoji']} {_posture['label']}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(_posture["summary"])
+                    if _posture["reasons"]:
+                        st.caption("Regime legs: " + " · ".join(_posture["reasons"]))
+                    if _posture["armed"]:
+                        st.warning(
+                            "Both your book fragility and the market regime are elevated — the "
+                            "**Daily Brief** is surfacing risk-off de-risk suggestions for your "
+                            "highest-beta names. This dial only shows the posture; act from there."
+                        )
+                st.caption(
+                    "Posture = book fragility × current market regime. It reads where you stand "
+                    "**now** — it does not predict a pullback's timing, and it never changes a "
+                    "gate. The book half is the fragility gauge on the Home brief."
+                )
+            st.markdown("")
+
             # Drawdown chart
             _dd_series = _pr.get("drawdown_series")
             if _dd_series is not None and len(_dd_series) > 1:

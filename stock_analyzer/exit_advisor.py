@@ -345,6 +345,57 @@ def risk_off_regime(spy_trend_df, vix_level, *, trend_ma, vix_threshold):
     return (len(reasons) > 0, reasons)
 
 
+# Posture display strings (labels/emoji — NOT policy thresholds).
+_POSTURE_LABELS = {
+    0: ("Steady",             "🛡️"),
+    1: ("Watchful",           "🌥️"),
+    2: ("Defensive",          "⚠️"),
+    3: ("Risk-off & fragile", "🔴"),
+}
+_POSTURE_FRAG_TXT = {
+    "calm":    "your book moves roughly with the market",
+    "caution": "your book is more volatile than the market",
+    "fragile": "your book would fall outsized in a routine pullback",
+}
+
+
+def market_risk_posture(fragility, *, risk_off, reasons=None):
+    """Compose the ALREADY-computed book fragility and market regime into one
+    read-only EXPOSURE posture (0-3). Pure / UI-free.
+
+    NOT a forecast (it reads where you stand NOW, never predicts a pullback's timing)
+    and NOT a directive (the de-risk *action* stays assess_risk_off_derisk's job; this
+    only OBSERVES, and exposes `armed` so the UI can point to that action without
+    duplicating it — single-surface rule). Composition only: reuses the fragility
+    severity bands and the risk_off_regime legs, introducing NO new threshold.
+
+        score = severity_rank(calm 0 / caution 1 / fragile 2) + (1 if risk_off else 0)   # 0..3
+        armed = severity in {caution, fragile} AND risk_off   (the SAME gate assess_risk_off_derisk uses)
+
+    Returns None when fragility is unavailable — WITHHOLD rather than render a falsely
+    calm dial (mirrors assess_fragility).
+    """
+    sev = (fragility or {}).get("severity")
+    if sev not in ("calm", "caution", "fragile"):
+        return None
+    rank  = {"calm": 0, "caution": 1, "fragile": 2}[sev]
+    ro    = bool(risk_off)
+    score = rank + (1 if ro else 0)
+    armed = rank >= 1 and ro
+    label, emoji = _POSTURE_LABELS[score]
+    regime_txt = "the market is in a risk-off regime" if ro else "the market regime is calm"
+    return {
+        "score":    score,
+        "label":    label,
+        "emoji":    emoji,
+        "armed":    armed,
+        "severity": sev,
+        "risk_off": ro,
+        "summary":  f"Right now {_POSTURE_FRAG_TXT[sev]} and {regime_txt}.",
+        "reasons":  list(reasons or []),
+    }
+
+
 def assess_risk_off_derisk(
     port_df,
     held_data,
