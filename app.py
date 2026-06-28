@@ -17120,4 +17120,84 @@ elif page == "🧠 AI Insights":
                 st.markdown(_mr.get(_mr_col))
                 st.markdown("")
 
+        # ── Compact missed-opportunity visual companion (full analytics on the
+        # 📊 Recommendations History page). Reuses the SAME pure helpers; computed
+        # live over the displayed report's exact window. Fail-soft — any failure
+        # just hides the chart, never breaks the narrative above.
+        from stock_analyzer.recommendations_history import (
+            match_recs_to_trades as _mrm, compute_outcomes as _mrco,
+            distinct_missed as _mrdm, missed_split as _mrms,
+        )
+        from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
+
+        _mr_miss: list = []
+        try:
+            _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
+            _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
+            _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
+            if _mr_recs2 is not None and not _mr_recs2.empty:
+                _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
+                _mr_tk2 = sorted({
+                    str(t).strip().upper()
+                    for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
+                })
+                _mr_px2: dict = {}
+                try:
+                    _p2 = fetch_live_prices(_mr_tk2) if _mr_tk2 else {}
+                    _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
+                except Exception:
+                    _mr_px2 = {}
+                _mr_spy2: dict = {}
+                try:
+                    _h2 = _cached_spy("6mo")
+                    if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
+                        for _i2, _r2 in _h2.iterrows():
+                            _d2 = _i2.date() if hasattr(_i2, "date") else None
+                            try:
+                                _c2 = float(_r2["Close"])
+                            except (TypeError, ValueError):
+                                _c2 = None
+                            if _d2 is not None and _c2 and _c2 > 0:
+                                _mr_spy2[_d2] = _c2
+                except Exception:
+                    _mr_spy2 = {}
+                _mr_en2 = _mrco(
+                    _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
+                    spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
+                )
+                _mr_miss = _mrdm(_mr_en2)
+        except Exception:
+            _mr_miss = []
+
+        if _mr_miss:
+            _mr_sp = _mrms(_mr_miss)
+            st.markdown("**🎯 What you skipped this period**")
+            import plotly.graph_objects as go
+            _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
+            _mr_sel = sorted(
+                _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
+                key=lambda r: r["outcome_pct"],
+            )
+            _mr_xc = [r["outcome_pct"] for r in _mr_sel]
+            _mr_yc = [r["ticker"] for r in _mr_sel]
+            _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
+            _mr_fig = go.Figure(go.Bar(
+                x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
+                text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
+            ))
+            _mr_fig.update_layout(
+                height=max(200, 40 + 24 * len(_mr_sel)),
+                margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                yaxis=dict(title=None), showlegend=False,
+            )
+            st.plotly_chart(_mr_fig, use_container_width=True)
+            st.caption(
+                f"Of **{_mr_sp['n_distinct']}** name(s) surfaced but never acted on this period: "
+                f"**{_mr_sp['n_winners']}** rose (missed), **{_mr_sp['n_dodged']}** fell (dodged). "
+                "Green = rose after surfacing; red = fell. Full ranked table + per-$1k "
+                "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
+            )
+
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
