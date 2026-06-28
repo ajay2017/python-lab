@@ -103,6 +103,15 @@ def _failover_single(capability: str, method: str, *args, **kwargs):
             continue
         if isinstance(result, (list, dict)) and len(result) == 0:
             continue
+        # Reject a price frame whose Close is entirely non-positive / NaN — that's
+        # unusable garbage (not real prices), and accepting it would let failover
+        # STOP on a structurally-valid-but-signal-empty payload instead of trying
+        # the next provider (H5). NaN > 0 is False, so all-NaN is caught too
+        # (belt-and-suspenders with the provider-boundary NaN-Close strip, M6).
+        # Only applies to price frames — float results (risk-free) have no Close.
+        if (isinstance(result, pd.DataFrame) and "Close" in result.columns
+                and not (result["Close"] > 0).any()):
+            continue
         return result
     if last_exc is not None:
         raise last_exc
@@ -144,6 +153,9 @@ def get_bundle(ticker: str, period: str = "6mo") -> dict:
         hist = b.get("history")
         if isinstance(hist, pd.DataFrame) and hist.empty:
             continue
+        if (isinstance(hist, pd.DataFrame) and "Close" in hist.columns
+                and not (hist["Close"] > 0).any()):
+            continue   # all-zero/negative/NaN Close → unusable price history (H5)
         primary = b
         primary.setdefault("_source", prov.name)
         break
