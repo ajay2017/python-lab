@@ -58,14 +58,19 @@ class FinnhubProvider(DataProvider):
                     # c == 0 → unknown/unsupported symbol on Finnhub; skip it.
                     continue
                 price = float(price)
+                # prev_close: leave None when the source omits it (Finnhub pc=0/null)
+                # rather than falling back to the live price — a fabricated prev==price
+                # disarms the cross-check's strict settled-close leg (it would compare
+                # live-vs-live and pass) and reports a false 0.0% day-change for a real
+                # mover. Consumers treat None as "prev unknown" (M2).
                 prev = q.get("pc")
-                prev = float(prev) if prev else price
+                prev = float(prev) if prev else None
                 dp = q.get("dp")
                 results[t] = {
                     "price":      round(price, 2),
-                    "prev_close": round(prev, 2),
+                    "prev_close": round(prev, 2) if prev is not None else None,
                     "change_pct": round(float(dp), 2) if dp is not None else (
-                        round((price - prev) / prev * 100, 2) if prev else 0.0),
+                        round((price - prev) / prev * 100, 2) if prev else None),
                     "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
                     "source":     "finnhub",
                 }

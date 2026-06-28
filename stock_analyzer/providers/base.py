@@ -17,8 +17,10 @@ error, empty payload) — the orchestrator then tries the next provider.
 Canonical return shapes (every provider must conform so consumers above
 `data.py` are source-agnostic):
 
-    live_prices(tickers) -> {ticker: {"price": float, "prev_close": float,
-                                      "change_pct": float, "fetched_at": str}}
+    live_prices(tickers) -> {ticker: {"price": float, "prev_close": float|None,
+                                      "change_pct": float|None, "fetched_at": str}}
+        (prev_close / change_pct are None when the source omits the prior close —
+         providers must NOT fabricate prev==price; consumers handle None. See M2.)
     price_history(ticker, period) -> pandas.DataFrame indexed by datetime with
                                      at least a "Close" column (OHLCV when avail)
     bundle(ticker, period) -> {"history": DataFrame, "info": dict, "news": list,

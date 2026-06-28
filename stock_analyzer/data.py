@@ -80,7 +80,9 @@ def fetch_market_indices() -> list[dict]:
 def fetch_live_prices(tickers: list[str]) -> dict[str, dict]:
     """
     Lightweight batch fetch of current prices only — bypasses the full history load.
-    Returns {ticker: {"price": float, "prev_close": float, "change_pct": float, "fetched_at": str}}.
+    Returns {ticker: {"price": float, "prev_close": float|None, "change_pct": float|None, "fetched_at": str}}.
+    prev_close / change_pct are None when the source omits the prior close (never
+    fabricated as prev==price — that would disarm the cross-check's strict leg; M2).
     """
     if _C.DATA_MULTISOURCE_ENABLED:
         return _orch.get_live_prices(tickers)

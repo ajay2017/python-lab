@@ -1985,16 +1985,19 @@ if page == "🏠 Home":
             return
         price_cols = st.columns(len(live))
         for col, (t, lp) in zip(price_cols, live.items()):
-            chg   = lp["change_pct"]
-            arrow = "▲" if chg >= 0 else "▼"
-            clr   = "#00C851" if chg >= 0 else "#ff4444"
+            chg   = lp.get("change_pct")
+            if chg is None:                          # prev close unknown (M2) → honest blank, no false 0.00%
+                clr, _chg_disp = "#94a3b8", "—"
+            else:
+                clr       = "#00C851" if chg >= 0 else "#ff4444"
+                _chg_disp = f"{'▲' if chg >= 0 else '▼'} {chg:+.2f}%"
             col.markdown(
                 f"<div style='text-align:center;padding:6px 2px;"
                 f"border:1px solid #333;border-radius:6px'>"
                 f"<b>{t}</b><br>"
                 f"<span style='font-size:1.1em'>${lp['price']:.2f}</span><br>"
                 f"<span style='color:{clr};font-size:0.85em'>"
-                f"{arrow} {chg:+.2f}%</span></div>",
+                f"{_chg_disp}</span></div>",
                 unsafe_allow_html=True,
             )
         refresh_note = (
@@ -2287,13 +2290,13 @@ if page == "🏠 Home":
     _today_total_n  = len(port_df)
     _today_missing  = [
         r["Ticker"] for _, r in port_df.iterrows()
-        if not (r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("prev_close", 0) > 0)
+        if not (r["Ticker"] in _lp_map and (_lp_map[r["Ticker"]].get("prev_close") or 0) > 0)
     ]
     _today_priced_n = _today_total_n - len(_today_missing)
     _today_pnl = sum(
         (_lp_map[r["Ticker"]]["price"] - _lp_map[r["Ticker"]]["prev_close"]) * r["Shares"]
         for _, r in port_df.iterrows()
-        if r["Ticker"] in _lp_map and _lp_map[r["Ticker"]].get("prev_close", 0) > 0
+        if r["Ticker"] in _lp_map and (_lp_map[r["Ticker"]].get("prev_close") or 0) > 0
     )
     _today_pnl_pct = _today_pnl / total_val * 100 if total_val else 0
     _today_loaded  = bool(_lp_map)
@@ -5363,7 +5366,8 @@ if page == "🏠 Home":
                 return {}
             try:
                 px = fetch_live_prices(list(_tickers_key))
-                return {t: float(d.get("change_pct", 0)) for t, d in px.items()}
+                return {t: float(d["change_pct"]) for t, d in px.items()
+                        if d.get("change_pct") is not None}
             except Exception:
                 return {}
 

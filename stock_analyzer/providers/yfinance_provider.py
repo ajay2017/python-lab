@@ -277,11 +277,15 @@ class YFinanceProvider(DataProvider):
                     if len(col) < 1:
                         continue
                     price = float(col.iloc[-1])
-                    prev  = float(col.iloc[-2]) if len(col) >= 2 else price
+                    # prev_close: None when only one bar is available (can't know the
+                    # prior close) rather than falling back to the live price — a
+                    # fabricated prev==price disarms the cross-check's strict
+                    # settled-close leg and reports a false 0.0% day-change (M2).
+                    prev  = float(col.iloc[-2]) if len(col) >= 2 else None
                     results[t] = {
                         "price":      round(price, 2),
-                        "prev_close": round(prev, 2),
-                        "change_pct": round((price - prev) / prev * 100, 2) if prev else 0.0,
+                        "prev_close": round(prev, 2) if prev is not None else None,
+                        "change_pct": round((price - prev) / prev * 100, 2) if prev else None,
                         "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
                         "source":     "yahoo_finance",
                     }

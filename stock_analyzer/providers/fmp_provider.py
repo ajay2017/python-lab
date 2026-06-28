@@ -147,13 +147,17 @@ class FMPProvider(DataProvider):
             price = _num(row, "price")
             if not price or price <= 0:
                 continue
-            prev = _num(row, "previousClose", "previous_close") or price
+            # prev_close: keep None when FMP omits/zeros it rather than falling back
+            # to the live price — a fabricated prev==price disarms the cross-check's
+            # strict settled-close leg and reports a false 0.0% day-change (M2).
+            prev = _num(row, "previousClose", "previous_close")
+            prev = prev if (prev and prev > 0) else None
             chg = _num(row, "changePercentage", "changesPercentage")
             results[t] = {
                 "price":      round(price, 2),
-                "prev_close": round(prev, 2),
+                "prev_close": round(prev, 2) if prev is not None else None,
                 "change_pct": round(chg, 2) if chg is not None else (
-                    round((price - prev) / prev * 100, 2) if prev else 0.0),
+                    round((price - prev) / prev * 100, 2) if prev else None),
                 "fetched_at": datetime.now(_ET).strftime("%H:%M:%S ET"),
                 "source":     "fmp",
             }
