@@ -102,6 +102,8 @@ def build_debrief_package(
         "alpha_pct":        None,
         "week_start_value": None,
         "week_end_value":   None,
+        "net_flow":         None,
+        "week_had_trades":  False,
         "contributors":     [],
         "detractors":       [],
         "recs_surfaced":    [],
@@ -137,6 +139,21 @@ def build_debrief_package(
         package["performance_pct"] = round(perf, 2)
         if spy_week_pct is not None:
             package["alpha_pct"] = round(perf - spy_week_pct, 2)
+
+    # Flag weeks with trades so the LLM can caveat the return figure.
+    # A clean cash-flow-adjusted return requires daily cash/margin history
+    # (not available — snapshots are equity-only). Margin buys in particular
+    # can't be treated as external capital flows.
+    week_had_trades = False
+    if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
+        _wt = trades_df[
+            (trades_df["traded_at"].astype(str).str[:10] >= start_date) &
+            (trades_df["traded_at"].astype(str).str[:10] <= end_date) &
+            trades_df["action"].str.upper().isin(["BUY", "SELL"])
+        ]
+        week_had_trades = not _wt.empty
+    package["net_flow"] = None
+    package["week_had_trades"] = week_had_trades
 
     # Per-position P&L
     start_val_by_tk: dict[str, float] = {
@@ -195,7 +212,7 @@ def _format_prompt(package: dict) -> str:
     lines = [f"Week: {package['week_start']} to {package['week_ending']}", ""]
 
     if package.get("performance_pct") is not None:
-        lines.append("Portfolio performance:")
+        lines.append("Portfolio performance (equity positions only — cash and margin excluded):")
         if package.get("week_start_value"):
             lines.append(f"  Start value: ${package['week_start_value']:,.0f}")
         if package.get("week_end_value"):
@@ -203,6 +220,10 @@ def _format_prompt(package: dict) -> str:
         lines.append(f"  Portfolio return: {_pct(package.get('performance_pct'))}")
         lines.append(f"  SPY return:       {_pct(package.get('spy_pct'))}")
         lines.append(f"  Alpha:            {_pct(package.get('alpha_pct'))}")
+        if package.get("week_had_trades"):
+            lines.append("  Note: Trades (buys/sells) occurred this week. The return above reflects"
+                         " equity market-value change and may include position-size effects"
+                         " (e.g. margin-funded buys), not pure price appreciation.")
     else:
         lines.append("Portfolio performance: insufficient snapshot data for this period.")
 
