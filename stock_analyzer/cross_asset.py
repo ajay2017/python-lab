@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -49,13 +50,16 @@ def _close(data: dict, ticker: str) -> pd.Series | None:
 def fetch_cross_asset_data() -> dict[str, pd.DataFrame]:
     """Download 45 days of daily history for all cross-asset tickers."""
     try:
-        raw = yf.download(
-            _TICKERS,
-            period="45d",
-            auto_adjust=True,
-            progress=False,
-            group_by="ticker",
-        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(
+                yf.download,
+                _TICKERS,
+                period="45d",
+                auto_adjust=True,
+                progress=False,
+                group_by="ticker",
+            )
+            raw = _fut.result(timeout=20)
     except Exception:
         return {}
 
@@ -75,9 +79,12 @@ def fetch_cross_asset_data() -> dict[str, pd.DataFrame]:
             except Exception:
                 result[ticker] = pd.DataFrame()
     else:
-        # Single-ticker fallback — unlikely given the list, but guard it.
+        # Single-ticker fallback — yfinance returned a flat DataFrame (only one
+        # ticker responded). We cannot identify which ticker it belongs to from
+        # shape alone, so treat all as unavailable rather than silently assign
+        # wrong-asset data.
         for ticker in _TICKERS:
-            result[ticker] = raw if not raw.empty else pd.DataFrame()
+            result[ticker] = pd.DataFrame()
 
     return result
 
@@ -94,7 +101,8 @@ def compute_cross_asset_signals(data: dict[str, pd.DataFrame]) -> dict:
     else:
         series = hyg.iloc[-CROSS_ASSET_HYG_TREND_DAYS:]
         slope = _slope(series)
-        pct_per_day = slope / float(series.iloc[0]) * 100
+        _base = float(series.iloc[0])
+        pct_per_day = (slope / _base * 100) if _base != 0 else 0.0
         stressed = slope < 0
         signals["credit"] = {
             "stressed": stressed,
@@ -147,7 +155,8 @@ def compute_cross_asset_signals(data: dict[str, pd.DataFrame]) -> dict:
     else:
         series = copper.iloc[-CROSS_ASSET_COPPER_TREND_DAYS:]
         slope = _slope(series)
-        pct_per_day = slope / float(series.iloc[0]) * 100
+        _base = float(series.iloc[0])
+        pct_per_day = (slope / _base * 100) if _base != 0 else 0.0
         stressed = slope < 0
         signals["copper"] = {
             "stressed": stressed,
