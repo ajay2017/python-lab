@@ -5987,8 +5987,12 @@ if page == "🏠 Home":
             sb3.metric("Sentiment",   f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (15%)",
                        help="VADER analysis of latest news headlines from Yahoo Finance")
 
-            # News Sentiment — Finnhub awareness row (not a gate; strictly additive)
-            _ns_data = _cached_sentiment(sel).get(sel)
+            # News Sentiment — Finnhub awareness row (not a gate; strictly additive).
+            # Reuse the Brief's batch cache key (all held tickers, sorted CSV) rather
+            # than a single-ticker key — sel is always a held position here, the Brief
+            # block above has already warmed this exact entry, so this is a pure cache
+            # hit (no extra Finnhub call) and the two surfaces can't show drifting data.
+            _ns_data = _cached_sentiment(",".join(sorted(held_tickers))).get(sel)
             if _ns_data is not None:
                 from stock_analyzer.news_sentiment import sentiment_label as _sent_label
                 _ns_lbl, _ns_emoji = _sent_label(_ns_data["bullish_pct"])
