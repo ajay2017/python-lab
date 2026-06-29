@@ -3243,7 +3243,14 @@ if page == "🏠 Home":
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    _db_act_n   = len(_daily_brief["act_today"])
+    # Split defensive items by URGENCY once (calm-advisor §2B / F-25a) and reuse the
+    # result across EVERY surface that counts "Act Today" — the tab-title 🔴 badge
+    # here, the summary chip, and the Act/Monitoring section headers below — so they
+    # can never disagree. Counting the raw act_today/review_list lists let a promoted
+    # review-list trim read "Act Today (1)" in the section while the badge/chip showed
+    # 0 (and a macro-only day badged 🔴 for an item the split demotes to Awareness).
+    _split_def  = split_defensive(_daily_brief["act_today"], _daily_brief["review_list"])
+    _db_act_n   = len(_split_def["act"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
     tab_daily, tab_evening, tab_ov, tab_perf, tab_pnl, tab_act, tab_risk, tab_rs, tab_heat, tab_rank, tab_brief = st.tabs([
@@ -3922,9 +3929,13 @@ if page == "🏠 Home":
 
         # Action summary chip — counts moved out of the tone chip
         with _act_col:
-            _act_n      = len(_db_act)
+            # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
+            # the defensive column below — never the raw act_today/review_list lists —
+            # so the chip can't contradict the section headers.
+            _act_n      = len(_split_def["act"])
             _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
-            _review_n   = len(_db_review)
+            _review_n   = len(_split_def["aware"])
+            _tuneup_n   = len(_db_tuneup)
             _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
             _act_border = "#ef4444" if _act_n > 0 else "#334155"
             st.markdown(
@@ -3935,7 +3946,8 @@ if page == "🏠 Home":
                 f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
                 f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} urgent action{'s' if _act_n != 1 else ''}<br>"
                 f"🟢 {_grow_n} growth setup{'s' if _grow_n != 1 else ''}<br>"
-                f"🟡 {_review_n} to review"
+                f"🟡 {_review_n} to review<br>"
+                f"🔧 {_tuneup_n} to tune up"
                 f"</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -4716,7 +4728,8 @@ if page == "🏠 Home":
             # items. Each item keeps its origin card template (_source) but lands in
             # the bucket decision_bucket.classify_bucket assigns. Empty Act bucket =
             # "you're set for today" (derived; no new persistence).
-            _split_def    = split_defensive(_db_act, _db_review)
+            # _split_def computed once above (shared with the summary chip) so the
+            # chip counts and these section headers can't drift apart.
             _act_bucket   = _split_def["act"]
             _aware_bucket = _split_def["aware"]
 
