@@ -1161,6 +1161,12 @@ def _cached_vix(period: str = "1mo"):
         return None
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_cross_asset():
+    from stock_analyzer.cross_asset import fetch_cross_asset_data, compute_cross_asset_signals
+    return compute_cross_asset_signals(fetch_cross_asset_data())
+
+
 # ── Signal-flow Sankey (shared) ──────────────────────────────────────────────
 # Builds the New-Positions → acted/missed → win/loss/flat Sankey figure from a
 # recommendations_history.signal_flow() dict. Shared by the Recommendations
@@ -3921,6 +3927,16 @@ if page == "🏠 Home":
                 f"</div>"
                 f"</div>",
                 unsafe_allow_html=True,
+            )
+
+        # Cross-asset macro note — shown when ≥ CROSS_ASSET_STRESS_BRIEF_SCORE signals are stressed
+        from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
+        _ca_brief = _cached_cross_asset()
+        if _ca_brief.get("score", 0) >= _CA_BRIEF_MIN:
+            st.info(
+                f"📡 **Cross-asset:** {_ca_brief['summary']} "
+                f"Check the **🔗 Risk Analysis** tab for the full breakdown.",
+                icon=None,
             )
 
         # ── Quick Research — label · input · button on one row ────────────────
@@ -8217,6 +8233,48 @@ if page == "🏠 Home":
                     "Posture = book fragility × current market regime. It reads where you stand "
                     "**now** — it does not predict a pullback's timing, and it never changes a "
                     "gate. The book half is the fragility gauge on the Home brief."
+                )
+            st.markdown("")
+
+            st.markdown("---")
+            st.markdown("#### 📡 Cross-Asset Pulse")
+            _ca = _cached_cross_asset()
+            _ca_rows = [
+                ("credit",   "Credit spreads (HYG)"),
+                ("vix_term", "VIX term structure"),
+                ("dollar",   "Dollar (DXY)"),
+                ("copper",   "Copper"),
+                ("curve",    "Yield curve (3m10y)"),
+            ]
+            for _ca_key, _ca_name in _ca_rows:
+                _ca_sig = _ca.get(_ca_key, {})
+                if not _ca_sig.get("available", False):
+                    _ca_emoji = "—"
+                elif _ca_sig["stressed"]:
+                    _ca_emoji = "🔴"
+                else:
+                    _ca_emoji = "✅"
+                _ca_c1, _ca_c2, _ca_c3 = st.columns([3, 5, 4])
+                _ca_c1.markdown(f"**{_ca_name}**")
+                _ca_c2.markdown(f"{_ca_emoji}" if not _ca_sig.get("available") else f"{_ca_emoji} {_ca_sig.get('label', '')}")
+                _ca_c3.caption(_ca_sig.get("detail", "") if _ca_sig.get("available") else "")
+            _ca_score = _ca.get("score", 0)
+            _ca_label = _ca.get("label", "—")
+            if _ca_label == "—":
+                st.caption("Cross-asset signals unavailable — market data offline.")
+            else:
+                _ca_color = (
+                    "#22c55e" if _ca_label == "Calm" else
+                    "#f59e0b" if _ca_label == "Caution" else
+                    "#ef4444"
+                )
+                st.markdown(
+                    f"<div style='margin-top:8px;font-size:0.85em;color:{_ca_color};font-weight:600'>"
+                    f"Overall: {_ca_label} · {_ca_score} of 5 signals stressed</div>"
+                    f"<div style='font-size:0.78em;color:#6b7280;margin-top:2px'>"
+                    f"Cross-asset signals update every 30 min. They are awareness-only — "
+                    f"they never move a gate or change a recommendation.</div>",
+                    unsafe_allow_html=True,
                 )
             st.markdown("")
 

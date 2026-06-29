@@ -231,6 +231,17 @@ RISK_OFF_NAME_MIN_BETA  = 1.2    # only trim genuinely high-beta drivers (β ≥
 RISK_OFF_TRIM_TOP_N     = 3      # act on the top-N beta contributors (β × weight), not the whole book.
 RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position (or tighten the stop instead).
 
+# Cross-asset regime signals — thresholds for the Cross-Asset Pulse card (Risk tab).
+# Each signal is independent; score = count of stressed signals (0–5).
+CROSS_ASSET_HYG_TREND_DAYS     = 20    # lookback window (days) for HYG linear trend
+CROSS_ASSET_COPPER_TREND_DAYS  = 20    # lookback window (days) for copper trend
+CROSS_ASSET_DXY_TREND_DAYS     = 20    # lookback window (days) for DXY trend
+CROSS_ASSET_DXY_ROC_DAYS       = 5     # short-window rate-of-change for dollar signal
+CROSS_ASSET_DXY_ROC_THRESHOLD  = 1.5  # % 5-day ROC above which dollar is "rapidly rising"
+CROSS_ASSET_VIX_TERM_RATIO     = 1.0  # VIX / VIX3M ratio threshold; >1 = term-structure inverted
+CROSS_ASSET_CURVE_STRESS_BP    = -50  # 3m10y yield spread (basis pts); below = deeply inverted (^IRX=3m T-bill, ^TNX=10yr)
+CROSS_ASSET_STRESS_BRIEF_SCORE = 2    # score >= this triggers a one-liner in Today's Brief
+
 # ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
 # investment-decision threshold. The ET hour the daily email targets; the cron is
 # scheduled at two UTC times (to straddle EST/EDT) and a Supabase idempotency
