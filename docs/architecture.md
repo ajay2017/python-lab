@@ -971,3 +971,104 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 | US Treasury / Yahoo `^IRX` | 13-week T-bill rate for risk-free rate | Daily cached | Falls back to 4.5% if unavailable |
 
 No single market-data source is now a hard dependency for prices or the analysis bundle. yfinance has no official SLA, so its calls are wrapped in `_retry()` (transient 429s) and a hard failure fails over to FMP; live prices come from Finnhub (real-time) first with gap-fill to yfinance/FMP. Keyed providers (Finnhub/FMP/FRED) are skipped silently when their key is absent. The price cross-check (§4.0.4) surfaces source disagreement loudly. Pre-market `fast_info` calls in `premarket.py` are not retried (best-effort).
+
+---
+
+## 12. AI Intelligence Layer
+
+The AI layer is **strictly additive**: every other page, every gate, every protection works identically whether or not the Anthropic API is reachable. A missing key or timeout returns `None`; callers render a graceful banner and move on.
+
+### 12.1 Architecture overview
+
+```mermaid
+flowchart LR
+    subgraph ENGINE["① Rules Engine  (always runs)"]
+        direction TB
+        SRC[("Market data\n& portfolio")]
+        SCORE["Scoring · Gates\nRecommendations"]
+        SRC --> SCORE
+    end
+
+    PACK["② Evidence package\nPython pre-computes:\nP&L · alpha · signals\nnews · technicals"]
+
+    subgraph LLM_LAYER["③ AI Intelligence Layer  (additive)"]
+        direction TB
+        CLAUDE(["Claude AI\nSonnet 4.6 / Haiku"])
+        F1["F-1 Thesis Review  ·  INTACT / WEAKENING / BROKEN"]
+        F5["F-5 Thesis Draft  ·  editable BUY-time draft"]
+        F3["F-3 Weekly Debrief  ·  4-section narrative"]
+        F4["F-4 Monthly Report  ·  entry quality + signal discipline"]
+        PM["Pre-market Stance  ·  Defensive / Neutral / Constructive"]
+        CLAUDE --> F1 & F5 & F3 & F4 & PM
+    end
+
+    SCORE -->|"pre-computed\nfacts only"| PACK
+    PACK  -->|"one-shot prompt"| CLAUDE
+
+    NOLOOP(["⚠ AI never feeds back\nto the engine.\nApp works without AI."])
+    LLM_LAYER -.-> NOLOOP
+```
+
+**Key design decisions:**
+
+- **One-shot prompts only.** No multi-turn, no RAG, no tool use. Python assembles a fully structured evidence package; the LLM narrates it.
+- **Evidence first, LLM last.** All computation (P&L, alpha, composite scores, band breakdowns) happens in Python before the prompt is constructed. The LLM describes numbers; it never computes them.
+- **Thresholds interpolated at call time.** The F-4 system prompt imports `COMPOSITE_BUY` from `constants.py` at invocation, so any policy change propagates to the prompt immediately — no stale hardcoded values.
+- **`bundle_evidence()` is the single extractor.** Both F-1 (review) and F-5 (authoring) read evidence through the same shared function (`thesis_advisor.bundle_evidence`), preventing drift between what the reviewer and the drafter see.
+- **30-second timeout on all core features** (`LLM_REQUEST_TIMEOUT_SEC` in `constants.py`). Any exception returns `None`.
+- **No retries.** Fail fast, show a banner, let the user retry manually.
+
+### 12.2 Feature table
+
+| ID | Feature | File | Model | Trigger | Max output | Result cached |
+|----|---------|------|-------|---------|------------|---------------|
+| F-1 | Thesis Review | `thesis_advisor.py` | Sonnet 4.6 | On-demand button + Sunday cron | 300 tok | DB `thesis_reviews` |
+| F-5 | Thesis Draft | `thesis_advisor.py` | Sonnet 4.6 | On-demand (BUY form) | 300 tok | Editable field only (not auto-saved) |
+| F-3 | Weekly Debrief | `debrief_advisor.py` | Sonnet 4.6 | On-demand + Sunday cron | 700 tok | DB `weekly_debriefs` |
+| F-4 | Monthly Report | `intelligence_report.py` | Sonnet 4.6 | On-demand + 1st-Sunday cron | 1000 tok | DB `monthly_reports` (frozen `viz_json`) |
+| — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
+| — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
+
+### 12.3 Prompt construction pattern
+
+```
+DB / session data
+  → advisor's build_package() function
+  → System prompt  (static role + output format rules)
+  → User prompt    (pre-aggregated evidence — 300–1600 tokens)
+  → client.messages.create()   [synchronous, no streaming]
+  → parse response text → structured dict
+  → save to DB (F-1 / F-3 / F-4) or return to UI
+```
+
+### 12.4 Token budget (approximate per call)
+
+| Feature | Input tokens | Output tokens | Notes |
+|---------|-------------|---------------|-------|
+| F-1 Thesis Review | ~600 | ~150 | Technical + fundamentals + 12 headlines |
+| F-5 Thesis Draft | ~750 | ~150 | Engine verdict + catalyst + regime added |
+| F-3 Weekly Debrief | ~1 000 | ~300 | Portfolio-vs-SPY + contributors + recs surfaced |
+| F-4 Monthly Report | ~1 600 | ~400 | Band/verdict breakdowns; largest prompt |
+| Pre-market Stance | ~600 | ~200 | Futures + macro regime + top 5 holdings |
+
+At the current weekly/monthly call frequency the total annual API cost is approximately **$1–2 USD** (Sonnet 4.6: $3/M input, $15/M output; Haiku: $0.80/M input, $4/M output). Prompt caching would save ≈15–30% on system-prompt tokens but is not implemented — revisit if call volume grows 10×.
+
+### 12.5 Secrets and graceful degradation
+
+API key resolution order: `st.secrets["anthropic"]["api_key"]` → `ANTHROPIC_API_KEY` env var → GitHub Actions secret (cron path).
+
+| Condition | Effect |
+|-----------|--------|
+| No API key | "AI drafting unavailable" caption; feature buttons disabled |
+| Timeout / API error | Returns `None`; caller shows banner; rest of app unaffected |
+| Read-only viewer mode | Thesis-draft button disabled at UI layer |
+
+### 12.6 Cron schedule (GitHub Actions)
+
+| Lane | Schedule | Features invoked |
+|------|----------|-----------------|
+| `thesis` | Sunday evening | F-1 thesis review (all open positions with a thesis) |
+| `debrief` | Sunday evening (after thesis) | F-3 weekly debrief |
+| `monthly` | First Sunday of month | F-4 monthly report |
+
+All three lanes are inert until `ANTHROPIC_API_KEY` is set in GitHub repository secrets.

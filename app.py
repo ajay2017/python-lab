@@ -4152,7 +4152,7 @@ if page == "🏠 Home":
 
                 _reach_parts = [f"{_tracked_n} tracked"]
                 if _wl_extra_n:
-                    _reach_parts.append(f"{_wl_extra_n} watchlist")
+                    _reach_parts.append(f"{_wl_extra_n} watchlist-only")
                 if _movers_ran:
                     _reach_parts.append(f"{_disc_extra_n} discovery")
                 _reach_src = " + ".join(_reach_parts)
@@ -16937,6 +16937,46 @@ The app's intelligence is computed live in your browser — so it can only reach
         )
 
     with st.expander("🧠 AI Insights — thesis tracking, weekly debrief & monthly review", expanded=False):
+        st.caption("How the AI layer fits into the app")
+        st.graphviz_chart(
+            """
+            digraph AI {
+                rankdir=LR
+                node [fontname="Helvetica" fontsize=10 margin="0.15,0.08"]
+                edge [fontname="Helvetica" fontsize=9 color="#444444"]
+
+                subgraph cluster_engine {
+                    label="Rules Engine  (always runs)"
+                    style=filled fillcolor="#eef2ff" color="#5566bb" fontsize=11
+                    DataSrc [label="Market data\\nand your portfolio" shape=cylinder fillcolor=white style=filled]
+                    Score   [label="Scoring  |  Gates\\nRecommendations"  shape=box style="rounded,filled" fillcolor=white]
+                    DataSrc -> Score
+                }
+
+                Pkg [label="Evidence package\\nPython pre-computes:\\nP&L  ·  alpha  ·  signals\\nnews  ·  technicals" shape=box style="rounded,filled" fillcolor="#fffde7" color="#f0a800"]
+
+                Claude [label="Claude AI\\n(one-shot prompt\\nper feature call)" shape=ellipse style=filled fillcolor="#fce4ec" color="#c2185b"]
+
+                subgraph cluster_ai {
+                    label="AI Insights  (additive — app works without AI)"
+                    style=filled fillcolor="#e8f5e9" color="#388e3c" fontsize=11
+                    F1 [label="Thesis Review\\nINTACT / WEAKENING / BROKEN" shape=box style="rounded,filled" fillcolor=white]
+                    F3 [label="Weekly Debrief\\nPortfolio narrative" shape=box style="rounded,filled" fillcolor=white]
+                    F4 [label="Monthly Report\\nEntry quality + Signal discipline" shape=box style="rounded,filled" fillcolor=white]
+                }
+
+                Score  -> Pkg   [label="pre-computed facts only"]
+                Pkg    -> Claude [label="one-shot prompt"]
+                Claude -> F1
+                Claude -> F3
+                Claude -> F4
+
+                Guarantee [label="AI never moves a gate\\nor feeds back to the engine" shape=note fillcolor="#fff9c4" style=filled color="#c8a000"]
+                Claude -> Guarantee [style=dashed arrowhead=none color="#aaaaaa"]
+            }
+            """,
+            use_container_width=True,
+        )
         st.markdown(
             """
 The **🧠 AI Insights** page is a *reflective* layer that sits **on top of** the rule-based engine. Everything else in the app decides and gates with fixed rules; this page uses AI to **narrate the patterns** in what those rules have been doing — your picks, your trades, your theses — over weeks and months. Two promises never change: the AI only ever **describes numbers the engine already computed** (it cannot invent a recommendation, a trade, or an outcome), and it **never moves a gate or sets a threshold** — that stays a rules decision. If the AI is ever unavailable, every other page and every protection still works exactly the same; this layer is purely additive.
