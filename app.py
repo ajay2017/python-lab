@@ -1167,6 +1167,18 @@ def _cached_cross_asset():
     return compute_cross_asset_signals(fetch_cross_asset_data())
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_sentiment(ticker_csv: str) -> dict[str, dict]:
+    """Fetch Finnhub news sentiment for a sorted comma-joined ticker CSV.
+
+    ticker_csv serves as the cache key (same tickers = same cache entry).
+    Returns {ticker: sentiment_dict}; empty dict when Finnhub is not configured.
+    """
+    from stock_analyzer.news_sentiment import fetch_sentiment_for_tickers
+    tickers = [t for t in ticker_csv.split(",") if t]
+    return fetch_sentiment_for_tickers(tickers)
+
+
 # ── Signal-flow Sankey (shared) ──────────────────────────────────────────────
 # Builds the New-Positions → acted/missed → win/loss/flat Sankey figure from a
 # recommendations_history.signal_flow() dict. Shared by the Recommendations
@@ -5235,6 +5247,45 @@ if page == "🏠 Home":
                     "rebalancing or have fresh capital, not on the clock."
                 )
 
+            # News Sentiment Shift — brief awareness cards for held positions
+            _sentiment_brief = _cached_sentiment(",".join(sorted(held_tickers))) if held_tickers else {}
+            if _sentiment_brief:
+                from stock_analyzer.news_sentiment import is_sentiment_shift as _is_shift
+                _sent_shift_tickers = [
+                    t for t in held_tickers
+                    if t in _sentiment_brief and _is_shift(_sentiment_brief[t])
+                ]
+                if _sent_shift_tickers:
+                    st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
+                        f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                        f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                        f"📰 News Sentiment Shift ({len(_sent_shift_tickers)})</span>"
+                        f"<span style='color:#94a3b8;font-size:0.82em'>"
+                        f" · narrative may be changing — check headlines</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _ss_tk in _sent_shift_tickers:
+                        _ss = _sentiment_brief[_ss_tk]
+                        _ss_vs = _ss.get("vs_sector_pp")
+                        _ss_vs_txt = f", {_ss_vs:+.0f} pp vs sector avg" if _ss_vs is not None else ""
+                        _ss_buzz = _ss["buzz_score"]
+                        st.markdown(
+                            "<div style='background:#0f172a;border:1px solid #78350f;"
+                            "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                            f"<div style='color:#fbbf24;font-weight:700;font-size:0.86em'>"
+                            f"📰 {_ss_tk}</div>"
+                            f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
+                            f"News sentiment shifted bearish "
+                            f"({_ss['bullish_pct']:.0%} bullish{_ss_vs_txt}, "
+                            f"{_ss_buzz:.1f}× normal coverage). "
+                            f"Awareness only — check headlines.</div>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
         # ── Buy Candidates — OVERFLOW only, in the left "offense" column ──────
@@ -5927,6 +5978,27 @@ if page == "🏠 Home":
                             + _tip("FCF Yield"))
             sb3.metric("Sentiment",   f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (15%)",
                        help="VADER analysis of latest news headlines from Yahoo Finance")
+
+            # News Sentiment — Finnhub awareness row (not a gate; strictly additive)
+            _ns_data = _cached_sentiment(sel).get(sel)
+            if _ns_data is not None:
+                from stock_analyzer.news_sentiment import sentiment_label as _sent_label
+                _ns_lbl, _ns_emoji = _sent_label(_ns_data["bullish_pct"])
+                _ns_buzz = _ns_data["buzz_score"]
+                _ns_vs = _ns_data.get("vs_sector_pp")
+                _ns_vs_txt = f"&nbsp;&nbsp;·&nbsp;&nbsp;{_ns_vs:+.0f} pp vs sector" if _ns_vs is not None else ""
+                _ns_buzz_txt = f"{_ns_buzz:.1f}× avg coverage"
+                st.markdown(
+                    f"<div style='background:#0f172a;border:1px solid #334155;"
+                    f"border-radius:6px;padding:8px 14px;margin-top:4px;margin-bottom:4px'>"
+                    f"<span style='color:#94a3b8;font-size:0.82em'>News Sentiment&nbsp;&nbsp;</span>"
+                    f"<span style='font-size:0.88em'>{_ns_emoji} {_ns_lbl}"
+                    f" {_ns_data['bullish_pct']:.0%}</span>"
+                    f"<span style='color:#64748b;font-size:0.78em'>"
+                    f"&nbsp;&nbsp;·&nbsp;&nbsp;{_ns_buzz_txt}{_ns_vs_txt}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
             # Smart Money panel
             fin = r["financials"]

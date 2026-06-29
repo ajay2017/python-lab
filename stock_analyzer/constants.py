@@ -242,6 +242,13 @@ CROSS_ASSET_VIX_TERM_RATIO     = 1.0  # VIX / VIX3M ratio threshold; >1 = term-s
 CROSS_ASSET_CURVE_STRESS_BP    = -50  # 3m10y yield spread (basis pts); below = deeply inverted (^IRX=3m T-bill, ^TNX=10yr)
 CROSS_ASSET_STRESS_BRIEF_SCORE = 2    # score >= this triggers a one-liner in Today's Brief
 
+# News sentiment via Finnhub /stock/news-sentiment — thresholds for the sentiment
+# awareness layer (Analysis scorecard row + Brief shift alert). Phase 1: display only.
+NEWS_SENTIMENT_BULLISH_THRESHOLD    = 0.60  # bullish_pct >= this → green "Bullish" label
+NEWS_SENTIMENT_BEARISH_THRESHOLD    = 0.40  # bullish_pct <  this → red   "Bearish" label
+NEWS_SENTIMENT_SHIFT_ALERT_BULLISH  = 0.40  # held-position alert fires when bullish_pct < this
+NEWS_SENTIMENT_SHIFT_BUZZ_MIN       = 1.0   # alert only when buzz_score > this (active coverage)
+
 # ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
 # investment-decision threshold. The ET hour the daily email targets; the cron is
 # scheduled at two UTC times (to straddle EST/EDT) and a Supabase idempotency

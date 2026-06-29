@@ -87,3 +87,46 @@ class FinnhubProvider(DataProvider):
         elif not had_error:
             _ah.record("finnhub", "empty")
         return results
+
+    def fetch_news_sentiment(self, ticker: str) -> dict | None:
+        """Call /stock/news-sentiment for one ticker. Returns a normalised dict or None.
+
+        NOT part of the DataProvider capability chain — called directly by
+        news_sentiment.py. Fails silently (returns None) on any error so the
+        rest of the app is unaffected when sentiment data is unavailable.
+        """
+        if not self._key:
+            return None
+        try:
+            data = http_get_json(
+                f"{_BASE}/stock/news-sentiment",
+                params={"symbol": ticker, "token": self._key},
+            )
+            sentiment = data.get("sentiment")
+            if sentiment is None:
+                return None
+            bullish = sentiment.get("bullishPercent")
+            if bullish is None:
+                return None
+            buzz = data.get("buzz") or {}
+            sector_bullish = data.get("sectorAverageBullishPercent")
+            vs_sector = (
+                (float(bullish) - float(sector_bullish)) * 100
+                if sector_bullish is not None
+                else None
+            )
+            return {
+                "bullish_pct":   float(bullish),
+                "bearish_pct":   float(sentiment.get("bearishPercent") or 0),
+                "buzz_score":    float(buzz.get("buzzScore") or 0),
+                "company_score": float(data.get("companyNewsScore") or 0),
+                "sector_score":  float(data.get("sectorAverageNewsScore") or 0),
+                "vs_sector_pp":  float(vs_sector) if vs_sector is not None else None,
+                "symbol":        str(ticker),
+            }
+        except Exception as exc:
+            if is_rate_limit(exc):
+                _ah.record("finnhub", "rate_limit")
+            else:
+                _ah.record("finnhub", "error", msg=str(exc)[:120])
+            return None
