@@ -3950,6 +3950,14 @@ if page == "🏠 Home":
                 f"Check the **🔗 Risk Analysis** tab for the full breakdown.",
                 icon=None,
             )
+        elif _ca_brief.get("label") == "—":
+            # Total cross-asset outage: the module returns label "—" (never a
+            # fabricated "Calm") precisely so blind ≠ calm. Echo that quietly on
+            # the Brief so a silent card isn't read as a macro all-clear.
+            st.caption(
+                "📡 Cross-asset macro signals are offline (market data unavailable) — "
+                "no stress read this run."
+            )
 
         # ── Quick Research — label · input · button on one row ────────────────
         # Collapsed from a header banner + caption + input row down to a single
@@ -8332,6 +8340,10 @@ if page == "🏠 Home":
                 _ca_c3.caption(_ca_sig.get("detail", "") if _ca_sig.get("available") else "")
             _ca_score = _ca.get("score", 0)
             _ca_label = _ca.get("label", "—")
+            # Denominator = available signals (the module scores against
+            # availability, not a fixed 5); a hardcoded "of 5" overstates
+            # coverage when a feed is down.
+            _ca_avail = sum(1 for _k, _ in _ca_rows if _ca.get(_k, {}).get("available"))
             if _ca_label == "—":
                 st.caption("Cross-asset signals unavailable — market data offline.")
             else:
@@ -8342,7 +8354,7 @@ if page == "🏠 Home":
                 )
                 st.markdown(
                     f"<div style='margin-top:8px;font-size:0.85em;color:{_ca_color};font-weight:600'>"
-                    f"Overall: {_ca_label} · {_ca_score} of 5 signals stressed</div>"
+                    f"Overall: {_ca_label} · {_ca_score} of {_ca_avail} signals stressed</div>"
                     f"<div style='font-size:0.78em;color:#6b7280;margin-top:2px'>"
                     f"Cross-asset signals update every 30 min. They are awareness-only — "
                     f"they never move a gate or change a recommendation.</div>",
