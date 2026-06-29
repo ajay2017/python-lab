@@ -4850,10 +4850,12 @@ if page == "🏠 Home":
                     st.session_state["_broken_thesis_tickers"] = set()
             _broken_thesis_tickers = st.session_state.get("_broken_thesis_tickers", set())
 
-            def _render_act_card(_db_item):
+            def _render_act_card(_db_item, in_act=False):
                 _db_is_crit = _db_item["priority"] == "critical"
                 _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
-                _db_border  = "#ef4444" if _db_is_crit else "#f59e0b"
+                # Red left bar for any Act-bucket card (or a critical one); amber only
+                # when this act-origin item is shown in the calm Awareness lane.
+                _db_border  = "#ef4444" if (in_act or _db_is_crit) else "#f59e0b"
                 _db_ticker  = _db_item.get("ticker")
                 _db_weight_txt = (
                     f" · {_db_item['weight']:.1f}% of portfolio"
@@ -4870,7 +4872,7 @@ if page == "🏠 Home":
                 _db_why       = _db_item.get("why", "")
                 _db_trigger   = _db_item.get("trigger", "")
                 _db_flags     = _db_item.get("risk_flags", []) or []
-                _act_color    = "#ef4444" if _db_is_crit else "#fbbf24"
+                _act_color    = "#ef4444" if (in_act or _db_is_crit) else "#fbbf24"
 
                 _body = ""
                 if _db_directive:
@@ -4936,8 +4938,13 @@ if page == "🏠 Home":
                                 st.session_state["_pending_page"] = "🧠 AI Insights"
                                 st.rerun()
 
-            def _render_review_card(_db_rev, _card_idx=0):
-                _db_border  = "#f59e0b" if _db_rev.get("priority") == "medium" else "#78716c"
+            def _render_review_card(_db_rev, _card_idx=0, in_act=False):
+                # Red accents when this review item was promoted into the red "Act
+                # Today" bucket (e.g. a PROTECTIVE_TRIM); amber/grey keep the calm
+                # Monitoring styling otherwise.
+                _db_border  = ("#ef4444" if in_act
+                               else "#f59e0b" if _db_rev.get("priority") == "medium"
+                               else "#78716c")
                 _db_bg      = "#1c1917"
                 _db_ticker  = _db_rev.get("ticker")
                 _headline   = _db_rev.get("headline", "")
@@ -4945,6 +4952,8 @@ if page == "🏠 Home":
                 _why        = _db_rev.get("why", "")
                 _trigger    = _db_rev.get("trigger", "")
                 _act_color, _act_label, _act_text = _fmt_action(_action)
+                if in_act:
+                    _act_color = "#ef4444"  # match the red Act Today header
 
                 # Append alternatives only on weak-large TRIM_TO_TARGET items —
                 # this is the case where we're freeing capital and the user
@@ -5184,11 +5193,14 @@ if page == "🏠 Home":
                                             )
                                             st.rerun()
 
-            def _render_defensive_card(_item, _card_idx=0):
+            def _render_defensive_card(_item, _card_idx=0, in_act=False):
+                # in_act = this card sits in the red "Act Today" bucket → red accents
+                # (left bar + "→ LABEL:") so it reads as part of that section, matching
+                # the all-green offensive column. Awareness / Tune-up keep calm styling.
                 if _item.get("_source") == "review":
-                    _render_review_card(_item, _card_idx)
+                    _render_review_card(_item, _card_idx, in_act=in_act)
                 else:
-                    _render_act_card(_item)
+                    _render_act_card(_item, in_act=in_act)
 
             # Act Today — genuine decisions only
             _act_label  = (f"🔴 Act Today ({len(_act_bucket)})" if _act_bucket
@@ -5215,7 +5227,7 @@ if page == "🏠 Home":
                 )
             else:
                 for _ci, _item in enumerate(_act_bucket):
-                    _render_defensive_card(_item, _ci)
+                    _render_defensive_card(_item, _ci, in_act=True)
 
             # Monitoring / Awareness — FYI, nothing to execute
             st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
