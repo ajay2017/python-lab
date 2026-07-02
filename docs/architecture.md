@@ -79,7 +79,7 @@ python-lab/
     ├── providers/                  Multi-source market-data layer (failover + price cross-check)
     │   ├── base.py                 DataProvider abstraction, capability flags, canonical schemas
     │   ├── yfinance_provider.py    yfinance adapter (history/bundle/indices/risk-free; live-price failover)
-    │   ├── finnhub_provider.py     Finnhub adapter — real-time live prices (live-price PRIMARY)
+    │   ├── finnhub_provider.py     Finnhub adapter — real-time live prices (live-price PRIMARY) + fetch_news_sentiment (F-74 news-sentiment read)
     │   ├── fmp_provider.py         FMP adapter — live prices + history + full bundle (failover)
     │   ├── orchestrator.py         Failover chains (per data type) + price cross-check; PROVIDER_REGISTRY consumer
     │   ├── _util.py                Secret reader (st.secrets→env, section-nesting tolerant) + http helper
@@ -89,6 +89,7 @@ python-lab/
     ├── fundamentals.py             Fundamental scoring — sector-relative benchmarks
     ├── catalyst_watch.py           Catalyst Watch — forward earnings awareness (pure logic)
     ├── sentiment.py                VADER-based news sentiment scoring
+    ├── news_sentiment.py           Finnhub news-sentiment awareness — bullish%/buzz/vs-sector → label + held-position shift alert (pure wrapper over FinnhubProvider.fetch_news_sentiment; F-74)
     ├── scoring.py                  Composite score weights and recommendation tiers
     ├── signal_reconciliation.py    Central authority resolving scanner vs. composite vs. context into one buy/skip verdict (reconcile_signals) — every recommendation surface calls it
     ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
@@ -118,6 +119,7 @@ python-lab/
     ├── risk_advisor.py             Risk flags and advisor recommendations (exact beta impact)
     ├── exit_advisor.py             Exit-discipline + market-risk: deterioration WATCH/TRIM/EXIT ladder, risk-off de-risk overlay, Market-Risk Posture dial (classify_deterioration_tier · risk_off_regime · assess_risk_off_derisk · market_risk_posture — pure logic)
     ├── concentration.py            Concentration & sizing discipline: single-name ceiling enforcement + high-beta cluster awareness (pure logic)
+    ├── cross_asset.py              Cross-Asset Pulse — 5-signal macro stress (credit/VIX-term/dollar/copper/3m10y → 0–5 stress score; awareness-only, Risk tab + Brief one-liner; F-09c)
     ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
     ├── trade_analytics.py          Trade history analytics
     ├── trade_review.py             Trade Review: behavioural retrospective (app-followed vs deviated trades, panic-day reactivity, per-trade outcome vs SPY)
@@ -172,6 +174,13 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `RISK_OFF_TRIM_PCT` | 25.0 | Risk-off de-risk suggested trim % (or tighten the stop instead) |
 | `PULLBACK_ALERT_INDEX_PCT` | -3.0 | EOD reactive pullback email fires when SPY closes ≤ this %; operational alert knob, not a gate |
 | `ALERT_EOD_HOUR_ET` | 16 | EOD cron run gates on ET hour ≥ this (post-close); operational |
+| `CROSS_ASSET_HYG_TREND_DAYS` / `_COPPER_TREND_DAYS` / `_DXY_TREND_DAYS` | 20 / 20 / 20 | Cross-Asset Pulse (F-09c) linear-trend lookback windows (days) for the HYG / copper / DXY legs. Awareness-only — these signals never gate a recommendation |
+| `CROSS_ASSET_DXY_ROC_DAYS` / `_DXY_ROC_THRESHOLD` | 5 / 1.5 | Dollar-stress leg: 5-day rate-of-change; stressed when the DXY trend is rising AND ROC > 1.5% |
+| `CROSS_ASSET_VIX_TERM_RATIO` | 1.0 | VIX/VIX3M ratio above which the term structure is "inverted" (a stress signal) |
+| `CROSS_ASSET_CURVE_STRESS_BP` | -50 | 3m10y spread in bp (^TNX − ^IRX) below which the curve is "deeply inverted" |
+| `CROSS_ASSET_STRESS_BRIEF_SCORE` | 2 | Aggregate stress score (count of stressed signals among those with data) at/above which Today's Brief shows the cross-asset one-liner |
+| `NEWS_SENTIMENT_BULLISH_THRESHOLD` / `_BEARISH_THRESHOLD` | 0.60 / 0.40 | Finnhub news-sentiment (F-74) label cutoffs: bullish_pct ≥ 0.60 → 🟢 Bullish, < 0.40 → 🔴 Bearish, between → 🟡 Neutral. Awareness-only |
+| `NEWS_SENTIMENT_SHIFT_ALERT_BULLISH` / `_SHIFT_BUZZ_MIN` | 0.40 / 1.0 | Brief held-position shift card fires when bullish_pct < 0.40 AND buzz_score > 1.0 (both required — low-buzz bearishness is thin/stale, not alerted) |
 | `COMPOSITE_BUY` | 65 | Buy boundary — used for entry AND add-to-winner (aligned) |
 | `COMPOSITE_STRONG_BUY` | 75 | Strong Buy boundary |
 | `COMPOSITE_HOLD` | 44 | Hold floor; below this = "Sell zone" |
@@ -963,7 +972,7 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 | API | Purpose | Rate Limits | Failure Handling |
 |-----|---------|-------------|-----------------|
 | Yahoo Finance (yfinance) | History/bundle primary (OHLCV, company info, news, analyst data, earnings); indices; futures; global indices; live-price failover | Informal; 429 responses possible | Retry with linear backoff (3 attempts, 3s base); `api_health` records events; **a hard failure now fails over to FMP** (history/bundle) |
-| Finnhub (REST, free) | **Real-time live-price primary**; price cross-check source | 60 calls/min (free) | Per-symbol; rate-limit/error skips that ticker → gap-fill to yfinance; `api_health("finnhub")` |
+| Finnhub (REST, free) | **Real-time live-price primary**; price cross-check source; **news-sentiment read** (`/stock/news-sentiment` → bullish%/buzz/sector-avg) for the F-74 awareness surfaces | 60 calls/min (free) | Per-symbol; rate-limit/error skips that ticker → gap-fill to yfinance; news-sentiment returns `None` on any error (awareness-only, never blocks); `api_health("finnhub")` |
 | FMP / Financial Modeling Prep (REST, free, `/stable/`) | Failover for live prices, history, and full analysis bundle (profile/ratios/growth/targets/news/earnings/grades) | 250 calls/day (free) | Only invoked when higher-priority providers fail; key redacted from logged errors; `api_health("fmp")` |
 | Supabase REST API | Holdings, watchlist, trades, manual_stops CRUD | Generous free tier | Connection errors surface as UI warnings |
 | Anthropic / OpenAI / Google | AI Brief generation | Per-account | Errors surfaced in AI Brief tab; rest of app unaffected |
