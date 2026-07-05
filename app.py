@@ -18387,7 +18387,18 @@ elif page == "🧠 AI Insights":
 
         # (b) Editable preview — one expandable card per extracted stock ────────────
         if st.session_state.get("_ac_preview"):
-            _ac_pv_list = st.session_state["_ac_preview"]   # list[dict]
+            _ac_pv_raw = st.session_state["_ac_preview"]
+            # Robust to a legacy/malformed stored preview: a session created before
+            # the multi-stock change holds a single record DICT (not a list), which
+            # would make `enumerate` iterate its string keys and crash on _rec.get().
+            # Coerce to a list of dict records; clear a stale/unusable preview.
+            if isinstance(_ac_pv_raw, dict):
+                _ac_pv_raw = [_ac_pv_raw]
+            _ac_pv_list = [_r for _r in _ac_pv_raw if isinstance(_r, dict)] if isinstance(_ac_pv_raw, list) else []
+            if not _ac_pv_list:
+                for _k in ("_ac_preview", "_ac_raw_text", "_ac_preview_nonce"):
+                    st.session_state.pop(_k, None)
+                st.rerun()
             _ac_n       = len(_ac_pv_list)
             _ac_nonce   = st.session_state.get("_ac_preview_nonce", "x")
             st.markdown(
@@ -18415,7 +18426,7 @@ elif page == "🧠 AI Insights":
 
             for _i, _rec in enumerate(_ac_pv_list):
                 _ac_exp_label = (
-                    f"{(_rec.get('ticker') or '?').upper()} — {_rec.get('company', '')}"
+                    f"{str(_rec.get('ticker') or '?').upper()} — {_rec.get('company', '')}"
                 )
                 with st.expander(_ac_exp_label, expanded=True):
                     _ac_inc = st.checkbox(
