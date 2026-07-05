@@ -5805,20 +5805,56 @@ if page == "🏠 Home":
         sector_df = sector_exposure(port_df)
         if not sector_df.empty:
             st.subheader("Sector Exposure")
-            sec_fig = go.Figure(go.Bar(
+            # When the account carries a margin debit, the concentration GATES
+            # measure each sector against NET CAPITAL (the smaller denominator),
+            # not gross equity holdings — so a sector reads much higher there and
+            # the 35% cap bites at a lower gross weight. Show BOTH bars so this
+            # chart can't visually contradict a Grow Today sector suppression.
+            # Consumes the published _acct_gate_cache (CLAUDE.md: one number for
+            # all consumers). Display-only — the gate math is unchanged.
+            _sx_gate   = st.session_state.get("_acct_gate_cache") or {}
+            _sx_denom  = _f(_sx_gate.get("denom"), 0.0)
+            _sx_lever  = bool(_sx_gate.get("basis") in ("account", "over-levered")
+                              and _sx_denom > 0)
+            sec_fig = go.Figure()
+            sec_fig.add_trace(go.Bar(
                 x=sector_df["Sector"], y=sector_df["Pct"],
+                name="% of gross holdings",
                 marker_color="#4a9eff",
                 text=[f"{v:.0f}%" for v in sector_df["Pct"]],
                 textposition="outside",
             ))
+            if _sx_lever:
+                _sx_acct = sector_df["Value"] / _sx_denom * 100
+                sec_fig.add_trace(go.Bar(
+                    x=sector_df["Sector"], y=_sx_acct,
+                    name="% of net capital (gated)",
+                    marker_color=["#ef4444" if p >= SECTOR_CEILING else "#f59e0b"
+                                  for p in _sx_acct],
+                    text=[f"{v:.0f}%" for v in _sx_acct],
+                    textposition="outside",
+                ))
             sec_fig.add_hline(y=SECTOR_CEILING, line_dash="dash", line_color="red",
                               annotation_text=f"{SECTOR_CEILING:.0f}% sector hard cap")
             sec_fig.update_layout(
-                template="plotly_dark", height=260,
+                template="plotly_dark", height=300 if _sx_lever else 260,
                 yaxis_title="% of Portfolio",
+                barmode="group",
+                showlegend=_sx_lever,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="right", x=1),
                 margin=dict(l=0, r=0, t=10, b=0),
             )
             st.plotly_chart(sec_fig, use_container_width=True)
+            if _sx_lever:
+                st.caption(
+                    f"You carry a margin debit, so your concentration gates measure each "
+                    f"sector against **net capital (${_sx_denom:,.0f})**, not gross holdings — "
+                    f"borrowed money amplifies exposure to the capital you actually own. The "
+                    f"**{SECTOR_CEILING:.0f}% cap applies to the net-capital bars** (amber, red "
+                    f"when over): a red bar's sector is blocked for new buys in Grow Today. "
+                    f"See 💰 Account for the full account-weight view."
+                )
 
         # ── Composition Sankey — Portfolio → Sector → Position ───────────────
         # One view of where the money sits and how concentrated it is. Band width
@@ -5843,13 +5879,23 @@ if page == "🏠 Home":
                 _cmp_nodes.append(str(_t))
 
             # Node colours: sector red if over the hard cap; ticker red if over the
-            # single-name ceiling; otherwise neutral palette.
+            # single-name ceiling; otherwise neutral palette. Concentration flags
+            # fire on the GATE basis: when the account is levered, net capital (the
+            # smaller denominator) is what the 35%/15% ceilings measure against, so
+            # flag red there — otherwise this Sankey would read green while Grow
+            # Today suppresses the same sector. Band widths stay gross (where the
+            # money actually sits). Consumes the published _acct_gate_cache.
+            _cmp_gate  = st.session_state.get("_acct_gate_cache") or {}
+            _cmp_denom = _f(_cmp_gate.get("denom"), 0.0)
+            _cmp_lever = bool(_cmp_gate.get("basis") in ("account", "over-levered")
+                              and _cmp_denom > 0)
+            _flag_base = _cmp_denom if _cmp_lever else _cmp_tot
             _cmp_ncolor = ["#60a5fa"]
             for _s, _sv in _cmp_sectors.items():
-                _spct = _sv / _cmp_tot * 100
+                _spct = _sv / _flag_base * 100
                 _cmp_ncolor.append("#ef4444" if _spct > SECTOR_CEILING else "#38bdf8")
             for _, _row in _cmp_df.iterrows():
-                _tpct = float(_row["Market Value"]) / _cmp_tot * 100
+                _tpct = float(_row["Market Value"]) / _flag_base * 100
                 _cmp_ncolor.append("#f87171" if _tpct > SINGLE_NAME_CEILING else "#94a3b8")
 
             _cmp_src, _cmp_tgt, _cmp_val, _cmp_lab = [], [], [], []
@@ -5891,8 +5937,11 @@ if page == "🏠 Home":
             st.caption(
                 f"Band width = share of portfolio value. **Red** flags concentration: a "
                 f"sector over the **{SECTOR_CEILING:.0f}%** hard cap or a single name over the "
-                f"**{SINGLE_NAME_CEILING:.0f}%** ceiling. Reads where your capital actually sits "
-                f"and where it's bunched — in one view."
+                f"**{SINGLE_NAME_CEILING:.0f}%** ceiling"
+                + (" — measured against your **net capital** (you carry margin), the same "
+                   "basis the gates use, so a name can flag red here while its band (gross "
+                   "share) looks modest" if _cmp_lever else "")
+                + ". Reads where your capital actually sits and where it's bunched — in one view."
             )
 
         # Position table

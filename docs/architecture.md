@@ -623,6 +623,8 @@ CREATE TABLE account_cash (
 
 **Account-baseline NET cash (single row).** Holds the user-entered uninvested cash. The value is **signed: NEGATIVE = a margin debit** (account-baseline v4) — so `Total Account Value = Σ Market Value + cash` nets out any margin loan, and everything derived from it (true concentration, growth, return) nets it too. `db.load_account_cash()` / `save_account_cash()` (writer is read-only-viewer no-op — USER data). **Optional** — until created, load returns None and the app behaves as today (invested-equity only, with a nudge to set cash). The same field the Robinhood MCP sync would later auto-populate. RLS: `FOR ALL TO service_role`.
 
+When a margin debit makes the gate basis `account`/`over-levered` (published via `_acct_gate_cache`), the **Performance → Sector Exposure** chart adds a second net-capital bar per sector (35% cap applies to it) and the **Composition Sankey** flags concentration on the net-capital basis — so neither display can read "safe" while a Grow Today sector suppression fires on the same names. Display-only; band widths/weights everywhere else stay equity-basis.
+
 ### 6.8 `account_flows` table
 
 ```sql
