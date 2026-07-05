@@ -143,6 +143,30 @@ def split_defensive(act_today: list | None, review_list: list | None) -> dict:
     return {"act": act_items, "aware": aware_items}
 
 
+def reduce_call_items(act_today: list | None, review_list: list | None) -> dict[str, dict]:
+    """Map ticker → its reduce-call item (directive / why / tier preserved),
+    across BOTH Brief lanes.
+
+    Same canon as `reduce_call_tickers` (which returns just the keys), for a
+    consumer that needs the REASON — e.g. the Analysis page's "under a Reduce/
+    Exit call" reconciliation banner reads the item's `action`/`why`. First
+    reduce item per ticker wins in split order: the `act` bucket, then `aware`.
+    NB: `deterioration_exit`/`_trim` are act-ORIGIN but classify to the AWARE
+    bucket (they aren't in `_ACT_KINDS`), while review-origin trims classify to
+    ACT — so a name carrying BOTH keeps the review trim's item. The gate is
+    unaffected (suppression fires regardless); only the banner's displayed reason
+    differs. Pure; safe on None/empty.
+    """
+    _split = split_defensive(act_today, review_list)
+    out: dict[str, dict] = {}
+    for it in (_split["act"] + _split["aware"]):
+        if _is_reduce(it):
+            t = _ticker(it)
+            if t and t not in out:
+                out[t] = it
+    return out
+
+
 def reduce_call_tickers(act_today: list | None, review_list: list | None) -> set[str]:
     """Tickers under an active Reduce/Exit call, across BOTH Brief lanes.
 
@@ -154,9 +178,4 @@ def reduce_call_tickers(act_today: list | None, review_list: list | None) -> set
     never drift out of agreement, and it survives split_defensive re-bucketing
     (scans both act + aware). Pure; safe on None/empty.
     """
-    _split = split_defensive(act_today, review_list)
-    return {
-        _ticker(it)
-        for it in (_split["act"] + _split["aware"])
-        if _is_reduce(it) and _ticker(it)
-    }
+    return set(reduce_call_items(act_today, review_list).keys())

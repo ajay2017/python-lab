@@ -106,7 +106,9 @@ from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
 from stock_analyzer import exit_advisor
 from stock_analyzer.position_lifecycle import lifecycle_badge
-from stock_analyzer.decision_bucket import split_defensive, reduce_call_tickers
+from stock_analyzer.decision_bucket import (
+    split_defensive, reduce_call_tickers, reduce_call_items,
+)
 from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import (
@@ -2866,6 +2868,9 @@ if page == "🏠 Home":
             # Provide a minimal empty dict so downstream code doesn't crash, but
             # session_state flag tells consumers to render the offline UI state.
             _daily_brief = {"act_today": [], "buy_candidates": [], "review_list": [], "grow_today": {}}
+            # No reduce calls known while the Brief is offline — consumers fail
+            # open (show sizing), consistent with the Brief itself being offline.
+            st.session_state["_reduce_calls"] = {}
         else:
             st.session_state["_daily_brief_offline"] = False
             _gt_today = _daily_brief.get("grow_today") or {}
@@ -2879,6 +2884,16 @@ if page == "🏠 Home":
             st.session_state["_leading_sectors_cache"] = [
                 ls.get("sector", "") for ls in (_gt_today.get("leading_sectors") or [])
             ]
+
+            # Publish held positions under an active Reduce/Exit call so OTHER
+            # pages reconcile against the Brief (CLAUDE.md coordination: read,
+            # don't recompute). The Analysis page consumes this to suppress add-on
+            # sizing + show a "not a place to add" banner on a held name the Brief
+            # is telling you to trim/exit — same _is_reduce/_ticker canon as the
+            # Opportunity-Signals reconciliation, so the surfaces can't drift.
+            st.session_state["_reduce_calls"] = reduce_call_items(
+                _daily_brief.get("act_today"), _daily_brief.get("review_list")
+            )
 
             # ── Recommendations log (persist + decorate with first-seen) ─────────
             # Capture every pick surfaced today so the user can audit the App's
@@ -11602,6 +11617,17 @@ elif page == "📈 Analysis":
                         _sa_holding and price and _sa_stop and price <= _sa_stop
                     )
 
+                    # Deterioration / reduce-call gate — sibling to the stop-breach
+                    # gate: a held name the Daily Brief is telling you to trim/exit
+                    # is NOT a place to add, even when its composite still reads
+                    # Buy. The composite rates the STOCK (it rewards the oversold
+                    # setup); the exit discipline protects the POSITION. Consume the
+                    # Brief's PUBLISHED reduce calls (same _is_reduce/_ticker canon
+                    # as Opportunity Signals — no recompute drift) so the two
+                    # surfaces agree. Stop-breach (mechanical) still takes priority.
+                    _rc = (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                    _under_reduce = bool(_sa_holding and _rc and not _stop_breached)
+
                     if _sa_holding and _stop_breached:
                         _br_shares   = int(_sa_holding.get("Shares", 0))
                         _br_stoptype = "manual" if r.get("_stop_source") == "manual" else "ATR"
@@ -11620,6 +11646,31 @@ elif page == "📈 Analysis":
                             "<br><small style='color:#dc2626'>If your thesis has genuinely changed and "
                             "you want to keep holding, move/clear the stop in the Action Log first — "
                             "don't add into a breach.</small></div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif _under_reduce:
+                        # Held name under a Brief Reduce/Exit call (trend/deterioration,
+                        # sell signal, risk-off trim) but stop NOT yet breached — e.g.
+                        # a deterioration EXIT while price is still above the stop.
+                        # Keep the Buy composite visible (it's the honest attractiveness
+                        # read) but suppress the add framing: protect defers to deploy.
+                        _rc_action = _rc.get("action")
+                        _rc_label  = _rc_action if isinstance(_rc_action, str) else "Reduce / Exit"
+                        _rc_why    = _rc.get("why") if isinstance(_rc.get("why"), str) else ""
+                        st.markdown(
+                            "<div style='padding:12px;border-radius:8px;background:#f59e0b14;"
+                            "border-left:5px solid #f59e0b;margin-bottom:10px'>"
+                            "<b style='font-size:1.05em;color:#f59e0b'>⚠️ Under a Reduce/Exit call — "
+                            "not a place to add</b>"
+                            f"<br><span style='color:#fcd34d'>Today's Brief flags this position: "
+                            f"<b>{_rc_label}</b>.{(' ' + _rc_why) if _rc_why else ''}</span>"
+                            f"<br><span style='color:#fcd34d'>This protects the POSITION and overrides "
+                            f"the Buy composite <b>for adding</b>: the composite (<b>{r['total']:.1f}</b>) "
+                            f"rates the STOCK — it rewards the oversold setup — but your exit discipline "
+                            f"says the trend has turned. Add-on sizing is suppressed.</span>"
+                            "<br><small style='color:#fcd34d'>See Today's Brief for the full directive. "
+                            "If your thesis has genuinely changed and you want to keep holding, act on "
+                            "the Brief's call rather than adding into the weakness here.</small></div>",
                             unsafe_allow_html=True,
                         )
                     elif _sa_holding:
@@ -11643,9 +11694,10 @@ elif page == "📈 Analysis":
                             f"Sizing below is for adding to your existing position.{_earn_note}"
                         )
 
-                    # Add-on sizing is suppressed on a breached held position — you
-                    # don't size up a position your own stop rule says to exit.
-                    if ps and not _stop_breached:
+                    # Add-on sizing is suppressed on a breached held position OR one
+                    # under a Brief Reduce/Exit call — you don't size up a position
+                    # your own rules say to trim/exit.
+                    if ps and not _stop_breached and not _under_reduce:
                         st.markdown("#### Position Sizing")
                         p1, p2, p3, p4 = st.columns(4)
                         p1.metric("Shares", f"{ps['shares']:,}", help=_tip("Position Sizing"))

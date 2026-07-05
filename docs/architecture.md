@@ -248,6 +248,7 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | `_grow_composites_coverage` | Portfolio page | Grow Today UI | "Composite scores unavailable" banner when pre-fetch failed |
 | `_movers_candidates` | Portfolio page (`_cached_scan_movers` → composite-gate) | `_grow_today` via `movers=` arg | Discovery breakouts fed into the unified New Positions list |
 | `_daily_brief_offline` | Portfolio page (on `build_daily_briefing` exception) | Watchlist | Surfaces explicit offline state instead of silently disabling gates |
+| `_reduce_calls` | After `build_daily_briefing` (`decision_bucket.reduce_call_items`) | Stock Analysis Trade Plan | Held names under a Reduce/Exit call → suppress add-on sizing + "not a place to add" banner, so Analysis can't say "add" while the Brief says "reduce" |
 
 ### 4.0.3 Coordination gates currently enforced
 
@@ -257,6 +258,7 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | Risk Advisor TRIM → Rebalancer ADD | Suppress add on trim-targeted ticker | Amber banner: "Rebalance ADD Suppressed — Risk Advisor Conflict" |
 | News Intelligence alert → Rebalancer ADD | Attach news_warning; critical drops urgency | Banner inside the add card; critical labelled "Defer Add" |
 | Brief Reduce/Exit call → Overview Opportunity Signals | Drop the name from the "add on a pullback" lane (`reduce_call_tickers` — same `_is_reduce`/`_ticker` canon as the Act-bucket reconciler) | Amber "⚠️ NOT SHOWN AS ADDS" note lists the names; full headline stays under "All News for Your Holdings" |
+| Brief Reduce/Exit call → Analysis Trade Plan (held name) | Suppress the add-on Position Sizing block (`reduce_call_items` → `_reduce_calls`; sibling to the stop-breach suppression) | Amber "⚠️ Under a Reduce/Exit call — not a place to add" banner; composite Buy score kept (rates the stock; the exit protects the position) |
 | Rebalancer drift-trim → Grow Today add-to-winner | Suppress add on drift-overweight ticker | Concentration-blocked banner |
 | Single-name ceiling (15%) → Grow Today add-to-winner | Suppress add | Concentration-blocked banner |
 | Sector ceiling (35%) → Watchlist ENTER_NOW | Downgrade to NEAR_ENTRY | "Portfolio Fit Blocks Entry" card |
