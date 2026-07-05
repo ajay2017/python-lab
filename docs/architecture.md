@@ -133,6 +133,7 @@ python-lab/
     ├── thesis_advisor.py           AI Intelligence F-1 review (per-holding thesis → INTACT/WEAKENING/BROKEN, thesis_reviews table) + F-5 authoring (draft_thesis: editable candidate thesis at BUY → trades.user_thesis / thesis_source)
     ├── debrief_advisor.py          AI Intelligence F-3: weekly portfolio debrief — 4-section narrative + Sunday email (weekly_debriefs table)
     ├── intelligence_report.py      AI Intelligence F-4: monthly retrospective — Q0 entry-quality + Q1 signal-discipline; build_report_package + frozen viz_json snapshot (monthly_reports table)
+    ├── analyst_intel.py            Analyst Coverage F-6/F-154: extract_report (paste → atomic per-firm facts, Sonnet, offline→None) + derive_consensus (pure-Python avg/high/low PT + consensus label); awareness-only, analyst_coverage table
     ├── bundle_loader.py            Shared market-data bundle loader (load_all) — the app AND the headless cron load through the SAME path
     ├── headless_alert_engine.py    Headless alert computation for the cron: protective signals (stops / EXIT / risk-off), reactive pullback, EOD snapshot
     ├── notify.py                   Email rendering (weekly debrief / monthly intelligence / pullback / protective) + Resend delivery
@@ -181,6 +182,9 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `CROSS_ASSET_STRESS_BRIEF_SCORE` | 2 | Aggregate stress score (count of stressed signals among those with data) at/above which Today's Brief shows the cross-asset one-liner |
 | `NEWS_SENTIMENT_BULLISH_THRESHOLD` / `_BEARISH_THRESHOLD` | 0.60 / 0.40 | Finnhub news-sentiment (F-74) label cutoffs: bullish_pct ≥ 0.60 → 🟢 Bullish, < 0.40 → 🔴 Bearish, between → 🟡 Neutral. Awareness-only |
 | `NEWS_SENTIMENT_SHIFT_ALERT_BULLISH` / `_SHIFT_BUZZ_MIN` | 0.40 / 1.0 | Brief held-position shift card fires when bullish_pct < 0.40 AND buzz_score > 1.0 (both required — low-buzz bearishness is thin/stale, not alerted) |
+| `ANALYST_COVERAGE_FRESH_DAYS` | 30 | Analyst Coverage (F-154) — a saved report stays in the "recent" Ideas Inbox view this many days. Awareness-layer knob, not a gate |
+| `ANALYST_MIN_UPSIDE_PCT` | 15 | Reserved for the Phase-2 Brief chip (avg-PT upside to surface a held-name analyst nudge); UNUSED in Phase 1 |
+| `ANALYST_CONSENSUS_STRONG_BUY_FRAC` / `_BUY_FRAC` / `_SELL_FRAC` | 0.80 / 0.50 / 0.50 | Consensus **label** boundaries (fractions of rated firms) that classify the firm rating distribution into Strong Buy / Buy / Sell / Hold / Mixed. **Display-only classifications — NOT decision thresholds; never gate or score** |
 | `COMPOSITE_BUY` | 65 | Buy boundary — used for entry AND add-to-winner (aligned) |
 | `COMPOSITE_STRONG_BUY` | 75 | Strong Buy boundary |
 | `COMPOSITE_HOLD` | 44 | Hold floor; below this = "Sell zone" |
@@ -743,6 +747,31 @@ CREATE TABLE alert_state (
 
 **Headless-cron dedup state (system state, not user data).** Used ONLY by the email-alerts cron to (a) fire at most once per ET trading day and (b) skip an email whose protective set is unchanged since the last send (`last_fingerprint`). One row per cron lane (`id` 1 = pre-market protective, 2 = EOD pullback) — independent dedup, no extra DDL. **Not `_READONLY`-gated** (the cron runs outside the app). Degrades to "always send" when the table is absent — the alerts work before the DDL, just without dedup. `db.load_alert_state(row_id)` / `save_alert_state(...)`. RLS: `FOR ALL TO service_role`.
 
+### 6.15 `analyst_coverage` table
+
+```sql
+CREATE TABLE analyst_coverage (
+    id               BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    ticker           TEXT NOT NULL,
+    company          TEXT,
+    article_date     DATE NOT NULL,
+    report_type      TEXT,                          -- initiation / upgrade / downgrade / reiteration / pt_change / other
+    analysts         JSONB NOT NULL DEFAULT '[]',   -- [{firm, analyst, rating, price_target, upside_pct}, ...] — atomic per-firm facts
+    consensus_rating TEXT,                           -- derived label, e.g. "Strong Buy (5 Buy / 0 Hold / 0 Sell)"
+    avg_pt           NUMERIC,                         -- derived in Python (never by the LLM)
+    high_pt          NUMERIC,
+    low_pt           NUMERIC,
+    thesis           JSONB DEFAULT '[]',
+    catalysts        JSONB DEFAULT '[]',
+    risks            JSONB DEFAULT '[]',
+    raw_text         TEXT,                            -- original pasted article, for re-processing
+    source           TEXT DEFAULT 'cnbc_pro',
+    created_at       TIMESTAMPTZ DEFAULT now()
+);
+```
+
+**Analyst Coverage / Ideas Inbox (F-154, append-only).** Structured analyst research captured by pasting article text; the LLM (`analyst_intel.extract_report`, Sonnet) extracts only **atomic per-firm facts** and the app computes all aggregates (`avg_pt`/`high_pt`/`low_pt`/`consensus_rating`) in pure Python (`derive_consensus`) so no number is hallucinated. **Append-only** (`save_analyst_coverage` inserts). `db.load_analyst_coverage(ticker=, days=, limit=)` (backfills NULL for legacy columns) / `save_analyst_coverage()` / `delete_analyst_coverage(id)` — writers are read-only-viewer no-ops. **Awareness-only — feeds no gate, score, or verdict** (the "Wall Street vs. your engine" tension). Optional — inert until the DDL is applied (load returns empty). RLS: `FOR ALL TO service_role`.
+
 ---
 
 ## 7. Navigation and State Management
@@ -1035,6 +1064,7 @@ flowchart LR
 | F-5 | Thesis Draft | `thesis_advisor.py` | Sonnet 4.6 | On-demand (BUY form) | 300 tok | Editable field only (not auto-saved) |
 | F-3 | Weekly Debrief | `debrief_advisor.py` | Sonnet 4.6 | On-demand + Sunday cron | 700 tok | DB `weekly_debriefs` |
 | F-4 | Monthly Report | `intelligence_report.py` | Sonnet 4.6 | On-demand + 1st-Sunday cron | 1000 tok | DB `monthly_reports` (frozen `viz_json`) |
+| F-6 | Analyst Coverage extract | `analyst_intel.py` | Sonnet 4.6 | On-demand (paste + Extract) | 1500 tok | DB `analyst_coverage` (after editable-preview save) |
 | — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
 | — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
 
