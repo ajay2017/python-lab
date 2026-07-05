@@ -17553,14 +17553,7 @@ elif page == "🧠 AI Insights":
 
     _ai_api_key = st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
 
-    # ── Thesis Reviews ────────────────────────────────────────────────────────
-    st.subheader("📋 Thesis Reviews")
-    st.markdown(
-        "Weekly AI check: does your original investment conviction still hold "
-        "against current news, fundamentals, and price trend?"
-    )
-
-    # Load data
+    # ── Load shared data ONCE for the status header + sections ───────────────
     _thesis_reviews_df = _ai_db.load_thesis_reviews()
 
     # Build thesis lookup: ticker → most recent BUY with a thesis
@@ -17592,1059 +17585,1130 @@ elif page == "🧠 AI Insights":
             if _t not in _review_by_ticker:
                 _review_by_ticker[_t] = _rv
 
-    if not _open_tickers:
-        st.info("No open positions found — add holdings via the Trade Journal.")
-    else:
-        _status_colour = {"INTACT": "#22c55e", "WEAKENING": "#f59e0b", "BROKEN": "#ef4444"}
-        _status_icon   = {"INTACT": "✅", "WEAKENING": "⚠️", "BROKEN": "🔴"}
-
-        for _ticker in sorted(_open_tickers):
-            _thesis  = _thesis_by_ticker.get(_ticker, "")
-            _rv      = _review_by_ticker.get(_ticker)
-            _status  = _rv["status"] if _rv is not None else None
-            _summary = _rv["summary"] if _rv is not None else None
-            _rev_at  = _rv["reviewed_at"] if _rv is not None else None
-
-            # Expander label
-            if not _thesis:
-                _exp_label = f"**{_ticker}** — no thesis yet"
-            else:
-                _exp_label = f"**{_ticker}** — " + (_status or "awaiting review")
-
-            with st.expander(_exp_label, expanded=(_status == "BROKEN")):
-
-                if not _thesis:
-                    # ── No thesis — show Set Thesis form ─────────────────────
-                    st.caption("No investment thesis on record for this position. Set one below so the AI can review it weekly.")
-                    _set_val = st.text_area(
-                        "Investment thesis",
-                        value="",
-                        height=120,
-                        placeholder=(
-                            "E.g. NVDA benefits from AI training chip demand with no credible competitor "
-                            "for 18–24 months. Holds as long as hyperscaler capex keeps growing. "
-                            "Breaks if AMD closes the architectural gap or a major customer pulls their design win."
-                        ),
-                        key=f"_ai_thesis_set_{_ticker}",
-                    )
-                    if st.button(f"Save thesis for {_ticker}", key=f"_ai_thesis_save_{_ticker}"):
-                        if not _set_val.strip():
-                            st.warning("Thesis cannot be blank.")
-                        else:
-                            _ok = _ai_db.update_user_thesis(_ticker, _set_val.strip())
-                            if _ok:
-                                st.success("Thesis saved — will be reviewed in the next weekly cron run.")
-                                st.rerun()
-                            else:
-                                st.error("Save failed — DB offline or no BUY trade found for this ticker.")
-
-                else:
-                    # ── Has thesis — show review + re-evaluate + edit ─────────
-                    # Status chip + timestamp
-                    if _status:
-                        _chip_colour = _status_colour.get(_status, "#6b7280")
-                        _chip_icon   = _status_icon.get(_status, "")
-                        _chip_html   = (
-                            f"<span style='background:{_chip_colour}22;border:1px solid {_chip_colour};"
-                            f"color:{_chip_colour};border-radius:4px;padding:2px 8px;"
-                            f"font-size:0.85em;font-weight:600'>"
-                            f"{_chip_icon} {_status}</span>"
-                        )
-                    else:
-                        _chip_html = (
-                            "<span style='background:#374151;border:1px solid #4b5563;"
-                            "color:#9ca3af;border-radius:4px;padding:2px 8px;"
-                            "font-size:0.85em'>Not yet reviewed</span>"
-                        )
-                    _ts_text = f" · reviewed {str(_rev_at)[:10]}" if _rev_at else ""
-                    st.markdown(
-                        _chip_html + f"<span style='color:#6b7280;font-size:0.82em'>{_ts_text}</span>",
-                        unsafe_allow_html=True,
-                    )
-
-                    # Thesis text
-                    st.markdown("**Your thesis:**")
-                    st.markdown(
-                        f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
-                        f"padding:8px 12px;border-radius:4px;color:#cbd5e1;"
-                        f"font-style:italic;margin:4px 0 12px'>{_thesis}</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    # AI review summary
-                    if _summary:
-                        st.markdown("**AI assessment:**")
-                        st.markdown(_summary)
-                    else:
-                        st.caption("Click Re-evaluate to run the first AI review for this position.")
-
-                    # Re-evaluate button
-                    if st.button(f"Re-evaluate {_ticker}", key=f"_ai_reeval_{_ticker}", disabled=not _ai_api_key):
-                        with st.spinner(f"Reviewing thesis for {_ticker}..."):
-                            _held_data = st.session_state.get("held_data", {})
-                            # Evidence comes from the bundle via the shared
-                            # extractor so F-1 review and F-5 authoring never drift
-                            # on bundle key names (the bundle has financials/df/
-                            # headlines — not indicators/revenue_growth/news, the
-                            # mismatch that had been feeding the LLM empty evidence).
-                            if _ticker in _held_data:
-                                _ev = _ta.bundle_evidence(_held_data[_ticker])
-                            else:
-                                _ev = {"technical": {}, "fundamentals": {}, "news_headlines": []}
-                            # Enrich with newest saved analyst coverage (if any)
-                            _ac_cov = _ai_db.load_analyst_coverage(ticker=_ticker, limit=1)
-                            _ac_consensus = {}
-                            if not _ac_cov.empty:
-                                _acr = _ac_cov.iloc[0]
-                                def _pj(v):    # defensive jsonb parse
-                                    if isinstance(v, str):
-                                        try:
-                                            return json.loads(v)
-                                        except Exception:
-                                            return []
-                                    return v or []
-                                _ac_consensus = {
-                                    "consensus_rating": _acr.get("consensus_rating"),
-                                    "avg_pt":           _acr.get("avg_pt"),
-                                    "n_firms":          len(_pj(_acr.get("analysts"))),
-                                    "as_of":            str(_acr.get("article_date")),
-                                    "thesis":           _pj(_acr.get("thesis")),
-                                }
-                            _ev_inputs = _ta.build_review_inputs(
-                                technical=_ev["technical"],
-                                fundamentals=_ev["fundamentals"],
-                                news_headlines=_ev["news_headlines"],
-                                analyst_consensus=_ac_consensus,
-                            )
-                            _result = _ta.review_thesis(
-                                ticker=_ticker, user_thesis=_thesis,
-                                inputs=_ev_inputs, api_key=_ai_api_key,
-                            )
-                            if _result is None:
-                                st.error("AI review failed — LLM offline or API key invalid.")
-                            else:
-                                _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
-                                _saved = _ai_db.save_thesis_review({
-                                    "ticker":      _ticker,
-                                    "trade_date":  _trade_date,
-                                    "reviewed_at": _result["reviewed_at"],
-                                    "status":      _result["status"],
-                                    "summary":     _result["summary"],
-                                    "inputs_hash": _ta.inputs_hash(_ev_inputs),
-                                })
-                                if _saved:
-                                    st.success(f"Review saved — {_result['status']}")
-                                    st.rerun()
-                                else:
-                                    st.markdown(f"**{_result['status']}**")
-                                    st.markdown(_result["summary"])
-
-                    # Edit existing thesis
-                    st.divider()
-                    _edit_val = st.text_area(
-                        "Update thesis",
-                        value=_thesis,
-                        height=100,
-                        key=f"_ai_thesis_edit_{_ticker}",
-                    )
-                    if st.button(f"Save updated thesis for {_ticker}", key=f"_ai_thesis_upd_{_ticker}"):
-                        if not _edit_val.strip():
-                            st.warning("Thesis cannot be blank.")
-                        elif _edit_val.strip() == _thesis:
-                            st.info("No change detected.")
-                        else:
-                            _ok = _ai_db.update_user_thesis(_ticker, _edit_val.strip())
-                            if _ok:
-                                st.success("Thesis updated — Re-evaluate to refresh the AI assessment.")
-                                st.rerun()
-                            else:
-                                st.error("Save failed — DB offline or no BUY trade found for this ticker.")
-
-    st.divider()
-
-    # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
-    st.subheader("📊 Weekly Portfolio Debrief")
-    st.markdown(
-        "A weekly retrospective: what happened to your portfolio, which signals "
-        "you acted on or ignored, and what behavioural patterns showed up."
-    )
-
     from stock_analyzer import debrief_advisor as _dba
-
     _wd_df = _ai_db.load_weekly_debriefs(limit=8)
-
-    # On-demand generation
-    if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
-                 help="Generate a debrief for the trailing 7 days using current snapshot data."):
-        with st.spinner("Assembling data and calling AI..."):
-            _wd_today      = date.today()
-            _wd_week_start = _wd_today - timedelta(days=6)
-            _wd_snaps = _ai_db.load_daily_snapshots(start_date=_wd_week_start, end_date=_wd_today)
-            _wd_days  = len(_wd_snaps["snapshot_date"].unique()) if not _wd_snaps.empty else 0
-            if _wd_days < 5:
-                st.warning(
-                    f"Only {_wd_days} trading day(s) of snapshot data available — need 5. "
-                    f"Check back after more days accumulate (DDL activated 2026-06-27)."
-                )
-            else:
-                _wd_recs   = _ai_db.load_recommendations(
-                    start_date=_wd_week_start, end_date=_wd_today
-                )
-                _wd_trades = st.session_state.get("trades_df", pd.DataFrame())
-                _wd_broken = list(
-                    _thesis_reviews_df[_thesis_reviews_df["status"] == "BROKEN"]["ticker"]
-                    .astype(str).str.upper().unique()
-                ) if not _thesis_reviews_df.empty and "status" in _thesis_reviews_df.columns else []
-
-                # Fetch SPY return
-                _wd_spy_pct = None
-                try:
-                    import yfinance as _yf
-                    _spy = _yf.download("SPY", start=str(_wd_week_start), end=str(_wd_today),
-                                        progress=False, auto_adjust=True)
-                    if _spy is not None and not _spy.empty and len(_spy) >= 2:
-                        _wd_spy_pct = round(float(
-                            (_spy["Close"].iloc[-1] - _spy["Close"].iloc[0])
-                            / _spy["Close"].iloc[0] * 100
-                        ), 2)
-                except Exception:
-                    pass
-
-                _wd_pkg = _dba.build_debrief_package(
-                    week_ending   = _wd_today,
-                    snapshots_df  = _wd_snaps,
-                    recs_df       = _wd_recs,
-                    trades_df     = _wd_trades,
-                    spy_week_pct  = _wd_spy_pct,
-                    broken_theses = _wd_broken,
-                )
-                _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
-                if _wd_result is None:
-                    st.error("AI debrief failed — LLM offline or insufficient snapshot data.")
-                else:
-                    _saved = _ai_db.save_weekly_debrief(_wd_result)
-                    if _saved:
-                        st.success("Debrief generated and saved.")
-                        st.rerun()
-                    else:
-                        st.warning("Generated but save failed (DB offline) — showing inline:")
-                        for _lbl, _col in [
-                            ("What happened", "section_facts"),
-                            ("Decisions you made", "section_decisions"),
-                            ("Patterns this week", "section_patterns"),
-                            ("One thing to watch", "section_watchnext"),
-                        ]:
-                            if _wd_result.get(_col):
-                                st.markdown(f"**{_lbl}**")
-                                st.markdown(_wd_result[_col])
-
-    # Display most recent debrief
-    if _wd_df.empty:
-        st.info(
-            "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
-            "or wait for the Sunday evening cron (runs automatically once "
-            "`daily_snapshots` has ≥5 trading days of data — DDL activated 2026-06-27)."
-        )
-    else:
-        _wd = _wd_df.iloc[0]
-        _wd_perf  = _wd.get("performance_pct")
-        _wd_spy   = _wd.get("spy_pct")
-        _wd_alpha = _wd.get("alpha_pct")
-
-        st.caption(
-            f"Week ending {_wd.get('week_ending', '—')} · "
-            f"generated {str(_wd.get('generated_at', ''))[:10]}"
-            + (" · ✉ emailed" if _wd.get("email_sent") else "")
-        )
-
-        # Performance summary row
-        if _wd_perf is not None:
-            _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
-            def _wd_colour(v):
-                return "#22c55e" if v and v >= 0 else "#ef4444"
-            with _wd_col1:
-                st.markdown(
-                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Portfolio</div>"
-                    f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_perf)}'>{_wd_perf:+.1f}%</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with _wd_col2:
-                st.markdown(
-                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>SPY</div>"
-                    f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_spy)}'>"
-                    f"{'N/A' if _wd_spy is None else f'{_wd_spy:+.1f}%'}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with _wd_col3:
-                st.markdown(
-                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Alpha</div>"
-                    f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_alpha)}'>"
-                    f"{'N/A' if _wd_alpha is None else f'{_wd_alpha:+.1f}%'}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            st.markdown("")
-
-        # Weekly alpha trajectory — are you beating SPY, week over week?
-        # Per-week alpha (portfolio − SPY) from the saved debriefs, oldest → newest.
-        _wt = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
-        if len(_wt) >= 2:
-            _wt = _wt.iloc[::-1]   # load is newest-first; chart reads left→right in time
-            _wt_x = [str(w)[:10] for w in _wt["week_ending"]]
-            _wt_a = [float(a) for a in _wt["alpha_pct"]]
-            _wt_fig = go.Figure(go.Bar(
-                x=_wt_x, y=_wt_a,
-                marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _wt_a],
-                text=[f"{v:+.1f}" for v in _wt_a], textposition="outside",
-            ))
-            _wt_fig.update_layout(
-                title=dict(text="Weekly alpha vs SPY (percentage points)", font=dict(size=13), x=0),
-                height=240, margin=dict(l=8, r=8, t=36, b=8),
-                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
-                xaxis=dict(title=None), showlegend=False,
-            )
-            st.plotly_chart(_wt_fig, use_container_width=True)
-            _wt_beat = sum(1 for v in _wt_a if v > 0)
-            st.caption(
-                f"Portfolio return minus SPY, per week — green = beat the market. "
-                f"You beat SPY in **{_wt_beat} of {len(_wt_a)}** tracked week(s). "
-                f"This is the trend the metrics above show for just the latest week."
-            )
-            st.markdown("")
-
-        for _wd_label, _wd_col in [
-            ("What happened", "section_facts"),
-            ("Decisions you made", "section_decisions"),
-            ("Patterns this week", "section_patterns"),
-            ("One thing to watch", "section_watchnext"),
-        ]:
-            if _wd.get(_wd_col):
-                st.markdown(f"**{_wd_label}**")
-                st.markdown(_wd.get(_wd_col))
-                st.markdown("")
-
-    st.divider()
-
-    # ── Monthly Portfolio Intelligence (F-4) ──────────────────────────────────
-    st.subheader("🧭 Monthly Portfolio Intelligence")
-    st.markdown(
-        "A monthly retrospective on **how decisions were made** — is the engine "
-        "picking well (entry quality), and do you act on what it surfaces (signal "
-        "discipline)? It surfaces patterns; it never changes a gate."
-    )
 
     from stock_analyzer import intelligence_report as _ir
     from stock_analyzer.constants import MONTHLY_REPORT_MIN_GRADED as _MR_MIN_GRADED
-
     _mr_df = _ai_db.load_monthly_reports(limit=12)
-
-    if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
-                 help="Generate an intelligence report for the trailing ~4 weeks from recommendation history."):
-        with st.spinner("Assembling scorecard and calling AI..."):
-            _mr_end   = date.today()
-            _mr_start = _mr_end - timedelta(days=28)
-            _mr_recs  = _ai_db.load_recommendations(start_date=_mr_start, end_date=_mr_end)
-            if _mr_recs is None or _mr_recs.empty:
-                st.warning(
-                    "No recommendations recorded in the trailing 4 weeks yet. As Today's "
-                    "Brief surfaces picks day after day, this report will fill in."
-                )
-            else:
-                _mr_trades = st.session_state.get("trades_df", pd.DataFrame())
-
-                # Current prices for the rec tickers (marks open BUYs + missed-rec gains).
-                _mr_prices: dict = {}
-                _mr_tickers = sorted({
-                    str(t).strip().upper()
-                    for t in _mr_recs["ticker"].dropna().tolist() if str(t).strip()
-                })
-                if _mr_tickers:
-                    try:
-                        _mpx = fetch_live_prices(_mr_tickers)
-                        _mr_prices = {
-                            t: float(d.get("price", 0))
-                            for t, d in (_mpx or {}).items() if d and d.get("price")
-                        }
-                    except Exception:
-                        _mr_prices = {}
-
-                # SPY close-by-date for the regime/alpha benchmark.
-                _mr_spy_by_date: dict = {}
-                try:
-                    _mr_spy_hist = _cached_spy("6mo")
-                    if _mr_spy_hist is not None and not _mr_spy_hist.empty and "Close" in _mr_spy_hist.columns:
-                        for _sidx, _srow in _mr_spy_hist.iterrows():
-                            _sd = _sidx.date() if hasattr(_sidx, "date") else None
-                            try:
-                                _sc = float(_srow["Close"])
-                            except (TypeError, ValueError):
-                                _sc = None
-                            if _sd is not None and _sc and _sc > 0:
-                                _mr_spy_by_date[_sd] = _sc
-                except Exception:
-                    _mr_spy_by_date = {}
-
-                # Recent weekly debriefs for the trajectory line.
-                _mr_weekly: list = []
-                try:
-                    _mr_wdf = _ai_db.load_weekly_debriefs(limit=5)
-                    if _mr_wdf is not None and not _mr_wdf.empty:
-                        _mr_weekly = _mr_wdf.to_dict("records")
-                except Exception:
-                    _mr_weekly = []
-
-                _mr_pkg = _ir.build_report_package(
-                    period_start=_mr_start, period_end=_mr_end,
-                    recs_df=_mr_recs, trades_df=_mr_trades,
-                    current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
-                    weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
-                )
-                _mr_result = _ir.generate_report(_mr_pkg, _ai_api_key)
-                if _mr_result is None:
-                    st.error("AI report failed — LLM offline, or no recommendations to analyse.")
-                else:
-                    if not _mr_pkg.get("q0_ready"):
-                        st.caption(
-                            f"Note: only {_mr_pkg['n_graded']} matured graded entr(ies) — "
-                            f"entry-quality grading firms up at {_MR_MIN_GRADED}+."
-                        )
-                    _mr_saved = _ai_db.save_monthly_report(_mr_result)
-                    if _mr_saved:
-                        st.success("Monthly report generated and saved.")
-                        st.rerun()
-                    else:
-                        st.warning("Generated but save failed (DB offline) — showing inline:")
-                        for _lbl, _col in [
-                            ("Entry quality", "section_entry_quality"),
-                            ("Signal discipline", "section_signal_discipline"),
-                            ("Pattern & focus", "section_patterns"),
-                        ]:
-                            if _mr_result.get(_col):
-                                st.markdown(f"**{_lbl}**")
-                                st.markdown(_mr_result[_col])
-
-    # Display most recent report
-    if _mr_df.empty:
-        st.info(
-            "No monthly reports yet. Click **Generate Monthly Report** for an on-demand "
-            "run, or wait for the first-Sunday-of-month cron (needs the `monthly_reports` "
-            "table — run the DDL in Supabase to activate)."
-        )
-    else:
-        # Month-by-month archive: one entry per calendar month (the row with the latest
-        # period_end in each month wins, since an on-demand re-run within a month would
-        # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
-        # first row seen per (year, month) is that month's latest. Labelled by the month
-        # the report's window ends in.
-        _mr_opts: list = []
-        _mr_seen: set = set()
-        for _ri in range(len(_mr_df)):
-            try:
-                _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
-                _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
-            except Exception:
-                _key, _lbl = (_ri,), f"Report {_ri + 1}"
-            if _key in _mr_seen:
-                continue
-            _mr_seen.add(_key)
-            _mr_opts.append((_lbl, _ri))
-
-        if len(_mr_opts) > 1:
-            # Harden the variable-options widget: drop a stored selection that has aged
-            # out of the window (a month falling past limit=12), else Streamlit raises on
-            # an out-of-range persisted value (feedback_streamlit_widget_options_state).
-            if st.session_state.get("_mr_period_select") not in range(len(_mr_opts)):
-                st.session_state.pop("_mr_period_select", None)
-            _mr_sel_i = st.selectbox(
-                "Report month", options=list(range(len(_mr_opts))),
-                format_func=lambda i: _mr_opts[i][0], key="_mr_period_select",
-                help="Browse past monthly reports. Each is frozen exactly as it was generated.",
-            )
-            _mr_idx = _mr_opts[_mr_sel_i][1]
-        else:
-            _mr_idx = _mr_opts[0][1] if _mr_opts else 0
-
-        _mr = _mr_df.iloc[_mr_idx]
-        _mr_alpha = _mr.get("engine_alpha_pct")
-
-        st.caption(
-            f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
-            f"generated {str(_mr.get('generated_at', ''))[:10]}"
-            + (" · ✉ emailed" if _mr.get("email_sent") else "")
-        )
-
-        # Visuals come from ONE snapshot so the header, Sankey, band bar and missed bar
-        # can never disagree. Prefer the FROZEN snapshot saved with the report (immutable,
-        # and needs no price fetch); fall back to a LIVE recompute for reports saved
-        # before freezing — via the SAME pure helper, so both paths render identically.
-        from stock_analyzer.recommendations_history import report_viz_snapshot as _mr_vizfn
-
-        _mr_viz = None
-        _mr_frozen = False
-        _raw_viz = _mr.get("viz_json")
-        if isinstance(_raw_viz, float):          # NaN placeholder for a missing jsonb cell
-            _raw_viz = None
-        if isinstance(_raw_viz, str):
-            try:
-                _raw_viz = json.loads(_raw_viz)
-            except Exception:
-                _raw_viz = None
-        if isinstance(_raw_viz, dict) and _raw_viz.get("flow"):
-            _mr_viz, _mr_frozen = _raw_viz, True
-
-        if _mr_viz is None:
-            # Live fallback: rebuild the enriched recs over the report's window, then the
-            # shared snapshot. Fail-soft — any failure just hides the visuals.
-            from stock_analyzer.recommendations_history import (
-                match_recs_to_trades as _mrm, compute_outcomes as _mrco,
-            )
-            from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
-            _mr_en2: list = []
-            try:
-                _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
-                _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
-                _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
-                if _mr_recs2 is not None and not _mr_recs2.empty:
-                    _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
-                    _mr_tk2 = sorted({
-                        str(t).strip().upper()
-                        for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
-                    })
-                    _mr_px2: dict = {}
-                    try:
-                        _p2 = fetch_live_prices(_mr_tk2) if _mr_tk2 else {}
-                        _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
-                    except Exception:
-                        _mr_px2 = {}
-                    _mr_spy2: dict = {}
-                    try:
-                        _h2 = _cached_spy("6mo")
-                        if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
-                            for _i2, _r2 in _h2.iterrows():
-                                _d2 = _i2.date() if hasattr(_i2, "date") else None
-                                try:
-                                    _c2 = float(_r2["Close"])
-                                except (TypeError, ValueError):
-                                    _c2 = None
-                                if _d2 is not None and _c2 and _c2 > 0:
-                                    _mr_spy2[_d2] = _c2
-                    except Exception:
-                        _mr_spy2 = {}
-                    _mr_en2 = _mrco(
-                        _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
-                        spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
-                    )
-            except Exception:
-                _mr_en2 = []
-            if _mr_en2:
-                try:
-                    _mr_viz = _mr_vizfn(_mr_en2, rec_types=("new_pick",))
-                except Exception:
-                    _mr_viz = None
-
-        _mr_flow = _mr_viz.get("flow") if _mr_viz else None
-
-        # Headline counts: DISTINCT New-Position tickers (matches the Sankey). Fall back
-        # to the saved scalar counts only if no snapshot could be produced.
-        _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr.get("acted_count")
-        _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr.get("missed_count")
-
-        def _mr_colour(v):
-            try:
-                return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
-            except (TypeError, ValueError):
-                return "#94a3b8"
-
-        _mrc1, _mrc2, _mrc3 = st.columns(3)
-        with _mrc1:
-            st.markdown(
-                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
-                f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
-                f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
-                unsafe_allow_html=True,
-            )
-        with _mrc2:
-            st.markdown(
-                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on (names)</div>"
-                f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted_n if _mr_acted_n is not None else '—'}</div></div>",
-                unsafe_allow_html=True,
-            )
-        with _mrc3:
-            st.markdown(
-                f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Not acted (names)</div>"
-                f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed_n if _mr_missed_n is not None else '—'}</div></div>",
-                unsafe_allow_html=True,
-            )
-        st.caption(
-            "Counts are **distinct New-Position tickers** this period — a name surfaced "
-            "across many days counts once (not daily surfacings). "
-            + ("Frozen as generated, so the report reads the same whenever you open it."
-               if _mr_frozen
-               else "Recomputed live (saved before report-freezing was added).")
-        )
-        st.markdown("")
-
-        # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
-        # loop the whole report is built on. Same flow that drives the counts above.
-        if _mr_flow and _mr_flow["n_total"] > 0:
-            _mr_sk = _signal_flow_sankey(
-                _mr_flow,
-                "This month's signal flow — New Positions → acted / missed → outcome",
-            )
-            if _mr_sk is not None:
-                st.plotly_chart(_mr_sk, use_container_width=True)
-                st.caption(
-                    "New Positions to Initiate this period → acted / missed → outcome "
-                    "(distinct by ticker, matured only). Same engine as Recommendations "
-                    "History, scoped to this report's window."
-                )
-
-        # Narrative
-        for _mr_label, _mr_col in [
-            ("Entry quality", "section_entry_quality"),
-            ("Signal discipline", "section_signal_discipline"),
-            ("Pattern & focus", "section_patterns"),
-        ]:
-            if _mr.get(_mr_col):
-                st.markdown(f"**{_mr_label}**")
-                st.markdown(_mr.get(_mr_col))
-                st.markdown("")
-
-        # Q0 evidence — average alpha by composite band. Does higher conviction
-        # actually deliver higher alpha? From the same snapshot (scoped to new_pick).
-        _mr_bands = _mr_viz.get("bands") if _mr_viz else None
-        if _mr_bands and len(_mr_bands) >= 2:
-            _mb_x = [b["band"] for b in _mr_bands]
-            _mb_y = [b["avg_alpha"] for b in _mr_bands]
-            _mb_fig = go.Figure(go.Bar(
-                x=_mb_x, y=_mb_y,
-                marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
-                text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
-            ))
-            _mb_fig.update_layout(
-                title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
-                           font=dict(size=13), x=0),
-                height=240, margin=dict(l=8, r=8, t=36, b=8),
-                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
-                xaxis=dict(title=None), showlegend=False,
-            )
-            st.plotly_chart(_mb_fig, use_container_width=True)
-            st.caption(
-                "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
-                "Buy (65–74), the engine's top tier underperformed this period — the "
-                "narrative above flags whether that's worth your own review."
-            )
-            st.markdown("")
-
-        # Q1 evidence — missed-opportunity ranked bar (named, ranked magnitudes —
-        # the one thing a Sankey can't show). From the same snapshot.
-        _mr_miss = _mr_viz.get("missed") if _mr_viz else None
-        if _mr_miss:
-            _mr_sp = _mr_viz.get("missed_split", {})
-            st.markdown("**🎯 What you skipped this period**")
-            _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
-            _mr_sel = sorted(
-                _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
-                key=lambda r: r["outcome_pct"],
-            )
-            _mr_xc = [r["outcome_pct"] for r in _mr_sel]
-            _mr_yc = [r["ticker"] for r in _mr_sel]
-            _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
-            _mr_fig = go.Figure(go.Bar(
-                x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
-                text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
-            ))
-            _mr_fig.update_layout(
-                height=max(200, 40 + 24 * len(_mr_sel)),
-                margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
-                yaxis=dict(title=None), showlegend=False,
-            )
-            st.plotly_chart(_mr_fig, use_container_width=True)
-            st.caption(
-                f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **New Positions to Initiate** "
-                f"but never acted on this period: **{_mr_sp.get('n_winners', 0)}** rose (missed), "
-                f"**{_mr_sp.get('n_dodged', 0)}** fell (dodged). Green = rose after surfacing; red = fell. "
-                "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
-                "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
-            )
-
-    # ── Analyst Coverage — Ideas Inbox (Phase 1) ─────────────────────────────
-    st.divider()
-    st.subheader("📋 Analyst Coverage — Ideas Inbox")
-    st.caption(
-        "Awareness context only — analyst ratings and price targets are NEVER used by "
-        "the rule-based engine to score, gate, or override a verdict. Capturing Wall "
-        "Street perspective lets you see it alongside the engine's own scores."
-    )
 
     from stock_analyzer import analyst_intel as _ai_intel
     from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS as _AC_FRESH_DAYS
-
-    # (a) Capture + extract ───────────────────────────────────────────────────
-    _ac_paste = st.text_area(
-        "Paste the analyst article text",
-        height=200,
-        key="_ac_paste",
-        placeholder=(
-            "Paste the full text of an analyst research article "
-            "(CNBC Pro, Goldman, JPMorgan, BofA, Morgan Stanley, etc.)…"
-        ),
-    )
-    if st.button(
-        "Extract",
-        key="_ac_extract_btn",
-        disabled=not _ai_api_key,
-        help=(
-            "Requires Anthropic API key in Streamlit secrets. "
-            "Extracts structured analyst data from the pasted article."
-        ),
-    ):
-        if not _ac_paste or not _ac_paste.strip():
-            st.warning("Paste an article first.")
-        else:
-            with st.spinner("Extracting analyst data…"):
-                _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
-            if _ac_parsed is None:
-                st.error(
-                    "Extraction failed — LLM offline or article unparseable. "
-                    "Check the text and try again."
-                )
-            else:
-                st.session_state["_ac_preview"]  = _ac_parsed
-                st.session_state["_ac_raw_text"] = _ac_paste
-                st.rerun()
-
-    # (b) Editable preview ────────────────────────────────────────────────────
-    if st.session_state.get("_ac_preview"):
-        _ac_pv = st.session_state["_ac_preview"]
-        st.markdown("**Review and edit the extracted data before saving:**")
-
-        _acp_c1, _acp_c2 = st.columns(2)
-        with _acp_c1:
-            _ac_ticker = st.text_input(
-                "Ticker",
-                value=(str(_ac_pv.get("ticker") or "")).upper(),
-                key="_ac_ticker",
-            ).upper().strip()
-            _ac_company = st.text_input(
-                "Company",
-                value=str(_ac_pv.get("company") or ""),
-                key="_ac_company",
-            )
-        with _acp_c2:
-            _ac_date_val = str(_ac_pv.get("article_date") or "")
-            _ac_date = st.text_input(
-                "Article date (YYYY-MM-DD)",
-                value=_ac_date_val,
-                key="_ac_date",
-            )
-            _ac_rtype_opts = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
-            _ac_rtype_raw  = _ac_pv.get("report_type", "other")
-            _ac_rtype_idx  = _ac_rtype_opts.index(_ac_rtype_raw) if _ac_rtype_raw in _ac_rtype_opts else 5
-            _ac_rtype = st.selectbox(
-                "Report type",
-                options=_ac_rtype_opts,
-                index=_ac_rtype_idx,
-                key="_ac_rtype",
-            )
-
-        st.markdown("**Analysts** — add / delete / edit rows:")
-        _ac_analysts_raw = _ac_pv.get("analysts") or []
-        if isinstance(_ac_analysts_raw, str):
-            try:
-                _ac_analysts_raw = json.loads(_ac_analysts_raw)
-            except Exception:
-                _ac_analysts_raw = []
-        _ac_andf = pd.DataFrame(
-            _ac_analysts_raw if _ac_analysts_raw else [{}],
-            columns=["firm", "analyst", "rating", "price_target", "upside_pct"],
-        )
-        for _col in ["firm", "analyst", "rating", "price_target", "upside_pct"]:
-            if _col not in _ac_andf.columns:
-                _ac_andf[_col] = None
-        _ac_edited_df = st.data_editor(
-            _ac_andf[["firm", "analyst", "rating", "price_target", "upside_pct"]],
-            num_rows="dynamic",
-            key="_ac_analysts_editor",
-            use_container_width=True,
-        )
-
-        # Thesis / catalysts / risks (one bullet per line in the text areas)
-        def _ac_list_to_str(val) -> str:
-            if isinstance(val, str):
-                try:
-                    parsed = json.loads(val)
-                    return "\n".join(str(x) for x in parsed) if isinstance(parsed, list) else val
-                except Exception:
-                    return val
-            if isinstance(val, list):
-                return "\n".join(str(x) for x in val)
-            return ""
-
-        _ac_thesis = st.text_area(
-            "Thesis bullets (one per line)",
-            value=_ac_list_to_str(_ac_pv.get("thesis")),
-            height=120,
-            key="_ac_thesis",
-        )
-        _ac_catalysts = st.text_area(
-            "Catalysts (one per line)",
-            value=_ac_list_to_str(_ac_pv.get("catalysts")),
-            height=80,
-            key="_ac_catalysts",
-        )
-        _ac_risks = st.text_area(
-            "Risks (one per line)",
-            value=_ac_list_to_str(_ac_pv.get("risks")),
-            height=80,
-            key="_ac_risks",
-        )
-
-        # Live consensus derived from the (possibly edited) analyst rows.
-        # Sanitize NaN→None and drop fully-blank rows so derive_consensus and
-        # the save path both receive a clean list (data_editor emits float NaN
-        # for blank numeric cells; PostgreSQL jsonb rejects the NaN JSON token).
-        _ac_clean_df = _ac_edited_df.where(pd.notna(_ac_edited_df), None)
-        _ac_analysts_list = [
-            r for r in _ac_clean_df.to_dict("records")
-            if any(v not in (None, "") for v in r.values())
-        ]
-        _ac_cons = _ai_intel.derive_consensus(_ac_analysts_list)
-        _ac_cr   = _ac_cons.get("consensus_rating")
-        _ac_apt  = _ac_cons.get("avg_pt")
-        _ac_hpt  = _ac_cons.get("high_pt")
-        _ac_lpt  = _ac_cons.get("low_pt")
-        _ac_ups  = []
-        for _ac_a in _ac_analysts_list:
-            try:
-                _u = _ac_a.get("upside_pct")
-                if _u is not None:
-                    _uv = float(_u)
-                    if _uv == _uv:   # NaN guard
-                        _ac_ups.append(_uv)
-            except (TypeError, ValueError):
-                pass
-        _ac_cons_parts = []
-        if _ac_cr:
-            _ac_cons_parts.append(f"Consensus: **{_ac_cr}**")
-        if _ac_apt is not None:
-            _ac_cons_parts.append(
-                f"Avg PT: ${_ac_apt:.2f}"
-                + (f" (range ${_ac_lpt:.2f}–${_ac_hpt:.2f})" if _ac_lpt != _ac_hpt else "")
-            )
-        if _ac_ups:
-            _ac_cons_parts.append(
-                f"Upside range: {min(_ac_ups):.0f}%–{max(_ac_ups):.0f}%"
-                if min(_ac_ups) != max(_ac_ups)
-                else f"Stated upside: {_ac_ups[0]:.0f}%"
-            )
-        if _ac_cons_parts:
-            st.caption("Live consensus (from analyst rows above): " + " · ".join(_ac_cons_parts))
-
-        # Save / Discard buttons
-        _ac_sv_col, _ac_disc_col = st.columns([2, 1])
-        with _ac_sv_col:
-            if st.button(
-                "Save to Inbox",
-                key="_ac_save_btn",
-                disabled=st.session_state.get("_readonly", False),
-                help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
-            ):
-                # Date: fallback to today ET if blank; validate YYYY-MM-DD if non-blank.
-                _ac_save_date = _ac_date.strip()
-                _ac_date_ok = True
-                if not _ac_save_date:
-                    _ac_save_date = _today_et().isoformat()
-                else:
-                    try:
-                        datetime.strptime(_ac_save_date, "%Y-%m-%d")
-                    except ValueError:
-                        st.error("Article date must be YYYY-MM-DD.")
-                        _ac_date_ok = False
-
-                if _ac_date_ok:
-                    def _ac_split_lines(text: str) -> list[str]:
-                        return [l.strip() for l in text.splitlines() if l.strip()]
-
-                    _ac_record = {
-                        "ticker":           _ac_ticker,
-                        "company":          _ac_company.strip() or None,
-                        "article_date":     _ac_save_date,
-                        "report_type":      _ac_rtype,
-                        "analysts":         _ac_analysts_list,
-                        "consensus_rating": _ac_cr,
-                        "avg_pt":           _ac_apt,
-                        "high_pt":          _ac_hpt,
-                        "low_pt":           _ac_lpt,
-                        "thesis":           _ac_split_lines(_ac_thesis),
-                        "catalysts":        _ac_split_lines(_ac_catalysts),
-                        "risks":            _ac_split_lines(_ac_risks),
-                        "raw_text":         st.session_state.get("_ac_raw_text", ""),
-                        "source":           "cnbc_pro",
-                    }
-                    _ac_saved = _ai_db.save_analyst_coverage(_ac_record)
-                    if _ac_saved:
-                        st.success(f"Saved {_ac_ticker} coverage to the Ideas Inbox.")
-                        for _k in ("_ac_preview", "_ac_raw_text", "_ac_paste", "_ac_analysts_editor"):
-                            st.session_state.pop(_k, None)
-                        st.rerun()
-                    else:
-                        if st.session_state.get("_readonly", False):
-                            st.warning("Read-only viewer — saving is disabled.")
-                        else:
-                            st.error("Save failed — database error. Check the Data Health tab.")
-        with _ac_disc_col:
-            if st.button("Discard", key="_ac_discard_btn"):
-                for _k in ("_ac_preview", "_ac_raw_text", "_ac_analysts_editor"):
-                    st.session_state.pop(_k, None)
-                st.rerun()
-
-    # (c) Inbox library ───────────────────────────────────────────────────────
     _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS)
+    _ac_df_all = _ai_db.load_analyst_coverage()   # total count for status header
 
-    if _ac_df.empty:
-        st.info(
-            "No analyst coverage saved yet. Paste an article above to extract and "
-            "save the first one. (If you just applied the DDL, it will populate as "
-            "you add reports.)"
-        )
-    else:
-        # Cross-reference held tickers and watchlist for badges
-        _ac_held_tickers: set = set()
-        try:
-            _ac_hdf = st.session_state.get("holdings_df", pd.DataFrame())
-            if not _ac_hdf.empty and "Ticker" in _ac_hdf.columns:
-                _ac_held_tickers = set(_ac_hdf["Ticker"].astype(str).str.upper())
-        except Exception:
-            _ac_held_tickers = set()
-        _ac_watchlist: list = st.session_state.get("watchlist", [])
-        _ac_wl_set = {str(t).upper() for t in _ac_watchlist}
+    # ── At-a-glance status header ──────────────────────────────────────────────────────────
+    _hdr_attn_count = sum(
+        1 for _ht in _open_tickers
+        if _review_by_ticker.get(_ht) is not None
+        and _review_by_ticker[_ht].get("status") in ("WEAKENING", "BROKEN")
+    )
+    _hdr_tracked = len(_open_tickers)
 
-        st.markdown(f"Showing reports with article date within the last **{_AC_FRESH_DAYS} days**.")
+    _hdr_weekly_str   = "not generated"
+    _hdr_weekly_color = "#9ca3af"
+    if not _wd_df.empty:
+        _hdr_we           = str(_wd_df.iloc[0].get("week_ending", ""))[:10]
+        _hdr_weekly_str   = f"✓ week of {_hdr_we}"
+        _hdr_weekly_color = "#22c55e"
 
-        for _ac_i, _ac_row in _ac_df.iterrows():
-            _ac_t     = str(_ac_row.get("ticker") or "").upper()
-            _ac_co    = _ac_row.get("company") or ""
-            _ac_rdate = str(_ac_row.get("article_date") or "")[:10]
-            _ac_rt    = str(_ac_row.get("report_type") or "")
-            _ac_rowid = _ac_row.get("id")
-            _ac_crat  = _ac_row.get("consensus_rating")
-            _ac_a_pt  = _ac_row.get("avg_pt")
-            _ac_h_pt  = _ac_row.get("high_pt")
-            _ac_l_pt  = _ac_row.get("low_pt")
+    _hdr_monthly_str   = "not generated"
+    _hdr_monthly_color = "#9ca3af"
+    if not _mr_df.empty:
+        _hdr_pe            = str(_mr_df.iloc[0].get("period_end", ""))[:7]
+        _hdr_monthly_str   = f"✓ {_hdr_pe}"
+        _hdr_monthly_color = "#22c55e"
 
-            # Held / watchlist badge
-            if _ac_t in _ac_held_tickers:
-                _ac_badge = "✅ In your holdings"
-            elif _ac_t in _ac_wl_set:
-                _ac_badge = "👀 On your watchlist"
-            else:
-                _ac_badge = "💡 New idea"
+    _hdr_fresh_n = len(_ac_df)
+    _hdr_total_n = len(_ac_df_all)
+    _hdr_res_str = f"{_hdr_total_n} saved · {_hdr_fresh_n} within {_AC_FRESH_DAYS}d"
 
-            # Card header
+    _h1, _h2, _h3, _h4 = st.columns(4)
+    with _h1:
+        if _hdr_attn_count:
             st.markdown(
-                f"**{_ac_t}** — {_ac_co} &nbsp;·&nbsp; {_ac_rt} &nbsp;·&nbsp; "
-                f"{_ac_rdate} &nbsp;&nbsp; _{_ac_badge}_",
+                f"<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>🩺 Positions</div>"
+                f"<div style='color:#f59e0b;font-weight:600'>{_hdr_attn_count} need review</div></div>",
                 unsafe_allow_html=True,
             )
+        else:
+            _hdr_pos_label = "none yet" if not _hdr_tracked else f"{_hdr_tracked} tracked"
+            st.markdown(
+                f"<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>🩺 Positions</div>"
+                f"<div style='color:#9ca3af'>{_hdr_pos_label}</div></div>",
+                unsafe_allow_html=True,
+            )
+    with _h2:
+        st.markdown(
+            f"<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>📊 Weekly</div>"
+            f"<div style='color:{_hdr_weekly_color}'>{_hdr_weekly_str}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with _h3:
+        st.markdown(
+            f"<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>🧭 Monthly</div>"
+            f"<div style='color:{_hdr_monthly_color}'>{_hdr_monthly_str}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with _h4:
+        st.markdown(
+            f"<div style='text-align:center'><div style='color:#9ca3af;font-size:0.75em'>🏦 Research</div>"
+            f"<div style='color:#9ca3af'>{_hdr_res_str}</div></div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("---")
 
-            # Consensus chip + PT row
-            _ac_detail_parts = []
-            if _ac_crat:
-                _ac_detail_parts.append(f"Consensus: **{_ac_crat}**")
-            if _ac_a_pt is not None:
-                try:
-                    _pt_str = f"Avg PT: ${float(_ac_a_pt):.2f}"
-                    if _ac_l_pt is not None and _ac_h_pt is not None and float(_ac_l_pt) != float(_ac_h_pt):
-                        _pt_str += f" (${float(_ac_l_pt):.2f}–${float(_ac_h_pt):.2f})"
-                    _ac_detail_parts.append(_pt_str)
-                except (TypeError, ValueError):
-                    pass
+    # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
+    _ai_tab_pos, _ai_tab_deb, _ai_tab_res = st.tabs(["🩺 Positions", "📅 Debriefs", "🏦 Research"])
 
-            # Stated-upside range from per-firm rows
-            _ac_row_analysts = _ac_row.get("analysts") or []
-            if isinstance(_ac_row_analysts, str):
+    with _ai_tab_pos:
+        # ── Thesis Reviews ────────────────────────────────────────────────────────
+        st.subheader("📋 Thesis Reviews")
+        st.markdown(
+            "Weekly AI check: does your original investment conviction still hold "
+            "against current news, fundamentals, and price trend?"
+        )
+
+        if not _open_tickers:
+            st.info("No open positions found — add holdings via the Trade Journal.")
+        else:
+            _status_colour = {"INTACT": "#22c55e", "WEAKENING": "#f59e0b", "BROKEN": "#ef4444"}
+            _status_icon   = {"INTACT": "✅", "WEAKENING": "⚠️", "BROKEN": "🔴"}
+
+            for _ticker in sorted(_open_tickers):
+                _thesis  = _thesis_by_ticker.get(_ticker, "")
+                _rv      = _review_by_ticker.get(_ticker)
+                _status  = _rv["status"] if _rv is not None else None
+                _summary = _rv["summary"] if _rv is not None else None
+                _rev_at  = _rv["reviewed_at"] if _rv is not None else None
+
+                # Expander label
+                if not _thesis:
+                    _exp_label = f"**{_ticker}** — no thesis yet"
+                else:
+                    _exp_label = f"**{_ticker}** — " + (_status or "awaiting review")
+
+                with st.expander(_exp_label, expanded=(_status == "BROKEN")):
+
+                    if not _thesis:
+                        # ── No thesis — show Set Thesis form ─────────────────────
+                        st.caption("No investment thesis on record for this position. Set one below so the AI can review it weekly.")
+                        _set_val = st.text_area(
+                            "Investment thesis",
+                            value="",
+                            height=120,
+                            placeholder=(
+                                "E.g. NVDA benefits from AI training chip demand with no credible competitor "
+                                "for 18–24 months. Holds as long as hyperscaler capex keeps growing. "
+                                "Breaks if AMD closes the architectural gap or a major customer pulls their design win."
+                            ),
+                            key=f"_ai_thesis_set_{_ticker}",
+                        )
+                        if st.button(f"Save thesis for {_ticker}", key=f"_ai_thesis_save_{_ticker}"):
+                            if not _set_val.strip():
+                                st.warning("Thesis cannot be blank.")
+                            else:
+                                _ok = _ai_db.update_user_thesis(_ticker, _set_val.strip())
+                                if _ok:
+                                    st.success("Thesis saved — will be reviewed in the next weekly cron run.")
+                                    st.rerun()
+                                else:
+                                    st.error("Save failed — DB offline or no BUY trade found for this ticker.")
+
+                    else:
+                        # ── Has thesis — show review + re-evaluate + edit ─────────
+                        # Status chip + timestamp
+                        if _status:
+                            _chip_colour = _status_colour.get(_status, "#6b7280")
+                            _chip_icon   = _status_icon.get(_status, "")
+                            _chip_html   = (
+                                f"<span style='background:{_chip_colour}22;border:1px solid {_chip_colour};"
+                                f"color:{_chip_colour};border-radius:4px;padding:2px 8px;"
+                                f"font-size:0.85em;font-weight:600'>"
+                                f"{_chip_icon} {_status}</span>"
+                            )
+                        else:
+                            _chip_html = (
+                                "<span style='background:#374151;border:1px solid #4b5563;"
+                                "color:#9ca3af;border-radius:4px;padding:2px 8px;"
+                                "font-size:0.85em'>Not yet reviewed</span>"
+                            )
+                        _ts_text = f" · reviewed {str(_rev_at)[:10]}" if _rev_at else ""
+                        st.markdown(
+                            _chip_html + f"<span style='color:#6b7280;font-size:0.82em'>{_ts_text}</span>",
+                            unsafe_allow_html=True,
+                        )
+
+                        # Thesis text
+                        st.markdown("**Your thesis:**")
+                        st.markdown(
+                            f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
+                            f"padding:8px 12px;border-radius:4px;color:#cbd5e1;"
+                            f"font-style:italic;margin:4px 0 12px'>{_thesis}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        # AI review summary
+                        if _summary:
+                            st.markdown("**AI assessment:**")
+                            st.markdown(_summary)
+                        else:
+                            st.caption("Click Re-evaluate to run the first AI review for this position.")
+
+                        # Re-evaluate button
+                        if st.button(f"Re-evaluate {_ticker}", key=f"_ai_reeval_{_ticker}", disabled=not _ai_api_key):
+                            with st.spinner(f"Reviewing thesis for {_ticker}..."):
+                                _held_data = st.session_state.get("held_data", {})
+                                # Evidence comes from the bundle via the shared
+                                # extractor so F-1 review and F-5 authoring never drift
+                                # on bundle key names (the bundle has financials/df/
+                                # headlines — not indicators/revenue_growth/news, the
+                                # mismatch that had been feeding the LLM empty evidence).
+                                if _ticker in _held_data:
+                                    _ev = _ta.bundle_evidence(_held_data[_ticker])
+                                else:
+                                    _ev = {"technical": {}, "fundamentals": {}, "news_headlines": []}
+                                # Enrich with newest saved analyst coverage (if any)
+                                _ac_cov = _ai_db.load_analyst_coverage(ticker=_ticker, limit=1)
+                                _ac_consensus = {}
+                                if not _ac_cov.empty:
+                                    _acr = _ac_cov.iloc[0]
+                                    def _pj(v):    # defensive jsonb parse
+                                        if isinstance(v, str):
+                                            try:
+                                                return json.loads(v)
+                                            except Exception:
+                                                return []
+                                        return v or []
+                                    _ac_consensus = {
+                                        "consensus_rating": _acr.get("consensus_rating"),
+                                        "avg_pt":           _acr.get("avg_pt"),
+                                        "n_firms":          len(_pj(_acr.get("analysts"))),
+                                        "as_of":            str(_acr.get("article_date")),
+                                        "thesis":           _pj(_acr.get("thesis")),
+                                    }
+                                _ev_inputs = _ta.build_review_inputs(
+                                    technical=_ev["technical"],
+                                    fundamentals=_ev["fundamentals"],
+                                    news_headlines=_ev["news_headlines"],
+                                    analyst_consensus=_ac_consensus,
+                                )
+                                _result = _ta.review_thesis(
+                                    ticker=_ticker, user_thesis=_thesis,
+                                    inputs=_ev_inputs, api_key=_ai_api_key,
+                                )
+                                if _result is None:
+                                    st.error("AI review failed — LLM offline or API key invalid.")
+                                else:
+                                    _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
+                                    _saved = _ai_db.save_thesis_review({
+                                        "ticker":      _ticker,
+                                        "trade_date":  _trade_date,
+                                        "reviewed_at": _result["reviewed_at"],
+                                        "status":      _result["status"],
+                                        "summary":     _result["summary"],
+                                        "inputs_hash": _ta.inputs_hash(_ev_inputs),
+                                    })
+                                    if _saved:
+                                        st.success(f"Review saved — {_result['status']}")
+                                        st.rerun()
+                                    else:
+                                        st.markdown(f"**{_result['status']}**")
+                                        st.markdown(_result["summary"])
+
+                        # Edit existing thesis
+                        st.divider()
+                        _edit_val = st.text_area(
+                            "Update thesis",
+                            value=_thesis,
+                            height=100,
+                            key=f"_ai_thesis_edit_{_ticker}",
+                        )
+                        if st.button(f"Save updated thesis for {_ticker}", key=f"_ai_thesis_upd_{_ticker}"):
+                            if not _edit_val.strip():
+                                st.warning("Thesis cannot be blank.")
+                            elif _edit_val.strip() == _thesis:
+                                st.info("No change detected.")
+                            else:
+                                _ok = _ai_db.update_user_thesis(_ticker, _edit_val.strip())
+                                if _ok:
+                                    st.success("Thesis updated — Re-evaluate to refresh the AI assessment.")
+                                    st.rerun()
+                                else:
+                                    st.error("Save failed — DB offline or no BUY trade found for this ticker.")
+
+
+    with _ai_tab_deb:
+        # ── Weekly Portfolio Debrief ──────────────────────────────────────────────
+        st.subheader("📊 Weekly Portfolio Debrief")
+        st.markdown(
+            "A weekly retrospective: what happened to your portfolio, which signals "
+            "you acted on or ignored, and what behavioural patterns showed up."
+        )
+
+        # On-demand generation
+        if st.button("Generate Now", key="_wd_generate_btn", disabled=not _ai_api_key,
+                     help="Generate a debrief for the trailing 7 days using current snapshot data."):
+            with st.spinner("Assembling data and calling AI..."):
+                _wd_today      = date.today()
+                _wd_week_start = _wd_today - timedelta(days=6)
+                _wd_snaps = _ai_db.load_daily_snapshots(start_date=_wd_week_start, end_date=_wd_today)
+                _wd_days  = len(_wd_snaps["snapshot_date"].unique()) if not _wd_snaps.empty else 0
+                if _wd_days < 5:
+                    st.warning(
+                        f"Only {_wd_days} trading day(s) of snapshot data available — need 5. "
+                        f"Check back after more days accumulate (DDL activated 2026-06-27)."
+                    )
+                else:
+                    _wd_recs   = _ai_db.load_recommendations(
+                        start_date=_wd_week_start, end_date=_wd_today
+                    )
+                    _wd_trades = st.session_state.get("trades_df", pd.DataFrame())
+                    _wd_broken = list(
+                        _thesis_reviews_df[_thesis_reviews_df["status"] == "BROKEN"]["ticker"]
+                        .astype(str).str.upper().unique()
+                    ) if not _thesis_reviews_df.empty and "status" in _thesis_reviews_df.columns else []
+
+                    # Fetch SPY return
+                    _wd_spy_pct = None
+                    try:
+                        import yfinance as _yf
+                        _spy = _yf.download("SPY", start=str(_wd_week_start), end=str(_wd_today),
+                                            progress=False, auto_adjust=True)
+                        if _spy is not None and not _spy.empty and len(_spy) >= 2:
+                            _wd_spy_pct = round(float(
+                                (_spy["Close"].iloc[-1] - _spy["Close"].iloc[0])
+                                / _spy["Close"].iloc[0] * 100
+                            ), 2)
+                    except Exception:
+                        pass
+
+                    _wd_pkg = _dba.build_debrief_package(
+                        week_ending   = _wd_today,
+                        snapshots_df  = _wd_snaps,
+                        recs_df       = _wd_recs,
+                        trades_df     = _wd_trades,
+                        spy_week_pct  = _wd_spy_pct,
+                        broken_theses = _wd_broken,
+                    )
+                    _wd_result = _dba.generate_debrief(_wd_pkg, _ai_api_key)
+                    if _wd_result is None:
+                        st.error("AI debrief failed — LLM offline or insufficient snapshot data.")
+                    else:
+                        _saved = _ai_db.save_weekly_debrief(_wd_result)
+                        if _saved:
+                            st.success("Debrief generated and saved.")
+                            st.rerun()
+                        else:
+                            st.warning("Generated but save failed (DB offline) — showing inline:")
+                            for _lbl, _col in [
+                                ("What happened", "section_facts"),
+                                ("Decisions you made", "section_decisions"),
+                                ("Patterns this week", "section_patterns"),
+                                ("One thing to watch", "section_watchnext"),
+                            ]:
+                                if _wd_result.get(_col):
+                                    st.markdown(f"**{_lbl}**")
+                                    st.markdown(_wd_result[_col])
+
+        # Display most recent debrief
+        if _wd_df.empty:
+            st.info(
+                "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
+                "or wait for the Sunday evening cron (runs automatically once "
+                "`daily_snapshots` has ≥5 trading days of data — DDL activated 2026-06-27)."
+            )
+        else:
+            _wd = _wd_df.iloc[0]
+            _wd_perf  = _wd.get("performance_pct")
+            _wd_spy   = _wd.get("spy_pct")
+            _wd_alpha = _wd.get("alpha_pct")
+
+            st.caption(
+                f"Week ending {_wd.get('week_ending', '—')} · "
+                f"generated {str(_wd.get('generated_at', ''))[:10]}"
+                + (" · ✉ emailed" if _wd.get("email_sent") else "")
+            )
+
+            # Performance summary row
+            if _wd_perf is not None:
+                _wd_col1, _wd_col2, _wd_col3 = st.columns(3)
+                def _wd_colour(v):
+                    return "#22c55e" if v and v >= 0 else "#ef4444"
+                with _wd_col1:
+                    st.markdown(
+                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Portfolio</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_perf)}'>{_wd_perf:+.1f}%</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                with _wd_col2:
+                    st.markdown(
+                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>SPY</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_spy)}'>"
+                        f"{'N/A' if _wd_spy is None else f'{_wd_spy:+.1f}%'}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                with _wd_col3:
+                    st.markdown(
+                        f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Alpha</div>"
+                        f"<div style='font-size:1.4em;font-weight:700;color:{_wd_colour(_wd_alpha)}'>"
+                        f"{'N/A' if _wd_alpha is None else f'{_wd_alpha:+.1f}%'}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("")
+
+            # Weekly alpha trajectory — are you beating SPY, week over week?
+            # Per-week alpha (portfolio − SPY) from the saved debriefs, oldest → newest.
+            _wt = _wd_df[_wd_df["alpha_pct"].notna()].copy() if "alpha_pct" in _wd_df.columns else _wd_df.iloc[0:0]
+            if len(_wt) >= 2:
+                _wt = _wt.iloc[::-1]   # load is newest-first; chart reads left→right in time
+                _wt_x = [str(w)[:10] for w in _wt["week_ending"]]
+                _wt_a = [float(a) for a in _wt["alpha_pct"]]
+                _wt_fig = go.Figure(go.Bar(
+                    x=_wt_x, y=_wt_a,
+                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _wt_a],
+                    text=[f"{v:+.1f}" for v in _wt_a], textposition="outside",
+                ))
+                _wt_fig.update_layout(
+                    title=dict(text="Weekly alpha vs SPY (percentage points)", font=dict(size=13), x=0),
+                    height=240, margin=dict(l=8, r=8, t=36, b=8),
+                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(title="Alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                    xaxis=dict(title=None), showlegend=False,
+                )
+                st.plotly_chart(_wt_fig, use_container_width=True)
+                _wt_beat = sum(1 for v in _wt_a if v > 0)
+                st.caption(
+                    f"Portfolio return minus SPY, per week — green = beat the market. "
+                    f"You beat SPY in **{_wt_beat} of {len(_wt_a)}** tracked week(s). "
+                    f"This is the trend the metrics above show for just the latest week."
+                )
+                st.markdown("")
+
+            for _wd_label, _wd_col in [
+                ("What happened", "section_facts"),
+                ("Decisions you made", "section_decisions"),
+                ("Patterns this week", "section_patterns"),
+                ("One thing to watch", "section_watchnext"),
+            ]:
+                if _wd.get(_wd_col):
+                    st.markdown(f"**{_wd_label}**")
+                    st.markdown(_wd.get(_wd_col))
+                    st.markdown("")
+
+        st.divider()
+
+        # ── Monthly Portfolio Intelligence (F-4) ──────────────────────────────────
+        st.subheader("🧭 Monthly Portfolio Intelligence")
+        st.markdown(
+            "A monthly retrospective on **how decisions were made** — is the engine "
+            "picking well (entry quality), and do you act on what it surfaces (signal "
+            "discipline)? It surfaces patterns; it never changes a gate."
+        )
+
+        if st.button("Generate Monthly Report", key="_mr_generate_btn", disabled=not _ai_api_key,
+                     help="Generate an intelligence report for the trailing ~4 weeks from recommendation history."):
+            with st.spinner("Assembling scorecard and calling AI..."):
+                _mr_end   = date.today()
+                _mr_start = _mr_end - timedelta(days=28)
+                _mr_recs  = _ai_db.load_recommendations(start_date=_mr_start, end_date=_mr_end)
+                if _mr_recs is None or _mr_recs.empty:
+                    st.warning(
+                        "No recommendations recorded in the trailing 4 weeks yet. As Today's "
+                        "Brief surfaces picks day after day, this report will fill in."
+                    )
+                else:
+                    _mr_trades = st.session_state.get("trades_df", pd.DataFrame())
+
+                    # Current prices for the rec tickers (marks open BUYs + missed-rec gains).
+                    _mr_prices: dict = {}
+                    _mr_tickers = sorted({
+                        str(t).strip().upper()
+                        for t in _mr_recs["ticker"].dropna().tolist() if str(t).strip()
+                    })
+                    if _mr_tickers:
+                        try:
+                            _mpx = fetch_live_prices(_mr_tickers)
+                            _mr_prices = {
+                                t: float(d.get("price", 0))
+                                for t, d in (_mpx or {}).items() if d and d.get("price")
+                            }
+                        except Exception:
+                            _mr_prices = {}
+
+                    # SPY close-by-date for the regime/alpha benchmark.
+                    _mr_spy_by_date: dict = {}
+                    try:
+                        _mr_spy_hist = _cached_spy("6mo")
+                        if _mr_spy_hist is not None and not _mr_spy_hist.empty and "Close" in _mr_spy_hist.columns:
+                            for _sidx, _srow in _mr_spy_hist.iterrows():
+                                _sd = _sidx.date() if hasattr(_sidx, "date") else None
+                                try:
+                                    _sc = float(_srow["Close"])
+                                except (TypeError, ValueError):
+                                    _sc = None
+                                if _sd is not None and _sc and _sc > 0:
+                                    _mr_spy_by_date[_sd] = _sc
+                    except Exception:
+                        _mr_spy_by_date = {}
+
+                    # Recent weekly debriefs for the trajectory line.
+                    _mr_weekly: list = []
+                    try:
+                        _mr_wdf = _ai_db.load_weekly_debriefs(limit=5)
+                        if _mr_wdf is not None and not _mr_wdf.empty:
+                            _mr_weekly = _mr_wdf.to_dict("records")
+                    except Exception:
+                        _mr_weekly = []
+
+                    _mr_pkg = _ir.build_report_package(
+                        period_start=_mr_start, period_end=_mr_end,
+                        recs_df=_mr_recs, trades_df=_mr_trades,
+                        current_prices=_mr_prices, spy_close_by_date=_mr_spy_by_date,
+                        weekly_rows=_mr_weekly, min_graded=_MR_MIN_GRADED,
+                    )
+                    _mr_result = _ir.generate_report(_mr_pkg, _ai_api_key)
+                    if _mr_result is None:
+                        st.error("AI report failed — LLM offline, or no recommendations to analyse.")
+                    else:
+                        if not _mr_pkg.get("q0_ready"):
+                            st.caption(
+                                f"Note: only {_mr_pkg['n_graded']} matured graded entr(ies) — "
+                                f"entry-quality grading firms up at {_MR_MIN_GRADED}+."
+                            )
+                        _mr_saved = _ai_db.save_monthly_report(_mr_result)
+                        if _mr_saved:
+                            st.success("Monthly report generated and saved.")
+                            st.rerun()
+                        else:
+                            st.warning("Generated but save failed (DB offline) — showing inline:")
+                            for _lbl, _col in [
+                                ("Entry quality", "section_entry_quality"),
+                                ("Signal discipline", "section_signal_discipline"),
+                                ("Pattern & focus", "section_patterns"),
+                            ]:
+                                if _mr_result.get(_col):
+                                    st.markdown(f"**{_lbl}**")
+                                    st.markdown(_mr_result[_col])
+
+        # Display most recent report
+        if _mr_df.empty:
+            st.info(
+                "No monthly reports yet. Click **Generate Monthly Report** for an on-demand "
+                "run, or wait for the first-Sunday-of-month cron (needs the `monthly_reports` "
+                "table — run the DDL in Supabase to activate)."
+            )
+        else:
+            # Month-by-month archive: one entry per calendar month (the row with the latest
+            # period_end in each month wins, since an on-demand re-run within a month would
+            # otherwise duplicate), newest first. _mr_df is ordered period_end DESC, so the
+            # first row seen per (year, month) is that month's latest. Labelled by the month
+            # the report's window ends in.
+            _mr_opts: list = []
+            _mr_seen: set = set()
+            for _ri in range(len(_mr_df)):
                 try:
-                    _ac_row_analysts = json.loads(_ac_row_analysts)
+                    _pe = pd.to_datetime(_mr_df.iloc[_ri].get("period_end"))
+                    _key, _lbl = (_pe.year, _pe.month), _pe.strftime("%B %Y")
                 except Exception:
-                    _ac_row_analysts = []
-            _ac_card_ups = []
-            for _af in (_ac_row_analysts if isinstance(_ac_row_analysts, list) else []):
+                    _key, _lbl = (_ri,), f"Report {_ri + 1}"
+                if _key in _mr_seen:
+                    continue
+                _mr_seen.add(_key)
+                _mr_opts.append((_lbl, _ri))
+
+            if len(_mr_opts) > 1:
+                # Harden the variable-options widget: drop a stored selection that has aged
+                # out of the window (a month falling past limit=12), else Streamlit raises on
+                # an out-of-range persisted value (feedback_streamlit_widget_options_state).
+                if st.session_state.get("_mr_period_select") not in range(len(_mr_opts)):
+                    st.session_state.pop("_mr_period_select", None)
+                _mr_sel_i = st.selectbox(
+                    "Report month", options=list(range(len(_mr_opts))),
+                    format_func=lambda i: _mr_opts[i][0], key="_mr_period_select",
+                    help="Browse past monthly reports. Each is frozen exactly as it was generated.",
+                )
+                _mr_idx = _mr_opts[_mr_sel_i][1]
+            else:
+                _mr_idx = _mr_opts[0][1] if _mr_opts else 0
+
+            _mr = _mr_df.iloc[_mr_idx]
+            _mr_alpha = _mr.get("engine_alpha_pct")
+
+            st.caption(
+                f"Period {_mr.get('period_start', '—')} → {_mr.get('period_end', '—')} · "
+                f"generated {str(_mr.get('generated_at', ''))[:10]}"
+                + (" · ✉ emailed" if _mr.get("email_sent") else "")
+            )
+
+            # Visuals come from ONE snapshot so the header, Sankey, band bar and missed bar
+            # can never disagree. Prefer the FROZEN snapshot saved with the report (immutable,
+            # and needs no price fetch); fall back to a LIVE recompute for reports saved
+            # before freezing — via the SAME pure helper, so both paths render identically.
+            from stock_analyzer.recommendations_history import report_viz_snapshot as _mr_vizfn
+
+            _mr_viz = None
+            _mr_frozen = False
+            _raw_viz = _mr.get("viz_json")
+            if isinstance(_raw_viz, float):          # NaN placeholder for a missing jsonb cell
+                _raw_viz = None
+            if isinstance(_raw_viz, str):
                 try:
-                    _u = _af.get("upside_pct")
+                    _raw_viz = json.loads(_raw_viz)
+                except Exception:
+                    _raw_viz = None
+            if isinstance(_raw_viz, dict) and _raw_viz.get("flow"):
+                _mr_viz, _mr_frozen = _raw_viz, True
+
+            if _mr_viz is None:
+                # Live fallback: rebuild the enriched recs over the report's window, then the
+                # shared snapshot. Fail-soft — any failure just hides the visuals.
+                from stock_analyzer.recommendations_history import (
+                    match_recs_to_trades as _mrm, compute_outcomes as _mrco,
+                )
+                from stock_analyzer.constants import REC_SCORE_MIN_DAYS as _MR_MINDAYS
+                _mr_en2: list = []
+                try:
+                    _mr_ps_d = pd.to_datetime(_mr.get("period_start")).date() if _mr.get("period_start") else None
+                    _mr_pe_d = pd.to_datetime(_mr.get("period_end")).date() if _mr.get("period_end") else date.today()
+                    _mr_recs2 = _ai_db.load_recommendations(start_date=_mr_ps_d, end_date=_mr_pe_d)
+                    if _mr_recs2 is not None and not _mr_recs2.empty:
+                        _mr_tr2 = st.session_state.get("trades_df", pd.DataFrame())
+                        _mr_tk2 = sorted({
+                            str(t).strip().upper()
+                            for t in _mr_recs2["ticker"].dropna().tolist() if str(t).strip()
+                        })
+                        _mr_px2: dict = {}
+                        try:
+                            _p2 = fetch_live_prices(_mr_tk2) if _mr_tk2 else {}
+                            _mr_px2 = {t: float(d.get("price", 0)) for t, d in (_p2 or {}).items() if d and d.get("price")}
+                        except Exception:
+                            _mr_px2 = {}
+                        _mr_spy2: dict = {}
+                        try:
+                            _h2 = _cached_spy("6mo")
+                            if _h2 is not None and not _h2.empty and "Close" in _h2.columns:
+                                for _i2, _r2 in _h2.iterrows():
+                                    _d2 = _i2.date() if hasattr(_i2, "date") else None
+                                    try:
+                                        _c2 = float(_r2["Close"])
+                                    except (TypeError, ValueError):
+                                        _c2 = None
+                                    if _d2 is not None and _c2 and _c2 > 0:
+                                        _mr_spy2[_d2] = _c2
+                        except Exception:
+                            _mr_spy2 = {}
+                        _mr_en2 = _mrco(
+                            _mrm(_mr_recs2, _mr_tr2), _mr_px2, today=_mr_pe_d,
+                            spy_close_by_date=_mr_spy2, min_days=_MR_MINDAYS,
+                        )
+                except Exception:
+                    _mr_en2 = []
+                if _mr_en2:
+                    try:
+                        _mr_viz = _mr_vizfn(_mr_en2, rec_types=("new_pick",))
+                    except Exception:
+                        _mr_viz = None
+
+            _mr_flow = _mr_viz.get("flow") if _mr_viz else None
+
+            # Headline counts: DISTINCT New-Position tickers (matches the Sankey). Fall back
+            # to the saved scalar counts only if no snapshot could be produced.
+            _mr_acted_n  = _mr_flow["n_acted"]  if _mr_flow else _mr.get("acted_count")
+            _mr_missed_n = _mr_flow["n_missed"] if _mr_flow else _mr.get("missed_count")
+
+            def _mr_colour(v):
+                try:
+                    return "#22c55e" if v is not None and float(v) >= 0 else "#ef4444"
+                except (TypeError, ValueError):
+                    return "#94a3b8"
+
+            _mrc1, _mrc2, _mrc3 = st.columns(3)
+            with _mrc1:
+                st.markdown(
+                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Engine alpha (acted)</div>"
+                    f"<div style='font-size:1.4em;font-weight:700;color:{_mr_colour(_mr_alpha)}'>"
+                    f"{'N/A' if _mr_alpha is None else f'{float(_mr_alpha):+.1f}%'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with _mrc2:
+                st.markdown(
+                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Acted on (names)</div>"
+                    f"<div style='font-size:1.4em;font-weight:700'>{_mr_acted_n if _mr_acted_n is not None else '—'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with _mrc3:
+                st.markdown(
+                    f"<div style='text-align:center'><div style='color:#94a3b8;font-size:0.8em'>Not acted (names)</div>"
+                    f"<div style='font-size:1.4em;font-weight:700'>{_mr_missed_n if _mr_missed_n is not None else '—'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+            st.caption(
+                "Counts are **distinct New-Position tickers** this period — a name surfaced "
+                "across many days counts once (not daily surfacings). "
+                + ("Frozen as generated, so the report reads the same whenever you open it."
+                   if _mr_frozen
+                   else "Recomputed live (saved before report-freezing was added).")
+            )
+            st.markdown("")
+
+            # Decision-flow Sankey (Q1 anchor) — the surfaced → acted/missed → outcome
+            # loop the whole report is built on. Same flow that drives the counts above.
+            if _mr_flow and _mr_flow["n_total"] > 0:
+                _mr_sk = _signal_flow_sankey(
+                    _mr_flow,
+                    "This month's signal flow — New Positions → acted / missed → outcome",
+                )
+                if _mr_sk is not None:
+                    st.plotly_chart(_mr_sk, use_container_width=True)
+                    st.caption(
+                        "New Positions to Initiate this period → acted / missed → outcome "
+                        "(distinct by ticker, matured only). Same engine as Recommendations "
+                        "History, scoped to this report's window."
+                    )
+
+            # Narrative
+            for _mr_label, _mr_col in [
+                ("Entry quality", "section_entry_quality"),
+                ("Signal discipline", "section_signal_discipline"),
+                ("Pattern & focus", "section_patterns"),
+            ]:
+                if _mr.get(_mr_col):
+                    st.markdown(f"**{_mr_label}**")
+                    st.markdown(_mr.get(_mr_col))
+                    st.markdown("")
+
+            # Q0 evidence — average alpha by composite band. Does higher conviction
+            # actually deliver higher alpha? From the same snapshot (scoped to new_pick).
+            _mr_bands = _mr_viz.get("bands") if _mr_viz else None
+            if _mr_bands and len(_mr_bands) >= 2:
+                _mb_x = [b["band"] for b in _mr_bands]
+                _mb_y = [b["avg_alpha"] for b in _mr_bands]
+                _mb_fig = go.Figure(go.Bar(
+                    x=_mb_x, y=_mb_y,
+                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _mb_y],
+                    text=[f"{v:+.1f}" for v in _mb_y], textposition="outside",
+                ))
+                _mb_fig.update_layout(
+                    title=dict(text="Entry quality — avg alpha by composite band (pp vs SPY)",
+                               font=dict(size=13), x=0),
+                    height=240, margin=dict(l=8, r=8, t=36, b=8),
+                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(title="Avg alpha (pp)", zeroline=True, zerolinecolor="#475569"),
+                    xaxis=dict(title=None), showlegend=False,
+                )
+                st.plotly_chart(_mb_fig, use_container_width=True)
+                st.caption(
+                    "Higher-conviction bands *should* sit higher. If Strong Buy (≥75) trails "
+                    "Buy (65–74), the engine's top tier underperformed this period — the "
+                    "narrative above flags whether that's worth your own review."
+                )
+                st.markdown("")
+
+            # Q1 evidence — missed-opportunity ranked bar (named, ranked magnitudes —
+            # the one thing a Sankey can't show). From the same snapshot.
+            _mr_miss = _mr_viz.get("missed") if _mr_viz else None
+            if _mr_miss:
+                _mr_sp = _mr_viz.get("missed_split", {})
+                st.markdown("**🎯 What you skipped this period**")
+                _mr_bo = sorted(_mr_miss, key=lambda r: r["outcome_pct"], reverse=True)
+                _mr_sel = sorted(
+                    _mr_bo[:8] + [r for r in _mr_bo[-8:] if id(r) not in {id(x) for x in _mr_bo[:8]}],
+                    key=lambda r: r["outcome_pct"],
+                )
+                _mr_xc = [r["outcome_pct"] for r in _mr_sel]
+                _mr_yc = [r["ticker"] for r in _mr_sel]
+                _mr_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _mr_xc]
+                _mr_fig = go.Figure(go.Bar(
+                    x=_mr_xc, y=_mr_yc, orientation="h", marker_color=_mr_cc,
+                    text=[f"{v:+.1f}%" for v in _mr_xc], textposition="outside",
+                ))
+                _mr_fig.update_layout(
+                    height=max(200, 40 + 24 * len(_mr_sel)),
+                    margin=dict(l=8, r=24, t=10, b=8), template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                    yaxis=dict(title=None), showlegend=False,
+                )
+                st.plotly_chart(_mr_fig, use_container_width=True)
+                st.caption(
+                    f"Of **{_mr_sp.get('n_distinct', len(_mr_miss))}** name(s) surfaced as **New Positions to Initiate** "
+                    f"but never acted on this period: **{_mr_sp.get('n_winners', 0)}** rose (missed), "
+                    f"**{_mr_sp.get('n_dodged', 0)}** fell (dodged). Green = rose after surfacing; red = fell. "
+                    "Awareness-only buy-candidates are excluded. Full ranked table + per-$1k "
+                    "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
+                )
+
+
+    with _ai_tab_res:
+        # ── Analyst Coverage — Ideas Inbox (Phase 1) ─────────────────────────────
+        st.subheader("📋 Analyst Coverage — Ideas Inbox")
+        st.caption(
+            "Awareness context only — analyst ratings and price targets are NEVER used by "
+            "the rule-based engine to score, gate, or override a verdict. Capturing Wall "
+            "Street perspective lets you see it alongside the engine's own scores."
+        )
+
+        # (a) Capture + extract ───────────────────────────────────────────────────
+        _ac_paste = st.text_area(
+            "Paste the analyst article text",
+            height=200,
+            key="_ac_paste",
+            placeholder=(
+                "Paste the full text of an analyst research article "
+                "(CNBC Pro, Goldman, JPMorgan, BofA, Morgan Stanley, etc.)…"
+            ),
+        )
+        if st.button(
+            "Extract",
+            key="_ac_extract_btn",
+            disabled=not _ai_api_key,
+            help=(
+                "Requires Anthropic API key in Streamlit secrets. "
+                "Extracts structured analyst data from the pasted article."
+            ),
+        ):
+            if not _ac_paste or not _ac_paste.strip():
+                st.warning("Paste an article first.")
+            else:
+                with st.spinner("Extracting analyst data…"):
+                    _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
+                if _ac_parsed is None:
+                    st.error(
+                        "Extraction failed — LLM offline or article unparseable. "
+                        "Check the text and try again."
+                    )
+                else:
+                    st.session_state["_ac_preview"]  = _ac_parsed
+                    st.session_state["_ac_raw_text"] = _ac_paste
+                    st.rerun()
+
+        # (b) Editable preview ────────────────────────────────────────────────────
+        if st.session_state.get("_ac_preview"):
+            _ac_pv = st.session_state["_ac_preview"]
+            st.markdown("**Review and edit the extracted data before saving:**")
+
+            _acp_c1, _acp_c2 = st.columns(2)
+            with _acp_c1:
+                _ac_ticker = st.text_input(
+                    "Ticker",
+                    value=(str(_ac_pv.get("ticker") or "")).upper(),
+                    key="_ac_ticker",
+                ).upper().strip()
+                _ac_company = st.text_input(
+                    "Company",
+                    value=str(_ac_pv.get("company") or ""),
+                    key="_ac_company",
+                )
+            with _acp_c2:
+                _ac_date_val = str(_ac_pv.get("article_date") or "")
+                _ac_date = st.text_input(
+                    "Article date (YYYY-MM-DD)",
+                    value=_ac_date_val,
+                    key="_ac_date",
+                )
+                _ac_rtype_opts = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
+                _ac_rtype_raw  = _ac_pv.get("report_type", "other")
+                _ac_rtype_idx  = _ac_rtype_opts.index(_ac_rtype_raw) if _ac_rtype_raw in _ac_rtype_opts else 5
+                _ac_rtype = st.selectbox(
+                    "Report type",
+                    options=_ac_rtype_opts,
+                    index=_ac_rtype_idx,
+                    key="_ac_rtype",
+                )
+
+            st.markdown("**Analysts** — add / delete / edit rows:")
+            _ac_analysts_raw = _ac_pv.get("analysts") or []
+            if isinstance(_ac_analysts_raw, str):
+                try:
+                    _ac_analysts_raw = json.loads(_ac_analysts_raw)
+                except Exception:
+                    _ac_analysts_raw = []
+            _ac_andf = pd.DataFrame(
+                _ac_analysts_raw if _ac_analysts_raw else [{}],
+                columns=["firm", "analyst", "rating", "price_target", "upside_pct"],
+            )
+            for _col in ["firm", "analyst", "rating", "price_target", "upside_pct"]:
+                if _col not in _ac_andf.columns:
+                    _ac_andf[_col] = None
+            _ac_edited_df = st.data_editor(
+                _ac_andf[["firm", "analyst", "rating", "price_target", "upside_pct"]],
+                num_rows="dynamic",
+                key="_ac_analysts_editor",
+                use_container_width=True,
+            )
+
+            # Thesis / catalysts / risks (one bullet per line in the text areas)
+            def _ac_list_to_str(val) -> str:
+                if isinstance(val, str):
+                    try:
+                        parsed = json.loads(val)
+                        return "\n".join(str(x) for x in parsed) if isinstance(parsed, list) else val
+                    except Exception:
+                        return val
+                if isinstance(val, list):
+                    return "\n".join(str(x) for x in val)
+                return ""
+
+            _ac_thesis = st.text_area(
+                "Thesis bullets (one per line)",
+                value=_ac_list_to_str(_ac_pv.get("thesis")),
+                height=120,
+                key="_ac_thesis",
+            )
+            _ac_catalysts = st.text_area(
+                "Catalysts (one per line)",
+                value=_ac_list_to_str(_ac_pv.get("catalysts")),
+                height=80,
+                key="_ac_catalysts",
+            )
+            _ac_risks = st.text_area(
+                "Risks (one per line)",
+                value=_ac_list_to_str(_ac_pv.get("risks")),
+                height=80,
+                key="_ac_risks",
+            )
+
+            # Live consensus derived from the (possibly edited) analyst rows.
+            # Sanitize NaN→None and drop fully-blank rows so derive_consensus and
+            # the save path both receive a clean list (data_editor emits float NaN
+            # for blank numeric cells; PostgreSQL jsonb rejects the NaN JSON token).
+            _ac_clean_df = _ac_edited_df.where(pd.notna(_ac_edited_df), None)
+            _ac_analysts_list = [
+                r for r in _ac_clean_df.to_dict("records")
+                if any(v not in (None, "") for v in r.values())
+            ]
+            _ac_cons = _ai_intel.derive_consensus(_ac_analysts_list)
+            _ac_cr   = _ac_cons.get("consensus_rating")
+            _ac_apt  = _ac_cons.get("avg_pt")
+            _ac_hpt  = _ac_cons.get("high_pt")
+            _ac_lpt  = _ac_cons.get("low_pt")
+            _ac_ups  = []
+            for _ac_a in _ac_analysts_list:
+                try:
+                    _u = _ac_a.get("upside_pct")
                     if _u is not None:
                         _uv = float(_u)
-                        if _uv == _uv:    # NaN guard
-                            _ac_card_ups.append(_uv)
-                except (TypeError, ValueError, AttributeError):
+                        if _uv == _uv:   # NaN guard
+                            _ac_ups.append(_uv)
+                except (TypeError, ValueError):
                     pass
-            if _ac_card_ups:
-                _ac_detail_parts.append(
-                    f"Upside: {min(_ac_card_ups):.0f}%–{max(_ac_card_ups):.0f}%"
-                    if min(_ac_card_ups) != max(_ac_card_ups)
-                    else f"Upside: {_ac_card_ups[0]:.0f}%"
+            _ac_cons_parts = []
+            if _ac_cr:
+                _ac_cons_parts.append(f"Consensus: **{_ac_cr}**")
+            if _ac_apt is not None:
+                _ac_cons_parts.append(
+                    f"Avg PT: ${_ac_apt:.2f}"
+                    + (f" (range ${_ac_lpt:.2f}–${_ac_hpt:.2f})" if _ac_lpt != _ac_hpt else "")
                 )
-            _ac_firms_n = len(_ac_row_analysts) if isinstance(_ac_row_analysts, list) else 0
-            if _ac_firms_n:
-                _ac_detail_parts.insert(0, f"{_ac_firms_n} firm(s)")
+            if _ac_ups:
+                _ac_cons_parts.append(
+                    f"Upside range: {min(_ac_ups):.0f}%–{max(_ac_ups):.0f}%"
+                    if min(_ac_ups) != max(_ac_ups)
+                    else f"Stated upside: {_ac_ups[0]:.0f}%"
+                )
+            if _ac_cons_parts:
+                st.caption("Live consensus (from analyst rows above): " + " · ".join(_ac_cons_parts))
 
-            if _ac_detail_parts:
-                st.caption(" · ".join(_ac_detail_parts))
-
-            # Thesis bullets
-            _ac_thesis_list = _ac_row.get("thesis") or []
-            if isinstance(_ac_thesis_list, str):
-                try:
-                    _ac_thesis_list = json.loads(_ac_thesis_list)
-                except Exception:
-                    _ac_thesis_list = [_ac_thesis_list]
-            if isinstance(_ac_thesis_list, list) and _ac_thesis_list:
-                for _tb in _ac_thesis_list:
-                    st.markdown(f"- {_tb}")
-
-            # Raw text expander
-            _ac_raw = _ac_row.get("raw_text") or ""
-            if _ac_raw:
-                with st.expander("Show raw article text"):
-                    st.text(_ac_raw)
-
-            # Per-card action buttons
-            _ac_btn_c1, _ac_btn_c2, _ac_btn_c3 = st.columns([2, 2, 1])
-            with _ac_btn_c1:
+            # Save / Discard buttons
+            _ac_sv_col, _ac_disc_col = st.columns([2, 1])
+            with _ac_sv_col:
                 if st.button(
-                    f"▶ Analyze {_ac_t}",
-                    key=f"_ac_analyze_{_ac_rowid}_{_ac_i}",
-                ):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _ac_t
-                    st.rerun()
-            with _ac_btn_c2:
-                _ac_already_wl = _ac_t in _ac_wl_set
-                if not _ac_already_wl:
-                    if st.button(
-                        "➕ Add to Watchlist",
-                        key=f"_ac_addwl_{_ac_rowid}_{_ac_i}",
-                        disabled=st.session_state.get("_readonly", False),
-                        help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
-                    ):
-                        if _ac_t not in st.session_state.watchlist:
-                            st.session_state.watchlist.append(_ac_t)
-                        _ai_db.save_watchlist(st.session_state.watchlist)
-                        st.success(f"{_ac_t} added to watchlist.")
-                        st.rerun()
-            with _ac_btn_c3:
-                if st.button(
-                    "🗑",
-                    key=f"_ac_del_{_ac_rowid}_{_ac_i}",
+                    "Save to Inbox",
+                    key="_ac_save_btn",
                     disabled=st.session_state.get("_readonly", False),
-                    help="Delete this coverage record",
+                    help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
                 ):
-                    _ai_db.delete_analyst_coverage(_ac_rowid)
+                    # Date: fallback to today ET if blank; validate YYYY-MM-DD if non-blank.
+                    _ac_save_date = _ac_date.strip()
+                    _ac_date_ok = True
+                    if not _ac_save_date:
+                        _ac_save_date = _today_et().isoformat()
+                    else:
+                        try:
+                            datetime.strptime(_ac_save_date, "%Y-%m-%d")
+                        except ValueError:
+                            st.error("Article date must be YYYY-MM-DD.")
+                            _ac_date_ok = False
+
+                    if _ac_date_ok:
+                        def _ac_split_lines(text: str) -> list[str]:
+                            return [l.strip() for l in text.splitlines() if l.strip()]
+
+                        _ac_record = {
+                            "ticker":           _ac_ticker,
+                            "company":          _ac_company.strip() or None,
+                            "article_date":     _ac_save_date,
+                            "report_type":      _ac_rtype,
+                            "analysts":         _ac_analysts_list,
+                            "consensus_rating": _ac_cr,
+                            "avg_pt":           _ac_apt,
+                            "high_pt":          _ac_hpt,
+                            "low_pt":           _ac_lpt,
+                            "thesis":           _ac_split_lines(_ac_thesis),
+                            "catalysts":        _ac_split_lines(_ac_catalysts),
+                            "risks":            _ac_split_lines(_ac_risks),
+                            "raw_text":         st.session_state.get("_ac_raw_text", ""),
+                            "source":           "cnbc_pro",
+                        }
+                        _ac_saved = _ai_db.save_analyst_coverage(_ac_record)
+                        if _ac_saved:
+                            st.success(f"Saved {_ac_ticker} coverage to the Ideas Inbox.")
+                            for _k in ("_ac_preview", "_ac_raw_text", "_ac_paste", "_ac_analysts_editor"):
+                                st.session_state.pop(_k, None)
+                            st.rerun()
+                        else:
+                            if st.session_state.get("_readonly", False):
+                                st.warning("Read-only viewer — saving is disabled.")
+                            else:
+                                st.error("Save failed — database error. Check the Data Health tab.")
+            with _ac_disc_col:
+                if st.button("Discard", key="_ac_discard_btn"):
+                    for _k in ("_ac_preview", "_ac_raw_text", "_ac_analysts_editor"):
+                        st.session_state.pop(_k, None)
                     st.rerun()
 
-            st.divider()
+        # (c) Inbox library ───────────────────────────────────────────────────────
+        if _ac_df.empty:
+            st.info(
+                "No analyst coverage saved yet. Paste an article above to extract and "
+                "save the first one. (If you just applied the DDL, it will populate as "
+                "you add reports.)"
+            )
+        else:
+            # Cross-reference held tickers and watchlist for badges
+            _ac_held_tickers: set = set()
+            try:
+                _ac_hdf = st.session_state.get("holdings_df", pd.DataFrame())
+                if not _ac_hdf.empty and "Ticker" in _ac_hdf.columns:
+                    _ac_held_tickers = set(_ac_hdf["Ticker"].astype(str).str.upper())
+            except Exception:
+                _ac_held_tickers = set()
+            _ac_watchlist: list = st.session_state.get("watchlist", [])
+            _ac_wl_set = {str(t).upper() for t in _ac_watchlist}
+
+            st.markdown(f"Showing reports with article date within the last **{_AC_FRESH_DAYS} days**.")
+
+            for _ac_i, _ac_row in _ac_df.iterrows():
+                _ac_t     = str(_ac_row.get("ticker") or "").upper()
+                _ac_co    = _ac_row.get("company") or ""
+                _ac_rdate = str(_ac_row.get("article_date") or "")[:10]
+                _ac_rt    = str(_ac_row.get("report_type") or "")
+                _ac_rowid = _ac_row.get("id")
+                _ac_crat  = _ac_row.get("consensus_rating")
+                _ac_a_pt  = _ac_row.get("avg_pt")
+                _ac_h_pt  = _ac_row.get("high_pt")
+                _ac_l_pt  = _ac_row.get("low_pt")
+
+                # Held / watchlist badge
+                if _ac_t in _ac_held_tickers:
+                    _ac_badge = "✅ In your holdings"
+                elif _ac_t in _ac_wl_set:
+                    _ac_badge = "👀 On your watchlist"
+                else:
+                    _ac_badge = "💡 New idea"
+
+                # Card header
+                st.markdown(
+                    f"**{_ac_t}** — {_ac_co} &nbsp;·&nbsp; {_ac_rt} &nbsp;·&nbsp; "
+                    f"{_ac_rdate} &nbsp;&nbsp; _{_ac_badge}_",
+                    unsafe_allow_html=True,
+                )
+
+                # Consensus chip + PT row
+                _ac_detail_parts = []
+                if _ac_crat:
+                    _ac_detail_parts.append(f"Consensus: **{_ac_crat}**")
+                if _ac_a_pt is not None:
+                    try:
+                        _pt_str = f"Avg PT: ${float(_ac_a_pt):.2f}"
+                        if _ac_l_pt is not None and _ac_h_pt is not None and float(_ac_l_pt) != float(_ac_h_pt):
+                            _pt_str += f" (${float(_ac_l_pt):.2f}–${float(_ac_h_pt):.2f})"
+                        _ac_detail_parts.append(_pt_str)
+                    except (TypeError, ValueError):
+                        pass
+
+                # Stated-upside range from per-firm rows
+                _ac_row_analysts = _ac_row.get("analysts") or []
+                if isinstance(_ac_row_analysts, str):
+                    try:
+                        _ac_row_analysts = json.loads(_ac_row_analysts)
+                    except Exception:
+                        _ac_row_analysts = []
+                _ac_card_ups = []
+                for _af in (_ac_row_analysts if isinstance(_ac_row_analysts, list) else []):
+                    try:
+                        _u = _af.get("upside_pct")
+                        if _u is not None:
+                            _uv = float(_u)
+                            if _uv == _uv:    # NaN guard
+                                _ac_card_ups.append(_uv)
+                    except (TypeError, ValueError, AttributeError):
+                        pass
+                if _ac_card_ups:
+                    _ac_detail_parts.append(
+                        f"Upside: {min(_ac_card_ups):.0f}%–{max(_ac_card_ups):.0f}%"
+                        if min(_ac_card_ups) != max(_ac_card_ups)
+                        else f"Upside: {_ac_card_ups[0]:.0f}%"
+                    )
+                _ac_firms_n = len(_ac_row_analysts) if isinstance(_ac_row_analysts, list) else 0
+                if _ac_firms_n:
+                    _ac_detail_parts.insert(0, f"{_ac_firms_n} firm(s)")
+
+                if _ac_detail_parts:
+                    st.caption(" · ".join(_ac_detail_parts))
+
+                # Thesis bullets
+                _ac_thesis_list = _ac_row.get("thesis") or []
+                if isinstance(_ac_thesis_list, str):
+                    try:
+                        _ac_thesis_list = json.loads(_ac_thesis_list)
+                    except Exception:
+                        _ac_thesis_list = [_ac_thesis_list]
+                if isinstance(_ac_thesis_list, list) and _ac_thesis_list:
+                    for _tb in _ac_thesis_list:
+                        st.markdown(f"- {_tb}")
+
+                # Raw text expander
+                _ac_raw = _ac_row.get("raw_text") or ""
+                if _ac_raw:
+                    with st.expander("Show raw article text"):
+                        st.text(_ac_raw)
+
+                # Per-card action buttons
+                _ac_btn_c1, _ac_btn_c2, _ac_btn_c3 = st.columns([2, 2, 1])
+                with _ac_btn_c1:
+                    if st.button(
+                        f"▶ Analyze {_ac_t}",
+                        key=f"_ac_analyze_{_ac_rowid}_{_ac_i}",
+                    ):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _ac_t
+                        st.rerun()
+                with _ac_btn_c2:
+                    _ac_already_wl = _ac_t in _ac_wl_set
+                    if not _ac_already_wl:
+                        if st.button(
+                            "➕ Add to Watchlist",
+                            key=f"_ac_addwl_{_ac_rowid}_{_ac_i}",
+                            disabled=st.session_state.get("_readonly", False),
+                            help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                        ):
+                            if _ac_t not in st.session_state.watchlist:
+                                st.session_state.watchlist.append(_ac_t)
+                            _ai_db.save_watchlist(st.session_state.watchlist)
+                            st.success(f"{_ac_t} added to watchlist.")
+                            st.rerun()
+                with _ac_btn_c3:
+                    if st.button(
+                        "🗑",
+                        key=f"_ac_del_{_ac_rowid}_{_ac_i}",
+                        disabled=st.session_state.get("_readonly", False),
+                        help="Delete this coverage record",
+                    ):
+                        _ai_db.delete_analyst_coverage(_ac_rowid)
+                        st.rerun()
+
+                st.divider()
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
