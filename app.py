@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18374,197 +18375,254 @@ elif page == "🧠 AI Insights":
                 with st.spinner("Extracting analyst data…"):
                     _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
                 if _ac_parsed is None:
-                    st.error(
-                        "Extraction failed — LLM offline or article unparseable. "
-                        "Check the text and try again."
-                    )
+                    st.error("Extraction failed — LLM offline or unparseable.")
+                elif not _ac_parsed:
+                    st.info("No analyst coverage with a price target / write-up found in this text.")
                 else:
-                    st.session_state["_ac_preview"]  = _ac_parsed
-                    st.session_state["_ac_raw_text"] = _ac_paste
+                    # _ac_parsed is now a list[dict] — one record per stock
+                    st.session_state["_ac_preview"]       = _ac_parsed
+                    st.session_state["_ac_raw_text"]      = _ac_paste
+                    st.session_state["_ac_preview_nonce"] = str(uuid.uuid4())[:8]
                     st.rerun()
 
-        # (b) Editable preview ────────────────────────────────────────────────────
+        # (b) Editable preview — one expandable card per extracted stock ────────────
         if st.session_state.get("_ac_preview"):
-            _ac_pv = st.session_state["_ac_preview"]
-            st.markdown("**Review and edit the extracted data before saving:**")
-
-            _acp_c1, _acp_c2 = st.columns(2)
-            with _acp_c1:
-                _ac_ticker = st.text_input(
-                    "Ticker",
-                    value=(str(_ac_pv.get("ticker") or "")).upper(),
-                    key="_ac_ticker",
-                ).upper().strip()
-                _ac_company = st.text_input(
-                    "Company",
-                    value=str(_ac_pv.get("company") or ""),
-                    key="_ac_company",
-                )
-            with _acp_c2:
-                _ac_date_val = str(_ac_pv.get("article_date") or "")
-                _ac_date = st.text_input(
-                    "Article date (YYYY-MM-DD)",
-                    value=_ac_date_val,
-                    key="_ac_date",
-                )
-                _ac_rtype_opts = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
-                _ac_rtype_raw  = _ac_pv.get("report_type", "other")
-                _ac_rtype_idx  = _ac_rtype_opts.index(_ac_rtype_raw) if _ac_rtype_raw in _ac_rtype_opts else 5
-                _ac_rtype = st.selectbox(
-                    "Report type",
-                    options=_ac_rtype_opts,
-                    index=_ac_rtype_idx,
-                    key="_ac_rtype",
-                )
-
-            st.markdown("**Analysts** — add / delete / edit rows:")
-            _ac_analysts_raw = _ac_pv.get("analysts") or []
-            if isinstance(_ac_analysts_raw, str):
-                try:
-                    _ac_analysts_raw = json.loads(_ac_analysts_raw)
-                except Exception:
-                    _ac_analysts_raw = []
-            _ac_andf = pd.DataFrame(
-                _ac_analysts_raw if _ac_analysts_raw else [{}],
-                columns=["firm", "analyst", "rating", "price_target", "upside_pct"],
-            )
-            for _col in ["firm", "analyst", "rating", "price_target", "upside_pct"]:
-                if _col not in _ac_andf.columns:
-                    _ac_andf[_col] = None
-            _ac_edited_df = st.data_editor(
-                _ac_andf[["firm", "analyst", "rating", "price_target", "upside_pct"]],
-                num_rows="dynamic",
-                key="_ac_analysts_editor",
-                use_container_width=True,
+            _ac_pv_list = st.session_state["_ac_preview"]   # list[dict]
+            _ac_n       = len(_ac_pv_list)
+            _ac_nonce   = st.session_state.get("_ac_preview_nonce", "x")
+            st.markdown(
+                f"**Review and edit — {_ac_n} stock(s) extracted. "
+                "Untick any you don't want, then save.**"
             )
 
-            # Thesis / catalysts / risks (one bullet per line in the text areas)
+            # Shared helpers (defined once, used in every card)
             def _ac_list_to_str(val) -> str:
                 if isinstance(val, str):
                     try:
-                        parsed = json.loads(val)
-                        return "\n".join(str(x) for x in parsed) if isinstance(parsed, list) else val
+                        _parsed = json.loads(val)
+                        return "\n".join(str(x) for x in _parsed) if isinstance(_parsed, list) else val
                     except Exception:
                         return val
                 if isinstance(val, list):
                     return "\n".join(str(x) for x in val)
                 return ""
 
-            _ac_thesis = st.text_area(
-                "Thesis bullets (one per line)",
-                value=_ac_list_to_str(_ac_pv.get("thesis")),
-                height=120,
-                key="_ac_thesis",
-            )
-            _ac_catalysts = st.text_area(
-                "Catalysts (one per line)",
-                value=_ac_list_to_str(_ac_pv.get("catalysts")),
-                height=80,
-                key="_ac_catalysts",
-            )
-            _ac_risks = st.text_area(
-                "Risks (one per line)",
-                value=_ac_list_to_str(_ac_pv.get("risks")),
-                height=80,
-                key="_ac_risks",
-            )
+            def _ac_split_lines(text: str) -> list[str]:
+                return [l.strip() for l in text.splitlines() if l.strip()]
 
-            # Live consensus derived from the (possibly edited) analyst rows.
-            # Sanitize NaN→None and drop fully-blank rows so derive_consensus and
-            # the save path both receive a clean list (data_editor emits float NaN
-            # for blank numeric cells; PostgreSQL jsonb rejects the NaN JSON token).
-            _ac_clean_df = _ac_edited_df.where(pd.notna(_ac_edited_df), None)
-            _ac_analysts_list = [
-                r for r in _ac_clean_df.to_dict("records")
-                if any(v not in (None, "") for v in r.values())
-            ]
-            _ac_cons = _ai_intel.derive_consensus(_ac_analysts_list)
-            _ac_cr   = _ac_cons.get("consensus_rating")
-            _ac_apt  = _ac_cons.get("avg_pt")
-            _ac_hpt  = _ac_cons.get("high_pt")
-            _ac_lpt  = _ac_cons.get("low_pt")
-            _ac_ups  = []
-            for _ac_a in _ac_analysts_list:
-                try:
-                    _u = _ac_a.get("upside_pct")
-                    if _u is not None:
-                        _uv = float(_u)
-                        if _uv == _uv:   # NaN guard
-                            _ac_ups.append(_uv)
-                except (TypeError, ValueError):
-                    pass
-            _ac_cons_parts = []
-            if _ac_cr:
-                _ac_cons_parts.append(f"Consensus: **{_ac_cr}**")
-            if _ac_apt is not None:
-                _ac_cons_parts.append(
-                    f"Avg PT: ${_ac_apt:.2f}"
-                    + (f" (range ${_ac_lpt:.2f}–${_ac_hpt:.2f})" if _ac_lpt != _ac_hpt else "")
-                )
-            if _ac_ups:
-                _ac_cons_parts.append(
-                    f"Upside range: {min(_ac_ups):.0f}%–{max(_ac_ups):.0f}%"
-                    if min(_ac_ups) != max(_ac_ups)
-                    else f"Stated upside: {_ac_ups[0]:.0f}%"
-                )
-            if _ac_cons_parts:
-                st.caption("Live consensus (from analyst rows above): " + " · ".join(_ac_cons_parts))
+            _ac_rtype_opts  = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
+            _ac_collected: list[dict] = []   # records the user has included and are date-valid
 
-            # Save / Discard buttons
+            for _i, _rec in enumerate(_ac_pv_list):
+                _ac_exp_label = (
+                    f"{(_rec.get('ticker') or '?').upper()} — {_rec.get('company', '')}"
+                )
+                with st.expander(_ac_exp_label, expanded=True):
+                    _ac_inc = st.checkbox(
+                        "Include this stock",
+                        value=True,
+                        key=f"_ac_inc_{_ac_nonce}_{_i}",
+                    )
+
+                    _acp_c1, _acp_c2 = st.columns(2)
+                    with _acp_c1:
+                        _ac_ticker_i = st.text_input(
+                            "Ticker",
+                            value=(str(_rec.get("ticker") or "")).upper(),
+                            key=f"_ac_ticker_{_ac_nonce}_{_i}",
+                        ).upper().strip()
+                        _ac_company_i = st.text_input(
+                            "Company",
+                            value=str(_rec.get("company") or ""),
+                            key=f"_ac_company_{_ac_nonce}_{_i}",
+                        )
+                    with _acp_c2:
+                        _ac_date_i = st.text_input(
+                            "Article date (YYYY-MM-DD)",
+                            value=str(_rec.get("article_date") or ""),
+                            key=f"_ac_date_{_ac_nonce}_{_i}",
+                        )
+                        _ac_rtype_raw_i = _rec.get("report_type", "other")
+                        _ac_rtype_idx_i = (
+                            _ac_rtype_opts.index(_ac_rtype_raw_i)
+                            if _ac_rtype_raw_i in _ac_rtype_opts else 5
+                        )
+                        _ac_rtype_i = st.selectbox(
+                            "Report type",
+                            options=_ac_rtype_opts,
+                            index=_ac_rtype_idx_i,
+                            key=f"_ac_rtype_{_ac_nonce}_{_i}",
+                        )
+
+                    st.markdown("**Analysts** — add / delete / edit rows:")
+                    _ac_analysts_raw_i = _rec.get("analysts") or []
+                    if isinstance(_ac_analysts_raw_i, str):
+                        try:
+                            _ac_analysts_raw_i = json.loads(_ac_analysts_raw_i)
+                        except Exception:
+                            _ac_analysts_raw_i = []
+                    _ac_andf_i = pd.DataFrame(
+                        _ac_analysts_raw_i if _ac_analysts_raw_i else [{}],
+                        columns=["firm", "analyst", "rating", "price_target", "upside_pct"],
+                    )
+                    for _col in ["firm", "analyst", "rating", "price_target", "upside_pct"]:
+                        if _col not in _ac_andf_i.columns:
+                            _ac_andf_i[_col] = None
+                    _ac_edited_df_i = st.data_editor(
+                        _ac_andf_i[["firm", "analyst", "rating", "price_target", "upside_pct"]],
+                        num_rows="dynamic",
+                        key=f"_ac_editor_{_ac_nonce}_{_i}",
+                        use_container_width=True,
+                    )
+
+                    _ac_thesis_i = st.text_area(
+                        "Thesis bullets (one per line)",
+                        value=_ac_list_to_str(_rec.get("thesis")),
+                        height=120,
+                        key=f"_ac_thesis_{_ac_nonce}_{_i}",
+                    )
+                    _ac_catalysts_i = st.text_area(
+                        "Catalysts (one per line)",
+                        value=_ac_list_to_str(_rec.get("catalysts")),
+                        height=80,
+                        key=f"_ac_catalysts_{_ac_nonce}_{_i}",
+                    )
+                    _ac_risks_i = st.text_area(
+                        "Risks (one per line)",
+                        value=_ac_list_to_str(_rec.get("risks")),
+                        height=80,
+                        key=f"_ac_risks_{_ac_nonce}_{_i}",
+                    )
+
+                    # Live consensus for this card.
+                    # Sanitize NaN→None and drop fully-blank rows (data_editor emits
+                    # float NaN for blank numeric cells; PostgreSQL jsonb rejects it).
+                    _ac_clean_df_i = _ac_edited_df_i.where(pd.notna(_ac_edited_df_i), None)
+                    _ac_analysts_list_i = [
+                        r for r in _ac_clean_df_i.to_dict("records")
+                        if any(v not in (None, "") for v in r.values())
+                    ]
+                    _ac_cons_i = _ai_intel.derive_consensus(_ac_analysts_list_i)
+                    _ac_cr_i   = _ac_cons_i.get("consensus_rating")
+                    _ac_apt_i  = _ac_cons_i.get("avg_pt")
+                    _ac_hpt_i  = _ac_cons_i.get("high_pt")
+                    _ac_lpt_i  = _ac_cons_i.get("low_pt")
+                    _ac_ups_i: list[float] = []
+                    for _ac_a in _ac_analysts_list_i:
+                        try:
+                            _u = _ac_a.get("upside_pct")
+                            if _u is not None:
+                                _uv = float(_u)
+                                if _uv == _uv:   # NaN guard
+                                    _ac_ups_i.append(_uv)
+                        except (TypeError, ValueError):
+                            pass
+                    _ac_cons_parts_i = []
+                    if _ac_cr_i:
+                        _ac_cons_parts_i.append(f"Consensus: **{_ac_cr_i}**")
+                    if _ac_apt_i is not None:
+                        _ac_cons_parts_i.append(
+                            f"Avg PT: ${_ac_apt_i:.2f}"
+                            + (
+                                f" (range ${_ac_lpt_i:.2f}–${_ac_hpt_i:.2f})"
+                                if _ac_lpt_i != _ac_hpt_i else ""
+                            )
+                        )
+                    if _ac_ups_i:
+                        _ac_cons_parts_i.append(
+                            f"Upside range: {min(_ac_ups_i):.0f}%–{max(_ac_ups_i):.0f}%"
+                            if min(_ac_ups_i) != max(_ac_ups_i)
+                            else f"Stated upside: {_ac_ups_i[0]:.0f}%"
+                        )
+                    if _ac_cons_parts_i:
+                        st.caption(
+                            "Live consensus (from analyst rows above): "
+                            + " · ".join(_ac_cons_parts_i)
+                        )
+
+                    # Validate date and collect this record if user included it
+                    if _ac_inc:
+                        _ac_save_date_i = _ac_date_i.strip()
+                        _ac_date_ok_i   = True
+                        if not _ac_save_date_i:
+                            _ac_save_date_i = _today_et().isoformat()
+                        else:
+                            try:
+                                datetime.strptime(_ac_save_date_i, "%Y-%m-%d")
+                            except ValueError:
+                                st.warning(
+                                    f"{_ac_ticker_i or '?'}: Article date must be YYYY-MM-DD."
+                                )
+                                _ac_date_ok_i = False
+
+                        if _ac_date_ok_i:
+                            _ac_collected.append({
+                                "ticker":           _ac_ticker_i,
+                                "company":          _ac_company_i.strip() or None,
+                                "article_date":     _ac_save_date_i,
+                                "report_type":      _ac_rtype_i,
+                                "analysts":         _ac_analysts_list_i,
+                                "consensus_rating": _ac_cr_i,
+                                "avg_pt":           _ac_apt_i,
+                                "high_pt":          _ac_hpt_i,
+                                "low_pt":           _ac_lpt_i,
+                                "thesis":           _ac_split_lines(_ac_thesis_i),
+                                "catalysts":        _ac_split_lines(_ac_catalysts_i),
+                                "risks":            _ac_split_lines(_ac_risks_i),
+                                "raw_text":         st.session_state.get("_ac_raw_text", ""),
+                                "source":           "cnbc_pro",
+                            })
+
+            # Save / Discard buttons — below all cards
             _ac_sv_col, _ac_disc_col = st.columns([2, 1])
             with _ac_sv_col:
                 if st.button(
-                    "Save to Inbox",
+                    "💾 Save selected to Inbox",
                     key="_ac_save_btn",
                     disabled=st.session_state.get("_readonly", False),
-                    help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                    help=(
+                        "Read-only viewer — changes are disabled"
+                        if st.session_state.get("_readonly", False) else None
+                    ),
                 ):
-                    # Date: fallback to today ET if blank; validate YYYY-MM-DD if non-blank.
-                    _ac_save_date = _ac_date.strip()
-                    _ac_date_ok = True
-                    if not _ac_save_date:
-                        _ac_save_date = _today_et().isoformat()
+                    if not _ac_collected:
+                        st.warning(
+                            "No stocks selected to save — include at least one "
+                            "and ensure dates are valid."
+                        )
                     else:
-                        try:
-                            datetime.strptime(_ac_save_date, "%Y-%m-%d")
-                        except ValueError:
-                            st.error("Article date must be YYYY-MM-DD.")
-                            _ac_date_ok = False
-
-                    if _ac_date_ok:
-                        def _ac_split_lines(text: str) -> list[str]:
-                            return [l.strip() for l in text.splitlines() if l.strip()]
-
-                        _ac_record = {
-                            "ticker":           _ac_ticker,
-                            "company":          _ac_company.strip() or None,
-                            "article_date":     _ac_save_date,
-                            "report_type":      _ac_rtype,
-                            "analysts":         _ac_analysts_list,
-                            "consensus_rating": _ac_cr,
-                            "avg_pt":           _ac_apt,
-                            "high_pt":          _ac_hpt,
-                            "low_pt":           _ac_lpt,
-                            "thesis":           _ac_split_lines(_ac_thesis),
-                            "catalysts":        _ac_split_lines(_ac_catalysts),
-                            "risks":            _ac_split_lines(_ac_risks),
-                            "raw_text":         st.session_state.get("_ac_raw_text", ""),
-                            "source":           "cnbc_pro",
-                        }
-                        _ac_saved = _ai_db.save_analyst_coverage(_ac_record)
-                        if _ac_saved:
-                            st.success(f"Saved {_ac_ticker} coverage to the Ideas Inbox.")
-                            for _k in ("_ac_preview", "_ac_raw_text", "_ac_paste", "_ac_analysts_editor"):
+                        _ac_saved_recs  = []
+                        _ac_failed_recs = []
+                        for _ac_rec_to_save in _ac_collected:
+                            if _ai_db.save_analyst_coverage(_ac_rec_to_save):
+                                _ac_saved_recs.append(_ac_rec_to_save)
+                            else:
+                                _ac_failed_recs.append(_ac_rec_to_save)
+                        if not _ac_failed_recs and _ac_saved_recs:
+                            # Full success — clear the preview and refresh.
+                            st.success(f"Saved {len(_ac_saved_recs)} stock(s) to the Ideas Inbox.")
+                            for _k in ("_ac_preview", "_ac_raw_text", "_ac_preview_nonce", "_ac_paste"):
                                 st.session_state.pop(_k, None)
                             st.rerun()
+                        elif _ac_saved_recs and _ac_failed_recs:
+                            # Partial — keep ONLY the failed records in the preview so they can
+                            # be retried, without re-saving (duplicating) the ones that succeeded.
+                            st.warning(
+                                f"Saved {len(_ac_saved_recs)} stock(s); {len(_ac_failed_recs)} "
+                                "failed (database error) — kept above for retry. Check Data Health."
+                            )
+                            st.session_state["_ac_preview"]       = _ac_failed_recs
+                            st.session_state["_ac_preview_nonce"]  = str(uuid.uuid4())[:8]
+                            st.rerun()
                         else:
+                            # None saved — keep the preview intact for retry.
                             if st.session_state.get("_readonly", False):
                                 st.warning("Read-only viewer — saving is disabled.")
                             else:
-                                st.error("Save failed — database error. Check the Data Health tab.")
+                                st.error("Save failed — database error. Check Data Health.")
             with _ac_disc_col:
                 if st.button("Discard", key="_ac_discard_btn"):
-                    for _k in ("_ac_preview", "_ac_raw_text", "_ac_analysts_editor"):
+                    for _k in ("_ac_preview", "_ac_raw_text", "_ac_preview_nonce"):
                         st.session_state.pop(_k, None)
                     st.rerun()
 
