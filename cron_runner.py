@@ -348,6 +348,26 @@ def _run_thesis(now_et, force: bool) -> int:
         # on-demand review) — reads financials/df/headlines, not indicators/
         # revenue_growth/news, so the weekly review actually sees current data.
         ev = _ta.bundle_evidence(held_data.get(ticker, {}))
+        # Enrich with newest saved analyst coverage (if any)
+        _cov_cron = db.load_analyst_coverage(ticker=ticker, limit=1)
+        _ac_cons_cron: dict = {}
+        if not _cov_cron.empty:
+            _acr_cron = _cov_cron.iloc[0]
+            def _pj_cron(v):    # defensive jsonb parse
+                import json as _cj
+                if isinstance(v, str):
+                    try:
+                        return _cj.loads(v)
+                    except Exception:
+                        return []
+                return v or []
+            _ac_cons_cron = {
+                "consensus_rating": _acr_cron.get("consensus_rating"),
+                "avg_pt":           _acr_cron.get("avg_pt"),
+                "n_firms":          len(_pj_cron(_acr_cron.get("analysts"))),
+                "as_of":            str(_acr_cron.get("article_date")),
+                "thesis":           _pj_cron(_acr_cron.get("thesis")),
+            }
         positions.append({
             "ticker":      ticker,
             "trade_date":  str(row.get("traded_at", ""))[:10],
@@ -356,6 +376,7 @@ def _run_thesis(now_et, force: bool) -> int:
                 technical=ev["technical"],
                 fundamentals=ev["fundamentals"],
                 news_headlines=ev["news_headlines"],
+                analyst_consensus=_ac_cons_cron,
             ),
         })
 

@@ -11240,8 +11240,8 @@ elif page == "📈 Analysis":
                 _sa_holding = _sa_port[_sa_port["Ticker"] == ticker].iloc[0].to_dict()
 
             _plan_label = "🚪 Exit Plan" if _sa_is_sell else "📋 Trade Plan"
-            plan_tab, chart_tab, risk_tab, deep_tab = st.tabs(
-                [_plan_label, "📈 Chart", "⚖️ Risk", "🔬 Deep Dive"]
+            plan_tab, chart_tab, risk_tab, deep_tab, coverage_tab = st.tabs(
+                [_plan_label, "📈 Chart", "⚖️ Risk", "🔬 Deep Dive", "🏦 Analyst Coverage"]
             )
 
             # ── Trade Plan / Exit Plan ─────────────────────────────────────
@@ -12031,6 +12031,196 @@ elif page == "📈 Analysis":
                                 )
                     else:
                         st.caption("Revision data not available for this ticker.")
+
+            # ── Analyst Coverage ───────────────────────────────────────────
+            with coverage_tab:
+                # ── Street consensus (data provider) ──────────────────────
+                st.markdown("**🏦 Street consensus (data provider)**")
+                st.caption(
+                    "The analyst mean price target from the data provider (Yahoo Finance) — "
+                    "the same number shown on the Trade Plan / Base scenario. "
+                    "This is the broad provider mean, not firm-by-firm research."
+                )
+                _cov_fin = r["financials"]
+                _cov_at  = _cov_fin.get("analyst_target")       # provider mean PT
+                _cov_n   = _cov_fin.get("num_analyst_opinions")
+                _cov_hi  = _cov_fin.get("target_high")
+                _cov_lo  = _cov_fin.get("target_low")
+                if _cov_at is not None:
+                    _cov_parts = []
+                    try:
+                        _at_f = float(_cov_at)
+                        _cov_mean_str = f"Mean: **${_at_f:.2f}**"
+                        if _cov_n:
+                            _cov_mean_str += f"  ({int(_cov_n)} analysts)"
+                        _cov_parts.append(_cov_mean_str)
+                        if _cov_lo is not None and _cov_hi is not None:
+                            _cov_parts.append(
+                                f"Range: ${float(_cov_lo):.2f}–${float(_cov_hi):.2f}"
+                            )
+                        if price and price > 0:
+                            _cov_upside = (_at_f / price - 1) * 100
+                            _cov_clr = "#00C851" if _cov_upside >= 0 else "#ff4444"
+                            _cov_parts.append(
+                                f"<span style='color:{_cov_clr}'>"
+                                f"Implied upside: {_cov_upside:+.1f}%</span>"
+                            )
+                    except (TypeError, ValueError):
+                        pass
+                    if _cov_parts:
+                        st.markdown("  ·  ".join(_cov_parts), unsafe_allow_html=True)
+                else:
+                    st.info(f"No provider consensus available for {ticker}.")
+
+                st.markdown("---")
+
+                # ── Your saved research (Ideas Inbox) ─────────────────────
+                st.markdown("**📋 Your saved research (Ideas Inbox)**")
+                _cov_df = db.load_analyst_coverage(ticker=ticker, limit=10)
+                if _cov_df.empty:
+                    st.info(
+                        f"No saved research for {ticker}. "
+                        "Paste an analyst article on 🧠 AI Insights → Analyst Coverage "
+                        "to enrich this view."
+                    )
+                else:
+                    for _covi, _covrow in _cov_df.iterrows():
+                        _cov_co    = _covrow.get("company") or ""
+                        _cov_rdate = str(_covrow.get("article_date") or "")[:10]
+                        _cov_rt    = str(_covrow.get("report_type") or "")
+                        _cov_crat  = _covrow.get("consensus_rating")
+                        _cov_a_pt  = _covrow.get("avg_pt")
+                        _cov_h_pt  = _covrow.get("high_pt")
+                        _cov_l_pt  = _covrow.get("low_pt")
+
+                        # Card header (same style as Ideas Inbox)
+                        st.markdown(
+                            f"**{ticker}** — {_cov_co} &nbsp;·&nbsp; "
+                            f"{_cov_rt} &nbsp;·&nbsp; {_cov_rdate}",
+                            unsafe_allow_html=True,
+                        )
+
+                        # Consensus chip + PT detail row
+                        _cov_det: list = []
+                        _cov_analysts_raw = _covrow.get("analysts") or []
+                        if isinstance(_cov_analysts_raw, str):
+                            try:
+                                _cov_analysts_raw = json.loads(_cov_analysts_raw)
+                            except Exception:
+                                _cov_analysts_raw = []
+                        _cov_firms_n = (
+                            len(_cov_analysts_raw)
+                            if isinstance(_cov_analysts_raw, list) else 0
+                        )
+                        if _cov_firms_n:
+                            _cov_det.insert(0, f"{_cov_firms_n} firm(s)")
+                        if _cov_crat:
+                            _cov_det.append(f"Consensus: **{_cov_crat}**")
+                        if _cov_a_pt is not None:
+                            try:
+                                _pt_str = f"Avg PT: ${float(_cov_a_pt):.2f}"
+                                if (
+                                    _cov_l_pt is not None
+                                    and _cov_h_pt is not None
+                                    and float(_cov_l_pt) != float(_cov_h_pt)
+                                ):
+                                    _pt_str += (
+                                        f" (${float(_cov_l_pt):.2f}"
+                                        f"–${float(_cov_h_pt):.2f})"
+                                    )
+                                _cov_det.append(_pt_str)
+                            except (TypeError, ValueError):
+                                pass
+                        if _cov_det:
+                            st.caption(" · ".join(_cov_det))
+
+                        # Per-firm table
+                        if isinstance(_cov_analysts_raw, list) and _cov_analysts_raw:
+                            _firm_rows = []
+                            for _af in _cov_analysts_raw:
+                                if not isinstance(_af, dict):
+                                    continue
+                                _firm_rows.append({
+                                    "Firm":     _af.get("firm") or "—",
+                                    "Rating":   _af.get("rating") or "—",
+                                    "PT ($)":   _af.get("price_target"),
+                                    "Upside %": _af.get("upside_pct"),
+                                })
+                            if _firm_rows:
+                                st.dataframe(
+                                    pd.DataFrame(_firm_rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+
+                        # Thesis bullets
+                        _cov_th = _covrow.get("thesis") or []
+                        if isinstance(_cov_th, str):
+                            try:
+                                _cov_th = json.loads(_cov_th)
+                            except Exception:
+                                _cov_th = [_cov_th]
+                        if isinstance(_cov_th, list) and _cov_th:
+                            st.markdown("**Thesis points:**")
+                            for _tb in _cov_th:
+                                st.markdown(f"- {_tb}")
+
+                        # Catalysts
+                        _cov_cats = _covrow.get("catalysts") or []
+                        if isinstance(_cov_cats, str):
+                            try:
+                                _cov_cats = json.loads(_cov_cats)
+                            except Exception:
+                                _cov_cats = []
+                        if isinstance(_cov_cats, list) and _cov_cats:
+                            st.markdown("**Catalysts:**")
+                            for _cat in _cov_cats:
+                                st.markdown(f"- {_cat}")
+
+                        # Risks
+                        _cov_risks = _covrow.get("risks") or []
+                        if isinstance(_cov_risks, str):
+                            try:
+                                _cov_risks = json.loads(_cov_risks)
+                            except Exception:
+                                _cov_risks = []
+                        if isinstance(_cov_risks, list) and _cov_risks:
+                            st.markdown("**Risks:**")
+                            for _rk in _cov_risks:
+                                st.markdown(f"- {_rk}")
+
+                        st.divider()
+
+                    # ── Reconciliation caption (only when both sources available)
+                    _cov_newest     = _cov_df.iloc[0]
+                    _cov_saved_apt  = _cov_newest.get("avg_pt")
+                    if _cov_at is not None and _cov_saved_apt is not None:
+                        try:
+                            _cov_an_raw = _cov_newest.get("analysts") or []
+                            if isinstance(_cov_an_raw, str):
+                                try:
+                                    _cov_an_raw = json.loads(_cov_an_raw)
+                                except Exception:
+                                    _cov_an_raw = []
+                            _cov_n_firms_saved = (
+                                len(_cov_an_raw)
+                                if isinstance(_cov_an_raw, list) else 0
+                            )
+                            _cov_n_str = str(int(_cov_n)) if _cov_n else "?"
+                            st.caption(
+                                f"Provider mean ${float(_cov_at):.2f} across "
+                                f"{_cov_n_str} analysts · "
+                                f"your {_cov_n_firms_saved} saved firm(s) "
+                                f"avg ${float(_cov_saved_apt):.2f}."
+                            )
+                        except (TypeError, ValueError):
+                            pass
+
+                # Awareness-only footer
+                st.caption(
+                    "Awareness only — analyst targets never move a gate or "
+                    "the engine's verdict."
+                )
 
     # Correlation matrix
     if len(results) >= 2:
@@ -17457,10 +17647,30 @@ elif page == "🧠 AI Insights":
                                 _ev = _ta.bundle_evidence(_held_data[_ticker])
                             else:
                                 _ev = {"technical": {}, "fundamentals": {}, "news_headlines": []}
+                            # Enrich with newest saved analyst coverage (if any)
+                            _ac_cov = _ai_db.load_analyst_coverage(ticker=_ticker, limit=1)
+                            _ac_consensus = {}
+                            if not _ac_cov.empty:
+                                _acr = _ac_cov.iloc[0]
+                                def _pj(v):    # defensive jsonb parse
+                                    if isinstance(v, str):
+                                        try:
+                                            return json.loads(v)
+                                        except Exception:
+                                            return []
+                                    return v or []
+                                _ac_consensus = {
+                                    "consensus_rating": _acr.get("consensus_rating"),
+                                    "avg_pt":           _acr.get("avg_pt"),
+                                    "n_firms":          len(_pj(_acr.get("analysts"))),
+                                    "as_of":            str(_acr.get("article_date")),
+                                    "thesis":           _pj(_acr.get("thesis")),
+                                }
                             _ev_inputs = _ta.build_review_inputs(
                                 technical=_ev["technical"],
                                 fundamentals=_ev["fundamentals"],
                                 news_headlines=_ev["news_headlines"],
+                                analyst_consensus=_ac_consensus,
                             )
                             _result = _ta.review_thesis(
                                 ticker=_ticker, user_thesis=_thesis,

@@ -32,7 +32,7 @@ _SYSTEM_PROMPT = """You are a disciplined portfolio analyst helping an individua
 Your job: given the investor's original thesis and current evidence, assess whether the thesis is INTACT, WEAKENING, or BROKEN. Write a concise 2-3 sentence explanation.
 
 Rules:
-- Only use facts from the evidence provided. Do not invent events, price targets, or analyst opinions.
+- Only use facts from the evidence provided. Do not invent events, price targets, or analyst opinions. If an 'External analyst coverage' line is provided in the evidence, that consensus is REAL and you MAY cite it as supporting or contradicting context — but it is CONTEXT ONLY: analyst agreement never makes a broken thesis intact. Grade the user's specific thesis claim against the evidence; a thesis whose stated rationale is contradicted stays WEAKENING or BROKEN even if analysts remain bullish.
 - INTACT: evidence is broadly consistent with the original conviction.
 - WEAKENING: some evidence contradicts; not yet decisive. Use this when signals are mixed.
 - BROKEN: evidence materially contradicts the key condition the investor stated, or the core premise has clearly reversed.
@@ -93,6 +93,25 @@ def _format_prompt(ticker: str, user_thesis: str, inputs: dict) -> str:
         if parts:
             lines.append("Earnings: " + " ".join(parts))
 
+    analyst = inputs.get("analyst_consensus", {})
+    if analyst:
+        parts = []
+        if analyst.get("consensus_rating"):
+            parts.append(f"Consensus rating: {analyst['consensus_rating']}.")
+        if analyst.get("avg_pt") is not None:
+            try:
+                _apt = float(analyst["avg_pt"])
+                parts.append(f"Avg price target ${_apt:.2f} across {analyst.get('n_firms', '?')} firm(s).")
+            except (TypeError, ValueError):
+                pass
+        _asof = analyst.get("as_of")
+        if _asof and str(_asof).lower() != "none":
+            parts.append(f"(coverage as of {_asof})")
+        if analyst.get("thesis"):
+            parts.append("Analyst thesis points: " + "; ".join(analyst['thesis'][:2]) + ".")
+        if parts:
+            lines.append("External analyst coverage: " + " ".join(parts))
+
     return "\n".join(lines)
 
 
@@ -130,6 +149,7 @@ def build_review_inputs(
     fundamentals: dict | None = None,
     news_headlines: list[str] | None = None,
     last_earnings: dict | None = None,
+    analyst_consensus: dict | None = None,
 ) -> dict:
     """
     Assemble the structured evidence package passed to review_thesis().
@@ -141,12 +161,16 @@ def build_review_inputs(
     news_headlines: list of plain-text headline strings (last 30 days)
     last_earnings keys (all optional):
         result (str e.g. "beat EPS by 8%"), guidance (str e.g. "raised FY guidance")
+    analyst_consensus keys (all optional):
+        consensus_rating (str), avg_pt (float), n_firms (int), as_of (str),
+        thesis (list[str]) — newest saved coverage row from analyst_coverage table
     """
     return {
-        "technical":      technical      or {},
-        "fundamentals":   fundamentals   or {},
-        "news_headlines": news_headlines or [],
-        "last_earnings":  last_earnings  or {},
+        "technical":         technical         or {},
+        "fundamentals":      fundamentals       or {},
+        "news_headlines":    news_headlines     or [],
+        "last_earnings":     last_earnings      or {},
+        "analyst_consensus": analyst_consensus  or {},
     }
 
 
