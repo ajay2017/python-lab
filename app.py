@@ -1179,6 +1179,37 @@ def _cached_sentiment(ticker_csv: str) -> dict[str, dict]:
     return fetch_sentiment_for_tickers(tickers)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_analyst_coverage_recent() -> dict:
+    """Newest analyst_coverage row per ticker within ANALYST_COVERAGE_FRESH_DAYS.
+    Returns {TICKER: {consensus_rating, avg_pt, n_firms, article_date}}; empty dict
+    when none/offline. Awareness-only — used to ANNOTATE cards, never to gate/rank."""
+    from stock_analyzer import db as _acr_db
+    from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS
+    import json as _acr_json
+    df = _acr_db.load_analyst_coverage(days=ANALYST_COVERAGE_FRESH_DAYS)
+    out: dict = {}
+    if df is None or df.empty:
+        return out
+    for _, _row in df.iterrows():   # DataFrame is newest-first; keep first row per ticker
+        _t = str(_row.get("ticker", "")).upper()
+        if not _t or _t in out:
+            continue
+        _analysts = _row.get("analysts")
+        if isinstance(_analysts, str):
+            try:
+                _analysts = _acr_json.loads(_analysts)
+            except Exception:
+                _analysts = []
+        out[_t] = {
+            "consensus_rating": _row.get("consensus_rating"),
+            "avg_pt":           _row.get("avg_pt"),
+            "n_firms":          len(_analysts or []),
+            "article_date":     str(_row.get("article_date")),
+        }
+    return out
+
+
 # ── Signal-flow Sankey (shared) ──────────────────────────────────────────────
 # Builds the New-Positions → acted/missed → win/loss/flat Sankey figure from a
 # recommendations_history.signal_flow() dict. Shared by the Recommendations
@@ -4398,6 +4429,7 @@ if page == "🏠 Home":
             # New picks
             if new_picks:
                 st.markdown("**🆕 New Positions to Initiate**")
+            _ac_cov_map = _cached_analyst_coverage_recent()   # hoisted; one query, annotation-only
             for _gp in new_picks:
                 _gx         = _gp.get("xref", {})
                 _reconciled = _gx.get("verdict_reconciled", {}) or {}
@@ -4487,6 +4519,18 @@ if page == "🏠 Home":
                     + f"</div>",
                     unsafe_allow_html=True,
                 )
+                _ac_cov = _ac_cov_map.get(str(_gp["ticker"]).upper())
+                if _ac_cov and (_ac_cov.get("consensus_rating") or _ac_cov.get("avg_pt") is not None):
+                    _ac_parts = []
+                    if _ac_cov.get("consensus_rating"):
+                        _ac_parts.append(str(_ac_cov["consensus_rating"]))
+                    if _ac_cov.get("avg_pt") is not None:
+                        try:
+                            _ac_parts.append(f"avg PT ${float(_ac_cov['avg_pt']):.2f}")
+                        except (TypeError, ValueError):
+                            pass
+                    if _ac_parts:
+                        st.caption(f"🏦 Your saved research: {' · '.join(_ac_parts)} ({_ac_cov.get('n_firms', '?')} firms) — awareness only")
                 if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
                     st.session_state["_pending_page"]    = "📈 Analysis"
                     st.session_state["_analysis_ticker"] = _gp["ticker"]
