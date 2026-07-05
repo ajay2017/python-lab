@@ -17342,7 +17342,7 @@ The app's intelligence is computed live in your browser — so it can only reach
 """
         )
 
-    with st.expander("🧠 AI Insights — thesis tracking, weekly debrief & monthly review", expanded=False):
+    with st.expander("🧠 AI Insights — thesis tracking, weekly debrief, monthly review & analyst coverage", expanded=False):
         st.caption("How the AI layer fits into the app")
         st.graphviz_chart(
             """
@@ -17369,6 +17369,7 @@ The app's intelligence is computed live in your browser — so it can only reach
                     F1 [label="Thesis Review\\nINTACT / WEAKENING / BROKEN" shape=box style="rounded,filled" fillcolor=white]
                     F3 [label="Weekly Debrief\\nPortfolio narrative" shape=box style="rounded,filled" fillcolor=white]
                     F4 [label="Monthly Report\\nEntry quality + Signal discipline" shape=box style="rounded,filled" fillcolor=white]
+                    F6 [label="Analyst Coverage\\nBroker research you paste" shape=box style="rounded,filled" fillcolor=white]
                 }
 
                 Score  -> Pkg   [label="pre-computed facts only"]
@@ -17376,6 +17377,10 @@ The app's intelligence is computed live in your browser — so it can only reach
                 Claude -> F1
                 Claude -> F3
                 Claude -> F4
+
+                Research [label="Your pasted\\nanalyst research" shape=note fillcolor="#fffde7" style=filled color="#f0a800"]
+                Research -> Claude [label="you paste; AI extracts"]
+                Claude -> F6
 
                 Guarantee [label="AI never moves a gate\\nor feeds back to the engine" shape=note fillcolor="#fff9c4" style=filled color="#c8a000"]
                 Claude -> Guarantee [style=dashed arrowhead=none color="#aaaaaa"]
@@ -17385,9 +17390,9 @@ The app's intelligence is computed live in your browser — so it can only reach
         )
         st.markdown(
             """
-The **🧠 AI Insights** page is a *reflective* layer that sits **on top of** the rule-based engine. Everything else in the app decides and gates with fixed rules; this page uses AI to **narrate the patterns** in what those rules have been doing — your picks, your trades, your theses — over weeks and months. Two promises never change: the AI only ever **describes numbers the engine already computed** (it cannot invent a recommendation, a trade, or an outcome), and it **never moves a gate or sets a threshold** — that stays a rules decision. If the AI is ever unavailable, every other page and every protection still works exactly the same; this layer is purely additive.
+The **🧠 AI Insights** page is an AI layer that sits **on top of** the rule-based engine — mostly *reflection* on what the rules have been doing (your picks, trades, and theses over weeks and months), plus one tool that folds in outside analyst research you paste. It's organized into tabs — **🩺 Positions**, **📅 Debriefs**, **🏦 Research** — with an *"at a glance"* status strip up top. One promise never changes: the AI **never moves a gate or sets a threshold** — that stays a rules decision, and if the AI is ever unavailable every other page and protection works exactly the same (this layer is purely additive). The reflective features only ever **describe numbers the engine already computed** (they can't invent a recommendation, a trade, or an outcome); the capture tool (Analyst Coverage) brings in outside research, but even that is **awareness only** and never gates.
 
-Three things live here:
+Four things live here:
 
 - **📌 Thesis Tracking — "is my reason for owning this still true?"** When you log a buy you can write a *thesis* (why you're in it) — or tap **✨ Draft thesis** on the Trade Journal BUY form to have the app draft an **editable** starting point from its read on that stock (fundamentals, recent news, trend), complete with a built-in *"this breaks if…"* condition. You always edit and own the final wording — the draft is never saved on its own. For each holding that has one, the app weighs that original reason against current evidence — recent headlines, the fundamental and technical trend, the last earnings result — and labels it **INTACT**, **WEAKENING**, or **BROKEN**, with a short written read. It's deliberately conservative (leans WEAKENING when unsure; BROKEN needs a clear contradiction). **BROKEN does *not* sell anything** — it's awareness that your original reason has changed; the rule-based Trim/Exit protection fires on its own, separately. Reviews refresh weekly and on demand.
 
@@ -17398,7 +17403,9 @@ Three things live here:
    - **Signal discipline** — of those names, which did you **act on**, and did acting help or hurt? It shows what you *skipped* and what that cost or saved.
   The report is **visual**: a flow chart (surfaced → acted / not-acted → outcome), a bar of average market-beating return by conviction tier, and a ranked *"what you skipped"* chart. Counts are **distinct names** (a name that surfaced on many days counts once), and each report is **frozen the moment it's generated** — so it reads the same whenever you reopen it. Once you have more than one month, a **month picker** lets you browse past reports.
 
-Everything on this page is **reflection, not instruction** — it helps you understand your own and the engine's behaviour; it never tells you to buy or sell a specific name.
+- **🏦 Analyst Coverage — "what does Wall Street say, and does my engine agree?"** Paste a professional analyst article (CNBC Pro, a broker note) and the app pulls out the structured facts — each firm, its rating, price target, and thesis — into your **Ideas Inbox**. It handles multi-stock *"top picks"* articles (one record **per stock**, never merged) and always shows an **editable preview** so you can correct any misread before saving. Saved research then appears in three places: the **Ideas Inbox** itself (each card has **▶ Analyze** and **➕ Add to Watchlist**), a **🏦 Analyst Coverage** tab on the 📈 Analysis page — shown side-by-side with the data provider's *own* analyst consensus, so you see **Wall Street vs. your engine** at a glance — and as a small note on a *New Positions to Initiate* card when a pick overlaps your saved research. It's **awareness only**: analyst targets never change a score, a gate, or a verdict — the engine still decides. (CNBC/broker pages are paywalled, so you paste the text; the app can't fetch it for you.)
+
+Nothing on this page issues a buy or sell — it's context and reflection to help you understand your own and the engine's behaviour; the engine remains the only thing that gates or recommends.
 """
         )
 
@@ -17448,7 +17455,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — upcoming earnings for held + watchlist + sector names (awareness, not a buy signal).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report (it narrates patterns, it never gates).
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates.
 """
         )
 
