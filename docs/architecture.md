@@ -129,6 +129,7 @@ python-lab/
     ├── stress_test.py              Macro stress scenario modelling
     ├── split_detector.py           Stock split detection and adjustment
     ├── decision_journal.py         Signal-vs-override pattern analysis
+    ├── broker_import.py            Robinhood statement import (F-87): parse_robinhood_csv (pure — normalises Buy/Sell, surfaces invalid rows) + classify_against_existing (content-match dedup: exact same-day + date-agnostic, so hand-logged trades don't double-count); UI in Trade Journal reuses save_trade/recalculate_from_trades
     ├── recommendations_history.py  Retrospective scorecard (rule-based, no LLM): acted/missed outcomes graded on alpha, by-band/by-verdict rollups, distinct-ticker signal_flow + report_viz_snapshot (drives 📜 Recommendations History + the F-4 monthly visuals)
     ├── thesis_advisor.py           AI Intelligence F-1 review (per-holding thesis → INTACT/WEAKENING/BROKEN, thesis_reviews table; F-154a Phase 2: also ingests saved analyst_coverage as citable CONTEXT — never upgrades a verdict) + F-5 authoring (draft_thesis: editable candidate thesis at BUY → trades.user_thesis / thesis_source)
     ├── debrief_advisor.py          AI Intelligence F-3: weekly portfolio debrief — 4-section narrative + Sunday email (weekly_debriefs table)
