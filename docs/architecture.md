@@ -256,6 +256,7 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | Risk Advisor TRIM → Grow Today add-to-winner | Suppress add on trim-targeted ticker | Amber banner: "Add-to-Winner Suppressed — Risk Advisor Conflict" |
 | Risk Advisor TRIM → Rebalancer ADD | Suppress add on trim-targeted ticker | Amber banner: "Rebalance ADD Suppressed — Risk Advisor Conflict" |
 | News Intelligence alert → Rebalancer ADD | Attach news_warning; critical drops urgency | Banner inside the add card; critical labelled "Defer Add" |
+| Brief Reduce/Exit call → Overview Opportunity Signals | Drop the name from the "add on a pullback" lane (`reduce_call_tickers` — same `_is_reduce`/`_ticker` canon as the Act-bucket reconciler) | Amber "⚠️ NOT SHOWN AS ADDS" note lists the names; full headline stays under "All News for Your Holdings" |
 | Rebalancer drift-trim → Grow Today add-to-winner | Suppress add on drift-overweight ticker | Concentration-blocked banner |
 | Single-name ceiling (15%) → Grow Today add-to-winner | Suppress add | Concentration-blocked banner |
 | Sector ceiling (35%) → Watchlist ENTER_NOW | Downgrade to NEAR_ENTRY | "Portfolio Fit Blocks Entry" card |

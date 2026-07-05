@@ -106,7 +106,7 @@ from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
 from stock_analyzer import exit_advisor
 from stock_analyzer.position_lifecycle import lifecycle_badge
-from stock_analyzer.decision_bucket import split_defensive
+from stock_analyzer.decision_bucket import split_defensive, reduce_call_tickers
 from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
 from stock_analyzer.macro_calendar import (
@@ -6208,12 +6208,26 @@ if page == "🏠 Home":
 
         # ── News Intelligence ─────────────────────────────────────────────────
         st.divider()
+        # Positions under an active Reduce/Exit call must NOT surface as "add on
+        # a pullback" opportunities below — the protect-capital directive leads
+        # the composite score. Consume the Brief we already built (CLAUDE.md
+        # coordination: read, don't recompute) via the SAME reduce-detection canon
+        # the Act-bucket reconciler uses (decision_bucket.reduce_call_tickers), so
+        # the two surfaces can't drift: covers act-origin stop/sell/risk/
+        # deterioration/risk-off reduces AND review-origin trim variants.
+        _opp_reduce_tickers = (
+            reduce_call_tickers(_daily_brief.get("act_today"),
+                                _daily_brief.get("review_list"))
+            if isinstance(_daily_brief, dict) else set()
+        )
         _ni_data = build_news_intelligence(
-            st.session_state.get("_sidebar_news", []), port_df
+            st.session_state.get("_sidebar_news", []), port_df,
+            reduce_tickers=_opp_reduce_tickers,
         )
         _ni_sum   = _ni_data.get("summary", {})
         _ni_alts  = _ni_data.get("alerts", [])
         _ni_opps  = _ni_data.get("opportunities", [])
+        _ni_opps_supp = _ni_data.get("opportunities_suppressed", [])
         _ni_sects = _ni_data.get("sector_digest", [])
         _ni_held  = _ni_data.get("held_news", [])
 
@@ -6277,12 +6291,13 @@ if page == "🏠 Home":
                         st.rerun()
 
             # ── Opportunities ─────────────────────────────────────────────
-            if _ni_opps:
+            if _ni_opps or _ni_opps_supp:
                 st.markdown("#### 📈 Opportunity Signals")
-                st.caption(
-                    "Positive news on quality positions you already hold. "
-                    "These may support adding on a pullback — not a signal to chase the gap."
-                )
+                if _ni_opps:
+                    st.caption(
+                        "Positive news on quality positions you already hold. "
+                        "These may support adding on a pullback — not a signal to chase the gap."
+                    )
                 for _ni_oi, _op in enumerate(_ni_opps[:5]):
                     _op_link = _safe_link(_op.get("url", ""), _op.get("title", ""), max_len=90)
                     st.markdown(
@@ -6306,6 +6321,27 @@ if page == "🏠 Home":
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _op["ticker"]
                         st.rerun()
+
+                # Reconciliation: names with positive news held OUT of the add
+                # lane because they're under a Reduce/Exit call on the Brief.
+                # Named, not silently filtered (CLAUDE.md) — the full story still
+                # shows in "All News for Your Holdings" below.
+                if _ni_opps_supp:
+                    _supp_names = ", ".join(
+                        sorted({str(_o.get("ticker", "")).upper() for _o in _ni_opps_supp})
+                    )
+                    st.markdown(
+                        f"<div style='background:#1a1000;border-left:4px solid #f59e0b;"
+                        f"border-radius:0 6px 6px 0;padding:10px 14px;margin-bottom:8px'>"
+                        f"<div style='font-size:0.72em;color:#f59e0b;font-weight:700;"
+                        f"margin-bottom:4px'>⚠️ NOT SHOWN AS ADDS</div>"
+                        f"<div style='font-size:0.82em;color:#cbd5e1'>"
+                        f"<b>{_supp_names}</b> also have positive news, but they're under a "
+                        f"<b>Reduce / Exit</b> call on the Daily Brief. The deterioration "
+                        f"signal leads the composite score, so treat the upbeat headline as "
+                        f"context — not a reason to add.</div></div>",
+                        unsafe_allow_html=True,
+                    )
 
             # ── Sector patterns ───────────────────────────────────────────
             if _ni_sects:

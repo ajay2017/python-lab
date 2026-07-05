@@ -22,7 +22,7 @@ def _significance(item: dict, weight: float) -> float:
     return round(compound * tier_mult * pos_mult * recency, 3)
 
 
-def build_news_intelligence(news_items: list, port_df) -> dict:
+def build_news_intelligence(news_items: list, port_df, reduce_tickers=None) -> dict:
     """
     Build actionable news intelligence from curated news and portfolio data.
 
@@ -31,6 +31,13 @@ def build_news_intelligence(news_items: list, port_df) -> dict:
     news_items : list of dicts from curate_news_items()
     port_df    : enriched portfolio DataFrame (Ticker, Weight (%), Score,
                  Signal, P&L (%), Market Value, Sector columns)
+    reduce_tickers : iterable of tickers currently under an active Reduce/Exit
+                 call on the Daily Brief (any trim / exit / sell / stop / risk-off
+                 directive). Positive news on these names is split OUT of
+                 `opportunities` into `opportunities_suppressed` — a name you're
+                 being told to reduce is not an "add on a pullback" candidate,
+                 and surfacing it as one contradicts the Brief. Optional; when
+                 None/empty, behaviour is unchanged.
 
     Returns
     -------
@@ -38,6 +45,8 @@ def build_news_intelligence(news_items: list, port_df) -> dict:
       summary        — headline counts and portfolio coverage stats
       alerts         — negative stories on held positions, ranked by urgency
       opportunities  — positive signals on held, decent-quality positions
+      opportunities_suppressed — would-be opportunities dropped because the name
+                       is under a Reduce/Exit call (for a UI reconciliation note)
       sector_digest  — sectors with 2+ aligned stories (rotation signals)
       held_news      — every news item for held tickers with position context
     """
@@ -45,7 +54,7 @@ def build_news_intelligence(news_items: list, port_df) -> dict:
         return {
             "summary": {"positive": 0, "negative": 0, "neutral": 0,
                         "total": 0, "held_count": 0},
-            "alerts": [], "opportunities": [],
+            "alerts": [], "opportunities": [], "opportunities_suppressed": [],
             "sector_digest": [], "held_news": [],
         }
 
@@ -109,11 +118,25 @@ def build_news_intelligence(news_items: list, port_df) -> dict:
                                  -x["weight"], x["compound"]))
 
     # ── Opportunities: positive news on held, quality positions ──────────
-    opportunities: list[dict] = [
+    # A position under an active Reduce/Exit call (deterioration ladder, Sell
+    # signal, or breached stop — passed in via reduce_tickers) is NOT an "add on
+    # a pullback" candidate: that protect-capital directive leads the composite
+    # score, so framing its positive news as an opportunity contradicts the
+    # Brief. Split those out so the UI can show a reconciliation note instead of
+    # a conflicting green Buy card.
+    _reduce = {str(t).strip().upper() for t in (reduce_tickers or [])}
+    _opp_all: list[dict] = [
         item for item in enriched
         if item["is_held"] and item["compound"] >= 0.1 and item["score"] >= 55
     ]
+    opportunities: list[dict] = [
+        i for i in _opp_all if str(i.get("ticker", "")).strip().upper() not in _reduce
+    ]
+    opportunities_suppressed: list[dict] = [
+        i for i in _opp_all if str(i.get("ticker", "")).strip().upper() in _reduce
+    ]
     opportunities.sort(key=lambda x: (-x["sig"], -x["score"]))
+    opportunities_suppressed.sort(key=lambda x: (-x["sig"], -x["score"]))
 
     # ── Sector digest: 2+ aligned stories = rotation signal ──────────────
     sec_buckets: dict = {}
@@ -152,6 +175,7 @@ def build_news_intelligence(news_items: list, port_df) -> dict:
         "summary":       summary,
         "alerts":        alerts,
         "opportunities": opportunities,
+        "opportunities_suppressed": opportunities_suppressed,
         "sector_digest": sector_digest,
         "held_news":     held_news,
     }

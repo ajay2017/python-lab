@@ -141,3 +141,22 @@ def split_defensive(act_today: list | None, review_list: list | None) -> dict:
     # contradictory "hold/monitor" news card in the same lane (the SPCX case).
     act_items = _reconcile_act(act_items)
     return {"act": act_items, "aware": aware_items}
+
+
+def reduce_call_tickers(act_today: list | None, review_list: list | None) -> set[str]:
+    """Tickers under an active Reduce/Exit call, across BOTH Brief lanes.
+
+    For consumers OUTSIDE the Brief (e.g. the Overview's Opportunity Signals)
+    that must not surface an "add on a pullback" for a name the Brief is telling
+    you to reduce. Uses the SAME `_is_reduce` / `_ticker` canon as the Act-bucket
+    reconciler — act-origin reduce `kind`s (stop / sell / risk / deterioration /
+    risk-off) AND review-origin trim `action.type`s — so the two surfaces can
+    never drift out of agreement, and it survives split_defensive re-bucketing
+    (scans both act + aware). Pure; safe on None/empty.
+    """
+    _split = split_defensive(act_today, review_list)
+    return {
+        _ticker(it)
+        for it in (_split["act"] + _split["aware"])
+        if _is_reduce(it) and _ticker(it)
+    }
