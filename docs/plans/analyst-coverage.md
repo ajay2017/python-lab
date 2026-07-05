@@ -21,7 +21,7 @@
 
 Pure logic + the one LLM call. Mirrors the existing AI-layer idiom exactly (see `thesis_advisor.py`).
 
-- `extract_report(raw_text: str, api_key: str, model: str = "claude-sonnet-4-6", max_tokens: int = 1500) -> dict | None`
+- `extract_report(raw_text: str, api_key: str, model: str = "claude-sonnet-4-6", max_tokens: int = 2000) -> list[dict] | None` — returns **one record per covered stock** (a firm's multi-stock "top picks" roundup yields N records; a single-stock note yields a list of one; `None` only on hard failure). Each analyst attaches ONLY to the stock they discuss — never merged across stocks.
   - Guard: `if not api_key or not raw_text or not raw_text.strip(): return None`
   - Inside `try`: `import anthropic` → `anthropic.Anthropic(api_key=api_key)` → `client.messages.create(model=..., max_tokens=..., system=_system_prompt(), messages=[{"role":"user","content":raw_text}], timeout=LLM_REQUEST_TIMEOUT_SEC)`
   - Read `response.content[0].text`, parse strict JSON.
