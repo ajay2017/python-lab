@@ -247,6 +247,31 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.account_flows;
     create policy "Allow all (service role)" on public.account_flows
         for all to service_role using (true) with check (true);
+
+    -- analyst_coverage: Ideas Inbox — one row per analyst research article
+    -- (Phase 1: capture + review; awareness context only, never a gate).
+    -- Ships INERT until this DDL is applied; load returns empty DataFrame.
+    create table if not exists analyst_coverage (
+        id               bigint primary key generated always as identity,
+        ticker           text not null,
+        company          text,
+        article_date     date not null,
+        report_type      text,
+        analysts         jsonb not null default '[]'::jsonb,
+        consensus_rating text,
+        avg_pt           numeric,
+        high_pt          numeric,
+        low_pt           numeric,
+        thesis           jsonb default '[]'::jsonb,
+        catalysts        jsonb default '[]'::jsonb,
+        risks            jsonb default '[]'::jsonb,
+        raw_text         text,
+        source           text default 'cnbc_pro',
+        created_at       timestamptz default now()
+    );
+    alter table analyst_coverage enable row level security;
+    create policy "service_role_all_analyst_coverage" on analyst_coverage
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -903,6 +928,82 @@ def save_monthly_report(record: dict) -> bool:
         _client().table("monthly_reports").upsert(
             record, on_conflict="period_end"
         ).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return False
+
+
+# ── Analyst Coverage (AI Insights — Ideas Inbox) ─────────────────────────────
+
+_ANALYST_COVERAGE_COLS = [
+    "id", "ticker", "company", "article_date", "report_type",
+    "analysts", "consensus_rating", "avg_pt", "high_pt", "low_pt",
+    "thesis", "catalysts", "risks", "raw_text", "source", "created_at",
+]
+
+
+def save_analyst_coverage(record: dict) -> bool:
+    """Insert one analyst-coverage record. Append-only (each article is a distinct row)."""
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("analyst_coverage").insert(record).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return False
+
+
+def load_analyst_coverage(
+    ticker: str | None = None,
+    days: int | None = None,
+    limit: int = 100,
+) -> "pd.DataFrame":
+    """Load analyst coverage rows, newest first. Empty DataFrame on any failure or missing table.
+
+    ticker  — filter to a single ticker (optional).
+    days    — restrict to articles with article_date >= today_ET − days (optional).
+    limit   — max rows returned (default 100).
+    """
+    import pandas as pd
+    empty = pd.DataFrame(columns=_ANALYST_COVERAGE_COLS)
+    if not has_db():
+        return empty
+    try:
+        q = _client().table("analyst_coverage").select("*")
+        if ticker:
+            q = q.eq("ticker", ticker.strip().upper())
+        if days:
+            from datetime import datetime, timedelta
+            import pytz
+            _et = pytz.timezone("America/New_York")
+            cutoff = (datetime.now(tz=_et) - timedelta(days=days)).date().isoformat()
+            q = q.gte("article_date", cutoff)
+        rows = q.order("article_date", desc=True).limit(limit).execute().data
+        if not rows:
+            return empty
+        df = pd.DataFrame(rows)
+        for col in _ANALYST_COVERAGE_COLS:
+            if col not in df.columns:
+                df[col] = None
+        return df
+    except Exception:
+        return empty
+
+
+def delete_analyst_coverage(row_id) -> bool:
+    """Delete a single analyst-coverage record by id."""
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("analyst_coverage").delete().eq("id", row_id).execute()
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah

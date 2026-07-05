@@ -18017,4 +18017,380 @@ elif page == "🧠 AI Insights":
                 "detail on the **📊 Recommendations History** page → 🎯 Missed Opportunity."
             )
 
+    # ── Analyst Coverage — Ideas Inbox (Phase 1) ─────────────────────────────
+    st.divider()
+    st.subheader("📋 Analyst Coverage — Ideas Inbox")
+    st.caption(
+        "Awareness context only — analyst ratings and price targets are NEVER used by "
+        "the rule-based engine to score, gate, or override a verdict. Capturing Wall "
+        "Street perspective lets you see it alongside the engine's own scores."
+    )
+
+    from stock_analyzer import analyst_intel as _ai_intel
+    from stock_analyzer.constants import ANALYST_COVERAGE_FRESH_DAYS as _AC_FRESH_DAYS
+
+    # (a) Capture + extract ───────────────────────────────────────────────────
+    _ac_paste = st.text_area(
+        "Paste the analyst article text",
+        height=200,
+        key="_ac_paste",
+        placeholder=(
+            "Paste the full text of an analyst research article "
+            "(CNBC Pro, Goldman, JPMorgan, BofA, Morgan Stanley, etc.)…"
+        ),
+    )
+    if st.button(
+        "Extract",
+        key="_ac_extract_btn",
+        disabled=not _ai_api_key,
+        help=(
+            "Requires Anthropic API key in Streamlit secrets. "
+            "Extracts structured analyst data from the pasted article."
+        ),
+    ):
+        if not _ac_paste or not _ac_paste.strip():
+            st.warning("Paste an article first.")
+        else:
+            with st.spinner("Extracting analyst data…"):
+                _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
+            if _ac_parsed is None:
+                st.error(
+                    "Extraction failed — LLM offline or article unparseable. "
+                    "Check the text and try again."
+                )
+            else:
+                st.session_state["_ac_preview"]  = _ac_parsed
+                st.session_state["_ac_raw_text"] = _ac_paste
+                st.rerun()
+
+    # (b) Editable preview ────────────────────────────────────────────────────
+    if st.session_state.get("_ac_preview"):
+        _ac_pv = st.session_state["_ac_preview"]
+        st.markdown("**Review and edit the extracted data before saving:**")
+
+        _acp_c1, _acp_c2 = st.columns(2)
+        with _acp_c1:
+            _ac_ticker = st.text_input(
+                "Ticker",
+                value=(str(_ac_pv.get("ticker") or "")).upper(),
+                key="_ac_ticker",
+            ).upper().strip()
+            _ac_company = st.text_input(
+                "Company",
+                value=str(_ac_pv.get("company") or ""),
+                key="_ac_company",
+            )
+        with _acp_c2:
+            _ac_date_val = str(_ac_pv.get("article_date") or "")
+            _ac_date = st.text_input(
+                "Article date (YYYY-MM-DD)",
+                value=_ac_date_val,
+                key="_ac_date",
+            )
+            _ac_rtype_opts = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
+            _ac_rtype_raw  = _ac_pv.get("report_type", "other")
+            _ac_rtype_idx  = _ac_rtype_opts.index(_ac_rtype_raw) if _ac_rtype_raw in _ac_rtype_opts else 5
+            _ac_rtype = st.selectbox(
+                "Report type",
+                options=_ac_rtype_opts,
+                index=_ac_rtype_idx,
+                key="_ac_rtype",
+            )
+
+        st.markdown("**Analysts** — add / delete / edit rows:")
+        _ac_analysts_raw = _ac_pv.get("analysts") or []
+        if isinstance(_ac_analysts_raw, str):
+            try:
+                _ac_analysts_raw = json.loads(_ac_analysts_raw)
+            except Exception:
+                _ac_analysts_raw = []
+        _ac_andf = pd.DataFrame(
+            _ac_analysts_raw if _ac_analysts_raw else [{}],
+            columns=["firm", "analyst", "rating", "price_target", "upside_pct"],
+        )
+        for _col in ["firm", "analyst", "rating", "price_target", "upside_pct"]:
+            if _col not in _ac_andf.columns:
+                _ac_andf[_col] = None
+        _ac_edited_df = st.data_editor(
+            _ac_andf[["firm", "analyst", "rating", "price_target", "upside_pct"]],
+            num_rows="dynamic",
+            key="_ac_analysts_editor",
+            use_container_width=True,
+        )
+
+        # Thesis / catalysts / risks (one bullet per line in the text areas)
+        def _ac_list_to_str(val) -> str:
+            if isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    return "\n".join(str(x) for x in parsed) if isinstance(parsed, list) else val
+                except Exception:
+                    return val
+            if isinstance(val, list):
+                return "\n".join(str(x) for x in val)
+            return ""
+
+        _ac_thesis = st.text_area(
+            "Thesis bullets (one per line)",
+            value=_ac_list_to_str(_ac_pv.get("thesis")),
+            height=120,
+            key="_ac_thesis",
+        )
+        _ac_catalysts = st.text_area(
+            "Catalysts (one per line)",
+            value=_ac_list_to_str(_ac_pv.get("catalysts")),
+            height=80,
+            key="_ac_catalysts",
+        )
+        _ac_risks = st.text_area(
+            "Risks (one per line)",
+            value=_ac_list_to_str(_ac_pv.get("risks")),
+            height=80,
+            key="_ac_risks",
+        )
+
+        # Live consensus derived from the (possibly edited) analyst rows.
+        # Sanitize NaN→None and drop fully-blank rows so derive_consensus and
+        # the save path both receive a clean list (data_editor emits float NaN
+        # for blank numeric cells; PostgreSQL jsonb rejects the NaN JSON token).
+        _ac_clean_df = _ac_edited_df.where(pd.notna(_ac_edited_df), None)
+        _ac_analysts_list = [
+            r for r in _ac_clean_df.to_dict("records")
+            if any(v not in (None, "") for v in r.values())
+        ]
+        _ac_cons = _ai_intel.derive_consensus(_ac_analysts_list)
+        _ac_cr   = _ac_cons.get("consensus_rating")
+        _ac_apt  = _ac_cons.get("avg_pt")
+        _ac_hpt  = _ac_cons.get("high_pt")
+        _ac_lpt  = _ac_cons.get("low_pt")
+        _ac_ups  = []
+        for _ac_a in _ac_analysts_list:
+            try:
+                _u = _ac_a.get("upside_pct")
+                if _u is not None:
+                    _uv = float(_u)
+                    if _uv == _uv:   # NaN guard
+                        _ac_ups.append(_uv)
+            except (TypeError, ValueError):
+                pass
+        _ac_cons_parts = []
+        if _ac_cr:
+            _ac_cons_parts.append(f"Consensus: **{_ac_cr}**")
+        if _ac_apt is not None:
+            _ac_cons_parts.append(
+                f"Avg PT: ${_ac_apt:.2f}"
+                + (f" (range ${_ac_lpt:.2f}–${_ac_hpt:.2f})" if _ac_lpt != _ac_hpt else "")
+            )
+        if _ac_ups:
+            _ac_cons_parts.append(
+                f"Upside range: {min(_ac_ups):.0f}%–{max(_ac_ups):.0f}%"
+                if min(_ac_ups) != max(_ac_ups)
+                else f"Stated upside: {_ac_ups[0]:.0f}%"
+            )
+        if _ac_cons_parts:
+            st.caption("Live consensus (from analyst rows above): " + " · ".join(_ac_cons_parts))
+
+        # Save / Discard buttons
+        _ac_sv_col, _ac_disc_col = st.columns([2, 1])
+        with _ac_sv_col:
+            if st.button(
+                "Save to Inbox",
+                key="_ac_save_btn",
+                disabled=st.session_state.get("_readonly", False),
+                help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+            ):
+                # Date: fallback to today ET if blank; validate YYYY-MM-DD if non-blank.
+                _ac_save_date = _ac_date.strip()
+                _ac_date_ok = True
+                if not _ac_save_date:
+                    _ac_save_date = _today_et().isoformat()
+                else:
+                    try:
+                        datetime.strptime(_ac_save_date, "%Y-%m-%d")
+                    except ValueError:
+                        st.error("Article date must be YYYY-MM-DD.")
+                        _ac_date_ok = False
+
+                if _ac_date_ok:
+                    def _ac_split_lines(text: str) -> list[str]:
+                        return [l.strip() for l in text.splitlines() if l.strip()]
+
+                    _ac_record = {
+                        "ticker":           _ac_ticker,
+                        "company":          _ac_company.strip() or None,
+                        "article_date":     _ac_save_date,
+                        "report_type":      _ac_rtype,
+                        "analysts":         _ac_analysts_list,
+                        "consensus_rating": _ac_cr,
+                        "avg_pt":           _ac_apt,
+                        "high_pt":          _ac_hpt,
+                        "low_pt":           _ac_lpt,
+                        "thesis":           _ac_split_lines(_ac_thesis),
+                        "catalysts":        _ac_split_lines(_ac_catalysts),
+                        "risks":            _ac_split_lines(_ac_risks),
+                        "raw_text":         st.session_state.get("_ac_raw_text", ""),
+                        "source":           "cnbc_pro",
+                    }
+                    _ac_saved = _ai_db.save_analyst_coverage(_ac_record)
+                    if _ac_saved:
+                        st.success(f"Saved {_ac_ticker} coverage to the Ideas Inbox.")
+                        for _k in ("_ac_preview", "_ac_raw_text", "_ac_paste", "_ac_analysts_editor"):
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+                    else:
+                        if st.session_state.get("_readonly", False):
+                            st.warning("Read-only viewer — saving is disabled.")
+                        else:
+                            st.error("Save failed — database error. Check the Data Health tab.")
+        with _ac_disc_col:
+            if st.button("Discard", key="_ac_discard_btn"):
+                for _k in ("_ac_preview", "_ac_raw_text", "_ac_analysts_editor"):
+                    st.session_state.pop(_k, None)
+                st.rerun()
+
+    # (c) Inbox library ───────────────────────────────────────────────────────
+    _ac_df = _ai_db.load_analyst_coverage(days=_AC_FRESH_DAYS)
+
+    if _ac_df.empty:
+        st.info(
+            "No analyst coverage saved yet. Paste an article above to extract and "
+            "save the first one. (If you just applied the DDL, it will populate as "
+            "you add reports.)"
+        )
+    else:
+        # Cross-reference held tickers and watchlist for badges
+        _ac_held_tickers: set = set()
+        try:
+            _ac_hdf = st.session_state.get("holdings_df", pd.DataFrame())
+            if not _ac_hdf.empty and "Ticker" in _ac_hdf.columns:
+                _ac_held_tickers = set(_ac_hdf["Ticker"].astype(str).str.upper())
+        except Exception:
+            _ac_held_tickers = set()
+        _ac_watchlist: list = st.session_state.get("watchlist", [])
+        _ac_wl_set = {str(t).upper() for t in _ac_watchlist}
+
+        st.markdown(f"Showing reports with article date within the last **{_AC_FRESH_DAYS} days**.")
+
+        for _ac_i, _ac_row in _ac_df.iterrows():
+            _ac_t     = str(_ac_row.get("ticker") or "").upper()
+            _ac_co    = _ac_row.get("company") or ""
+            _ac_rdate = str(_ac_row.get("article_date") or "")[:10]
+            _ac_rt    = str(_ac_row.get("report_type") or "")
+            _ac_rowid = _ac_row.get("id")
+            _ac_crat  = _ac_row.get("consensus_rating")
+            _ac_a_pt  = _ac_row.get("avg_pt")
+            _ac_h_pt  = _ac_row.get("high_pt")
+            _ac_l_pt  = _ac_row.get("low_pt")
+
+            # Held / watchlist badge
+            if _ac_t in _ac_held_tickers:
+                _ac_badge = "✅ In your holdings"
+            elif _ac_t in _ac_wl_set:
+                _ac_badge = "👀 On your watchlist"
+            else:
+                _ac_badge = "💡 New idea"
+
+            # Card header
+            st.markdown(
+                f"**{_ac_t}** — {_ac_co} &nbsp;·&nbsp; {_ac_rt} &nbsp;·&nbsp; "
+                f"{_ac_rdate} &nbsp;&nbsp; _{_ac_badge}_",
+                unsafe_allow_html=True,
+            )
+
+            # Consensus chip + PT row
+            _ac_detail_parts = []
+            if _ac_crat:
+                _ac_detail_parts.append(f"Consensus: **{_ac_crat}**")
+            if _ac_a_pt is not None:
+                try:
+                    _pt_str = f"Avg PT: ${float(_ac_a_pt):.2f}"
+                    if _ac_l_pt is not None and _ac_h_pt is not None and float(_ac_l_pt) != float(_ac_h_pt):
+                        _pt_str += f" (${float(_ac_l_pt):.2f}–${float(_ac_h_pt):.2f})"
+                    _ac_detail_parts.append(_pt_str)
+                except (TypeError, ValueError):
+                    pass
+
+            # Stated-upside range from per-firm rows
+            _ac_row_analysts = _ac_row.get("analysts") or []
+            if isinstance(_ac_row_analysts, str):
+                try:
+                    _ac_row_analysts = json.loads(_ac_row_analysts)
+                except Exception:
+                    _ac_row_analysts = []
+            _ac_card_ups = []
+            for _af in (_ac_row_analysts if isinstance(_ac_row_analysts, list) else []):
+                try:
+                    _u = _af.get("upside_pct")
+                    if _u is not None:
+                        _uv = float(_u)
+                        if _uv == _uv:    # NaN guard
+                            _ac_card_ups.append(_uv)
+                except (TypeError, ValueError, AttributeError):
+                    pass
+            if _ac_card_ups:
+                _ac_detail_parts.append(
+                    f"Upside: {min(_ac_card_ups):.0f}%–{max(_ac_card_ups):.0f}%"
+                    if min(_ac_card_ups) != max(_ac_card_ups)
+                    else f"Upside: {_ac_card_ups[0]:.0f}%"
+                )
+            _ac_firms_n = len(_ac_row_analysts) if isinstance(_ac_row_analysts, list) else 0
+            if _ac_firms_n:
+                _ac_detail_parts.insert(0, f"{_ac_firms_n} firm(s)")
+
+            if _ac_detail_parts:
+                st.caption(" · ".join(_ac_detail_parts))
+
+            # Thesis bullets
+            _ac_thesis_list = _ac_row.get("thesis") or []
+            if isinstance(_ac_thesis_list, str):
+                try:
+                    _ac_thesis_list = json.loads(_ac_thesis_list)
+                except Exception:
+                    _ac_thesis_list = [_ac_thesis_list]
+            if isinstance(_ac_thesis_list, list) and _ac_thesis_list:
+                for _tb in _ac_thesis_list:
+                    st.markdown(f"- {_tb}")
+
+            # Raw text expander
+            _ac_raw = _ac_row.get("raw_text") or ""
+            if _ac_raw:
+                with st.expander("Show raw article text"):
+                    st.text(_ac_raw)
+
+            # Per-card action buttons
+            _ac_btn_c1, _ac_btn_c2, _ac_btn_c3 = st.columns([2, 2, 1])
+            with _ac_btn_c1:
+                if st.button(
+                    f"▶ Analyze {_ac_t}",
+                    key=f"_ac_analyze_{_ac_rowid}_{_ac_i}",
+                ):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _ac_t
+                    st.rerun()
+            with _ac_btn_c2:
+                _ac_already_wl = _ac_t in _ac_wl_set
+                if not _ac_already_wl:
+                    if st.button(
+                        "➕ Add to Watchlist",
+                        key=f"_ac_addwl_{_ac_rowid}_{_ac_i}",
+                        disabled=st.session_state.get("_readonly", False),
+                        help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                    ):
+                        if _ac_t not in st.session_state.watchlist:
+                            st.session_state.watchlist.append(_ac_t)
+                        _ai_db.save_watchlist(st.session_state.watchlist)
+                        st.success(f"{_ac_t} added to watchlist.")
+                        st.rerun()
+            with _ac_btn_c3:
+                if st.button(
+                    "🗑",
+                    key=f"_ac_del_{_ac_rowid}_{_ac_i}",
+                    disabled=st.session_state.get("_readonly", False),
+                    help="Delete this coverage record",
+                ):
+                    _ai_db.delete_analyst_coverage(_ac_rowid)
+                    st.rerun()
+
+            st.divider()
+
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

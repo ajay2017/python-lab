@@ -249,6 +249,18 @@ NEWS_SENTIMENT_BEARISH_THRESHOLD    = 0.40  # bullish_pct <  this → red   "Bea
 NEWS_SENTIMENT_SHIFT_ALERT_BULLISH  = 0.40  # held-position alert fires when bullish_pct < this
 NEWS_SENTIMENT_SHIFT_BUZZ_MIN       = 1.0   # alert only when buzz_score > this (active coverage)
 
+# ── Analyst coverage (awareness layer — NOT a gate) ──────────────────────────
+# Analyst research is display/awareness context only — it never modifies a
+# composite score, gate, or verdict (the engine remains the sole decider).
+ANALYST_COVERAGE_FRESH_DAYS = 30   # a report stays in the "recent" Ideas Inbox view this many days
+ANALYST_MIN_UPSIDE_PCT      = 15   # Phase-2 Brief-chip threshold (avg-PT upside); UNUSED in Phase 1
+# Consensus LABEL boundaries (display only — classify the firm rating
+# distribution into a headline label; NOT decision thresholds, never gate/score).
+# Fractions of rated firms.
+ANALYST_CONSENSUS_STRONG_BUY_FRAC = 0.80
+ANALYST_CONSENSUS_BUY_FRAC        = 0.50
+ANALYST_CONSENSUS_SELL_FRAC       = 0.50
+
 # ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
 # investment-decision threshold. The ET hour the daily email targets; the cron is
 # scheduled at two UTC times (to straddle EST/EDT) and a Supabase idempotency
