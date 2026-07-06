@@ -260,6 +260,12 @@ ANALYST_MIN_UPSIDE_PCT      = 15   # Phase-2 Brief-chip threshold (avg-PT upside
 ANALYST_CONSENSUS_STRONG_BUY_FRAC = 0.80
 ANALYST_CONSENSUS_BUY_FRAC        = 0.50
 ANALYST_CONSENSUS_SELL_FRAC       = 0.50
+# Max LLM OUTPUT tokens for one Ideas-Inbox extraction. A CNBC "biggest analyst
+# calls" roundup can carry 20-30 separate calls → the JSON array of that many
+# per-stock records overruns a small cap and truncates mid-array (→ JSON parse
+# fails → silent "extraction failed"). Sized generously; billed per token
+# actually generated, so a high ceiling is free for small single-stock pastes.
+ANALYST_EXTRACT_MAX_TOKENS = 8000
 
 # ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
 # investment-decision threshold. The ET hour the daily email targets; the cron is

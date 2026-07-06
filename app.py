@@ -18767,7 +18767,11 @@ elif page == "🧠 AI Insights":
                 with st.spinner("Extracting analyst data…"):
                     _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
                 if _ac_parsed is None:
-                    st.error("Extraction failed — LLM offline or unparseable.")
+                    st.error(
+                        "Extraction failed — the LLM is offline, or it returned data the app "
+                        "couldn't parse. If you pasted a very long roundup (many separate calls), "
+                        "try a section at a time."
+                    )
                 elif not _ac_parsed:
                     st.info("No analyst coverage with a price target / write-up found in this text.")
                 else:

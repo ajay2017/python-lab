@@ -17,6 +17,8 @@ Design contract (same as the rest of the AI layer):
 
 import json
 
+from stock_analyzer.constants import ANALYST_EXTRACT_MAX_TOKENS
+
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
@@ -53,7 +55,7 @@ def extract_report(
     raw_text: str,
     api_key: str,
     model: str = "claude-sonnet-4-6",
-    max_tokens: int = 2000,
+    max_tokens: int = ANALYST_EXTRACT_MAX_TOKENS,
 ) -> list[dict] | None:
     """
     Call the LLM to extract structured analyst coverage from raw article text.
