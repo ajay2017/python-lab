@@ -107,7 +107,7 @@ from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
 from stock_analyzer import exit_advisor
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
-    split_defensive, reduce_call_tickers, reduce_call_items,
+    split_defensive, reduce_call_items,
 )
 from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
@@ -6223,18 +6223,11 @@ if page == "🏠 Home":
 
         # ── News Intelligence ─────────────────────────────────────────────────
         st.divider()
-        # Positions under an active Reduce/Exit call must NOT surface as "add on
-        # a pullback" opportunities below — the protect-capital directive leads
-        # the composite score. Consume the Brief we already built (CLAUDE.md
-        # coordination: read, don't recompute) via the SAME reduce-detection canon
-        # the Act-bucket reconciler uses (decision_bucket.reduce_call_tickers), so
-        # the two surfaces can't drift: covers act-origin stop/sell/risk/
-        # deterioration/risk-off reduces AND review-origin trim variants.
-        _opp_reduce_tickers = (
-            reduce_call_tickers(_daily_brief.get("act_today"),
-                                _daily_brief.get("review_list"))
-            if isinstance(_daily_brief, dict) else set()
-        )
+        # Read the reduce-call set published by the Brief (CLAUDE.md coordination:
+        # downstream features read, don't recompute). _reduce_calls is set by the
+        # Brief builder above; {} when offline. Derives the same set as
+        # reduce_call_tickers() would but without a second split_defensive call.
+        _opp_reduce_tickers = set((st.session_state.get("_reduce_calls") or {}).keys())
         _ni_data = build_news_intelligence(
             st.session_state.get("_sidebar_news", []), port_df,
             reduce_tickers=_opp_reduce_tickers,
@@ -6267,9 +6260,10 @@ if page == "🏠 Home":
             _nic3.metric("🚨 Alerts",        len(_ni_alts),
                          delta="Requires attention" if _ni_alts else None,
                          delta_color="inverse" if _ni_alts else "off")
-            _nic4.metric("📈 Opportunities", len(_ni_opps),
-                         delta="Positive signals" if _ni_opps else None,
-                         delta_color="normal" if _ni_opps else "off")
+            _ni_opps_total = len(_ni_opps) + len(_ni_opps_supp)
+            _nic4.metric("📈 Opportunities", _ni_opps_total,
+                         delta="Positive signals" if _ni_opps_total else None,
+                         delta_color="normal" if _ni_opps_total else "off")
 
             # ── Alerts ────────────────────────────────────────────────────
             if _ni_alts:
@@ -6351,7 +6345,7 @@ if page == "🏠 Home":
                         f"<div style='font-size:0.72em;color:#f59e0b;font-weight:700;"
                         f"margin-bottom:4px'>⚠️ NOT SHOWN AS ADDS</div>"
                         f"<div style='font-size:0.82em;color:#cbd5e1'>"
-                        f"<b>{_supp_names}</b> also have positive news, but they're under a "
+                        f"<b>{_supp_names}</b> {'also have' if _ni_opps else 'have'} positive news, but they're under a "
                         f"<b>Reduce / Exit</b> call on the Daily Brief. The deterioration "
                         f"signal leads the composite score, so treat the upbeat headline as "
                         f"context — not a reason to add.</div></div>",
@@ -11655,7 +11649,12 @@ elif page == "📈 Analysis":
                         # Keep the Buy composite visible (it's the honest attractiveness
                         # read) but suppress the add framing: protect defers to deploy.
                         _rc_action = _rc.get("action")
-                        _rc_label  = _rc_action if isinstance(_rc_action, str) else "Reduce / Exit"
+                        if isinstance(_rc_action, str):
+                            _rc_label = _rc_action
+                        elif isinstance(_rc_action, dict):
+                            _rc_label = _rc_action.get("type", "Reduce / Exit")
+                        else:
+                            _rc_label = "Reduce / Exit"
                         _rc_why    = _rc.get("why") if isinstance(_rc.get("why"), str) else ""
                         st.markdown(
                             "<div style='padding:12px;border-radius:8px;background:#f59e0b14;"
