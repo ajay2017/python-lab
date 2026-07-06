@@ -55,6 +55,7 @@ TICKER_SECTORS = {
     "LMT": "Defense", "RTX": "Defense", "NOC": "Defense", "GD": "Defense",
     "XOM": "Energy", "CVX": "Energy", "OXY": "Energy", "COP": "Energy",
     "EOG": "Energy",
+    "SPCX": "Communications",   # Specialty Telecom (Nasdaq classification)
 }
 
 
