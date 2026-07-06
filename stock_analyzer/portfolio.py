@@ -196,6 +196,25 @@ def stop_ladder(
             }
             break
 
+    # Full profit-lock staircase (all rungs, ascending) — powers the staircase
+    # visual. Each rung carries the PRICE that activates the tier and the stop
+    # FLOOR it locks. reached = gain already at/above it; is_current = the highest
+    # reached rung (the tier in force). Same avg_cost×(1+…) math as protective_stop.
+    _reached = [t for t, _, _ in _RATCHET_LEVELS if gain_pct >= t]
+    _current_threshold = max(_reached) if _reached else None
+    ratchet_rungs = [
+        {
+            "gain_pct":      threshold,
+            "trigger_price": round(avg_cost * (1 + threshold / 100.0), 2),
+            "floor":         round(avg_cost * (1 + mult), 2),
+            "floor_pct":     round(mult * 100, 1),
+            "label":         label,
+            "reached":       gain_pct >= threshold,
+            "is_current":    threshold == _current_threshold,
+        }
+        for threshold, mult, label in sorted(_RATCHET_LEVELS, key=lambda x: x[0])
+    ]
+
     return {
         "price":               round(price, 2),
         "avg_cost":            round(avg_cost, 2),
@@ -215,6 +234,7 @@ def stop_ladder(
         "gap_pct":             gap_pct,
         "tighten_stop":        tighten_stop,
         "next_tier":           next_tier,
+        "ratchet_rungs":       ratchet_rungs,
         "stopped_out":         price <= active_stop,
     }
 

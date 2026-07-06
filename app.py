@@ -759,56 +759,162 @@ def _render_stop_ladder(r: dict, holding: dict, price: float, under_reduce: bool
     )
     with st.expander("🛡️ How your stop is set — and what happens next", expanded=False):
         # ── A) The stop ladder ────────────────────────────────────────────────
-        # Every relevant price level on a single number-line, so the stack is
-        # visible at a glance. Merge the active stop into whichever level it
-        # equals (the AAPL case: the "Breakeven guard" tier is reached but the
-        # ATR stop is the number that actually binds).
-        _levels = [("Entry (avg cost)", avg_cost, "#9ca3af")]
+        # Every relevant price level on one number-line. Roles (what each level
+        # IS) go in the legend caption + hover — the price cluster is too tight
+        # for long inline labels. The stop actually in force is drawn as a large
+        # ✓ marker; the losing candidate stop is DIMMED, and a "tightest wins"
+        # arrow points to the winner — so "which number binds, and why" reads at
+        # a glance (the AAPL case: ratchet tier reached, but the ATR stop binds).
+        _src = L["active_source"]
+        _mk = [dict(label="Entry", role="your average cost", px=avg_cost,
+                    color="#9ca3af", active=False, dim=False)]
         if L["tier_reached"] and L["ratchet_floor"]:
-            _rl = f"{L['ratchet_floor_label']} floor"
-            if L["active_source"] == "ratchet":
-                _rl = f"🎯 Active · {L['ratchet_floor_label']}"
-            _levels.append((_rl, L["ratchet_floor"], "#3b82f6"))
-        _atr_lbl = f"ATR stop ({ATR_STOP_MULT:g}× ATR)"
-        if L["active_source"] == "atr":
-            _atr_lbl = f"🎯 Active stop · ATR ({ATR_STOP_MULT:g}×)"
-        _levels.append((_atr_lbl, L["atr_stop"], "#f59e0b"))
-        if L["active_source"] == "manual":
-            _levels.append(("🎯 Active · 📌 manual", _active, "#dc2626"))
+            _mk.append(dict(label=L["ratchet_floor_label"], role="profit-lock floor",
+                            px=L["ratchet_floor"], color="#3b82f6",
+                            active=(_src == "ratchet"), dim=(_src != "ratchet")))
+        _mk.append(dict(label="ATR stop", role=f"volatility floor · price − {ATR_STOP_MULT:g}× ATR",
+                        px=L["atr_stop"], color="#f59e0b",
+                        active=(_src == "atr"), dim=(_src != "atr")))
+        if _src == "manual":
+            _mk.append(dict(label="Manual", role="your placed override", px=_active,
+                            color="#dc2626", active=True, dim=False))
         if L["tighten_stop"] and _active < L["tighten_stop"] < price:
-            _levels.append((f"Tighter option ({STOP_TIGHTEN_ATR_MULT:g}× ATR)", L["tighten_stop"], "#fbbf24"))
-        _levels.append(("Now", price, "#22c55e"))
+            _mk.append(dict(label="Tighter", role=f"optional · price − {STOP_TIGHTEN_ATR_MULT:g}× ATR",
+                            px=L["tighten_stop"], color="#fbbf24", active=False, dim=True))
+        _mk.append(dict(label="Now", role="current price", px=price,
+                        color="#22c55e", active=False, dim=False))
+
+        _lo = min(m["px"] for m in _mk)
+        _hi = max(m["px"] for m in _mk)
+        _pad = max((_hi - _lo) * 0.12, atr_val * 0.6)
+        _xmin, _xmax = _lo - _pad, _hi + _pad
 
         _fig = go.Figure()
-        # Shaded cushion: how far price must fall to hit the active stop.
-        _fig.add_vrect(
-            x0=_active, x1=price, fillcolor="#ef4444", opacity=0.08,
-            line_width=0, layer="below",
-            annotation_text=f"cushion −{L['gap_pct']:.1f}%",
-            annotation_position="top left",
-            annotation_font_size=11, annotation_font_color="#f87171",
-        )
-        for i, (_lbl, _px, _clr) in enumerate(_levels):
-            _fig.add_trace(go.Scatter(
-                x=[_px], y=[0], mode="markers+text",
-                marker=dict(size=14, color=_clr, line=dict(width=1, color="#0e1117")),
-                text=[f"{_lbl}<br>${_px:.2f}"],
-                textposition="top center" if i % 2 == 0 else "bottom center",
-                textfont=dict(size=11, color=_clr),
-                hoverinfo="skip", showlegend=False,
-            ))
-        _fig.add_vline(x=_active, line_dash="solid", line_color="#dc2626", line_width=1)
+        # #3 — zones: below the active stop = stop-out territory (red); above it =
+        # still holding (green). Makes the cushion legible without reading a number.
+        _fig.add_vrect(x0=_xmin, x1=_active, fillcolor="#ef4444", opacity=0.07,
+                       line_width=0, layer="below",
+                       annotation_text="🛑 stop-out zone", annotation_position="bottom left",
+                       annotation_font_size=10, annotation_font_color="#f87171")
+        _fig.add_vrect(x0=_active, x1=_xmax, fillcolor="#22c55e", opacity=0.06,
+                       line_width=0, layer="below",
+                       annotation_text="✅ holding zone", annotation_position="bottom right",
+                       annotation_font_size=10, annotation_font_color="#86efac")
+        _fig.add_vline(x=_active, line_dash="solid", line_color="#dc2626", line_width=1.4)
         _fig.add_vline(x=price, line_dash="dash", line_color="#e5e7eb", line_width=1)
-        _lo = min(p for _, p, _ in _levels)
-        _hi = max(p for _, p, _ in _levels)
-        _pad = max((_hi - _lo) * 0.10, atr_val * 0.5)
+        # #2 — "tightest wins" arrow, only when there's an actual contest (a
+        # ratchet floor and/or a manual override competing with the ATR stop).
+        if L["tier_reached"] or _src == "manual":
+            _fig.add_annotation(
+                x=_active, y=0.10, text="tightest of these wins → your stop",
+                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.2,
+                arrowcolor="#dc2626", ax=0, ay=-34, xref="x", yref="y",
+                font=dict(size=10, color="#fca5a5"),
+            )
+        for i, m in enumerate(_mk):
+            _icon = "✓ " if m["active"] else ""
+            _size = 20 if m["active"] else 11
+            _op   = 0.9 if m["active"] else (0.4 if m["dim"] else 0.95)
+            _sym  = "star" if m["active"] else "circle"
+            _txt  = f"<b>{_icon}{m['label']}</b><br>${m['px']:.2f}" if m["active"] else f"{m['label']}<br>${m['px']:.2f}"
+            _fig.add_trace(go.Scatter(
+                x=[m["px"]], y=[0], mode="markers+text",
+                marker=dict(size=_size, color=m["color"], symbol=_sym, opacity=_op,
+                            line=dict(width=1, color="#0e1117")),
+                text=[_txt],
+                textposition="bottom center" if (m["active"] or i % 2 == 1) else "top center",
+                textfont=dict(size=11, color=m["color"]),
+                hovertext=[f"{m['label']} — {m['role']}: ${m['px']:.2f}"],
+                hoverinfo="text", showlegend=False,
+            ))
         _fig.update_layout(
-            height=210, template="plotly_dark", showlegend=False,
-            margin=dict(l=10, r=10, t=40, b=10),
-            xaxis=dict(title="Price ($)", range=[_lo - _pad, _hi + _pad], zeroline=False),
+            height=240, template="plotly_dark", showlegend=False,
+            margin=dict(l=10, r=10, t=44, b=10),
+            xaxis=dict(title="Price ($)", range=[_xmin, _xmax], zeroline=False),
             yaxis=dict(visible=False, range=[-1, 1]),
         )
         st.plotly_chart(_fig, use_container_width=True, key=f"stopladder_{holding.get('Ticker','')}")
+        # #1 — role legend (colour → what it means), so the short chart labels
+        # never need a paragraph next to them.
+        _leg = " &nbsp;·&nbsp; ".join(
+            f"<span style='color:{m['color']}'>⬤</span> {m['label']} "
+            f"<span style='color:#9ca3af'>({m['role']})</span>"
+            + (" — <b>in force</b>" if m["active"] else "")
+            for m in _mk
+        )
+        st.caption(f"−{L['gap_pct']:.1f}% cushion to the active stop.")
+        st.markdown(f"<div style='font-size:0.82em;line-height:1.6'>{_leg}</div>",
+                    unsafe_allow_html=True)
+
+        # ── #4 — Profit-lock staircase ────────────────────────────────────────
+        # The forward story: as price climbs through each ratchet trigger, the
+        # LOCKED floor steps up. Shows the whole path + where you sit on it, so
+        # the next logical rung is obvious. Suppressed under a reduce/exit call
+        # (same reason the "keep-climbing" captions are). The dotted line marks
+        # your ACTUAL stop today — when it sits above the floor, the ATR stop is
+        # what binds (ties back to the "tightest wins" story above).
+        _rungs = L["ratchet_rungs"]
+        if not under_reduce and _rungs:
+            st.markdown("**📈 Profit-lock staircase — how your stop floor climbs as you gain**")
+            _xs = [rr["trigger_price"] for rr in _rungs]
+            _ys = [rr["floor"] for rr in _rungs]
+            _sfig = go.Figure()
+            # Stepped floor line (holds, then jumps up at each trigger price).
+            _sfig.add_trace(go.Scatter(
+                x=_xs + [max(_xs[-1], price) * 1.06], y=_ys + [_ys[-1]],
+                mode="lines", line=dict(shape="hv", color="#3b82f6", width=2),
+                hoverinfo="skip", showlegend=False,
+            ))
+            # Rung markers — reached = green, ahead = grey; the current tier ringed.
+            _sfig.add_trace(go.Scatter(
+                x=_xs, y=_ys, mode="markers+text",
+                marker=dict(
+                    size=[16 if rr["is_current"] else 11 for rr in _rungs],
+                    color=["#22c55e" if rr["reached"] else "#6b7280" for rr in _rungs],
+                    line=dict(width=[2 if rr["is_current"] else 0 for rr in _rungs], color="#e5e7eb"),
+                ),
+                text=[f"+{rr['gain_pct']:.0f}% → ${rr['floor']:.2f}" for rr in _rungs],
+                textposition="top center", textfont=dict(size=10, color="#93c5fd"),
+                hovertext=[f"At ${rr['trigger_price']:.2f} (+{rr['gain_pct']:.0f}%): "
+                           f"stop locks ${rr['floor']:.2f} (+{rr['floor_pct']:.0f}%) — {rr['label']}"
+                           for rr in _rungs],
+                hoverinfo="text", showlegend=False,
+            ))
+            _sfig.add_vline(x=price, line_dash="dash", line_color="#e5e7eb", line_width=1,
+                            annotation_text=f"you are here · +{L['gain_pct']:.1f}%",
+                            annotation_position="top", annotation_font_size=10,
+                            annotation_font_color="#e5e7eb")
+            _sfig.add_hline(y=_active, line_dash="dot", line_color="#f59e0b", line_width=1,
+                            annotation_text=f"actual stop today ${_active:.2f}",
+                            annotation_position="bottom right", annotation_font_size=10,
+                            annotation_font_color="#fbbf24")
+            _sfig.update_layout(
+                height=230, template="plotly_dark", showlegend=False,
+                margin=dict(l=10, r=10, t=30, b=30),
+                xaxis=dict(title="Price ($)",
+                           range=[min(avg_cost, price) * 0.97, max(_xs[-1], price) * 1.08]),
+                # Force the y-range to include the actual-stop hline — an
+                # add_hline shape does NOT expand autorange, so the "actual stop
+                # today" line would clip out of view exactly when the ATR stop
+                # binds below the lowest floor (early positions) or a big-winner
+                # trailing stop sits above the top floor — the cases this chart
+                # exists to explain.
+                yaxis=dict(title="Locked stop floor ($)",
+                           range=[min(min(_ys), _active) * 0.98, max(max(_ys), _active) * 1.02]),
+            )
+            st.plotly_chart(_sfig, use_container_width=True, key=f"stopstair_{holding.get('Ticker','')}")
+            if _src == "manual":
+                _stair_cap = (
+                    "Green = tier reached · grey = ahead · ringed = your current tier. The floor is the "
+                    "profit-ratchet level only — your **actual** stop (dotted) is your manual override, which is in force."
+                )
+            else:
+                _stair_cap = (
+                    "Green = tier reached · grey = ahead · ringed = your current tier. The floor is the "
+                    f"profit-ratchet level only — your **actual** stop is the higher of it and the {ATR_STOP_MULT:g}× "
+                    "ATR stop (dotted), so early on the ATR stop usually binds."
+                )
+            st.caption(_stair_cap)
 
         # ── B) Plain-English walk-through (with THIS position's numbers) ───────
         if L["active_source"] == "atr":
