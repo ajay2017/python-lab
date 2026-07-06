@@ -11,6 +11,11 @@ Transforms raw curated news items into actionable portfolio intelligence:
 
 import time as _time
 
+from stock_analyzer.constants import (
+    NEWS_OPPORTUNITY_COMPOUND_MIN,
+    NEWS_OPPORTUNITY_SCORE_MIN,
+)
+
 
 def _significance(item: dict, weight: float) -> float:
     """Score a news item's relevance to the portfolio (higher = more urgent)."""
@@ -127,7 +132,9 @@ def build_news_intelligence(news_items: list, port_df, reduce_tickers=None) -> d
     _reduce = {str(t).strip().upper() for t in (reduce_tickers or [])}
     _opp_all: list[dict] = [
         item for item in enriched
-        if item["is_held"] and item["compound"] >= 0.1 and item["score"] >= 55
+        if item["is_held"]
+        and item["compound"] >= NEWS_OPPORTUNITY_COMPOUND_MIN
+        and item["score"] >= NEWS_OPPORTUNITY_SCORE_MIN
     ]
     opportunities: list[dict] = [
         i for i in _opp_all if str(i.get("ticker", "")).strip().upper() not in _reduce

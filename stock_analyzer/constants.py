@@ -343,6 +343,14 @@ NEWS_SENTIMENT_NEGATIVE =  -0.15   # cross-reference "negative news" conflict
 NEWS_SENTIMENT_WARN     =  -0.05   # warning-news Review Before Close
 NEWS_SENTIMENT_POSITIVE =   0.10   # treat as supporting signal in xref
 
+# ── News-Intelligence "Opportunity Signals" inclusion (Overview) ─────────────
+# A held name surfaces as a positive-news opportunity when BOTH hold: the
+# headline is positive AND the position is decent quality. Kept as their own
+# named boundaries (house style: one policy value per decision surface) so the
+# opportunity feed tunes independently of the xref cutoffs above.
+NEWS_OPPORTUNITY_COMPOUND_MIN = 0.10   # positive-headline floor (matches NEWS_SENTIMENT_POSITIVE by design)
+NEWS_OPPORTUNITY_SCORE_MIN    = 55     # composite-quality floor for an opportunity card
+
 # ── Evening Debrief "meaningful intraday move" cutoff ────────────────────────
 # Picks moving more than this in absolute % today get a verdict
 # (Missed / Dodged / Skip validated). Smaller moves are "flat" — no signal.
