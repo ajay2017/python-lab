@@ -266,6 +266,11 @@ ANALYST_CONSENSUS_SELL_FRAC       = 0.50
 # fails → silent "extraction failed"). Sized generously; billed per token
 # actually generated, so a high ceiling is free for small single-stock pastes.
 ANALYST_EXTRACT_MAX_TOKENS = 8000
+# Per-call timeout for one Ideas-Inbox extraction. A 20-30 call roundup makes the
+# model generate several thousand output tokens, which takes well past the shared
+# 30s LLM_REQUEST_TIMEOUT_SEC → the request times out and looks like a parse
+# failure. Given its own generous ceiling (a deliberate one-shot paste action).
+ANALYST_EXTRACT_TIMEOUT_SEC = 90
 
 # ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
 # investment-decision threshold. The ET hour the daily email targets; the cron is

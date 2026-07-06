@@ -19,6 +19,12 @@ import json
 
 from stock_analyzer.constants import ANALYST_EXTRACT_MAX_TOKENS
 
+# Diagnostic: reason for the most recent extract_report() failure (or None on
+# success). extract_report always returns None on failure for clean degradation,
+# which hides WHY — a timeout, a model/param error, and a JSON parse fail all
+# look identical to the caller. The UI reads this to show the actual cause.
+LAST_EXTRACT_ERROR: str | None = None
+
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
@@ -69,18 +75,21 @@ def extract_report(
     a "top picks" article covering N stocks previously collapsed into one
     corrupt record with all analysts and price targets mixed together.
     """
+    global LAST_EXTRACT_ERROR
+    LAST_EXTRACT_ERROR = None
     if not api_key or not raw_text or not raw_text.strip():
+        LAST_EXTRACT_ERROR = "no API key configured or empty text"
         return None
     try:
         import anthropic
-        from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+        from stock_analyzer.constants import ANALYST_EXTRACT_TIMEOUT_SEC
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
             system=_system_prompt(),
             messages=[{"role": "user", "content": raw_text}],
-            timeout=LLM_REQUEST_TIMEOUT_SEC,
+            timeout=ANALYST_EXTRACT_TIMEOUT_SEC,
         )
         text = response.content[0].text if response.content else ""
         # Robust JSON parse: strip markdown fences first, then slice to first { ... last }
@@ -130,7 +139,8 @@ def extract_report(
                 rec["article_date"] = top_date
 
         return records
-    except Exception:
+    except Exception as e:
+        LAST_EXTRACT_ERROR = f"{type(e).__name__}: {e}"[:300]
         return None
 
 

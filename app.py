@@ -18772,6 +18772,9 @@ elif page == "🧠 AI Insights":
                         "couldn't parse. If you pasted a very long roundup (many separate calls), "
                         "try a section at a time."
                     )
+                    _ac_reason = getattr(_ai_intel, "LAST_EXTRACT_ERROR", None)
+                    if _ac_reason:
+                        st.caption(f"Details: {_ac_reason}")
                 elif not _ac_parsed:
                     st.info("No analyst coverage with a price target / write-up found in this text.")
                 else:
