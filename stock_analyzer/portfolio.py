@@ -21,8 +21,10 @@ TICKER_SECTORS = {
     "AVGO": "Semiconductors", "NVDA": "Semiconductors", "AMD": "Semiconductors",
     "MU": "Semiconductors", "QCOM": "Semiconductors", "INTC": "Semiconductors",
     "AMAT": "Semiconductors", "ASML": "Semiconductors", "TXN": "Semiconductors",
+    "LRCX": "Semiconductors",
     "AAPL": "Consumer Tech", "AMZN": "Consumer Tech", "NFLX": "Consumer Tech",
     "SHOP": "Consumer Tech", "UBER": "Consumer Tech", "ABNB": "Consumer Tech",
+    "BKNG": "Consumer Tech",
     "TSLA": "EV & Auto", "ENPH": "Clean Energy", "FSLR": "Clean Energy",
     "NEE": "Clean Energy", "BEP": "Clean Energy",
     "CRWD": "Cybersecurity", "NET": "Cybersecurity", "PANW": "Cybersecurity",
@@ -44,12 +46,15 @@ TICKER_SECTORS = {
     "UNH": "Healthcare", "JNJ": "Healthcare", "PFE": "Healthcare",
     "MRK": "Healthcare", "TMO": "Healthcare", "ABT": "Healthcare",
     "AMGN": "Healthcare", "BMY": "Healthcare", "MDT": "Healthcare", "DHR": "Healthcare",
+    "BIIB": "Healthcare", "BSX": "Healthcare",
     "JPM": "Financials", "V": "Financials", "MA": "Financials",
     "GS": "Financials", "XYZ": "Financials", "COIN": "Financials",
     "BX": "Financials", "BAC": "Financials", "WFC": "Financials",
     "C": "Financials", "MS": "Financials", "SCHW": "Financials", "BLK": "Financials",
+    "COF": "Financials", "HOOD": "Financials",
     "LMT": "Defense", "RTX": "Defense", "NOC": "Defense", "GD": "Defense",
     "XOM": "Energy", "CVX": "Energy", "OXY": "Energy", "COP": "Energy",
+    "EOG": "Energy",
 }
 
 

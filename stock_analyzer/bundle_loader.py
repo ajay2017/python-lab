@@ -99,6 +99,11 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
             FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
             FUNDAMENTALS_GATE_MIN_METRICS,
         )
+    # Scoring sector stays on the RAW live .info (empty → _default norms) and does
+    # NOT use the cached-sector fallback below — deliberately. Feeding a cached
+    # sector here would silently move fundamental/composite scores on a sparse day
+    # (a scoring change dressed as a data-resilience fix). Classification/gating
+    # gets the resilient sector; scoring does not. Don't "unify" these.
     _sector_for_scoring = bundle.get("info", {}).get("sector", "")
     f_score, f_signals = fundamental_score(financials, _sector_for_scoring)
     _fund_metric_count = count_core_metrics(financials)
@@ -124,6 +129,16 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     _info  = bundle.get("info", {})
     name   = _info.get("shortName") or _info.get("longName") or ticker
     sector = _info.get("sector", "")
+    # Sector resilience: `.info` is the only LIVE source for sector and it comes
+    # back sparse on Yahoo's flaky days → an unmapped holding would collapse to
+    # the "Other" catch-all AND drop out of the sector-concentration gate (which
+    # excludes "Other"). Sector is near-static, so write-through a good value and
+    # fall back to the last-known one when the live fetch is empty (mirrors the
+    # fundamentals-cache resilience). Best-effort; no-ops until the table exists.
+    if sector:
+        db.save_sector_cache(ticker, sector)
+    else:
+        sector = db.load_sector_cache(ticker) or ""
     industry          = _info.get("industry", "")
     market_cap        = _info.get("marketCap")
     business_summary  = _info.get("longBusinessSummary", "")

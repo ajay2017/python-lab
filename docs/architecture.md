@@ -199,7 +199,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `POSITION_AT_RISK_GAP_PCT` / `POSITION_WINNING_PNL_PCT` | 3.0 / 8.0 | Lifecycle thresholds: gap ≤3% = at_risk; P&L ≥8% (and healthy) = winning |
 | `BUCKET_CRITICAL_NEWS_IS_ACT` / `BUCKET_TIGHTEN_ONLY_IS_ACT` | True / False | Act-vs-Awareness borderline routing (calm advisor 2B): critical news → Act; stop-raise nudges → Awareness. Flip a flag to move the item between buckets with no code change |
 | `HYSTERESIS_COMPOSITE_DELTA` | 4.0 | Calm advisor 2C: `\|today − yesterday\|` composite ≤ this (and verdict unchanged) → a Grow-Today pick gets a "↔ Steady vs yesterday" chip. Annotate-only — never suppresses a pick |
-| `UNCLASSIFIED_SECTOR` | "Other" | The catch-all bucket a holding lands in with no curated `TICKER_SECTORS` mapping AND no provider `.info` sector. NOT a real correlated sector — concentration gates exclude it (a "Hard Cap Breach on Other" is a classification artifact, not a risk) |
+| `UNCLASSIFIED_SECTOR` | "Other" | The catch-all bucket a holding lands in with no curated `TICKER_SECTORS` mapping, no provider `.info` sector, AND no cached sector (`sector_cache`, §6.16 — the fallback that keeps a name classified through a thin-`.info` day). NOT a real correlated sector — concentration gates exclude it (a "Hard Cap Breach on Other" is a classification artifact, not a risk) |
 | `MACRO_BROAD_EXPOSURE_PCT` | 60.0 | Affected-sector exposure at/above which a HIGH-impact macro event is treated as portfolio-wide (NFP/CPI/Fed). The pre-event trim downgrades to an awareness WATCH ("hold through") instead of a token single-name trim — the sized trim is reserved for sector-concentrated events |
 | `ADD_WINNER_COOLDOWN_DAYS` | 10 | After the user adds shares to a position (a buy lot within this window), add-to-winner nudges for that name are suppressed — "don't grow a position you just changed." Aligned with `POSITION_SETTLING_DAYS`. None days-since-last-buy (no journal) → no cooldown |
 | `RR_ENTRY_MIN` | 2.0 | Min reward:risk for a favourable entry. Hard-gates Watchlist ENTER_NOW (G-13); on Analysis it drives a caveat, not a block |
@@ -779,6 +779,18 @@ CREATE TABLE analyst_coverage (
 ```
 
 **Analyst Coverage / Ideas Inbox (F-154, append-only).** Structured analyst research captured by pasting article text; the LLM (`analyst_intel.extract_report`, Sonnet, returns `list[dict]`) extracts only **atomic per-firm facts** as **one record per covered stock** (a multi-stock "top picks" roundup yields N records — each analyst attaches only to the stock they discuss, never merged; list-only mentions skipped) and the app computes all aggregates (`avg_pt`/`high_pt`/`low_pt`/`consensus_rating`) in pure Python (`derive_consensus`) so no number is hallucinated. The editable preview shows one card per extracted stock (include/exclude), saving each as its own row. **Append-only** (`save_analyst_coverage` inserts). `db.load_analyst_coverage(ticker=, days=, limit=)` (backfills NULL for legacy columns) / `save_analyst_coverage()` / `delete_analyst_coverage(id)` — writers are read-only-viewer no-ops. **Awareness-only — feeds no gate, score, or verdict** (the "Wall Street vs. your engine" tension). **Phase 2 (F-154a)** reads this table per-ticker into the 📈 Analysis "🏦 Analyst Coverage" tab (reconciled against the `targetMeanPrice` provider consensus) and injects the newest row as **CONTEXT** into the F-1 thesis reviewer (citable, never a verdict override). **Phase 3 (F-154b)** annotates Grow Today "New Positions to Initiate" cards with a display-only awareness caption when the surfaced pick also has recent saved coverage (`_cached_analyst_coverage_recent` hourly snapshot; render-only, never reorders/gates picks). Optional — inert until the DDL is applied (load returns empty). RLS: `FOR ALL TO service_role`.
+
+### 6.16 `sector_cache` table
+
+```sql
+CREATE TABLE sector_cache (
+    ticker     TEXT PRIMARY KEY,
+    sector     TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**Last-known sector fallback (data-resilience).** A held position's sector resolves as curated `TICKER_SECTORS` → provider `.info` sector → `UNCLASSIFIED_SECTOR` ("Other") (`portfolio.resolve_sector`), and `.info` is the ONLY live sector source. On Yahoo's recurring sparse-`.info` days the sector drops to `""`, so every **unmapped** holding collapses to "Other" — which the 35% sector gate **excludes** (`daily_briefing._breached_sectors`), silently exempting those positions from concentration gating. Since sector is near-static, `bundle_loader` now **write-throughs** a good live `.info` sector (`db.save_sector_cache`) and **falls back** to the last-known cached value (`db.load_sector_cache`) when the live fetch is empty, before the "Other" catch-all — so classification (and the gate) survive a thin-`.info` day. `save_sector_cache` is **system data → NOT read-only-viewer-gated** (mirrors `save_fundamentals_cache`). **Scoring is deliberately NOT switched to the cached sector** (`_sector_for_scoring` stays on raw `.info`) so a resilience fix can't silently move composite/fundamental scores. Optional — inert until the DDL is applied (load/save no-op; behaviour degrades to the prior "Other" fallback). RLS: `FOR ALL TO service_role`.
 
 ---
 

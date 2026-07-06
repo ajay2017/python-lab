@@ -19,6 +19,7 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     ALTER TABLE public.recommendations ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.manual_stops    ENABLE ROW LEVEL SECURITY;
     ALTER TABLE public.fundamentals_cache ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.sector_cache       ENABLE ROW LEVEL SECURITY;
 
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.holdings;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.watchlist;
@@ -26,6 +27,7 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.recommendations;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.manual_stops;
     DROP POLICY IF EXISTS "Allow all (service role)" ON public.fundamentals_cache;
+    DROP POLICY IF EXISTS "Allow all (service role)" ON public.sector_cache;
 
     CREATE POLICY "Allow all (service role)" ON public.holdings
         FOR ALL TO service_role USING (true) WITH CHECK (true);
@@ -38,6 +40,8 @@ One-time SQL to set up RLS (run in Supabase SQL Editor):
     CREATE POLICY "Allow all (service role)" ON public.manual_stops
         FOR ALL TO service_role USING (true) WITH CHECK (true);
     CREATE POLICY "Allow all (service role)" ON public.fundamentals_cache
+        FOR ALL TO service_role USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow all (service role)" ON public.sector_cache
         FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 Table schema (run once if tables don't exist):
@@ -139,6 +143,16 @@ the user acted on it):
         ticker      text primary key,
         financials  jsonb not null,
         fetched_at  timestamptz not null default now()
+    );
+
+    -- Last-known sector fallback (bundle_loader write-throughs a live .info
+    -- sector and reads this when .info comes back sparse). Sector is near-static
+    -- so a cached value never goes stale. Optional: until created, load/save
+    -- no-op and an unmapped holding on a thin-.info day falls to "Other" as before.
+    create table if not exists sector_cache (
+        ticker     text primary key,
+        sector     text not null,
+        updated_at timestamptz not null default now()
     );
 
     -- Daily snapshots — Tier B day-over-day P&L baseline (added 2026-06-09).
@@ -1501,6 +1515,56 @@ def save_fundamentals_cache(ticker: str, financials: dict) -> bool:
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         _client().table("fundamentals_cache").upsert(record, on_conflict="ticker").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_sector_cache(ticker: str) -> str | None:
+    """Return the last-known sector for a ticker, or None.
+
+    Sector is a near-static attribute, so a cached value is always safe to reuse
+    as the fallback when a live yfinance `.info` fetch comes back sparse (Yahoo's
+    recurring thin-.info days). Without it, an unmapped holding collapses to the
+    "Other" catch-all AND drops out of the sector-concentration gate (which
+    excludes "Other" by design). Returns None when the DB is offline, the table
+    doesn't exist yet, or there's no row — so the app degrades to live-only
+    behaviour until the table is created. Never raises."""
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("sector_cache")
+            .select("sector")
+            .eq("ticker", t).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        sec = rows[0].get("sector")
+        return sec if (isinstance(sec, str) and sec.strip()) else None
+    except Exception:
+        return None
+
+
+def save_sector_cache(ticker: str, sector: str) -> bool:
+    """Upsert the last-known sector for a ticker (write-through when a live .info
+    fetch returned a real sector). System data, not user data → NOT _READONLY-
+    gated (mirrors save_fundamentals_cache — a read-only viewer still benefits
+    from a warm cache). Best-effort: a failure (e.g. table not created yet) is
+    swallowed so it never disrupts the data path."""
+    t   = str(ticker or "").upper().strip()
+    sec = str(sector or "").strip()
+    if not t or not sec or not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        record = {
+            "ticker":     t,
+            "sector":     sec,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _client().table("sector_cache").upsert(record, on_conflict="ticker").execute()
         return True
     except Exception:
         return False
