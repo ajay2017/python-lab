@@ -18097,10 +18097,16 @@ elif page == "🧠 AI Insights":
                             else:
                                 _ok = _ai_db.update_user_thesis(_ticker, _set_val.strip())
                                 if _ok:
+                                    # Reload the cached trades_df so the saved thesis
+                                    # is reflected on rerun — the write hits the DB
+                                    # directly, but this page rebuilds _thesis_by_ticker
+                                    # from st.session_state.trades_df, which would
+                                    # otherwise stay stale and read as "no thesis yet".
+                                    st.session_state.trades_df = _ai_db.load_trades()
                                     st.success("Thesis saved — will be reviewed in the next weekly cron run.")
                                     st.rerun()
                                 else:
-                                    st.error("Save failed — DB offline or no BUY trade found for this ticker.")
+                                    st.error("Save failed — DB offline, or no BUY trade on record for this ticker (holdings without a matching BUY row can't anchor a thesis).")
 
                     else:
                         # ── Has thesis — show review + re-evaluate + edit ─────────
