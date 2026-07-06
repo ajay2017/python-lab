@@ -150,6 +150,11 @@ WEAK_CONVICTION_SCORE     = 55
 # in the remaining 75% while removing asymmetric downside.
 STOP_PROFIT_LOCK_PNL_PCT  = 25.0
 STOP_PROFIT_LOCK_TRIM_PCT = 25.0
+# Initial / trailing stop width = current price − this × ATR. The single source
+# for the base stop multiple, consumed by risk.atr_stop_loss, bundle_loader and
+# the Analysis stop-ladder explainer so the number can never drift between the
+# engine and what the UI explains. Policy value — change = investment-policy decision.
+ATR_STOP_MULT             = 2.0
 # New stop level when tightening = current price − this × ATR.
 # Tighter than the 2.0× used for initial stops because the position is
 # already in the danger zone — less room before next stop-out is warranted.

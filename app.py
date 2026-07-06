@@ -127,7 +127,7 @@ from stock_analyzer.targets import (
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
-    annotate_add_candidates, resolve_sector,
+    annotate_add_candidates, resolve_sector, stop_ladder,
     holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
@@ -603,6 +603,17 @@ _TIPS = {
         "It solves the hardest problem in investing: letting winners run while "
         "never giving back all your gains."
     ),
+    "Protective Stop": (
+        "The stop the app acts on for a position you hold — the TIGHTER (higher) "
+        "of two levels, plus any manual override:\n\n"
+        "• ATR stop: Price − 2 × ATR (a volatility floor outside daily noise)\n"
+        "• Profit-ratchet floor: climbs as your gain grows (+10% → breakeven, "
+        "+25% → lock +10%, and so on)\n"
+        "• Manual override: a stop you've placed yourself wins whenever it's tighter\n\n"
+        "So the number can come from volatility even when the label names a profit "
+        "tier. Open the 🛡️ 'How your stop is set' panel below for the full "
+        "breakdown and a what-if simulator."
+    ),
     "Composite Score": (
         "Weighted composite signal combining three analytical dimensions:\n\n"
         "• Technical (45%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
@@ -692,6 +703,235 @@ def _tip(key: str) -> str:
 def _m(val_str: str) -> str:
     """Return masked placeholder when privacy mode is on, otherwise the value as-is."""
     return "••••••" if st.session_state.get("_privacy", True) else val_str
+
+
+def _render_stop_ladder(r: dict, holding: dict, price: float, under_reduce: bool = False) -> None:
+    """Analysis-page explainer + what-if simulator for a HELD position's stop.
+
+    Read-only / educational: it never changes a gate, threshold, or
+    recommendation — it only VISUALISES the stop the engine already computed and
+    SIMULATES it forward. Faithful by construction: every number comes from
+    `portfolio.stop_ladder`, which reuses `protective_stop` + the real ATR
+    formula + the real constants; the CURRENT-state active stop is pinned to the
+    engine's own `r["stop"]` (via atr_stop_override) so it is bit-exact with the
+    "Stop Loss" metric / Brief. Renders nothing unless we have price, avg cost
+    and ATR.
+
+    `under_reduce`: the Brief flags this position for reduce/exit — suppress the
+    "keep climbing" nudges (next-ratchet, tighten-option) so the explainer never
+    softens an active exit directive.
+    """
+    from stock_analyzer.constants import (
+        ATR_STOP_MULT, STOP_TIGHTEN_ATR_MULT, STOP_TIGHTEN_MIN_GAIN_PCT, APPROACHING_STOP_GAP_PCT,
+    )
+    from stock_analyzer.portfolio import _RATCHET_LEVELS
+
+    avg_cost = _f(holding.get("Avg Cost"))
+    atr_val  = _f(r.get("atr"))
+    if not (price and price > 0 and avg_cost > 0 and atr_val > 0):
+        return
+    shares = int(_f(holding.get("Shares")))
+
+    _manual = str(holding.get("Stop Type")) == "Manual" or r.get("_stop_source") == "manual"
+    _manual_stop = _f(holding.get("Stop")) if _manual else None
+
+    # atr_stop_override pins the ladder's ATR stop to the engine's exact value —
+    # but ONLY on the non-manual path. When a manual stop is active the Analysis
+    # bundle overwrites r["stop"] with the manual price, so passing it as the ATR
+    # override would render the manual price under the "2× ATR" label (the very
+    # label-vs-number confusion this feature exists to kill). Manual → derive the
+    # true ATR stop from atr_val; the active stop stays exact via manual_stop.
+    L = stop_ladder(
+        price, avg_cost, atr_val,
+        tighten_multiplier=STOP_TIGHTEN_ATR_MULT,
+        manual_stop=_manual_stop,
+        atr_stop_override=None if _manual else (_f(r.get("stop")) or None),
+    )
+    if not L:
+        return
+
+    _active = L["active_stop"]
+    # Ratchet ladder description, interpolated from the engine's own levels so
+    # the bullet text can never drift from _RATCHET_LEVELS.
+    _rl_desc = ", ".join(
+        f"+{thr:.0f}% → {'breakeven' if mult <= 0.02 else f'lock +{mult*100:.0f}%'}"
+        for thr, mult, _ in sorted(_RATCHET_LEVELS, key=lambda x: x[0])
+    )
+    with st.expander("🛡️ How your stop is set — and what happens next", expanded=False):
+        # ── A) The stop ladder ────────────────────────────────────────────────
+        # Every relevant price level on a single number-line, so the stack is
+        # visible at a glance. Merge the active stop into whichever level it
+        # equals (the AAPL case: the "Breakeven guard" tier is reached but the
+        # ATR stop is the number that actually binds).
+        _levels = [("Entry (avg cost)", avg_cost, "#9ca3af")]
+        if L["tier_reached"] and L["ratchet_floor"]:
+            _rl = f"{L['ratchet_floor_label']} floor"
+            if L["active_source"] == "ratchet":
+                _rl = f"🎯 Active · {L['ratchet_floor_label']}"
+            _levels.append((_rl, L["ratchet_floor"], "#3b82f6"))
+        _atr_lbl = f"ATR stop ({ATR_STOP_MULT:g}× ATR)"
+        if L["active_source"] == "atr":
+            _atr_lbl = f"🎯 Active stop · ATR ({ATR_STOP_MULT:g}×)"
+        _levels.append((_atr_lbl, L["atr_stop"], "#f59e0b"))
+        if L["active_source"] == "manual":
+            _levels.append(("🎯 Active · 📌 manual", _active, "#dc2626"))
+        if L["tighten_stop"] and _active < L["tighten_stop"] < price:
+            _levels.append((f"Tighter option ({STOP_TIGHTEN_ATR_MULT:g}× ATR)", L["tighten_stop"], "#fbbf24"))
+        _levels.append(("Now", price, "#22c55e"))
+
+        _fig = go.Figure()
+        # Shaded cushion: how far price must fall to hit the active stop.
+        _fig.add_vrect(
+            x0=_active, x1=price, fillcolor="#ef4444", opacity=0.08,
+            line_width=0, layer="below",
+            annotation_text=f"cushion −{L['gap_pct']:.1f}%",
+            annotation_position="top left",
+            annotation_font_size=11, annotation_font_color="#f87171",
+        )
+        for i, (_lbl, _px, _clr) in enumerate(_levels):
+            _fig.add_trace(go.Scatter(
+                x=[_px], y=[0], mode="markers+text",
+                marker=dict(size=14, color=_clr, line=dict(width=1, color="#0e1117")),
+                text=[f"{_lbl}<br>${_px:.2f}"],
+                textposition="top center" if i % 2 == 0 else "bottom center",
+                textfont=dict(size=11, color=_clr),
+                hoverinfo="skip", showlegend=False,
+            ))
+        _fig.add_vline(x=_active, line_dash="solid", line_color="#dc2626", line_width=1)
+        _fig.add_vline(x=price, line_dash="dash", line_color="#e5e7eb", line_width=1)
+        _lo = min(p for _, p, _ in _levels)
+        _hi = max(p for _, p, _ in _levels)
+        _pad = max((_hi - _lo) * 0.10, atr_val * 0.5)
+        _fig.update_layout(
+            height=210, template="plotly_dark", showlegend=False,
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis=dict(title="Price ($)", range=[_lo - _pad, _hi + _pad], zeroline=False),
+            yaxis=dict(visible=False, range=[-1, 1]),
+        )
+        st.plotly_chart(_fig, use_container_width=True, key=f"stopladder_{holding.get('Ticker','')}")
+
+        # ── B) Plain-English walk-through (with THIS position's numbers) ───────
+        if L["active_source"] == "atr":
+            _src_line = (
+                f"the **ATR stop** (${L['atr_stop']:.2f}) — you're up +{L['gain_pct']:.1f}%, below the "
+                f"+10% profit-ratchet, so the volatility stop is in force."
+                if not L["tier_reached"] else
+                f"the **ATR stop** (${L['atr_stop']:.2f})."
+            )
+        elif L["active_source"] == "ratchet":
+            _src_line = (
+                f"the **{L['ratchet_floor_label']}** floor (${L['ratchet_floor']:.2f}) — your gain lifted it "
+                f"above the ATR stop."
+            )
+        else:  # manual
+            _src_line = f"**your manual stop** (${_active:.2f}) — it overrides the computed stop because it's tighter."
+        _tier_note = ""
+        if L["tier_reached"] and L["active_source"] == "atr":
+            _tier_note = (
+                f" You're in the **{L['tier_label']}** tier (up +{L['gain_pct']:.1f}%), so the label reads "
+                f"“{L['tier_label']}” — but that floor is only ${L['ratchet_floor']:.2f}, *below* the ATR "
+                f"stop, so the **ATR stop is the number that actually protects you** right now. The label "
+                f"marks the profit tier you've reached; the value comes from volatility."
+            )
+        st.markdown(
+            f"Your stop is built from **three layers**, and each run the app uses the **tightest (highest)** of them:\n\n"
+            f"1. **Volatility floor (ATR).** ATR(14) ≈ **${atr_val:.2f}**/day of typical range. The base stop sits "
+            f"**{ATR_STOP_MULT:g}× ATR** below price = **${L['atr_stop']:.2f}** — outside normal day-to-day noise.\n"
+            f"2. **Profit ratchet.** As your gain grows, a floor lifts to protect profit "
+            f"({_rl_desc}). The app raises the recommended stop for you to place — the lock comes from you "
+            f"moving your broker stop up and never lowering it.\n"
+            f"3. **Your override.** A manual stop you've placed wins whenever it's tighter than the computed one.\n\n"
+            f"**Right now:** price **${price:.2f}**, up **+{L['gain_pct']:.1f}%**. Your active stop is {_src_line}"
+            f"{_tier_note}"
+        )
+        if (not under_reduce and L["tighten_stop"] and _active < L["tighten_stop"] < price
+                and L["gain_pct"] >= STOP_TIGHTEN_MIN_GAIN_PCT):
+            st.caption(
+                f"💡 A **tighter alternative** sits at **${L['tighten_stop']:.2f}** ({STOP_TIGHTEN_ATR_MULT:g}× ATR). Today's Brief "
+                f"nudges toward it when you're up ≥ {STOP_TIGHTEN_MIN_GAIN_PCT:.0f}% with "
+                f"{APPROACHING_STOP_GAP_PCT:.0f}%-or-less room — it locks more profit at the cost of less "
+                f"breathing room. Optional, not required."
+            )
+        if L["next_tier"] and not under_reduce:
+            _nt = L["next_tier"]
+            st.caption(
+                f"🎯 **Next ratchet up:** if it reaches **${_nt['trigger_price']:.2f}** (+{_nt['gain_pct']:.0f}%), "
+                f"the app will recommend raising your stop to **${_nt['floor']:.2f}** — locking **{_nt['label']}** "
+                f"once you place it."
+            )
+
+        # ── C) What-if simulator ──────────────────────────────────────────────
+        st.markdown("**🎮 What-if — drag to a price and see what your stop does:**")
+        _smin = round(min(avg_cost, _active) * 0.85, 2)
+        _smax = round(price * 1.40, 2)
+        _step = max(0.01, round(price * 0.005, 2))
+        _sdefault = min(max(round(price, 2), _smin), _smax)  # clamp into range
+        _hypo = st.slider(
+            "Simulated price ($)", min_value=_smin, max_value=_smax, value=_sdefault,
+            step=_step, key=f"stopsim_{holding.get('Ticker','')}",
+            help="Assumes today's volatility (ATR held constant). Downside = tested against the stop you have TODAY; upside = the higher stop the app would then recommend.",
+        )
+        if _hypo < price:
+            # Downside: does a fall to _hypo breach the stop you hold TODAY? (The
+            # app instructs you to place a resting stop at the active level, so we
+            # test against that placed level, not a recomputed one.)
+            _drop = (_hypo / price - 1) * 100
+            if _hypo <= _active:
+                _realized_pct = (_active / avg_cost - 1) * 100
+                _realized = (_active - avg_cost) * shares
+                _outcome = (
+                    f"locking in <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {shares} shares) — "
+                    f"a profitable exit, not a loss."
+                    if _active >= avg_cost else
+                    f"realizing <b>{_realized_pct:+.1f}%</b> (<b>${_realized:+,.0f}</b> on {shares} shares) — "
+                    f"the loss is capped here, by design."
+                )
+                st.markdown(
+                    f"<div style='padding:10px 14px;border-radius:6px;background:#dc262618;"
+                    f"border-left:4px solid #dc2626;color:#fca5a5'>🛑 <b>Stop-out.</b> A fall to "
+                    f"<b>${_hypo:.2f}</b> ({_drop:+.1f}%) breaches your <b>${_active:.2f}</b> stop. "
+                    f"You'd exit near the stop, {_outcome}</div>", unsafe_allow_html=True,
+                )
+            else:
+                _cushion = (_hypo - _active) / _hypo * 100
+                st.markdown(
+                    f"<div style='padding:10px 14px;border-radius:6px;background:#16a34a14;"
+                    f"border-left:4px solid #22c55e;color:#86efac'>✅ <b>No exit.</b> At "
+                    f"<b>${_hypo:.2f}</b> ({_drop:+.1f}%) you'd still sit <b>{_cushion:.1f}%</b> above your "
+                    f"<b>${_active:.2f}</b> stop — the position keeps running.</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            # Upside: recompute the RECOMMENDED stop at the higher price. The
+            # engine is stateless — it re-derives max(2×ATR stop, current-tier
+            # floor) every run — so this is the level the app would tell you to
+            # RAISE your stop to, not an automatic guarantee. The floor recedes if
+            # the gain later falls into a lower tier; protection is realised only
+            # by you moving your placed stop up and not lowering it.
+            _sim = stop_ladder(_hypo, avg_cost, atr_val,
+                               tighten_multiplier=STOP_TIGHTEN_ATR_MULT, manual_stop=_manual_stop,
+                               atr_stop_override=round(_hypo - L["atr_multiplier"] * atr_val, 2))
+            _new_stop = _sim["active_stop"]
+            _new_pct = (_new_stop / avg_cost - 1) * 100
+            _new_amt = (_new_stop - avg_cost) * shares
+            _driver = (f"the <b>{_sim['ratchet_floor_label']}</b> floor"
+                       if _sim["active_source"] == "ratchet" else "the 2× ATR trailing stop")
+            _tier_txt = (f" You'd enter the <b>{_sim['tier_label']}</b> profit tier (floor ${_sim['ratchet_floor']:.2f})."
+                         if _sim["tier_reached"] else "")
+            _note = (" Today's Brief already flags this position for reduce/exit — treat this as informational."
+                     if under_reduce else "")
+            st.markdown(
+                f"<div style='padding:10px 14px;border-radius:6px;background:#1e3a8a24;"
+                f"border-left:4px solid #3b82f6;color:#bfdbfe'>📈 <b>At ${_hypo:.2f} "
+                f"(+{_sim['gain_pct']:.1f}%)</b>, the app would recommend raising your stop to "
+                f"<b>${_new_stop:.2f}</b> ({_driver}) — protecting <b>{_new_pct:+.1f}%</b> "
+                f"(<b>${_new_amt:+,.0f}</b>) once you place it there and hold it.{_tier_txt}{_note}</div>",
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "Educational only — this mirrors the engine's stop logic; it doesn't change any recommendation. "
+            "Stops are acted at the next open, not intraday."
+        )
 
 
 def _render_trade_button(
@@ -11484,11 +11724,20 @@ elif page == "📈 Analysis":
 
                 elif _sa_is_hold:
                     # ── HOLD — POSITION MONITOR ────────────────────────────
+                    # For a HELD position the protective stop is the ratcheted /
+                    # manual stop the engine actually acts on (_sa_holding["Stop"]);
+                    # r["stop"] is only the raw ATR entry stop and UNDER-reports it
+                    # once a profit-ratchet tier engages (max(ATR, floor)). Display
+                    # the held stop so the metric, the Hold narrative, the scenarios
+                    # line and the stop-ladder explainer all agree with the Brief.
+                    # Non-held Hold → r["stop"] (a fresh ATR entry stop is correct).
+                    _hold_stop = (_f(_sa_holding.get("Stop")) if _sa_holding else 0.0) or r["stop"]
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Price", f"${price:.2f}" if price else "N/A")
-                    c2.metric("Stop Loss", f"${r['stop']:.2f}" if r["stop"] else "N/A",
-                              delta=f"-{(price-r['stop'])/price*100:.1f}%" if price and r["stop"] else None,
-                              delta_color="inverse", help=_tip("ATR Stop"))
+                    c2.metric("Stop Loss", f"${_hold_stop:.2f}" if _hold_stop else "N/A",
+                              delta=f"-{(price-_hold_stop)/price*100:.1f}%" if price and _hold_stop else None,
+                              delta_color="inverse",
+                              help=_tip("Protective Stop") if _sa_holding else _tip("ATR Stop"))
                     if _sa_holding:
                         c3.metric("Shares Held", f"{int(_sa_holding.get('Shares', 0)):,}")
                         c4.metric("P&L",
@@ -11508,12 +11757,15 @@ elif page == "📈 Analysis":
                             "<div style='background:#172554;border-left:4px solid #3b82f6;"
                             "border-radius:6px;padding:10px 14px;color:#dbeafe;font-size:0.92em'>"
                             f"<b>Hold</b> your {int(_sa_holding.get('Shares', 0))} shares with stop at "
-                            f"<b>${r['stop']:.2f}</b>{_stop_badge}. Mixed signals — re-check {_recheck}. "
+                            f"<b>${_hold_stop:.2f}</b>{_stop_badge}. Mixed signals — re-check {_recheck}. "
                             f"Add to position if score ≥ {COMPOSITE_BUY:.0f} and price holds above stop. "
                             f"Exit immediately if price closes below stop."
                             "</div>",
                             unsafe_allow_html=True,
                         )
+                        if _hold_stop:  # skip when the engine reports "Stop Unavailable"
+                            _hold_rc = (st.session_state.get("_reduce_calls") or {}).get(str(ticker).upper())
+                            _render_stop_ladder(r, _sa_holding, price, under_reduce=bool(_hold_rc))
                     else:
                         c3.metric("Entry Zone",
                                   f"${r['entry_lo']:.2f}–${r['entry_hi']:.2f}" if r["entry_lo"] else "N/A")
@@ -11542,9 +11794,9 @@ elif page == "📈 Analysis":
                                 _sfig.add_hline(y=price, line_dash="dash", line_color="white",
                                                 annotation_text=f"Now ${price:.2f}",
                                                 annotation_position="right")
-                            if r["stop"]:
-                                _sfig.add_hline(y=r["stop"], line_dash="dot", line_color="#ff4444",
-                                                annotation_text=f"Stop ${r['stop']:.2f}",
+                            if _hold_stop:
+                                _sfig.add_hline(y=_hold_stop, line_dash="dot", line_color="#ff4444",
+                                                annotation_text=f"Stop ${_hold_stop:.2f}",
                                                 annotation_position="right")
                             _sfig.update_layout(
                                 height=300, template="plotly_dark", showlegend=False,

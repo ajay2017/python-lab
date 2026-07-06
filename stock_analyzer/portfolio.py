@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING, ATR_STOP_MULT
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -100,6 +100,123 @@ def protective_stop(
             floor = avg_cost * (1 + multiplier)
             return round(max(atr_stop, floor), 2), label
     return round(atr_stop, 2), "ATR Stop"
+
+
+def stop_ladder(
+    price: float,
+    avg_cost: float,
+    atr_val: float,
+    atr_multiplier: float = ATR_STOP_MULT,
+    tighten_multiplier: float | None = None,
+    manual_stop: float | None = None,
+    atr_stop_override: float | None = None,
+) -> dict | None:
+    """Full stop-management breakdown for ONE position at a given price — the
+    single source behind the "How your stop is set" explainer + its what-if
+    simulator on the Analysis page.
+
+    FAITHFUL to the live engine by construction: it reuses `protective_stop`
+    (the profit ratchet) and the same `price − mult × ATR` formula as
+    `risk.atr_stop_loss`, so the explanation/simulation can never drift from the
+    numbers the Brief and Scorecard actually act on. The simulator just calls
+    this again with a hypothetical price.
+
+    Args:
+        price:              current (or hypothetical) price.
+        avg_cost:           position average cost.
+        atr_val:            current ATR(14) in dollars. Held constant across a
+                            what-if (labelled "at today's volatility" in the UI)
+                            — ATR is a short-horizon dollar range, not a function
+                            of the price level.
+        atr_multiplier:     initial-stop ATR multiple (ATR_STOP_MULT = the value
+                            risk.atr_stop_loss uses).
+        tighten_multiplier: if given (STOP_TIGHTEN_ATR_MULT), also return the
+                            profit-lock "tighter alternative" level. None = omit.
+        manual_stop:        an active user override; it wins ONLY when it is at
+                            least as tight as the auto stop, exactly mirroring
+                            build_portfolio_df's override guard.
+        atr_stop_override:  when the caller already holds the engine's exact ATR
+                            stop (bundle `r["stop"]`, computed from the UNrounded
+                            ATR), pass it so the ladder's ATR stop is bit-exact
+                            with the "Stop Loss" metric / Brief instead of being
+                            re-derived from the rounded `atr_val` (avoids a ±$0.01
+                            drift). None → derive from price − mult × atr_val.
+
+    Returns None when the inputs can't form a stop (missing price/atr, or
+    avg_cost ≤ 0 so there is no gain basis).
+    """
+    if not price or price <= 0 or not atr_val or atr_val <= 0 or avg_cost <= 0:
+        return None
+
+    gain_pct = (price - avg_cost) / avg_cost * 100.0
+    atr_stop = round(atr_stop_override, 2) if atr_stop_override else round(price - atr_multiplier * atr_val, 2)
+
+    # Ratchet floor for the CURRENT gain tier (display-only — which number
+    # actually wins is decided by protective_stop below). Mirrors _RATCHET_LEVELS
+    # exactly; None until the gain reaches the first rung (+10%).
+    ratchet_floor = None
+    ratchet_floor_label = None
+    for threshold, mult, label in _RATCHET_LEVELS:
+        if gain_pct >= threshold:
+            ratchet_floor = round(avg_cost * (1 + mult), 2)
+            ratchet_floor_label = label
+            break
+
+    # Authoritative auto stop + tier label (= max(ATR floor, ratchet floor)).
+    auto_stop, tier_label = protective_stop(price, avg_cost, atr_stop)
+    # Which NUMBER is in force pre-manual: the ratchet floor only wins when it is
+    # actually higher than the ATR stop (the AAPL nuance — the tier label can say
+    # "Breakeven guard" while the ATR stop is the number that binds).
+    auto_source = "ratchet" if (ratchet_floor is not None and ratchet_floor >= atr_stop) else "atr"
+
+    active_stop = auto_stop
+    active_source = auto_source
+    manual_applied = False
+    if manual_stop and manual_stop > 0 and manual_stop >= auto_stop:
+        active_stop = round(manual_stop, 2)
+        active_source = "manual"
+        manual_applied = True
+
+    gap_pct = round((price - active_stop) / price * 100.0, 1)
+
+    tighten_stop = None
+    if tighten_multiplier:
+        tighten_stop = round(price - tighten_multiplier * atr_val, 2)
+
+    # Next ratchet rung the price has NOT reached yet — the "keep climbing" story:
+    # at +N% your stop auto-ratchets to $floor (locks +M%). None past the top rung.
+    next_tier = None
+    for threshold, mult, label in sorted(_RATCHET_LEVELS, key=lambda x: x[0]):
+        if threshold > gain_pct:
+            next_tier = {
+                "gain_pct":      threshold,
+                "trigger_price": round(avg_cost * (1 + threshold / 100.0), 2),
+                "floor":         round(avg_cost * (1 + mult), 2),
+                "label":         label,
+            }
+            break
+
+    return {
+        "price":               round(price, 2),
+        "avg_cost":            round(avg_cost, 2),
+        "gain_pct":            round(gain_pct, 1),
+        "atr_val":             round(atr_val, 2),
+        "atr_multiplier":      atr_multiplier,
+        "atr_stop":            atr_stop,
+        "ratchet_floor":       ratchet_floor,
+        "ratchet_floor_label": ratchet_floor_label,
+        "tier_label":          tier_label,          # profit tier reached (protective_stop label)
+        "tier_reached":        ratchet_floor is not None,
+        "auto_stop":           auto_stop,
+        "auto_source":         auto_source,          # "ratchet" | "atr" (which number wins pre-manual)
+        "active_stop":         active_stop,
+        "active_source":       active_source,        # "manual" | "ratchet" | "atr"
+        "manual_applied":      manual_applied,
+        "gap_pct":             gap_pct,
+        "tighten_stop":        tighten_stop,
+        "next_tier":           next_tier,
+        "stopped_out":         price <= active_stop,
+    }
 
 
 def build_portfolio_df(

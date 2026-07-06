@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from stock_analyzer.indicators import atr as _atr_series
+from stock_analyzer.constants import ATR_STOP_MULT
 
 
 def _atr_value(df: pd.DataFrame, length: int = 14) -> float:
@@ -10,7 +11,7 @@ def _atr_value(df: pd.DataFrame, length: int = 14) -> float:
     return float(s.iloc[-1])
 
 
-def atr_stop_loss(df: pd.DataFrame, multiplier: float = 2.0) -> tuple[float, float]:
+def atr_stop_loss(df: pd.DataFrame, multiplier: float = ATR_STOP_MULT) -> tuple[float, float]:
     """Returns (stop_loss_price, atr_value)."""
     atr_val = _atr_value(df)
     current_price = float(df["Close"].iloc[-1])

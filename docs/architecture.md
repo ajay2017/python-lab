@@ -217,6 +217,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `GROW_CANDIDATE_POOL` | 12 (derived) | `GROW_MAX_PICKS_BULL × GROW_CANDIDATE_OVERFETCH` — the bull-day max candidate window; app.py pre-fetches composites for this many top non-held picks. Single source of truth (replaced a hardcoded `.head(12)` in two app.py sites) |
 | `DATA_FMP_INFO_CACHE_TTL_SEC` | 3600 | TTL for per-ticker FMP `.info` backfill cache (only non-sparse responses cached) |
 | `STOP_PROFIT_LOCK_PNL_PCT` / `_TRIM_PCT` | 25 / 25 | Review profit-lock: trigger P&L and trim size |
+| `ATR_STOP_MULT` | 2.0 | Initial / trailing stop width = price − this × ATR. Single source consumed by `risk.atr_stop_loss`, `bundle_loader` and the Analysis stop-ladder explainer (`portfolio.stop_ladder`) so the number can't drift between engine and UI |
 | `STOP_TIGHTEN_ATR_MULT` | 1.5 | Review stop-tighten multiple (vs 2.0× initial) |
 | `EARNINGS_OVERWEIGHT_TRIM_PCT` / `_TO_PCT` | 12 / 10 | Review earnings-overweight: trigger / target weight |
 | `WEAK_LARGE_TRIM_TO_PCT` | 8 | Review weak-large: trim-to target weight |

@@ -20,6 +20,7 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_GATE_MIN_METRICS,
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     BUNDLE_CACHE_MAX_AGE_DAYS,
+    ATR_STOP_MULT,
 )
 from stock_analyzer.data import fetch_ticker_bundle, fetch_financials_from_info
 from stock_analyzer.technicals import compute_indicators, technical_score
@@ -117,7 +118,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # would pass every `if price:` check and render "$nan". None = honest "no price".
     _closes = df["Close"].dropna() if not df.empty else None
     price = float(_closes.iloc[-1]) if _closes is not None and not _closes.empty else None
-    stop, atr_val = atr_stop_loss(df, multiplier=2.0)
+    stop, atr_val = atr_stop_loss(df, multiplier=ATR_STOP_MULT)
     entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
     targets = compute_price_targets(df, financials, price) if price else None
     sr = support_resistance(df)
