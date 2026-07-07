@@ -18175,6 +18175,28 @@ It reads two things together: how far a name has fallen **from its highest point
 """
         )
 
+    with st.expander("🎚️ How your stop level is set — ATR, profit-ratchet & the what-if simulator", expanded=False):
+        st.markdown(
+            """
+Your protective stop is built from **three layers**, and each run the app uses the **tightest (highest)** of them:
+
+1. **Volatility floor (ATR stop)** — `price − 2 × ATR`, where ATR (Average True Range) is the stock's typical daily range. This sits *outside* normal day-to-day noise, so a routine wiggle doesn't stop you out. A jumpy name gets a **wider** stop and a steady one a **tighter** stop — the buffer respects each stock's own behaviour rather than an arbitrary percentage.
+2. **Profit ratchet** — as your gain grows, a floor climbs *under* the price to lock in profit so a winner never round-trips back to a loss:
+   - **+10% gain → Breakeven guard** (floor at ~+2% — you can't give it back to a loss)
+   - **+25% → locks +10%** · **+50% → locks +25%** · **+75% → locks +40%**
+3. **Your manual override** — a stop you place yourself (via the Action Log) wins **only when it's tighter** than the computed one; a stale, looser manual stop won't be allowed to erode the ratchet's profit protection.
+
+**The one thing that confuses people:** the stop's **label** names the profit *tier* you've reached (e.g. *"Breakeven guard"*), but the **number** can still come from the ATR stop when that sits higher — the app always uses whichever is tighter. So a position can read *"Breakeven guard"* while the dollar figure is actually the volatility (ATR) stop. That's not a bug; the label is the tier, the number is the tighter of the two.
+
+**See it and simulate it.** On **📈 Analysis → a position you hold → 📋 Trade Plan**, open **"🛡️ How your stop is set — and what happens next"** for a read-only walkthrough:
+- a **stop ladder** placing entry, the ratchet floor, the ATR stop, your active stop and the price on one line — the level actually *in force* is marked, the losing candidate dimmed, and an arrow points to the winner;
+- a **profit-lock staircase** showing how your locked floor climbs through each tier as the stock gains — so the next rung is obvious;
+- a **what-if price slider** — drag it down to see whether a drop breaches your stop (and the P&L you'd realise), or up to see the higher stop the app would then recommend.
+
+It's **educational only — it explains the stop, it never changes a recommendation.** The stop shown on Analysis matches Today's Brief exactly — same ratcheted stop, same live price, same breach test — so the two surfaces never tell you different things about where your stop is.
+"""
+        )
+
     with st.expander("⏰ Daily automation & email alerts (works while the app is closed)", expanded=False):
         st.markdown(
             """
