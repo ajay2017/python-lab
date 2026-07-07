@@ -12034,11 +12034,22 @@ elif page == "📈 Analysis":
                     # stop is breached is a mechanical EXIT — protect-capital overrides
                     # deploy-capital, so the Analysis page must NOT frame it as an add.
                     # The composite still rates the STOCK (it can be a genuine Buy); the
-                    # stop protects the POSITION. Same data the Brief reads, so the two
-                    # surfaces agree instead of contradicting (add here vs sell there).
-                    _sa_stop = r.get("stop")
+                    # stop protects the POSITION. Gate on the RATCHETED/manual protective
+                    # stop the Brief actually acts on (`_sa_holding["Stop"]` = Gap-to-Stop
+                    # basis), NOT the raw ATR stop `r["stop"]` — so the breach banner fires
+                    # exactly when the Brief flags a breach, not only once price falls the
+                    # extra distance to the ATR stop (the F-47 held-stop pattern; ps/R:R
+                    # deliberately stay on `r["stop"]` = the ATR fresh-entry basis).
+                    _sa_stop = (_f(_sa_holding.get("Stop")) or r.get("stop")) if _sa_holding else r.get("stop")
+                    # Match the Brief's EXACT breach test — it fires on
+                    # round(Gap%, 1) <= 0 (daily_briefing), not the raw inequality —
+                    # so a sub-0.05% gap can't split the two surfaces. (Intraday the
+                    # Analysis price is last-close while the Brief uses the live-merged
+                    # price, so the mirror is stop-exact, not price-exact — a separate
+                    # pre-existing limitation, not introduced here.)
                     _stop_breached = bool(
-                        _sa_holding and price and _sa_stop and price <= _sa_stop
+                        _sa_holding and price and _sa_stop
+                        and round((price - _sa_stop) / price * 100, 1) <= 0
                     )
 
                     # Deterioration / reduce-call gate — sibling to the stop-breach
@@ -12054,7 +12065,13 @@ elif page == "📈 Analysis":
 
                     if _sa_holding and _stop_breached:
                         _br_shares   = int(_sa_holding.get("Shares", 0))
-                        _br_stoptype = "manual" if r.get("_stop_source") == "manual" else "ATR"
+                        # Describe the stop by its ACTUAL type (the held Stop Type: Manual /
+                        # a ratchet tier / ATR Stop) so the banner never labels a ratchet
+                        # stop "ATR" now that _sa_stop is the ratcheted value. "Stop
+                        # Unavailable" (build had no stop) falls back to the ATR label —
+                        # accurate, since _sa_stop then falls back to r["stop"] (the ATR stop).
+                        _br_st       = str(_sa_holding.get("Stop Type", "") or "").strip()
+                        _br_stoptype = "ATR" if (not _br_st or _br_st == "Stop Unavailable") else _br_st.removesuffix(" Stop")
                         _br_gap      = ((price - _sa_stop) / price * 100) if price else 0
                         st.markdown(
                             "<div style='padding:12px;border-radius:8px;background:#dc262618;"
