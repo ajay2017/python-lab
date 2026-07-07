@@ -779,8 +779,10 @@ def _render_stop_ladder(r: dict, holding: dict, price: float, under_reduce: bool
             _mk.append(dict(label="Manual", role="your placed override", px=_active,
                             color="#dc2626", active=True, dim=False))
         if L["tighten_stop"] and _active < L["tighten_stop"] < price:
+            # Violet (not amber) so it doesn't blur into the orange ATR stop —
+            # the one low-contrast pair on the ladder.
             _mk.append(dict(label="Tighter", role=f"optional · price − {STOP_TIGHTEN_ATR_MULT:g}× ATR",
-                            px=L["tighten_stop"], color="#fbbf24", active=False, dim=True))
+                            px=L["tighten_stop"], color="#a78bfa", active=False, dim=True))
         _mk.append(dict(label="Now", role="current price", px=price,
                         color="#22c55e", active=False, dim=False))
 
