@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING, ATR_STOP_MULT
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -280,7 +280,7 @@ def build_portfolio_df(
             stop, stop_label, gap_to_stop = None, "Stop Unavailable", None
         else:
             stop, stop_label = protective_stop(price, avg_cost, _raw_stop)
-            gap_to_stop = round((price - stop) / price * 100, 1)
+            gap_to_stop = round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)
 
         # Manual-stop override: user actioned a Brief "raise stop" recommendation
         # and recorded the new level. Persisted in Supabase manual_stops table
@@ -299,7 +299,7 @@ def build_portfolio_df(
             if _ms_price > 0 and _ms_price >= stop:
                 stop = round(_ms_price, 2)
                 stop_label = "Manual"
-                gap_to_stop = round((price - stop) / price * 100, 1)
+                gap_to_stop = round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)
 
         rows.append({
             "Ticker": ticker,

@@ -168,6 +168,13 @@ STOP_TIGHTEN_ATR_MULT     = 1.5
 # in the CRITICAL band (≤3% gap, about to be stopped out) still surface
 # regardless of P&L. Policy value — change = investment-policy decision.
 STOP_TIGHTEN_MIN_GAIN_PCT = 8.0
+# Decimal places the Gap-to-Stop % is rounded to BEFORE the breach test
+# (gap <= 0). Shared by build_portfolio_df (the stored "Gap to Stop (%)"),
+# the Daily Brief's breach loop and the Analysis breach gate so all three
+# fire at the exact same price — a single-source for the breach boundary
+# precision (was a bare literal 1 in each). Not a stop-width policy value;
+# it only controls where the rounding tips a near-zero gap to <=0.
+GAP_TO_STOP_ROUND_DECIMALS = 1
 
 # ── Position lifecycle (position_lifecycle.classify_position_state) ───────────
 # A held position moves through states: settling → established → winning, with

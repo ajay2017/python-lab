@@ -101,6 +101,7 @@ from stock_analyzer.constants import (
     DATA_LOAD_STAGGER_SEC,
     BUNDLE_CACHE_MAX_AGE_DAYS,
     DEFAULT_PORTFOLIO_VALUE,
+    GAP_TO_STOP_ROUND_DECIMALS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -12101,7 +12102,7 @@ elif page == "📈 Analysis":
                     # fragment/synthesis split, self-heals, directionally fine for a live view).
                     _stop_breached = bool(
                         _sa_holding and price and _sa_stop and not _gap_missing
-                        and round((price - _sa_stop) / price * 100, 1) <= 0
+                        and round((price - _sa_stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS) <= 0
                     )
 
                     # Deterioration / reduce-call gate — sibling to the stop-breach
@@ -12119,11 +12120,20 @@ elif page == "📈 Analysis":
                         _br_shares   = int(_sa_holding.get("Shares", 0))
                         # Describe the stop by its ACTUAL type (the held Stop Type: Manual /
                         # a ratchet tier / ATR Stop) so the banner never labels a ratchet
-                        # stop "ATR" now that _sa_stop is the ratcheted value. "Stop
-                        # Unavailable" (build had no stop) falls back to the ATR label —
-                        # accurate, since _sa_stop then falls back to r["stop"] (the ATR stop).
-                        _br_st       = str(_sa_holding.get("Stop Type", "") or "").strip()
-                        _br_stoptype = "ATR" if (not _br_st or _br_st == "Stop Unavailable") else _br_st.removesuffix(" Stop")
+                        # stop "ATR" now that _sa_stop is the ratcheted value. Build a
+                        # natural-language label with the word "stop" baked in: a ratchet
+                        # tier ("Protect 25% gain", "Breakeven guard") reads ungrammatically
+                        # as "your Protect 25% gain stop", so render it as a parenthetical
+                        # ("your profit-ratchet stop (Protect 25% gain)"). "Stop Unavailable"
+                        # (build had no stop) falls back to the ATR label — accurate, since
+                        # _sa_stop then falls back to r["stop"] (the ATR stop).
+                        _br_st = str(_sa_holding.get("Stop Type", "") or "").strip()
+                        if not _br_st or _br_st in ("Stop Unavailable", "ATR Stop"):
+                            _br_stoplabel = "ATR stop"
+                        elif _br_st == "Manual":
+                            _br_stoplabel = "manual stop"
+                        else:
+                            _br_stoplabel = f"profit-ratchet stop ({_br_st})"
                         _br_gap      = ((price - _sa_stop) / price * 100) if price else 0
                         st.markdown(
                             "<div style='padding:12px;border-radius:8px;background:#dc262618;"
@@ -12131,7 +12141,7 @@ elif page == "📈 Analysis":
                             "<b style='font-size:1.05em;color:#dc2626'>⛔ Stop breached — exit signal, "
                             "not an add</b>"
                             f"<br><span style='color:#dc2626'>You hold <b>{_br_shares} shares</b> and "
-                            f"price <b>${price:.2f}</b> is at/below your {_br_stoptype} stop "
+                            f"price <b>${price:.2f}</b> is at/below your {_br_stoplabel} "
                             f"<b>${_sa_stop:.2f}</b> (gap {_br_gap:+.1f}%). Your mechanical rule says "
                             f"<b>sell all {_br_shares} at next open</b> — the same exit Today's Brief "
                             "is showing. <b>This overrides the Buy composite:</b> the composite rates the "
