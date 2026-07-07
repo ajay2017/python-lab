@@ -705,7 +705,8 @@ def _m(val_str: str) -> str:
     return "••••••" if st.session_state.get("_privacy", True) else val_str
 
 
-def _render_stop_ladder(r: dict, holding: dict, price: float, under_reduce: bool = False) -> None:
+def _render_stop_ladder(r: dict, holding: dict, price: float,
+                        under_reduce: bool = False, buy_add: bool = False) -> None:
     """Analysis-page explainer + what-if simulator for a HELD position's stop.
 
     Read-only / educational: it never changes a gate, threshold, or
@@ -720,6 +721,15 @@ def _render_stop_ladder(r: dict, holding: dict, price: float, under_reduce: bool
     `under_reduce`: the Brief flags this position for reduce/exit — suppress the
     "keep climbing" nudges (next-ratchet, tighten-option) so the explainer never
     softens an active exit directive.
+
+    `buy_add`: rendered on the Buy/Strong-Buy tab of a position you already hold.
+    Two stops are in play there and MUST be distinguished: the position is sized
+    (shares + R:R) off `r["stop"]` — the ATR fresh-entry stop (or your manual
+    stop) — DELIBERATELY, so new capital is risked at today's volatility rather
+    than off the tighter stop the existing shares earned (sizing off the ratchet
+    would over-buy into strength). The ladder's *active* level is your ratcheted
+    PROTECTIVE stop. A note frames both so the two numbers can't read as a
+    contradiction; sizing/R:R are unchanged.
     """
     from stock_analyzer.constants import (
         ATR_STOP_MULT, STOP_TIGHTEN_ATR_MULT, STOP_TIGHTEN_MIN_GAIN_PCT, APPROACHING_STOP_GAP_PCT,
@@ -758,6 +768,44 @@ def _render_stop_ladder(r: dict, holding: dict, price: float, under_reduce: bool
         for thr, mult, _ in sorted(_RATCHET_LEVELS, key=lambda x: x[0])
     )
     with st.expander("🛡️ How your stop is set — and what happens next", expanded=False):
+        # ── Buy-add framing: two stops are in play (sizing vs protective) ──────
+        # The shares/R:R below size off r["stop"] (ATR fresh-entry, or a manual
+        # override); the ladder's active level is the ratcheted protective stop.
+        # Name both up front so the different numbers don't read as a bug.
+        if buy_add:
+            _sizing_stop = _f(r.get("stop"))
+            # r["stop"] is the manual price when a manual override is active (the
+            # Analysis bundle overwrites it), else the raw ATR fresh-entry stop —
+            # so describe the sizing stop by what it actually IS. (A manual stop
+            # in the [ATR, ratchet-floor) gap is accepted here but rejected by the
+            # portfolio's ratchet gate, so _sizing_stop can be the manual price
+            # even in the "different" branch — don't hardcode "ATR" there.)
+            if _manual:
+                _sz_line = (f"- **Sizing stop ${_sizing_stop:.2f}** — the shares & R:R below are sized off "
+                            f"**your manual stop**.")
+            else:
+                _sz_line = (f"- **Sizing stop ${_sizing_stop:.2f}** — the shares & R:R below are sized off the "
+                            f"{ATR_STOP_MULT:g}× ATR fresh-entry stop, on purpose: new capital is risked at "
+                            f"today's volatility, not off the tighter stop your existing shares already earned. "
+                            f"That keeps the add conservative and avoids over-buying into strength.")
+            if _sizing_stop and abs(_sizing_stop - _active) >= 0.01:
+                st.info(
+                    f"**Adding to a position you hold — two stops are at work:**\n\n"
+                    f"{_sz_line}\n"
+                    f"- **Protective stop ${_active:.2f}** — the real stop on your combined holding (the "
+                    f"active level on the ladder below)."
+                )
+            else:
+                st.info(
+                    f"**Adding to a position you hold.** Your sizing stop and protective stop are the same "
+                    f"right now (**${_active:.2f}**) — the shares & R:R below size off it. The ladder shows how "
+                    f"it's built."
+                )
+            st.caption(
+                f"⚠️ Adding at ${price:.2f} raises your blended average cost, which lowers your gain % — it can "
+                f"drop you into a lower profit-ratchet tier, lowering the floor that tier had locked. Size adds "
+                f"with that in mind."
+            )
         # ── A) The stop ladder ────────────────────────────────────────────────
         # Every relevant price level on one number-line. Roles (what each level
         # IS) go in the legend caption + hover — the price cluster is too tight
@@ -12052,6 +12100,15 @@ elif page == "📈 Analysis":
                             f"P&L {_sa_holding.get('P&L (%)', 0):+.1f}%. "
                             f"Sizing below is for adding to your existing position.{_earn_note}"
                         )
+
+                    # Stop explainer for the held-add case (not breached / not under
+                    # a reduce call — those already show a "don't add" banner). Gate
+                    # on `ps` too so the note's "shares & R:R below" can't render when
+                    # sizing is absent (Stop-Unavailable edge). Sizing & R:R stay on
+                    # the ATR fresh-entry stop; the explainer frames the sizing-vs-
+                    # protective distinction (buy_add=True). Read-only.
+                    if _sa_holding and ps and not _stop_breached and not _under_reduce:
+                        _render_stop_ladder(r, _sa_holding, price, under_reduce=False, buy_add=True)
 
                     # Add-on sizing is suppressed on a breached held position OR one
                     # under a Brief Reduce/Exit call — you don't size up a position
