@@ -102,6 +102,25 @@ def protective_stop(
     return round(atr_stop, 2), "ATR Stop"
 
 
+def manual_stop_wins(manual_price: float, protective_stop_price: float) -> bool:
+    """Single source for the manual-override policy: does a user's manual stop
+    beat the auto (protective) stop?
+
+    A manual stop wins ONLY when it is at least as TIGHT (>=) as the ratcheted
+    protective stop — a manual sitting BELOW a fresh ratchet floor would erode
+    profit protection, so the ratchet keeps winning there. Both surfaces that
+    apply a manual override (build_portfolio_df, feeding the Brief; and the
+    Analysis manual-stop merge) MUST gate through this one predicate — if the
+    comparison ever drifts (e.g. >= tightened to >) on only one of them, a
+    manual in the [ATR stop, ratchet floor) gap is accepted on one surface and
+    rejected on the other, re-opening the split-brain closed 2026-07-07.
+    """
+    return bool(
+        manual_price and manual_price > 0
+        and protective_stop_price and manual_price >= protective_stop_price
+    )
+
+
 def stop_ladder(
     price: float,
     avg_cost: float,
@@ -172,7 +191,11 @@ def stop_ladder(
     active_stop = auto_stop
     active_source = auto_source
     manual_applied = False
-    if manual_stop and manual_stop > 0 and manual_stop >= auto_stop:
+    # Same override policy as build_portfolio_df / the Analysis merge — route
+    # through the shared predicate so this DISPLAY mirror can't drift from the
+    # decision the Brief acts on (auto_stop is positive here, so it's a no-op
+    # today, but it keeps all three manual-override surfaces single-sourced).
+    if manual_stop_wins(manual_stop, auto_stop):
         active_stop = round(manual_stop, 2)
         active_source = "manual"
         manual_applied = True
@@ -296,7 +319,7 @@ def build_portfolio_df(
         stop_type_auto = stop_label
         if _ms and stop is not None:
             _ms_price = float(_ms.get("stop_price") or 0)
-            if _ms_price > 0 and _ms_price >= stop:
+            if manual_stop_wins(_ms_price, stop):
                 stop = round(_ms_price, 2)
                 stop_label = "Manual"
                 gap_to_stop = round((price - stop) / price * 100, GAP_TO_STOP_ROUND_DECIMALS)

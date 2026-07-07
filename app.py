@@ -129,7 +129,7 @@ from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
-    holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
+    manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
@@ -11476,7 +11476,7 @@ elif page == "📈 Analysis":
             _price = _r.get("current_price")
             _avg   = _ac_map.get(str(_t).upper(), 0.0)
             _prot  = protective_stop(_price, _avg, _base)[0] if (_price and _avg > 0) else _base
-            if _ms_p >= _prot:
+            if manual_stop_wins(_ms_p, _prot):
                 results[_t] = {
                     **_r,
                     "stop":          _ms_p,
