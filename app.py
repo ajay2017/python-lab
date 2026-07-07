@@ -11423,16 +11423,31 @@ elif page == "📈 Analysis":
     # subsequent renders for everyone, not just this user.
     _an_ms_map = st.session_state.get("_manual_stops", {}) or {}
     if _an_ms_map:
-        # Avg-cost map (for the ratchet floor) from holdings — cheap, and
-        # protective_stop degrades to the ATR stop when avg_cost is missing.
+        # Avg-cost map (for the ratchet floor) — read from the SAME frozen
+        # synthesis frame that produced _sa_holding["Stop"] (build_portfolio_df's
+        # `_port_df_enriched`), NOT a separate holdings_df query, so the ratchet
+        # floor computed here can't diverge from the Brief's after a mid-session
+        # trade re-baselines one frame but not the other (F6). protective_stop
+        # degrades to the ATR stop when a ticker's avg_cost is missing.
+        # Per-cell coercion is defensive: one unparseable Avg Cost skips THAT
+        # ticker only — it must never wipe the whole map, which would zero every
+        # _avg and silently drop the gate to the raw ATR stop for the entire
+        # book, re-opening the manual-gate split-brain this block closes (F1).
+        # Absent-frame degradation (accepted): on a cold Analysis-first landing
+        # (or a Home data-outage session) `_port_df_enriched` is empty, so the
+        # map is empty and the gate degrades to the raw ATR stop — but in that
+        # same state `_sa_holding` is None too, so the breach gate and held-stop
+        # display co-degrade; the Analysis surfaces stay mutually consistent and
+        # the Brief always recomputes correctly via build_portfolio_df. Self-heals
+        # on the next Home render.
         _ac_map = {}
-        try:
-            _hdf = st.session_state.get("holdings_df")
-            if _hdf is not None and not _hdf.empty:
-                for _, _h in _hdf.iterrows():
-                    _ac_map[str(_h.get("Ticker", "")).upper()] = float(_h.get("Avg Cost ($)") or 0)
-        except Exception:
-            _ac_map = {}
+        _sc_port_ac = st.session_state.get("_port_df_enriched", pd.DataFrame())
+        if _sc_port_ac is not None and not _sc_port_ac.empty:
+            for _, _h in _sc_port_ac.iterrows():
+                try:
+                    _ac_map[str(_h.get("Ticker", "")).upper()] = float(_h.get("Avg Cost") or 0)
+                except (TypeError, ValueError):
+                    continue
         for _t, _r in list(results.items()):
             _ms = _an_ms_map.get(str(_t).upper())
             if not _ms:
@@ -11445,12 +11460,18 @@ elif page == "📈 Analysis":
             if not (_base and _ms_p > 0):
                 continue
             # Gate on the RATCHETED protective stop (max of ATR stop and the
-            # profit-ratchet floor) — IDENTICAL to build_portfolio_df — not the
-            # raw ATR stop. So Analysis and the Brief/portfolio agree on whether a
-            # manual stop wins: a manual in the [ATR, floor) gap is rejected here
-            # too (the ratchet floor protects more profit), instead of being
-            # accepted only on this page. Degrades to the ATR stop (_base) when
-            # avg_cost is unavailable — same as the old behaviour.
+            # profit-ratchet floor) — the SAME gate logic as build_portfolio_df —
+            # not the raw ATR stop. So Analysis and the Brief/portfolio agree on
+            # whether a manual stop wins: a manual in the [ATR, floor) gap is
+            # rejected here too (the ratchet floor protects more profit), instead
+            # of being accepted only on this page. Degrades to the ATR stop
+            # (_base) when avg_cost is unavailable — same as the old behaviour.
+            # NB: this runs on the live-merged price (above), while build ran on
+            # the synthesis-frozen price, so the tier can differ if the stock
+            # crosses a ratchet threshold within the 60s live-refresh window —
+            # the same self-healing fragment-vs-synthesis skew the breach gate
+            # accepts; it re-converges on the next synthesis (not price-identical,
+            # but same-basis and directionally correct for a live view).
             _price = _r.get("current_price")
             _avg   = _ac_map.get(str(_t).upper(), 0.0)
             _prot  = protective_stop(_price, _avg, _base)[0] if (_price and _avg > 0) else _base
@@ -12058,6 +12079,18 @@ elif page == "📈 Analysis":
                     # extra distance to the ATR stop (the F-47 held-stop pattern; ps/R:R
                     # deliberately stay on `r["stop"]` = the ATR fresh-entry basis).
                     _sa_stop = (_f(_sa_holding.get("Stop")) or r.get("stop")) if _sa_holding else r.get("stop")
+                    # Mirror the Brief's skip for "Stop Unavailable" rows: when
+                    # build_portfolio_df had no ATR stop it writes Stop=None AND
+                    # Gap to Stop (%)=None, and the Brief SKIPS the breach test
+                    # entirely (daily_briefing: `if gap is None: continue`). Here
+                    # _f(None) → 0.0 is falsy, so _sa_stop would otherwise fall
+                    # back to the raw ATR bundle r["stop"] and fire a ⛔ banner on
+                    # a name the Brief is deliberately silent about. Use pd.isna
+                    # (not `is None`): once the DataFrame column is float64 the
+                    # None becomes NaN, and `NaN is None` is False — pd.isna is
+                    # True for BOTH, matching the Brief's NaN-aware `_f` so the
+                    # skip engages in every dtype, not just object columns (F3).
+                    _gap_missing = bool(_sa_holding) and pd.isna(_sa_holding.get("Gap to Stop (%)"))
                     # Match the Brief's EXACT breach test — it fires on
                     # round(Gap%, 1) <= 0 (daily_briefing), not the raw inequality —
                     # so a sub-0.05% gap can't split the two surfaces. `price` is now
@@ -12067,7 +12100,7 @@ elif page == "📈 Analysis":
                     # `_live_prices` past the frozen synthesis snapshot; inherent to the
                     # fragment/synthesis split, self-heals, directionally fine for a live view).
                     _stop_breached = bool(
-                        _sa_holding and price and _sa_stop
+                        _sa_holding and price and _sa_stop and not _gap_missing
                         and round((price - _sa_stop) / price * 100, 1) <= 0
                     )
 
