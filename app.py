@@ -127,7 +127,7 @@ from stock_analyzer.targets import (
 from stock_analyzer.portfolio import (
     build_portfolio_df, sector_exposure, alerts, rebalance_actions,
     correlation_matrix, diversification_score, diversification_recommendations,
-    annotate_add_candidates, resolve_sector, stop_ladder,
+    annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
     holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
@@ -11406,6 +11406,16 @@ elif page == "📈 Analysis":
     # subsequent renders for everyone, not just this user.
     _an_ms_map = st.session_state.get("_manual_stops", {}) or {}
     if _an_ms_map:
+        # Avg-cost map (for the ratchet floor) from holdings — cheap, and
+        # protective_stop degrades to the ATR stop when avg_cost is missing.
+        _ac_map = {}
+        try:
+            _hdf = st.session_state.get("holdings_df")
+            if _hdf is not None and not _hdf.empty:
+                for _, _h in _hdf.iterrows():
+                    _ac_map[str(_h.get("Ticker", "")).upper()] = float(_h.get("Avg Cost ($)") or 0)
+        except Exception:
+            _ac_map = {}
         for _t, _r in list(results.items()):
             _ms = _an_ms_map.get(str(_t).upper())
             if not _ms:
@@ -11415,7 +11425,19 @@ elif page == "📈 Analysis":
                 _ms_p = float(_ms.get("stop_price") or 0)
             except (TypeError, ValueError):
                 continue
-            if _base and _ms_p > 0 and _ms_p >= _base:
+            if not (_base and _ms_p > 0):
+                continue
+            # Gate on the RATCHETED protective stop (max of ATR stop and the
+            # profit-ratchet floor) — IDENTICAL to build_portfolio_df — not the
+            # raw ATR stop. So Analysis and the Brief/portfolio agree on whether a
+            # manual stop wins: a manual in the [ATR, floor) gap is rejected here
+            # too (the ratchet floor protects more profit), instead of being
+            # accepted only on this page. Degrades to the ATR stop (_base) when
+            # avg_cost is unavailable — same as the old behaviour.
+            _price = _r.get("current_price")
+            _avg   = _ac_map.get(str(_t).upper(), 0.0)
+            _prot  = protective_stop(_price, _avg, _base)[0] if (_price and _avg > 0) else _base
+            if _ms_p >= _prot:
                 results[_t] = {
                     **_r,
                     "stop":          _ms_p,
