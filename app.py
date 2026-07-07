@@ -11398,6 +11398,23 @@ elif page == "📈 Analysis":
         st.error("No data loaded.")
         st.stop()
 
+    # Merge live prices into current_price BEFORE the stop overrides/gates below,
+    # so the Analysis page uses the SAME price basis the Home synthesis fed
+    # build_portfolio_df and the Brief (which merges `_live_prices` into
+    # current_price at the top of the Home render, before build_portfolio_df).
+    # This closes the last-close-vs-live gap that could split the stop-breach gate
+    # between Analysis and the Brief intraday — now both compare the same live
+    # price against the same stop. Reuses the `_live_prices` already fetched for
+    # the sidebar strip (zero extra API cost); only held tickers are present, so
+    # non-held analysed names keep their last-close bundle price. Shallow-copy so
+    # we never mutate the @st.cache_data bundle. Derived stop/targets stay
+    # last-close-based here, exactly as on the Home page (same accepted pattern).
+    _an_live = st.session_state.get("_live_prices", {}) or {}
+    for _t in list(results.keys()):
+        _lp_px = (_an_live.get(_t) or {}).get("price")
+        if _lp_px and _lp_px > 0:
+            results[_t] = {**results[_t], "current_price": float(_lp_px)}
+
     # Apply manual-stop overrides at the results merge point so every
     # downstream render (Scorecard, Trade Plan metrics, Stop Loss lines on
     # charts, Risk advisor, etc.) reads the user's actioned stop instead of
@@ -12043,10 +12060,12 @@ elif page == "📈 Analysis":
                     _sa_stop = (_f(_sa_holding.get("Stop")) or r.get("stop")) if _sa_holding else r.get("stop")
                     # Match the Brief's EXACT breach test — it fires on
                     # round(Gap%, 1) <= 0 (daily_briefing), not the raw inequality —
-                    # so a sub-0.05% gap can't split the two surfaces. (Intraday the
-                    # Analysis price is last-close while the Brief uses the live-merged
-                    # price, so the mirror is stop-exact, not price-exact — a separate
-                    # pre-existing limitation, not introduced here.)
+                    # so a sub-0.05% gap can't split the two surfaces. `price` is now
+                    # the live-merged price (the same `_live_prices` snapshot the Brief
+                    # used, merged above), so the mirror is price-exact too — bounded
+                    # only by the 60s live-price refresh (the strip fragment can advance
+                    # `_live_prices` past the frozen synthesis snapshot; inherent to the
+                    # fragment/synthesis split, self-heals, directionally fine for a live view).
                     _stop_breached = bool(
                         _sa_holding and price and _sa_stop
                         and round((price - _sa_stop) / price * 100, 1) <= 0
