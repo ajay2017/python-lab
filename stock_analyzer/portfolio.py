@@ -684,6 +684,97 @@ def correlation_matrix(held_data: dict) -> pd.DataFrame:
     return returns.corr().round(3)
 
 
+def _to_tz_naive(s: pd.Series) -> pd.Series:
+    """Drop timezone from a datetime-indexed Series so two series built from
+    different providers (tz-aware vs tz-naive) can align on their dates."""
+    out = s.dropna().copy()
+    idx = out.index
+    if isinstance(idx, pd.DatetimeIndex) and idx.tz is not None:
+        out.index = idx.tz_localize(None)
+    return out
+
+
+def portfolio_return_series(port_df: pd.DataFrame, held_data: dict) -> pd.Series | None:
+    """The book's weighted daily-RETURN Series (for correlation_to_portfolio).
+
+    Mirrors the weighting in `risk.compute_portfolio_risk_metrics` (which computes
+    the same `port_returns` internally but does not expose it): per-name daily
+    returns from each holding's Close history, weighted by current Weight (%),
+    renormalised to the names that actually have price history. Returns None when
+    there is insufficient data. Pure / no I/O.
+    """
+    if port_df is None or port_df.empty or not held_data:
+        return None
+    series: dict[str, pd.Series] = {}
+    for ticker, data in (held_data or {}).items():
+        hist = data.get("df") if data.get("df") is not None else data.get("history")
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            series[ticker] = _to_tz_naive(hist["Close"])
+    if not series:
+        return None
+    prices = pd.DataFrame(series).ffill().dropna()
+    if len(prices) < 10:
+        return None
+    daily_returns = prices.pct_change().dropna()
+    weights: dict[str, float] = {}
+    for _, row in port_df.iterrows():
+        t = row["Ticker"]
+        if t in daily_returns.columns:
+            try:
+                weights[t] = float(row["Weight (%)"]) / 100.0
+            except (TypeError, ValueError):
+                continue
+    total_w = sum(weights.values())
+    if total_w <= 0:
+        return None
+    weights = {t: w / total_w for t, w in weights.items()}
+    port_returns = pd.Series(0.0, index=daily_returns.index)
+    for t, w in weights.items():
+        port_returns += daily_returns[t] * w
+    return port_returns
+
+
+def correlation_to_portfolio(
+    candidate_close: pd.Series,
+    port_returns: pd.Series,
+    min_overlap: int = 20,
+) -> float | None:
+    """Pearson correlation of a candidate's daily returns to the BOOK's daily returns.
+
+    This is the data-driven, book-relative diversification read — it supersedes
+    the hardcoded, tech-heavy-assuming `_SECTOR_PROFILES` corr values for the
+    rebalance card, which are wrong for a book concentrated in a non-tech sector.
+
+    Parameters
+    ----------
+    candidate_close : the candidate's daily Close price Series (from its bundle `df`).
+    port_returns    : the portfolio's weighted daily-RETURN Series (already returns,
+                      not prices — built by the caller the same way
+                      `compute_portfolio_risk_metrics` builds `port_returns`).
+    min_overlap     : minimum overlapping trading days required for a stable read;
+                      fewer → return None (surface "n/a", never a noisy estimate).
+
+    Returns the correlation rounded to 2dp in [-1, 1], or None when the candidate
+    price history is missing/short or the aligned overlap is below `min_overlap`.
+    Pure / no I/O.
+    """
+    if candidate_close is None or port_returns is None:
+        return None
+    try:
+        cand = _to_tz_naive(pd.Series(candidate_close))
+        cand_ret = cand.pct_change().dropna()
+        book_ret = _to_tz_naive(pd.Series(port_returns))
+        joined = pd.concat([cand_ret, book_ret], axis=1, join="inner").dropna()
+        if len(joined) < max(2, min_overlap):
+            return None
+        c = joined.iloc[:, 0].corr(joined.iloc[:, 1])
+        if c is None or c != c:   # NaN guard (e.g. a flat/zero-variance series)
+            return None
+        return round(float(c), 2)
+    except Exception:
+        return None
+
+
 def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) -> dict:
     """
     Score 0–100: 100 = fully uncorrelated, 0 = all positions move in lockstep.

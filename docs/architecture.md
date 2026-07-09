@@ -212,6 +212,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `REGIME_CPI_ELEVATED_MIN` / `_HOT_MIN` | 3.0 / 4.0 | Regime-classifier CPI ladder: ≥ELEVATED = mild inflation-fight pressure; >HOT = strong inflation-fight / stagflation signal |
 | `DIVERSIFY_SCAN_CAP` | 10 | Max discovery-universe names composite-scored per underweight sector on the Diversification ADD card (bounds cached-load_all work) |
 | `DIVERSIFY_DISPLAY_TOP` | 3 | Ranked diversification candidates shown per sector (best-first by composite) |
+| `REDEPLOY_CORR_DIVERSIFIER_MAX` / `_CORRELATED_MIN` | 0.40 / 0.70 | Correlation-to-your-book label boundaries on the Hard-Cap-Breach rebalance plan (F-22c): < MAX → 🟢 genuine diversifier, ≥ MIN → 🔴 limited benefit, between → 🟡 partial. **Display classification, NOT a gate** — never suppresses or reorders a candidate (composite + `COMPOSITE_BUY` remain the sole ranker/gate). Same status as the analyst-consensus labels |
 | `GROW_MAX_PICKS_BULL` / `_DEFAULT` | 3 / 1 | Grow Today new-position cap per day (bull / flat-bear). Investment-policy values |
 | `GROW_CANDIDATE_OVERFETCH` | 4 | Over-fetch multiplier — composite-score this many × the pick cap so enough candidates survive the gates. Coverage/perf knob, not a policy threshold |
 | `GROW_CANDIDATE_POOL` | 12 (derived) | `GROW_MAX_PICKS_BULL × GROW_CANDIDATE_OVERFETCH` — the bull-day max candidate window; app.py pre-fetches composites for this many top non-held picks. Single source of truth (replaced a hardcoded `.head(12)` in two app.py sites) |

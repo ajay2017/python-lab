@@ -122,6 +122,10 @@ def build_risk_advisor_recommendations(
             "market_value": _f(row.get("Market Value")),
             "pnl_pct":      _f(row.get("P&L (%)")),
             "score":        _f(row.get("Score")),
+            # None-preserving composite (never coerced to 0.0) — a priced name
+            # with a missing score must NOT masquerade as "lowest conviction" in
+            # the trim ranking below. `_beta_ok` is a generic None-safe float.
+            "score_raw":    _beta_ok(row.get("Score")),
             "signal":       str(row.get("Signal", "")),
             "ret_6mo":      _f(h_rets.get(t)),
             "sector":       str(row.get("Sector", "Other")),
@@ -535,6 +539,7 @@ def build_risk_advisor_recommendations(
             "weight":       tr["weight"],
             "market_value": tr["market_value"],
             "pnl_pct":      tr["pnl_pct"],
+            "score_raw":    tr["score_raw"],   # None-preserving; for conviction rank
         })
 
     # The "Other" catch-all is not a real correlated sector — it's the bucket
@@ -614,6 +619,29 @@ def build_risk_advisor_recommendations(
                 "  ·  ".join(f"{s} ({w:.1f}%)" for s, w in under_sectors)
                 if under_sectors else "no under-represented sectors detected"
             )
+            # Structured redeploy targets (render layer scores real tickers per
+            # sector via the diversification helpers). Account-basis weights match
+            # the top-sector figure above.
+            redeploy_sectors = [
+                {"sector": s, "weight": round(w, 1)} for s, w in under_sectors
+            ]
+            # Conviction-ranked trim order — the concrete backing for the copy's
+            # "trim the lowest-conviction names first." Ranked by composite ASCENDING;
+            # names with no real composite (score_raw is None) are EXCLUDED so a
+            # missing score can't masquerade as lowest conviction. Account-basis
+            # weight, consistent with root_tickers.
+            trim_candidates = [
+                {
+                    "ticker":  h["ticker"],
+                    "score":   round(float(h["score_raw"]), 0),
+                    "weight":  round(h["weight"] * _acct_f, 1),
+                    "pnl_pct": round(h["pnl_pct"], 1),
+                }
+                for h in sorted(
+                    (h for h in sector_holdings[top_sec] if h["score_raw"] is not None),
+                    key=lambda h: h["score_raw"],
+                )
+            ]
 
             recs.append({
                 "priority": sec_priority,
@@ -636,6 +664,11 @@ def build_risk_advisor_recommendations(
                 ),
                 "root_cause": f"Largest {top_sec} positions: {top_names_str}.",
                 "root_tickers": root_tickers,
+                # Rebalance-plan payload (render layer, app.py _render_act_card):
+                # trim_candidates = conviction-ranked names to trim first;
+                # redeploy_sectors = under-represented targets to score buy names in.
+                "trim_candidates":  trim_candidates,
+                "redeploy_sectors": redeploy_sectors,
                 "recommendation": (
                     f"Trim {top_sec} exposure by approximately "
                     f"**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** to bring the sector under "

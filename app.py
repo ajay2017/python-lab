@@ -84,6 +84,9 @@ from stock_analyzer.constants import (
     CONCENTRATION_HIGHBETA_SHARE_WARN,
     ACCOUNT_CASH_STALE_DAYS,
     DIVERSIFY_DISPLAY_TOP,
+    DIVERSIFY_SCAN_CAP,
+    REDEPLOY_CORR_DIVERSIFIER_MAX,
+    REDEPLOY_CORR_CORRELATED_MIN,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     MACRO_IMMINENT_DAYS,
@@ -130,6 +133,7 @@ from stock_analyzer.portfolio import (
     correlation_matrix, diversification_score, diversification_recommendations,
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
+    diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
@@ -5395,6 +5399,214 @@ if page == "🏠 Home":
                             ):
                                 st.session_state["_pending_page"] = "🧠 AI Insights"
                                 st.rerun()
+
+                # ── Rebalance plan (Hard-Cap-Breach / sector-concentration cards) ──
+                # Completes the trim→redeploy loop that the copy promises but the
+                # card never delivered: names the lowest-conviction holdings to trim
+                # AND engine-vetted, correlation-checked buy candidates in the
+                # under-represented sectors. Button-gated (not an expander, whose
+                # body always executes) so NO scoring / correlation compute runs
+                # until the user asks — keeps the default Brief calm (§2B) and
+                # avoids a per-rerun fetch storm. INVARIANTS: the engine composite +
+                # COMPOSITE_BUY are the SOLE ranker/gate; correlation-to-book and
+                # saved analyst research only ANNOTATE (never reorder past the
+                # composite, never gate).
+                _rebal_flag = next(
+                    (f for f in _db_flags if f.get("rec_type") == "sector_concentration"),
+                    None,
+                )
+                if _rebal_flag is not None:
+                    _rebal_sfx  = _db_item["action"][:10]
+                    _rebal_key  = f"_rebal_open_{_db_ticker}_{_rebal_sfx}"
+                    if st.button(
+                        "🔎 Rebalance plan — what to trim, where to redeploy",
+                        key=f"_rebal_btn_{_db_ticker}_{_rebal_sfx}",
+                    ):
+                        st.session_state[_rebal_key] = not st.session_state.get(_rebal_key, False)
+                    if st.session_state.get(_rebal_key, False):
+                        _trim       = _rebal_flag.get("trim_candidates", []) or []
+                        _redep_secs = _rebal_flag.get("redeploy_sectors", []) or []
+
+                        # ── Trim first: lowest-conviction names in the sector ──
+                        if _trim:
+                            st.markdown("**Trim first — your lowest-conviction names:**")
+                            for _tc in _trim[:DIVERSIFY_DISPLAY_TOP]:
+                                st.caption(
+                                    f"• **{_tc['ticker']}** — composite "
+                                    f"{_tc['score']:.0f}/100 · {_tc['weight']:.1f}% · "
+                                    f"P&L {_tc['pnl_pct']:+.1f}%"
+                                )
+                            st.caption(
+                                "_Ranked by your engine's conviction score (lowest first) — "
+                                "keep your best ideas, prune the marginal ones._"
+                            )
+
+                        # ── Redeploy: engine-vetted candidates in under-rep sectors ──
+                        if _redep_secs:
+                            _held_set = (
+                                set(port_df["Ticker"].tolist())
+                                if (port_df is not None and not port_df.empty) else set()
+                            )
+                            _grow_cache = st.session_state.get("_grow_composites", {}) or {}
+                            _port_ret   = portfolio_return_series(port_df, held_data)
+                            _ac_map     = _cached_analyst_coverage_recent()
+
+                            _cand_rows: list[dict] = []
+                            with st.spinner("Scoring redeploy candidates…"):
+                                for _sec in _redep_secs:
+                                    _sec_name = _sec.get("sector")
+                                    _pool = diversifying_candidate_pool(
+                                        _sec_name, _held_set, cap=DIVERSIFY_SCAN_CAP
+                                    )
+                                    _quality: dict = {}
+                                    _bundles: dict = {}
+                                    for _cand in _pool:
+                                        _cb = _grow_cache.get(_cand)
+                                        if _cb is None:
+                                            try:
+                                                _cb = load_all(_cand)
+                                            except Exception:
+                                                _cb = None
+                                        if _cb is None:
+                                            continue
+                                        _bundles[_cand] = _cb
+                                        _cprice = _cb.get("current_price")
+                                        _cstop  = _cb.get("stop")
+                                        _ctgt   = (_cb.get("targets") or {}).get("base")
+                                        _crr = (
+                                            risk_reward(_cprice, _cstop, _ctgt)
+                                            if (_cprice and _cstop and _ctgt) else None
+                                        )
+                                        _quality[_cand] = {
+                                            "score":  _cb.get("total"),
+                                            "signal": (_cb.get("rec") or {}).get("label"),
+                                            "rr":     _crr,
+                                        }
+                                    _annot = annotate_add_candidates(
+                                        _pool, _quality, buy_gate=COMPOSITE_BUY
+                                    )
+                                    for _a in _annot:
+                                        _a["sector"]  = _sec_name
+                                        _a["_bundle"] = _bundles.get(_a["ticker"])
+                                    _cand_rows.extend(_annot)
+
+                            # Global re-rank across sectors: gate-passers (composite
+                            # desc) → scored-failers → unscored. Composite is primary.
+                            def _rebal_rank(c: dict) -> tuple:
+                                tier = 0 if c["passes"] is True else (1 if c["passes"] is False else 2)
+                                return (tier, -(c["score"] if isinstance(c["score"], (int, float)) else 0))
+                            _cand_rows.sort(key=_rebal_rank)
+                            # Dedup by ticker (keep the best-ranked instance). A ticker
+                            # could in principle appear in two redeploy sectors' pools;
+                            # two identical Analyze-button keys would raise
+                            # StreamlitDuplicateElementId. Latent today (rosters are
+                            # disjoint) — cheap to harden, also avoids double-display.
+                            _seen_t: set = set()
+                            _deduped: list[dict] = []
+                            for _c in _cand_rows:
+                                _tk = str(_c["ticker"]).upper()
+                                if _tk in _seen_t:
+                                    continue
+                                _seen_t.add(_tk)
+                                _deduped.append(_c)
+                            _cand_rows = _deduped
+                            _display = _cand_rows[:DIVERSIFY_DISPLAY_TOP]
+
+                            # Correlation-to-book for the displayed names only.
+                            for _c in _display:
+                                _bd = _c.get("_bundle") or {}
+                                _hist = _bd.get("df") if _bd.get("df") is not None else _bd.get("history")
+                                _close = (
+                                    _hist["Close"]
+                                    if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
+                                    else None
+                                )
+                                _c["corr"] = (
+                                    correlation_to_portfolio(_close, _port_ret)
+                                    if (_close is not None and _port_ret is not None) else None
+                                )
+                            # "Cleanest diversifier" = lowest corr among displayed
+                            # gate-passers (correlation as a HIGHLIGHT, not a re-rank).
+                            _passers_corr = [
+                                c for c in _display
+                                if c["passes"] is True and isinstance(c.get("corr"), (int, float))
+                            ]
+                            _cleanest = (
+                                min(_passers_corr, key=lambda c: c["corr"])["ticker"]
+                                if _passers_corr else None
+                            )
+
+                            def _corr_label(cv) -> str:
+                                if not isinstance(cv, (int, float)):
+                                    return "corr to your book: n/a"
+                                if cv < REDEPLOY_CORR_DIVERSIFIER_MAX:
+                                    return f"🟢 corr {cv:.2f} to your book — genuine diversifier"
+                                if cv >= REDEPLOY_CORR_CORRELATED_MIN:
+                                    return f"🔴 corr {cv:.2f} to your book — limited benefit (moves with your book)"
+                                return f"🟡 corr {cv:.2f} to your book — partial diversifier"
+
+                            st.markdown("**Redeploy into — engine-vetted candidates:**")
+                            if any(c["passes"] is True for c in _cand_rows):
+                                _best = next(c for c in _cand_rows if c["passes"] is True)
+                                st.success(
+                                    f"**{_best['ticker']}** ({_best['sector']}) clears the Buy gate "
+                                    f"({_best['score']:.0f} ≥ {COMPOSITE_BUY:.0f}) — a genuine redeploy entry, "
+                                    "not just a sector filler.",
+                                    icon="🎯",
+                                )
+                            else:
+                                st.warning(
+                                    f"No under-represented-sector name clears the Buy gate "
+                                    f"(≥ {COMPOSITE_BUY:.0f}) today. Trimming is still sound — wait for a "
+                                    "better entry or pick your own name.",
+                                    icon="🚦",
+                                )
+
+                            for _c in _display:
+                                _t = _c["ticker"]
+                                _gate_icon = (
+                                    "✅" if _c["passes"] is True
+                                    else ("⚠️" if _c["passes"] is False else "—")
+                                )
+                                _score_txt = (
+                                    f"{_c['score']:.0f}/100"
+                                    if isinstance(_c["score"], (int, float)) else "score n/a"
+                                )
+                                _rr = _c.get("rr")
+                                _rr_txt = (
+                                    f" · R:R {_rr:.1f}:1"
+                                    if isinstance(_rr, (int, float)) and _rr > 0 else ""
+                                )
+                                _clean_badge = " · 🏆 cleanest diversifier" if _t == _cleanest else ""
+                                st.markdown(
+                                    f"{_gate_icon} **{_t}** ({_c['sector']}) — {_score_txt}"
+                                    + (f" · {_c['signal']}" if _c.get("signal") else "")
+                                    + _rr_txt
+                                )
+                                st.caption(f"{_corr_label(_c.get('corr'))}{_clean_badge}")
+                                # Analyst awareness note — display-only; NEVER ranks/gates.
+                                _ac = _ac_map.get(str(_t).upper())
+                                if _ac and (_ac.get("consensus_rating") or _ac.get("avg_pt") is not None):
+                                    _ap = []
+                                    if _ac.get("consensus_rating"):
+                                        _ap.append(str(_ac["consensus_rating"]))
+                                    if _ac.get("avg_pt") is not None:
+                                        _ap.append(f"avg PT ${float(_ac['avg_pt']):.2f}")
+                                    if _ap:
+                                        st.caption(
+                                            f"🏦 Your saved research: {' · '.join(_ap)} "
+                                            f"({_ac.get('n_firms', '?')} firms) — awareness only"
+                                        )
+                                if st.button(f"▶ Analyze {_t}", key=f"_rebal_an_{_t}_{_rebal_sfx}"):
+                                    st.session_state["_pending_page"]    = "📈 Analysis"
+                                    st.session_state["_analysis_ticker"] = _t
+                                    st.rerun()
+
+                            st.caption(
+                                f"_Ranked by your engine's composite (Buy gate {COMPOSITE_BUY:.0f}); "
+                                "correlation measured against your actual book. Full options on "
+                                "⚠️ Alerts & Actions → Add for Diversification._"
+                            )
 
             def _render_review_card(_db_rev, _card_idx=0, in_act=False):
                 # Red accents when this review item was promoted into the red "Act

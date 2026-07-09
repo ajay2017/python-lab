@@ -1217,19 +1217,28 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         if rec.get("type") in _TUNEUP_RISK_TYPES:
             continue
         rt = rec.get("root_tickers", [])
+        # risk recs already carry rich directive text in `recommendation`; keep it
+        # as a flag entry so multiple flags on one ticker can merge.
+        _flag = {
+            "title":          rec.get("title", "Risk Alert"),
+            "recommendation": rec.get("recommendation", rec.get("problem", "")),
+            "problem":        rec.get("problem", ""),
+        }
+        # Rebalance-plan payload rides ON THE FLAG (not the item top-level) so it
+        # survives _consolidate_act_today, which keeps only the primary item's
+        # keys but gathers ALL flags across a merged ticker group. The render
+        # (app.py _render_act_card) keys off flag["rec_type"].
+        if rec.get("type") == "sector_concentration":
+            _flag["rec_type"]         = "sector_concentration"
+            _flag["trim_candidates"]  = rec.get("trim_candidates", []) or []
+            _flag["redeploy_sectors"] = rec.get("redeploy_sectors", []) or []
         items.append({
             "priority": "high",
             "icon":     "⚠️",
             "ticker":   rt[0]["ticker"] if rt else None,
             "kind":     "risk",
             "action":   f"RISK — {rec.get('title','Risk Alert')}",
-            # risk recs already carry rich directive text in `recommendation`;
-            # keep it as a flag entry so multiple flags on one ticker can merge.
-            "risk_flags": [{
-                "title":          rec.get("title", "Risk Alert"),
-                "recommendation": rec.get("recommendation", rec.get("problem", "")),
-                "problem":        rec.get("problem", ""),
-            }],
+            "risk_flags": [_flag],
             "weight":  None,
             "pnl_pct": None,
         })

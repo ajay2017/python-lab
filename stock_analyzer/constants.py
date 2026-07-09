@@ -62,6 +62,17 @@ UNCLASSIFIED_SECTOR = "Other"
 DIVERSIFY_SCAN_CAP    = 10        # max names composite-scored per underweight sector
 DIVERSIFY_DISPLAY_TOP = 3         # ranked candidates shown per sector
 
+# ── Rebalance-plan correlation labels (DISPLAY CLASSIFICATION, NOT A GATE) ────
+# On the Hard-Cap-Breach rebalance card, each redeploy candidate is annotated
+# with its correlation to YOUR ACTUAL BOOK (portfolio.correlation_to_portfolio) —
+# a data-driven diversification read that supersedes the hardcoded tech-heavy
+# _SECTOR_PROFILES values for this surface. These boundaries only pick the label
+# text (🟢 genuine diversifier / 🟡 partial / 🔴 limited benefit); they NEVER
+# gate, suppress, or reorder a candidate (the engine composite + COMPOSITE_BUY
+# remain the sole ranker/gate). Same status as the analyst-consensus labels.
+REDEPLOY_CORR_DIVERSIFIER_MAX = 0.40   # corr below this → "genuine diversifier"
+REDEPLOY_CORR_CORRELATED_MIN  = 0.70   # corr at/above this → "limited benefit"
+
 # ── Grow Today candidate funnel ──────────────────────────────────────────────
 # max_picks: how many NEW positions the daily brief will recommend. Lower on
 # flat/bear days (capital-preservation posture). Investment-policy values —
