@@ -134,6 +134,7 @@ from stock_analyzer.portfolio import (
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
+    trailing_return,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
@@ -5430,15 +5431,56 @@ if page == "🏠 Home":
                         # ── Trim first: lowest-conviction names in the sector ──
                         if _trim:
                             st.markdown("**Trim first — your lowest-conviction names:**")
-                            for _tc in _trim[:DIVERSIFY_DISPLAY_TOP]:
-                                st.caption(
-                                    f"• **{_tc['ticker']}** — composite "
-                                    f"{_tc['score']:.0f}/100 · {_tc['weight']:.1f}% · "
-                                    f"P&L {_tc['pnl_pct']:+.1f}%"
+                            _trim_show = _trim[:DIVERSIFY_DISPLAY_TOP]
+                            for _tc in _trim_show:
+                                _t = _tc["ticker"]
+                                # Basis for WHY this name is low-conviction: the
+                                # composite's three pillars (already computed in the
+                                # held bundle) + recent momentum, so "this one is
+                                # performing better lately" is legible next to a
+                                # single conviction number. Display-only; the order
+                                # stays composite-ascending (engine authority).
+                                _hb = (held_data or {}).get(_t) or {}
+                                _tsc, _fsc, _ssc = _hb.get("t_score"), _hb.get("f_score"), _hb.get("s_score")
+                                _hist = _hb.get("df") if _hb.get("df") is not None else _hb.get("history")
+                                _cl = (
+                                    _hist["Close"]
+                                    if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
+                                    else None
                                 )
+                                _r1w = trailing_return(_cl, 5) if _cl is not None else None
+                                _r1m = trailing_return(_cl, 21) if _cl is not None else None
+                                st.markdown(
+                                    f"• **{_t}** — composite {_tc['score']:.0f}/100 · "
+                                    f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
+                                )
+                                _pillars = []
+                                if isinstance(_tsc, (int, float)): _pillars.append(f"tech {_tsc:.0f}")
+                                if isinstance(_fsc, (int, float)): _pillars.append(f"fund {_fsc:.0f}")
+                                if isinstance(_ssc, (int, float)): _pillars.append(f"sentiment {_ssc:.0f}")
+                                _mom = []
+                                if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
+                                if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
+                                _basis_bits = []
+                                if _pillars: _basis_bits.append(" · ".join(_pillars))
+                                if _mom:     _basis_bits.append(" · ".join(_mom))
+                                # Name the pillar dragging the composite down (the
+                                # "why") — factual, lowest of the three.
+                                _pillar_map = {
+                                    "fundamentals": _fsc, "momentum/technicals": _tsc, "sentiment": _ssc,
+                                }
+                                _valid = {k: v for k, v in _pillar_map.items() if isinstance(v, (int, float))}
+                                if _valid:
+                                    _weak = min(_valid, key=_valid.get)
+                                    _basis_bits.append(f"conviction capped by {_weak} ({_valid[_weak]:.0f})")
+                                if _basis_bits:
+                                    st.caption("    ↳ " + "  ·  ".join(_basis_bits))
                             st.caption(
-                                "_Ranked by your engine's conviction score (lowest first) — "
-                                "keep your best ideas, prune the marginal ones._"
+                                "_Ordered by your engine's composite (lowest first). Small gaps are within "
+                                "scoring noise — the pillar breakdown + recent momentum are your tie-breaker. "
+                                "Two honest schools when a sector MUST be cut: **trim the laggard** (momentum) "
+                                "or **take profit on the runner** (rebalance). The engine ranks conviction; "
+                                "the final call is yours._"
                             )
 
                         # ── Redeploy: engine-vetted candidates in under-rep sectors ──

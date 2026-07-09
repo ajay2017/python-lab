@@ -694,6 +694,28 @@ def _to_tz_naive(s: pd.Series) -> pd.Series:
     return out
 
 
+def trailing_return(close, trading_days: int) -> float | None:
+    """Trailing % price return over the last `trading_days` bars of a Close series.
+
+    Used to show a held name's RECENT momentum (e.g. 1wk = 5, 1mo = 21) next to
+    its composite on the rebalance-plan trim list — the composite already blends a
+    technical pillar, but a short-window return is what makes "this name is
+    performing better lately" legible. Returns None when history is too short.
+    Pure / no I/O.
+    """
+    try:
+        s = pd.Series(close).dropna()
+        if len(s) < trading_days + 1:
+            return None
+        prev = float(s.iloc[-1 - trading_days])
+        last = float(s.iloc[-1])
+        if prev <= 0:
+            return None
+        return round((last / prev - 1.0) * 100.0, 1)
+    except Exception:
+        return None
+
+
 def portfolio_return_series(port_df: pd.DataFrame, held_data: dict) -> pd.Series | None:
     """The book's weighted daily-RETURN Series (for correlation_to_portfolio).
 
