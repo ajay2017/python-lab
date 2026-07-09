@@ -13012,8 +13012,9 @@ elif page == "📈 Analysis":
                             "Forward P/E": "Forward P/E", "FCF Yield": "FCF Yield",
                         }
                         tip_key = tip_map.get(k, "")
+                        tip_safe = _tip(tip_key).split(chr(10))[0].replace("'", "&#39;")
                         label_md = (
-                            f"<abbr title='{_tip(tip_key).split(chr(10))[0]}' "
+                            f"<abbr title='{tip_safe}' "
                             f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
                             if tip_key else f"<b>{k}</b>"
                         )
@@ -13038,8 +13039,9 @@ elif page == "📈 Analysis":
                             continue
                         suffix = "%" if key == "fcf_yield" else ""
                         fmt = f"{v:.1f}{suffix}" if key == "fcf_yield" else f"{v:.2f}"
+                        tip_safe = tip_txt.split(chr(10))[0].replace("'", "&#39;")
                         st.markdown(
-                            f"<small><abbr title='{tip_txt.split(chr(10))[0]}' "
+                            f"<small><abbr title='{tip_safe}' "
                             f"style='cursor:help;border-bottom:1px dotted #555'>**{label}**</abbr>: "
                             f"{fmt}</small>",
                             unsafe_allow_html=True,
