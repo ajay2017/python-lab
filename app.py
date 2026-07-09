@@ -5493,7 +5493,11 @@ if page == "🏠 Home":
                                 if _tt_dollar else {"rows": [], "total_allocated": 0, "target": 0, "shortfall": 0}
                             )
                             if _alloc["rows"]:
-                                _hdr = f"**Trim first — the plan (target: trim ~${_tt_dollar:,.0f}"
+                                # NOTE: escape literal "$" as "\$" in every st.markdown/
+                                # st.caption below — Streamlit renders a $…$ PAIR as LaTeX
+                                # math, so a line with two unescaped dollars (e.g. the
+                                # running total) garbles into italic math.
+                                _hdr = f"**Trim first — the plan (target: trim ~\\${_tt_dollar:,.0f}"
                                 if isinstance(_tt_pp, (int, float)): _hdr += f" · {_tt_pp:.0f}pp"
                                 _hdr += f" → {SECTOR_ELEVATED:.0f}%):**"
                                 st.markdown(_hdr)
@@ -5516,7 +5520,7 @@ if page == "🏠 Home":
                                     _tail = " · full exit" if _row["full"] else " · partial"
                                     _tx = _tax_txt.get(_row.get("tax_dir"), "")
                                     st.markdown(
-                                        f"**{_i}. {_t}** — {_verb} ~${_row['cut_dollar']:,.0f}{_pp}{_sh}{_tail}"
+                                        f"**{_i}. {_t}** — {_verb} ~\\${_row['cut_dollar']:,.0f}{_pp}{_sh}{_tail}"
                                         + (f" · 🧾 {_tx}" if _tx else "")
                                     )
                                     _trim_basis(_t, _tc_by_tkr.get(_t, {}))
@@ -5524,16 +5528,16 @@ if page == "🏠 Home":
                                 if _extra:
                                     _ex_sum = sum(r["cut_dollar"] for r in _extra)
                                     st.caption(
-                                        f"    + ~${_ex_sum:,.0f} to trim across {len(_extra)} more "
+                                        f"    + ~\\${_ex_sum:,.0f} to trim across {len(_extra)} more "
                                         "low-conviction name(s)"
                                     )
                                 st.caption(
-                                    f"✓ **${_alloc['total_allocated']:,.0f}** of ~${_alloc['target']:,.0f} "
+                                    f"✓ **\\${_alloc['total_allocated']:,.0f}** of ~\\${_alloc['target']:,.0f} "
                                     f"· sector → ~{SECTOR_ELEVATED:.0f}%"
                                 )
                                 if _alloc["shortfall"] > 0:
                                     st.caption(
-                                        f"⚠️ ~${_alloc['shortfall']:,.0f} of the target isn't covered by your "
+                                        f"⚠️ ~\\${_alloc['shortfall']:,.0f} of the target isn't covered by your "
                                         "scored names in this sector — trim the remainder across the sector's "
                                         "other holdings."
                                     )
