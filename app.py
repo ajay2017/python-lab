@@ -18779,7 +18779,7 @@ This is why a name can show up as a Grow Today pick in the morning (bull open) a
     with st.expander("📊 Understanding verdict changes — what would flip the signal?", expanded=False):
         st.markdown(
             """
-The **verdict upgrade/downgrade expander** ("📈 What would change this signal?") appears below the verdict banner on every Analysis page. On the left, it shows how many composite points separate the current verdict from the next tier up, and which of the four pillars — Technical, Business Quality, Valuation, or Sentiment — needs the most improvement to close that gap (sorted easiest lever first). On the right, it shows your downgrade buffer: how many points above the current verdict floor, and which pillar carries the most weight (most impactful if it deteriorates). This lets you see exactly what the engine considers the core case for a stock — and what would break it.
+The **verdict upgrade/downgrade expander** ("📈 What would change this signal?") appears below the verdict banner on every Analysis page. On the left, it shows how many composite points separate the current verdict from the next tier up, and which of the four pillars — Technical, Business Quality, Valuation, or Sentiment — would most easily close that gap (the smallest lift shown first). On the right, it shows your downgrade buffer: how many points above the current verdict floor, and which pillar carries the most weight (most impactful if it deteriorates). This lets you see exactly what the engine considers the core case for a stock — and what would break it.
 """
         )
 
@@ -18858,7 +18858,7 @@ It's **educational only — it explains the stop, it never changes a recommendat
     with st.expander("⚙️ Gate checks on the Trade Plan", expanded=False):
         st.markdown(
             """
-Before you size a position, the **Gate checks** row at the top of the Trade Plan gives you a five-gate snapshot: **Data Quality** (are fundamentals available?), **Reward:Risk** (is the entry R:R ≥ 2×?), **Concentration** (does this fit your portfolio caps?), **Sector cap** (is the sector below 35%?), and **Earnings window** (stepping into an imminent earnings print?). Each gate shows as green ✓ (clear), red ✗ (failed), or grey — (data not yet loaded — check the 💰 Account page or 🔔 Catalyst Watch page first). The checks are **awareness only** — they don't block you from entering, but they surface which data gaps or risks to consider before you commit.
+Before you size a position, the **Gate checks** row — shown just above the position-sizing section of the Trade Plan — gives you a five-gate snapshot: **Data Quality** (are fundamentals available?), **Reward:Risk** (is the entry R:R ≥ 2×?), **Concentration** (does this fit your portfolio caps?), **Sector cap** (is the sector below 35%?), and **Earnings window** (stepping into an imminent earnings print?). Each gate shows as green ✓ (clear), red ✗ (failed), or grey — (not applicable or not yet known): a name you don't hold has no concentration to check, an R:R the app can't compute reads *unavailable*, and portfolio or earnings data that hasn't loaded yet points you to the 💰 Account or 🔔 Catalyst Watch page (each gate's caption tells you which). The checks are **awareness only** — they don't block you from entering, but they surface which data gaps or risks to consider before you commit.
 """
         )
 
