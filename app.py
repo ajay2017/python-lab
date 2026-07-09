@@ -4715,14 +4715,22 @@ if page == "🏠 Home":
                             _fn_fig = go.Figure(go.Sankey(
                                 arrangement="snap",
                                 node=dict(
-                                    label=_fn_labels, color=_fn_ncolor, pad=18, thickness=16,
+                                    # pad is generous on purpose: the funnel is
+                                    # heavily value-skewed (e.g. 206 not-scored vs
+                                    # a 12-name scored band), so the terminal nodes
+                                    # collapse to a few px and their labels collide.
+                                    # A large gap separates the labels while band
+                                    # WIDTHS stay drawn-to-scale (thickness=value).
+                                    label=_fn_labels, color=_fn_ncolor, pad=34, thickness=14,
                                     line=dict(color="rgba(255,255,255,0.08)", width=0.5),
                                 ),
                                 link=dict(source=list(_fs), target=list(_ft),
                                           value=list(_fv), color=list(_fc)),
                             ))
                             _fn_fig.update_layout(
-                                height=300, margin=dict(l=0, r=0, t=10, b=0),
+                                # l/r margins give the right-edge node labels room
+                                # so they never clip the container.
+                                height=280, margin=dict(l=8, r=8, t=10, b=6),
                                 template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
                                 font=dict(size=11, color="#cbd5e1"),
                             )
