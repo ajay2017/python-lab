@@ -18776,6 +18776,13 @@ This is why a name can show up as a Grow Today pick in the morning (bull open) a
 """
         )
 
+    with st.expander("📊 Understanding verdict changes — what would flip the signal?", expanded=False):
+        st.markdown(
+            """
+The **verdict upgrade/downgrade expander** ("📈 What would change this signal?") appears below the verdict banner on every Analysis page. On the left, it shows how many composite points separate the current verdict from the next tier up, and which of the four pillars — Technical, Business Quality, Valuation, or Sentiment — needs the most improvement to close that gap (sorted easiest lever first). On the right, it shows your downgrade buffer: how many points above the current verdict floor, and which pillar carries the most weight (most impactful if it deteriorates). This lets you see exactly what the engine considers the core case for a stock — and what would break it.
+"""
+        )
+
     with st.expander("🚦 Why a pick gets held back (the gates)", expanded=False):
         st.markdown(
             """
@@ -18845,6 +18852,13 @@ Your protective stop is built from **three layers**, and each run the app uses t
 - a **what-if price slider** — drag it down to see whether a drop breaches your stop (and the P&L you'd realise), or up to see the higher stop the app would then recommend.
 
 It's **educational only — it explains the stop, it never changes a recommendation.** The stop shown on Analysis matches Today's Brief exactly — same ratcheted stop, same live price, same breach test — so the two surfaces never tell you different things about where your stop is.
+"""
+        )
+
+    with st.expander("⚙️ Gate checks on the Trade Plan", expanded=False):
+        st.markdown(
+            """
+Before you size a position, the **Gate checks** row at the top of the Trade Plan gives you a five-gate snapshot: **Data Quality** (are fundamentals available?), **Reward:Risk** (is the entry R:R ≥ 2×?), **Concentration** (does this fit your portfolio caps?), **Sector cap** (is the sector below 35%?), and **Earnings window** (stepping into an imminent earnings print?). Each gate shows as green ✓ (clear), red ✗ (failed), or grey — (data not yet loaded — check the 💰 Account page or 🔔 Catalyst Watch page first). The checks are **awareness only** — they don't block you from entering, but they surface which data gaps or risks to consider before you commit.
 """
         )
 

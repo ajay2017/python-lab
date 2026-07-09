@@ -516,7 +516,26 @@ Earnings growth and debt/equity retain universal thresholds. The sector P/E norm
 | PT Upside to consensus avg target | 25 | ≥30%=25; ≥15%=20; ≥5%=12; ≥0%=6; ≥−5%=2; <−5%=0 |
 | Analyst consensus rating | 30 | Strong Buy=30; Buy=24; Hold=15; Mixed=9; Sell=0 |
 
-### 5.4 Technical Score Components (0–100)
+### 5.4 Upgrade/Downgrade Trigger Computation
+
+For each pillar p with score Sp and weight Wp, the score needed to reach the next verdict threshold T is:
+  S_p_needed = (T − Σ(other pillars Sk × Wk)) / Wp
+Rendered in the "📈 What would change this signal?" expander (app.py ~12148).
+Pillar triggers sorted by ascending gain needed (easiest lever first); top 2 shown.
+Downgrade buffer = composite − current_threshold; most-impactful pillar = max(Wp).
+Constants: COMPOSITE_STRONG_BUY=75, COMPOSITE_BUY=65, COMPOSITE_HOLD=44, COMPOSITE_SELL=30; COMPOSITE_WEIGHTS keys technical/business_quality/valuation/sentiment.
+
+### 5.5 Gate Checklist Display
+
+Five pass/fail checks shown in Trade Plan tab (Buy/Strong Buy branch only). Data sources:
+- Data Quality: bundle bq_available (FUNDAMENTALS_GATE_MIN_METRICS=1 of 4 BQ keys)
+- R/R: rr_val computed from risk_reward(); gate = RR_ENTRY_MIN=2.0
+- Concentration: equity Gate Weight % from _port_df_enriched; gate = SINGLE_NAME_CEILING=15.0%
+- Sector cap: sector weight from _port_df_enriched; gate = SECTOR_CEILING=35.0%
+- Earnings: days from r["earnings"] to today_et(); gate = EARNINGS_IMMINENT_DAYS=7d
+Shows "—" (grey) when account or catalyst data not loaded in session. Display-only — does not modify any gate decision.
+
+### 5.6 Technical Score Components (0–100)
 
 | Component | Max Pts | Key Thresholds |
 |-----------|---------|----------------|
@@ -526,7 +545,7 @@ Earnings growth and debt/equity retain universal thresholds. The sector P/E norm
 | Bollinger Band position | 20 | Below lower=18; lower-mid=14; mid-upper=8; above upper=2 |
 | OBV trend | 20 | Rising=20; neutral=10; falling=2 |
 
-### 5.5 Scanner Score Components (0–100)
+### 5.7 Scanner Score Components (0–100)
 
 | Component | Max Pts | Key Thresholds |
 |-----------|---------|----------------|
