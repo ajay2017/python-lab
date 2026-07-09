@@ -694,6 +694,84 @@ def _to_tz_naive(s: pd.Series) -> pd.Series:
     return out
 
 
+def trim_allocation(ordered, target_dollar: float, denom: float) -> dict:
+    """Greedy allocation of a sector-trim target across conviction-ordered names.
+
+    Makes the "Trim first" list ADD UP to the card's headline directive: walk the
+    already-conviction-ascending candidates and fully exit the weakest names
+    first, partial-trimming the last one to land exactly on `target_dollar`. This
+    only DISTRIBUTES a target the engine already computed (`excess_dollar`); it
+    never reranks or gates.
+
+    Parameters
+    ----------
+    ordered : conviction-ascending candidates, each a dict with `ticker`,
+              `market_value`, `price` (may be None/0), `pnl_pct`.
+    target_dollar : total $ to trim out of the sector (rec's `excess_dollar`).
+    denom : the pp denominator the headline uses (`_gd`) so per-name pp sums to
+            the headline `excess_pp`.
+
+    Returns {rows, total_allocated, target, shortfall} where each row is
+    {ticker, cut_dollar, cut_pp, shares, full, tax_dir}: `full` = exit the whole
+    position; `shares` = None when price is missing; `tax_dir` in
+    {"gain","loss","flat"} from `pnl_pct`; `shortfall` = target not covered by the
+    supplied (scored) names (surface an honest "+$X across other names" note).
+    Pure / no I/O.
+    """
+    rows: list[dict] = []
+    try:
+        target = float(target_dollar)
+    except (TypeError, ValueError):
+        target = 0.0
+    try:
+        d = float(denom)
+    except (TypeError, ValueError):
+        d = 0.0
+    if target <= 0:
+        return {"rows": [], "total_allocated": 0.0, "target": max(0.0, target), "shortfall": 0.0}
+
+    remaining = target
+    total = 0.0
+    eps = 0.01  # sub-cent: treat as fully consumed / fully exited
+    for c in (ordered or []):
+        if remaining <= eps:
+            break
+        try:
+            mv = float(c.get("market_value") or 0.0)
+        except (TypeError, ValueError):
+            mv = 0.0
+        if mv <= 0:
+            continue
+        cut = mv if mv <= remaining else remaining
+        try:
+            price = float(c.get("price") or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
+        shares = round(cut / price, 2) if price > 0 else None
+        try:
+            pnl = float(c.get("pnl_pct"))
+        except (TypeError, ValueError):
+            pnl = 0.0
+        tax_dir = "gain" if pnl > 0 else ("loss" if pnl < 0 else "flat")
+        rows.append({
+            "ticker":     c.get("ticker"),
+            "cut_dollar": round(cut),
+            "cut_pp":     round(cut / d * 100, 1) if d > 0 else None,
+            "shares":     shares,
+            "full":       cut >= mv - eps,
+            "tax_dir":    tax_dir,
+        })
+        remaining -= cut
+        total     += cut
+
+    return {
+        "rows":            rows,
+        "total_allocated": round(total),
+        "target":          round(target),
+        "shortfall":       round(remaining) if remaining > eps else 0.0,
+    }
+
+
 def trailing_return(close, trading_days: int) -> float | None:
     """Trailing % price return over the last `trading_days` bars of a Close series.
 

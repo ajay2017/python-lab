@@ -134,7 +134,7 @@ from stock_analyzer.portfolio import (
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
-    trailing_return,
+    trailing_return, trim_allocation,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
@@ -5430,16 +5430,16 @@ if page == "🏠 Home":
 
                         # ── Trim first: lowest-conviction names in the sector ──
                         if _trim:
-                            st.markdown("**Trim first — your lowest-conviction names:**")
-                            _trim_show = _trim[:DIVERSIFY_DISPLAY_TOP]
-                            for _tc in _trim_show:
-                                _t = _tc["ticker"]
-                                # Basis for WHY this name is low-conviction: the
-                                # composite's three pillars (already computed in the
-                                # held bundle) + recent momentum, so "this one is
-                                # performing better lately" is legible next to a
-                                # single conviction number. Display-only; the order
-                                # stays composite-ascending (engine authority).
+                            _tt_dollar = _rebal_flag.get("trim_target_dollar")
+                            _tt_pp     = _rebal_flag.get("trim_target_pp")
+                            _tt_denom  = _rebal_flag.get("trim_target_denom")
+                            _tc_by_tkr = {c.get("ticker"): c for c in _trim}
+
+                            # Basis sub-line for WHY a name is low-conviction: the
+                            # composite's three pillars (from the held bundle) +
+                            # recent momentum + the pillar capping it. Display-only;
+                            # order stays composite-ascending (engine authority).
+                            def _trim_basis(_t, _tc):
                                 _hb = (held_data or {}).get(_t) or {}
                                 _tsc, _fsc, _ssc = _hb.get("t_score"), _hb.get("f_score"), _hb.get("s_score")
                                 _hist = _hb.get("df") if _hb.get("df") is not None else _hb.get("history")
@@ -5448,39 +5448,102 @@ if page == "🏠 Home":
                                     if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
                                     else None
                                 )
+                                _bits = []
+                                if isinstance(_tc.get("score"), (int, float)):
+                                    _bits.append(f"composite {_tc['score']:.0f}/100")
+                                if isinstance(_tc.get("weight"), (int, float)):
+                                    _bits.append(f"{_tc['weight']:.1f}% held")
+                                if isinstance(_tc.get("pnl_pct"), (int, float)):
+                                    _bits.append(f"P&L {_tc['pnl_pct']:+.1f}%")
+                                _pill = []
+                                if isinstance(_tsc, (int, float)): _pill.append(f"tech {_tsc:.0f}")
+                                if isinstance(_fsc, (int, float)): _pill.append(f"fund {_fsc:.0f}")
+                                if isinstance(_ssc, (int, float)): _pill.append(f"sentiment {_ssc:.0f}")
+                                if _pill: _bits.append(" ".join(_pill))
                                 _r1w = trailing_return(_cl, 5) if _cl is not None else None
                                 _r1m = trailing_return(_cl, 21) if _cl is not None else None
-                                st.markdown(
-                                    f"• **{_t}** — composite {_tc['score']:.0f}/100 · "
-                                    f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
-                                )
-                                _pillars = []
-                                if isinstance(_tsc, (int, float)): _pillars.append(f"tech {_tsc:.0f}")
-                                if isinstance(_fsc, (int, float)): _pillars.append(f"fund {_fsc:.0f}")
-                                if isinstance(_ssc, (int, float)): _pillars.append(f"sentiment {_ssc:.0f}")
                                 _mom = []
                                 if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
                                 if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
-                                _basis_bits = []
-                                if _pillars: _basis_bits.append(" · ".join(_pillars))
-                                if _mom:     _basis_bits.append(" · ".join(_mom))
-                                # Name the pillar dragging the composite down (the
-                                # "why") — factual, lowest of the three.
-                                _pillar_map = {
-                                    "fundamentals": _fsc, "momentum/technicals": _tsc, "sentiment": _ssc,
-                                }
-                                _valid = {k: v for k, v in _pillar_map.items() if isinstance(v, (int, float))}
-                                if _valid:
-                                    _weak = min(_valid, key=_valid.get)
-                                    _basis_bits.append(f"conviction capped by {_weak} ({_valid[_weak]:.0f})")
-                                if _basis_bits:
-                                    st.caption("    ↳ " + "  ·  ".join(_basis_bits))
+                                if _mom: _bits.append(" ".join(_mom))
+                                _pm = {"fundamentals": _fsc, "momentum/technicals": _tsc, "sentiment": _ssc}
+                                _pv = {k: v for k, v in _pm.items() if isinstance(v, (int, float))}
+                                if _pv:
+                                    _wk = min(_pv, key=_pv.get)
+                                    _bits.append(f"capped by {_wk} ({_pv[_wk]:.0f})")
+                                if _bits:
+                                    st.caption("    ↳ " + "  ·  ".join(_bits))
+
+                            _tax_txt = {
+                                "gain": "realizes a gain (taxable)",
+                                "loss": "realizes a loss (offsets gains)",
+                                "flat": "~breakeven",
+                            }
+                            _alloc = (
+                                trim_allocation(_trim, _tt_dollar, _tt_denom)
+                                if _tt_dollar else {"rows": [], "total_allocated": 0, "target": 0, "shortfall": 0}
+                            )
+                            if _alloc["rows"]:
+                                _hdr = f"**Trim first — the plan (target: trim ~${_tt_dollar:,.0f}"
+                                if isinstance(_tt_pp, (int, float)): _hdr += f" · {_tt_pp:.0f}pp"
+                                _hdr += f" → {SECTOR_ELEVATED:.0f}%):**"
+                                st.markdown(_hdr)
+                                # Display cap only (NOT a gate): rows past it are
+                                # rolled up into a remainder line so the running
+                                # total still reflects every name. Deliberately >
+                                # the 3-name candidate display — a trim plan may
+                                # legitimately span more names to reach the target.
+                                _PLAN_CAP = 5
+                                for _i, _row in enumerate(_alloc["rows"][:_PLAN_CAP], 1):
+                                    _t = _row["ticker"]
+                                    _verb = "sell ALL" if _row["full"] else "trim"
+                                    _pp = f" · {_row['cut_pp']:.0f}pp" if _row.get("cut_pp") is not None else ""
+                                    _sh_val = _row.get("shares")
+                                    if _sh_val:
+                                        _sh = (f" · ≈{_sh_val:,.0f} sh" if _sh_val >= 1
+                                               else f" · ≈{_sh_val:.2f} sh")
+                                    else:
+                                        _sh = ""
+                                    _tail = " · full exit" if _row["full"] else " · partial"
+                                    _tx = _tax_txt.get(_row.get("tax_dir"), "")
+                                    st.markdown(
+                                        f"**{_i}. {_t}** — {_verb} ~${_row['cut_dollar']:,.0f}{_pp}{_sh}{_tail}"
+                                        + (f" · 🧾 {_tx}" if _tx else "")
+                                    )
+                                    _trim_basis(_t, _tc_by_tkr.get(_t, {}))
+                                _extra = _alloc["rows"][_PLAN_CAP:]
+                                if _extra:
+                                    _ex_sum = sum(r["cut_dollar"] for r in _extra)
+                                    st.caption(
+                                        f"    + ~${_ex_sum:,.0f} to trim across {len(_extra)} more "
+                                        "low-conviction name(s)"
+                                    )
+                                st.caption(
+                                    f"✓ **${_alloc['total_allocated']:,.0f}** of ~${_alloc['target']:,.0f} "
+                                    f"· sector → ~{SECTOR_ELEVATED:.0f}%"
+                                )
+                                if _alloc["shortfall"] > 0:
+                                    st.caption(
+                                        f"⚠️ ~${_alloc['shortfall']:,.0f} of the target isn't covered by your "
+                                        "scored names in this sector — trim the remainder across the sector's "
+                                        "other holdings."
+                                    )
+                            else:
+                                # Fallback (no target available, e.g. legacy cached
+                                # rec): basis-only priority list, the shipped shape.
+                                st.markdown("**Trim first — your lowest-conviction names:**")
+                                for _tc in _trim[:DIVERSIFY_DISPLAY_TOP]:
+                                    _t = _tc.get("ticker")
+                                    st.markdown(
+                                        f"• **{_t}** — composite {_tc['score']:.0f}/100 · "
+                                        f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
+                                    )
+                                    _trim_basis(_t, _tc)
                             st.caption(
-                                "_Ordered by your engine's composite (lowest first). Small gaps are within "
-                                "scoring noise — the pillar breakdown + recent momentum are your tie-breaker. "
-                                "Two honest schools when a sector MUST be cut: **trim the laggard** (momentum) "
-                                "or **take profit on the runner** (rebalance). The engine ranks conviction; "
-                                "the final call is yours._"
+                                "_Greedy: your weakest-conviction names are trimmed first (engine order — small "
+                                "gaps are within scoring noise). Shares are approximate; the $/pp are the target. "
+                                "Two honest schools when a sector MUST be cut: **trim the laggard** (momentum) or "
+                                "**take profit on the runner** (rebalance) — the final call is yours._"
                             )
 
                         # ── Redeploy: engine-vetted candidates in under-rep sectors ──

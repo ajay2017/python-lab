@@ -120,6 +120,7 @@ def build_risk_advisor_recommendations(
             "var_95":       _f(rm.get("var_95")),
             "weight":       _f(row.get("Weight (%)")),
             "market_value": _f(row.get("Market Value")),
+            "price":        _f(row.get("Price")),
             "pnl_pct":      _f(row.get("P&L (%)")),
             "score":        _f(row.get("Score")),
             # None-preserving composite (never coerced to 0.0) — a priced name
@@ -538,6 +539,7 @@ def build_risk_advisor_recommendations(
             "ticker":       t,
             "weight":       tr["weight"],
             "market_value": tr["market_value"],
+            "price":        tr["price"],
             "pnl_pct":      tr["pnl_pct"],
             "score_raw":    tr["score_raw"],   # None-preserving; for conviction rank
         })
@@ -632,10 +634,12 @@ def build_risk_advisor_recommendations(
             # weight, consistent with root_tickers.
             trim_candidates = [
                 {
-                    "ticker":  h["ticker"],
-                    "score":   round(float(h["score_raw"]), 0),
-                    "weight":  round(h["weight"] * _acct_f, 1),
-                    "pnl_pct": round(h["pnl_pct"], 1),
+                    "ticker":       h["ticker"],
+                    "score":        round(float(h["score_raw"]), 0),
+                    "weight":       round(h["weight"] * _acct_f, 1),
+                    "pnl_pct":      round(h["pnl_pct"], 1),
+                    "market_value": h["market_value"],   # for greedy trim allocation
+                    "price":        h["price"],
                 }
                 for h in sorted(
                     (h for h in sector_holdings[top_sec] if h["score_raw"] is not None),
@@ -667,8 +671,13 @@ def build_risk_advisor_recommendations(
                 # Rebalance-plan payload (render layer, app.py _render_act_card):
                 # trim_candidates = conviction-ranked names to trim first;
                 # redeploy_sectors = under-represented targets to score buy names in.
-                "trim_candidates":  trim_candidates,
-                "redeploy_sectors": redeploy_sectors,
+                # trim_target_* = the headline directive's target ($/pp + denom),
+                # so the render's greedy allocation adds up to the same figure.
+                "trim_candidates":    trim_candidates,
+                "redeploy_sectors":   redeploy_sectors,
+                "trim_target_pp":     round(excess_pp, 1),
+                "trim_target_dollar": excess_dollar,
+                "trim_target_denom":  _gd,
                 "recommendation": (
                     f"Trim {top_sec} exposure by approximately "
                     f"**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** to bring the sector under "

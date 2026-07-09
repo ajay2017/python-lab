@@ -1229,9 +1229,12 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         # keys but gathers ALL flags across a merged ticker group. The render
         # (app.py _render_act_card) keys off flag["rec_type"].
         if rec.get("type") == "sector_concentration":
-            _flag["rec_type"]         = "sector_concentration"
-            _flag["trim_candidates"]  = rec.get("trim_candidates", []) or []
-            _flag["redeploy_sectors"] = rec.get("redeploy_sectors", []) or []
+            _flag["rec_type"]           = "sector_concentration"
+            _flag["trim_candidates"]    = rec.get("trim_candidates", []) or []
+            _flag["redeploy_sectors"]   = rec.get("redeploy_sectors", []) or []
+            _flag["trim_target_pp"]     = rec.get("trim_target_pp")
+            _flag["trim_target_dollar"] = rec.get("trim_target_dollar")
+            _flag["trim_target_denom"]  = rec.get("trim_target_denom")
         items.append({
             "priority": "high",
             "icon":     "⚠️",
