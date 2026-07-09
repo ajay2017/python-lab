@@ -105,6 +105,11 @@ from stock_analyzer.constants import (
     BUNDLE_CACHE_MAX_AGE_DAYS,
     DEFAULT_PORTFOLIO_VALUE,
     GAP_TO_STOP_ROUND_DECIMALS,
+    COMPOSITE_STRONG_BUY,
+    COMPOSITE_SELL,
+    COMPOSITE_WEIGHTS,
+    EARNINGS_IMMINENT_DAYS,
+    UNCLASSIFIED_SECTOR,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -12138,6 +12143,93 @@ elif page == "📈 Analysis":
                         f"cross-check source (keeps the composite stable)."
                     )
 
+                # ── Upgrade / Downgrade trigger computation ───────────────────────────
+                # Pure display — reads pillar scores already in `r`; no scoring changes.
+                _composite  = r.get("total", 0) or 0
+                _t_sc   = r.get("t_score",  50) or 50
+                _bq_sc  = r.get("bq_score", r.get("f_score", 50)) or 50
+                _val_sc = r.get("val_score", 50) or 50
+                _s_sc   = r.get("s_score",  50) or 50
+                _verdict_ladder = [
+                    ("Strong Buy", COMPOSITE_STRONG_BUY),
+                    ("Buy",        COMPOSITE_BUY),
+                    ("Hold",       COMPOSITE_HOLD),
+                    ("Sell",       COMPOSITE_SELL),
+                ]
+                _current_tier = next(
+                    (i for i, (_, thr) in enumerate(_verdict_ladder) if _composite >= thr),
+                    len(_verdict_ladder),
+                )
+                # _pillars defined before downgrade block (downgrade reuses max-weight pillar)
+                _pillars = [
+                    ("Technical",        _t_sc,   COMPOSITE_WEIGHTS["technical"]),
+                    ("Business Quality", _bq_sc,  COMPOSITE_WEIGHTS["business_quality"]),
+                    ("Valuation",        _val_sc, COMPOSITE_WEIGHTS["valuation"]),
+                    ("Sentiment",        _s_sc,   COMPOSITE_WEIGHTS["sentiment"]),
+                ]
+                _upgrade_info   = None
+                _downgrade_info = None
+                if _current_tier > 0:
+                    _up_label, _up_threshold = _verdict_ladder[_current_tier - 1]
+                    _gap_up = round(_up_threshold - _composite, 1)
+                    _pillar_triggers = []
+                    for _pname, _pscore, _pw in _pillars:
+                        _others = _composite - _pscore * _pw
+                        _needed = (_up_threshold - _others) / _pw
+                        _needed = round(_needed, 1)
+                        if 0 <= _needed <= 100 and _needed > _pscore:
+                            _pillar_triggers.append((_pname, _pscore, _needed, round(_needed - _pscore, 1)))
+                    _pillar_triggers.sort(key=lambda x: x[3])
+                    _upgrade_info = {"label": _up_label, "gap": _gap_up, "triggers": _pillar_triggers}
+                if _current_tier < len(_verdict_ladder):
+                    _current_threshold = _verdict_ladder[_current_tier][1]
+                    _buffer            = round(_composite - _current_threshold, 1)
+                    _max_wt_pillar     = max(_pillars, key=lambda x: x[2])
+                    _downgrade_info = {
+                        "buffer":                _buffer,
+                        "current_threshold":     _current_threshold,
+                        "current_label":         _verdict_ladder[_current_tier][0],
+                        "most_impactful_pillar": _max_wt_pillar[0],
+                        "most_impactful_score":  _max_wt_pillar[1],
+                        "most_impactful_weight": _max_wt_pillar[2],
+                    }
+                with st.expander("📈 What would change this signal?", expanded=False):
+                    _exp_c1, _exp_c2 = st.columns(2)
+                    with _exp_c1:
+                        if _upgrade_info:
+                            st.markdown(f"**⬆ To reach {_upgrade_info['label']}**")
+                            st.markdown(
+                                f"Composite needs **+{_upgrade_info['gap']} pts** "
+                                f"(currently {_composite:.1f})"
+                            )
+                            if _upgrade_info["triggers"]:
+                                for _pname, _pcur, _pneeded, _pgain in _upgrade_info["triggers"][:2]:
+                                    st.markdown(
+                                        f"<small>• {_pname}: {_pcur:.0f} → "
+                                        f"**{_pneeded:.0f}** (+{_pgain:.0f} pts)</small>",
+                                        unsafe_allow_html=True,
+                                    )
+                        else:
+                            st.markdown("**⬆ Already at Strong Buy**")
+                            st.markdown("No upgrade available — highest signal tier reached.")
+                    with _exp_c2:
+                        if _downgrade_info:
+                            st.markdown(f"**⬇ To drop from {_downgrade_info['current_label']}**")
+                            st.markdown(
+                                f"**{_downgrade_info['buffer']} pts** above the "
+                                f"{_downgrade_info['current_label']} floor "
+                                f"({_downgrade_info['current_threshold']})"
+                            )
+                            st.markdown(
+                                f"<small>• {_downgrade_info['most_impactful_pillar']} "
+                                f"({_downgrade_info['most_impactful_score']:.0f}/100) "
+                                f"carries {_downgrade_info['most_impactful_weight']:.0%} weight — "
+                                f"most impactful if it deteriorates</small>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown("**⬇ Already at lowest tier**")
+
             # Source links
             st.markdown(
                 f"[📊 Yahoo Finance](https://finance.yahoo.com/quote/{ticker}) · "
@@ -12614,6 +12706,73 @@ elif page == "📈 Analysis":
                     # protective distinction (buy_add=True). Read-only.
                     if _sa_holding and ps and not _stop_breached and not _under_reduce:
                         _render_stop_ladder(r, _sa_holding, price, under_reduce=False, buy_add=True)
+
+                    # ── Gate checklist ────────────────────────────────────────────
+                    # Pure display — reads portfolio DataFrame and bundle already in
+                    # session state; no scoring or gate logic changes.
+                    _gc_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
+                    _gc_wcol = (
+                        "Gate Weight (%)"
+                        if (not _gc_port.empty and "Gate Weight (%)" in _gc_port.columns)
+                        else "Weight (%)"
+                    )
+                    _gc_tw = None   # single-name equity weight (None = not held / unknown)
+                    _gc_sw = None   # sector equity weight (None = sector unknown)
+                    if not _gc_port.empty:
+                        _gc_ticker_row = _gc_port[_gc_port["Ticker"] == ticker]
+                        if not _gc_ticker_row.empty:
+                            _gc_tw = _f(_gc_ticker_row.iloc[0].get(_gc_wcol))
+                        _gc_sec = r.get("sector", "")
+                        if _gc_sec and _gc_sec != UNCLASSIFIED_SECTOR:
+                            _gc_sec_rows = _gc_port[_gc_port["Sector"] == _gc_sec]
+                            if not _gc_sec_rows.empty:
+                                _gc_sw = float(_gc_sec_rows[_gc_wcol].sum())
+                    _gc_earn_str  = r.get("earnings", "")
+                    _gc_earn_days = None
+                    try:
+                        if _gc_earn_str:
+                            _gc_earn_days = (
+                                datetime.strptime(_gc_earn_str, "%Y-%m-%d").date() - _today_et()
+                            ).days
+                            if _gc_earn_days < 0:
+                                _gc_earn_days = None  # past earnings date
+                    except Exception:
+                        pass
+                    _gate_bq_ok     = r.get("bq_available", r.get("fundamentals_available", True))
+                    _gate_rr_ok     = (rr_val >= RR_ENTRY_MIN)       if rr_val else None
+                    _gate_conc_ok   = ((_gc_tw or 0) < SINGLE_NAME_CEILING) if _gc_tw is not None else None
+                    _gate_sector_ok = ((_gc_sw or 0) < SECTOR_CEILING)      if _gc_sw is not None else None
+                    _gate_earn_ok   = (_gc_earn_days > EARNINGS_IMMINENT_DAYS) if _gc_earn_days is not None else None
+                    st.markdown("**Gate checks**")
+                    _gate_cols = st.columns(5)
+                    _gate_rows = [
+                        ("Data Quality",  _gate_bq_ok,
+                         "BQ metrics available"),
+                        ("R/R ≥ 2×",      _gate_rr_ok,
+                         f"R/R = {rr_val:.1f}×" if rr_val else "R/R unavailable"),
+                        ("Concentration", _gate_conc_ok,
+                         f"{_gc_tw:.1f}% of portfolio" if _gc_tw is not None else "See Account page"),
+                        ("Sector cap",    _gate_sector_ok,
+                         f"{_gc_sw:.1f}% in sector" if _gc_sw is not None else "See Account page"),
+                        ("Earnings",      _gate_earn_ok,
+                         f"{_gc_earn_days}d to earnings" if _gc_earn_days is not None else "See Catalyst Watch"),
+                    ]
+                    for _gcol_w, (_glabel, _gok, _gdetail) in zip(_gate_cols, _gate_rows):
+                        if _gok is True:
+                            _gcolor, _gicon = "#00C851", "✓"
+                        elif _gok is False:
+                            _gcolor, _gicon = "#ff4444", "✗"
+                        else:
+                            _gcolor, _gicon = "#888", "—"
+                        _gcol_w.markdown(
+                            f"<div style='text-align:center'>"
+                            f"<div style='color:{_gcolor};font-size:1.2em'>{_gicon}</div>"
+                            f"<div style='font-size:0.75em;color:#ccc'>{_glabel}</div>"
+                            f"<div style='font-size:0.65em;color:#888'>{_gdetail}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown("---")
 
                     # Add-on sizing is suppressed on a breached held position OR one
                     # under a Brief Reduce/Exit call — you don't size up a position
