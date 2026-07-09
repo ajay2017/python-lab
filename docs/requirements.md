@@ -147,7 +147,7 @@ This app is built for the **quality-first, medium-term investor with long-term t
 
 | ID | Design choice | Implication |
 |---|---|---|
-| PH-01 | Composite = Technical 45% + **Fundamental 40%** + Sentiment 15%; verdict is WITHHELD when fundamentals are unavailable. | A 40% fundamental weight is central to an investor and irrelevant to an intraday trader. |
+| PH-01 | Composite = Technical 25% + **Business Quality 35%** + **Valuation 30%** + Sentiment 10%; verdict is WITHHELD when BQ fundamentals are unavailable. Analyst consensus (avg_pt + rating label from `analyst_coverage`) feeds the Valuation pillar; individual Ideas Inbox records remain awareness-only. | A combined 65% weight on business quality + valuation is central to an investor and irrelevant to an intraday trader. |
 | PH-02 | Composite signals are computed on page load and held; only prices refresh (~60s). Signals do **not** recompute every tick. | Deliberate anti-overtrading choice (also a rate-limit guard). Intraday signal churn is intentionally absent. |
 | PH-03 | Proximity gates suppress initiating into earnings; Catalyst Watch is awareness, **not** a buy rec. | The app declines binary-event volatility that a trader often seeks. |
 | PH-04 | Stops are ATR-based, R:R is multi-day, sizing is risk-%-of-portfolio. | Swing-to-position constructs (holding across days/weeks), not intraday levels. |

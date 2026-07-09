@@ -21,12 +21,15 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     BUNDLE_CACHE_MAX_AGE_DAYS,
     ATR_STOP_MULT,
+    VALUATION_COVERAGE_FRESH_DAYS,
 )
 from stock_analyzer.data import fetch_ticker_bundle, fetch_financials_from_info
 from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.fundamentals import (
-    fundamental_score, upside_potential, count_core_metrics, resolve_fundamentals,
+    business_quality_score, fundamental_score,
+    upside_potential, count_core_metrics, resolve_fundamentals, CORE_BQ_KEYS,
 )
+from stock_analyzer.valuation import valuation_score
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
 from stock_analyzer.risk import atr_stop_loss, compute_all_risk
@@ -106,18 +109,49 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     # (a scoring change dressed as a data-resilience fix). Classification/gating
     # gets the resilient sector; scoring does not. Don't "unify" these.
     _sector_for_scoring = bundle.get("info", {}).get("sector", "")
-    f_score, f_signals = fundamental_score(financials, _sector_for_scoring)
+    bq_score, bq_signals = business_quality_score(financials, _sector_for_scoring)
     _fund_metric_count = count_core_metrics(financials)
-    fundamentals_available = _fund_metric_count >= FUNDAMENTALS_GATE_MIN_METRICS
-    avg_sent, headlines = analyze_news(bundle["news"])
-    s_score = sentiment_score_0_100(avg_sent)
-    total = combined_score(t_score, f_score, s_score)
-    rec = recommendation(total)
+    bq_available = _fund_metric_count >= FUNDAMENTALS_GATE_MIN_METRICS
     # Last *valid* close. compute_indicators already strips NaN-Close bars, but
     # guard here too — defense in depth: float(NaN) is truthy, so a stray NaN
     # would pass every `if price:` check and render "$nan". None = honest "no price".
+    # Price is computed here (before valuation_score) because the PT-upside metric
+    # needs current_price to compute % upside to consensus target.
     _closes = df["Close"].dropna() if not df.empty else None
     price = float(_closes.iloc[-1]) if _closes is not None and not _closes.empty else None
+    # ── Analyst coverage for Valuation pillar ──────────────────────────────────
+    _analyst_data: dict = {"avg_pt": None, "consensus_label": None, "has_coverage": False}
+    try:
+        import json as _json
+        _cov_df = db.load_analyst_coverage(ticker=ticker, days=VALUATION_COVERAGE_FRESH_DAYS)
+        if _cov_df is not None and not _cov_df.empty:
+            _all_analysts: list = []
+            for _, _row in _cov_df.iterrows():
+                _raw = _row.get("analysts") or []
+                if isinstance(_raw, str):
+                    try:
+                        _raw = _json.loads(_raw)
+                    except Exception:
+                        _raw = []
+                if isinstance(_raw, list):
+                    _all_analysts.extend(_raw)
+            if _all_analysts:
+                from stock_analyzer.analyst_intel import derive_consensus
+                _cons = derive_consensus(_all_analysts)
+                _raw_label = _cons.get("consensus_rating") or ""
+                _label = _raw_label.split(" (")[0] if " (" in _raw_label else (_raw_label or None)
+                _analyst_data = {
+                    "avg_pt":          _cons.get("avg_pt"),
+                    "consensus_label": _label,
+                    "has_coverage":    bool(_label),
+                }
+    except Exception:
+        pass  # silent degrade — valuation scores on P/E + FCF alone
+    val_score, val_signals = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
+    avg_sent, headlines = analyze_news(bundle["news"])
+    s_score = sentiment_score_0_100(avg_sent)
+    total = combined_score(t_score, bq_score, val_score, s_score)
+    rec = recommendation(total)
     stop, atr_val = atr_stop_loss(df, multiplier=ATR_STOP_MULT)
     entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
     targets = compute_price_targets(df, financials, price) if price else None
@@ -145,7 +179,14 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     business_summary  = _info.get("longBusinessSummary", "")
     return {
         "df": df, "t_score": t_score, "t_signals": t_signals,
-        "f_score": f_score, "f_signals": f_signals,
+        # New 4-pillar keys:
+        "bq_score":         bq_score,  "bq_signals":   bq_signals,
+        "val_score":        val_score, "val_signals":  val_signals,
+        "val_analyst_data": _analyst_data,
+        "bq_available":     bq_available,
+        # Backward compat aliases (keep for one release):
+        "f_score":          bq_score,  "f_signals":    bq_signals,
+        "fundamentals_available": bq_available,
         "s_score": s_score, "avg_sent": avg_sent, "headlines": headlines,
         "total": total, "rec": rec, "financials": financials,
         "current_price": price, "upside": upside,
@@ -158,7 +199,6 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "industry": industry, "market_cap": market_cap,
         "business_summary": business_summary,
         "info_source": bundle.get("_info_source"),
-        "fundamentals_available": fundamentals_available,
         "fund_metric_count": _fund_metric_count,
         "fund_source": _fund_source,
         "fund_cache_age_days": _fund_cache_age_days,

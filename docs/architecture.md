@@ -330,11 +330,11 @@ data.fetch_ticker_bundle(ticker)   ← Yahoo Finance (single session per ticker)
         └── earnings, revisions → stored in result dict
                 │
                 ▼
-        scoring.combined_score(t_score, f_score, s_score) → total (0–100)
+        scoring.combined_score(t_score, bq_score, val_score, s_score) → total (0–100)
         scoring.recommendation(total) → {label, color, icon, rationale}
                 │
                 ▼
-        held_data[ticker] = {df, t_score, f_score, s_score, total, rec,
+        held_data[ticker] = {df, t_score, bq_score, val_score, s_score, total, rec,
                              financials, headlines, risk_metrics, targets,
                              entry_lo/hi, stop, earnings, revisions,
                              name, sector}
@@ -466,26 +466,29 @@ Entry Timing Verdict (boundaries inclusive — Phase 1 H6 aligned):
 ### 5.1 Composite Score Formula
 
 ```
-composite_score = (technical_score × 0.45)
-                + (fundamental_score × 0.40)
-                + (sentiment_score × 0.15)
+composite_score = (technical_score      × 0.25)
+                + (business_quality_score × 0.35)
+                + (valuation_score       × 0.30)
+                + (sentiment_score       × 0.10)
 ```
 
 All component scores are on a 0–100 scale.
+
+Analyst consensus (avg_pt + rating label aggregated from the `analyst_coverage` table) feeds the Valuation pillar score. Individual Ideas Inbox records remain display/awareness context only; only aggregated consensus metrics enter scoring.
 
 ### 5.2 Recommendation Tiers
 
 | Score | Signal | Action |
 |-------|--------|--------|
-| ≥ 72 | ⬆⬆ Strong Buy | All three dimensions aligned bullish |
-| 58–71 | ⬆ Buy | Most signals positive; favourable entry |
-| 44–57 | ➡ Hold | Mixed signals; maintain position, no new entry |
+| ≥ 75 | ⬆⬆ Strong Buy | All four dimensions aligned bullish |
+| 65–74 | ⬆ Buy | Most signals positive; favourable entry |
+| 44–64 | ➡ Hold | Mixed signals; maintain position, no new entry |
 | 30–43 | ⬇ Sell | Weakening; consider reducing |
 | < 30 | ⬇⬇ Strong Sell | Multiple bearish signals; elevated downside risk |
 
-### 5.3 Fundamental Score — Sector-Relative Benchmarks
+### 5.3 Business Quality Score — Sector-Relative Benchmarks
 
-P/E, revenue growth, and profit margin thresholds are normalised per sector so high-multiple growth companies (Technology, Communication Services) are not structurally penalised vs value sectors (Utilities, Energy).
+Business Quality covers revenue growth, earnings growth, profit margins, and debt/equity. Revenue growth, profit margin, and P/E norms are sector-relative so high-growth companies are not structurally penalised vs value sectors. P/E and FCF Yield have moved to the Valuation pillar (`valuation.py`).
 
 | Sector | P/E Cheap | P/E Fair Hi | P/E Expensive | Rev Strong | Rev Healthy | Margin Excel | Margin Good |
 |--------|-----------|-------------|---------------|------------|-------------|--------------|-------------|
@@ -502,7 +505,16 @@ P/E, revenue growth, and profit margin thresholds are normalised per sector so h
 | Real Estate | <25 | <45 | ≥70 | >8% | >4% | >30% | >15% |
 | Default | <15 | <28 | ≥45 | >15% | >8% | >18% | >10% |
 
-Earnings growth and debt/equity retain universal thresholds; FCF Yield retains universal thresholds.
+Earnings growth and debt/equity retain universal thresholds. The sector P/E norms table is also consumed by the Valuation pillar for its Forward P/E metric.
+
+### 5.3a Valuation Score Components (0–100)
+
+| Component | Max Pts | Notes |
+|-----------|---------|-------|
+| Forward P/E (sector-relative) | 25 | Uses same `_SECTOR_NORMS` as BQ pillar |
+| FCF Yield | 20 | ≥5%=20pts; ≥3%=15; ≥1%=8; ≥0%=3; <0%=0 |
+| PT Upside to consensus avg target | 25 | ≥30%=25; ≥15%=20; ≥5%=12; ≥0%=6; ≥−5%=2; <−5%=0 |
+| Analyst consensus rating | 30 | Strong Buy=30; Buy=24; Hold=15; Mixed=9; Sell=0 |
 
 ### 5.4 Technical Score Components (0–100)
 

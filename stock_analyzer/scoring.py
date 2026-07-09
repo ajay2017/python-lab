@@ -14,13 +14,16 @@ WEIGHTS = COMPOSITE_WEIGHTS
 
 def combined_score(
     technical: float,
-    fundamental: float,
+    business_quality: float,
+    valuation: float,
     sentiment: float,
 ) -> float:
+    w = WEIGHTS
     return round(
-        technical * WEIGHTS["technical"]
-        + fundamental * WEIGHTS["fundamental"]
-        + sentiment * WEIGHTS["sentiment"],
+        technical        * w["technical"]
+        + business_quality * w["business_quality"]
+        + valuation        * w["valuation"]
+        + sentiment        * w["sentiment"],
         1,
     )
 

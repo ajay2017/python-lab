@@ -6,20 +6,22 @@ rather than absolute universal thresholds. A 35x P/E is expensive for a
 utility but fair for a high-growth semiconductor company.
 """
 
-# The core scoreable metrics. When NONE are present, fundamental_score returns a
-# fabricated neutral 50 — so consumers gate on the count, not the raw score.
+# The core Business Quality metrics. When NONE are present, business_quality_score
+# returns a fabricated neutral 50 — so consumers gate on the count, not the raw score.
+# Forward P/E and FCF Yield have moved to the Valuation pillar (valuation.py).
 # Single source of truth (was duplicated as `_scored_keys` here and
 # `_core_fund_keys` in app.py).
-CORE_FUNDAMENTAL_KEYS = (
-    "forward_pe", "revenue_growth", "earnings_growth",
+CORE_BQ_KEYS = (
+    "revenue_growth", "earnings_growth",
     "profit_margins", "debt_to_equity",
 )
+CORE_FUNDAMENTAL_KEYS = CORE_BQ_KEYS  # backward compat alias
 
 
 def count_core_metrics(financials: dict | None) -> int:
-    """How many core scoreable fundamental metrics are actually present."""
+    """How many core BQ scoreable metrics are actually present."""
     f = financials or {}
-    return sum(1 for k in CORE_FUNDAMENTAL_KEYS if f.get(k) is not None)
+    return sum(1 for k in CORE_BQ_KEYS if f.get(k) is not None)
 
 
 def resolve_fundamentals(
@@ -145,11 +147,13 @@ _FUND_BANDS = {
 }
 
 
-def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
+def business_quality_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     """
-    Returns a score 0–100 and a dict of signal details.
+    Returns a Business Quality score 0–100 and a dict of signal details.
+    Covers revenue growth, earnings growth, profit margins, and debt/equity.
+    Forward P/E and FCF Yield have moved to the Valuation pillar (valuation.py).
     Metrics are benchmarked against sector norms so high-growth tech
-    companies are not penalised for sector-appropriate P/E multiples.
+    companies are not penalised for sector-appropriate multiples.
     """
     norms = _SECTOR_NORMS.get(sector, _SECTOR_NORMS["_default"])
     sector_label = sector if sector else "market"
@@ -157,23 +161,6 @@ def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
     signals: dict = {}
     points = 0
     max_points = 0
-
-    # ── Valuation: Forward P/E (sector-relative) ─────────────────────────────
-    fwd_pe = financials.get("forward_pe")
-    if fwd_pe and fwd_pe > 0:
-        max_points += 20
-        if fwd_pe < norms["pe_cheap"]:
-            points += 20
-            signals["Forward P/E"] = f"{fwd_pe:.1f} — Cheap vs {sector_label} peers"
-        elif fwd_pe < norms["pe_fair_hi"]:
-            points += 15
-            signals["Forward P/E"] = f"{fwd_pe:.1f} — Fair value for {sector_label}"
-        elif fwd_pe < norms["pe_exp"]:
-            points += 8
-            signals["Forward P/E"] = f"{fwd_pe:.1f} — Moderately expensive for {sector_label}"
-        else:
-            points += 2
-            signals["Forward P/E"] = f"{fwd_pe:.1f} — Expensive vs {sector_label} peers"
 
     # ── Revenue growth (sector-relative) ─────────────────────────────────────
     rev_growth = financials.get("revenue_growth")
@@ -251,38 +238,21 @@ def fundamental_score(financials: dict, sector: str = "") -> tuple[float, dict]:
             points += 2
             signals["Debt/Equity"] = f"{de:.0f}% — High leverage"
 
-    # ── FCF Yield ─────────────────────────────────────────────────────────────
-    fcf_yield = financials.get("fcf_yield")
-    if fcf_yield is not None:
-        max_points += 20
-        if fcf_yield >= _FUND_BANDS["fcf_excel"]:
-            points += 20
-            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Excellent cash generation"
-        elif fcf_yield >= _FUND_BANDS["fcf_good"]:
-            points += 15
-            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Good"
-        elif fcf_yield >= _FUND_BANDS["fcf_modest"]:
-            points += 8
-            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Modest"
-        elif fcf_yield >= 0:
-            points += 3
-            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Low"
-        else:
-            points += 0
-            signals["FCF Yield"] = f"{fcf_yield:.1f}% — Negative FCF (cash burn)"
-
     # ── Data quality check ────────────────────────────────────────────────────
-    # The 5 scoreable metrics are: fwd_pe, rev_growth, earn_growth, margins,
-    # debt_to_equity (fcf_yield and analyst_target are supplemental).
-    _missing = len(CORE_FUNDAMENTAL_KEYS) - count_core_metrics(financials)
+    # The 4 BQ metrics are: rev_growth, earn_growth, margins, debt_to_equity.
+    # FCF Yield and Forward P/E are now scored in the Valuation pillar (valuation.py).
+    _missing = len(CORE_BQ_KEYS) - count_core_metrics(financials)
     if _missing >= 3:
         signals["⚠ Data Quality"] = (
-            f"{_missing}/5 core metrics missing from Yahoo Finance — "
-            "fundamental score is based on limited data and may be unreliable"
+            f"{_missing}/4 core BQ metrics missing from Yahoo Finance — "
+            "business quality score is based on limited data and may be unreliable"
         )
 
     score = (points / max_points * 100) if max_points > 0 else 50
     return round(score, 1), signals
+
+
+fundamental_score = business_quality_score  # backward compat alias
 
 
 def upside_potential(current_price: float, financials: dict) -> str | None:

@@ -621,14 +621,14 @@ _TIPS = {
         "breakdown and a what-if simulator."
     ),
     "Composite Score": (
-        "Weighted composite signal combining three analytical dimensions:\n\n"
-        "• Technical (45%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
-        "• Fundamental (40%): Forward P/E, FCF Yield, Revenue & Earnings Growth, "
-        "Margins, Debt/Equity\n"
-        "• Sentiment (15%): VADER analysis of latest news headlines\n\n"
+        "Weighted composite signal combining four analytical dimensions:\n\n"
+        "• Technical (25%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
+        "• Business Quality (35%): Revenue & Earnings Growth, Margins, Debt/Equity\n"
+        "• Valuation (30%): Forward P/E, FCF Yield, Analyst PT Upside, Consensus Rating\n"
+        "• Sentiment (10%): VADER analysis of latest news headlines\n\n"
         "Score thresholds:\n"
-        "• ≥ 72 → Strong Buy\n• 58–72 → Buy\n"
-        "• 44–58 → Hold\n• 30–44 → Sell\n• < 30 → Strong Sell\n\n"
+        "• ≥ 75 → Strong Buy\n• 65–74 → Buy\n"
+        "• 44–64 → Hold\n• 30–43 → Sell\n• < 30 → Strong Sell\n\n"
         "Note: The Scanner uses momentum-only scoring (no fundamentals). "
         "A stock can score 85 on momentum and 52 composite — both are correct."
     ),
@@ -5459,7 +5459,10 @@ if page == "🏠 Home":
                             # order stays composite-ascending (engine authority).
                             def _trim_basis(_t, _tc):
                                 _hb = (held_data or {}).get(_t) or {}
-                                _tsc, _fsc, _ssc = _hb.get("t_score"), _hb.get("f_score"), _hb.get("s_score")
+                                _tsc  = _hb.get("t_score")
+                                _bqsc = _hb.get("bq_score", _hb.get("f_score"))
+                                _vsc  = _hb.get("val_score")
+                                _ssc  = _hb.get("s_score")
                                 _hist = _hb.get("df") if _hb.get("df") is not None else _hb.get("history")
                                 _cl = (
                                     _hist["Close"]
@@ -5474,9 +5477,10 @@ if page == "🏠 Home":
                                 if isinstance(_tc.get("pnl_pct"), (int, float)):
                                     _bits.append(f"P&L {_tc['pnl_pct']:+.1f}%")
                                 _pill = []
-                                if isinstance(_tsc, (int, float)): _pill.append(f"tech {_tsc:.0f}")
-                                if isinstance(_fsc, (int, float)): _pill.append(f"fund {_fsc:.0f}")
-                                if isinstance(_ssc, (int, float)): _pill.append(f"sentiment {_ssc:.0f}")
+                                if isinstance(_tsc,  (int, float)): _pill.append(f"tech {_tsc:.0f}")
+                                if isinstance(_bqsc, (int, float)): _pill.append(f"bq {_bqsc:.0f}")
+                                if isinstance(_vsc,  (int, float)): _pill.append(f"val {_vsc:.0f}")
+                                if isinstance(_ssc,  (int, float)): _pill.append(f"sentiment {_ssc:.0f}")
                                 if _pill: _bits.append(" ".join(_pill))
                                 _r1w = trailing_return(_cl, 5) if _cl is not None else None
                                 _r1m = trailing_return(_cl, 21) if _cl is not None else None
@@ -5484,7 +5488,7 @@ if page == "🏠 Home":
                                 if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
                                 if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
                                 if _mom: _bits.append(" ".join(_mom))
-                                _pm = {"fundamentals": _fsc, "momentum/technicals": _tsc, "sentiment": _ssc}
+                                _pm = {"business_quality": _bqsc, "valuation": _vsc, "technicals": _tsc, "sentiment": _ssc}
                                 _pv = {k: v for k, v in _pm.items() if isinstance(v, (int, float))}
                                 if _pv:
                                     _wk = min(_pv, key=_pv.get)
@@ -6700,7 +6704,7 @@ if page == "🏠 Home":
         st.caption(
             "Hover the ℹ️ icon on any column header below for a plain-English explanation.  \n"
             "**Ratchet stop** moves up automatically as gains grow — locks in profits while letting winners run.  \n"
-            "**Score** = Technical 45% + Fundamental 40% + Sentiment 15% (composite). "
+            "**Score** = Technical 25% + Business Quality 35% + Valuation 30% + Sentiment 10% (composite). "
             "Scanner uses momentum-only scoring — see drill-down for full breakdown."
         )
 
@@ -6845,17 +6849,21 @@ if page == "🏠 Home":
                       help=_tip("Composite Score"))
 
             # Score breakdown row
-            sb1, sb2, sb3 = st.columns(3)
-            t_contrib  = round(r['t_score'] * 0.45, 1)
-            f_contrib  = round(r['f_score'] * 0.40, 1)
-            s_contrib  = round(r['s_score'] * 0.15, 1)
-            sb1.metric("Technical",   f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (45%)",
+            sb1, sb2, sb3, sb4 = st.columns(4)
+            from stock_analyzer.constants import COMPOSITE_WEIGHTS as _CW
+            t_contrib  = round(r['t_score']  * _CW["technical"],        1)
+            bq_contrib = round(r.get('bq_score', r['f_score']) * _CW["business_quality"], 1)
+            v_contrib  = round(r.get('val_score', 50) * _CW["valuation"], 1)
+            s_contrib  = round(r['s_score']  * _CW["sentiment"],         1)
+            sb1.metric("Technical",       f"{r['t_score']:.0f}/100", f"+{t_contrib} pts (25%)",
                        help="RSI · MACD · Bollinger Bands · MA trend · Volume\n\n"
                             + _tip("RSI"))
-            sb2.metric("Fundamental", f"{r['f_score']:.0f}/100", f"+{f_contrib} pts (40%)",
-                       help="Forward P/E · FCF Yield · Revenue & Earnings growth · Margins · Debt/Equity\n\n"
+            sb2.metric("Business Quality", f"{r.get('bq_score', r['f_score']):.0f}/100", f"+{bq_contrib} pts (35%)",
+                       help="Revenue & Earnings growth · Margins · Debt/Equity")
+            sb3.metric("Valuation",       f"{r.get('val_score', 50):.0f}/100", f"+{v_contrib} pts (30%)",
+                       help="Forward P/E · FCF Yield · Analyst PT Upside · Consensus Rating\n\n"
                             + _tip("FCF Yield"))
-            sb3.metric("Sentiment",   f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (15%)",
+            sb4.metric("Sentiment",       f"{r['s_score']:.0f}/100", f"+{s_contrib} pts (10%)",
                        help="VADER analysis of latest news headlines from Yahoo Finance")
 
             # News Sentiment — Finnhub awareness row (not a gate; strictly additive).
@@ -8477,10 +8485,13 @@ if page == "🏠 Home":
                     with ev_col:
                         st.markdown("**Score Breakdown — What's Driving It**")
                         if t_score is not None:
+                            _bq_score = r_data.get("bq_score", f_score)
+                            _val_score = r_data.get("val_score", 50)
                             for dim, sc, weight, tip_key in [
-                                ("Technical",    t_score, "45%", "RSI"),
-                                ("Fundamental",  f_score, "40%", "FCF Yield"),
-                                ("Sentiment",    s_score, "15%", ""),
+                                ("Technical",        t_score,    "25%", "RSI"),
+                                ("Business Quality", _bq_score,  "35%", ""),
+                                ("Valuation",        _val_score, "30%", "FCF Yield"),
+                                ("Sentiment",        s_score,    "10%", ""),
                             ]:
                                 clr  = "#00C851" if sc >= 60 else ("#ffbb33" if sc >= 44 else "#ff4444")
                                 icon_s = "✅" if sc >= 60 else ("⚠️" if sc >= 44 else "❌")
@@ -8496,14 +8507,14 @@ if page == "🏠 Home":
                                 )
 
                             # Primary driver diagnosis
-                            if t_score is not None and f_score is not None:
-                                gap_tf = t_score - f_score
+                            if t_score is not None and _bq_score is not None:
+                                gap_tf = t_score - _bq_score
                                 if gap_tf < -15:
-                                    driver = "🔴 **Fundamental deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
+                                    driver = "🔴 **Business quality deterioration** is the primary driver — this is a thesis-change signal, act with more urgency."
                                 elif gap_tf > 15:
-                                    driver = "🟡 **Technical weakness only** — fundamentals remain solid. Likely a timing/momentum signal; the ratchet stop may handle it."
+                                    driver = "🟡 **Technical weakness only** — business quality remains solid. Likely a timing/momentum signal; the ratchet stop may handle it."
                                 else:
-                                    driver = "⚠️ **Both Technical and Fundamental signals are weak** — broader caution warranted."
+                                    driver = "⚠️ **Both Technical and Business Quality signals are weak** — broader caution warranted."
                                 st.info(driver)
 
                         # Specific bearish signals from t_signals
@@ -8652,8 +8663,9 @@ if page == "🏠 Home":
                             if any(w in v.lower() for w in
                                    ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
                         }
+                        _rbc_bq_score = r_data.get("bq_score", f_score)
                         if f_sigs_all:
-                            st.markdown(f"📊 **Fundamentals · {f_score:.0f}/100** — raw values from Yahoo Finance")
+                            st.markdown(f"📊 **Business Quality · {_rbc_bq_score:.0f}/100** — raw values from Yahoo Finance")
                             for k, v in f_sigs_all.items():
                                 is_bad = any(w in v.lower() for w in
                                             ["declin", "expensive", "loss", "burn", "high lev", "contract", "modest", "thin", "slow"])
@@ -8756,10 +8768,11 @@ if page == "🏠 Home":
                         half = act["half_shares"]
                         half_val = half * act["price"]
                         full_val = act["shares"] * act["price"]
-                        if f_score is not None and t_score is not None:
-                            if f_score < COMPOSITE_HOLD:
+                        _rbc_bq = r_data.get("bq_score", f_score)
+                        if _rbc_bq is not None and t_score is not None:
+                            if _rbc_bq < COMPOSITE_HOLD:
                                 action_text = (
-                                    f"**Fundamental-driven weakness — act with urgency.**  \n"
+                                    f"**Business quality weakness — act with urgency.**  \n"
                                     f"Sell **{half} shares** (~${half_val:,.0f}) at market now to bank the "
                                     f"{act['pnl']:.0f}% gain on half the position.  \n"
                                     f"Hold remaining {act['shares'] - half} shares with stop at "
@@ -10974,7 +10987,7 @@ elif page == "🔍 Market Scanner":
         "It is a fast filter, not a buy signal. A high momentum score means the stock is moving — "
         "**not** that fundamentals or sentiment support the move.  \n"
         "For any ticker that catches your eye, run a full analysis on the **Analysis** page, "
-        "which adds Fundamental (40%) and Sentiment (15%) data to form a composite score. "
+        "which adds Business Quality (35%), Valuation (30%), and Sentiment (10%) data to form a composite score. "
         "A stock can score 85 on momentum and 52 composite — both numbers are correct; they answer different questions.",
         icon="ℹ️",
     )
@@ -11188,9 +11201,10 @@ elif page == "🔍 Market Scanner":
                 _ev_comp_data  = _ev_composites.get(_ev_t, {})
                 _ev_comp_score = float(_ev_comp_data.get("total") or 0) if _ev_comp_data else None
                 _ev_comp_label = str((_ev_comp_data.get("rec") or {}).get("label", "")) if _ev_comp_data else ""
-                _ev_tech_score = float(_ev_comp_data.get("t_total") or 0) if _ev_comp_data else None
-                _ev_fund_score = float(_ev_comp_data.get("f_total") or 0) if _ev_comp_data else None
-                _ev_sent_score = float(_ev_comp_data.get("sentiment_score") or 0) if _ev_comp_data else None
+                _ev_tech_score = float(_ev_comp_data.get("t_score") or 0) if _ev_comp_data else None
+                _ev_bq_score   = float(_ev_comp_data.get("bq_score", _ev_comp_data.get("f_score") or 0) or 0) if _ev_comp_data else None
+                _ev_val_score  = float(_ev_comp_data.get("val_score") or 0) if _ev_comp_data else None
+                _ev_sent_score = float(_ev_comp_data.get("s_score") or 0) if _ev_comp_data else None
                 _bndl     = _ev_bundle_map.get(_ev_t, {})
                 _ev_info  = _bndl.get("info", {})
                 _ev_revs  = _bndl.get("revisions", {})
@@ -11271,8 +11285,8 @@ elif page == "🔍 Market Scanner":
                     "mom_3m": _ev_m3m, "mom_3m_pts": _ev_m3m_pts,
                     # Composite score (None if not yet pre-fetched)
                     "comp_score": _ev_comp_score, "comp_label": _ev_comp_label,
-                    "tech_score": _ev_tech_score, "fund_score": _ev_fund_score,
-                    "sent_score": _ev_sent_score,
+                    "tech_score": _ev_tech_score, "bq_score": _ev_bq_score,
+                    "val_score": _ev_val_score, "sent_score": _ev_sent_score,
                 })
 
             st.subheader("📊 Signal Evidence — Top 10")
@@ -11363,19 +11377,21 @@ elif page == "🔍 Market Scanner":
                     _comp_sc  = _evr.get("comp_score")
                     _comp_lbl = _evr.get("comp_label", "")
                     _t_sc     = _evr.get("tech_score")
-                    _f_sc     = _evr.get("fund_score")
+                    _bq_sc    = _evr.get("bq_score")
+                    _val_sc   = _evr.get("val_score")
                     _s_sc     = _evr.get("sent_score")
 
                     # Build composite line if available
                     if _comp_sc is not None:
                         _comp_clr = "#22c55e" if _comp_sc >= 68 else "#f59e0b" if _comp_sc >= 60 else "#ef4444"
                         _comp_breakdown = ""
-                        if _t_sc is not None and _f_sc is not None and _s_sc is not None:
+                        if _t_sc is not None and _bq_sc is not None and _s_sc is not None:
                             _comp_breakdown = (
                                 f"<span style='color:#6b7280;font-size:0.78em'>"
-                                f" (Technical {_t_sc:.0f}×45% + "
-                                f"Fundamental {_f_sc:.0f}×40% + "
-                                f"Sentiment {_s_sc:.0f}×15%)</span>"
+                                f" (Technical {_t_sc:.0f}×25% + "
+                                f"BQ {_bq_sc:.0f}×35% + "
+                                f"Val {(_val_sc or 50):.0f}×30% + "
+                                f"Sentiment {_s_sc:.0f}×10%)</span>"
                             )
                         _comp_line = (
                             f"<div style='margin-top:4px'>"
@@ -12045,7 +12061,7 @@ elif page == "📈 Analysis":
                     f"<br><span style='color:#dc2626'>We couldn't get {ticker}'s "
                     "fundamental data from any source right now (Yahoo Finance returned "
                     "nothing and the failover couldn't backfill it). The composite needs "
-                    "the fundamental leg (40% weight) to issue a trustworthy call — "
+                    "the Business Quality leg (35% weight) to issue a trustworthy call — "
                     "without it the score defaults to a neutral 50 and produces a "
                     "<b>misleading verdict</b>, so the app is holding the recommendation "
                     "rather than guessing.</span>"
@@ -12064,9 +12080,12 @@ elif page == "📈 Analysis":
                     f"· {r['total']}/100</b>"
                     f"<span style='color:#888;font-size:0.85em'> "
                     f"(<abbr title='{_tip('RSI').split(chr(10))[0]}' style='cursor:help'>Technical</abbr> "
-                    f"{r['t_score']:.0f} × 45% + "
-                    f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Fundamental</abbr> "
-                    f"{r['f_score']:.0f} × 40% + Sentiment {r['s_score']:.0f} × 15%)"
+                    f"{r['t_score']:.0f} × 25% + "
+                    f"<abbr title='Revenue &amp; earnings growth · margins · debt/equity' style='cursor:help'>BQ</abbr> "
+                    f"{r.get('bq_score', r['f_score']):.0f} × 35% + "
+                    f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Val</abbr> "
+                    f"{r.get('val_score', 50):.0f} × 30% + "
+                    f"Sentiment {r['s_score']:.0f} × 10%)"
                     f"</span><br>{rec['rationale']}"
                     + (f"<br><small>📍 {r['upside']}</small>"
                        if r["upside"]
@@ -12938,7 +12957,7 @@ elif page == "📈 Analysis":
 
             # ── Deep Dive ─────────────────────────────────────────────────
             with deep_tab:
-                dd1, dd2, dd3, dd4 = st.columns(4)
+                dd1, dd2, dd2v, dd3, dd4 = st.columns(5)
                 with dd1:
                     st.markdown(f"**Technical — {r['t_score']}/100**")
                     st.caption("RSI · MACD · MA · Bollinger · Volume")
@@ -12957,15 +12976,15 @@ elif page == "📈 Analysis":
                             unsafe_allow_html=True,
                         )
                 with dd2:
-                    st.markdown(f"**Fundamental — {r['f_score']}/100**")
-                    st.caption("Valuation · Growth · Quality · Cash Flow")
-                    for k, v in r["f_signals"].items():
+                    _dd2_bq = r.get("bq_score", r["f_score"])
+                    st.markdown(f"**Business Quality — {_dd2_bq:.0f}/100**")
+                    st.caption("Growth · Profitability · Balance Sheet")
+                    for k, v in r.get("bq_signals", r["f_signals"]).items():
                         clr = "#00C851" if any(w in v.lower() for w in
                               ["strong","excellent","good","healthy","under"]) else (
                               "#ff4444" if any(w in v.lower() for w in
                               ["declin","contract","high lev","expensive","loss","burn"]) else "#aaa")
                         tip_map = {
-                            "Forward P/E": "Forward P/E", "FCF Yield": "FCF Yield",
                             "Revenue Growth": "Revenue Growth", "Earnings Growth": "Earnings Growth",
                             "Profit Margin": "Profit Margin", "Debt/Equity": "Debt/Equity",
                         }
@@ -12980,7 +12999,30 @@ elif page == "📈 Analysis":
                             f"<span style='color:#ccc'>{v}</span>",
                             unsafe_allow_html=True,
                         )
-                    fin = r["financials"]
+                with dd2v:
+                    _dd2v_val = r.get("val_score", 50)
+                    st.markdown(f"**Valuation — {_dd2v_val:.0f}/100**")
+                    st.caption("P/E · FCF Yield · PT Upside · Consensus")
+                    for k, v in r.get("val_signals", {}).items():
+                        clr = "#00C851" if any(w in v.lower() for w in
+                              ["strong","excellent","good","cheap","upside"]) else (
+                              "#ff4444" if any(w in v.lower() for w in
+                              ["expensive","overvalued","negative"]) else "#aaa")
+                        tip_map = {
+                            "Forward P/E": "Forward P/E", "FCF Yield": "FCF Yield",
+                        }
+                        tip_key = tip_map.get(k, "")
+                        label_md = (
+                            f"<abbr title='{_tip(tip_key).split(chr(10))[0]}' "
+                            f"style='cursor:help;border-bottom:1px dotted #666'><b>{k}</b></abbr>"
+                            if tip_key else f"<b>{k}</b>"
+                        )
+                        st.markdown(
+                            f"<small style='color:{clr}'>●</small> {label_md}: "
+                            f"<span style='color:#ccc'>{v}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    _dd2v_fin = r["financials"]
                     st.markdown("---")
                     raw_metrics = [
                         ("Trailing P/E", "pe_ratio",    _tip("P/E Ratio")),
@@ -12991,7 +13033,7 @@ elif page == "📈 Analysis":
                         ("ROE",          "return_on_equity", _tip("ROE")),
                     ]
                     for label, key, tip_txt in raw_metrics:
-                        v = fin.get(key)
+                        v = _dd2v_fin.get(key)
                         if v is None:
                             continue
                         suffix = "%" if key == "fcf_yield" else ""
@@ -18544,11 +18586,12 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
     with st.expander("🧮 How stocks are scored", expanded=False):
         st.markdown(
             """
-Every stock gets a **Composite score (0–100)** blending three factors:
+Every stock gets a **Composite score (0–100)** blending four factors:
 
-- **Technical — 45%** (trend, momentum, RSI, relative strength)
-- **Fundamental — 40%** (valuation, growth, profitability, balance sheet)
-- **Sentiment — 15%** (news tone)
+- **Technical — 25%** (trend, momentum, RSI, relative strength)
+- **Business Quality — 35%** (revenue/earnings growth, profitability, balance sheet)
+- **Valuation — 30%** (Forward P/E, FCF yield, analyst PT upside, consensus rating)
+- **Sentiment — 10%** (news tone)
 
 A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not* enough — a hot breakout (high momentum) is **skipped** if the full composite says Hold/Sell ("composite contradicts momentum").
 

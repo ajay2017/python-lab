@@ -272,9 +272,10 @@ NEWS_SENTIMENT_BEARISH_THRESHOLD    = 0.40  # bullish_pct <  this → red   "Bea
 NEWS_SENTIMENT_SHIFT_ALERT_BULLISH  = 0.40  # held-position alert fires when bullish_pct < this
 NEWS_SENTIMENT_SHIFT_BUZZ_MIN       = 1.0   # alert only when buzz_score > this (active coverage)
 
-# ── Analyst coverage (awareness layer — NOT a gate) ──────────────────────────
-# Analyst research is display/awareness context only — it never modifies a
-# composite score, gate, or verdict (the engine remains the sole decider).
+# ── Analyst coverage ─────────────────────────────────────────────────────────
+# Analyst consensus (avg_pt + rating label aggregated from analyst_coverage)
+# feeds the Valuation pillar score.  Individual Ideas Inbox records remain
+# display/awareness context only; only aggregated consensus metrics enter scoring.
 ANALYST_COVERAGE_FRESH_DAYS = 30   # a report stays in the "recent" Ideas Inbox view this many days
 ANALYST_MIN_UPSIDE_PCT      = 15   # Phase-2 Brief-chip threshold (avg-PT upside); UNUSED in Phase 1
 # Consensus LABEL boundaries (display only — classify the firm rating
@@ -294,6 +295,25 @@ ANALYST_EXTRACT_MAX_TOKENS = 8000
 # 30s LLM_REQUEST_TIMEOUT_SEC → the request times out and looks like a parse
 # failure. Given its own generous ceiling (a deliberate one-shot paste action).
 ANALYST_EXTRACT_TIMEOUT_SEC = 90
+
+# ── Valuation pillar ──────────────────────────────────────────────────────────
+# Constants used by valuation.valuation_score() — the fourth scoring pillar that
+# covers Forward P/E, FCF Yield, analyst PT upside, and analyst consensus rating.
+VALUATION_COVERAGE_FRESH_DAYS = 90   # analyst_coverage lookback for scoring
+
+VALUATION_PT_UPSIDE_STRONG  = 30    # ≥ this % → 25/25 pts
+VALUATION_PT_UPSIDE_GOOD    = 15
+VALUATION_PT_UPSIDE_MODEST  = 5
+VALUATION_PT_UPSIDE_NEUTRAL = 0
+VALUATION_PT_UPSIDE_NEAR    = -5
+
+VALUATION_CONSENSUS_PTS = {
+    "Strong Buy": 30,
+    "Buy":        24,
+    "Hold":       15,
+    "Mixed":       9,
+    "Sell":        0,
+}
 
 # ✉️ Protective-alert cron (exit-discipline Phase 3) — OPERATIONAL knob, not an
 # investment-decision threshold. The ET hour the daily email targets; the cron is
@@ -393,11 +413,12 @@ MEANINGFUL_INTRADAY_PCT = 1.0
 # ── Composite-score weights (scoring.combined_score) ─────────────────────────
 # How much each layer contributes to the composite score. Tuning these is a
 # policy decision — heavier technical = more momentum-driven, heavier
-# fundamental = more value-driven. Must sum to 1.0.
+# valuation = more value-driven. Must sum to 1.0.
 COMPOSITE_WEIGHTS = {
-    "technical":   0.45,
-    "fundamental": 0.40,
-    "sentiment":   0.15,
+    "technical":        0.25,
+    "business_quality": 0.35,
+    "valuation":        0.30,
+    "sentiment":        0.10,
 }
 
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
@@ -525,11 +546,11 @@ DATA_XCHECK_FIELDS = {"price"}
 DATA_FMP_INFO_CACHE_TTL_SEC = 3600
 
 # Minimum number of CORE fundamental metrics that must be present for the
-# fundamental leg — and therefore the composite verdict — to be trusted. The
-# five core scoreable metrics are forward_pe, revenue_growth, earnings_growth,
-# profit_margins, debt_to_equity (see fundamentals.fundamental_score). When
+# Business Quality leg — and therefore the composite verdict — to be trusted. The
+# four core BQ metrics are revenue_growth, earnings_growth,
+# profit_margins, debt_to_equity (see fundamentals.business_quality_score). When
 # yfinance `.info` comes back empty AND no failover source can backfill it,
-# zero of these are present, and fundamental_score returns a FABRICATED neutral
+# zero of these are present, and business_quality_score returns a FABRICATED neutral
 # 50 (points/max_points with max_points==0). The composite then emits a
 # confident Buy/Hold on data we don't actually have — the exact "recommend
 # wrongly" failure the operating posture forbids. Below this threshold the app

@@ -212,23 +212,16 @@ def build_comparison(
         ],
     })
 
-    # ── Fundamentals ────────────────────────────────────────────────────────
+    # ── Business Quality ────────────────────────────────────────────────────
+    _bq_a = bundle_a.get("bq_score", bundle_a.get("f_score", 0))
+    _bq_b = bundle_b.get("bq_score", bundle_b.get("f_score", 0))
     sections.append({
-        "name": "Fundamentals",
+        "name": "Business Quality",
         "rows": [
-            _row("Fundamental Score",
-                 f"{bundle_a.get('f_score', 0):.0f}/100",
-                 f"{bundle_b.get('f_score', 0):.0f}/100",
-                 _winner(bundle_a.get("f_score"), bundle_b.get("f_score"), True, tolerance=3)),
-            _row("Forward P/E",
-                 _fmt_num(fin_a.get("forward_pe"), "{:.1f}"),
-                 _fmt_num(fin_b.get("forward_pe"), "{:.1f}"),
-                 _winner(fin_a.get("forward_pe"), fin_b.get("forward_pe"),
-                         higher_better=False, tolerance=0.5)),
-            _row("FCF Yield",
-                 f"{fin_a['fcf_yield']:.2f}%" if fin_a.get("fcf_yield") is not None else "—",
-                 f"{fin_b['fcf_yield']:.2f}%" if fin_b.get("fcf_yield") is not None else "—",
-                 _winner(fin_a.get("fcf_yield"), fin_b.get("fcf_yield"), True, tolerance=0.3)),
+            _row("BQ Score",
+                 f"{_bq_a:.0f}/100",
+                 f"{_bq_b:.0f}/100",
+                 _winner(_bq_a, _bq_b, True, tolerance=3)),
             _row("Revenue Growth",
                  _fmt_pct(fin_a.get("revenue_growth")),
                  _fmt_pct(fin_b.get("revenue_growth")),
@@ -244,6 +237,28 @@ def build_comparison(
                  _fmt_num(fin_b.get("debt_to_equity"), "{:.0f}"),
                  _winner(fin_a.get("debt_to_equity"), fin_b.get("debt_to_equity"),
                          higher_better=False, tolerance=5)),
+        ],
+    })
+
+    # ── Valuation ───────────────────────────────────────────────────────────
+    _val_a = bundle_a.get("val_score", 50)
+    _val_b = bundle_b.get("val_score", 50)
+    sections.append({
+        "name": "Valuation",
+        "rows": [
+            _row("Valuation Score",
+                 f"{_val_a:.0f}/100",
+                 f"{_val_b:.0f}/100",
+                 _winner(_val_a, _val_b, True, tolerance=3)),
+            _row("Forward P/E",
+                 _fmt_num(fin_a.get("forward_pe"), "{:.1f}"),
+                 _fmt_num(fin_b.get("forward_pe"), "{:.1f}"),
+                 _winner(fin_a.get("forward_pe"), fin_b.get("forward_pe"),
+                         higher_better=False, tolerance=0.5)),
+            _row("FCF Yield",
+                 f"{fin_a['fcf_yield']:.2f}%" if fin_a.get("fcf_yield") is not None else "—",
+                 f"{fin_b['fcf_yield']:.2f}%" if fin_b.get("fcf_yield") is not None else "—",
+                 _winner(fin_a.get("fcf_yield"), fin_b.get("fcf_yield"), True, tolerance=0.3)),
         ],
     })
 
