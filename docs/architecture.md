@@ -254,6 +254,8 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | `_movers_candidates` | Portfolio page (`_cached_scan_movers` → composite-gate) | `_grow_today` via `movers=` arg | Discovery breakouts fed into the unified New Positions list |
 | `_daily_brief_offline` | Portfolio page (on `build_daily_briefing` exception) | Watchlist | Surfaces explicit offline state instead of silently disabling gates |
 | `_reduce_calls` | After `build_daily_briefing` (`decision_bucket.reduce_call_items`) | Stock Analysis Trade Plan | Held names under a Reduce/Exit call → suppress add-on sizing + "not a place to add" banner, so Analysis can't say "add" while the Brief says "reduce" |
+| `_acct_gate_cache` | Portfolio page (concentration-gate wiring, ~app.py:2710) | Grow Today 15%/35% suppression, entry nudge, watchlist/quick-research/comparison entry-fit | One number all gate consumers read for the concentration basis + denom. **Now `basis="equity"`, `denom=invested equity`** (2026-07-09 — reqs G-19); the net-capital path is retired |
+| `_leverage_cache` | Portfolio page (same wiring point) | 🔗 Risk Analysis leverage read (+ 💰 Account ⚖️ note) | Margin/leverage AWARENESS (`{levered, margin_debit, net_capital, equity, ratio, stale}`) — read-only, **never gates** (F-09d) |
 
 ### 4.0.3 Coordination gates currently enforced
 
@@ -631,7 +633,7 @@ CREATE TABLE account_cash (
 
 **Account-baseline NET cash (single row).** Holds the user-entered uninvested cash. The value is **signed: NEGATIVE = a margin debit** (account-baseline v4) — so `Total Account Value = Σ Market Value + cash` nets out any margin loan, and everything derived from it (true concentration, growth, return) nets it too. `db.load_account_cash()` / `save_account_cash()` (writer is read-only-viewer no-op — USER data). **Optional** — until created, load returns None and the app behaves as today (invested-equity only, with a nudge to set cash). The same field the Robinhood MCP sync would later auto-populate. RLS: `FOR ALL TO service_role`.
 
-When a margin debit makes the gate basis `account`/`over-levered` (published via `_acct_gate_cache`), the **Performance → Sector Exposure** chart adds a second net-capital bar per sector (35% cap applies to it) and the **Composition Sankey** flags concentration on the net-capital basis — so neither display can read "safe" while a Grow Today sector suppression fires on the same names. Display-only; band widths/weights everywhere else stay equity-basis.
+Since the concentration gates are **equity-basis** (2026-07-09 — reqs G-19), `_acct_gate_cache.basis` is always `"equity"`: the **Sector Exposure** chart and **Composition Sankey** show the equity view and flag concentration (35% sector / 15% single-name) against invested equity — the net-capital overlay/flag branches remain conditioned on `basis ∈ {account, over-levered}` and are therefore inert (no net-capital claim renders). Leverage/margin risk is instead an **awareness-only** read on the **🔗 Risk Analysis** tab (`_leverage_cache`; F-09d) + the 💰 Account ⚖️ note — never a gate. (These conditional branches are retained as the seam so the basis stays a one-line policy choice; do not re-enable net-capital gating without a policy discussion.)
 
 ### 6.8 `account_flows` table
 

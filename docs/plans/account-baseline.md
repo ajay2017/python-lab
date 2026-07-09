@@ -53,7 +53,7 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
   makes them all net out the loan (no new subsystem, no new DDL). UI: "Net cash /
   margin" input (no min), leverage caption, debit>equity soft-warn. Gates still
   equity-weight. Motivated by the user trading on margin often.
-- **Gate-basis decision — Phase 1 ✅ SHIPPED (2026-06-26).** The deferred
+- **Gate-basis decision — Phase 1 SHIPPED 2026-06-26 (⚠️ SUPERSEDED 2026-07-09 — see reversal below; kept for history).** The deferred
   question ("move the 15%/35% concentration GATES off equity-basis?") was decided:
   **"tighter-of-both"** — gates compare a margin-aware `Gate Weight (%)` =
   `MV ÷ min(equity, total_account_value)`. Margin tightens the ceilings; cash on

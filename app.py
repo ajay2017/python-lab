@@ -18601,6 +18601,19 @@ It reads two things together: how far a name has fallen **from its highest point
 """
         )
 
+    with st.expander("⚖️ When a sector is over the cap — the rebalance plan", expanded=False):
+        st.markdown(
+            """
+When a single sector grows past the **35% hard cap** (or approaches the **25% warn** line), the app raises a **Hard Cap Breach** card in **🔴 Act Today** — and, rather than a bare "trim your sector" nudge, it hands you a concrete plan you open with **🔎 Rebalance plan — what to trim, where to redeploy**:
+
+**Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's three pillars (**technical · fundamental · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
+
+**Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else (a ✅ passer is "a genuine entry," not filler), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there.
+
+**It advises; you decide.** The engine's conviction score sets the order; correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
+"""
+        )
+
     with st.expander("🎚️ How your stop level is set — ATR, profit-ratchet & the what-if simulator", expanded=False):
         st.markdown(
             """
@@ -18725,7 +18738,7 @@ On the 💰 Account page, enter your **Net cash / margin ($)**:
 
 Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**, and **true concentration** — each holding as a % of your *whole account*, not just your invested stocks (so a name looks as big as it really is relative to all your money).
 
-**How the gates use this — "tighter of both".** The concentration gates (the 15% single-name and 35% sector ceilings) measure against the **tighter of** your invested equity *or* your net capital. **Cash on hand never loosens them** — they stay equity-based. But a **margin debit tightens them:** each name is measured against your smaller *net capital*, so the ceilings bite sooner — a name that's 28% of your stocks can be 60%+ of the capital you actually own, and the gate acts on that larger figure. Whenever margin is tightening a gate you'll see a **⚖️ Tightened by margin** note on the suppression, and — while you're levered — the **Sector Exposure chart** (Performance tab) draws a second *net-capital* bar per sector so the picture on screen matches the basis the gate is firing on. (If the cash figure is unknown or goes stale, the gate quietly falls back to equity-basis rather than acting on old data.)
+**How the gates use this — equity-basis, with leverage watched separately.** The concentration gates (the 15% single-name and 35% sector ceilings) measure each name against your **invested equity** — its share of your stock holdings. That's deliberately **stable**: a *transient* margin balance won't suddenly make a well-sized book look over-concentrated and demand a large trim. **Leverage isn't ignored — it's surfaced separately as awareness (never a gate):** when you carry a margin debit, the **🔗 Risk Analysis** tab shows a leverage read — your margin debit, your net capital (equity minus the loan), the leverage multiple, and roughly what a −10% move on your largest sector would cost your equity — and the ⚖️ note on this Account page flags it too. So *position sizing* is judged on your equity (and won't lurch when you dip in and out of margin), while the *financing* dimension is something you **monitor**, not something that forces a trim.
 
 **2. Set a baseline + log deposits/withdrawals (to see real growth).**
 Under **Growth & Contributions**, set a **baseline** (your contributed capital — default = today's total, which tracks growth from today; or enter your lifetime net deposits for all-time gain). Then log **deposits** and **withdrawals** as they happen. The app computes:
