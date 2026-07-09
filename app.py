@@ -2887,6 +2887,14 @@ if page == "🏠 Home":
     # every rerun. On a cache hit we restore the bundled locals AND re-publish
     # the cross-page coordination caches (other pages may mutate them) so the
     # CLAUDE.md publish/consume contract holds.
+    # Schema version — BUMP whenever the synthesis OUTPUT shape changes (new
+    # brief/flag fields, new bundled locals). It's part of the signature so a
+    # deploy that changes the shape invalidates any warm session cache built by
+    # the PREVIOUS deploy. Without it, the new render reads a stale-shape brief
+    # and silently degrades — e.g. the rebalance trim PLAN fell back to the
+    # basis-only list because a cached brief predated the trim_target_*/
+    # market_value/price fields. See memory project_home_synth_memoization.
+    _SYNTH_SCHEMA_VER = 1
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -2900,6 +2908,7 @@ if page == "🏠 Home":
         ),
         st.session_state.get("_scanner_ver", 0),
         st.session_state.get("_brief_refresh_nonce", 0),
+        _SYNTH_SCHEMA_VER,
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
     if _synth_cache is not None and _synth_cache.get("sig") == _synth_sig:
