@@ -136,7 +136,7 @@ from stock_analyzer.portfolio import (
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation,
 )
-from stock_analyzer.concentration import assess_add_concentration, high_beta_share, gating_denominator
+from stock_analyzer.concentration import assess_add_concentration, high_beta_share
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
 from stock_analyzer.discovery_universe import discovery_tickers
 from stock_analyzer.macro import (
@@ -2697,41 +2697,49 @@ if page == "🏠 Home":
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
 
-    # ── Concentration-gate basis: "tighter-of-both" (equity vs net capital) ────
-    # The 15%/35% ceilings gate on a "Gate Weight (%)" that nets margin: when the
-    # account carries a margin debit (signed net cash < 0), the true capital base
-    # is smaller than invested equity, so each name is a LARGER share of what you
-    # actually own and the gate tightens. Cash on hand never loosens the gate, and
-    # a stale (> ACCOUNT_CASH_STALE_DAYS) or unknown cash figure falls back to
-    # equity-basis. Display weights ("Weight (%)") stay equity-basis EVERYWHERE;
-    # only the gate comparisons read "Gate Weight (%)". Investment-policy decision
-    # 2026-06-26 — see docs/plans/account-baseline.md.
-    _gate_denom, _gate_basis = float(total_val), "equity"
+    # ── Concentration-gate basis: EQUITY (invested equity) ─────────────────────
+    # 2026-07-09 POLICY (reverses the 2026-06-26 net-capital "tighter-of-both"):
+    # the 15%/35% ceilings + the risk-advisor trim/nudge recs gate on plain equity
+    # weight (MV ÷ invested equity). A TRANSIENT margin balance must not lurch a
+    # hard gate (position sizing is judged on equity, which is stable); leverage
+    # risk is surfaced SEPARATELY as an awareness-only signal below (never a gate).
+    # Gate Weight (%) == equity Weight (%) — kept as a column so the downstream
+    # `_gate_wt`/`_gate_wt_col` consumers are unchanged. See account-baseline.md
+    # (2026-07-09 reversal) + project_concentration_discipline.
+    _gate_denom = float(total_val)
+    if not port_df.empty:
+        port_df["Gate Weight (%)"] = port_df["Weight (%)"]
+    st.session_state["_acct_gate_cache"] = {
+        "denom": _gate_denom, "basis": "equity", "over_levered": False,
+    }
+    # ── Leverage / margin AWARENESS (text-only — NEVER gates) ──────────────────
+    # Net capital = invested equity + signed net cash (negative cash = margin
+    # debit). Published for the 🔗 Risk Analysis leverage read + the 💰 Account
+    # note. "levered" only when the manually-seeded cash is known, fresh, and a
+    # true debit — fail-soft to not-levered otherwise (CLAUDE.md offline = None-ish
+    # calm default, no false alarm).
+    _lev = {"levered": False, "margin_debit": 0.0, "net_capital": float(total_val),
+            "equity": float(total_val), "ratio": 1.0, "stale": False}
     try:
         _acct_cash = db.load_account_cash()
-        _cash_stale = False
         if _acct_cash and _acct_cash.get("updated_at"):
             _cash_age_days = (pd.Timestamp.now(tz="UTC")
                               - pd.to_datetime(_acct_cash["updated_at"], utc=True)).days
-            _cash_stale = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
-        _acct_total = (float(total_val) + _acct_cash["cash_balance"]) if _acct_cash else None
-        _gate_denom, _gate_basis = gating_denominator(
-            float(total_val), _acct_total, stale=_cash_stale,
-        )
+            _lev["stale"] = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
+        if _acct_cash:
+            _cash_bal = float(_acct_cash["cash_balance"])
+            _net_cap  = float(total_val) + _cash_bal
+            if _cash_bal < 0 and not _lev["stale"] and _net_cap > 0:
+                _lev.update({
+                    "levered":      True,
+                    "margin_debit": abs(_cash_bal),
+                    "net_capital":  _net_cap,
+                    "equity":       float(total_val),
+                    "ratio":        float(total_val) / _net_cap,
+                })
     except Exception:
-        _gate_denom, _gate_basis = float(total_val), "equity"
-    if not port_df.empty:
-        if _gate_basis in ("account", "over-levered") and _gate_denom > 0:
-            port_df["Gate Weight (%)"] = (port_df["Market Value"] / _gate_denom * 100).round(1)
-        else:
-            port_df["Gate Weight (%)"] = port_df["Weight (%)"]
-    # Published for the entry nudge (Trade Journal) + suppression-banner annotation
-    # (CLAUDE.md coordination pattern — one consistent number for all consumers).
-    st.session_state["_acct_gate_cache"] = {
-        "denom":        _gate_denom,
-        "basis":        _gate_basis,
-        "over_levered": _gate_basis == "over-levered",
-    }
+        pass
+    st.session_state["_leverage_cache"] = _lev
 
     # Today's P&L — mark-to-market of CURRENTLY-HELD shares vs prior close.
     # SCOPE (surfaced in the metric label "(held)" + tooltip): this is a
@@ -4462,8 +4470,9 @@ if page == "🏠 Home":
                     _qr_held_row = port_df[port_df["Ticker"] == _t]
                     _qr_is_held  = not _qr_held_row.empty
                     _qr_sector   = _qr_raw.get("sector", "")
-                    # Margin-aware gate basis (Phase 2): sum the net-capital Gate
-                    # Weight when present so the entry caution matches the hard gate.
+                    # Concentration gate basis (equity, 2026-07-09 — reqs G-19):
+                    # sum the Gate Weight (%) column (== equity Weight) so the entry
+                    # caution matches the hard gate.
                     _qr_gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
                     _qr_sec_wt   = (
                         float(port_df[port_df["Sector"] == _qr_sector][_qr_gcol].sum())
@@ -5442,12 +5451,6 @@ if page == "🏠 Home":
                             _tt_dollar = _rebal_flag.get("trim_target_dollar")
                             _tt_pp     = _rebal_flag.get("trim_target_pp")
                             _tt_denom  = _rebal_flag.get("trim_target_denom")
-                            _tt_acct   = _rebal_flag.get("trim_target_acct_basis")
-                            # On margin the sector weight / 25% target are on the
-                            # NET-CAPITAL basis (denominator = your equity net of the
-                            # margin loan), which is why the sector can read >100%
-                            # and the trim is large. Say so, so it isn't mysterious.
-                            _basis_lbl = " of net capital" if _tt_acct else ""
                             _tc_by_tkr = {c.get("ticker"): c for c in _trim}
 
                             # Basis sub-line for WHY a name is low-conviction: the
@@ -5505,17 +5508,8 @@ if page == "🏠 Home":
                                 # running total) garbles into italic math.
                                 _hdr = f"**Trim first — the plan (target: trim ~\\${_tt_dollar:,.0f}"
                                 if isinstance(_tt_pp, (int, float)): _hdr += f" · {_tt_pp:.0f}pp"
-                                _hdr += f" → {SECTOR_ELEVATED:.0f}%{_basis_lbl}"
-                                if _tt_acct and isinstance(_tt_denom, (int, float)) and _tt_denom > 0:
-                                    _hdr += f" ≈ \\${_tt_denom:,.0f}"
-                                _hdr += "):**"
+                                _hdr += f" → {SECTOR_ELEVATED:.0f}%):**"
                                 st.markdown(_hdr)
-                                if _tt_acct:
-                                    st.caption(
-                                        "ℹ️ Measured on your **net capital** (equity minus the margin "
-                                        "loan) — margin nets the base down, so the sector reads hotter "
-                                        "than an equity-only view and the de-risk needed is larger."
-                                    )
                                 # Display cap only (NOT a gate): rows past it are
                                 # rolled up into a remainder line so the running
                                 # total still reflects every name. Deliberately >
@@ -5548,7 +5542,7 @@ if page == "🏠 Home":
                                     )
                                 st.caption(
                                     f"✓ **\\${_alloc['total_allocated']:,.0f}** of ~\\${_alloc['target']:,.0f} "
-                                    f"· sector → ~{SECTOR_ELEVATED:.0f}%{_basis_lbl}"
+                                    f"· sector → ~{SECTOR_ELEVATED:.0f}%"
                                 )
                                 if _alloc["shortfall"] > 0:
                                     st.caption(
@@ -9045,6 +9039,44 @@ if page == "🏠 Home":
     # TAB 3 — RISK ANALYSIS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab_risk:
+        # ── Leverage / margin AWARENESS (text-only — NEVER gates) ──────────────
+        # Concentration gates are equity-basis (2026-07-09 policy); leverage risk
+        # lives HERE as monitoring, not a suppression, so a transient margin
+        # balance can't force a trim. Renders only when the seeded cash shows a
+        # real, fresh margin debit (see _leverage_cache). "$" escaped as "\$" —
+        # Streamlit renders a $…$ pair as LaTeX.
+        _lev_c = st.session_state.get("_leverage_cache") or {}
+        if _lev_c.get("levered"):
+            _lv_ratio = _lev_c.get("ratio")
+            _lv_eq    = _f(_lev_c.get("equity"), 0.0)
+            _lv_nc    = _f(_lev_c.get("net_capital"), 0.0)
+            _lv_debit = _f(_lev_c.get("margin_debit"), 0.0)
+            _lv_line  = ""
+            try:
+                if port_df is not None and not port_df.empty and "Sector" in port_df.columns:
+                    _lv_sec = (port_df.groupby("Sector")["Market Value"].sum()
+                               .sort_values(ascending=False))
+                    if not _lv_sec.empty:
+                        _lv_pb  = abs(FRAGILITY_PULLBACK_PCT) / 100.0   # single-source the −10% yardstick
+                        _lv_hit = float(_lv_sec.iloc[0]) * _lv_pb
+                        _lv_eq_pct = (_lv_hit / _lv_eq * 100) if _lv_eq > 0 else None
+                        _lv_line = (
+                            f" A −{abs(FRAGILITY_PULLBACK_PCT):.0f}% move on your largest sector "
+                            f"({_lv_sec.index[0]}) ≈ −\\${_lv_hit:,.0f}"
+                            + (f" (−{_lv_eq_pct:.0f}% of your equity)" if _lv_eq_pct is not None else "")
+                            + "."
+                        )
+            except Exception:
+                _lv_line = ""
+            st.warning(
+                f"⚖️ **Leverage — awareness only (not a gate).** You're carrying a "
+                f"**\\${_lv_debit:,.0f} margin debit**: \\${_lv_eq:,.0f} of stock on "
+                f"**\\${_lv_nc:,.0f} of your own capital**"
+                + (f" (**{_lv_ratio:.1f}× leverage**)" if isinstance(_lv_ratio, (int, float)) else "")
+                + f".{_lv_line} Margin amplifies a drawdown against the capital you actually own — "
+                "worth monitoring. Concentration gates are judged on equity, so this never forces a trim.",
+                icon="⚖️",
+            )
         # ── Portfolio Risk Dashboard ──────────────────────────────────────────
         if _port_risk:
             st.markdown("### Portfolio Risk Dashboard")
@@ -13445,7 +13477,8 @@ elif page == "📋 Watchlist":
         _wl_sector = str(_wd.get("sector", "")) if isinstance(_wd, dict) else ""
         _wl_sec_wt = 0.0
         if _wl_sector and not _wl_port_df.empty and "Sector" in _wl_port_df.columns:
-            # Margin-aware gate basis (Phase 2): prefer the net-capital Gate Weight.
+            # Concentration gate basis (equity, 2026-07-09 — reqs G-19): sum the
+            # Gate Weight (%) column (== equity Weight).
             _wl_gcol = "Gate Weight (%)" if "Gate Weight (%)" in _wl_port_df.columns else "Weight (%)"
             _wl_sec_wt = float(_wl_port_df[_wl_port_df["Sector"] == _wl_sector][_wl_gcol].sum())
         _wl_pctx = {
@@ -14796,9 +14829,9 @@ elif page == "📒 Trade Journal":
                         try:
                             _cc_pdf = st.session_state.get("_last_port_df")
                             _cc_pv  = _f(st.session_state.get("_portfolio_value"), 0.0)
-                            # Tighter-of-both gate basis (margin nets the denominator
-                            # down so the nudge fires sooner); falls back to equity
-                            # when cash is unknown/stale. See gating_denominator.
+                            # Concentration gate basis = equity (2026-07-09 — reqs
+                            # G-19): the published denom is invested equity, so the
+                            # nudge fires on the same equity weight as the hard gate.
                             _cc_gate   = st.session_state.get("_acct_gate_cache") or {}
                             _cc_denom  = _f(_cc_gate.get("denom"), 0.0) or _cc_pv
                             _cc_margin = _cc_gate.get("basis") in ("account", "over-levered")
@@ -17155,9 +17188,11 @@ elif page == "💰 Account":
     # Home hot path (no per-rerun cost on Home) and has room to grow (v2 flows,
     # v3 returns). Reads the portfolio the Home brief already built (_last_port_df
     # in session) — NO heavy recompute — mirroring the Catalyst Watch pattern.
-    # The 15%/35% concentration GATES are margin-aware (tighter-of-both: equity,
-    # or net capital when levered — cash never loosens; shipped 2026-06-26). This
-    # account view is the honest exposure picture, not itself a gate.
+    # The 15%/35% concentration GATES are EQUITY-basis (2026-07-09 policy —
+    # reverses the 2026-06-26 net-capital basis; a transient margin balance must
+    # not lurch a hard gate). Leverage/margin risk is a SEPARATE awareness signal
+    # (🔗 Risk Analysis + the ⚖️ note below), never a gate. This account view is
+    # the honest exposure picture.
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("💰 Account")
     st.caption(
@@ -17207,9 +17242,9 @@ elif page == "💰 Account":
             st.caption(
                 "True concentration — each holding as % of your **whole account** "
                 "(equity + net cash) vs % of invested equity. The concentration **gates "
-                "are margin-aware** — they use your **net capital** when you're levered "
-                "(equity otherwise; cash never loosens them), so a margin debit makes the "
-                "gates bite on the higher, account-level weight."
+                "use equity-basis** (% of invested equity), so they stay stable across a "
+                "transient margin balance; leverage/margin risk is surfaced separately as "
+                "an **awareness** signal (🔗 Risk Analysis), never a gate."
             )
             st.dataframe(
                 _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],

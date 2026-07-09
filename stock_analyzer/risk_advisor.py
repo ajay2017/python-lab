@@ -93,16 +93,15 @@ def build_risk_advisor_recommendations(
         return []
     pv = portfolio_value
 
-    # ── Concentration-rec basis: "tighter-of-both" (margin-aware, Phase 2) ────
-    # The single-name / sector CONCENTRATION recs below scale their weights by
-    # _acct_f so a margin debit tightens them exactly as the hard Grow-Today gates
-    # do (gate_denom = min(equity, net capital) < equity ⇒ f > 1 ⇒ weights run
-    # higher, ceilings bite sooner). Every weight scales by the SAME factor, and
-    # the "$ riding on a name" is unchanged (it's just market value); only the
-    # TRIM pp/$ grow — hence the trim-$ multiplier is _gd, not pv. Falls back to
-    # equity-basis (f = 1.0, no change) when there's no margin / gate_denom is
-    # absent. Only these concentration recs use it — beta/Sharpe recs keep equity
-    # weight (a different risk dimension). See concentration.gating_denominator.
+    # ── Concentration-rec basis: whatever `gate_denom` the caller passes ───────
+    # This is a basis-agnostic seam: the recs scale weights by _acct_f = pv/gate_denom
+    # and size trims off _gd. CURRENT POLICY (2026-07-09, reqs G-19): app.py passes
+    # gate_denom = invested equity, so _acct_f = 1.0, _gd = pv → the recs are pure
+    # EQUITY-basis (no scaling). The seam is retained so the basis stays a one-line
+    # policy choice at the call site (a prior 2026-06-26 policy passed net capital
+    # here to tighten under margin; reversed — do not re-tighten without a policy
+    # discussion). Only the two concentration recs use it — beta/Sharpe recs keep
+    # equity weight (a different risk dimension).
     _acct_f     = (pv / gate_denom) if (gate_denom and 0 < gate_denom < pv) else 1.0
     _acct_basis = _acct_f > 1.0
     _gd         = gate_denom if _acct_basis else pv   # denominator for trim-$ math
@@ -660,8 +659,6 @@ def build_risk_advisor_recommendations(
                     f"{'above' if sec_priority == 'HIGH' else 'approaching'} the "
                     f"{SECTOR_CEILING:.0f}% institutional sector ceiling "
                     f"(elevated warn level {SECTOR_ELEVATED:.0f}%)."
-                    + (" _Measured on your **net capital** — a margin debit nets the base "
-                       "down, so the sector runs hotter than the equity-only view._" if _acct_basis else "")
                     + f" A single sector-wide shock (regulatory action, earnings cycle, "
                     f"macro regime change) hits roughly **${top_wt / 100.0 * _gd:,.0f}** of "
                     f"capital at once — diversification breaks down precisely when you need it."
@@ -678,11 +675,6 @@ def build_risk_advisor_recommendations(
                 "trim_target_pp":     round(excess_pp, 1),
                 "trim_target_dollar": excess_dollar,
                 "trim_target_denom":  _gd,
-                # True when weights/target are on the margin-aware net-capital
-                # basis (a margin debit tightened the denominator below equity).
-                # The render labels "of net capital" + shows the margin note so a
-                # >100% sector weight and an aggressive target aren't mysterious.
-                "trim_target_acct_basis": _acct_basis,
                 "recommendation": (
                     f"Trim {top_sec} exposure by approximately "
                     f"**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** to bring the sector under "
@@ -729,8 +721,6 @@ def build_risk_advisor_recommendations(
                     f"**{t} is {w:.1f}% of your book** — above the "
                     f"{SINGLE_NAME_CEILING:.0f}% single-name ceiling. Conviction is fine "
                     f"(score {score:.0f}); this is a SIZE limit."
-                    + (" _Measured on your **net capital** — margin nets the base down, so "
-                       "the position runs hotter than the equity-only view._" if _acct_basis else "")
                     + f" At this weight one bad "
                     f"print or downgrade on a single name can swing the whole portfolio — "
                     f"roughly **${w / 100.0 * _gd:,.0f}** rides on {t} alone."

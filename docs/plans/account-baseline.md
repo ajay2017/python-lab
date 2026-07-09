@@ -69,6 +69,24 @@ Established basis (verified in code): `portfolio.build_portfolio_df` →
   `quick_research`, `comparison` — each sums the `Gate Weight (%)` column).**
   Beta/Sharpe recs stay equity-basis (different risk dimension). See
   requirements.md G-19 / F-12b and architecture.md known-behaviours.
+- **Gate-basis decision — REVERSED to EQUITY (2026-07-09). ⬅ CURRENT POLICY.**
+  The 2026-06-26 net-capital "tighter-of-both" basis was reverted: in use it let a
+  **transient** margin balance lurch a hard gate — a sector read **166.9%** and the
+  app demanded ~85% liquidation off a temporary financing state. **Why equity now:**
+  (1) a hard gate shouldn't swing on a transient financing choice — position sizing
+  is judged on invested equity, which is stable; (2) it fought the §2B calm-advisor /
+  anti-churn posture; (3) concentration (position sizing) and leverage are *different*
+  risks — folding margin into the concentration denominator overloaded one gate.
+  **What changed:** ALL gates + recs + nudges gate on plain equity weight
+  (`Gate Weight (%)` == equity `Weight (%)`; `gate_denom` = equity → `_acct_f` = 1);
+  `gating_denominator` retired from the gate path (fn kept, unused). A genuinely
+  over-concentrated book still breaches (on equity). **Leverage/margin risk is NOT
+  lost — it moved to an awareness-only signal** (`_leverage_cache` → 🔗 Risk Analysis
+  read + 💰 Account note; reqs F-09d), monitored, never a gate. This is NOT a
+  regression toward the pre-2026-06-26 "blind to leverage" state — leverage is
+  explicitly surfaced, just not gated. Do NOT re-base gates to net-capital without an
+  explicit policy discussion (hard rule #1). See reqs G-19 / F-09d, architecture.md
+  known-behaviours, `project_concentration_discipline`.
 - **Broker sync (parked).** Robinhood MCP auto-fills `account_cash` (and later
   `account_flows`) — same schema, no rework.
 

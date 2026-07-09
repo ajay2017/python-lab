@@ -443,9 +443,10 @@ def _portfolio_fit(bundle_a, bundle_b, ticker_a, ticker_b, port_df) -> dict:
             notes.append(f"⚠️ Already held at {weight:.1f}% of portfolio")
         sector = bundle.get("sector") or ""
         if sector and "Sector" in port_df.columns:
-            # Margin-aware gate basis (Phase 2): sum the net-capital Gate Weight
-            # when present so this entry-fit ceiling matches the hard gate; falls
-            # back to equity "Weight (%)" otherwise. See gating_denominator.
+            # Concentration gate basis (equity, 2026-07-09 — reqs G-19): sum the
+            # Gate Weight (%) column (== equity Weight as of the equity-basis
+            # policy) so this entry-fit ceiling matches the hard gate; falls back
+            # to "Weight (%)" for non-app callers.
             _gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
             sector_weight = float(
                 port_df[port_df["Sector"] == sector][_gcol].sum() or 0
