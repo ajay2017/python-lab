@@ -5442,6 +5442,12 @@ if page == "🏠 Home":
                             _tt_dollar = _rebal_flag.get("trim_target_dollar")
                             _tt_pp     = _rebal_flag.get("trim_target_pp")
                             _tt_denom  = _rebal_flag.get("trim_target_denom")
+                            _tt_acct   = _rebal_flag.get("trim_target_acct_basis")
+                            # On margin the sector weight / 25% target are on the
+                            # NET-CAPITAL basis (denominator = your equity net of the
+                            # margin loan), which is why the sector can read >100%
+                            # and the trim is large. Say so, so it isn't mysterious.
+                            _basis_lbl = " of net capital" if _tt_acct else ""
                             _tc_by_tkr = {c.get("ticker"): c for c in _trim}
 
                             # Basis sub-line for WHY a name is low-conviction: the
@@ -5499,8 +5505,17 @@ if page == "🏠 Home":
                                 # running total) garbles into italic math.
                                 _hdr = f"**Trim first — the plan (target: trim ~\\${_tt_dollar:,.0f}"
                                 if isinstance(_tt_pp, (int, float)): _hdr += f" · {_tt_pp:.0f}pp"
-                                _hdr += f" → {SECTOR_ELEVATED:.0f}%):**"
+                                _hdr += f" → {SECTOR_ELEVATED:.0f}%{_basis_lbl}"
+                                if _tt_acct and isinstance(_tt_denom, (int, float)) and _tt_denom > 0:
+                                    _hdr += f" ≈ \\${_tt_denom:,.0f}"
+                                _hdr += "):**"
                                 st.markdown(_hdr)
+                                if _tt_acct:
+                                    st.caption(
+                                        "ℹ️ Measured on your **net capital** (equity minus the margin "
+                                        "loan) — margin nets the base down, so the sector reads hotter "
+                                        "than an equity-only view and the de-risk needed is larger."
+                                    )
                                 # Display cap only (NOT a gate): rows past it are
                                 # rolled up into a remainder line so the running
                                 # total still reflects every name. Deliberately >
@@ -5533,7 +5548,7 @@ if page == "🏠 Home":
                                     )
                                 st.caption(
                                     f"✓ **\\${_alloc['total_allocated']:,.0f}** of ~\\${_alloc['target']:,.0f} "
-                                    f"· sector → ~{SECTOR_ELEVATED:.0f}%"
+                                    f"· sector → ~{SECTOR_ELEVATED:.0f}%{_basis_lbl}"
                                 )
                                 if _alloc["shortfall"] > 0:
                                     st.caption(
@@ -17140,8 +17155,9 @@ elif page == "💰 Account":
     # Home hot path (no per-rerun cost on Home) and has room to grow (v2 flows,
     # v3 returns). Reads the portfolio the Home brief already built (_last_port_df
     # in session) — NO heavy recompute — mirroring the Catalyst Watch pattern.
-    # Display-only: the 15%/35% concentration GATES are unchanged (equity-weight);
-    # account-level concentration here is the honest exposure view, not a gate.
+    # The 15%/35% concentration GATES are margin-aware (tighter-of-both: equity,
+    # or net capital when levered — cash never loosens; shipped 2026-06-26). This
+    # account view is the honest exposure picture, not itself a gate.
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("💰 Account")
     st.caption(
@@ -17190,8 +17206,10 @@ elif page == "💰 Account":
             )
             st.caption(
                 "True concentration — each holding as % of your **whole account** "
-                "(equity + net cash) vs % of invested equity. The concentration gates still "
-                "use equity weight; this is the honest exposure view."
+                "(equity + net cash) vs % of invested equity. The concentration **gates "
+                "are margin-aware** — they use your **net capital** when you're levered "
+                "(equity otherwise; cash never loosens them), so a margin debit makes the "
+                "gates bite on the higher, account-level weight."
             )
             st.dataframe(
                 _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],

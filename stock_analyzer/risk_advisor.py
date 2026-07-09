@@ -678,6 +678,11 @@ def build_risk_advisor_recommendations(
                 "trim_target_pp":     round(excess_pp, 1),
                 "trim_target_dollar": excess_dollar,
                 "trim_target_denom":  _gd,
+                # True when weights/target are on the margin-aware net-capital
+                # basis (a margin debit tightened the denominator below equity).
+                # The render labels "of net capital" + shows the margin note so a
+                # >100% sector weight and an aggressive target aren't mysterious.
+                "trim_target_acct_basis": _acct_basis,
                 "recommendation": (
                     f"Trim {top_sec} exposure by approximately "
                     f"**{excess_pp:.0f}pp (~${excess_dollar:,.0f})** to bring the sector under "

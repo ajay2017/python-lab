@@ -1232,9 +1232,10 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             _flag["rec_type"]           = "sector_concentration"
             _flag["trim_candidates"]    = rec.get("trim_candidates", []) or []
             _flag["redeploy_sectors"]   = rec.get("redeploy_sectors", []) or []
-            _flag["trim_target_pp"]     = rec.get("trim_target_pp")
-            _flag["trim_target_dollar"] = rec.get("trim_target_dollar")
-            _flag["trim_target_denom"]  = rec.get("trim_target_denom")
+            _flag["trim_target_pp"]         = rec.get("trim_target_pp")
+            _flag["trim_target_dollar"]     = rec.get("trim_target_dollar")
+            _flag["trim_target_denom"]      = rec.get("trim_target_denom")
+            _flag["trim_target_acct_basis"] = rec.get("trim_target_acct_basis")
         items.append({
             "priority": "high",
             "icon":     "⚠️",
