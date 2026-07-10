@@ -383,16 +383,16 @@ def get_daily_quota(provider: str) -> int | None:
         import pytz as _pytz
         import datetime as _dt
         today = _dt.datetime.now(_pytz.timezone("America/New_York")).date()
-        res = (
+        rows = (
             _client()
             .table("api_quota_log")
             .select("call_count")
             .eq("provider", provider)
             .eq("log_date", str(today))
-            .maybe_single()
+            .limit(1)
             .execute()
-        )
-        return int((res.data or {}).get("call_count", 0))
+        ).data or []
+        return int(rows[0]["call_count"]) if rows else 0
     except Exception:
         return None
 
