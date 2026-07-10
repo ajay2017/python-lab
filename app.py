@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 import uuid
 import streamlit as st
@@ -16017,7 +16017,7 @@ elif page == "📒 Trade Journal":
                              use_container_width=True)
 
         # ── Tabs: CSV vs Screenshot ────────────────────────────────────────────
-        _bi_csv_tab, _bi_ss_tab = st.tabs(["📄 CSV", "📸 Screenshots"])
+        _bi_csv_tab, _bi_ss_tab = st.tabs(["📄 CSV", "📋 Paste history"])
 
         # ══════════════════════════════════════════════════════════════════════
         # TAB 1 — CSV import (unchanged)
@@ -16232,10 +16232,10 @@ elif page == "📒 Trade Journal":
         # ══════════════════════════════════════════════════════════════════════
         with _bi_ss_tab:
             st.caption(
-                "Upload one or more screenshots of the Robinhood **Account → History** "
-                "page. Claude Vision (Opus 4.8) extracts executed Buy/Sell trades; "
-                "canceled orders are skipped automatically. Tickers are inferred from "
-                "company names — review and correct in the editable preview before importing."
+                "Paste text copied from the Robinhood **Account → History** page. "
+                "The parser extracts executed Buy/Sell trades automatically; canceled "
+                "orders are skipped. Tickers are inferred from company names — "
+                "review and correct in the editable preview before importing."
             )
 
             # ── Sync watermark ─────────────────────────────────────────────────
@@ -16244,7 +16244,7 @@ elif page == "📒 Trade Journal":
             )
             if _ss_watermark:
                 st.info(
-                    f"📌 **Last screenshot import:** {_ss_watermark.strftime('%b %d, %Y')}  ·  "
+                    f"📌 **Last import:** {_ss_watermark.strftime('%b %d, %Y')}  ·  "
                     "Trades on or before this date are filtered out by default."
                 )
 
@@ -16264,46 +16264,43 @@ elif page == "📒 Trade Journal":
                 ),
             )
 
-            # ── Image upload ───────────────────────────────────────────────────
-            _ss_files = st.file_uploader(
-                "Robinhood History screenshots",
-                type=["png", "jpg", "jpeg"],
-                accept_multiple_files=True,
-                key="_ss_uploader",
+            # ── Text paste area ────────────────────────────────────────────────
+            _ss_text_input = st.text_area(
+                "Robinhood History text",
+                height=220,
+                key="_ss_text_input",
+                placeholder=(
+                    "Paste here. On Robinhood: Account → History, then select-all and copy.\n\n"
+                    "Each order has four lines, for example:\n"
+                    "  Palantir Technologies limit buy\n"
+                    "  Individual · Jul 9\n"
+                    "  $1,301.52\n"
+                    "  5 shares at $260.30"
+                ),
             )
 
-            # ── Anthropic key check ────────────────────────────────────────────
+            # Optional: Anthropic API key for resolving unknown company names
             _ss_api_key = (
                 st.secrets.get("anthropic", {}).get("api_key")
                 or st.secrets.get("ANTHROPIC_API_KEY")
                 or os.environ.get("ANTHROPIC_API_KEY", "")
             )
 
-            if _ss_files:
-                if not _ss_api_key:
-                    st.error(
-                        "Anthropic API key not configured — add it to Streamlit secrets "
-                        "as `[anthropic] api_key = '...'` to enable screenshot extraction."
-                    )
-                else:
-                    if st.button(
-                        f"🔍 Extract trades from {len(_ss_files)} screenshot(s)",
-                        key="_ss_extract_btn",
-                    ):
-                        with st.spinner(
-                            f"Extracting trades from {len(_ss_files)} screenshot(s) "
-                            "using Claude Opus 4.8…"
-                        ):
-                            _ss_images = [f.read() for f in _ss_files]
-                            _ss_parsed = _bscr.parse_robinhood_screenshots(
-                                images=_ss_images,
-                                api_key=_ss_api_key,
-                                model="claude-opus-4-8",
-                                reference_date=_today_et(),
-                            )
-                        st.session_state["_ss_parsed"] = _ss_parsed
+            if _ss_text_input and _ss_text_input.strip():
+                if st.button(
+                    "🔍 Parse trades",
+                    key="_ss_extract_btn",
+                ):
+                    with st.spinner("Parsing trade history…"):
+                        _ss_parsed = _bscr.parse_robinhood_text(
+                            text=_ss_text_input,
+                            api_key=_ss_api_key or None,
+                            model="claude-opus-4-8",
+                            reference_date=_today_et(),
+                        )
+                    st.session_state["_ss_parsed"] = _ss_parsed
 
-            # ── Results (persist across re-renders until a new extract runs) ──
+            # ── Results (persist across re-renders until a new parse runs) ────
             _ss_result = st.session_state.get("_ss_parsed")
             if _ss_result:
                 if _ss_result.get("error") and _ss_result["trades"].empty:
@@ -16355,7 +16352,7 @@ elif page == "📒 Trade Journal":
                     if _ss_trades.empty:
                         st.info(
                             "No executable trades found after applying the sync-since filter. "
-                            "Try adjusting the date or uploading additional screenshots."
+                            "Try adjusting the date or pasting additional history."
                         )
                     else:
                         _ss_class = _bimp.classify_against_existing(
@@ -16376,8 +16373,8 @@ elif page == "📒 Trade Journal":
                                 "that are genuinely a separate fill."
                             )
 
-                        # Ticker and Date are editable — ticker is Vision-inferred,
-                        # date has no year in the screenshot so user can correct.
+                        # Ticker and Date are editable — ticker is inferred from company
+                        # name and date has no year in the Robinhood text.
                         _ss_preview = pd.DataFrame({
                             "Import?": _ss_class["is_new"].tolist(),
                             "Date":    _ss_class["activity_date"].astype(str),
@@ -16424,8 +16421,8 @@ elif page == "📒 Trade Journal":
                             key="_ss_editor",
                         )
 
-                        # In-app-not-in-screenshot: trades in the app within the
-                        # screenshot date range that don't appear in the screenshot.
+                        # In-app-not-in-pasted-history: trades in the app within the
+                        # date range that don't appear in the pasted text.
                         _ss_dates = _ss_trades["activity_date"].dropna()
                         if not _ss_dates.empty:
                             _ss_range_from = _ss_dates.min()
@@ -16440,13 +16437,13 @@ elif page == "📒 Trade Journal":
                                 with st.expander(
                                     f"🔍 {len(_ss_app_only)} trade(s) in app "
                                     f"({_ss_range_from} → {_ss_range_to}) "
-                                    "not seen in screenshot — review",
+                                    "not seen in pasted history — review",
                                     expanded=False,
                                 ):
                                     st.caption(
                                         "These trades exist in your journal within the "
-                                        "screenshot's date range but don't appear in the "
-                                        "screenshot. They may be legitimately absent (logged "
+                                        "pasted history's date range but don't appear in the "
+                                        "text. They may be legitimately absent (logged "
                                         "manually, different account) or could indicate a "
                                         "discrepancy. No action is taken automatically — "
                                         "investigate and correct via the Log a Trade form."
@@ -16491,7 +16488,7 @@ elif page == "📒 Trade Journal":
                                             "price":        float(_ss_row["Price"]),
                                             "traded_at":    str(_ss_row["Date"]),
                                             "trigger_type": "MANUAL",
-                                            "notes":        f"RH screenshot {_ss_today_str}",
+                                            "notes":        f"RH text import {_ss_today_str}",
                                         }
                                     except (TypeError, ValueError):
                                         _ss_n_fail += 1
@@ -16549,7 +16546,6 @@ elif page == "📒 Trade Journal":
                                         "Import failed — no trades were saved. "
                                         "Check the Data Health tab for details."
                                     )
-
     if not db.has_db():
         st.info(
             "💡 **Supabase not connected** — trades above are session-only and will be lost on refresh.  \n"
@@ -19602,7 +19598,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
     with st.expander("🗺️ The pages, at a glance", expanded=False):
         st.markdown(
             """
-- **🏠 Home** — Today's Brief: the daily decision summary (above).
+- **🏠 Home** — Today's Brief: the daily decision summary. Also includes **🔥 Stress Testing** (scenario impact + model-vs-actual historical comparison for COVID Crash, 2022 Rate Shock, and GFC 2008 windows).
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
@@ -19636,6 +19632,30 @@ It's a **learning** surface, not a recommendation surface — it shows how the e
 The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report never blindsides you, across three tiers: **your holdings**, your **watchlist**, and the broader **sector universe** the scanner follows. A 🔥 flag marks a sector heating up with near-term reports.
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
+"""
+        )
+
+    with st.expander("🔥 Stress Testing & Scenario Analysis", expanded=False):
+        st.markdown(
+            """
+The **🔥 Stress Testing** section on the Home page projects how your holdings would fare under market shock scenarios.
+
+**What it does:** Each position's estimated P&L under a chosen scenario (e.g., crash, rate shock) is calculated using its individual **beta vs SPY**. Named historical scenarios (COVID Crash, 2022 Rate Shock, GFC 2008) also apply **sector-specific shocks** instead of a pure beta move — reflecting that different sectors suffered differently in those events.
+
+**How to read it:**
+- **Losers** — positions hit hardest under the scenario (typically high-beta growth stocks in a crash).
+- **Gainers** — positions that may benefit (e.g., defensive stocks or rate-sensitive names in the right scenario).
+- **Portfolio impact** — headline estimated move and total P&L impact across your entire book.
+
+**Historical comparison (COVID Crash, 2022 Rate Shock, GFC 2008 only):** An optional "📅 How did your holdings actually perform?" expander lets you **load actual historical drawdowns** from the event window. Click the button, and the app fetches the peak-to-trough losses your held tickers *actually experienced* during that event.
+
+The comparison table shows **Model Est. (%)** vs **Actual (%)** and the **Δ (difference)**:
+- **Positive Δ** = the model was too pessimistic; your holdings held up better than estimated.
+- **Negative Δ** = the model under-estimated the damage.
+
+Use this over time as **calibration context** — it shows how well the model's risk estimates track reality for your specific book. Over many scenarios, you'll learn where the model's blind spots are.
+
+This is **awareness only** — it never gates a recommendation or sizes a trade.
 """
         )
 

@@ -1,17 +1,20 @@
 """
-stock_analyzer/broker_screenshot.py — Robinhood History screenshot parser (pure)
+stock_analyzer/broker_screenshot.py — Robinhood History text parser (pure)
 
-Accepts one or more PNG/JPG screenshots of the Robinhood Account → History page,
-calls Claude Vision (Opus 4.8 by default) to extract executed trades, and returns
-a result dict in the same shape as broker_import.parse_robinhood_csv so the
-downstream dedup + preview + write path is reused unchanged.
+Accepts text pasted from the Robinhood Account → History page and parses it
+into structured trade records. No image processing or Vision API required.
+
+Each order in the Robinhood History page appears as four lines:
+  Line 1: "[Company Name] [order_type] [buy|sell]"
+  Line 2: "Individual · [Month] [Day]"
+  Line 3: "Canceled"  — OR —  "$[total]"
+  Line 4: "[N] share[s] at $[price]"  (only for executed trades)
 
 No Streamlit or database imports.
 """
 
 from __future__ import annotations
 
-import base64
 import collections
 import datetime
 import json
@@ -24,82 +27,148 @@ _COLS_TRADE   = ["ticker", "action", "shares", "price", "activity_date", "compan
 _COLS_INVALID = _COLS_TRADE + ["reason"]
 _TRADE_ACTIONS = {"BUY", "SELL"}
 
-# ── Vision prompt ──────────────────────────────────────────────────────────────
+# ── Ticker lookup table ────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """\
-You are a precise data-extraction assistant. You will be shown a screenshot of the
-Robinhood Account → History page. Your job is to extract ONLY executed (non-canceled)
-buy and sell orders as structured JSON.
-
-ROBINHOOD HISTORY FORMAT — each order appears as four lines:
-  Line 1: "[Company Name] [order type] [buy/sell]"
-           e.g. "Snowflake market sell", "Palantir Technologies limit buy"
-  Line 2: "Individual · [Month] [Day]"
-           e.g. "Individual · Jul 9"
-  Line 3: Either "Canceled"  ← SKIP THIS ORDER ENTIRELY
-           or    "$[total]"  ← executed trade (e.g. "$1,301.52")
-  Line 4: "[N] share[s] at $[price per share]"  (only for executed trades)
-           e.g. "5 shares at $260.31" or "1 share at $260.31"
-
-EXTRACTION RULES:
-1. Skip ALL canceled orders — do not include them in "trades".
-2. For each executed trade extract: company name, ticker (inferred), action, date
-   string, shares, price per share.
-3. Infer the stock ticker from the company name using your training knowledge.
-   Examples: Apple→AAPL, Palantir Technologies→PLTR, Snowflake→SNOW,
-   CrowdStrike Holdings→CRWD, Medtronic→MDT, Occidental Petroleum→OXY,
-   ServiceNow→NOW, Biogen→BIIB, Boston Scientific→BSX, Robinhood Markets→HOOD,
-   Broadcom→AVGO, Capital One→COF, First Solar→FSLR, Palo Alto Networks→PANW,
-   Novo Nordisk→NVO, Micron Technology→MU, Lam Research Corp→LRCX,
-   General Dynamics→GD, Visa→V, Booking Holdings→BKNG, EOG Resources→EOG,
-   Occidental Petroleum→OXY, SpaceX→SPACEX.
-4. Set ticker_confidence to "high" for standard publicly-traded tickers you are
-   certain about, "low" for private companies (e.g. SpaceX), ambiguous names, or
-   any name you are not confident about.
-5. action must be exactly "BUY" or "SELL" (uppercase).
-6. date_str must be the date exactly as shown in the screenshot (e.g. "Jul 9").
-7. shares and price must be numbers (float), not strings.
-8. Return ONLY a valid JSON object — no markdown fences, no explanation.
-
-OUTPUT SCHEMA:
-{
-  "trades": [
-    {
-      "company_name": "Snowflake",
-      "ticker": "SNOW",
-      "ticker_confidence": "high",
-      "action": "SELL",
-      "date_str": "Jul 9",
-      "shares": 5.0,
-      "price": 260.31
-    }
-  ],
-  "canceled_count": 8,
-  "date_range": { "earliest": "Jul 1", "latest": "Jul 9" }
+_TICKER_MAP: dict[str, str] = {
+    "apple": "AAPL",
+    "apple inc": "AAPL",
+    "microsoft": "MSFT",
+    "microsoft corporation": "MSFT",
+    "amazon": "AMZN",
+    "amazon.com": "AMZN",
+    "alphabet": "GOOGL",
+    "google": "GOOGL",
+    "meta": "META",
+    "meta platforms": "META",
+    "tesla": "TSLA",
+    "nvidia": "NVDA",
+    "nvidia corporation": "NVDA",
+    "amd": "AMD",
+    "advanced micro devices": "AMD",
+    "intel": "INTC",
+    "intel corporation": "INTC",
+    "qualcomm": "QCOM",
+    "taiwan semiconductor": "TSM",
+    "taiwan semiconductor manufacturing": "TSM",
+    "palantir": "PLTR",
+    "palantir technologies": "PLTR",
+    "snowflake": "SNOW",
+    "crowdstrike": "CRWD",
+    "crowdstrike holdings": "CRWD",
+    "servicenow": "NOW",
+    "palo alto networks": "PANW",
+    "datadog": "DDOG",
+    "cloudflare": "NET",
+    "sentinelone": "S",
+    "zscaler": "ZS",
+    "okta": "OKTA",
+    "mongodb": "MDB",
+    "elastic": "ESTC",
+    "hashicorp": "HCP",
+    "broadcom": "AVGO",
+    "broadcom inc": "AVGO",
+    "applied materials": "AMAT",
+    "lam research": "LRCX",
+    "lam research corp": "LRCX",
+    "micron technology": "MU",
+    "micron": "MU",
+    "marvell technology": "MRVL",
+    "marvell": "MRVL",
+    "visa": "V",
+    "mastercard": "MA",
+    "american express": "AXP",
+    "capital one": "COF",
+    "capital one financial": "COF",
+    "jpmorgan": "JPM",
+    "jpmorgan chase": "JPM",
+    "goldman sachs": "GS",
+    "bank of america": "BAC",
+    "wells fargo": "WFC",
+    "robinhood": "HOOD",
+    "robinhood markets": "HOOD",
+    "coinbase": "COIN",
+    "coinbase global": "COIN",
+    "medtronic": "MDT",
+    "biogen": "BIIB",
+    "boston scientific": "BSX",
+    "novo nordisk": "NVO",
+    "eli lilly": "LLY",
+    "johnson & johnson": "JNJ",
+    "pfizer": "PFE",
+    "unitedhealth": "UNH",
+    "unitedhealth group": "UNH",
+    "first solar": "FSLR",
+    "eog resources": "EOG",
+    "occidental petroleum": "OXY",
+    "booking holdings": "BKNG",
+    "general dynamics": "GD",
+    "lockheed martin": "LMT",
+    "raytheon": "RTX",
+    "raytheon technologies": "RTX",
+    "s&p global": "SPGI",
+    "moody's": "MCO",
+    "s&p 500 etf": "SPY",
+    "invesco qqq": "QQQ",
+    "spacex": "SPACEX",
 }
-"""
 
-_USER_PROMPT = (
-    "Extract all executed trades from this Robinhood History screenshot. "
-    "Return only the JSON object as specified — no markdown, no extra text."
+# Companies whose ticker confidence is always "low"
+_LOW_CONF_NAMES: frozenset[str] = frozenset({"spacex"})
+
+# ── Text parsing regexes ───────────────────────────────────────────────────────
+
+# Line 1: "[Company] [order_type] [buy|sell]"
+_ACTION_RE = re.compile(
+    r'^(.+?)\s+(market|limit|stop\s+limit|stop|trailing\s+stop)\s+(buy|sell)\s*$',
+    re.IGNORECASE,
 )
+
+# Line 2: "Individual · [Month Day]"
+_DATE_LINE_RE = re.compile(r'^Individual\s*[·•]\s*(.+?)\s*$', re.IGNORECASE)
+
+# Line 3: canceled or dollar total
+_CANCELED_RE = re.compile(r'^canceled$', re.IGNORECASE)
+_DOLLAR_RE   = re.compile(r'^\$([\d,]+(?:\.\d+)?)\s*$')
+
+# Line 4: "N share(s) at $price"
+_SHARES_RE = re.compile(
+    r'^(\d+(?:\.\d+)?)\s+shares?\s+at\s+\$([\d,]+(?:\.\d+)?)\s*$',
+    re.IGNORECASE,
+)
+
+# ── Claude text API prompt for unknown tickers ─────────────────────────────────
+
+_TICKER_LOOKUP_PROMPT = """\
+Map each company name to its primary US exchange ticker symbol.
+Return only a valid JSON object mapping company name → ticker.
+For private companies (e.g. SpaceX) or names you are not certain about,
+use null as the value.
+No markdown, no explanation.
+
+Companies: {names_json}
+"""
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _detect_mime(img_bytes: bytes) -> str:
-    if img_bytes[:4] == b"\x89PNG":
-        return "image/png"
-    if img_bytes[:3] in (b"\xff\xd8\xff",):
-        return "image/jpeg"
-    return "image/png"
+def _lookup_ticker(company: str) -> tuple[str, str]:
+    """
+    Look up ticker in the local table. Returns (ticker, confidence).
+    confidence is 'high', 'low', or '' (unknown — needs API lookup).
+    """
+    key = company.lower().strip()
+    if key in _LOW_CONF_NAMES:
+        return (key.upper(), "low")
+    if key in _TICKER_MAP:
+        return (_TICKER_MAP[key], "high")
+    return ("", "")
 
 
 def _infer_year(date_str: str, reference_date: datetime.date) -> Optional[datetime.date]:
     """
-    Given "Jul 9" and a reference date (the upload date), return the most
-    plausible calendar date. Assumes current year unless the result would be
-    in the future (> 1 day ahead), in which case uses prior year.
+    Given "Jul 9" and a reference date (today), return the most plausible
+    calendar date. Assumes current year unless the result is in the future
+    (> 1 day ahead), in which case uses prior year.
     """
     for fmt in ("%b %d", "%B %d", "%b %d, %Y", "%B %d, %Y"):
         try:
@@ -116,26 +185,121 @@ def _infer_year(date_str: str, reference_date: datetime.date) -> Optional[dateti
     return None
 
 
-def _strip_json_fences(text: str) -> str:
-    text = re.sub(r"^```(?:json)?[\r\n]*", "", text.strip())
-    text = re.sub(r"[\r\n]*```$", "", text.strip())
-    return text.strip()
+def _parse_text_blocks(text: str) -> tuple[list[dict], int]:
+    """
+    Parse raw Robinhood History text into a list of raw trade dicts and a
+    canceled count.
+
+    Uses "Individual · [date]" as the anchor line; looks one line back for
+    company+action and 1–2 lines forward for status and shares.
+    """
+    lines = [ln.strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]  # drop blank lines
+
+    trades: list[dict] = []
+    canceled = 0
+
+    for i, line in enumerate(lines):
+        m_date = _DATE_LINE_RE.match(line)
+        if not m_date:
+            continue
+
+        date_str = m_date.group(1).strip()
+
+        # Line before: "[Company] [order_type] [buy|sell]"
+        if i == 0:
+            continue
+        m_action = _ACTION_RE.match(lines[i - 1])
+        if not m_action:
+            continue
+
+        company = m_action.group(1).strip()
+        action  = m_action.group(3).upper()
+
+        # Line after: "Canceled" or "$total"
+        if i + 1 >= len(lines):
+            continue
+        status_line = lines[i + 1]
+
+        if _CANCELED_RE.match(status_line):
+            canceled += 1
+            continue
+
+        if not _DOLLAR_RE.match(status_line):
+            continue  # unexpected format — skip
+
+        # Two lines after: "N share(s) at $price"
+        if i + 2 >= len(lines):
+            continue
+        m_shares = _SHARES_RE.match(lines[i + 2])
+        if not m_shares:
+            continue
+
+        trades.append({
+            "company":  company,
+            "action":   action,
+            "date_str": date_str,
+            "shares":   float(m_shares.group(1)),
+            "price":    float(m_shares.group(2).replace(",", "")),
+        })
+
+    return trades, canceled
+
+
+def _resolve_unknown_tickers(
+    unknowns: list[str],
+    api_key: str,
+    model: str,
+) -> dict[str, tuple[str, str]]:
+    """
+    Call Claude text API to map a batch of unknown company names to tickers.
+    Returns {company_name_lower: (ticker, confidence)}.
+    """
+    if not unknowns or not api_key:
+        return {}
+    try:
+        import anthropic  # noqa: PLC0415
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = _TICKER_LOOKUP_PROMPT.format(
+            names_json=json.dumps(unknowns)
+        )
+        resp = client.messages.create(
+            model=model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=30,
+        )
+        raw = resp.content[0].text.strip() if resp.content else "{}"
+        raw = re.sub(r"^```(?:json)?[\r\n]*", "", raw)
+        raw = re.sub(r"[\r\n]*```$", "", raw.strip()).strip()
+        data = json.loads(raw)
+    except Exception:
+        return {}
+
+    result: dict[str, tuple[str, str]] = {}
+    for name, ticker in data.items():
+        key = name.lower().strip()
+        if ticker:
+            result[key] = (str(ticker).upper().strip(), "high")
+        else:
+            result[key] = (name.upper().strip(), "low")
+    return result
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
-def parse_robinhood_screenshots(
-    images: list[bytes],
-    api_key: str,
+def parse_robinhood_text(
+    text: str,
+    api_key: Optional[str] = None,
     model: str = "claude-opus-4-8",
     reference_date: Optional[datetime.date] = None,
 ) -> dict:
     """
-    Parse one or more Robinhood Account → History screenshot images.
+    Parse text pasted from the Robinhood Account → History page.
 
-    Returns same shape as broker_import.parse_robinhood_csv, plus two extra keys:
-      low_confidence_tickers : list[str]  — tickers flagged uncertain by the model
-      parse_warnings         : list[str]  — per-image non-fatal errors
+    Returns the same shape as broker_import.parse_robinhood_csv, plus:
+      low_confidence_tickers : list[str]
+      parse_warnings         : list[str]
     """
     if reference_date is None:
         reference_date = datetime.date.today()
@@ -143,132 +307,99 @@ def parse_robinhood_screenshots(
     empty_trades  = pd.DataFrame(columns=_COLS_TRADE)
     empty_invalid = pd.DataFrame(columns=_COLS_INVALID)
 
-    if not images:
+    text = (text or "").strip()
+    if not text:
         return {
             "trades": empty_trades, "skipped": {}, "invalid": empty_invalid,
-            "error": "No images provided.", "low_confidence_tickers": [],
+            "error": "No text provided.", "low_confidence_tickers": [],
             "parse_warnings": [],
         }
 
-    try:
-        import anthropic  # noqa: PLC0415 — lazy import matches project pattern
-    except ImportError:
+    raw_trades, total_canceled = _parse_text_blocks(text)
+
+    if not raw_trades and total_canceled == 0:
         return {
             "trades": empty_trades, "skipped": {}, "invalid": empty_invalid,
-            "error": "anthropic package not available.", "low_confidence_tickers": [],
+            "error": (
+                "No trades found. Make sure you pasted from the Robinhood "
+                "Account → History page. Each order should have four lines: "
+                "company+order type, \"Individual · Month Day\", dollar total or "
+                "\"Canceled\", then shares."
+            ),
+            "low_confidence_tickers": [],
             "parse_warnings": [],
         }
 
-    client = anthropic.Anthropic(api_key=api_key)
+    # Resolve tickers: local table first, Claude API for unknowns
+    unknowns: list[str] = []
+    for rt in raw_trades:
+        ticker, conf = _lookup_ticker(rt["company"])
+        if not conf:
+            key = rt["company"].lower().strip()
+            if key not in unknowns:
+                unknowns.append(rt["company"])
 
-    all_raw: list[dict] = []
-    total_canceled = 0
+    api_resolved: dict[str, tuple[str, str]] = {}
     parse_warnings: list[str] = []
-
-    for idx, img_bytes in enumerate(images, 1):
-        mime = _detect_mime(img_bytes)
-        b64  = base64.standard_b64encode(img_bytes).decode()
-
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=4096,
-                system=_SYSTEM_PROMPT,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime,
-                                "data": b64,
-                            },
-                        },
-                        {"type": "text", "text": _USER_PROMPT},
-                    ],
-                }],
-                timeout=120,
+    if unknowns and api_key:
+        api_resolved = _resolve_unknown_tickers(unknowns, api_key, model)
+        if not api_resolved:
+            parse_warnings.append(
+                f"Could not resolve tickers for: {', '.join(unknowns)} via API. "
+                "Ticker column is editable — correct before importing."
             )
-        except Exception as exc:
-            parse_warnings.append(f"Image {idx}: API error — {exc}")
-            continue
 
-        raw_text = response.content[0].text if response.content else ""
-        raw_text = _strip_json_fences(raw_text)
-
-        try:
-            data = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            parse_warnings.append(f"Image {idx}: could not parse model response as JSON — {exc}")
-            continue
-
-        total_canceled += int(data.get("canceled_count", 0) or 0)
-        all_raw.extend(data.get("trades", []) or [])
-
-    if parse_warnings and not all_raw:
-        return {
-            "trades": empty_trades, "skipped": {}, "invalid": empty_invalid,
-            "error": "; ".join(parse_warnings), "low_confidence_tickers": [],
-            "parse_warnings": parse_warnings,
-        }
-
-    # Dedup exact duplicates that appear across overlapping screenshots
+    # Dedup across repeated pasted text
     seen_keys: set = set()
-    deduped: list[dict] = []
-    for r in all_raw:
-        key = (
-            str(r.get("ticker", "")).upper(),
-            str(r.get("action", "")),
-            str(r.get("date_str", "")),
-            r.get("shares"),
-            r.get("price"),
-        )
-        if key not in seen_keys:
-            seen_keys.add(key)
-            deduped.append(r)
-
     records: list[dict]         = []
     invalid_records: list[dict] = []
     low_conf_tickers: list[str] = []
 
-    for r in deduped:
-        ticker   = str(r.get("ticker", "")).strip().upper()
-        action   = str(r.get("action", "")).strip().upper()
-        company  = str(r.get("company_name", "")).strip()
-        shares_v = r.get("shares")
-        price_v  = r.get("price")
-        date_str = str(r.get("date_str", "")).strip()
+    for rt in raw_trades:
+        company  = rt["company"]
+        action   = rt["action"]
+        date_str = rt["date_str"]
+        shares   = rt["shares"]
+        price    = rt["price"]
 
-        if r.get("ticker_confidence") == "low" and ticker not in low_conf_tickers:
+        # Dedup key
+        dup_key = (company.lower(), action, date_str, shares, price)
+        if dup_key in seen_keys:
+            continue
+        seen_keys.add(dup_key)
+
+        # Resolve ticker
+        local_ticker, local_conf = _lookup_ticker(company)
+        if local_conf:
+            ticker, conf = local_ticker, local_conf
+        else:
+            resolved = api_resolved.get(company.lower().strip())
+            if resolved:
+                ticker, conf = resolved
+            else:
+                # Fall back to using the company name as a placeholder
+                ticker, conf = company.upper(), "low"
+
+        if conf == "low" and ticker not in low_conf_tickers:
             low_conf_tickers.append(ticker)
 
         act_date = _infer_year(date_str, reference_date)
 
-        try:
-            shares_f = float(shares_v) if shares_v is not None else None
-        except (TypeError, ValueError):
-            shares_f = None
-        try:
-            price_f = float(price_v) if price_v is not None else None
-        except (TypeError, ValueError):
-            price_f = None
-
         base = {
             "ticker":        ticker,
             "action":        action,
-            "shares":        shares_f,
-            "price":         price_f,
+            "shares":        shares,
+            "price":         price,
             "activity_date": act_date,
             "company":       company,
         }
 
         reasons: list[str] = []
-        if not ticker:                          reasons.append("no ticker extracted")
-        if action not in _TRADE_ACTIONS:        reasons.append(f"unknown action '{action}'")
-        if act_date is None:                    reasons.append("unparseable date")
-        if shares_f is None or shares_f <= 0:  reasons.append("shares ≤ 0 or missing")
-        if price_f  is None or price_f  <= 0:  reasons.append("price ≤ 0 or missing")
+        if not ticker:                       reasons.append("no ticker resolved")
+        if action not in _TRADE_ACTIONS:     reasons.append(f"unknown action '{action}'")
+        if act_date is None:                 reasons.append("unparseable date")
+        if shares is None or shares <= 0:    reasons.append("shares ≤ 0 or missing")
+        if price  is None or price  <= 0:    reasons.append("price ≤ 0 or missing")
 
         if reasons:
             invalid_records.append({**base, "reason": "; ".join(reasons)})
@@ -299,18 +430,16 @@ def find_app_only_in_range(
     Return trades in trades_df whose date falls within [date_from, date_to] that
     do NOT have a corresponding match in screenshot_trades.
 
-    Used to surface "in app, not in screenshot" candidates for review.
+    Used to surface "in app, not in pasted history" candidates for review.
     The comparison is content-based (ticker + action + shares + price), not
     date-exact, since the app date (traded_at) may differ by a day from the
-    screenshot date (activity date on Robinhood may reflect settlement or
-    the date the user logged it).
+    activity date shown in Robinhood.
 
     Returns a DataFrame with columns: ticker, action, shares, price, traded_at.
     """
     if trades_df is None or not isinstance(trades_df, pd.DataFrame) or trades_df.empty:
         return pd.DataFrame(columns=["ticker", "action", "shares", "price", "traded_at"])
 
-    # Build a multiset of screenshot trades by content key
     screenshot_keys: collections.Counter = collections.Counter()
     if not screenshot_trades.empty:
         for _, r in screenshot_trades.iterrows():
@@ -325,7 +454,6 @@ def find_app_only_in_range(
             except (TypeError, ValueError):
                 continue
 
-    # Filter app trades to the date range
     app_in_range = []
     matched_counts: collections.Counter = collections.Counter()
 
@@ -356,7 +484,7 @@ def find_app_only_in_range(
             continue
 
         if matched_counts[key] < screenshot_keys[key]:
-            matched_counts[key] += 1  # consumed a match — not app-only
+            matched_counts[key] += 1
         else:
             app_in_range.append({
                 "ticker":    str(row.get("ticker", "")).upper(),
@@ -371,15 +499,18 @@ def find_app_only_in_range(
 
 def last_screenshot_sync_date(trades_df) -> Optional[datetime.date]:
     """
-    Return the most recent traded_at date from trades tagged as screenshot imports
-    (notes containing 'RH screenshot'). Returns None if no prior screenshot import.
+    Return the most recent traded_at date from trades tagged as text-paste imports
+    (notes containing 'RH screenshot' or 'RH text import').
+    Returns None if no prior import of this type.
     """
     if trades_df is None or not isinstance(trades_df, pd.DataFrame) or trades_df.empty:
         return None
     if "notes" not in trades_df.columns or "traded_at" not in trades_df.columns:
         return None
 
-    mask = trades_df["notes"].astype(str).str.contains("RH screenshot", na=False)
+    mask = trades_df["notes"].astype(str).str.contains(
+        r"RH screenshot|RH text import", na=False, regex=True
+    )
     subset = trades_df[mask]
     if subset.empty:
         return None
