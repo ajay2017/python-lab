@@ -67,7 +67,10 @@ from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommen
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.trade_analytics import build_full_analytics
-from stock_analyzer.stress_test import SCENARIOS, run_scenario, run_all_scenarios, assess_fragility
+from stock_analyzer.stress_test import (
+    SCENARIOS, run_scenario, run_all_scenarios, assess_fragility,
+    HISTORICAL_WINDOWS, fetch_historical_drawdowns,
+)
 from stock_analyzer.daily_pnl import compute_positions_day_pnl
 from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
@@ -10008,6 +10011,80 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                 else:
                     st.info("No positions estimated to benefit under this scenario — "
                             "consider defensive names (Healthcare, Energy, Defense) for hedging.")
+
+            # Historical comparison — only for scenarios that have a real event window
+            _hist_window = HISTORICAL_WINDOWS.get((_active_sc or {}).get("id", ""))
+            if _hist_window:
+                st.markdown("")
+                with st.expander(
+                    f"📅 How did your holdings actually perform? ({_hist_window[0]} → {_hist_window[1]})",
+                    expanded=False,
+                ):
+                    _hcache_key = f"_hist_stress_{_active_sc['id']}"
+                    if _hcache_key not in st.session_state:
+                        st.info(
+                            f"Historical prices not yet loaded for this scenario.  "
+                            f"Window: **{_hist_window[0]}** → **{_hist_window[1]}**  "
+                            f"(fetches one ticker at a time via yfinance — takes ~5–15 s)."
+                        )
+                        if st.button("📥 Load historical data", key=f"_load_hist_{_active_sc['id']}"):
+                            _tickers_for_hist = [r["Ticker"] for r in (_sc_result.get("rows") or [])]
+                            with st.spinner("Fetching historical prices…"):
+                                st.session_state[_hcache_key] = fetch_historical_drawdowns(
+                                    _active_sc["id"], _tickers_for_hist
+                                )
+                            st.rerun()
+                    else:
+                        _hist_data = st.session_state[_hcache_key]
+                        _hist_cmp_rows = []
+                        for _hr in (_sc_result.get("rows") or []):
+                            _tk     = _hr["Ticker"]
+                            _actual = _hist_data.get(_tk)
+                            _model  = _hr["Est. Move (%)"]
+                            _delta  = round(_actual - _model, 1) if _actual is not None else None
+                            _hist_cmp_rows.append({
+                                "Ticker":            _tk,
+                                "Model Est. (%)":    _model,
+                                "Actual (%)":        _actual,
+                                "Δ (Actual−Model)":  _delta,
+                            })
+
+                        if _hist_cmp_rows:
+                            _hcmp_df = pd.DataFrame(_hist_cmp_rows)
+
+                            def _hcmp_style(row):
+                                delta = row.get("Δ (Actual−Model)")
+                                if not pd.notna(delta):
+                                    return [""] * len(row)
+                                if delta > 5:
+                                    return ["background-color:rgba(0,200,81,0.10)"] * len(row)
+                                if delta < -5:
+                                    return ["background-color:rgba(255,68,68,0.10)"] * len(row)
+                                return [""] * len(row)
+
+                            st.dataframe(
+                                _hcmp_df.style.apply(_hcmp_style, axis=1).format({
+                                    "Model Est. (%)":   lambda v: f"{v:+.1f}%" if pd.notna(v) else "—",
+                                    "Actual (%)":       lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A",
+                                    "Δ (Actual−Model)": lambda v: f"{v:+.1f}pp" if pd.notna(v) else "—",
+                                }),
+                                use_container_width=True, hide_index=True,
+                            )
+                            _n_avail = sum(1 for r in _hist_cmp_rows if r["Actual (%)"] is not None)
+                            _n_na    = len(_hist_cmp_rows) - _n_avail
+                            if _n_na:
+                                st.caption(
+                                    f"{_n_na} ticker(s) show N/A — data unavailable for this window "
+                                    f"(IPO after the event, delisted, or fewer than 5 trading days of data)."
+                                )
+                            st.caption(
+                                "Actual (%) = peak-to-trough during the event window (first-day close → minimum close).  "
+                                "Δ > 0 = model overestimated the loss (actual was better);  "
+                                "Δ < 0 = model underestimated (actual was worse)."
+                            )
+                        if st.button("🔄 Refresh data", key=f"_refresh_hist_{_active_sc['id']}"):
+                            del st.session_state[_hcache_key]
+                            st.rerun()
 
             # Scenario comparison summary — all scenarios, one row each
             st.markdown("")

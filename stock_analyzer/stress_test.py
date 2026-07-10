@@ -202,6 +202,16 @@ SCENARIOS = [
 ]
 
 
+# Scenarios that have a known historical event window.  Only these show the
+# "model estimate vs actual" comparison; purely hypothetical scenarios stay
+# model-only.
+HISTORICAL_WINDOWS: dict[str, tuple[str, str]] = {
+    "covid_crash":     ("2020-02-19", "2020-03-23"),
+    "rate_shock_2022": ("2022-01-03", "2022-10-13"),
+    "gfc_2008":        ("2007-10-09", "2009-03-09"),
+}
+
+
 def run_scenario(
     scenario: dict,
     port_df: pd.DataFrame,
@@ -324,6 +334,57 @@ def run_all_scenarios(
         result = run_scenario(sc, port_df, held_data, portfolio_beta)
         if result:
             results.append({**sc, **result})
+    return results
+
+
+def fetch_historical_drawdowns(
+    scenario_id: str,
+    tickers: list[str],
+) -> dict[str, float | None]:
+    """
+    For a scenario with a HISTORICAL_WINDOWS entry, fetch each ticker's
+    actual peak-to-trough % during the event window.
+
+    Returns {ticker: pct} where pct is negative for a loss (e.g. -34.5).
+    Returns None for a ticker when data is unavailable (IPO after window,
+    delisted, or too few trading days).  Returns {} for hypothetical
+    scenarios (no window defined).
+
+    Uses yfinance directly with a date-range download — the multi-source
+    orchestrator takes period strings, not start/end dates.
+    """
+    if scenario_id not in HISTORICAL_WINDOWS:
+        return {}
+
+    start, end = HISTORICAL_WINDOWS[scenario_id]
+    import yfinance as _yf
+
+    results: dict[str, float | None] = {}
+    for ticker in tickers:
+        try:
+            df = _yf.download(
+                ticker, start=start, end=end,
+                auto_adjust=True, progress=False, multi_level_index=False,
+            )
+            if df.empty or len(df) < 5:
+                results[ticker] = None
+                continue
+            close = df["Close"]
+            if hasattr(close, "columns"):   # guard against multi-level columns
+                close = close.iloc[:, 0]
+            close = close.dropna()
+            if len(close) < 5:
+                results[ticker] = None
+                continue
+            start_price = float(close.iloc[0])
+            if start_price <= 0:
+                results[ticker] = None
+                continue
+            min_price = float(close.min())
+            results[ticker] = round((min_price - start_price) / start_price * 100, 1)
+        except Exception:
+            results[ticker] = None
+
     return results
 
 
