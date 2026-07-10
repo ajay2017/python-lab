@@ -194,6 +194,50 @@ def build_hold_time_stats(ext_df: pd.DataFrame) -> dict:
     }
 
 
+def _build_overtrading_stats(trades_df: pd.DataFrame) -> dict:
+    """
+    Detect overtrading by comparing the current calendar month's trade count
+    to the rolling 12-month average.  Uses BUY + SELL rows (excludes SPLIT).
+    Returns {} when there is insufficient history (< 2 prior months).
+    """
+    if trades_df is None or trades_df.empty:
+        return {}
+
+    df = trades_df[trades_df["action"].isin(["BUY", "SELL"])].copy()
+    if df.empty:
+        return {}
+
+    df["_dt"] = df["traded_at"].apply(_parse_dt)
+    df = df.dropna(subset=["_dt"])
+    if df.empty:
+        return {}
+
+    df["month_str"] = df["_dt"].apply(lambda d: d.strftime("%Y-%m"))
+    monthly_counts = df.groupby("month_str").size().sort_index()
+    if len(monthly_counts) < 2:
+        return {}
+
+    current_month = _dt.utcnow().strftime("%Y-%m")
+    current_count = int(monthly_counts.get(current_month, 0))
+
+    # Exclude the current (possibly partial) month from the baseline avg
+    prior = monthly_counts[monthly_counts.index != current_month].tail(12)
+    if prior.empty:
+        return {}
+
+    rolling_avg = float(prior.mean())
+    multiplier = round(current_count / rolling_avg, 1) if rolling_avg > 0 else None
+    is_elevated = multiplier is not None and multiplier >= 2.0
+
+    return {
+        "current_month":       current_month,
+        "current_month_count": current_count,
+        "rolling_avg":         round(rolling_avg, 1),
+        "multiplier":          multiplier,
+        "is_elevated":         is_elevated,
+    }
+
+
 def build_behavioral_insights(
     ext_df: pd.DataFrame,
     trigger_df: pd.DataFrame,
@@ -203,6 +247,7 @@ def build_behavioral_insights(
     profit_factor: float | None,
     avg_win_pct: float | None,
     avg_loss_pct: float | None,
+    overtrading_stats: dict | None = None,
 ) -> list[dict]:
     """
     Returns a list of behavioral insight cards, each with:
@@ -514,6 +559,69 @@ def build_behavioral_insights(
                 ),
             })
 
+    # ── OVERTRADING DETECTION ─────────────────────────────────────────────────
+    ot = overtrading_stats or {}
+    if ot.get("multiplier") is not None and ot.get("rolling_avg", 0) > 0:
+        cnt  = ot["current_month_count"]
+        avg  = ot["rolling_avg"]
+        mult = ot["multiplier"]
+        if ot.get("is_elevated"):
+            insights.append({
+                "priority": "HIGH",
+                "title":    f"Overtrading Alert — {cnt} Trades This Month ({mult:.1f}× Your Avg)",
+                "observation": (
+                    f"You've made **{cnt} trades** this calendar month vs your "
+                    f"12-month average of **{avg:.1f} trades/month**  \n"
+                    f"That's **{mult:.1f}× your baseline pace** — a statistically significant spike."
+                ),
+                "implication": (
+                    "Overtrading is one of the most reliably documented destroyers of retail portfolio "
+                    "returns. More trades = more transaction costs, more emotional decisions, and "
+                    "more exposure to random noise rather than genuine signal. "
+                    "A spike to 2× your normal pace usually means you're reacting to market volatility, "
+                    "not acting on pre-planned opportunities."
+                ),
+                "action": (
+                    "Impose a self-cooling rule for the rest of the month: any new trade requires "
+                    "a 24-hour review period before execution. Write down the thesis first. "
+                    "If you can't articulate a clear entry reason within 3 sentences that you "
+                    "could defend to someone else, don't take the trade."
+                ),
+                "institutional_lens": (
+                    "Institutional PM research shows that most portfolio managers' worst months "
+                    "are also their busiest months. The 'activity trap' — where higher conviction feels "
+                    "like it requires more trades — is documented across asset classes. "
+                    "Most quant desks cap the number of trades a PM can make per period specifically "
+                    "to prevent this. Your own baseline is your calibration signal."
+                ),
+            })
+        elif mult >= 1.5:
+            insights.append({
+                "priority": "MEDIUM",
+                "title":    f"Trade Pace Elevated — {cnt} Trades This Month ({mult:.1f}× Avg)",
+                "observation": (
+                    f"**{cnt} trades** this month vs your avg of **{avg:.1f}/month** "
+                    f"(**{mult:.1f}× pace**).  \nNot yet a red flag, but worth monitoring."
+                ),
+                "implication": (
+                    "A 1.5× pace increase can reflect genuine opportunity (a volatile market with "
+                    "multiple valid setups) or the early stage of an overtrading pattern. "
+                    "The distinction is usually visible in the trade notes: "
+                    "opportunistic trades have pre-planned theses; reactive trades are hasty."
+                ),
+                "action": (
+                    "Before each remaining trade this month, confirm it was on your watchlist "
+                    "before today. New-idea trades taken the same day you discover them "
+                    "are the ones most likely to be reactive noise."
+                ),
+                "institutional_lens": (
+                    "PM behavioral research distinguishes 'high-conviction months' (more setups "
+                    "that met the pre-defined criteria) from 'reactive months' (more trades triggered "
+                    "by price action rather than thesis). The test is whether the trades were "
+                    "pre-planned or reactive — not the count itself."
+                ),
+            })
+
     # Sort: HIGH first, then MEDIUM, then OK
     order = {"HIGH": 0, "MEDIUM": 1, "OK": 2}
     insights.sort(key=lambda x: order.get(x["priority"], 3))
@@ -527,14 +635,16 @@ def build_full_analytics(trades_df: pd.DataFrame) -> dict:
           avg_win_pct, avg_loss_pct, insights
     """
     empty = {
-        "ext_df":       pd.DataFrame(),
-        "trigger_df":   pd.DataFrame(),
-        "monthly_df":   pd.DataFrame(),
-        "hold_stats":   {},
-        "profit_factor": None,
-        "avg_win_pct":  None,
-        "avg_loss_pct": None,
-        "insights":     [],
+        "ext_df":            pd.DataFrame(),
+        "trigger_df":        pd.DataFrame(),
+        "monthly_df":        pd.DataFrame(),
+        "hold_stats":        {},
+        "profit_factor":     None,
+        "win_rate":          None,
+        "avg_win_pct":       None,
+        "avg_loss_pct":      None,
+        "overtrading_stats": {},
+        "insights":          [],
     }
 
     if trades_df is None or trades_df.empty:
@@ -555,22 +665,26 @@ def build_full_analytics(trades_df: pd.DataFrame) -> dict:
 
     win_rate = len(winners) / len(ext_df) * 100 if len(ext_df) else 0.0
 
-    trigger_df = build_trigger_breakdown(ext_df)
-    monthly_df = build_monthly_trend(ext_df)
-    hold_stats = build_hold_time_stats(ext_df)
+    trigger_df       = build_trigger_breakdown(ext_df)
+    monthly_df       = build_monthly_trend(ext_df)
+    hold_stats       = build_hold_time_stats(ext_df)
+    overtrading_stats = _build_overtrading_stats(trades_df)
 
     insights = build_behavioral_insights(
         ext_df, trigger_df, monthly_df, hold_stats,
         win_rate, profit_factor, avg_win_pct, avg_loss_pct,
+        overtrading_stats=overtrading_stats,
     )
 
     return {
-        "ext_df":        ext_df,
-        "trigger_df":    trigger_df,
-        "monthly_df":    monthly_df,
-        "hold_stats":    hold_stats,
-        "profit_factor": profit_factor,
-        "avg_win_pct":   avg_win_pct,
-        "avg_loss_pct":  avg_loss_pct,
-        "insights":      insights,
+        "ext_df":            ext_df,
+        "trigger_df":        trigger_df,
+        "monthly_df":        monthly_df,
+        "hold_stats":        hold_stats,
+        "profit_factor":     profit_factor,
+        "win_rate":          round(win_rate, 1),
+        "avg_win_pct":       avg_win_pct,
+        "avg_loss_pct":      avg_loss_pct,
+        "overtrading_stats": overtrading_stats,
+        "insights":          insights,
     }

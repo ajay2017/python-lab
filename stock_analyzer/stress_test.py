@@ -89,6 +89,38 @@ _SECTOR_SHOCKS = {
         "Energy":           +5.0,
         "Defense":          -3.0,
     },
+    "2008 GFC": {
+        # SPY: -56.8% peak-to-trough (Oct 2007 – Mar 2009)
+        # Financials were the epicenter; Energy collapsed with oil ($147→$32);
+        # defensives (Healthcare, Defense) fell less than the market.
+        "Semiconductors":  -65.0,
+        "AI & Data":       -60.0,
+        "AI & Cloud":      -60.0,
+        "Consumer Tech":   -55.0,
+        "EV & Auto":       -75.0,   # GM/Ford near bankruptcy
+        "Clean Energy":    -70.0,
+        "Cybersecurity":   -55.0,
+        "Healthcare":      -22.0,
+        "Financials":      -78.0,   # Bear Stearns, Lehman, Citi devastated
+        "Energy":          -50.0,   # oil collapsed despite supply dynamics
+        "Defense":         -20.0,
+    },
+    "Stagflation": {
+        # High inflation + stagnant growth (1970s analogy / current macro risk).
+        # Long-duration / high-multiple tech compressed; Energy the defining winner;
+        # Healthcare and Defense defensive; Financials mixed (NIM up, credit risk limited).
+        "Semiconductors":  -25.0,
+        "AI & Data":       -30.0,   # highest multiples → most duration → most compressed
+        "AI & Cloud":      -28.0,
+        "Consumer Tech":   -20.0,
+        "EV & Auto":       -22.0,   # materials cost surge + consumer spending falls
+        "Clean Energy":    -12.0,   # policy tailwinds offset capex cost pressure
+        "Cybersecurity":   -18.0,
+        "Healthcare":       -8.0,
+        "Financials":       -5.0,
+        "Energy":          +30.0,   # supply constraints + inflation = Energy outperforms
+        "Defense":         +12.0,   # geopolitical tension historically accompanies stagflation
+    },
 }
 
 # Predefined scenarios: (label, description, spy_move_pct)
@@ -117,6 +149,14 @@ SCENARIOS = [
                        "Comparable to 2001–2002 or Q4 2018 extended.",
         "spy_move":    -30.0,
         "sector_key":  None,
+    },
+    {
+        "id":          "gfc_2008",
+        "label":       "2008 GFC  (SPY −57%)",
+        "description": "Global Financial Crisis peak-to-trough (Oct 2007 – Mar 2009). "
+                       "Financials −78%, EV & Auto −75%. The worst credit event in modern history.",
+        "spy_move":    -57.0,
+        "sector_key":  "2008 GFC",
     },
     {
         "id":          "rate_shock_2022",
@@ -149,6 +189,15 @@ SCENARIOS = [
                        "Long-duration growth names repriced; Financials and Energy benefit.",
         "spy_move":    -12.0,
         "sector_key":  "Rate Spike (+100bps)",
+    },
+    {
+        "id":          "stagflation",
+        "label":       "Stagflation  (Energy +30%, Tech −30%)",
+        "description": "High inflation + stagnant growth (1970s analogy). "
+                       "Long-duration / high-multiple tech compressed; Energy the defining winner. "
+                       "Sector overrides applied.",
+        "spy_move":    -18.0,
+        "sector_key":  "Stagflation",
     },
 ]
 
