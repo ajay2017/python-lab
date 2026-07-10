@@ -15598,9 +15598,9 @@ elif page == "📒 Trade Journal":
                 st.info("No recommendations in the last 90 days to evaluate.")
             else:
                 _oc_prices = {
-                    str(t): float(p)
+                    str(t): float(p["price"])
                     for t, p in (st.session_state.get("_live_prices") or {}).items()
-                    if p is not None
+                    if isinstance(p, dict) and p.get("price") is not None
                 }
                 _oc_matched  = _oc_match(_oc_recs_df, trades_df)
                 _oc_enriched = _oc_outcomes(
@@ -15779,9 +15779,9 @@ elif page == "📒 Trade Journal":
                 st.info("No recommendation history found — run a scan to generate recommendations.")
             else:
                 _etb_prices = {
-                    str(t): float(p)
+                    str(t): float(p["price"])
                     for t, p in (st.session_state.get("_live_prices") or {}).items()
-                    if p is not None
+                    if isinstance(p, dict) and p.get("price") is not None
                 }
                 _etb_matched  = _etb_match(_etb_recs_df, trades_df)
                 _etb_enriched = _etb_outcomes(
