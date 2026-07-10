@@ -46,7 +46,7 @@ import html as _html
 import time
 from stock_analyzer.data import (
     DEFAULT_TICKERS, fetch_ticker_bundle, fetch_financials_from_info,
-    fetch_spy, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
+    fetch_spy, fetch_tlt, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
     fetch_earnings_calendar, fetch_next_earnings,
@@ -61,7 +61,7 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics
+from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics, rate_sensitivity_per_ticker
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
@@ -173,6 +173,7 @@ from stock_analyzer.premarket_stance import (
 from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
 from stock_analyzer import broker_import as _bimp
+from stock_analyzer import broker_screenshot as _bscr
 
 # Brand: DRISHTA (Sanskrit for "vision/insight") — "Beyond Noise".
 # page_icon falls back to an emoji if the logo file isn't deployed yet so
@@ -1576,6 +1577,11 @@ def _get_rfr() -> float:
 @st.cache_data(ttl=1800)
 def _cached_spy(period: str = "6mo"):
     return fetch_spy(period)
+
+
+@st.cache_data(ttl=1800)
+def _cached_tlt(period: str = "3mo"):
+    return fetch_tlt(period)
 
 
 # VIX latest close (cached) — fear gauge for the risk-off de-risk regime check.
@@ -9507,6 +9513,72 @@ if page == "🏠 Home":
                 "Diagonal is always +1.0."
             )
 
+        # ── Rate Sensitivity Table ────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 📉 Rate Sensitivity — How Your Holdings React to Rate Moves")
+        st.caption(
+            "TLT (20-yr Treasury ETF) falls when long rates rise. A negative TLT correlation "
+            "means the holding tends to DROP when rates rise (rate-sensitive, long-duration). "
+            "A positive correlation means it tends to RISE (rate beneficiary). "
+            "TLT Corr is computed from 3-month daily return data; Sector Score is the "
+            "macro.RATE_SENSITIVITY structural label (−1.0 = most sensitive, +1.0 = most beneficial)."
+        )
+        _tlt_df = _cached_tlt("3mo")
+        _rs_rows = rate_sensitivity_per_ticker(port_df, held_data, _tlt_df if not _tlt_df.empty else None)
+        if _rs_rows:
+            import pandas as _rs_pd
+            _rs_df = _rs_pd.DataFrame(_rs_rows)
+
+            def _rs_color(val):
+                if val is None:
+                    return ""
+                if val < -0.4:
+                    return "color:#ff4444"
+                if val < -0.1:
+                    return "color:#ffbb33"
+                if val < 0.1:
+                    return "color:#9ca3af"
+                if val < 0.4:
+                    return "color:#00C851"
+                return "color:#00C851;font-weight:bold"
+
+            _rs_display = _rs_df[["Ticker", "Sector", "Weight (%)", "TLT Corr", "Sector Score", "Implication"]].copy()
+            _rs_display["TLT Corr"] = _rs_display["TLT Corr"].apply(
+                lambda v: f"{v:+.3f}" if v is not None else "—"
+            )
+            _rs_display["Sector Score"] = _rs_display["Sector Score"].apply(lambda v: f"{v:+.2f}")
+            st.dataframe(
+                _rs_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Ticker":       st.column_config.TextColumn("Ticker", width="small"),
+                    "Sector":       st.column_config.TextColumn("Sector"),
+                    "Weight (%)":   st.column_config.NumberColumn("Wt %", format="%.1f", width="small"),
+                    "TLT Corr":     st.column_config.TextColumn("TLT Corr", help="Pearson corr vs TLT 3mo returns; — = insufficient data"),
+                    "Sector Score": st.column_config.TextColumn("Sector Score", help="Structural macro.RATE_SENSITIVITY label"),
+                    "Implication":  st.column_config.TextColumn("Implication"),
+                },
+            )
+            # Weighted portfolio exposure summary
+            _rs_has_corr = [r for r in _rs_rows if r["TLT Corr"] is not None]
+            if _rs_has_corr:
+                _total_w = sum(r["Weight (%)"] for r in _rs_has_corr)
+                if _total_w > 0:
+                    _wtd_corr = sum(r["TLT Corr"] * r["Weight (%)"] for r in _rs_has_corr) / _total_w
+                    _exp_label = (
+                        "rate-sensitive (net headwind when rates rise)"
+                        if _wtd_corr < -0.1 else
+                        "rate-neutral"
+                        if _wtd_corr < 0.1 else
+                        "rate-resilient (net tailwind when rates rise)"
+                    )
+                    st.caption(
+                        f"**Weighted portfolio TLT correlation: {_wtd_corr:+.3f}** — book is broadly **{_exp_label}**."
+                    )
+        else:
+            st.info("Rate sensitivity unavailable — portfolio data not loaded.")
+
         # ── Risk Action Plan ──────────────────────────────────────────────────
         if _risk_advisor_recs:
             st.divider()
@@ -15428,6 +15500,76 @@ elif page == "📒 Trade Journal":
                             st.markdown("")
                             st.info(f"**Institutional Lens** · {_ins['institutional_lens']}")
 
+    # ── Opportunity Cost — what you passed on and what it cost ───────────────
+    with st.expander("💸 Opportunity Cost — Recommendations You Passed On", expanded=False):
+        st.caption(
+            "Compares each new_pick recommendation you didn't act on against what it returned. "
+            "Full chart is on the Recommendations History page; this is the 90-day summary."
+        )
+        try:
+            from stock_analyzer.recommendations_history import (
+                match_recs_to_trades as _oc_match,
+                compute_outcomes as _oc_outcomes,
+                distinct_missed as _oc_missed,
+                missed_split as _oc_split,
+            )
+            from datetime import date as _oc_date, timedelta as _oc_td
+            _oc_recs_df = db.load_recommendations(
+                start_date=(_oc_date.today() - _oc_td(days=90)).isoformat(),
+            )
+            if _oc_recs_df.empty:
+                st.info("No recommendations in the last 90 days to evaluate.")
+            else:
+                _oc_prices = {
+                    str(t): float(p)
+                    for t, p in (st.session_state.get("_live_prices") or {}).items()
+                    if p is not None
+                }
+                _oc_matched  = _oc_match(_oc_recs_df, trades_df)
+                _oc_enriched = _oc_outcomes(
+                    _oc_matched, _oc_prices or None, _oc_date.today(), min_days=5
+                )
+                _oc_rows = _oc_missed(_oc_enriched, rec_types=("new_pick",))
+                _oc_spl  = _oc_split(_oc_rows)
+
+                n_missed  = _oc_spl.get("n_distinct", 0)
+                n_winners = _oc_spl.get("n_winners", 0)
+                n_dodged  = _oc_spl.get("n_dodged", 0)
+                avg_pct   = _oc_spl.get("avg_outcome_pct")
+                avg_alpha = _oc_spl.get("avg_alpha_pct")
+
+                if n_missed == 0:
+                    st.success("✅ No missed opportunities with outcomes in the last 90 days.")
+                else:
+                    _oc_c1, _oc_c2, _oc_c3, _oc_c4 = st.columns(4)
+                    _oc_c1.metric("Recs Passed", n_missed, help="Distinct new_pick recs you didn't act on (90d)")
+                    _oc_c2.metric("Would've Won", n_winners, help="Passed recs that went up")
+                    _oc_c3.metric("Dodged Losers", n_dodged, help="Passed recs that fell — good pass")
+                    _oc_c4.metric(
+                        "Avg Missed Return",
+                        f"{avg_pct:+.1f}%" if avg_pct is not None else "—",
+                        f"α {avg_alpha:+.1f}pp vs SPY" if avg_alpha is not None else None,
+                        delta_color="inverse",
+                    )
+                    if _oc_rows:
+                        st.markdown("**Top missed opportunities (last 90d, sorted by alpha):**")
+                        for _ocr in _oc_rows[:5]:
+                            _ocr_pct   = _ocr.get("outcome_pct")
+                            _ocr_alpha = _ocr.get("alpha_pct")
+                            _ocr_label = _ocr.get("outcome_label", "unknown")
+                            _ocr_color = "#22c55e" if _ocr_label == "win" else ("#ef4444" if _ocr_label == "loss" else "#9ca3af")
+                            st.markdown(
+                                f"<span style='color:#fbbf24;font-weight:600'>{_ocr['ticker']}</span> "
+                                f"<span style='color:{_ocr_color}'>"
+                                f"{f'{_ocr_pct:+.1f}%' if _ocr_pct is not None else '—'}</span>"
+                                + (f" <span style='color:#9ca3af;font-size:0.85em'>· α {_ocr_alpha:+.1f}pp vs SPY</span>" if _ocr_alpha is not None else "")
+                                + f" <span style='color:#9ca3af;font-size:0.82em'>· first rec {_ocr.get('first_rec_date', '')} · {_ocr.get('n_surfaced', 1)} surfacing(s)</span>",
+                                unsafe_allow_html=True,
+                            )
+                    st.caption("Full chart with all missed opportunities: 📊 Recommendations History page.")
+        except Exception as _oc_err:
+            st.warning(f"Opportunity cost data unavailable: {_oc_err}")
+
     # ── Decision Journal — My Patterns ───────────────────────────────────────
     try:
         _dj = compute_patterns(trades_df)
@@ -15541,6 +15683,67 @@ elif page == "📒 Trade Journal":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+
+    # ── Engine Trust by Composite Band ───────────────────────────────────────
+    with st.expander("🔬 Engine Trust by Composite Band", expanded=False):
+        st.caption(
+            "Did you trust the engine more when conviction was higher? And was the engine right? "
+            "Action rate answers the first question; alpha comparison answers the second."
+        )
+        try:
+            from stock_analyzer.recommendations_history import (
+                match_recs_to_trades as _etb_match,
+                compute_outcomes as _etb_outcomes,
+                engine_trust_by_band as _etb_fn,
+            )
+            from datetime import date as _etb_date
+            _etb_recs_df = db.load_recommendations()
+            if _etb_recs_df.empty:
+                st.info("No recommendation history found — run a scan to generate recommendations.")
+            else:
+                _etb_prices = {
+                    str(t): float(p)
+                    for t, p in (st.session_state.get("_live_prices") or {}).items()
+                    if p is not None
+                }
+                _etb_matched  = _etb_match(_etb_recs_df, trades_df)
+                _etb_enriched = _etb_outcomes(
+                    _etb_matched, _etb_prices or None, _etb_date.today()
+                )
+                _etb_rows = _etb_fn(_etb_enriched)
+                if not _etb_rows:
+                    st.info("Insufficient data to compute band breakdown — need more recommendations with outcomes.")
+                else:
+                    for _etr in _etb_rows:
+                        _etr_acted = _etr["action_rate"]
+                        _etr_color = "#22c55e" if _etr_acted >= 60 else ("#f59e0b" if _etr_acted >= 30 else "#9ca3af")
+                        _etr_aa    = _etr["avg_alpha_acted"]
+                        _etr_ap    = _etr["avg_alpha_passed"]
+
+                        def _pp(v):
+                            return f"{v:+.1f}pp" if v is not None else "—"
+
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid {_etr_color};"
+                            f"border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
+                            f"<div style='color:#f9fafb;font-weight:600;font-size:0.9em'>"
+                            f"{_etr['band_label']}"
+                            f"<span style='color:#9ca3af;font-weight:400;font-size:0.85em'> · "
+                            f"{_etr['n_recs']} recs</span></div>"
+                            f"<div style='display:flex;gap:24px;margin-top:6px;font-size:0.82em'>"
+                            f"<span><span style='color:#9ca3af'>Acted</span> "
+                            f"<span style='color:{_etr_color};font-weight:600'>{_etr['n_acted']}/{_etr['n_recs']} ({_etr_acted:.0f}%)</span></span>"
+                            f"<span><span style='color:#9ca3af'>α when acted</span> "
+                            f"<span style='color:#d1d5db'>{_pp(_etr_aa)}</span></span>"
+                            f"<span><span style='color:#9ca3af'>α when passed</span> "
+                            f"<span style='color:#d1d5db'>{_pp(_etr_ap)}</span></span>"
+                            f"</div>"
+                            f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>{_etr['edge_comment']}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+        except Exception as _etb_err:
+            st.warning(f"Engine trust data unavailable: {_etb_err}")
 
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")

@@ -628,6 +628,103 @@ def report_viz_snapshot(enriched: list[dict], rec_types: tuple = ("new_pick",)) 
     }
 
 
+def engine_trust_by_band(enriched: list[dict]) -> list[dict]:
+    """
+    Action rate and alpha quality broken down by composite score band.
+
+    Answers: "Did you trust the engine more at 75+ vs 65-74, and were you
+    right to?" — the key self-awareness question for systematic investing.
+
+    Bands:
+      < 65   — below buy threshold (should not have been acted on; interesting if so)
+      65–74  — BUY tier
+      75+    — STRONG BUY tier
+
+    Returns list of band dicts sorted by band floor ascending.  Each dict:
+      band_label      — str display label
+      band_floor      — int (for sorting)
+      n_recs          — int  (mature + priced; excludes maturing rows)
+      n_acted         — int
+      action_rate     — float %
+      avg_alpha_acted — float | None  (avg alpha_pct for acted rows with alpha)
+      avg_alpha_passed— float | None  (avg alpha_pct for passed rows with alpha)
+      edge_comment    — str plain-English read of the alpha comparison
+    """
+    def _band(score):
+        try:
+            s = float(score)
+        except (TypeError, ValueError):
+            return None
+        if s < 65:
+            return (0, "Below 65 (sub-threshold)")
+        if s < 75:
+            return (65, "65–74 (BUY)")
+        return (75, "75+ (Strong BUY)")
+
+    buckets: dict[int, dict] = {}
+    for r in enriched:
+        if r.get("outcome_maturing"):
+            continue
+        result = _band(r.get("composite_score"))
+        if result is None:
+            continue
+        floor, label = result
+        if floor not in buckets:
+            buckets[floor] = {
+                "band_label":   label,
+                "band_floor":   floor,
+                "_n":           0,
+                "_acted":       0,
+                "_alpha_acted": [],
+                "_alpha_passed":[],
+            }
+        b = buckets[floor]
+        b["_n"] += 1
+        alpha = r.get("alpha_pct")
+        if r["acted_on"]:
+            b["_acted"] += 1
+            if alpha is not None:
+                b["_alpha_acted"].append(float(alpha))
+        else:
+            if alpha is not None:
+                b["_alpha_passed"].append(float(alpha))
+
+    rows = []
+    for floor, b in sorted(buckets.items()):
+        n      = b["_n"]
+        acted  = b["_acted"]
+        ar     = round(acted / n * 100, 1) if n else 0.0
+        aa     = round(sum(b["_alpha_acted"])  / len(b["_alpha_acted"]),  1) if b["_alpha_acted"]  else None
+        ap     = round(sum(b["_alpha_passed"]) / len(b["_alpha_passed"]), 1) if b["_alpha_passed"] else None
+
+        if aa is not None and ap is not None:
+            if aa > ap:
+                edge = f"Acting on this band delivered {aa - ap:+.1f}pp more alpha than passing — engine was right."
+            elif ap > aa:
+                edge = f"Passing on this band outperformed acting by {ap - aa:.1f}pp — you may be over-trusting the engine here."
+            else:
+                edge = "Acting and passing produced similar alpha — no clear edge signal."
+        elif aa is not None:
+            edge = f"Acted rows: avg {aa:+.1f}pp alpha. (No passed rows with outcomes to compare.)"
+        elif ap is not None:
+            edge = f"Passed rows: avg {ap:+.1f}pp alpha. (No acted rows with outcomes to compare.)"
+        else:
+            edge = "Insufficient outcome data to draw conclusions."
+
+        rows.append({
+            "band_label":       b["band_label"],
+            "band_floor":       floor,
+            "n_recs":           n,
+            "n_acted":          acted,
+            "action_rate":      ar,
+            "avg_alpha_acted":  aa,
+            "avg_alpha_passed": ap,
+            "edge_comment":     edge,
+        })
+
+    return rows
+
+
 def daily_volume(enriched: list[dict]) -> list[dict]:
     """
     For the recs-per-day chart: count of recs surfaced per rec_date, split

@@ -169,6 +169,11 @@ def fetch_spy(period: str = "6mo") -> pd.DataFrame:
     return fetch_price_history("SPY", period)
 
 
+def fetch_tlt(period: str = "3mo") -> pd.DataFrame:
+    """iShares 20-Year Treasury ETF — proxy for long-rate sensitivity."""
+    return fetch_price_history("TLT", period)
+
+
 def fetch_vix(period: str = "1mo") -> pd.DataFrame:
     """CBOE Volatility Index (^VIX) price history — the fear gauge.
 

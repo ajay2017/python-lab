@@ -111,6 +111,84 @@ def beta_vs_market(df: pd.DataFrame, market_df: pd.DataFrame) -> float | None:
     return round(float(cov / mkt_var), 2)
 
 
+def pearson_corr_vs_benchmark(df: pd.DataFrame, benchmark_df: pd.DataFrame) -> float | None:
+    """Pearson correlation of daily returns vs a benchmark (e.g. TLT).
+
+    Distinct from beta_vs_market: beta is the regression slope (sensitivity in $),
+    correlation is the −1..+1 co-movement coefficient (direction + strength).
+    Both require ≥20 overlapping trading days; returns None when unavailable.
+    """
+    stock_ret = df["Close"].pct_change().dropna()
+    bench_ret = benchmark_df["Close"].pct_change().dropna()
+    combined = pd.concat([stock_ret, bench_ret], axis=1, keys=["s", "b"]).dropna()
+    if len(combined) < 20:
+        return None
+    corr = combined["s"].corr(combined["b"])
+    if corr != corr:   # NaN guard
+        return None
+    return round(float(corr), 3)
+
+
+def rate_sensitivity_per_ticker(
+    port_df: pd.DataFrame,
+    held_data: dict,
+    tlt_df: pd.DataFrame | None,
+) -> list[dict]:
+    """
+    Per-holding rate sensitivity table combining:
+      - Sector-level score from macro.RATE_SENSITIVITY (−1..+1 label)
+      - Computed Pearson correlation vs TLT daily returns (−1..+1, live data)
+
+    TLT falls when long rates rise; a negative correlation with TLT means the
+    holding tends to DROP when rates rise (rate-sensitive / long-duration).
+    A positive correlation means it tends to RISE with rates (rate beneficiary).
+
+    Returns list[dict] sorted by tlt_corr ascending (most rate-sensitive first).
+    Rows with no TLT data still appear using the sector score only.
+    """
+    from stock_analyzer.macro import RATE_SENSITIVITY  # avoid circular import at module level
+
+    rows = []
+    for _, pos in port_df.iterrows():
+        ticker = str(pos.get("Ticker", ""))
+        sector = str(pos.get("Sector", "Other"))
+        weight = float(pos.get("Weight (%)", 0) or 0)
+        sector_score = RATE_SENSITIVITY.get(sector, 0.0)
+
+        tlt_corr = None
+        if tlt_df is not None and not tlt_df.empty:
+            data = (held_data.get(ticker) or {})
+            df   = data.get("df")
+            if df is not None and not df.empty and "Close" in df.columns:
+                tlt_corr = pearson_corr_vs_benchmark(df, tlt_df)
+
+        # Human-readable implication driven by the sector score (structural) and
+        # TLT correlation (empirical).  Use TLT corr when available; fall back to sector score.
+        primary = tlt_corr if tlt_corr is not None else sector_score
+        if primary < -0.4:
+            implication = "Rate-sensitive — hurt when rates rise"
+        elif primary < -0.1:
+            implication = "Mild rate headwind"
+        elif primary < 0.1:
+            implication = "Roughly rate-neutral"
+        elif primary < 0.4:
+            implication = "Mild rate tailwind"
+        else:
+            implication = "Rate beneficiary — helped when rates rise"
+
+        rows.append({
+            "Ticker":         ticker,
+            "Sector":         sector,
+            "Weight (%)":     round(weight, 1),
+            "Sector Score":   sector_score,
+            "TLT Corr":       tlt_corr,
+            "Implication":    implication,
+        })
+
+    rows.sort(key=lambda r: (r["TLT Corr"] if r["TLT Corr"] is not None else r["Sector Score"]))
+    return rows
+
+
 def compute_all_risk(
     df: pd.DataFrame,
     spy_df: pd.DataFrame | None = None,
