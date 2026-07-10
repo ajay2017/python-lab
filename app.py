@@ -16935,7 +16935,7 @@ elif page == "📜 Recommendations History":
         _rh_type_filter = st.multiselect(
             "Rec type",
             ["new_pick", "add_winner", "buy_candidate"],
-            default=["new_pick", "add_winner", "buy_candidate"],
+            default=["new_pick", "add_winner"],
             key="_rh_type_filter",
         )
     with _rh_c3:
