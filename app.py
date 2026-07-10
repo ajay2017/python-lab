@@ -1532,6 +1532,13 @@ with st.sidebar:
                 f"</span>",
                 unsafe_allow_html=True,
             )
+            if _ah_src == "bundle_cache" and _ah_h["calls"] > 0:
+                st.markdown(
+                    "<span style='font-size:0.72em;color:#666'>"
+                    "↳ live providers failed for ≥1 ticker; app served last saved snapshot instead"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
         if st.button("Reset counters", key="_ah_reset", use_container_width=True):
             _ah.reset()
             st.rerun()
