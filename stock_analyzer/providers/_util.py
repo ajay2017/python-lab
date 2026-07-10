@@ -63,6 +63,10 @@ def http_get_json(url: str, params: dict | None = None, timeout: int = _TIMEOUT)
     except requests.HTTPError as exc:
         safe_msg = _redact_url(str(exc))
         raise requests.HTTPError(safe_msg, response=resp) from None
+    if not resp.text.strip():
+        # Surface the HTTP status when the body is empty so callers can distinguish
+        # a silent rate-limit 200+empty from a genuine parse error.
+        raise ValueError(f"HTTP {resp.status_code} — empty response body")
     return resp.json()
 
 

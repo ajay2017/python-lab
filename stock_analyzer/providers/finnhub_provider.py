@@ -76,7 +76,7 @@ class FinnhubProvider(DataProvider):
                 }
             except Exception as exc:
                 had_error = True
-                _ah.record("finnhub", classify_error(exc), msg=str(exc)[:120])
+                _ah.record("finnhub", classify_error(exc), msg=f"quote/{t}: {str(exc)[:100]}")
                 continue
 
         if results:
@@ -122,5 +122,5 @@ class FinnhubProvider(DataProvider):
                 "symbol":        str(ticker),
             }
         except Exception as exc:
-            _ah.record("finnhub", classify_error(exc), msg=str(exc)[:120])
+            _ah.record("finnhub", classify_error(exc), msg=f"news-sentiment/{ticker}: {str(exc)[:90]}")
             return None
