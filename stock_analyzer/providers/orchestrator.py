@@ -78,6 +78,15 @@ def _providers_for(capability: str) -> list:
     # (yahoo_finance / finnhub / fmp) for the cooldown lookup to match.
     live = [p for p in capable
             if not _ah.in_cooldown(p.name, C.PROVIDER_RL_COOLDOWN_SEC)]
+    # Soft-cap: suppress FMP for the rest of the day when the daily quota is at
+    # or above the threshold. Count is cached in api_health (5-min TTL) — not a
+    # per-call DB hit. Only checks when FMP would otherwise be chosen.
+    if any(p.name == "fmp" for p in live):
+        _daily = _ah.get_fmp_daily_quota()
+        if _daily is not None and _daily >= C.FMP_DAILY_SOFT_CAP:
+            live = [p for p in live if p.name != "fmp"]
+            _ah.record("fmp", "quota",
+                       f"daily soft-cap reached: {_daily}/{C.FMP_DAILY_CALL_CAP}")
     return live if live else capable
 
 

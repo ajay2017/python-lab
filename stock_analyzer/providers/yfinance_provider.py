@@ -18,6 +18,7 @@ import pytz
 
 from stock_analyzer import api_health as _ah
 from stock_analyzer.constants import DATA_YF_REQUEST_TIMEOUT_SEC
+from stock_analyzer.providers._util import classify_error
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable,
     CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE, CAP_INDICES, CAP_RISK_FREE,
@@ -70,13 +71,11 @@ def _retry(fn, *args, retries: int = 3, backoff: float = 1.0, **kwargs):
             _ah.record("yahoo_finance", "error", msg=f"timeout >{DATA_YF_REQUEST_TIMEOUT_SEC}s")
             raise
         except Exception as exc:
-            msg = str(exc).lower()
-            if any(k in msg for k in ("429", "too many", "rate limit", "rate-limit")):
-                _ah.record("yahoo_finance", "rate_limit")
-                if attempt < retries - 1:
-                    time.sleep(backoff * (attempt + 1))
-                    continue
-            _ah.record("yahoo_finance", "error", msg=str(exc)[:120])
+            ev = classify_error(exc)
+            _ah.record("yahoo_finance", ev, msg=str(exc)[:120])
+            if ev == "rate_limit" and attempt < retries - 1:
+                time.sleep(backoff * (attempt + 1))
+                continue
             raise
 
 

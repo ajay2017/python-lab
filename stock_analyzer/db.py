@@ -286,6 +286,30 @@ the user acted on it):
     alter table analyst_coverage enable row level security;
     create policy "service_role_all_analyst_coverage" on analyst_coverage
         for all to service_role using (true) with check (true);
+
+    -- api_quota_log: daily API call counter per provider (Option 2 data health).
+    -- Ships INERT until this DDL + function are applied; get_daily_quota returns
+    -- None and the chip hides the field; soft-cap gate stays open (fail-safe).
+    create table if not exists api_quota_log (
+        provider   text    not null,
+        log_date   date    not null default current_date,
+        call_count integer not null default 0,
+        primary key (provider, log_date)
+    );
+    alter table api_quota_log enable row level security;
+    create policy "service_role_all_api_quota_log" on api_quota_log
+        for all to service_role using (true) with check (true);
+
+    -- Atomic increment (avoids read-modify-write race under concurrent requests)
+    create or replace function public.increment_api_quota(p_provider text)
+    returns void language plpgsql as $$
+    begin
+        insert into public.api_quota_log (provider, log_date, call_count)
+        values (p_provider, current_date, 1)
+        on conflict (provider, log_date)
+        do update set call_count = public.api_quota_log.call_count + 1;
+    end;
+    $$;
 """
 
 import os
@@ -334,6 +358,43 @@ def has_db() -> bool:
     """True when usable Supabase credentials are present (env or st.secrets)."""
     url, key = _supabase_creds()
     return bool(url) and bool(key) and not url.startswith("https://your-project")
+
+
+# ── API quota tracking ────────────────────────────────────────────────────────
+
+def increment_daily_quota(provider: str) -> None:
+    """Atomically +1 today's call count for provider in Supabase.
+    Silent on failure — quota tracking is observability, never a gate."""
+    if not has_db():
+        return
+    try:
+        _client().rpc("increment_api_quota", {"p_provider": provider}).execute()
+    except Exception:
+        pass
+
+
+def get_daily_quota(provider: str) -> int | None:
+    """Return today's call count for provider from Supabase.
+    Returns None when DB is unavailable (chip hides the field); 0 when table
+    exists but no row yet for today."""
+    if not has_db():
+        return None
+    try:
+        import pytz as _pytz
+        import datetime as _dt
+        today = _dt.datetime.now(_pytz.timezone("America/New_York")).date()
+        res = (
+            _client()
+            .table("api_quota_log")
+            .select("call_count")
+            .eq("provider", provider)
+            .eq("log_date", str(today))
+            .maybe_single()
+            .execute()
+        )
+        return int((res.data or {}).get("call_count", 0))
+    except Exception:
+        return None
 
 
 # Process-level singleton (was @st.cache_resource). A plain module global caches

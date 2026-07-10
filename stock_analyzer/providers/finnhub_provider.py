@@ -20,7 +20,7 @@ from stock_analyzer import api_health as _ah
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable, CAP_LIVE_PRICE,
 )
-from stock_analyzer.providers._util import get_secret, http_get_json, is_rate_limit
+from stock_analyzer.providers._util import get_secret, http_get_json, classify_error
 
 _ET = pytz.timezone("America/New_York")
 _BASE = "https://finnhub.io/api/v1"
@@ -76,10 +76,7 @@ class FinnhubProvider(DataProvider):
                 }
             except Exception as exc:
                 had_error = True
-                if is_rate_limit(exc):
-                    _ah.record("finnhub", "rate_limit")
-                else:
-                    _ah.record("finnhub", "error", msg=str(exc)[:120])
+                _ah.record("finnhub", classify_error(exc), msg=str(exc)[:120])
                 continue
 
         if results:
@@ -125,8 +122,5 @@ class FinnhubProvider(DataProvider):
                 "symbol":        str(ticker),
             }
         except Exception as exc:
-            if is_rate_limit(exc):
-                _ah.record("finnhub", "rate_limit")
-            else:
-                _ah.record("finnhub", "error", msg=str(exc)[:120])
+            _ah.record("finnhub", classify_error(exc), msg=str(exc)[:120])
             return None

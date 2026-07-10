@@ -70,3 +70,22 @@ def is_rate_limit(exc: Exception) -> bool:
     """True when an exception looks like an HTTP 429 / quota error."""
     msg = str(exc).lower()
     return "429" in msg or "too many" in msg or "rate limit" in msg or "limit reach" in msg
+
+
+def classify_error(exc: Exception) -> str:
+    """Classify an exception into a fine-grained api_health event type.
+    Use instead of bare is_rate_limit() at provider call sites."""
+    import json as _json
+    # Parse check FIRST — JSONDecodeError messages often contain numeric column
+    # offsets ("line 1 column 403 (char 402)") that would otherwise match the
+    # auth/quota bare-string checks below and trigger the circuit-breaker.
+    if isinstance(exc, (ValueError, _json.JSONDecodeError)):
+        return "parse"
+    msg = str(exc).lower()
+    if "401" in msg or "403" in msg or "unauthorized" in msg or "forbidden" in msg:
+        return "auth"
+    if "402" in msg or "payment required" in msg or "plan limit" in msg or "upgrade your" in msg:
+        return "quota"
+    if "429" in msg or "too many" in msg or "rate limit" in msg or "limit reach" in msg:
+        return "rate_limit"
+    return "error"

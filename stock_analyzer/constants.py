@@ -545,6 +545,12 @@ DATA_XCHECK_FIELDS = {"price"}
 # move intraday). Process-local cache — cleared on reboot or orchestrator reset.
 DATA_FMP_INFO_CACHE_TTL_SEC = 3600
 
+# FMP free-tier daily budget (250 calls/day on the free plan). The soft-cap
+# pauses all FMP requests for the rest of the day, leaving a safety buffer
+# before the hard limit. Operational knob — NOT an investment threshold.
+FMP_DAILY_CALL_CAP = 250   # FMP free-plan hard limit
+FMP_DAILY_SOFT_CAP = 220   # pause FMP at this count (30-call buffer)
+
 # Minimum number of CORE fundamental metrics that must be present for the
 # Business Quality leg — and therefore the composite verdict — to be trusted. The
 # four core BQ metrics are revenue_growth, earnings_growth,

@@ -1505,6 +1505,20 @@ with st.sidebar:
                 _ah_parts.append(f"**{_ah_h['rate_limits']} RL**")
             if _ah_h["empty"] > 0:
                 _ah_parts.append(f"{_ah_h['empty']} empty")
+            if _ah_h.get("quotas", 0) > 0:
+                _ah_parts.append(f"**{_ah_h['quotas']} quota**")
+            if _ah_h.get("auth_errors", 0) > 0:
+                _ah_parts.append(f"**{_ah_h['auth_errors']} auth**")
+            if _ah_h.get("parse_errors", 0) > 0:
+                _ah_parts.append(f"**{_ah_h['parse_errors']} parse**")
+            if _ah_src == "fmp":
+                from stock_analyzer.constants import FMP_DAILY_SOFT_CAP as _C_SOFT, FMP_DAILY_CALL_CAP as _C_CAP
+                _fmp_d = _ah.get_fmp_daily_quota()
+                if _fmp_d is not None:
+                    if _fmp_d >= _C_SOFT:
+                        _ah_parts.append(f"**⚠ today: {_fmp_d}/{_C_CAP}**")
+                    else:
+                        _ah_parts.append(f"today: {_fmp_d}/{_C_CAP}")
             _ah_detail = " · ".join(_ah_parts) if _ah_parts else "no calls yet"
             _ah_fresh  = _ah_h["freshness"]
             _ah_err_snippet = (

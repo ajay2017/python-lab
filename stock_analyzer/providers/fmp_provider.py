@@ -25,11 +25,12 @@ import pytz
 import pandas as pd
 
 from stock_analyzer import api_health as _ah
+from stock_analyzer import db as _db
 from stock_analyzer import constants as C
 from stock_analyzer.providers.base import (
     DataProvider, ProviderUnavailable, CAP_LIVE_PRICE, CAP_HISTORY, CAP_BUNDLE,
 )
-from stock_analyzer.providers._util import get_secret, http_get_json, is_rate_limit
+from stock_analyzer.providers._util import get_secret, http_get_json, classify_error
 
 _ET = pytz.timezone("America/New_York")
 _BASE = "https://financialmodelingprep.com/stable"
@@ -126,12 +127,11 @@ class FMPProvider(DataProvider):
             try:
                 payload = http_get_json(f"{_BASE}/quote",
                                         params={"symbol": t, "apikey": self._key})
+                _db.increment_daily_quota("fmp")
             except Exception as exc:
+                _db.increment_daily_quota("fmp")
                 had_error = True
-                if is_rate_limit(exc):
-                    _ah.record("fmp", "rate_limit")
-                else:
-                    _ah.record("fmp", "error", msg=self._safe(exc))
+                _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
                 continue
 
             err = _fmp_error(payload)
@@ -181,12 +181,11 @@ class FMPProvider(DataProvider):
         }
         try:
             payload = http_get_json(f"{_BASE}/historical-price-eod/full", params=params)
+            _db.increment_daily_quota("fmp")
         except Exception as exc:
-            if is_rate_limit(exc):
-                _ah.record("fmp", "rate_limit")
-            else:
-                _ah.record("fmp", "error", msg=self._safe(exc))
-            raise ProviderUnavailable(self._safe(exc)) from exc
+            _db.increment_daily_quota("fmp")
+            _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+            raise ProviderUnavailable(self._safe(str(exc))) from exc
 
         err = _fmp_error(payload)
         if err:
@@ -211,8 +210,8 @@ class FMPProvider(DataProvider):
                 "Volume": df.get("volume"),
             }).dropna(subset=["Close"])
         except Exception as exc:
-            _ah.record("fmp", "error", msg=f"history parse {ticker}: {self._safe(exc)}")
-            raise ProviderUnavailable(self._safe(exc)) from exc
+            _ah.record("fmp", "error", msg=f"history parse {ticker}: {self._safe(str(exc))}")
+            raise ProviderUnavailable(self._safe(str(exc))) from exc
 
         if out.empty:
             _ah.record("fmp", "empty")
@@ -228,12 +227,11 @@ class FMPProvider(DataProvider):
         p["apikey"] = self._key
         try:
             payload = http_get_json(f"{_BASE}/{path}", params=p)
+            _db.increment_daily_quota("fmp")
         except Exception as exc:
-            if is_rate_limit(exc):
-                _ah.record("fmp", "rate_limit")
-            else:
-                _ah.record("fmp", "error", msg=self._safe(exc))
-            raise ProviderUnavailable(self._safe(exc)) from exc
+            _db.increment_daily_quota("fmp")
+            _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+            raise ProviderUnavailable(self._safe(str(exc))) from exc
         err = _fmp_error(payload)
         if err:
             _ah.record("fmp", "error", msg=self._safe(err))
