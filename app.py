@@ -15919,8 +15919,8 @@ elif page == "📒 Trade Journal":
                         st.session_state.pop("_tj_drift_checked", None)
                         st.session_state.pop("_tj_drift_state", None)
 
-    # ── 📥 Import from broker statement (Robinhood CSV) ───────────────────────
-    with st.expander("📥 Import from broker statement (Robinhood CSV)", expanded=False):
+    # ── 📥 Import from broker statement ──────────────────────────────────────
+    with st.expander("📥 Import from broker statement (Robinhood)", expanded=False):
         # Show last import result (stashed before rerun so it survives the rerun)
         _bi_last = st.session_state.pop("_bi_last_result", None)
         if _bi_last:
@@ -15939,223 +15939,539 @@ elif page == "📒 Trade Journal":
                 st.dataframe(_bi_last["holdings_df"], hide_index=True,
                              use_container_width=True)
 
-        st.caption(
-            "Upload your Robinhood account-activity CSV (downloaded from Robinhood → "
-            "Account → History → Export). Only Buy and Sell trades are imported; "
-            "dividends, cash transfers, and fees are counted in the skipped summary "
-            "but not saved. You review every row before anything is written."
-        )
-        _bi_file = st.file_uploader(
-            "Robinhood activity CSV", type=["csv"], key="_bi_uploader"
-        )
+        # ── Tabs: CSV vs Screenshot ────────────────────────────────────────────
+        _bi_csv_tab, _bi_ss_tab = st.tabs(["📄 CSV", "📸 Screenshots"])
 
-        if _bi_file is not None:
-            try:
-                _bi_parsed = _bimp.parse_robinhood_csv(_bi_file)
-            except Exception as _bi_exc:
-                _bi_parsed = {
-                    "trades": pd.DataFrame(), "skipped": {},
-                    "invalid": pd.DataFrame(),
-                    "error": f"Could not parse the file: {_bi_exc}",
-                }
+        # ══════════════════════════════════════════════════════════════════════
+        # TAB 1 — CSV import (unchanged)
+        # ══════════════════════════════════════════════════════════════════════
+        with _bi_csv_tab:
+            st.caption(
+                "Upload your Robinhood account-activity CSV (downloaded from Robinhood → "
+                "Account → History → Export). Only Buy and Sell trades are imported; "
+                "dividends, cash transfers, and fees are counted in the skipped summary "
+                "but not saved. You review every row before anything is written."
+            )
+            _bi_file = st.file_uploader(
+                "Robinhood activity CSV", type=["csv"], key="_bi_uploader"
+            )
 
-            if _bi_parsed["error"]:
-                st.error(_bi_parsed["error"])
-            else:
-                _bi_trades  = _bi_parsed["trades"]
-                _bi_skipped = _bi_parsed["skipped"]
-                _bi_invalid = _bi_parsed["invalid"]
+            if _bi_file is not None:
+                try:
+                    _bi_parsed = _bimp.parse_robinhood_csv(_bi_file)
+                except Exception as _bi_exc:
+                    _bi_parsed = {
+                        "trades": pd.DataFrame(), "skipped": {},
+                        "invalid": pd.DataFrame(),
+                        "error": f"Could not parse the file: {_bi_exc}",
+                    }
 
-                # ── Summary line ──────────────────────────────────────────────
-                _bi_n_buy  = int((_bi_trades["action"] == "BUY").sum())  if not _bi_trades.empty else 0
-                _bi_n_sell = int((_bi_trades["action"] == "SELL").sum()) if not _bi_trades.empty else 0
-                _bi_n_tot  = _bi_n_buy + _bi_n_sell
-                _bi_skip_parts = [f"{v} {k}" for k, v in _bi_skipped.items()]
-                _bi_skip_str   = ", ".join(_bi_skip_parts) if _bi_skip_parts else "none"
-                st.markdown(
-                    f"**{_bi_n_tot} trade row{'s' if _bi_n_tot != 1 else ''}** "
-                    f"({_bi_n_buy} Buy / {_bi_n_sell} Sell)  ·  "
-                    f"**{sum(_bi_skipped.values())} non-trade rows skipped** ({_bi_skip_str})  ·  "
-                    f"**{len(_bi_invalid)} invalid** (shares or price ≤ 0)"
-                )
-
-                # ── Surface invalid rows so the user knows what was excluded ──
-                if not _bi_invalid.empty:
-                    with st.expander(
-                        f"⚠️ {len(_bi_invalid)} row(s) excluded — shares or price ≤ 0",
-                        expanded=False,
-                    ):
-                        st.caption(
-                            "These rows violate the trades table constraints "
-                            "(shares > 0, price > 0) and cannot be imported. "
-                            "Verify your CSV or add them manually via the Log a Trade form."
-                        )
-                        st.dataframe(_bi_invalid, hide_index=True,
-                                     use_container_width=True)
-
-                if _bi_trades.empty:
-                    st.info("No Buy/Sell rows found to import.")
+                if _bi_parsed["error"]:
+                    st.error(_bi_parsed["error"])
                 else:
-                    # ── Classify against existing trades ──────────────────────
-                    _bi_class = _bimp.classify_against_existing(
-                        _bi_trades,
-                        st.session_state.get("trades_df"),
+                    _bi_trades  = _bi_parsed["trades"]
+                    _bi_skipped = _bi_parsed["skipped"]
+                    _bi_invalid = _bi_parsed["invalid"]
+
+                    # ── Summary line ──────────────────────────────────────────
+                    _bi_n_buy  = int((_bi_trades["action"] == "BUY").sum())  if not _bi_trades.empty else 0
+                    _bi_n_sell = int((_bi_trades["action"] == "SELL").sum()) if not _bi_trades.empty else 0
+                    _bi_n_tot  = _bi_n_buy + _bi_n_sell
+                    _bi_skip_parts = [f"{v} {k}" for k, v in _bi_skipped.items()]
+                    _bi_skip_str   = ", ".join(_bi_skip_parts) if _bi_skip_parts else "none"
+                    st.markdown(
+                        f"**{_bi_n_tot} trade row{'s' if _bi_n_tot != 1 else ''}** "
+                        f"({_bi_n_buy} Buy / {_bi_n_sell} Sell)  ·  "
+                        f"**{sum(_bi_skipped.values())} non-trade rows skipped** ({_bi_skip_str})  ·  "
+                        f"**{len(_bi_invalid)} invalid** (shares or price ≤ 0)"
                     )
 
-                    _bi_n_new = int(_bi_class["is_new"].sum())
-                    _bi_n_dup = len(_bi_class) - _bi_n_new
-                    st.caption(
-                        f"**{_bi_n_new} new row{'s' if _bi_n_new != 1 else ''} pre-selected**  ·  "
-                        f"{_bi_n_dup} look already recorded (unchecked by default)"
-                    )
-                    if _bi_n_dup:
-                        st.caption(
-                            "ℹ️ Rows matching a trade already in your journal — including one "
-                            "you logged **by hand on a different date** — are marked *possible "
-                            "duplicate* and left unchecked. Read the **Status** column and "
-                            "re-tick only rows that are genuinely a separate fill."
+                    if not _bi_invalid.empty:
+                        with st.expander(
+                            f"⚠️ {len(_bi_invalid)} row(s) excluded — shares or price ≤ 0",
+                            expanded=False,
+                        ):
+                            st.caption(
+                                "These rows violate the trades table constraints "
+                                "(shares > 0, price > 0) and cannot be imported. "
+                                "Verify your CSV or add them manually via the Log a Trade form."
+                            )
+                            st.dataframe(_bi_invalid, hide_index=True,
+                                         use_container_width=True)
+
+                    if _bi_trades.empty:
+                        st.info("No Buy/Sell rows found to import.")
+                    else:
+                        _bi_class = _bimp.classify_against_existing(
+                            _bi_trades,
+                            st.session_state.get("trades_df"),
                         )
 
-                    # ── Editable preview ──────────────────────────────────────
-                    _bi_preview = pd.DataFrame({
-                        "Import?":  _bi_class["is_new"].tolist(),
-                        "Date":     _bi_class["activity_date"].astype(str),
-                        "Ticker":   _bi_class["ticker"].tolist(),
-                        "Action":   _bi_class["action"].tolist(),
-                        "Shares":   _bi_class["shares"].tolist(),
-                        "Price":    _bi_class["price"].tolist(),
-                        "Status":   _bi_class["match_reason"].tolist(),
-                    })
-
-                    _bi_edited = st.data_editor(
-                        _bi_preview,
-                        column_config={
-                            "Import?": st.column_config.CheckboxColumn(
-                                "Import?", default=True
-                            ),
-                            "Date":   st.column_config.TextColumn(
-                                "Date", disabled=True
-                            ),
-                            "Ticker": st.column_config.TextColumn(
-                                "Ticker", disabled=True
-                            ),
-                            "Action": st.column_config.TextColumn(
-                                "Action", disabled=True
-                            ),
-                            "Shares": st.column_config.NumberColumn(
-                                "Shares", format="%.4g", disabled=True
-                            ),
-                            "Price":  st.column_config.NumberColumn(
-                                "Price ($)", format="$%.2f", disabled=True
-                            ),
-                            "Status": st.column_config.TextColumn(
-                                "Status", disabled=True
-                            ),
-                        },
-                        hide_index=True,
-                        use_container_width=True,
-                        key="_bi_editor",
-                    )
-
-                    # ── Import button ─────────────────────────────────────────
-                    if st.button(
-                        "📥 Import selected trades",
-                        key="_bi_import_btn",
-                        type="primary",
-                        disabled=st.session_state.get("_readonly", False),
-                        help=(
-                            "Read-only viewer — changes are disabled"
-                            if st.session_state.get("_readonly", False)
-                            else None
-                        ),
-                    ):
-                        _bi_selected = _bi_edited[_bi_edited["Import?"] == True]
-                        if _bi_selected.empty:
-                            st.warning("Nothing selected.")
-                        else:
-                            # Sort chronologically: date asc, BUY before SELL
-                            # within a day — so SELLs replay against prior BUYs.
-                            _bi_sel = _bi_selected.copy()
-                            _bi_sel["_sort_action"] = (
-                                _bi_sel["Action"] == "SELL"
-                            ).astype(int)
-                            _bi_sel = _bi_sel.sort_values(
-                                ["Date", "_sort_action"]
+                        _bi_n_new = int(_bi_class["is_new"].sum())
+                        _bi_n_dup = len(_bi_class) - _bi_n_new
+                        st.caption(
+                            f"**{_bi_n_new} new row{'s' if _bi_n_new != 1 else ''} pre-selected**  ·  "
+                            f"{_bi_n_dup} look already recorded (unchecked by default)"
+                        )
+                        if _bi_n_dup:
+                            st.caption(
+                                "ℹ️ Rows matching a trade already in your journal — including one "
+                                "you logged **by hand on a different date** — are marked *possible "
+                                "duplicate* and left unchecked. Read the **Status** column and "
+                                "re-tick only rows that are genuinely a separate fill."
                             )
 
-                            _bi_today_str = _today_et().isoformat()
-                            _bi_n_ok   = 0
-                            _bi_n_fail = 0
-                            for _, _bi_row in _bi_sel.iterrows():
-                                _bi_rec = {
-                                    "ticker":       str(_bi_row["Ticker"]),
-                                    "action":       str(_bi_row["Action"]),
-                                    "shares":       float(_bi_row["Shares"]),
-                                    "price":        float(_bi_row["Price"]),
-                                    "traded_at":    str(_bi_row["Date"]),
-                                    "trigger_type": "MANUAL",
-                                    "notes":        f"Robinhood import {_bi_today_str}",
-                                }
-                                if db.save_trade(_bi_rec):
-                                    _bi_n_ok += 1
-                                else:
-                                    _bi_n_fail += 1
+                        _bi_preview = pd.DataFrame({
+                            "Import?":  _bi_class["is_new"].tolist(),
+                            "Date":     _bi_class["activity_date"].astype(str),
+                            "Ticker":   _bi_class["ticker"].tolist(),
+                            "Action":   _bi_class["action"].tolist(),
+                            "Shares":   _bi_class["shares"].tolist(),
+                            "Price":    _bi_class["price"].tolist(),
+                            "Status":   _bi_class["match_reason"].tolist(),
+                        })
 
-                            if _bi_n_ok > 0:
-                                # Reconciliation rebuild — mirrors the
-                                # auto-rebuild-on-delete pattern exactly.
-                                st.session_state["trades_df"] = db.load_trades()
-                                _bi_recalc = db.recalculate_from_trades(
-                                    st.session_state["trades_df"]
-                                )
-                                db.save_holdings(_bi_recalc["holdings_df"])
-                                st.session_state["holdings_df"] = (
-                                    _bi_recalc["holdings_df"]
-                                )
-                                _bi_n_corrected = 0
-                                for _bi_tid, _bi_c in (
-                                    _bi_recalc["realized_pnl_corrections"].items()
-                                ):
-                                    if db.update_trade_realized_pnl(
-                                        _bi_tid,
-                                        _bi_c["realized_pnl"],
-                                        cost_basis=_bi_c["cost_basis"],
-                                    ):
-                                        _bi_n_corrected += 1
+                        _bi_edited = st.data_editor(
+                            _bi_preview,
+                            column_config={
+                                "Import?": st.column_config.CheckboxColumn(
+                                    "Import?", default=True
+                                ),
+                                "Date":   st.column_config.TextColumn(
+                                    "Date", disabled=True
+                                ),
+                                "Ticker": st.column_config.TextColumn(
+                                    "Ticker", disabled=True
+                                ),
+                                "Action": st.column_config.TextColumn(
+                                    "Action", disabled=True
+                                ),
+                                "Shares": st.column_config.NumberColumn(
+                                    "Shares", format="%.4g", disabled=True
+                                ),
+                                "Price":  st.column_config.NumberColumn(
+                                    "Price ($)", format="$%.2f", disabled=True
+                                ),
+                                "Status": st.column_config.TextColumn(
+                                    "Status", disabled=True
+                                ),
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                            key="_bi_editor",
+                        )
 
-                                # Invalidate drift banner — we just rebuilt
-                                st.session_state.pop("_tj_drift_checked", None)
-                                st.session_state.pop("_tj_drift_state", None)
-
-                                # Stash result for display on the next run
-                                # (after st.rerun() clears the current render)
-                                st.session_state["_bi_last_result"] = {
-                                    "n_imported":  _bi_n_ok,
-                                    "n_corrected": _bi_n_corrected,
-                                    "warnings":    list(
-                                        _bi_recalc.get("warnings", [])
-                                    )[:5],
-                                    "holdings_df": _bi_recalc["holdings_df"],
-                                }
-                                if _bi_n_fail:
-                                    # Partial failure — warn before rerun so the
-                                    # count makes sense.  The rerun will show the
-                                    # success banner for the rows that did save.
-                                    st.warning(
-                                        f"{_bi_n_fail} row(s) failed to save — "
-                                        "see Data Health tab for details."
-                                    )
-                                st.rerun()
-                            elif not db.has_db():
-                                st.error(
-                                    "No database connected — can't import. "
-                                    "Check your Supabase secrets / the Data Health tab."
-                                )
+                        if st.button(
+                            "📥 Import selected trades",
+                            key="_bi_import_btn",
+                            type="primary",
+                            disabled=st.session_state.get("_readonly", False),
+                            help=(
+                                "Read-only viewer — changes are disabled"
+                                if st.session_state.get("_readonly", False)
+                                else None
+                            ),
+                        ):
+                            _bi_selected = _bi_edited[_bi_edited["Import?"] == True]
+                            if _bi_selected.empty:
+                                st.warning("Nothing selected.")
                             else:
-                                st.error(
-                                    "Import failed — no trades were saved. "
-                                    "Check the Data Health tab for details."
+                                _bi_sel = _bi_selected.copy()
+                                _bi_sel["_sort_action"] = (
+                                    _bi_sel["Action"] == "SELL"
+                                ).astype(int)
+                                _bi_sel = _bi_sel.sort_values(
+                                    ["Date", "_sort_action"]
                                 )
+
+                                _bi_today_str = _today_et().isoformat()
+                                _bi_n_ok   = 0
+                                _bi_n_fail = 0
+                                for _, _bi_row in _bi_sel.iterrows():
+                                    _bi_rec = {
+                                        "ticker":       str(_bi_row["Ticker"]),
+                                        "action":       str(_bi_row["Action"]),
+                                        "shares":       float(_bi_row["Shares"]),
+                                        "price":        float(_bi_row["Price"]),
+                                        "traded_at":    str(_bi_row["Date"]),
+                                        "trigger_type": "MANUAL",
+                                        "notes":        f"Robinhood import {_bi_today_str}",
+                                    }
+                                    if db.save_trade(_bi_rec):
+                                        _bi_n_ok += 1
+                                    else:
+                                        _bi_n_fail += 1
+
+                                if _bi_n_ok > 0:
+                                    st.session_state["trades_df"] = db.load_trades()
+                                    _bi_recalc = db.recalculate_from_trades(
+                                        st.session_state["trades_df"]
+                                    )
+                                    db.save_holdings(_bi_recalc["holdings_df"])
+                                    st.session_state["holdings_df"] = (
+                                        _bi_recalc["holdings_df"]
+                                    )
+                                    _bi_n_corrected = 0
+                                    for _bi_tid, _bi_c in (
+                                        _bi_recalc["realized_pnl_corrections"].items()
+                                    ):
+                                        if db.update_trade_realized_pnl(
+                                            _bi_tid,
+                                            _bi_c["realized_pnl"],
+                                            cost_basis=_bi_c["cost_basis"],
+                                        ):
+                                            _bi_n_corrected += 1
+
+                                    st.session_state.pop("_tj_drift_checked", None)
+                                    st.session_state.pop("_tj_drift_state", None)
+
+                                    st.session_state["_bi_last_result"] = {
+                                        "n_imported":  _bi_n_ok,
+                                        "n_corrected": _bi_n_corrected,
+                                        "warnings":    list(
+                                            _bi_recalc.get("warnings", [])
+                                        )[:5],
+                                        "holdings_df": _bi_recalc["holdings_df"],
+                                    }
+                                    if _bi_n_fail:
+                                        st.warning(
+                                            f"{_bi_n_fail} row(s) failed to save — "
+                                            "see Data Health tab for details."
+                                        )
+                                    st.rerun()
+                                elif not db.has_db():
+                                    st.error(
+                                        "No database connected — can't import. "
+                                        "Check your Supabase secrets / the Data Health tab."
+                                    )
+                                else:
+                                    st.error(
+                                        "Import failed — no trades were saved. "
+                                        "Check the Data Health tab for details."
+                                    )
+
+        # ══════════════════════════════════════════════════════════════════════
+        # TAB 2 — Screenshot import (Robinhood Account → History view)
+        # ══════════════════════════════════════════════════════════════════════
+        with _bi_ss_tab:
+            st.caption(
+                "Upload one or more screenshots of the Robinhood **Account → History** "
+                "page. Claude Vision (Opus 4.8) extracts executed Buy/Sell trades; "
+                "canceled orders are skipped automatically. Tickers are inferred from "
+                "company names — review and correct in the editable preview before importing."
+            )
+
+            # ── Sync watermark ─────────────────────────────────────────────────
+            _ss_watermark = _bscr.last_screenshot_sync_date(
+                st.session_state.get("trades_df")
+            )
+            if _ss_watermark:
+                st.info(
+                    f"📌 **Last screenshot import:** {_ss_watermark.strftime('%b %d, %Y')}  ·  "
+                    "Trades on or before this date are filtered out by default."
+                )
+
+            import datetime as _dt_mod
+            _ss_default_since = (
+                (_ss_watermark + _dt_mod.timedelta(days=1))
+                if _ss_watermark
+                else (_today_et() - _dt_mod.timedelta(days=180))
+            )
+            _ss_since = st.date_input(
+                "Sync since (filter out trades before this date)",
+                value=_ss_default_since,
+                key="_ss_since_date",
+                help=(
+                    "Only trades on or after this date will be shown for import. "
+                    "Set to the day after your last import to avoid re-importing history."
+                ),
+            )
+
+            # ── Image upload ───────────────────────────────────────────────────
+            _ss_files = st.file_uploader(
+                "Robinhood History screenshots",
+                type=["png", "jpg", "jpeg"],
+                accept_multiple_files=True,
+                key="_ss_uploader",
+            )
+
+            # ── Anthropic key check ────────────────────────────────────────────
+            _ss_api_key = (
+                st.secrets.get("anthropic", {}).get("api_key")
+                or st.secrets.get("ANTHROPIC_API_KEY")
+                or os.environ.get("ANTHROPIC_API_KEY", "")
+            )
+
+            if _ss_files:
+                if not _ss_api_key:
+                    st.error(
+                        "Anthropic API key not configured — add it to Streamlit secrets "
+                        "as `[anthropic] api_key = '...'` to enable screenshot extraction."
+                    )
+                else:
+                    if st.button(
+                        f"🔍 Extract trades from {len(_ss_files)} screenshot(s)",
+                        key="_ss_extract_btn",
+                    ):
+                        with st.spinner(
+                            f"Extracting trades from {len(_ss_files)} screenshot(s) "
+                            "using Claude Opus 4.8…"
+                        ):
+                            _ss_images = [f.read() for f in _ss_files]
+                            _ss_parsed = _bscr.parse_robinhood_screenshots(
+                                images=_ss_images,
+                                api_key=_ss_api_key,
+                                model="claude-opus-4-8",
+                                reference_date=_today_et(),
+                            )
+                        st.session_state["_ss_parsed"] = _ss_parsed
+
+            # ── Results (persist across re-renders until a new extract runs) ──
+            _ss_result = st.session_state.get("_ss_parsed")
+            if _ss_result:
+                if _ss_result.get("error") and _ss_result["trades"].empty:
+                    st.error(_ss_result["error"])
+                else:
+                    if _ss_result.get("parse_warnings"):
+                        for _sw in _ss_result["parse_warnings"]:
+                            st.warning(f"⚠ {_sw}")
+
+                    _ss_trades   = _ss_result["trades"]
+                    _ss_skipped  = _ss_result["skipped"]
+                    _ss_invalid  = _ss_result["invalid"]
+                    _ss_low_conf = _ss_result.get("low_confidence_tickers", [])
+
+                    # Apply sync-since filter
+                    if not _ss_trades.empty and _ss_since:
+                        _ss_trades = _ss_trades[
+                            _ss_trades["activity_date"].apply(
+                                lambda d: d is not None and d >= _ss_since
+                            )
+                        ].copy()
+
+                    _ss_n_buy  = int((_ss_trades["action"] == "BUY").sum())  if not _ss_trades.empty else 0
+                    _ss_n_sell = int((_ss_trades["action"] == "SELL").sum()) if not _ss_trades.empty else 0
+                    _ss_n_tot  = _ss_n_buy + _ss_n_sell
+                    _ss_canceled = _ss_skipped.get("Canceled", 0)
+                    st.markdown(
+                        f"**{_ss_n_tot} executed trade{'s' if _ss_n_tot != 1 else ''}** "
+                        f"({_ss_n_buy} Buy / {_ss_n_sell} Sell)  ·  "
+                        f"**{_ss_canceled} canceled orders skipped**  ·  "
+                        f"**{len(_ss_invalid)} invalid rows**"
+                    )
+
+                    if _ss_low_conf:
+                        st.warning(
+                            f"⚠️ **Low-confidence ticker{'s' if len(_ss_low_conf) > 1 else ''}:** "
+                            f"{', '.join(_ss_low_conf)}  —  the Ticker column is editable; "
+                            "correct any misidentified symbols before importing."
+                        )
+
+                    if not _ss_invalid.empty:
+                        with st.expander(
+                            f"⚠️ {len(_ss_invalid)} row(s) excluded — could not parse",
+                            expanded=False,
+                        ):
+                            st.dataframe(_ss_invalid, hide_index=True,
+                                         use_container_width=True)
+
+                    if _ss_trades.empty:
+                        st.info(
+                            "No executable trades found after applying the sync-since filter. "
+                            "Try adjusting the date or uploading additional screenshots."
+                        )
+                    else:
+                        _ss_class = _bimp.classify_against_existing(
+                            _ss_trades,
+                            st.session_state.get("trades_df"),
+                        )
+
+                        _ss_n_new = int(_ss_class["is_new"].sum())
+                        _ss_n_dup = len(_ss_class) - _ss_n_new
+                        st.caption(
+                            f"**{_ss_n_new} new row{'s' if _ss_n_new != 1 else ''} pre-selected**  ·  "
+                            f"{_ss_n_dup} look already recorded (unchecked by default)"
+                        )
+                        if _ss_n_dup:
+                            st.caption(
+                                "ℹ️ Rows matching a trade already in your journal are marked "
+                                "*possible duplicate* and left unchecked. Re-tick only rows "
+                                "that are genuinely a separate fill."
+                            )
+
+                        # Ticker and Date are editable — ticker is Vision-inferred,
+                        # date has no year in the screenshot so user can correct.
+                        _ss_preview = pd.DataFrame({
+                            "Import?": _ss_class["is_new"].tolist(),
+                            "Date":    _ss_class["activity_date"].astype(str),
+                            "Ticker":  _ss_class["ticker"].tolist(),
+                            "Company": _ss_class["company"].tolist(),
+                            "Action":  _ss_class["action"].tolist(),
+                            "Shares":  _ss_class["shares"].tolist(),
+                            "Price":   _ss_class["price"].tolist(),
+                            "Status":  _ss_class["match_reason"].tolist(),
+                        })
+
+                        _ss_edited = st.data_editor(
+                            _ss_preview,
+                            column_config={
+                                "Import?": st.column_config.CheckboxColumn(
+                                    "Import?", default=True
+                                ),
+                                "Date":    st.column_config.TextColumn(
+                                    "Date (YYYY-MM-DD)",
+                                    help="Edit if the inferred year is wrong.",
+                                ),
+                                "Ticker":  st.column_config.TextColumn(
+                                    "Ticker",
+                                    help="Inferred from company name — correct if wrong.",
+                                ),
+                                "Company": st.column_config.TextColumn(
+                                    "Company", disabled=True
+                                ),
+                                "Action":  st.column_config.TextColumn(
+                                    "Action", disabled=True
+                                ),
+                                "Shares":  st.column_config.NumberColumn(
+                                    "Shares", format="%.4g", disabled=True
+                                ),
+                                "Price":   st.column_config.NumberColumn(
+                                    "Price ($)", format="$%.2f", disabled=True
+                                ),
+                                "Status":  st.column_config.TextColumn(
+                                    "Status", disabled=True
+                                ),
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                            key="_ss_editor",
+                        )
+
+                        # In-app-not-in-screenshot: trades in the app within the
+                        # screenshot date range that don't appear in the screenshot.
+                        _ss_dates = _ss_trades["activity_date"].dropna()
+                        if not _ss_dates.empty:
+                            _ss_range_from = _ss_dates.min()
+                            _ss_range_to   = _ss_dates.max()
+                            _ss_app_only = _bscr.find_app_only_in_range(
+                                _ss_trades,
+                                st.session_state.get("trades_df"),
+                                date_from=_ss_range_from,
+                                date_to=_ss_range_to,
+                            )
+                            if not _ss_app_only.empty:
+                                with st.expander(
+                                    f"🔍 {len(_ss_app_only)} trade(s) in app "
+                                    f"({_ss_range_from} → {_ss_range_to}) "
+                                    "not seen in screenshot — review",
+                                    expanded=False,
+                                ):
+                                    st.caption(
+                                        "These trades exist in your journal within the "
+                                        "screenshot's date range but don't appear in the "
+                                        "screenshot. They may be legitimately absent (logged "
+                                        "manually, different account) or could indicate a "
+                                        "discrepancy. No action is taken automatically — "
+                                        "investigate and correct via the Log a Trade form."
+                                    )
+                                    st.dataframe(
+                                        _ss_app_only, hide_index=True,
+                                        use_container_width=True,
+                                    )
+
+                        if st.button(
+                            "📥 Import selected trades",
+                            key="_ss_import_btn",
+                            type="primary",
+                            disabled=st.session_state.get("_readonly", False),
+                            help=(
+                                "Read-only viewer — changes are disabled"
+                                if st.session_state.get("_readonly", False)
+                                else None
+                            ),
+                        ):
+                            _ss_selected = _ss_edited[_ss_edited["Import?"] == True]
+                            if _ss_selected.empty:
+                                st.warning("Nothing selected.")
+                            else:
+                                _ss_sel = _ss_selected.copy()
+                                _ss_sel["_sort_action"] = (
+                                    _ss_sel["Action"] == "SELL"
+                                ).astype(int)
+                                _ss_sel = _ss_sel.sort_values(
+                                    ["Date", "_sort_action"]
+                                )
+
+                                _ss_today_str = _today_et().isoformat()
+                                _ss_n_ok   = 0
+                                _ss_n_fail = 0
+                                for _, _ss_row in _ss_sel.iterrows():
+                                    try:
+                                        _ss_rec = {
+                                            "ticker":       str(_ss_row["Ticker"]).upper().strip(),
+                                            "action":       str(_ss_row["Action"]),
+                                            "shares":       float(_ss_row["Shares"]),
+                                            "price":        float(_ss_row["Price"]),
+                                            "traded_at":    str(_ss_row["Date"]),
+                                            "trigger_type": "MANUAL",
+                                            "notes":        f"RH screenshot {_ss_today_str}",
+                                        }
+                                    except (TypeError, ValueError):
+                                        _ss_n_fail += 1
+                                        continue
+                                    if db.save_trade(_ss_rec):
+                                        _ss_n_ok += 1
+                                    else:
+                                        _ss_n_fail += 1
+
+                                if _ss_n_ok > 0:
+                                    st.session_state["trades_df"] = db.load_trades()
+                                    _ss_recalc = db.recalculate_from_trades(
+                                        st.session_state["trades_df"]
+                                    )
+                                    db.save_holdings(_ss_recalc["holdings_df"])
+                                    st.session_state["holdings_df"] = (
+                                        _ss_recalc["holdings_df"]
+                                    )
+                                    _ss_n_corrected = 0
+                                    for _ss_tid, _ss_c in (
+                                        _ss_recalc["realized_pnl_corrections"].items()
+                                    ):
+                                        if db.update_trade_realized_pnl(
+                                            _ss_tid,
+                                            _ss_c["realized_pnl"],
+                                            cost_basis=_ss_c["cost_basis"],
+                                        ):
+                                            _ss_n_corrected += 1
+
+                                    st.session_state.pop("_tj_drift_checked", None)
+                                    st.session_state.pop("_tj_drift_state", None)
+                                    st.session_state.pop("_ss_parsed", None)
+
+                                    st.session_state["_bi_last_result"] = {
+                                        "n_imported":  _ss_n_ok,
+                                        "n_corrected": _ss_n_corrected,
+                                        "warnings":    list(
+                                            _ss_recalc.get("warnings", [])
+                                        )[:5],
+                                        "holdings_df": _ss_recalc["holdings_df"],
+                                    }
+                                    if _ss_n_fail:
+                                        st.warning(
+                                            f"{_ss_n_fail} row(s) failed to save — "
+                                            "see Data Health tab for details."
+                                        )
+                                    st.rerun()
+                                elif not db.has_db():
+                                    st.error(
+                                        "No database connected — can't import. "
+                                        "Check your Supabase secrets / the Data Health tab."
+                                    )
+                                else:
+                                    st.error(
+                                        "Import failed — no trades were saved. "
+                                        "Check the Data Health tab for details."
+                                    )
 
     if not db.has_db():
         st.info(
