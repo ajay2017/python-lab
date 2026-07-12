@@ -3731,7 +3731,7 @@ if page == "🏠 Home":
     else:
         _c3.metric("Today's P&L (held)", "Updating…", help="Loads with the live price strip")
     _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
-               help=f"{n_danger} danger · {n_warning} warning — check Alerts & Actions tab")
+               help=f"{n_danger} danger · {n_warning} warning — check Risk & Alerts tab")
     _c5.metric("Avg Conviction",   f"{avg_score:.0f}/100")
     _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
                _div_label, delta_color="off")
@@ -3772,2535 +3772,2534 @@ if page == "🏠 Home":
     _db_act_n   = len(_split_def["act"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
-    tab_daily, tab_evening, tab_ov, tab_perf, tab_pnl, tab_act, tab_risk, tab_rs, tab_heat, tab_rank, tab_brief = st.tabs([
-        f"📋 Today's Brief{_db_icon}",
-        "🌙 Evening Debrief",
-        "📊 Overview",
-        "📈 Performance",
-        "💰 P&L Attribution",
-        f"⚠️ Alerts & Actions{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
-        "🔗 Risk Analysis",
-        "📈 Relative Strength",
-        "🔥 Sector Rotation",
-        "🏆 Rankings",
-        "🤖 AI Brief",
-    ])
-
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 0 — DAILY BRIEFING
+    # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
+    # docs/reviews/2026-07-12-UX-review.md finding I1. The "decides, not
+    # informs" operating posture (CLAUDE.md) means this should dominate the
+    # viewport before any tab click, not compete with 10 other topics.
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_daily:
-        from datetime import datetime as _dt
+    st.subheader(f"📋 Today's Brief{_db_icon}")
+    from datetime import datetime as _dt
 
-        # ── Freshness strip — captured-at timestamp + Lock/Unlock control ─────
-        # The Brief is designed for one-time AM decision-making, not a streaming
-        # ticker. Surfacing the build time (and offering a freeze) closes the
-        # "I acted on a card that disappeared 30 min later" trust gap.
-        _b_built_at = st.session_state.get("_brief_built_at")
-        _b_locked   = bool(st.session_state.get("_brief_locked", False))
-        _b_locked_at = st.session_state.get("_brief_locked_at")
-        _b_now_et   = datetime.now(_pytz.timezone("America/New_York"))
+    # ── Freshness strip — captured-at timestamp + Lock/Unlock control ─────
+    # The Brief is designed for one-time AM decision-making, not a streaming
+    # ticker. Surfacing the build time (and offering a freeze) closes the
+    # "I acted on a card that disappeared 30 min later" trust gap.
+    _b_built_at = st.session_state.get("_brief_built_at")
+    _b_locked   = bool(st.session_state.get("_brief_locked", False))
+    _b_locked_at = st.session_state.get("_brief_locked_at")
+    _b_now_et   = datetime.now(_pytz.timezone("America/New_York"))
 
-        def _fmt_et(_d):
-            if _d is None:
-                return "—"
-            try:
-                return _d.strftime("%-I:%M %p ET") if hasattr(_d, "strftime") else "—"
-            except ValueError:
-                # Windows strftime doesn't support %-I; fall back to %I and strip
-                return _d.strftime("%I:%M %p ET").lstrip("0")
+    def _fmt_et(_d):
+        if _d is None:
+            return "—"
+        try:
+            return _d.strftime("%-I:%M %p ET") if hasattr(_d, "strftime") else "—"
+        except ValueError:
+            # Windows strftime doesn't support %-I; fall back to %I and strip
+            return _d.strftime("%I:%M %p ET").lstrip("0")
 
-        def _fmt_age(_d):
-            if _d is None:
-                return ""
-            try:
-                _delta = _b_now_et - _d
-                _mins = int(_delta.total_seconds() // 60)
-                if _mins < 1:
-                    return "just now"
-                if _mins < 60:
-                    return f"{_mins} min ago"
-                _hrs = _mins // 60
-                return f"{_hrs}h {_mins % 60}m ago"
-            except Exception:
-                return ""
+    def _fmt_age(_d):
+        if _d is None:
+            return ""
+        try:
+            _delta = _b_now_et - _d
+            _mins = int(_delta.total_seconds() // 60)
+            if _mins < 1:
+                return "just now"
+            if _mins < 60:
+                return f"{_mins} min ago"
+            _hrs = _mins // 60
+            return f"{_hrs}h {_mins % 60}m ago"
+        except Exception:
+            return ""
 
-        # ── Status bar — built-at chip + refresh controls + lock, single row ──
-        _sb_c1, _sb_c2, _sb_c3, _sb_c4 = st.columns([6, 2, 2, 2])
+    # ── Status bar — built-at chip + refresh controls + lock, single row ──
+    _sb_c1, _sb_c2, _sb_c3, _sb_c4 = st.columns([6, 2, 2, 2])
 
-        # Col 1 — built-at / locked chip (dark-bordered, same style as before)
-        with _sb_c1:
-            if _b_locked and _b_locked_at:
-                st.markdown(
-                    f"<div style='background:#172554;border:1px solid #3b82f6;"
-                    f"border-radius:8px;padding:8px 14px;color:#bfdbfe'>"
-                    f"🔒 <b>Today's Setup Locked</b> at {_fmt_et(_b_locked_at)} "
-                    f"<span style='color:#93c5fd;font-size:0.85em'>({_fmt_age(_b_locked_at)})</span> — "
-                    f"recommendations frozen for the day."
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            elif _b_built_at:
-                try:
-                    _b_age_mins = int((_b_now_et - _b_built_at).total_seconds() // 60)
-                except Exception:
-                    _b_age_mins = 0
-                _b_remaining = max(0, 30 - _b_age_mins)
-                _b_freshness = (
-                    f"auto-refreshes in {_b_remaining} min · or click Refresh Signals"
-                    if _b_remaining > 0 else
-                    "stale · click Refresh Signals to update"
-                )
-                _b_border = "#334155" if _b_remaining > 0 else "#92400e"
-                st.markdown(
-                    f"<div style='background:#0f172a;border:1px solid {_b_border};"
-                    f"border-radius:8px;padding:8px 14px;color:#cbd5e1;font-size:0.92em'>"
-                    f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
-                    f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
-                    f"{_b_freshness}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-        # Col 2 — Refresh macro
-        with _sb_c2:
-            _macro_src = (
-                "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
-                else "Static only (add FRED key in Economic Calendar)"
+    # Col 1 — built-at / locked chip (dark-bordered, same style as before)
+    with _sb_c1:
+        if _b_locked and _b_locked_at:
+            st.markdown(
+                f"<div style='background:#172554;border:1px solid #3b82f6;"
+                f"border-radius:8px;padding:8px 14px;color:#bfdbfe'>"
+                f"🔒 <b>Today's Setup Locked</b> at {_fmt_et(_b_locked_at)} "
+                f"<span style='color:#93c5fd;font-size:0.85em'>({_fmt_age(_b_locked_at)})</span> — "
+                f"recommendations frozen for the day."
+                f"</div>",
+                unsafe_allow_html=True,
             )
+        elif _b_built_at:
+            try:
+                _b_age_mins = int((_b_now_et - _b_built_at).total_seconds() // 60)
+            except Exception:
+                _b_age_mins = 0
+            _b_remaining = max(0, 30 - _b_age_mins)
+            _b_freshness = (
+                f"auto-refreshes in {_b_remaining} min · or click Refresh Signals"
+                if _b_remaining > 0 else
+                "stale · click Refresh Signals to update"
+            )
+            _b_border = "#334155" if _b_remaining > 0 else "#92400e"
+            st.markdown(
+                f"<div style='background:#0f172a;border:1px solid {_b_border};"
+                f"border-radius:8px;padding:8px 14px;color:#cbd5e1;font-size:0.92em'>"
+                f"📌 <b>Built at {_fmt_et(_b_built_at)}</b> "
+                f"<span style='color:#94a3b8'>({_fmt_age(_b_built_at)})</span> · "
+                f"{_b_freshness}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # Col 2 — Refresh macro
+    with _sb_c2:
+        _macro_src = (
+            "FRED live" if any(e.get("source") == "static+fred" for e in (_macro_events or []))
+            else "Static only (add FRED key in Economic Calendar)"
+        )
+        if st.button(
+            "🔄 Refresh macro",
+            key="_refresh_macro_home",
+            help=f"Source: {_macro_src} · cache invalidates at midnight ET. Re-fetch FRED actuals + release dates mid-day when the calendar looks stale.",
+            use_container_width=True,
+        ):
+            _mc_clear_key = f"_macro_cal_{_today_et()}"
+            if _mc_clear_key in st.session_state:
+                del st.session_state[_mc_clear_key]
+            st.session_state["_brief_refresh_nonce"] = \
+                st.session_state.get("_brief_refresh_nonce", 0) + 1
+            st.rerun()
+
+    # Col 3 — Refresh Signals
+    with _sb_c3:
+        _rs_locked, _rs_rem = _refresh_gate("data")
+        # Build dynamic help text from signal-age state
+        if _rs_locked:
+            _rs_help = f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
+        else:
+            _sig_ts = st.session_state.get("_brief_signals_ts")
+            _ssm    = st.session_state.get("_scanner_results_meta") or {}
+            if _sig_ts:
+                _sig_age = int((datetime.now() - _sig_ts).total_seconds())
+                if _sig_age < 60:
+                    _rs_help = f"Signals refreshed {_sig_age}s ago — live prices current."
+                elif _sig_age < 3600:
+                    _rs_help = f"Signals refreshed {_sig_age // 60}m ago. Click to pull latest."
+                else:
+                    _rs_help = f"Signals last refreshed {_sig_age // 3600}h ago — stale, refresh recommended."
+            elif _ssm.get("scan_date") == _today_et().isoformat():
+                _src_phrase = "auto-scan (~10 AM ET)" if _ssm.get("source") == "cron" else "scan"
+                _rs_help = f"Signals from today's {_src_phrase}. Click to re-score on live prices intraday."
+            elif _ssm.get("scan_date"):
+                _rs_help = f"Signals from {_ssm['scan_date']} scan — click to score today's price action."
+            else:
+                _rs_help = "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
+        _do_refresh = st.button(
+            "🔄 Refresh Signals",
+            key="_db_refresh_signals",
+            use_container_width=True,
+            disabled=_rs_locked,
+            help=_rs_help,
+        )
+
+    # Col 4 — Lock Setup / Unlock
+    with _sb_c4:
+        if _b_locked:
             if st.button(
-                "🔄 Refresh macro",
-                key="_refresh_macro_home",
-                help=f"Source: {_macro_src} · cache invalidates at midnight ET. Re-fetch FRED actuals + release dates mid-day when the calendar looks stale.",
+                "🔓 Unlock",
+                key="_brief_unlock_btn",
+                help="Resume live Brief updates. Recommendations will refresh on the next render.",
                 use_container_width=True,
             ):
-                _mc_clear_key = f"_macro_cal_{_today_et()}"
-                if _mc_clear_key in st.session_state:
-                    del st.session_state[_mc_clear_key]
+                st.session_state["_brief_locked"] = False
+                st.session_state.pop("_brief_locked_snapshot", None)
+                st.session_state.pop("_brief_locked_for_date", None)
+                st.session_state.pop("_brief_locked_at", None)
+                st.session_state["_brief_refresh_nonce"] = \
+                    st.session_state.get("_brief_refresh_nonce", 0) + 1
+                st.rerun()
+        else:
+            if st.button(
+                "🔒 Lock Setup",
+                key="_brief_lock_btn",
+                help="Freeze today's recommendations. Lock expires at end of trading day.",
+                use_container_width=True,
+                disabled=_daily_brief is None,
+            ):
+                st.session_state["_brief_locked"]          = True
+                st.session_state["_brief_locked_snapshot"] = _daily_brief
+                st.session_state["_brief_locked_for_date"] = _today_et()
+                st.session_state["_brief_locked_at"]       = _b_now_et
                 st.session_state["_brief_refresh_nonce"] = \
                     st.session_state.get("_brief_refresh_nonce", 0) + 1
                 st.rerun()
 
-        # Col 3 — Refresh Signals
-        with _sb_c3:
-            _rs_locked, _rs_rem = _refresh_gate("data")
-            # Build dynamic help text from signal-age state
-            if _rs_locked:
-                _rs_help = f"Cooling down — available in {_rs_rem}s (shared with Refresh All Data)."
-            else:
-                _sig_ts = st.session_state.get("_brief_signals_ts")
-                _ssm    = st.session_state.get("_scanner_results_meta") or {}
-                if _sig_ts:
-                    _sig_age = int((datetime.now() - _sig_ts).total_seconds())
-                    if _sig_age < 60:
-                        _rs_help = f"Signals refreshed {_sig_age}s ago — live prices current."
-                    elif _sig_age < 3600:
-                        _rs_help = f"Signals refreshed {_sig_age // 60}m ago. Click to pull latest."
-                    else:
-                        _rs_help = f"Signals last refreshed {_sig_age // 3600}h ago — stale, refresh recommended."
-                elif _ssm.get("scan_date") == _today_et().isoformat():
-                    _src_phrase = "auto-scan (~10 AM ET)" if _ssm.get("source") == "cron" else "scan"
-                    _rs_help = f"Signals from today's {_src_phrase}. Click to re-score on live prices intraday."
-                elif _ssm.get("scan_date"):
-                    _rs_help = f"Signals from {_ssm['scan_date']} scan — click to score today's price action."
-                else:
-                    _rs_help = "Re-fetches live prices and re-runs the market scanner. Best used ~15 min after market open."
-            _do_refresh = st.button(
-                "🔄 Refresh Signals",
-                key="_db_refresh_signals",
-                use_container_width=True,
-                disabled=_rs_locked,
-                help=_rs_help,
+    if _do_refresh:
+        _refresh_gate_arm("data")
+        st.cache_data.clear()
+        _wl_for_scan        = st.session_state.get("watchlist", []) or []
+        _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
+        _wl_extras          = [t for t in _wl_for_scan if str(t).upper() not in _universe_tickers]
+        _total_scan_tickers = len(_universe_tickers) + len(_wl_extras)
+        with st.spinner(
+            f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
+        ):
+            _fresh_results = scan_sectors(
+                list(SECTOR_UNIVERSE.keys()),
+                period="6mo",
+                extra_tickers=_wl_for_scan,
             )
-
-        # Col 4 — Lock Setup / Unlock
-        with _sb_c4:
-            if _b_locked:
-                if st.button(
-                    "🔓 Unlock",
-                    key="_brief_unlock_btn",
-                    help="Resume live Brief updates. Recommendations will refresh on the next render.",
-                    use_container_width=True,
+        if not _fresh_results.empty:
+            st.session_state.scanner_results = _fresh_results
+            # New scan → invalidate the Home synthesis cache so the Brief
+            # rebuilds against the fresh scanner results.
+            st.session_state["_scanner_ver"] = \
+                st.session_state.get("_scanner_ver", 0) + 1
+            # Persist (full-universe scan) so the next cold load / session
+            # shows candidates without re-scanning. Mirrors what the cron writes.
+            # (_today_et() already returns a date — no .date().)
+            _today_d = _today_et()
+            db.save_scanner_cache(_fresh_results, _today_d, source="app")
+            st.session_state["_scanner_results_meta"] = {
+                "scan_date": _today_d.isoformat(), "source": "app",
+                "scanned_at": _today_d.isoformat(),
+            }
+            # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
+            # (= 12) non-held scanner picks. Pool size matches _grow_today's
+            # candidate window (max_picks_bull × over-fetch) so every candidate
+            # the Brief considers gets a composite verdict rather than falling
+            # back to "Verify — Run Analysis First."
+            _top_candidates = _fresh_results[
+                ~_fresh_results["Ticker"].isin(set(held_tickers))
+            ].head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
+            _grow_composites: dict = {}
+            if _top_candidates:
+                with st.spinner(
+                    f"Validating top {len(_top_candidates)} picks with full analysis…"
                 ):
-                    st.session_state["_brief_locked"] = False
-                    st.session_state.pop("_brief_locked_snapshot", None)
-                    st.session_state.pop("_brief_locked_for_date", None)
-                    st.session_state.pop("_brief_locked_at", None)
-                    st.session_state["_brief_refresh_nonce"] = \
-                        st.session_state.get("_brief_refresh_nonce", 0) + 1
-                    st.rerun()
-            else:
-                if st.button(
-                    "🔒 Lock Setup",
-                    key="_brief_lock_btn",
-                    help="Freeze today's recommendations. Lock expires at end of trading day.",
-                    use_container_width=True,
-                    disabled=_daily_brief is None,
-                ):
-                    st.session_state["_brief_locked"]          = True
-                    st.session_state["_brief_locked_snapshot"] = _daily_brief
-                    st.session_state["_brief_locked_for_date"] = _today_et()
-                    st.session_state["_brief_locked_at"]       = _b_now_et
-                    st.session_state["_brief_refresh_nonce"] = \
-                        st.session_state.get("_brief_refresh_nonce", 0) + 1
-                    st.rerun()
-
-        if _do_refresh:
-            _refresh_gate_arm("data")
-            st.cache_data.clear()
-            _wl_for_scan        = st.session_state.get("watchlist", []) or []
-            _universe_tickers   = set().union(*SECTOR_UNIVERSE.values())
-            _wl_extras          = [t for t in _wl_for_scan if str(t).upper() not in _universe_tickers]
-            _total_scan_tickers = len(_universe_tickers) + len(_wl_extras)
-            with st.spinner(
-                f"Fetching live prices and scanning {_total_scan_tickers} stocks — ~20 seconds…"
-            ):
-                _fresh_results = scan_sectors(
-                    list(SECTOR_UNIVERSE.keys()),
-                    period="6mo",
-                    extra_tickers=_wl_for_scan,
-                )
-            if not _fresh_results.empty:
-                st.session_state.scanner_results = _fresh_results
-                # New scan → invalidate the Home synthesis cache so the Brief
-                # rebuilds against the fresh scanner results.
-                st.session_state["_scanner_ver"] = \
-                    st.session_state.get("_scanner_ver", 0) + 1
-                # Persist (full-universe scan) so the next cold load / session
-                # shows candidates without re-scanning. Mirrors what the cron writes.
-                # (_today_et() already returns a date — no .date().)
-                _today_d = _today_et()
-                db.save_scanner_cache(_fresh_results, _today_d, source="app")
-                st.session_state["_scanner_results_meta"] = {
-                    "scan_date": _today_d.isoformat(), "source": "app",
-                    "scanned_at": _today_d.isoformat(),
-                }
-                # Pre-fetch full composite analysis for top GROW_CANDIDATE_POOL
-                # (= 12) non-held scanner picks. Pool size matches _grow_today's
-                # candidate window (max_picks_bull × over-fetch) so every candidate
-                # the Brief considers gets a composite verdict rather than falling
-                # back to "Verify — Run Analysis First."
-                _top_candidates = _fresh_results[
-                    ~_fresh_results["Ticker"].isin(set(held_tickers))
-                ].head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
-                _grow_composites: dict = {}
-                if _top_candidates:
-                    with st.spinner(
-                        f"Validating top {len(_top_candidates)} picks with full analysis…"
-                    ):
-                        _gc_results = _parallel_load_all(_top_candidates)
-                        for _tc, _b in _gc_results.items():
-                            if _b is not None:
-                                _grow_composites[_tc] = _b
-                st.session_state._grow_composites    = _grow_composites
-                st.session_state._brief_signals_ts   = datetime.now()
-                st.rerun()
-            else:
-                st.warning("Scanner returned no results — check your connection and try again.")
-
-        # Build act_today lookup once — used by pre-market movers and the main sections below
-        _act_today_map: dict = {
-            str(i["ticker"]).upper(): i
-            for i in _daily_brief.get("act_today", [])
-            if i.get("ticker")
-        }
-
-        # Catalyst Watch moved to its own nav page (🔔 Catalyst Watch) to keep
-        # the Home brief lean — see the `elif page == "🔔 Catalyst Watch"` block.
-
-        # Captured inside the pre-market block below and consumed by the tone-banner
-        # staleness reconciliation: the LIVE futures direction, so a stale "Protect
-        # Mode" tone can note when futures currently disagree. None outside the
-        # pre-market window (NameError-safe — the banner always renders).
-        _pm_futures_tone = None
-        _pm_es_pct = None
-
-        # ── Pre-Market Intel panel (visible 4:00–9:29 AM ET weekdays) ─────────
-        if is_premarket():
-            try:
-                _pm = _get_premarket_brief(
-                    tuple(held_tickers),
-                    tuple(st.session_state.get("watchlist", [])),
-                )
-                # Inject today's HIGH/MEDIUM macro events (already computed above)
-                _pm["events"] = [
-                    e for e in _macro_events
-                    if e.get("date") == _today_et() and e.get("impact") in ("HIGH", "MEDIUM")
-                ]
-
-                # ── Pre-Market Stance (AI narrative + verdict) ────────────
-                # Renders ABOVE the deterministic Pre-Market Intel banner so the
-                # interpretive stance is the first thing the user sees pre-open.
-                # Card hides silently when no Anthropic key is configured —
-                # graceful degradation so the rest of Today's Brief is unaffected.
-                _pms_key = (
-                    st.secrets.get("anthropic", {}).get("api_key")
-                    or st.secrets.get("ANTHROPIC_API_KEY")
-                    or os.environ.get("ANTHROPIC_API_KEY", "")
-                )
-                if _pms_key:
-                    _pms_model     = "claude-haiku-4-5-20251001"
-                    _pms_today_key = str(_today_et())
-                    _pms_cache_key = f"_pm_stance__{_pms_today_key}__{_pms_model}"
-                    _pms_cached    = st.session_state.get(_pms_cache_key)
-
-                    _pms_hc1, _pms_hc2 = st.columns([5, 1])
-                    with _pms_hc1:
-                        st.markdown(
-                            f"<div style='font-size:1.05em;font-weight:700;"
-                            f"color:#f9fafb;margin-top:4px'>"
-                            f"🔭 Pre-Market Stance "
-                            f"<span style='color:#9ca3af;font-size:0.72em;font-weight:400'>"
-                            f"· {_pm['as_of']}</span></div>",
-                            unsafe_allow_html=True,
-                        )
-                    with _pms_hc2:
-                        _pms_refresh = st.button(
-                            "🔄 Refresh",
-                            key="_pms_refresh_btn",
-                            use_container_width=True,
-                            help="Re-runs the AI stance with the latest pre-market data.",
-                        )
-
-                    if _pms_refresh or _pms_cached is None:
-                        with st.spinner("Generating stance narrative…"):
-                            # Pull the current regime from the cached FRED detector
-                            # if a key is available; otherwise skip — the stance
-                            # still has futures / events / portfolio to work with.
-                            _pms_regime = None
-                            try:
-                                _pms_fred_key = (
-                                    st.secrets.get("fred", {}).get("api_key")
-                                    or os.environ.get("FRED_API_KEY", "")
-                                )
-                                if _pms_fred_key:
-                                    _pms_regime = detect_macro_regime_fred(_pms_fred_key)
-                            except Exception:
-                                _pms_regime = None
-
-                            _pms_inputs = pms_assemble_inputs(
-                                premarket_brief = _pm,
-                                regime          = _pms_regime,
-                                port_df         = port_df,
-                                news_headlines  = [
-                                    n.get("headline", "")
-                                    for n in st.session_state.get("_sidebar_news", [])[:5]
-                                    if n.get("headline")
-                                ],
-                            )
-                            _pms_result = pms_generate_stance(
-                                inputs  = _pms_inputs,
-                                api_key = _pms_key,
-                                model   = _pms_model,
-                            )
-                            if _pms_result:
-                                st.session_state[_pms_cache_key] = _pms_result
-                                _pms_cached = _pms_result
-
-                    if _pms_cached:
-                        _stance        = _pms_cached.get("stance", "neutral")
-                        _stance_label  = _pms_cached.get("stance_label", "Neutral at open")
-                        _narrative     = _pms_cached.get("narrative", "")
-                        _stance_color  = {
-                            "defensive":    "#ef4444",
-                            "constructive": "#22c55e",
-                        }.get(_stance, "#f59e0b")
-                        _stance_icon   = {
-                            "defensive":    "🛡️",
-                            "constructive": "🟢",
-                        }.get(_stance, "⚖️")
-                        st.markdown(
-                            f"<div style='background:#0f172a;border:1px solid {_stance_color};"
-                            f"border-left:5px solid {_stance_color};border-radius:8px;"
-                            f"padding:14px 18px;margin-bottom:12px'>"
-                            f"<div style='color:#e5e7eb;font-size:0.95em;line-height:1.55'>"
-                            f"{_narrative}</div>"
-                            f"<div style='margin-top:10px;padding-top:10px;"
-                            f"border-top:1px solid #1f2937'>"
-                            f"<span style='color:{_stance_color};font-weight:800;"
-                            f"letter-spacing:0.05em;text-transform:uppercase;font-size:0.85em'>"
-                            f"{_stance_icon} Stance: {_stance_label}</span>"
-                            f"<span style='color:#6b7280;font-size:0.75em;margin-left:10px'>"
-                            f"Model: {_pms_cached.get('model','?').split('-')[1].title()}</span>"
-                            f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.warning(
-                            "Pre-Market Stance unavailable — Anthropic API call failed. "
-                            "Click 🔄 Refresh to retry or check your key in Streamlit secrets."
-                        )
-
-                _pm_tone  = _pm["tone"]
-                _pm_color = "#14532d" if _pm_tone == "bull" else "#7f1d1d" if _pm_tone == "bear" else "#1c1917"
-                _pm_bdr   = "#22c55e" if _pm_tone == "bull" else "#ef4444" if _pm_tone == "bear" else "#4b5563"
-                _pm_icon  = "📈" if _pm_tone == "bull" else "📉" if _pm_tone == "bear" else "〰️"
-                _pm_label = (
-                    "Futures pointing HIGHER — bullish open expected"  if _pm_tone == "bull" else
-                    "Futures pointing LOWER — cautious open expected"   if _pm_tone == "bear" else
-                    "Futures mixed — direction unclear ahead of open"
-                )
-                es_row  = next((f for f in _pm["futures"] if f["symbol"] == "ES=F"), None)
-                es_str  = f"ES {es_row['chg_pct']:+.2f}%" if es_row else ""
-                # Hand the live futures direction to the tone-banner reconciliation.
-                _pm_futures_tone = _pm_tone
-                _pm_es_pct = es_row["chg_pct"] if es_row else None
-
-                st.markdown(
-                    f"<div style='background:{_pm_color};border:1px solid {_pm_bdr};"
-                    f"border-radius:12px;padding:14px 20px;margin-bottom:10px'>"
-                    f"<div style='display:flex;align-items:center;justify-content:space-between;"
-                    f"flex-wrap:wrap;gap:8px'>"
-                    f"<span style='font-size:1.05em;font-weight:700;color:#f9fafb'>"
-                    f"🌅 Pre-Market Intel</span>"
-                    f"<span style='color:#9ca3af;font-size:0.78em'>{_pm['as_of']}</span>"
-                    f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.85em;margin-top:4px'>"
-                    f"{_pm_icon} {_pm_label}"
-                    + (f" · <b style='color:#f9fafb'>{es_str}</b>" if es_str else "")
-                    + f"</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-                # Row 1: US Futures tiles
-                if _pm["futures"]:
-                    _pm_cols = st.columns(len(_pm["futures"]))
-                    for _pmc, _fut in zip(_pm_cols, _pm["futures"]):
-                        _fc = "#22c55e" if _fut["chg_pct"] >= 0 else "#ef4444"
-                        _pmc.markdown(
-                            f"<div style='background:#111827;border:1px solid #374151;"
-                            f"border-radius:8px;padding:8px 10px;text-align:center'>"
-                            f"<div style='color:#9ca3af;font-size:0.72em'>{_fut['icon']} {_fut['name']}</div>"
-                            f"<div style='color:#f9fafb;font-weight:700'>{_fut['price']:,.0f}</div>"
-                            f"<div style='color:{_fc};font-size:0.85em;font-weight:600'>"
-                            f"{_fut['chg_pct']:+.2f}%</div></div>",
-                            unsafe_allow_html=True,
-                        )
-
-                # Row 2: Global markets + movers + events
-                _pm_left, _pm_right = st.columns([1, 1])
-
-                with _pm_left:
-                    if _pm["global_markets"]:
-                        st.markdown(
-                            "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
-                            "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
-                            "🌍 GLOBAL MARKETS (OVERNIGHT)</div>",
-                            unsafe_allow_html=True,
-                        )
-                        for _gm in _pm["global_markets"]:
-                            _gc = "#22c55e" if _gm["chg_pct"] >= 0 else "#ef4444"
-                            _garrow = "▲" if _gm["chg_pct"] >= 0 else "▼"
-                            st.markdown(
-                                f"<div style='display:flex;justify-content:space-between;"
-                                f"padding:2px 0;font-size:0.82em'>"
-                                f"<span style='color:#d1d5db'>{_gm['flag']} {_gm['name']}</span>"
-                                f"<span style='color:{_gc};font-weight:600'>"
-                                f"{_garrow} {_gm['chg_pct']:+.2f}%</span></div>",
-                                unsafe_allow_html=True,
-                            )
-
-                    if _pm["events"]:
-                        st.markdown(
-                            "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
-                            "letter-spacing:0.06em;margin-top:12px;margin-bottom:4px'>"
-                            "📅 TODAY'S CATALYSTS</div>",
-                            unsafe_allow_html=True,
-                        )
-                        for _ev in _pm["events"][:4]:
-                            _eic = "#ef4444" if _ev.get("impact") == "HIGH" else "#f59e0b"
-                            _etime = _ev.get("time_et", "")
-                            _ename = _ev.get("event", _ev.get("name", ""))
-                            st.markdown(
-                                f"<div style='font-size:0.82em;padding:2px 0'>"
-                                f"<span style='color:{_eic};font-weight:700'>●</span> "
-                                f"<span style='color:#9ca3af'>{_etime} </span>"
-                                f"<span style='color:#d1d5db'>{_ename}</span></div>",
-                                unsafe_allow_html=True,
-                            )
-
-                with _pm_right:
-                    if _pm["movers"]:
-                        st.markdown(
-                            "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
-                            "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
-                            "⚡ PRE-MARKET MOVERS (YOUR STOCKS)</div>",
-                            unsafe_allow_html=True,
-                        )
-                        for _mv in _pm["movers"][:8]:
-                            _mc = "#22c55e" if _mv["chg_pct"] >= 0 else "#ef4444"
-                            _marrow = "▲" if _mv["chg_pct"] >= 0 else "▼"
-                            _mv_ticker = str(_mv["ticker"]).upper()
-                            _mv_act    = _act_today_map.get(_mv_ticker)
-                            _held_badge = (
-                                "<span style='background:#1e3a5f;color:#60a5fa;"
-                                "padding:0 5px;border-radius:4px;font-size:0.7em'>held</span> "
-                                if _mv["is_held"] else ""
-                            )
-                            # Alert badge when Act Today has an action on this mover
-                            _act_badge = ""
-                            _act_tooltip = ""
-                            if _mv_act:
-                                _act_action = str(_mv_act.get("action", ""))
-                                if "SELL" in _act_action or "Stop" in _act_action:
-                                    _act_badge = ("<span style='background:#7f1d1d;color:#fca5a5;"
-                                                  "padding:0 5px;border-radius:4px;font-size:0.7em;"
-                                                  "font-weight:700'>⚠ SELL SIGNAL</span> ")
-                                elif "RISK" in _act_action:
-                                    _act_badge = ("<span style='background:#422006;color:#fcd34d;"
-                                                  "padding:0 5px;border-radius:4px;font-size:0.7em;"
-                                                  "font-weight:700'>⚠ RISK ALERT</span> ")
-                                else:
-                                    _act_badge = ("<span style='background:#1c1917;color:#f59e0b;"
-                                                  "padding:0 5px;border-radius:4px;font-size:0.7em;"
-                                                  "font-weight:700'>⚠ ACT TODAY</span> ")
-                            st.markdown(
-                                f"<div style='display:flex;justify-content:space-between;"
-                                f"align-items:center;padding:3px 0;font-size:0.82em'>"
-                                f"<span style='color:#f9fafb;font-weight:600'>{_mv['ticker']}</span>"
-                                f"<span>{_held_badge}{_act_badge}"
-                                f"<span style='color:#9ca3af;margin-right:6px'>"
-                                f"${_mv['pre_price']:.2f}</span>"
-                                f"<span style='color:{_mc};font-weight:700'>"
-                                f"{_marrow} {_mv['chg_pct']:+.2f}%</span></span></div>",
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        with _pm_right:
-                            st.caption("No significant pre-market moves in your holdings or watchlist yet.")
-
-                st.divider()
-
-            except Exception as _pm_err:
-                st.caption(f"Pre-market data unavailable: {_pm_err}")
-
-        _db_act    = _daily_brief["act_today"]
-        _db_buys   = _daily_brief["buy_candidates"]
-        _db_review = _daily_brief["review_list"]
-        _db_grow   = _daily_brief.get("grow_today", {})
-        _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
-        _db_tone   = _market_context.get("tone", "flat")
-        # F-5: publish market tone so the Trade Journal thesis-draft can add regime
-        # context (best-effort; degrades to no regime if Home hasn't rendered yet).
-        st.session_state["_market_tone_cache"] = _db_tone
-        _db_sp_pct = _market_context.get("sp500_pct", 0.0)
-        _db_nq_pct = _market_context.get("nasdaq_pct", 0.0)
-
-        # ── Briefing header — tone-aware ──────────────────────────────────────
-        _tone_label = (
-            "📈 Growth Mode — Markets Up"   if _db_tone == "bull" else
-            "🛡️ Protect Mode — Markets Down" if _db_tone == "bear" else
-            "📊 Hold Steady — Mixed Market"
-        )
-        _tone_color = "#14532d" if _db_tone == "bull" else "#7f1d1d" if _db_tone == "bear" else "#1c1917"
-        _tone_bdr   = "#22c55e" if _db_tone == "bull" else "#ef4444" if _db_tone == "bear" else "#4b5563"
-        _sp_str     = f"S&P 500 {_db_sp_pct:+.2f}%"
-        _nq_str     = f"Nasdaq {_db_nq_pct:+.2f}%"
-        _lead_str   = (
-            " · Leading: " + ", ".join(
-                f"{ls['sector']} ({ls['return_1w']:+.1f}% 1W)"
-                for ls in _market_context.get("leading_sectors", [])[:2]
-            ) if _market_context.get("leading_sectors") else ""
-        )
-        # Compute last trading day for the date label when market is closed
-        from datetime import timedelta as _dbtd
-        _db_now_et  = _dt.now(_pytz.timezone("America/New_York"))
-        _db_weekday = _db_now_et.weekday()
-        _db_hour_et = _db_now_et.hour + _db_now_et.minute / 60
-        if _db_weekday >= 5:
-            _db_last_close = _today_et() - _dbtd(days=_db_weekday - 4)
-        elif _db_hour_et < 9.5:
-            _db_lc = _today_et() - _dbtd(days=1)
-            while _db_lc.weekday() >= 5:
-                _db_lc -= _dbtd(days=1)
-            _db_last_close = _db_lc
+                    _gc_results = _parallel_load_all(_top_candidates)
+                    for _tc, _b in _gc_results.items():
+                        if _b is not None:
+                            _grow_composites[_tc] = _b
+            st.session_state._grow_composites    = _grow_composites
+            st.session_state._brief_signals_ts   = datetime.now()
+            st.rerun()
         else:
-            _db_last_close = _today_et()
-        _db_date_str = _today_et().strftime("%A, %B %d %Y")
-        if not mkt["is_open"] and _db_last_close != _today_et():
-            _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
+            st.warning("Scanner returned no results — check your connection and try again.")
 
-        # Tone-staleness reconciliation (annotate, NEVER flip): pre-market, the tone
-        # reflects the LAST close while futures are live and can disagree. A red
-        # "Protect Mode" sitting above green live futures is misleading. Note the
-        # mismatch only — futures ≠ the open, so we never let them change the tone /
-        # gates / recommendations. Material direction mismatch only (reuses
-        # futures_tone's own bull/bear classification — no new threshold).
-        _tone_reconcile = ""
-        _tone_is_stale = (not mkt["is_open"]) and (_db_last_close != _today_et())
-        if _tone_is_stale and _pm_futures_tone in ("bull", "bear"):
-            if (_db_tone == "bear" and _pm_futures_tone == "bull") or \
-               (_db_tone == "bull" and _pm_futures_tone == "bear"):
-                _rec_dir = "higher" if _pm_futures_tone == "bull" else "lower"
-                _rec_es  = f" (ES {_pm_es_pct:+.2f}%)" if _pm_es_pct is not None else ""
-                _tone_reconcile = (
-                    f"Reflects {_db_last_close.strftime('%a %b %d')} close — live futures "
-                    f"currently {_rec_dir}{_rec_es}; refresh after the open for today's read."
-                )
+    # Build act_today lookup once — used by pre-market movers and the main sections below
+    _act_today_map: dict = {
+        str(i["ticker"]).upper(): i
+        for i in _daily_brief.get("act_today", [])
+        if i.get("ticker")
+    }
 
-        # ── Market tone · fragility · action summary — three chips ────────────
-        _tone_col, _frag_col, _act_col = st.columns([5, 5, 3])
-        with _tone_col:
-            st.markdown(
-                f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
-                f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:165px'>"
-                f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
-                f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
-                f"{_tone_label}</span>"
-                f"<span style='color:#9ca3af;font-size:0.8em'>"
-                f"{_db_date_str}</span>"
-                f"</div>"
-                f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
-                f"{_sp_str} · {_nq_str}{_lead_str}</div>"
-                + (f"<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
-                   f"border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
-                   f"⚠️ {_tone_reconcile}</div>" if _tone_reconcile else "")
-                + f"</div>",
-                unsafe_allow_html=True,
+    # Catalyst Watch moved to its own nav page (🔔 Catalyst Watch) to keep
+    # the Home brief lean — see the `elif page == "🔔 Catalyst Watch"` block.
+
+    # Captured inside the pre-market block below and consumed by the tone-banner
+    # staleness reconciliation: the LIVE futures direction, so a stale "Protect
+    # Mode" tone can note when futures currently disagree. None outside the
+    # pre-market window (NameError-safe — the banner always renders).
+    _pm_futures_tone = None
+    _pm_es_pct = None
+
+    # ── Pre-Market Intel panel (visible 4:00–9:29 AM ET weekdays) ─────────
+    if is_premarket():
+        try:
+            _pm = _get_premarket_brief(
+                tuple(held_tickers),
+                tuple(st.session_state.get("watchlist", [])),
             )
+            # Inject today's HIGH/MEDIUM macro events (already computed above)
+            _pm["events"] = [
+                e for e in _macro_events
+                if e.get("date") == _today_et() and e.get("impact") in ("HIGH", "MEDIUM")
+            ]
 
-        # Fragility gauge — wrapped in a bordered container so it matches the chip style
-        with _frag_col:
-            with st.container(border=True):
-                _frag = st.session_state.get("_fragility_cache")
-                if _frag:
-                    _fg_sev       = _frag["severity"]
-                    _fg_icon      = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
-                    _fg_lead      = {
-                        "calm":    "Your book moves roughly with the market.",
-                        "caution": "Your book is more volatile than the market.",
-                        "fragile": "Your book is fragile to a pullback.",
-                    }[_fg_sev]
-                    _fg_bar_color = {"calm": "#22c55e", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
-                    _fg_why       = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
-                    _fg_mult_val  = _frag.get("mult") or 1.0
-                    _fg_left, _fg_right = st.columns([2, 3])
-                    with _fg_left:
-                        _fg_fig = go.Figure(go.Indicator(
-                            mode="gauge+number",
-                            value=_fg_mult_val,
-                            number={"suffix": "×", "font": {"size": 26, "color": "#f0f2f5"}},
-                            title={"text": ""},
-                            gauge={
-                                "axis": {
-                                    "range": [0, 3],
-                                    "tickvals": [0, 1, 2, 3],
-                                    "ticktext": ["0", "1×", "2×", "3×"],
-                                    "tickwidth": 1, "tickcolor": "#4b5563",
-                                    "tickfont": {"size": 9, "color": "#6b7280"},
-                                },
-                                "bar": {"color": _fg_bar_color, "thickness": 0.28},
-                                "bgcolor": "rgba(0,0,0,0)",
-                                "borderwidth": 0,
-                                "steps": [
-                                    {"range": [0, PORTFOLIO_BETA_ELEVATED],
-                                     "color": "rgba(34,197,94,0.10)"},
-                                    {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
-                                     "color": "rgba(245,158,11,0.14)"},
-                                    {"range": [PORTFOLIO_BETA_CEILING, 3],
-                                     "color": "rgba(239,68,68,0.10)"},
-                                ],
-                                "threshold": {
-                                    "line": {"color": "#6b7280", "width": 1},
-                                    "thickness": 0.75, "value": 1.0,
-                                },
-                            },
-                        ))
-                        _fg_fig.update_layout(
-                            height=130, margin={"l": 5, "r": 5, "t": 10, "b": 0},
-                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        )
-                        st.plotly_chart(_fg_fig, use_container_width=True,
-                                        config={"displayModeBar": False})
-                    with _fg_right:
-                        _hb = st.session_state.get("_highbeta_share")
-                        _hb_warn  = (_hb is not None and _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN)
-                        _hb_color = "#f59e0b" if _hb_warn else "#6b7280"
-                        _hb_line  = (
-                            f"<div style='color:{_hb_color};font-size:0.75em;margin-top:8px'>"
-                            f"🔗 <b>{_hb:.0f}%</b> in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
-                            + (" — correlated on risk-off days." if _hb_warn else " — moderate.")
-                            + "</div>"
-                        ) if (_hb is not None and _hb > 0) else ""
-                        st.markdown(
-                            f"<div style='padding-top:24px'>"
-                            f"<div style='color:#9ca3af;font-size:0.85em'>"
-                            f"{_fg_icon} {_fg_lead}</div>"
-                            f"<div style='color:#d1d5db;font-size:0.80em;margin-top:8px'>"
-                            f"A {abs(_frag['pullback_pct']):.0f}% pullback → "
-                            f"~<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
-                            + _hb_line +
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-                elif not port_df.empty:
-                    # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
-                    # computed — say so rather than imply zero exposure. Matches the
-                    # fundamentals-gate "withhold with a visible reason" precedent.
+            # ── Pre-Market Stance (AI narrative + verdict) ────────────
+            # Renders ABOVE the deterministic Pre-Market Intel banner so the
+            # interpretive stance is the first thing the user sees pre-open.
+            # Card hides silently when no Anthropic key is configured —
+            # graceful degradation so the rest of Today's Brief is unaffected.
+            _pms_key = (
+                st.secrets.get("anthropic", {}).get("api_key")
+                or st.secrets.get("ANTHROPIC_API_KEY")
+                or os.environ.get("ANTHROPIC_API_KEY", "")
+            )
+            if _pms_key:
+                _pms_model     = "claude-haiku-4-5-20251001"
+                _pms_today_key = str(_today_et())
+                _pms_cache_key = f"_pm_stance__{_pms_today_key}__{_pms_model}"
+                _pms_cached    = st.session_state.get(_pms_cache_key)
+
+                _pms_hc1, _pms_hc2 = st.columns([5, 1])
+                with _pms_hc1:
                     st.markdown(
-                        "<div style='background:#1c1917;border:1px solid #4b5563;"
-                        "border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px;"
-                        "color:#9ca3af;font-size:0.8em'>"
-                        "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
-                        "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                        f"<div style='font-size:1.05em;font-weight:700;"
+                        f"color:#f9fafb;margin-top:4px'>"
+                        f"🔭 Pre-Market Stance "
+                        f"<span style='color:#9ca3af;font-size:0.72em;font-weight:400'>"
+                        f"· {_pm['as_of']}</span></div>",
                         unsafe_allow_html=True,
                     )
-
-        # Action summary chip — counts moved out of the tone chip
-        with _act_col:
-            # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
-            # the defensive column below — never the raw act_today/review_list lists —
-            # so the chip can't contradict the section headers.
-            _act_n      = len(_split_def["act"])
-            _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
-            _review_n   = len(_split_def["aware"])
-            _tuneup_n   = len(_db_tuneup)
-            _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
-            _act_border = "#ef4444" if _act_n > 0 else "#334155"
-            st.markdown(
-                f"<div style='background:{_act_color};border:1px solid {_act_border};"
-                f"border-radius:12px;padding:14px 20px;min-height:165px'>"
-                f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
-                f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
-                f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
-                f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} urgent action{'s' if _act_n != 1 else ''}<br>"
-                f"🟢 {_grow_n} growth setup{'s' if _grow_n != 1 else ''}<br>"
-                f"🟡 {_review_n} to review<br>"
-                f"🔧 {_tuneup_n} to tune up"
-                f"</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-        # Cross-asset macro note — shown when ≥ CROSS_ASSET_STRESS_BRIEF_SCORE signals are stressed
-        from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
-        _ca_brief = _cached_cross_asset()
-        if _ca_brief.get("score", 0) >= _CA_BRIEF_MIN:
-            st.info(
-                f"📡 **Cross-asset:** {_ca_brief['summary']} "
-                f"Check the **🔗 Risk Analysis** tab for the full breakdown.",
-                icon=None,
-            )
-        elif _ca_brief.get("label") == "—":
-            # Total cross-asset outage: the module returns label "—" (never a
-            # fabricated "Calm") precisely so blind ≠ calm. Echo that quietly on
-            # the Brief so a silent card isn't read as a macro all-clear.
-            st.caption(
-                "📡 Cross-asset macro signals are offline (market data unavailable) — "
-                "no stress read this run."
-            )
-
-        # ── Quick Research — label · input · button on one row ────────────────
-        # Collapsed from a header banner + caption + input row down to a single
-        # row. The dropped caption ("instant actionable summary") now lives in the
-        # button tooltip; the placeholder already carries the "any ticker" hint.
-        _qr_lbl, _qr_ic1, _qr_ic2 = st.columns([2, 6, 1.3])
-        with _qr_lbl:
-            st.markdown(
-                "<div style='padding-top:8px;color:#f9fafb;font-size:0.95em;"
-                "font-weight:700;white-space:nowrap'>🔍 Research a Stock</div>",
-                unsafe_allow_html=True,
-            )
-        with _qr_ic1:
-            _qr_ticker_in = st.text_input(
-                "ticker", key="_qr_ticker_input",
-                placeholder="e.g. RKLB, TSLA, AAPL  — any ticker you've seen in the news",
-                label_visibility="collapsed",
-            )
-        with _qr_ic2:
-            _qr_btn = st.button(
-                "Research →", key="_qr_btn", use_container_width=True,
-                help="Enter any ticker for an instant actionable summary — spot a news catalyst fast.",
-            )
-
-        if _qr_btn and _qr_ticker_in.strip():
-            _t = _qr_ticker_in.strip().upper()
-            with st.spinner(f"Analyzing {_t}..."):
-                try:
-                    _qr_raw = load_all(_t)
-                    # Build portfolio context so the 5th bullet is portfolio-aware
-                    _qr_held_row = port_df[port_df["Ticker"] == _t]
-                    _qr_is_held  = not _qr_held_row.empty
-                    _qr_sector   = _qr_raw.get("sector", "")
-                    # Concentration gate basis (equity, 2026-07-09 — reqs G-19):
-                    # sum the Gate Weight (%) column (== equity Weight) so the entry
-                    # caution matches the hard gate.
-                    _qr_gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
-                    _qr_sec_wt   = (
-                        float(port_df[port_df["Sector"] == _qr_sector][_qr_gcol].sum())
-                        if _qr_sector else 0.0
-                    )
-                    # Sector-level Act Today awareness — when the user asks about
-                    # a ticker in a sector where OTHER positions are flagged for
-                    # action, that signals sector stress even if THIS ticker
-                    # looks individually fine. Tells the user to wait for the
-                    # broader sector picture to stabilise before adding.
-                    _qr_sector_acts = []
-                    if _qr_sector:
-                        _qr_held_tickers_in_sec = set(
-                            port_df[port_df["Sector"] == _qr_sector]["Ticker"].tolist()
-                        )
-                        _qr_sector_acts = [
-                            a for a in _daily_brief.get("act_today", [])
-                            if a.get("ticker") and a["ticker"] in _qr_held_tickers_in_sec
-                            and a["ticker"] != _t
-                        ]
-                    _qr_ctx = {
-                        "held":              _qr_is_held,
-                        "held_shares":       float(_qr_held_row["Shares"].iloc[0])   if _qr_is_held else None,
-                        "held_avg_cost":     float(_qr_held_row["Avg Cost"].iloc[0]) if _qr_is_held else None,
-                        "held_pnl_pct":      float(_qr_held_row["P&L (%)"].iloc[0])  if _qr_is_held else None,
-                        "held_signal":       str(_qr_held_row["Signal"].iloc[0])     if _qr_is_held else None,
-                        "sector_of_ticker":  _qr_sector,
-                        "sector_weight_pct": _qr_sec_wt,
-                        "portfolio_beta":    _port_risk.get("beta"),
-                        "ticker_beta":       (_qr_raw.get("risk_metrics") or {}).get("beta"),
-                        "act_today_flags":   [a for a in _daily_brief.get("act_today", [])
-                                              if a.get("ticker") == _t],
-                        "sector_act_today":  _qr_sector_acts,
-                    }
-                    st.session_state["_qr_result"] = _qr_research(_t, _qr_raw, portfolio_ctx=_qr_ctx)
-                except Exception as _qr_e:
-                    st.session_state["_qr_result"] = {"error": str(_qr_e), "ticker": _t}
-
-        _qr_res = st.session_state.get("_qr_result")
-        if _qr_res:
-            if "error" in _qr_res:
-                st.error(f"Could not load data for {_qr_res['ticker']}: {_qr_res['error']}")
-            else:
-                _qr_e = _qr_res["entry"]
-                # Header strip: ticker | name | sector | price | entry verdict badge
-                # Composite chip shows "{score}/100" only when the verdict is real;
-                # a withheld verdict (fundamentals missing) carries score=None so the
-                # chip reads "🚫 Verdict withheld" with no fabricated number (§9 P1).
-                _qr_score_sfx = (
-                    f" {_qr_res['score']:.0f}/100" if _qr_res.get("score") is not None else ""
-                )
-                st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
-                    f"border-top:1px solid #374151;padding-top:10px;margin-top:4px'>"
-                    f"<span style='color:#fbbf24;font-size:1em;font-weight:700'>{_qr_res['ticker']}</span>"
-                    + (f"<span style='color:#d1d5db;font-size:0.85em'>{_qr_res['name']}</span>"
-                       if _qr_res.get("name") and _qr_res["name"] != _qr_res["ticker"] else "")
-                    + (f"<span style='color:#9ca3af;font-size:0.8em'>{_qr_res['sector']}</span>"
-                       if _qr_res.get("sector") else "")
-                    + (f"<span style='color:#f9fafb;font-size:0.9em'>${_qr_res['price']:.2f}</span>"
-                       if _qr_res.get("price") else "")
-                    + f"<span style='background:{_qr_e['color']}22;border:1px solid {_qr_e['color']};"
-                    f"color:{_qr_e['color']};padding:2px 10px;border-radius:10px;"
-                    f"font-size:0.78em;font-weight:700'>{_qr_e['icon']} {_qr_e['label']}</span>"
-                    f"<span style='background:{_qr_res['signal_color']}22;border:1px solid {_qr_res['signal_color']};"
-                    f"color:{_qr_res['signal_color']};padding:2px 10px;border-radius:10px;"
-                    f"font-size:0.78em;font-weight:700'>{_qr_res['signal_icon']} {_qr_res['signal']}{_qr_score_sfx}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                # 4-bullet actionable summary
-                for _qr_b in _qr_res["bullets"]:
-                    st.markdown(f"- {_qr_b}")
-                # Recent headlines (top 3)
-                if _qr_res.get("headlines"):
-                    st.markdown(
-                        "<div style='color:#6b7280;font-size:0.8em;margin-top:4px'>"
-                        "<strong style='color:#9ca3af'>Recent headlines:</strong></div>",
-                        unsafe_allow_html=True,
-                    )
-                    for _qr_h in _qr_res["headlines"][:3]:
-                        _qr_dot = (
-                            "🟢" if _qr_h.get("label") == "Positive" else
-                            "🔴" if _qr_h.get("label") == "Negative" else "⚪"
-                        )
-                        _qr_link = _safe_link(
-                            _qr_h.get("url", ""),
-                            _qr_h.get("headline", ""),
-                            max_len=200,
-                            style="color:#60a5fa",
-                        )
-                        st.markdown(
-                            f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
-                            f"{_qr_dot} {_qr_link}</div>",
-                            unsafe_allow_html=True,
-                        )
-                # Action buttons
-                _qr_bc1, _qr_bc2 = st.columns([3, 1])
-                with _qr_bc1:
-                    if st.button(f"▶ Analyze {_qr_res['ticker']}", key="_qr_full_btn"):
-                        st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _qr_res["ticker"]
-                        st.session_state["_nav_origin"]      = "📋 Today's Brief"
-                        st.rerun()
-                with _qr_bc2:
-                    if st.button("✕ Clear", key="_qr_clear_btn"):
-                        del st.session_state["_qr_result"]
-                        st.rerun()
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # ── Grow Today (before Act Today on bull days, after on bear/flat) ────
-        def _fmt_first_seen(ts_val) -> str:
-            """Render '_first_seen_at' from the recommendations log as a small
-            'Recommended HH:MM ET' chip. Returns empty string when no value
-            is present (e.g. logging table not yet provisioned)."""
-            if not ts_val:
-                return ""
-            try:
-                _dt = pd.to_datetime(ts_val, utc=True, errors="coerce")
-                if pd.isna(_dt):
-                    return ""
-                _et = _dt.tz_convert("America/New_York")
-                return _et.strftime("%-I:%M %p ET").lstrip("0") if hasattr(_et, "strftime") else ""
-            except Exception:
-                try:
-                    # Windows strftime doesn't support %-I; fall back to %I and strip
-                    _et = pd.to_datetime(ts_val, utc=True).tz_convert("America/New_York")
-                    return _et.strftime("%I:%M %p ET").lstrip("0")
-                except Exception:
-                    return ""
-
-        def _render_grow_today(grow: dict, tone: str):
-            if not grow:
-                return
-            new_picks    = grow.get("new_picks", [])
-            add_pos      = grow.get("add_positions", [])
-            deploy_note  = grow.get("deploy_note")
-            bear_msg     = grow.get("message")
-            lead_secs_ui = grow.get("leading_sectors", [])
-            risk_banner  = grow.get("risk_banner")
-            blocked_adds  = grow.get("risk_blocked_adds", [])
-            conc_blocked  = grow.get("concentration_blocked_adds", [])
-            sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
-            cooldown_adds = grow.get("cooldown_adds", [])
-            macro_blocked = grow.get("macro_blocked_picks", [])
-            comp_skipped  = grow.get("composite_skipped", [])
-            comp_unavail  = grow.get("composite_unavailable", [])
-
-            _g_label = (
-                "📈 Grow Today"      if tone == "bull" else
-                "🛡️ Defer New Entries" if tone == "bear" else
-                "📈 High-Conviction Entries Only"
-            )
-            _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
-            _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
-            _g_count = f" ({len(new_picks) + len(add_pos)} setups)" if (new_picks or add_pos) else ""
-
-            st.markdown(
-                f"<div style='background:{_g_bg};border-left:4px solid {_g_bdr};"
-                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_g_label}{_g_count}</span>"
-                + (f"<span style='color:#86efac;font-size:0.82em;margin-left:8px'>"
-                   f"Sector leaders: {', '.join(ls['sector'] for ls in lead_secs_ui[:2])}</span>"
-                   if lead_secs_ui and tone == "bull" else "")
-                + (f"<div style='color:#86efac;font-size:0.78em;margin-top:4px'>"
-                   f"Cleared all 5 portfolio checks — vetted for entry.</div>"
-                   if tone != "bear" else "")
-                + f"</div>",
-                unsafe_allow_html=True,
-            )
-
-            if bear_msg:
-                st.caption(f"🛡️ {bear_msg}")
-                return
-
-
-            # Reach line: make the screening funnel visible — the brief draws
-            # from the curated SECTOR_UNIVERSE + watchlist + the broad discovery
-            # universe (movers pass), but only the finalists get composite-scored.
-            # Without this the user can't tell the engine looks beyond the
-            # ~70 curated names. Read-only; reflects what actually ran this session.
-            _sr_reach = st.session_state.get("scanner_results")
-            if _sr_reach is not None and not _sr_reach.empty:
-                _tracked_set = set().union(*SECTOR_UNIVERSE.values())
-                _tracked_n   = len(_tracked_set)
-                _wl_reach    = st.session_state.get("watchlist", []) or []
-                _wl_extra_n  = len([t for t in _wl_reach if str(t).upper() not in _tracked_set])
-                _disc_extra_n = len(discovery_tickers(exclude=_tracked_set))
-                _movers_ran  = "_movers_candidates" in st.session_state
-                _cov         = st.session_state.get("_grow_composites_coverage") or {}
-                _finalists_n = len(_cov.get("intended", []) or [])
-
-                _reach_parts = [f"{_tracked_n} tracked"]
-                if _wl_extra_n:
-                    _reach_parts.append(f"{_wl_extra_n} watchlist-only")
-                if _movers_ran:
-                    _reach_parts.append(f"{_disc_extra_n} discovery")
-                _reach_src = " + ".join(_reach_parts)
-                if _finalists_n:
-                    st.caption(
-                        f"🔭 Screened {_reach_src} names → "
-                        f"{_finalists_n} reached full composite scoring."
-                    )
-                else:
-                    st.caption(f"🔭 Screened {_reach_src} names — run Refresh Signals for a fresh pass.")
-
-                # ── Reach-funnel Sankey — the SAME real numbers drawn to scale ──
-                # universe → reached composite scoring → New Positions to Initiate.
-                # Pure subtraction off the reach counts above, so it ALWAYS balances
-                # and never fabricates: "not scored" = universe − scored; the scored
-                # split = picks + below-buy-bar + other-filters (residual).
-                _fn_universe = _tracked_n + _wl_extra_n + (_disc_extra_n if _movers_ran else 0)
-                _fn_scored   = _finalists_n
-                _fn_picks    = len(new_picks)
-                if _fn_scored > 0 and _fn_universe >= _fn_scored >= _fn_picks:
-                    with st.expander("🔎 How today's screen funnelled down to picks", expanded=True):
-                        _fn_notscored = _fn_universe - _fn_scored
-                        _fn_belowbar  = min(len(comp_skipped), _fn_scored - _fn_picks)
-                        _fn_other     = (_fn_scored - _fn_picks) - _fn_belowbar
-                        _fn_labels = [
-                            f"Screened ({_fn_universe})",
-                            f"Reached composite scoring ({_fn_scored})",
-                            f"Not scored this pass ({_fn_notscored})",
-                            f"✅ New Positions to Initiate ({_fn_picks})",
-                            f"Composite below Buy bar ({_fn_belowbar})",
-                            f"Other filters ({_fn_other})",
-                        ]
-                        _fn_ncolor = ["#60a5fa", "#38bdf8", "#475569", "#22c55e", "#f59e0b", "#64748b"]
-                        _fn_links = [
-                            (0, 1, _fn_scored,    "rgba(56,189,248,0.45)"),
-                            (0, 2, _fn_notscored, "rgba(71,85,105,0.25)"),
-                            (1, 3, _fn_picks,     "rgba(34,197,94,0.5)"),
-                            (1, 4, _fn_belowbar,  "rgba(245,158,11,0.35)"),
-                            (1, 5, _fn_other,     "rgba(100,116,139,0.3)"),
-                        ]
-                        _fn_links = [(s, t, v, c) for (s, t, v, c) in _fn_links if v > 0]
-                        if _fn_links:
-                            _fs, _ft, _fv, _fc = zip(*_fn_links)
-                            _fn_fig = go.Figure(go.Sankey(
-                                arrangement="snap",
-                                node=dict(
-                                    # pad is generous on purpose: the funnel is
-                                    # heavily value-skewed (e.g. 206 not-scored vs
-                                    # a 12-name scored band), so the terminal nodes
-                                    # collapse to a few px and their labels collide.
-                                    # A large gap separates the labels while band
-                                    # WIDTHS stay drawn-to-scale (thickness=value).
-                                    label=_fn_labels, color=_fn_ncolor, pad=34, thickness=14,
-                                    line=dict(color="rgba(255,255,255,0.08)", width=0.5),
-                                ),
-                                link=dict(source=list(_fs), target=list(_ft),
-                                          value=list(_fv), color=list(_fc)),
-                            ))
-                            _fn_fig.update_layout(
-                                # l/r margins give the right-edge node labels room
-                                # so they never clip the container.
-                                height=280, margin=dict(l=8, r=8, t=10, b=6),
-                                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
-                                font=dict(size=11, color="#cbd5e1"),
-                            )
-                            st.plotly_chart(_fn_fig, use_container_width=True)
-                            st.caption(
-                                f"The funnel above, drawn to scale. Of **{_fn_universe}** names "
-                                f"screened, **{_fn_scored}** reached full composite scoring and "
-                                f"**{_fn_picks}** cleared every gate into New Positions to Initiate. "
-                                f"**Other filters** = scored names dropped for sector-cap / macro / "
-                                f"data / flat-day caution (the banners below name the specifics). "
-                                f"Every band is a real count — pure subtraction, nothing fabricated."
-                            )
-
-            # Composite-fetch failure banner — picks where load_all() couldn't
-            # fetch composite data (yfinance transient errors, etc) are held
-            # OUT of new_picks entirely (see daily_briefing.composite_unavailable).
-            # We surface them here as one aggregate notice with a Refresh button
-            # rather than as half-validated cards inside the actionable list.
-            # The "decides, not informs" posture: we don't recommend what we
-            # can't validate. The user gets one obvious recovery action.
-            if comp_unavail:
-                _unavail_tickers = [p.get("ticker", "") for p in comp_unavail]
-                _bn_c1, _bn_c2 = st.columns([5, 1])
-                with _bn_c1:
-                    st.markdown(
-                        "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
-                        "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
-                        f"<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                        f"🔍 Couldn't score {len(comp_unavail)} candidate"
-                        f"{'s' if len(comp_unavail) != 1 else ''} — data source returned an error</div>"
-                        f"<div style='color:#fcd34d;font-size:0.78em'>"
-                        f"Affected: <b>{', '.join(_unavail_tickers[:5])}</b>"
-                        + (f" (+{len(_unavail_tickers)-5} more)" if len(_unavail_tickers) > 5 else "")
-                        + "</div>"
-                        "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
-                        "Set aside until data loads — momentum alone isn't enough to recommend. "
-                        "Click Retry to try the data fetch again."
-                        "</div></div>",
-                        unsafe_allow_html=True,
-                    )
-                with _bn_c2:
-                    _rg_locked, _rg_rem = _refresh_gate("data")
-                    if st.button("🔁 Retry", key="_db_grow_retry_comp",
-                                 disabled=_rg_locked,
-                                 help=(f"Cooling down — available in {_rg_rem}s."
-                                       if _rg_locked else
-                                       "Clear cache and re-fetch composite data for the affected tickers")):
-                        _refresh_gate_arm("data")
-                        st.cache_data.clear()
-                        st.session_state.pop("_grow_composites", None)
-                        st.session_state.pop("_grow_composites_coverage", None)
-                        st.rerun()
-
-            # Risk banner: shown when Act Today has active portfolio risk flags
-            if risk_banner:
-                st.markdown(
-                    "<div style='background:#422006;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    "⚠️ Active Risk Alerts — resolve Act Today before deploying new capital</div>"
-                    + "".join(
-                        f"<div style='color:#fcd34d;font-size:0.79em'>• {flag}</div>"
-                        for flag in risk_banner
-                    )
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-
-            if not new_picks and not add_pos:
-                # No actionable setups — show the empty-state message, but
-                # DON'T early-return. Filtered-out / macro-blocked candidates
-                # are still rendered below so the user understands WHY there
-                # are no recommendations today (composite said no, sector had
-                # a macro event, etc.) rather than wondering "did anything
-                # even get screened?"
-                #
-                # Make the funnel explicit: "of X scanned, Y rejected, Z
-                # couldn't be scored" — without this, the unverified banner
-                # above and the empty-state message below look contradictory
-                # (banner says "2 candidates...", body says "no setups",
-                # and the user has no way to know those are different things).
-                _comp_cov     = st.session_state.get("_grow_composites_coverage") or {}
-                _scanned_n    = len(_comp_cov.get("intended", []) or [])
-                # Keep these SEPARATE. composite_skipped = reached full scoring but
-                # fell below the Buy bar (a merit rejection). macro_blocked = MET
-                # the criteria (often top momentum) but were suppressed ONLY for an
-                # imminent macro event — they get their own detailed block below.
-                # Lumping the two as "didn't meet criteria" both mislabelled the
-                # macro picks (a score-100 name did NOT fail on merit) and broke
-                # the arithmetic (the combined count could exceed the count
-                # actually evaluated, e.g. "of 12 evaluated, 16 didn't meet…").
-                _belowbar_n   = len(comp_skipped)
-                _macro_n      = len(macro_blocked)
-                _couldnt_n    = len(comp_unavail)
-                if _scanned_n > 0 and tone == "bull":
-                    _funnel_parts = []
-                    if _belowbar_n:
-                        _funnel_parts.append(f"{_belowbar_n} fell below it")
-                    if _couldnt_n:
-                        _funnel_parts.append(
-                            f"{_couldnt_n} couldn't be scored (see banner above)"
-                        )
-                    _funnel = f" ({'; '.join(_funnel_parts)})" if _funnel_parts else ""
-                    if _macro_n:
-                        _mp_word = "pick was" if _macro_n == 1 else "picks were"
-                        _macro_note = (
-                            f" Separately, {_macro_n} strong {_mp_word} suppressed "
-                            "for an imminent macro event (see below)."
-                        )
-                    else:
-                        _macro_note = ""
-                    # When the emptiness is macro-driven, a re-scan can't un-block
-                    # the suppressed names — so don't suggest one (§2B calm).
-                    _tail = (
-                        "These re-evaluate automatically once the event resolves."
-                        if _macro_n else
-                        "Run Market Scanner for a fresh pass."
-                    )
-                    st.caption(
-                        f"Today's scan: none of the scored candidates cleared the "
-                        f"buy threshold{_funnel}.{_macro_note} {_tail}"
-                    )
-                elif tone == "bull":
-                    st.caption(
-                        "No high-confidence setups meet today's criteria. "
-                        "Run Market Scanner to refresh candidates."
-                    )
-                else:
-                    st.caption(
-                        "Flat market — waiting for clearer direction before adding new positions."
-                    )
-                # Hide the re-scan CTA when emptiness is macro-driven — a fresh
-                # scan can't un-block names suppressed for an imminent event, so
-                # prompting it is a futile action (§2B calm). The sidebar nav
-                # still reaches the Market Scanner page.
-                if tone == "bull" and not macro_blocked:
-                    if st.button("🔍 Run Market Scanner", key="_db_grow_scanner"):
-                        st.session_state["_pending_page"] = "🔍 Market Scanner"
-                        st.rerun()
-
-            # New picks
-            if new_picks:
-                st.markdown("**🆕 New Positions to Initiate**")
-            _ac_cov_map = _cached_analyst_coverage_recent()   # hoisted; one query, annotation-only
-            for _gp in new_picks:
-                _gx         = _gp.get("xref", {})
-                _reconciled = _gx.get("verdict_reconciled", {}) or {}
-                # Prefer the central reconciliation engine's color/label/one-liner.
-                # Falls back to the legacy verdict_* fields if the engine didn't run.
-                _vc         = _reconciled.get("color") or _gx.get("verdict_color", "#22c55e")
-                _vl         = _reconciled.get("label") or _gx.get("verdict_label", "")
-                _v_one      = _reconciled.get("one_liner") or _gx.get("verdict_one_liner", "")
-                _sz         = _gp.get("sizing", {})
-                _conv       = _gp.get("conviction", "unverified")
-                _comp_sc    = _gp.get("composite_score")   # None if not yet fetched
-                _comp_lbl   = _gp.get("composite_label", "")
-
-                # Conviction badge: color + text driven by composite score
-                _conv_cfg = {
-                    "high":       ("#22c55e", "✅ High Conviction"),
-                    "moderate":   ("#f59e0b", "🟡 Moderate Setup"),
-                    "low":        ("#ef4444", "⚠ Low Composite"),
-                    "unverified": ("#f59e0b", "🔍 Verify — Run Analysis First"),
-                }
-                _conv_clr, _conv_txt = _conv_cfg.get(_conv, _conv_cfg["unverified"])
-
-                # Score line: always show momentum; show composite when available
-                _score_line = f"Momentum {_gp['score']:.0f}/100"
-                if _comp_sc is not None:
-                    _score_line += f" · Composite {_comp_sc:.0f}/100"
-                    if _comp_lbl:
-                        _score_line += f" ({_comp_lbl})"
-
-                # Mover badge: this candidate entered via today's 1-day breakout
-                # (from the broad discovery universe) rather than the curated
-                # scanner. Same list, same gates — the badge just shows the
-                # entry trigger so the user knows it's a fresh breakout.
-                _mover_badge = ""
-                if _gp.get("is_mover") and _gp.get("day_change") is not None:
-                    _mover_badge = (
-                        f"<span style='background:#052e16;border:1px solid #22c55e;color:#4ade80;"
-                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'"
-                        f" title='Surfaced from the broad ~200-name discovery universe — a breakout outside your tracked list'>"
-                        f"🔥 +{_gp['day_change']:.1f}% today</span>"
+                with _pms_hc2:
+                    _pms_refresh = st.button(
+                        "🔄 Refresh",
+                        key="_pms_refresh_btn",
+                        use_container_width=True,
+                        help="Re-runs the AI stance with the latest pre-market data.",
                     )
 
-                # Steady-vs-yesterday chip (calm advisor 2C): a calm grey marker
-                # telling the user this is the same conviction holding, not a
-                # fresh daily call. Annotate-only; absent when the pick moved.
-                _steady_chip = ""
-                if _gp.get("_hysteresis", {}).get("stable"):
-                    _steady_chip = (
-                        f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
-                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
-                        f"title='Position unchanged from the previous trading session — score and verdict held steady'>"
-                        f"↔ Steady vs yesterday</span>"
-                    )
-
-                st.markdown(
-                    f"<div style='background:#111827;border-left:3px solid {_vc};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                    f"<span style='color:#f9fafb;font-weight:700'>{_gp['ticker']}</span>"
-                    f"<span style='color:#9ca3af;font-size:0.8em'>{_score_line} · {_gp['sector']}"
-                    + (f" 🔥" if _gp.get("is_leader") else "")
-                    + f"</span>"
-                    + _mover_badge
-                    # Cross-reference verdict badge
-                    + f"<span style='background:{_vc}22;border:1px solid {_vc};color:{_vc};"
-                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_vl}</span>"
-                    # Conviction badge (composite-driven)
-                    f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
-                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_conv_txt}</span>"
-                    + _steady_chip
-                    + f"</div>"
-                    # Resolution one-liner — explicit verdict that reconciles
-                    # momentum vs composite vs news vs earnings into one sentence.
-                    + (f"<div style='color:{_vc};font-size:0.85em;margin-top:6px;"
-                       f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
-                    + f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
-                    f"💡 <em>{_gp['thesis']}</em></div>"
-                    + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
-                       f"📐 Suggested: {_sz.get('shares',0)} shares · "
-                       f"Entry zone ${_sz.get('entry_lo', _gp['price']):.2f}–${_sz.get('entry_hi', _gp['price']):.2f} "
-                       f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
-                       f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
-                       f"</div>" if _sz else "")
-                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                       f"⏱ First surfaced: {_fmt_first_seen(_gp.get('_first_seen_at'))}"
-                       f"</div>" if _gp.get("_first_seen_at") else "")
-                    + f"</div>",
-                    unsafe_allow_html=True,
-                )
-                _ac_cov = _ac_cov_map.get(str(_gp["ticker"]).upper())
-                if _ac_cov and (_ac_cov.get("consensus_rating") or _ac_cov.get("avg_pt") is not None):
-                    _ac_parts = []
-                    if _ac_cov.get("consensus_rating"):
-                        _ac_parts.append(str(_ac_cov["consensus_rating"]))
-                    if _ac_cov.get("avg_pt") is not None:
+                if _pms_refresh or _pms_cached is None:
+                    with st.spinner("Generating stance narrative…"):
+                        # Pull the current regime from the cached FRED detector
+                        # if a key is available; otherwise skip — the stance
+                        # still has futures / events / portfolio to work with.
+                        _pms_regime = None
                         try:
-                            _ac_parts.append(f"avg PT ${float(_ac_cov['avg_pt']):.2f}")
-                        except (TypeError, ValueError):
-                            pass
-                    if _ac_parts:
-                        st.caption(f"🏦 Your saved research: {' · '.join(_ac_parts)} ({_ac_cov.get('n_firms', '?')} firms) — awareness only")
-                if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _gp["ticker"]
-                    st.rerun()
+                            _pms_fred_key = (
+                                st.secrets.get("fred", {}).get("api_key")
+                                or os.environ.get("FRED_API_KEY", "")
+                            )
+                            if _pms_fred_key:
+                                _pms_regime = detect_macro_regime_fred(_pms_fred_key)
+                        except Exception:
+                            _pms_regime = None
 
-            # Add-to-winner
-            if add_pos:
-                st.markdown("**➕ Add to Winning Positions**")
-            for _ga in add_pos:
-                _sz = _ga.get("sizing", {})
-                _ga_steady_chip = ""
-                if _ga.get("_hysteresis", {}).get("stable"):
-                    _ga_steady_chip = (
-                        f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
-                        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
-                        f"title='Position unchanged from the previous trading session — score and verdict held steady'>"
-                        f"↔ Steady vs yesterday</span>"
+                        _pms_inputs = pms_assemble_inputs(
+                            premarket_brief = _pm,
+                            regime          = _pms_regime,
+                            port_df         = port_df,
+                            news_headlines  = [
+                                n.get("headline", "")
+                                for n in st.session_state.get("_sidebar_news", [])[:5]
+                                if n.get("headline")
+                            ],
+                        )
+                        _pms_result = pms_generate_stance(
+                            inputs  = _pms_inputs,
+                            api_key = _pms_key,
+                            model   = _pms_model,
+                        )
+                        if _pms_result:
+                            st.session_state[_pms_cache_key] = _pms_result
+                            _pms_cached = _pms_result
+
+                if _pms_cached:
+                    _stance        = _pms_cached.get("stance", "neutral")
+                    _stance_label  = _pms_cached.get("stance_label", "Neutral at open")
+                    _narrative     = _pms_cached.get("narrative", "")
+                    _stance_color  = {
+                        "defensive":    "#ef4444",
+                        "constructive": "#22c55e",
+                    }.get(_stance, "#f59e0b")
+                    _stance_icon   = {
+                        "defensive":    "🛡️",
+                        "constructive": "🟢",
+                    }.get(_stance, "⚖️")
+                    st.markdown(
+                        f"<div style='background:#0f172a;border:1px solid {_stance_color};"
+                        f"border-left:5px solid {_stance_color};border-radius:8px;"
+                        f"padding:14px 18px;margin-bottom:12px'>"
+                        f"<div style='color:#e5e7eb;font-size:0.95em;line-height:1.55'>"
+                        f"{_narrative}</div>"
+                        f"<div style='margin-top:10px;padding-top:10px;"
+                        f"border-top:1px solid #1f2937'>"
+                        f"<span style='color:{_stance_color};font-weight:800;"
+                        f"letter-spacing:0.05em;text-transform:uppercase;font-size:0.85em'>"
+                        f"{_stance_icon} Stance: {_stance_label}</span>"
+                        f"<span style='color:#6b7280;font-size:0.75em;margin-left:10px'>"
+                        f"Model: {_pms_cached.get('model','?').split('-')[1].title()}</span>"
+                        f"</div></div>",
+                        unsafe_allow_html=True,
                     )
-                st.markdown(
-                    f"<div style='background:#052e16;border-left:3px solid #4ade80;"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                    f"<span style='color:#f9fafb;font-weight:700'>{_ga['ticker']}</span>"
-                    f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
-                    f"Score {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
-                    + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
-                    + f"</span>"
-                    + _ga_steady_chip
-                    + f"</div>"
-                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
-                    f"💡 <em>{_ga['thesis']}</em></div>"
-                    + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
-                       f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
-                       f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
-                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                       f"⏱ First surfaced: {_fmt_first_seen(_ga.get('_first_seen_at'))}"
-                       f"</div>" if _ga.get("_first_seen_at") else "")
-                    + f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button(f"▶ Analyze {_ga['ticker']}", key=f"_db_grow_add_{_ga['ticker']}"):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _ga["ticker"]
-                    st.rerun()
+                else:
+                    st.warning(
+                        "Pre-Market Stance unavailable — Anthropic API call failed. "
+                        "Click 🔄 Refresh to retry or check your key in Streamlit secrets."
+                    )
 
-            # Post-add cooldown — you already acted on this add recently; the app
-            # is deliberately staying quiet so it doesn't read as day-trading.
-            if cooldown_adds:
-                _cd_rows = "".join(
-                    f"<div style='color:#93c5fd;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                    f"(Score {b.get('score',0):.0f} · P&L {b.get('pnl_pct',0):+.1f}%) — "
-                    f"{b.get('reason','recently added')}</div>"
-                    for b in cooldown_adds[:4]
-                )
-                st.markdown(
-                    "<div style='background:#0f172a;border:1px solid #475569;"
-                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
-                    "<div style='color:#cbd5e1;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    "🌱 Add Paused — Recently Added (settling)</div>"
-                    + _cd_rows
-                    + "<div style='color:#94a3b8;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "You already acted on these — the trend's still intact, but adding again "
-                    "this soon is churn, not conviction. They'll return to the add list after "
-                    "the new shares settle (or if you trim and the thesis re-strengthens)."
-                    "</div></div>",
-                    unsafe_allow_html=True,
-                )
+            _pm_tone  = _pm["tone"]
+            _pm_color = "#14532d" if _pm_tone == "bull" else "#7f1d1d" if _pm_tone == "bear" else "#1c1917"
+            _pm_bdr   = "#22c55e" if _pm_tone == "bull" else "#ef4444" if _pm_tone == "bear" else "#4b5563"
+            _pm_icon  = "📈" if _pm_tone == "bull" else "📉" if _pm_tone == "bear" else "〰️"
+            _pm_label = (
+                "Futures pointing HIGHER — bullish open expected"  if _pm_tone == "bull" else
+                "Futures pointing LOWER — cautious open expected"   if _pm_tone == "bear" else
+                "Futures mixed — direction unclear ahead of open"
+            )
+            es_row  = next((f for f in _pm["futures"] if f["symbol"] == "ES=F"), None)
+            es_str  = f"ES {es_row['chg_pct']:+.2f}%" if es_row else ""
+            # Hand the live futures direction to the tone-banner reconciliation.
+            _pm_futures_tone = _pm_tone
+            _pm_es_pct = es_row["chg_pct"] if es_row else None
 
-            # When a margin debit tightened the gate (account-basis), say so — the
-            # suppression weights run higher than the equity-only view shown
-            # elsewhere, and the user should know WHY (CLAUDE.md: never silently).
-            _gate_margin_note = (
-                "<div style='color:#fcd34d;font-size:0.74em;margin-top:6px;font-style:italic'>"
-                "⚖️ Tightened by margin — gated on your net capital, not gross stock holdings."
-                "</div>"
-                if (st.session_state.get("_acct_gate_cache") or {}).get("basis")
-                   in ("account", "over-levered") else ""
+            st.markdown(
+                f"<div style='background:{_pm_color};border:1px solid {_pm_bdr};"
+                f"border-radius:12px;padding:14px 20px;margin-bottom:10px'>"
+                f"<div style='display:flex;align-items:center;justify-content:space-between;"
+                f"flex-wrap:wrap;gap:8px'>"
+                f"<span style='font-size:1.05em;font-weight:700;color:#f9fafb'>"
+                f"🌅 Pre-Market Intel</span>"
+                f"<span style='color:#9ca3af;font-size:0.78em'>{_pm['as_of']}</span>"
+                f"</div>"
+                f"<div style='color:#d1d5db;font-size:0.85em;margin-top:4px'>"
+                f"{_pm_icon} {_pm_label}"
+                + (f" · <b style='color:#f9fafb'>{es_str}</b>" if es_str else "")
+                + f"</div></div>",
+                unsafe_allow_html=True,
             )
 
-            # Single-name concentration ceiling suppressed an add — surface why
-            # so the user understands the position is capped, not signal-weak.
-            if conc_blocked:
-                _cn_rows = "".join(
-                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                    f"({b.get('weight',0):.1f}% weight · Score {b.get('score',0):.0f}) — "
-                    f"{b.get('reason','position at single-name ceiling')}</div>"
-                    for b in conc_blocked[:3]
-                )
-                st.markdown(
-                    "<div style='background:#422006;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    f"🔒 Add Suppressed — Single-Name Ceiling ({int(SINGLE_NAME_CEILING)}%)</div>"
-                    + _cn_rows
-                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "These winners qualify on signal but already exceed the institutional "
-                    "single-name ceiling. Adding more would concentrate idiosyncratic risk. "
-                    "Trim back to target before considering further adds."
-                    "</div>"
-                    + _gate_margin_note
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # Sector hard-cap breach — adds AND new picks in an over-cap sector are
-            # suppressed so the Brief never says "add here" while Act Today says
-            # "trim this sector". The protect-capital signal wins (the ESTC case).
-            if sector_blocked:
-                _sb_rows = "".join(
-                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                    f"({b.get('sector','?')} · Score {b.get('score',0):.0f}) — "
-                    f"{b.get('reason','sector over hard cap')}</div>"
-                    for b in sector_blocked[:4]
-                )
-                st.markdown(
-                    "<div style='background:#422006;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    f"🔒 Suppressed — Sector Hard Cap ({int(SECTOR_CEILING)}%)</div>"
-                    + _sb_rows
-                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "These names qualify on signal, but their sector is already over the "
-                    "institutional hard cap. Adding more would deepen a concentration the "
-                    "Risk Advisor is recommending you trim. A Strong Buy here is a KEEP, not an add."
-                    "</div>"
-                    + _gate_margin_note
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-
-            # Risk Advisor suppressed an add-to-winner — surface the conflict so the
-            # user understands why a winning held position isn't on the add list.
-            if blocked_adds:
-                _reason_label = {
-                    "beta":   "high portfolio beta",
-                    "sharpe": "poor risk-adjusted return",
-                }
-                _rows = "".join(
-                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                    f"(Strong Buy, Score {b.get('score',0):.0f}, P&L {b.get('pnl_pct',0):+.1f}%) — "
-                    f"Risk Advisor flagged for trim due to "
-                    f"{_reason_label.get(b.get('reason',''), b.get('reason',''))}.</div>"
-                    for b in blocked_adds[:3]
-                )
-                st.markdown(
-                    "<div style='background:#422006;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin:8px 0'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    "🔀 Add-to-Winner Suppressed — Risk Advisor Conflict</div>"
-                    + _rows
-                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "These positions qualify as winners but Risk Advisor recommends trimming them. "
-                    "Adding more would compound the risk metric being flagged. "
-                    "Resolve in Portfolio → Risk Advisor before adding.</div>"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-
-            if deploy_note:
-                st.info(f"💰 {deploy_note}")
-
-            # ─────────────────────────────────────────────────────────────────
-            # BELOW THE FOLD — "Here's what we considered but didn't recommend"
-            # These blocks are informational, not actionable, so they live
-            # below the action items. They tell the user WHY a hot ticker
-            # didn't make the cut (composite said no, macro event imminent,
-            # etc.) — important context but lower priority than what to act on.
-            # ─────────────────────────────────────────────────────────────────
-
-            # Macro-blocked picks — sector has imminent HIGH-impact catalyst.
-            if macro_blocked:
-                _mb_shown = macro_blocked[:4]
-                _mb_extra = len(macro_blocked) - len(_mb_shown)
-                _mb_rows = "".join(
-                    f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
-                    f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
-                    for b in _mb_shown
-                )
-                if _mb_extra > 0:
-                    _mb_rows += (
-                        f"<div style='color:#fcd34d;font-size:0.79em;opacity:0.85'>"
-                        f"• …and {_mb_extra} more in affected sectors</div>"
-                    )
-                st.markdown(
-                    "<div style='background:#422006;border:1px solid #f59e0b;"
-                    "border-radius:8px;padding:8px 14px;margin-top:12px;margin-bottom:8px'>"
-                    "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    f"🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event ({len(macro_blocked)})</div>"
-                    + _mb_rows
-                    + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "These sectors have a HIGH-impact macro release within "
-                    f"{MACRO_IMMINENT_DAYS} days. Opening fresh positions into a known binary "
-                    "catalyst is the institutional anti-pattern this gate blocks. "
-                    "Revisit after the event resolves and the dust settles."
-                    "</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-            # Composite-conflict suppression — momentum was hot but the full
-            # composite (Technical + Fundamental + Sentiment) was below the
-            # Buy threshold. Surfaces what was considered AND rejected so the
-            # user makes the decision on the Brief itself.
-            if comp_skipped:
-                _cs_rows = "".join(
-                    f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
-                    f"• <b>{c['ticker']}</b> ({c.get('sector','—')}) — "
-                    f"Momentum <b>{c.get('momentum_score',0):.0f}/100</b> "
-                    f"but composite <b>{c.get('composite_label','Hold')} "
-                    f"{c.get('composite_score',0):.1f}/100</b> "
-                    "→ skip (composite contradicts momentum)."
-                    "</div>"
-                    for c in comp_skipped[:5]
-                )
-                st.markdown(
-                    "<div style='background:#3f1d1d;border:1px solid #ef4444;"
-                    "border-radius:8px;padding:8px 14px;margin-top:8px;margin-bottom:4px'>"
-                    "<div style='color:#fca5a5;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
-                    f"⛔ Screened but Filtered Out ({len(comp_skipped)}) — Composite Says No</div>"
-                    + _cs_rows
-                    + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
-                    "Momentum (a single-factor breakout signal) caught these names, "
-                    "but the full composite — Technical + Fundamental + Sentiment — "
-                    "is below the Buy threshold (65). Decision: skip until composite "
-                    "recovers. Track on the Watchlist for a re-look."
-                    "</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-        # ── Two-column layout: Act Today (left) | Grow Today (right) ────────
-        _db_col_right, _db_col_left = st.columns([1, 1])
-
-        with _db_col_left:
-            _render_grow_today(_db_grow, _db_tone)
-
-        with _db_col_right:
-            # ── Act vs Awareness split (calm advisor 2B) ────────────────────
-            # Split the defensive column by URGENCY, not origin: "Act Today" holds
-            # genuine same-day trade decisions; "Monitoring / Awareness" holds FYI
-            # items. Each item keeps its origin card template (_source) but lands in
-            # the bucket decision_bucket.classify_bucket assigns. Empty Act bucket =
-            # "you're set for today" (derived; no new persistence).
-            # _split_def computed once above (shared with the summary chip) so the
-            # chip counts and these section headers can't drift apart.
-            _act_bucket   = _split_def["act"]
-            _aware_bucket = _split_def["aware"]
-
-            _db_trades = st.session_state.get("trades_df")
-
-            def _journal_context(ticker: str) -> dict | None:
-                if _db_trades is None or _db_trades.empty:
-                    return None
-                t = str(ticker).strip().upper()
-                df = _db_trades[_db_trades["ticker"].astype(str).str.upper() == t]
-                if df.empty:
-                    return None
-                df = df.sort_values("traded_at", ascending=False)
-                # Entry thesis = notes on the most recent BUY (with non-empty notes)
-                thesis, thesis_date = "", ""
-                buys = df[df["action"].astype(str).str.upper() == "BUY"]
-                for _, _row in buys.iterrows():
-                    n = str(_row.get("notes") or "").strip()
-                    if n and n.lower() != "nan":
-                        thesis, thesis_date = n, str(_row.get("traded_at", ""))[:10]
-                        break
-                # Lessons = up to 2 most recent non-empty lesson entries
-                lessons = []
-                for _, _row in df.iterrows():
-                    l = str(_row.get("lesson") or "").strip()
-                    if l and l.lower() != "nan":
-                        lessons.append({"text": l, "date": str(_row.get("traded_at", ""))[:10]})
-                        if len(lessons) >= 2:
-                            break
-                if not thesis and not lessons:
-                    return None
-                return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
-
-            # Format a structured action dict into (color, label, text) so each
-            # item renders the directive directly instead of a "consider X" prose.
-            def _fmt_action(action: dict) -> tuple[str, str, str]:
-                t = (action or {}).get("type", "")
-                if t == "WATCH":
-                    return ("#94a3b8", "WATCH",
-                            "no action today — see Trigger below for what would escalate.")
-                if t == "TIGHTEN_ONLY":
-                    ns = action.get("new_stop")
-                    return ("#fbbf24", "ACT",
-                            f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
-                if t == "TRIM_AND_TIGHTEN":
-                    ns = action.get("new_stop")
-                    stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
-                    return ("#22c55e", "ACT",
-                            f"Trim {action['trim_shares']} shares "
-                            f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
-                            f"{stop_str}")
-                if t == "TRIM_TO_TARGET":
-                    return ("#fbbf24", "ACT",
-                            f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
-                            f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
-                if t == "PROTECTIVE_TRIM":
-                    return ("#fbbf24", "ACT",
-                            f"Trim {action['trim_ticker']} (weakest in sector, score "
-                            f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
-                            f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
-                            f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
-                if t == "DETERIORATION_WATCH":
-                    return ("#94a3b8", "WATCH",
-                            "no action today — early deterioration; watching for follow-through "
-                            "(see Trigger for what escalates it to a TRIM).")
-                return ("#94a3b8", "—", "—")
-
-            # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
-            # Two complementary sources (primary + backup so both don't fail
-            # together): (1) Grow Today's verified new picks above COMPOSITE_BUY,
-            # (2) Add-to-Winner candidates (existing positions with room).
-            def _alt_targets(skip_ticker: str | None) -> list[str]:
-                _grow_picks = _db_grow.get("new_picks", []) or []
-                _add_picks  = _db_grow.get("add_positions", []) or []
-                _alts: list[tuple[str, float]] = []
-                _seen: set = set()
-                for _p in _grow_picks:
-                    _t = str(_p.get("ticker", "")).upper()
-                    _cs = _p.get("composite_score")
-                    if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
-                        continue
-                    if _cs is None:
-                        continue
-                    _alts.append((_t, _cs))
-                    _seen.add(_t)
-                if len(_alts) < 3:
-                    for _p in _add_picks:
-                        _t = str(_p.get("ticker", "")).upper()
-                        _cs = _p.get("score")
-                        if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
-                            continue
-                        _alts.append((_t, _cs))
-                        _seen.add(_t)
-                        if len(_alts) >= 3:
-                            break
-                _alts.sort(key=lambda x: -(x[1] or 0))
-                return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
-
-            # Load BROKEN thesis tickers once per render — additive only; no-ops
-            # if AI Insights has never been used or the table doesn't exist yet.
-            if "_broken_thesis_tickers" not in st.session_state:
-                try:
-                    _rv_df = db.load_thesis_reviews()
-                    if not _rv_df.empty:
-                        # Keep only the most-recent review per ticker
-                        _rv_latest = (
-                            _rv_df.sort_values("reviewed_at", ascending=False)
-                            .drop_duplicates(subset="ticker")
-                        )
-                        st.session_state["_broken_thesis_tickers"] = set(
-                            _rv_latest.loc[
-                                _rv_latest["status"] == "BROKEN", "ticker"
-                            ].astype(str).str.upper()
-                        )
-                    else:
-                        st.session_state["_broken_thesis_tickers"] = set()
-                except Exception:
-                    st.session_state["_broken_thesis_tickers"] = set()
-            _broken_thesis_tickers = st.session_state.get("_broken_thesis_tickers", set())
-
-            def _render_act_card(_db_item, in_act=False):
-                _db_is_crit = _db_item["priority"] == "critical"
-                _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
-                # Red left bar for any Act-bucket card (or a critical one); amber only
-                # when this act-origin item is shown in the calm Awareness lane.
-                _db_border  = "#ef4444" if (in_act or _db_is_crit) else "#f59e0b"
-                _db_ticker  = _db_item.get("ticker")
-                _db_weight_txt = (
-                    f" · {_db_item['weight']:.1f}% of portfolio"
-                    if _db_item.get("weight") else ""
-                )
-                _db_pnl_txt = (
-                    f" · P&L {_db_item['pnl_pct']:+.1f}%"
-                    if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
-                )
-                # Body: structured ACT/Why/Trigger when present (matches
-                # Review Before Close); falls back to legacy reason / risk
-                # flags for older item shapes.
-                _db_directive = _db_item.get("directive", "")
-                _db_why       = _db_item.get("why", "")
-                _db_trigger   = _db_item.get("trigger", "")
-                _db_flags     = _db_item.get("risk_flags", []) or []
-                _act_color    = "#ef4444" if (in_act or _db_is_crit) else "#fbbf24"
-
-                _body = ""
-                if _db_directive:
-                    _body += (
-                        f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
-                        f"<span style='color:{_act_color};font-weight:700'>→ ACT:</span> "
-                        f"<span style='color:#f1f5f9'>{_db_directive}</span></div>"
-                    )
-                if _db_why:
-                    _body += (
-                        f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                        f"<b>Why:</b> {_db_why}</div>"
-                    )
-                if _db_trigger:
-                    _body += (
-                        f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                        f"<b>Trigger:</b> {_db_trigger}</div>"
-                    )
-                # Risk flags: one sub-block per flag (consolidated multi-risk).
-                for _flag in _db_flags:
-                    _body += (
-                        f"<div style='color:#e7e5e4;font-size:0.81em;margin-top:6px;"
-                        f"border-left:2px solid #f59e0b;padding-left:8px'>"
-                        f"<span style='color:#fbbf24;font-weight:600'>{_flag.get('title','Risk')}</span><br>"
-                        f"<span style='color:#d1d5db'>{_flag.get('recommendation','')}</span></div>"
-                    )
-                # Back-compat: anything without the new fields still shows reason.
-                if not _body and _db_item.get("reason"):
-                    _body = (
-                        f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>"
-                        f"{_db_item['reason']}</div>"
+            # Row 1: US Futures tiles
+            if _pm["futures"]:
+                _pm_cols = st.columns(len(_pm["futures"]))
+                for _pmc, _fut in zip(_pm_cols, _pm["futures"]):
+                    _fc = "#22c55e" if _fut["chg_pct"] >= 0 else "#ef4444"
+                    _pmc.markdown(
+                        f"<div style='background:#111827;border:1px solid #374151;"
+                        f"border-radius:8px;padding:8px 10px;text-align:center'>"
+                        f"<div style='color:#9ca3af;font-size:0.72em'>{_fut['icon']} {_fut['name']}</div>"
+                        f"<div style='color:#f9fafb;font-weight:700'>{_fut['price']:,.0f}</div>"
+                        f"<div style='color:{_fc};font-size:0.85em;font-weight:600'>"
+                        f"{_fut['chg_pct']:+.2f}%</div></div>",
+                        unsafe_allow_html=True,
                     )
 
-                st.markdown(
-                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                    f"{_db_item['icon']} {_db_item['action']}"
-                    + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
-                    + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
-                    f"</div>"
-                    + _body
-                    + f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if _db_ticker:
-                    _act_cols = st.columns([2, 3, 5])
-                    with _act_cols[0]:
-                        if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
-                                     use_container_width=False):
-                            st.session_state["_pending_page"]    = "📈 Analysis"
-                            st.session_state["_analysis_ticker"] = _db_ticker
-                            st.rerun()
-                    # Combined elevated card: when BROKEN thesis + TRIM/EXIT coincide,
-                    # show a lightweight AI note link (core card is complete without it).
-                    if str(_db_ticker).upper() in _broken_thesis_tickers:
-                        with _act_cols[1]:
-                            if st.button(
-                                "🔴 Thesis broken — view AI note →",
-                                key=f"_db_act_ainote_{_db_ticker}_{_db_item['action'][:10]}",
-                                use_container_width=False,
-                            ):
-                                st.session_state["_pending_page"] = "🧠 AI Insights"
-                                st.rerun()
+            # Row 2: Global markets + movers + events
+            _pm_left, _pm_right = st.columns([1, 1])
 
-                # ── Rebalance plan (Hard-Cap-Breach / sector-concentration cards) ──
-                # Completes the trim→redeploy loop that the copy promises but the
-                # card never delivered: names the lowest-conviction holdings to trim
-                # AND engine-vetted, correlation-checked buy candidates in the
-                # under-represented sectors. Button-gated (not an expander, whose
-                # body always executes) so NO scoring / correlation compute runs
-                # until the user asks — keeps the default Brief calm (§2B) and
-                # avoids a per-rerun fetch storm. INVARIANTS: the engine composite +
-                # COMPOSITE_BUY are the SOLE ranker/gate; correlation-to-book and
-                # saved analyst research only ANNOTATE (never reorder past the
-                # composite, never gate).
-                _rebal_flag = next(
-                    (f for f in _db_flags if f.get("rec_type") == "sector_concentration"),
-                    None,
-                )
-                if _rebal_flag is not None:
-                    _rebal_sfx  = _db_item["action"][:10]
-                    _rebal_key  = f"_rebal_open_{_db_ticker}_{_rebal_sfx}"
-                    if st.button(
-                        "🔎 Rebalance plan — what to trim, where to redeploy",
-                        key=f"_rebal_btn_{_db_ticker}_{_rebal_sfx}",
-                    ):
-                        st.session_state[_rebal_key] = not st.session_state.get(_rebal_key, False)
-                    if st.session_state.get(_rebal_key, False):
-                        _trim       = _rebal_flag.get("trim_candidates", []) or []
-                        _redep_secs = _rebal_flag.get("redeploy_sectors", []) or []
-
-                        # ── Trim first: lowest-conviction names in the sector ──
-                        if _trim:
-                            _tt_dollar = _rebal_flag.get("trim_target_dollar")
-                            _tt_pp     = _rebal_flag.get("trim_target_pp")
-                            _tt_denom  = _rebal_flag.get("trim_target_denom")
-                            _tc_by_tkr = {c.get("ticker"): c for c in _trim}
-
-                            # Basis sub-line for WHY a name is low-conviction: the
-                            # composite's three pillars (from the held bundle) +
-                            # recent momentum + the pillar capping it. Display-only;
-                            # order stays composite-ascending (engine authority).
-                            def _trim_basis(_t, _tc):
-                                _hb = (held_data or {}).get(_t) or {}
-                                _tsc  = _hb.get("t_score")
-                                _bqsc = _hb.get("bq_score", _hb.get("f_score"))
-                                _vsc  = _hb.get("val_score")
-                                _ssc  = _hb.get("s_score")
-                                _hist = _hb.get("df") if _hb.get("df") is not None else _hb.get("history")
-                                _cl = (
-                                    _hist["Close"]
-                                    if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
-                                    else None
-                                )
-                                _bits = []
-                                if isinstance(_tc.get("score"), (int, float)):
-                                    _bits.append(f"composite {_tc['score']:.0f}/100")
-                                if isinstance(_tc.get("weight"), (int, float)):
-                                    _bits.append(f"{_tc['weight']:.1f}% held")
-                                if isinstance(_tc.get("pnl_pct"), (int, float)):
-                                    _bits.append(f"P&L {_tc['pnl_pct']:+.1f}%")
-                                _pill = []
-                                if isinstance(_tsc,  (int, float)): _pill.append(f"tech {_tsc:.0f}")
-                                if isinstance(_bqsc, (int, float)): _pill.append(f"bq {_bqsc:.0f}")
-                                if isinstance(_vsc,  (int, float)): _pill.append(f"val {_vsc:.0f}")
-                                if isinstance(_ssc,  (int, float)): _pill.append(f"sentiment {_ssc:.0f}")
-                                if _pill: _bits.append(" ".join(_pill))
-                                _r1w = trailing_return(_cl, 5) if _cl is not None else None
-                                _r1m = trailing_return(_cl, 21) if _cl is not None else None
-                                _mom = []
-                                if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
-                                if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
-                                if _mom: _bits.append(" ".join(_mom))
-                                _pm = {"business_quality": _bqsc, "valuation": _vsc, "technicals": _tsc, "sentiment": _ssc}
-                                _pv = {k: v for k, v in _pm.items() if isinstance(v, (int, float))}
-                                if _pv:
-                                    _wk = min(_pv, key=_pv.get)
-                                    _bits.append(f"capped by {_wk} ({_pv[_wk]:.0f})")
-                                if _bits:
-                                    st.caption("    ↳ " + "  ·  ".join(_bits))
-
-                            _tax_txt = {
-                                "gain": "realizes a gain (taxable)",
-                                "loss": "realizes a loss (offsets gains)",
-                                "flat": "~breakeven",
-                            }
-                            _alloc = (
-                                trim_allocation(_trim, _tt_dollar, _tt_denom)
-                                if _tt_dollar else {"rows": [], "total_allocated": 0, "target": 0, "shortfall": 0}
-                            )
-                            if _alloc["rows"]:
-                                # NOTE: escape literal "$" as "\$" in every st.markdown/
-                                # st.caption below — Streamlit renders a $…$ PAIR as LaTeX
-                                # math, so a line with two unescaped dollars (e.g. the
-                                # running total) garbles into italic math.
-                                _hdr = f"**Trim first — the plan (target: trim ~\\${_tt_dollar:,.0f}"
-                                if isinstance(_tt_pp, (int, float)): _hdr += f" · {_tt_pp:.0f}pp"
-                                _hdr += f" → {SECTOR_ELEVATED:.0f}%):**"
-                                st.markdown(_hdr)
-                                # Display cap only (NOT a gate): rows past it are
-                                # rolled up into a remainder line so the running
-                                # total still reflects every name. Deliberately >
-                                # the 3-name candidate display — a trim plan may
-                                # legitimately span more names to reach the target.
-                                _PLAN_CAP = 5
-                                for _i, _row in enumerate(_alloc["rows"][:_PLAN_CAP], 1):
-                                    _t = _row["ticker"]
-                                    _verb = "sell ALL" if _row["full"] else "trim"
-                                    _pp = f" · {_row['cut_pp']:.0f}pp" if _row.get("cut_pp") is not None else ""
-                                    _sh_val = _row.get("shares")
-                                    if _sh_val:
-                                        _sh = (f" · ≈{_sh_val:,.0f} sh" if _sh_val >= 1
-                                               else f" · ≈{_sh_val:.2f} sh")
-                                    else:
-                                        _sh = ""
-                                    _tail = " · full exit" if _row["full"] else " · partial"
-                                    _tx = _tax_txt.get(_row.get("tax_dir"), "")
-                                    st.markdown(
-                                        f"**{_i}. {_t}** — {_verb} ~\\${_row['cut_dollar']:,.0f}{_pp}{_sh}{_tail}"
-                                        + (f" · 🧾 {_tx}" if _tx else "")
-                                    )
-                                    _trim_basis(_t, _tc_by_tkr.get(_t, {}))
-                                _extra = _alloc["rows"][_PLAN_CAP:]
-                                if _extra:
-                                    _ex_sum = sum(r["cut_dollar"] for r in _extra)
-                                    st.caption(
-                                        f"    + ~\\${_ex_sum:,.0f} to trim across {len(_extra)} more "
-                                        "low-conviction name(s)"
-                                    )
-                                st.caption(
-                                    f"✓ **\\${_alloc['total_allocated']:,.0f}** of ~\\${_alloc['target']:,.0f} "
-                                    f"· sector → ~{SECTOR_ELEVATED:.0f}%"
-                                )
-                                if _alloc["shortfall"] > 0:
-                                    st.caption(
-                                        f"⚠️ ~\\${_alloc['shortfall']:,.0f} of the target isn't covered by your "
-                                        "scored names in this sector — trim the remainder across the sector's "
-                                        "other holdings."
-                                    )
-                            else:
-                                # Fallback (no target available, e.g. legacy cached
-                                # rec): basis-only priority list, the shipped shape.
-                                st.markdown("**Trim first — your lowest-conviction names:**")
-                                for _tc in _trim[:DIVERSIFY_DISPLAY_TOP]:
-                                    _t = _tc.get("ticker")
-                                    st.markdown(
-                                        f"• **{_t}** — composite {_tc['score']:.0f}/100 · "
-                                        f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
-                                    )
-                                    _trim_basis(_t, _tc)
-                            st.caption(
-                                "_Greedy: your weakest-conviction names are trimmed first (engine order — small "
-                                "gaps are within scoring noise). Shares are approximate; the $/pp are the target. "
-                                "Two honest schools when a sector MUST be cut: **trim the laggard** (momentum) or "
-                                "**take profit on the runner** (rebalance) — the final call is yours._"
-                            )
-
-                        # ── Redeploy: engine-vetted candidates in under-rep sectors ──
-                        if _redep_secs:
-                            _held_set = (
-                                set(port_df["Ticker"].tolist())
-                                if (port_df is not None and not port_df.empty) else set()
-                            )
-                            _grow_cache = st.session_state.get("_grow_composites", {}) or {}
-                            _port_ret   = portfolio_return_series(port_df, held_data)
-                            _ac_map     = _cached_analyst_coverage_recent()
-
-                            _cand_rows: list[dict] = []
-                            with st.spinner("Scoring redeploy candidates…"):
-                                for _sec in _redep_secs:
-                                    _sec_name = _sec.get("sector")
-                                    _pool = diversifying_candidate_pool(
-                                        _sec_name, _held_set, cap=DIVERSIFY_SCAN_CAP
-                                    )
-                                    _quality: dict = {}
-                                    _bundles: dict = {}
-                                    for _cand in _pool:
-                                        _cb = _grow_cache.get(_cand)
-                                        if _cb is None:
-                                            try:
-                                                _cb = load_all(_cand)
-                                            except Exception:
-                                                _cb = None
-                                        if _cb is None:
-                                            continue
-                                        _bundles[_cand] = _cb
-                                        _cprice = _cb.get("current_price")
-                                        _cstop  = _cb.get("stop")
-                                        _ctgt   = (_cb.get("targets") or {}).get("base")
-                                        _crr = (
-                                            risk_reward(_cprice, _cstop, _ctgt)
-                                            if (_cprice and _cstop and _ctgt) else None
-                                        )
-                                        _quality[_cand] = {
-                                            "score":  _cb.get("total"),
-                                            "signal": (_cb.get("rec") or {}).get("label"),
-                                            "rr":     _crr,
-                                        }
-                                    _annot = annotate_add_candidates(
-                                        _pool, _quality, buy_gate=COMPOSITE_BUY
-                                    )
-                                    for _a in _annot:
-                                        _a["sector"]  = _sec_name
-                                        _a["_bundle"] = _bundles.get(_a["ticker"])
-                                    _cand_rows.extend(_annot)
-
-                            # Global re-rank across sectors: gate-passers (composite
-                            # desc) → scored-failers → unscored. Composite is primary.
-                            def _rebal_rank(c: dict) -> tuple:
-                                tier = 0 if c["passes"] is True else (1 if c["passes"] is False else 2)
-                                return (tier, -(c["score"] if isinstance(c["score"], (int, float)) else 0))
-                            _cand_rows.sort(key=_rebal_rank)
-                            # Dedup by ticker (keep the best-ranked instance). A ticker
-                            # could in principle appear in two redeploy sectors' pools;
-                            # two identical Analyze-button keys would raise
-                            # StreamlitDuplicateElementId. Latent today (rosters are
-                            # disjoint) — cheap to harden, also avoids double-display.
-                            _seen_t: set = set()
-                            _deduped: list[dict] = []
-                            for _c in _cand_rows:
-                                _tk = str(_c["ticker"]).upper()
-                                if _tk in _seen_t:
-                                    continue
-                                _seen_t.add(_tk)
-                                _deduped.append(_c)
-                            _cand_rows = _deduped
-                            _display = _cand_rows[:DIVERSIFY_DISPLAY_TOP]
-
-                            # Correlation-to-book for the displayed names only.
-                            for _c in _display:
-                                _bd = _c.get("_bundle") or {}
-                                _hist = _bd.get("df") if _bd.get("df") is not None else _bd.get("history")
-                                _close = (
-                                    _hist["Close"]
-                                    if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
-                                    else None
-                                )
-                                _c["corr"] = (
-                                    correlation_to_portfolio(_close, _port_ret)
-                                    if (_close is not None and _port_ret is not None) else None
-                                )
-                            # "Cleanest diversifier" = lowest corr among displayed
-                            # gate-passers (correlation as a HIGHLIGHT, not a re-rank).
-                            _passers_corr = [
-                                c for c in _display
-                                if c["passes"] is True and isinstance(c.get("corr"), (int, float))
-                            ]
-                            _cleanest = (
-                                min(_passers_corr, key=lambda c: c["corr"])["ticker"]
-                                if _passers_corr else None
-                            )
-
-                            def _corr_label(cv) -> str:
-                                if not isinstance(cv, (int, float)):
-                                    return "corr to your book: n/a"
-                                if cv < REDEPLOY_CORR_DIVERSIFIER_MAX:
-                                    return f"🟢 corr {cv:.2f} to your book — genuine diversifier"
-                                if cv >= REDEPLOY_CORR_CORRELATED_MIN:
-                                    return f"🔴 corr {cv:.2f} to your book — limited benefit (moves with your book)"
-                                return f"🟡 corr {cv:.2f} to your book — partial diversifier"
-
-                            st.markdown("**Redeploy into — engine-vetted candidates:**")
-                            if any(c["passes"] is True for c in _cand_rows):
-                                _best = next(c for c in _cand_rows if c["passes"] is True)
-                                st.success(
-                                    f"**{_best['ticker']}** ({_best['sector']}) clears the Buy gate "
-                                    f"({_best['score']:.0f} ≥ {COMPOSITE_BUY:.0f}) — a genuine redeploy entry, "
-                                    "not just a sector filler.",
-                                    icon="🎯",
-                                )
-                            else:
-                                st.warning(
-                                    f"No under-represented-sector name clears the Buy gate "
-                                    f"(≥ {COMPOSITE_BUY:.0f}) today. Trimming is still sound — wait for a "
-                                    "better entry or pick your own name.",
-                                    icon="🚦",
-                                )
-
-                            for _c in _display:
-                                _t = _c["ticker"]
-                                _gate_icon = (
-                                    "✅" if _c["passes"] is True
-                                    else ("⚠️" if _c["passes"] is False else "—")
-                                )
-                                _score_txt = (
-                                    f"{_c['score']:.0f}/100"
-                                    if isinstance(_c["score"], (int, float)) else "score n/a"
-                                )
-                                _rr = _c.get("rr")
-                                _rr_txt = (
-                                    f" · R:R {_rr:.1f}:1"
-                                    if isinstance(_rr, (int, float)) and _rr > 0 else ""
-                                )
-                                _clean_badge = " · 🏆 cleanest diversifier" if _t == _cleanest else ""
-                                st.markdown(
-                                    f"{_gate_icon} **{_t}** ({_c['sector']}) — {_score_txt}"
-                                    + (f" · {_c['signal']}" if _c.get("signal") else "")
-                                    + _rr_txt
-                                )
-                                st.caption(f"{_corr_label(_c.get('corr'))}{_clean_badge}")
-                                # Analyst awareness note — display-only; NEVER ranks/gates.
-                                _ac = _ac_map.get(str(_t).upper())
-                                if _ac and (_ac.get("consensus_rating") or _ac.get("avg_pt") is not None):
-                                    _ap = []
-                                    if _ac.get("consensus_rating"):
-                                        _ap.append(str(_ac["consensus_rating"]))
-                                    if _ac.get("avg_pt") is not None:
-                                        _ap.append(f"avg PT ${float(_ac['avg_pt']):.2f}")
-                                    if _ap:
-                                        st.caption(
-                                            f"🏦 Your saved research: {' · '.join(_ap)} "
-                                            f"({_ac.get('n_firms', '?')} firms) — awareness only"
-                                        )
-                                if st.button(f"▶ Analyze {_t}", key=f"_rebal_an_{_t}_{_rebal_sfx}"):
-                                    st.session_state["_pending_page"]    = "📈 Analysis"
-                                    st.session_state["_analysis_ticker"] = _t
-                                    st.rerun()
-
-                            st.caption(
-                                f"_Ranked by your engine's composite (Buy gate {COMPOSITE_BUY:.0f}); "
-                                "correlation measured against your actual book. Full options on "
-                                "⚠️ Alerts & Actions → Add for Diversification._"
-                            )
-
-            def _render_review_card(_db_rev, _card_idx=0, in_act=False):
-                # Red accents when this review item was promoted into the red "Act
-                # Today" bucket (e.g. a PROTECTIVE_TRIM); amber/grey keep the calm
-                # Monitoring styling otherwise.
-                _db_border  = ("#ef4444" if in_act
-                               else "#f59e0b" if _db_rev.get("priority") == "medium"
-                               else "#78716c")
-                _db_bg      = "#1c1917"
-                _db_ticker  = _db_rev.get("ticker")
-                _headline   = _db_rev.get("headline", "")
-                _action     = _db_rev.get("action", {}) or {}
-                _why        = _db_rev.get("why", "")
-                _trigger    = _db_rev.get("trigger", "")
-                _act_color, _act_label, _act_text = _fmt_action(_action)
-                if in_act:
-                    _act_color = "#ef4444"  # match the red Act Today header
-
-                # Append alternatives only on weak-large TRIM_TO_TARGET items —
-                # this is the case where we're freeing capital and the user
-                # naturally needs to know where to put it.
-                if (_action.get("type") == "TRIM_TO_TARGET"
-                        and _action.get("reason_key") == "weak_large"):
-                    _alts = _alt_targets(_db_ticker)
-                    if _alts:
-                        _act_text += f" Reallocate to: {', '.join(_alts)}."
-                    else:
-                        _act_text += (
-                            " No composite-verified deployment options in today's "
-                            "brief — consider Watchlist or hold cash."
-                        )
-
-                # Title line: icon + ticker (or event name for macro) + headline
-                _title_left = _db_rev["icon"]
-                if _db_ticker:
-                    _title_left += f" <span style='color:#fbbf24'>{_db_ticker}</span>"
-                elif _db_rev.get("event"):
-                    _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
-
-                # Lifecycle badge (calm-advisor): 🌱 Settling / 📈 Winning / ⚠️ At Risk.
-                # "established" is un-badged (returns None). Tells the user WHERE this
-                # position is in its life so a stop nudge reads in context.
-                _lc = lifecycle_badge(_db_rev.get("lifecycle"))
-                if _lc:
-                    _title_left += (
-                        f" <span style='background:{_lc['color']}22;color:{_lc['color']};"
-                        f"border:1px solid {_lc['color']};border-radius:8px;padding:1px 7px;"
-                        f"font-size:0.74em;font-weight:700;margin-left:6px' title=\"{_lc['tip']}\">"
-                        f"{_lc['emoji']} {_lc['label']}</span>"
+            with _pm_left:
+                if _pm["global_markets"]:
+                    st.markdown(
+                        "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
+                        "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
+                        "🌍 GLOBAL MARKETS (OVERNIGHT)</div>",
+                        unsafe_allow_html=True,
                     )
-
-                # Manual-stop badge: if this ticker already has a user-set stop,
-                # surface it next to the headline so the user immediately sees
-                # "I've already acted on this; here's the level I set." Reads
-                # _manual_stops from session_state so it survives full reruns.
-                _ms_map = st.session_state.get("_manual_stops", {}) or {}
-                _ms_for_item = _ms_map.get(str(_db_ticker or "").upper())
-                if _ms_for_item:
-                    _ms_set_at = str(_ms_for_item.get("set_at", ""))[:10]
-                    _ms_p_val  = float(_ms_for_item.get("stop_price") or 0)
-                    _title_left += (
-                        f" <span style='background:#1e3a8a;color:#bfdbfe;"
-                        f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
-                        f"margin-left:6px'>"
-                        f"📌 manual stop ${_ms_p_val:.2f}"
-                        + (f" · set {_ms_set_at}" if _ms_set_at else "")
-                        + "</span>"
-                    )
-
-                st.markdown(
-                    f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                    f"{_title_left}"
-                    + (f" <span style='color:#a8a29e;font-weight:400'>· {_headline}</span>" if _headline else "")
-                    + f"</div>"
-                    f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
-                    f"<span style='color:{_act_color};font-weight:700'>→ {_act_label}:</span> "
-                    f"<span style='color:#f1f5f9'>{_act_text}</span></div>"
-                    + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                       f"<b>Why:</b> {_why}</div>" if _why else "")
-                    + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
-                       f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
-                    + f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-                # Weak-large-position items get Trade Journal context injected so the
-                # user can re-evaluate the position against their original reasoning,
-                # not just the current weight/score metrics.
-                if _db_rev.get("icon") == "🔍" and _db_ticker:
-                    _jctx = _journal_context(_db_ticker)
-                    if _jctx:
-                        _parts = []
-                        if _jctx.get("thesis"):
-                            _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
-                            _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
-                            _parts.append(
-                                f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
-                                f"📒 <b>Your entry thesis</b>{_date_tag}: "
-                                f"<span style='color:#e7e5e4;font-style:italic'>“{_html.escape(str(_t_clip))}”</span></div>"
-                            )
-                        for _ln in _jctx.get("lessons", []):
-                            _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
-                            _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
-                            _parts.append(
-                                f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
-                                f"💡 <b>Lesson</b>{_l_date}: "
-                                f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
-                            )
-                        if _parts:
-                            st.markdown(
-                                f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
-                                f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
-                                + "".join(_parts)
-                                + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
-                                "Re-evaluate this large position against your original reasoning before trimming."
-                                f"</div></div>",
-                                unsafe_allow_html=True,
-                            )
-                    else:
+                    for _gm in _pm["global_markets"]:
+                        _gc = "#22c55e" if _gm["chg_pct"] >= 0 else "#ef4444"
+                        _garrow = "▲" if _gm["chg_pct"] >= 0 else "▼"
                         st.markdown(
-                            f"<div style='background:#1c1917;border-left:3px solid #57534e;"
-                            f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
-                            f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
-                            f"📒 No Trade Journal entry found for {_db_ticker}. "
-                            "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
-                            f"</div>",
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"padding:2px 0;font-size:0.82em'>"
+                            f"<span style='color:#d1d5db'>{_gm['flag']} {_gm['name']}</span>"
+                            f"<span style='color:{_gc};font-weight:600'>"
+                            f"{_garrow} {_gm['chg_pct']:+.2f}%</span></div>",
                             unsafe_allow_html=True,
                         )
 
-                _action_type = _action.get("type")
-
-                # Trim subject computed UP FRONT (before the _db_ticker gate): a
-                # PROTECTIVE_TRIM card carries ticker=None with its real subject in
-                # action.trim_ticker (the weakest sector holding), so it must NOT be
-                # gated behind the headline ticker — that's the macro de-risk trim
-                # the whole Phase-B logging affordance is for.
-                _trim_tkr = ""
-                _trim_sh_f = 0.0
-                if _action_type in ("TRIM_TO_TARGET", "TRIM_AND_TIGHTEN", "PROTECTIVE_TRIM"):
-                    _trim_tkr = str(_action.get("trim_ticker") or _db_ticker or "").upper()
-                    try:
-                        _trim_sh_f = float(_action.get("trim_shares") or 0)
-                    except (TypeError, ValueError):
-                        _trim_sh_f = 0.0
-                _has_trim = bool(_trim_tkr) and _trim_sh_f > 0
-
-                if _db_ticker or _has_trim:
-                    _btn_c1, _btn_c2 = st.columns([1, 5])
-                    with _btn_c1:
-                        if _db_ticker and st.button(f"▶ Analyze {_db_ticker}",
-                                     key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
-                                     use_container_width=False):
-                            st.session_state["_pending_page"]    = "📈 Analysis"
-                            st.session_state["_analysis_ticker"] = _db_ticker
-                            st.rerun()
-
-                    # Action Log Phase B — in-context "log this trim". The app has no
-                    # brokerage execution path, so the loop closes by RECORDING the
-                    # trade you placed: one click pre-fills the Trade Journal SELL
-                    # form (ticker + suggested shares + decision context) so you don't
-                    # navigate away; once logged, holdings recompute and this trim
-                    # recommendation stops re-firing. Key uses the per-render card
-                    # index so two macro cards trimming the same name can't collide.
-                    if _has_trim:
-                        _trim_px = (st.session_state.get("_live_prices", {}).get(_trim_tkr, {}) or {}).get("price")
-                        with _btn_c2:
-                            _render_trade_button(
-                                ticker=_trim_tkr,
-                                suggested_action="SELL",
-                                shares=_trim_sh_f,
-                                price=float(_trim_px) if _trim_px else None,
-                                trigger="RECOMMENDATION",
-                                signal_context=(f"{_act_label}: {_act_text}")[:140],
-                                followed_intent="yes",
-                                notes=(f"Trim per Daily Brief — {_act_text}")[:240],
-                                key_suffix=f"trimlog_{_card_idx}",
-                                label=f"📒 Log this trim ({int(_trim_sh_f)} sh {_trim_tkr})",
-                            )
-
-                    # "Mark Done" form for stop-raise actions. The app can't place
-                    # the order at your brokerage — but it can record that YOU did,
-                    # so the same recommendation stops re-firing every render. Two
-                    # action types qualify: TIGHTEN_ONLY (raise stop) and
-                    # TRIM_AND_TIGHTEN (its stop-raise half — the trim half logs via
-                    # the "📒 Log this trim" button above).
-                    if _action_type in ("TIGHTEN_ONLY", "TRIM_AND_TIGHTEN"):
-                        _rec_stop = _action.get("new_stop")
-                        with _btn_c2:
-                            with st.expander(
-                                f"✅ Mark Done — log the stop I placed at brokerage",
-                                expanded=False,
-                            ):
-                                st.caption(
-                                    "The app advises; your brokerage executes. Once you've "
-                                    "placed the stop-loss order at Fidelity / Schwab / IBKR / "
-                                    "wherever, log the level here so this recommendation stops "
-                                    "re-appearing tomorrow."
-                                )
-                                _md_form_key = f"_md_form_{_db_ticker}_{_action_type}"
-                                with st.form(_md_form_key, clear_on_submit=True):
-                                    _md_col1, _md_col2 = st.columns([1, 2])
-                                    with _md_col1:
-                                        _new_stop_input = st.number_input(
-                                            "Stop placed at ($)",
-                                            min_value=0.0,
-                                            value=float(_rec_stop) if _rec_stop else 0.0,
-                                            step=0.01,
-                                            format="%.2f",
-                                            key=f"_md_price_{_db_ticker}",
-                                        )
-                                    with _md_col2:
-                                        _note_input = st.text_input(
-                                            "Note (optional)",
-                                            placeholder="e.g. 'GTC stop at Fidelity 2026-05-29'",
-                                            key=f"_md_note_{_db_ticker}",
-                                        )
-                                    _sub_c1, _sub_c2 = st.columns([1, 1])
-                                    with _sub_c1:
-                                        _md_submitted = st.form_submit_button(
-                                            "💾 Save",
-                                            type="primary",
-                                            use_container_width=True,
-                                            disabled=st.session_state.get("_readonly", False),
-                                            help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
-                                        )
-                                    with _sub_c2:
-                                        _md_revert = st.form_submit_button(
-                                            "↩️ Revert to ATR",
-                                            use_container_width=True,
-                                            disabled=st.session_state.get("_readonly", False),
-                                            help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else "Clear any manual stop override for this ticker",
-                                        )
-                                    if _md_submitted and _new_stop_input > 0:
-                                        if db.save_manual_stop(
-                                            ticker=_db_ticker,
-                                            stop_price=float(_new_stop_input),
-                                            note=_note_input or None,
-                                            source_action=f"review_{_action_type.lower()}",
-                                        ):
-                                            st.success(
-                                                f"Manual stop ${_new_stop_input:.2f} saved for "
-                                                f"{_db_ticker}. The Brief will stop re-suggesting "
-                                                "this until price moves enough to warrant a "
-                                                "further tighten."
-                                            )
-                                            st.rerun()
-                                    if _md_revert:
-                                        if db.clear_manual_stop(_db_ticker):
-                                            st.info(
-                                                f"Manual stop cleared for {_db_ticker}. "
-                                                "Reverted to ATR-derived stop."
-                                            )
-                                            st.rerun()
-
-            def _render_defensive_card(_item, _card_idx=0, in_act=False):
-                # in_act = this card sits in the red "Act Today" bucket → red accents
-                # (left bar + "→ LABEL:") so it reads as part of that section, matching
-                # the all-green offensive column. Awareness / Tune-up keep calm styling.
-                if _item.get("_source") == "review":
-                    _render_review_card(_item, _card_idx, in_act=in_act)
-                else:
-                    _render_act_card(_item, in_act=in_act)
-
-            # Act Today — genuine decisions only
-            _act_label  = (f"🔴 Act Today ({len(_act_bucket)})" if _act_bucket
-                           else "✅ Act Today — you're set")
-            _act_bg     = "#7f1d1d" if _act_bucket else "#14532d"
-            _act_border = "#ef4444" if _act_bucket else "#22c55e"
-            st.markdown(
-                f"<div style='background:{_act_bg};border-left:4px solid {_act_border};"
-                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_act_label}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if not _act_bucket:
-                _n_aware = len(_aware_bucket)
-                st.markdown(
-                    f"<div style='background:#052e16;border:1px solid #22c55e;border-radius:8px;"
-                    f"padding:12px 16px;margin-bottom:10px'>"
-                    f"<span style='color:#86efac;font-weight:700'>✅ Nothing to act on — you're set for today.</span>"
-                    f"<span style='color:#bbf7d0;font-size:0.85em'> Monitoring {_n_aware} "
-                    f"item{'s' if _n_aware != 1 else ''} below — no trade needed.</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                for _ci, _item in enumerate(_act_bucket):
-                    _render_defensive_card(_item, _ci, in_act=True)
-
-            # Monitoring / Awareness — FYI, nothing to execute
-            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-            st.markdown(
-                f"<div style='background:#1e293b;border-left:4px solid #475569;"
-                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
-                f"👁️ Monitoring / Awareness ({len(_aware_bucket)})</span>"
-                f"<span style='color:#94a3b8;font-size:0.82em'> · FYI — no action needed</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if not _aware_bucket:
-                st.caption("Nothing to monitor today — every position is steady.")
-            else:
-                for _ci, _item in enumerate(_aware_bucket):
-                    _render_defensive_card(_item, 1000 + _ci)
-
-            # Portfolio Tune-up — slow-moving risk-metric improvements (Sharpe /
-            # beta / volatility / drawdown / tail). NOT time-boxed decisions, so
-            # they live below Act Today / Awareness as standing quality work you
-            # do when rebalancing — not on the clock (§2B calm posture).
-            if _db_tuneup:
-                st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-                st.markdown(
-                    f"<div style='background:#1e293b;border-left:4px solid #64748b;"
-                    f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                    f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
-                    f"🔧 Portfolio Tune-up ({len(_db_tuneup)})</span>"
-                    f"<span style='color:#94a3b8;font-size:0.82em'> · standing quality — not time-sensitive</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                for _tu in _db_tuneup:
-                    _tu_tk = ", ".join(_tu.get("tickers", [])[:4])
+                if _pm["events"]:
                     st.markdown(
-                        "<div style='background:#0f172a;border:1px solid #334155;"
-                        "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                        f"<div style='color:#cbd5e1;font-weight:700;font-size:0.86em'>"
-                        f"{_tu.get('title','Portfolio metric')}</div>"
-                        + (f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
-                           f"{_tu.get('recommendation','')}</div>" if _tu.get("recommendation") else "")
-                        + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
-                           f"Positions: {_tu_tk}</div>" if _tu_tk else "")
-                        + "</div>",
+                        "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
+                        "letter-spacing:0.06em;margin-top:12px;margin-bottom:4px'>"
+                        "📅 TODAY'S CATALYSTS</div>",
                         unsafe_allow_html=True,
                     )
-                st.caption(
-                    "These lift risk-adjusted quality over time — act on them when you're "
-                    "rebalancing or have fresh capital, not on the clock."
-                )
+                    for _ev in _pm["events"][:4]:
+                        _eic = "#ef4444" if _ev.get("impact") == "HIGH" else "#f59e0b"
+                        _etime = _ev.get("time_et", "")
+                        _ename = _ev.get("event", _ev.get("name", ""))
+                        st.markdown(
+                            f"<div style='font-size:0.82em;padding:2px 0'>"
+                            f"<span style='color:{_eic};font-weight:700'>●</span> "
+                            f"<span style='color:#9ca3af'>{_etime} </span>"
+                            f"<span style='color:#d1d5db'>{_ename}</span></div>",
+                            unsafe_allow_html=True,
+                        )
 
-            # News Sentiment Shift — brief awareness cards for held positions
-            _sentiment_brief = _cached_sentiment(",".join(sorted(held_tickers))) if held_tickers else {}
-            if _sentiment_brief:
-                from stock_analyzer.news_sentiment import is_sentiment_shift as _is_shift
-                _sent_shift_tickers = [
-                    t for t in held_tickers
-                    if t in _sentiment_brief and _is_shift(_sentiment_brief[t])
-                ]
-                if _sent_shift_tickers:
-                    st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+            with _pm_right:
+                if _pm["movers"]:
                     st.markdown(
-                        f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
-                        f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-                        f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
-                        f"📰 News Sentiment Shift ({len(_sent_shift_tickers)})</span>"
-                        f"<span style='color:#94a3b8;font-size:0.82em'>"
-                        f" · narrative may be changing — check headlines</span>"
+                        "<div style='color:#6b7280;font-size:0.72em;font-weight:600;"
+                        "letter-spacing:0.06em;margin-top:10px;margin-bottom:4px'>"
+                        "⚡ PRE-MARKET MOVERS (YOUR STOCKS)</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for _mv in _pm["movers"][:8]:
+                        _mc = "#22c55e" if _mv["chg_pct"] >= 0 else "#ef4444"
+                        _marrow = "▲" if _mv["chg_pct"] >= 0 else "▼"
+                        _mv_ticker = str(_mv["ticker"]).upper()
+                        _mv_act    = _act_today_map.get(_mv_ticker)
+                        _held_badge = (
+                            "<span style='background:#1e3a5f;color:#60a5fa;"
+                            "padding:0 5px;border-radius:4px;font-size:0.7em'>held</span> "
+                            if _mv["is_held"] else ""
+                        )
+                        # Alert badge when Act Today has an action on this mover
+                        _act_badge = ""
+                        _act_tooltip = ""
+                        if _mv_act:
+                            _act_action = str(_mv_act.get("action", ""))
+                            if "SELL" in _act_action or "Stop" in _act_action:
+                                _act_badge = ("<span style='background:#7f1d1d;color:#fca5a5;"
+                                              "padding:0 5px;border-radius:4px;font-size:0.7em;"
+                                              "font-weight:700'>⚠ SELL SIGNAL</span> ")
+                            elif "RISK" in _act_action:
+                                _act_badge = ("<span style='background:#422006;color:#fcd34d;"
+                                              "padding:0 5px;border-radius:4px;font-size:0.7em;"
+                                              "font-weight:700'>⚠ RISK ALERT</span> ")
+                            else:
+                                _act_badge = ("<span style='background:#1c1917;color:#f59e0b;"
+                                              "padding:0 5px;border-radius:4px;font-size:0.7em;"
+                                              "font-weight:700'>⚠ ACT TODAY</span> ")
+                        st.markdown(
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"align-items:center;padding:3px 0;font-size:0.82em'>"
+                            f"<span style='color:#f9fafb;font-weight:600'>{_mv['ticker']}</span>"
+                            f"<span>{_held_badge}{_act_badge}"
+                            f"<span style='color:#9ca3af;margin-right:6px'>"
+                            f"${_mv['pre_price']:.2f}</span>"
+                            f"<span style='color:{_mc};font-weight:700'>"
+                            f"{_marrow} {_mv['chg_pct']:+.2f}%</span></span></div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    with _pm_right:
+                        st.caption("No significant pre-market moves in your holdings or watchlist yet.")
+
+            st.divider()
+
+        except Exception as _pm_err:
+            st.caption(f"Pre-market data unavailable: {_pm_err}")
+
+    _db_act    = _daily_brief["act_today"]
+    _db_buys   = _daily_brief["buy_candidates"]
+    _db_review = _daily_brief["review_list"]
+    _db_grow   = _daily_brief.get("grow_today", {})
+    _db_tuneup = _daily_brief.get("portfolio_tuneup", []) or []
+    _db_tone   = _market_context.get("tone", "flat")
+    # F-5: publish market tone so the Trade Journal thesis-draft can add regime
+    # context (best-effort; degrades to no regime if Home hasn't rendered yet).
+    st.session_state["_market_tone_cache"] = _db_tone
+    _db_sp_pct = _market_context.get("sp500_pct", 0.0)
+    _db_nq_pct = _market_context.get("nasdaq_pct", 0.0)
+
+    # ── Briefing header — tone-aware ──────────────────────────────────────
+    _tone_label = (
+        "📈 Growth Mode — Markets Up"   if _db_tone == "bull" else
+        "🛡️ Protect Mode — Markets Down" if _db_tone == "bear" else
+        "📊 Hold Steady — Mixed Market"
+    )
+    _tone_color = "#14532d" if _db_tone == "bull" else "#7f1d1d" if _db_tone == "bear" else "#1c1917"
+    _tone_bdr   = "#22c55e" if _db_tone == "bull" else "#ef4444" if _db_tone == "bear" else "#4b5563"
+    _sp_str     = f"S&P 500 {_db_sp_pct:+.2f}%"
+    _nq_str     = f"Nasdaq {_db_nq_pct:+.2f}%"
+    _lead_str   = (
+        " · Leading: " + ", ".join(
+            f"{ls['sector']} ({ls['return_1w']:+.1f}% 1W)"
+            for ls in _market_context.get("leading_sectors", [])[:2]
+        ) if _market_context.get("leading_sectors") else ""
+    )
+    # Compute last trading day for the date label when market is closed
+    from datetime import timedelta as _dbtd
+    _db_now_et  = _dt.now(_pytz.timezone("America/New_York"))
+    _db_weekday = _db_now_et.weekday()
+    _db_hour_et = _db_now_et.hour + _db_now_et.minute / 60
+    if _db_weekday >= 5:
+        _db_last_close = _today_et() - _dbtd(days=_db_weekday - 4)
+    elif _db_hour_et < 9.5:
+        _db_lc = _today_et() - _dbtd(days=1)
+        while _db_lc.weekday() >= 5:
+            _db_lc -= _dbtd(days=1)
+        _db_last_close = _db_lc
+    else:
+        _db_last_close = _today_et()
+    _db_date_str = _today_et().strftime("%A, %B %d %Y")
+    if not mkt["is_open"] and _db_last_close != _today_et():
+        _db_date_str += f" · data as of {_db_last_close.strftime('%a %b %d')}"
+
+    # Tone-staleness reconciliation (annotate, NEVER flip): pre-market, the tone
+    # reflects the LAST close while futures are live and can disagree. A red
+    # "Protect Mode" sitting above green live futures is misleading. Note the
+    # mismatch only — futures ≠ the open, so we never let them change the tone /
+    # gates / recommendations. Material direction mismatch only (reuses
+    # futures_tone's own bull/bear classification — no new threshold).
+    _tone_reconcile = ""
+    _tone_is_stale = (not mkt["is_open"]) and (_db_last_close != _today_et())
+    if _tone_is_stale and _pm_futures_tone in ("bull", "bear"):
+        if (_db_tone == "bear" and _pm_futures_tone == "bull") or \
+           (_db_tone == "bull" and _pm_futures_tone == "bear"):
+            _rec_dir = "higher" if _pm_futures_tone == "bull" else "lower"
+            _rec_es  = f" (ES {_pm_es_pct:+.2f}%)" if _pm_es_pct is not None else ""
+            _tone_reconcile = (
+                f"Reflects {_db_last_close.strftime('%a %b %d')} close — live futures "
+                f"currently {_rec_dir}{_rec_es}; refresh after the open for today's read."
+            )
+
+    # ── Market tone · fragility · action summary — three chips ────────────
+    _tone_col, _frag_col, _act_col = st.columns([5, 5, 3])
+    with _tone_col:
+        st.markdown(
+            f"<div style='background:{_tone_color};border:1px solid {_tone_bdr};"
+            f"border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:165px'>"
+            f"<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
+            f"<span style='font-size:1.1em;font-weight:700;color:#f9fafb'>"
+            f"{_tone_label}</span>"
+            f"<span style='color:#9ca3af;font-size:0.8em'>"
+            f"{_db_date_str}</span>"
+            f"</div>"
+            f"<div style='color:#d1d5db;font-size:0.82em;margin-top:6px'>"
+            f"{_sp_str} · {_nq_str}{_lead_str}</div>"
+            + (f"<div style='color:#fbbf24;font-size:0.76em;margin-top:6px;"
+               f"border-top:1px solid rgba(255,255,255,0.08);padding-top:5px'>"
+               f"⚠️ {_tone_reconcile}</div>" if _tone_reconcile else "")
+            + f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Fragility gauge — wrapped in a bordered container so it matches the chip style
+    with _frag_col:
+        with st.container(border=True):
+            _frag = st.session_state.get("_fragility_cache")
+            if _frag:
+                _fg_sev       = _frag["severity"]
+                _fg_icon      = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
+                _fg_lead      = {
+                    "calm":    "Your book moves roughly with the market.",
+                    "caution": "Your book is more volatile than the market.",
+                    "fragile": "Your book is fragile to a pullback.",
+                }[_fg_sev]
+                _fg_bar_color = {"calm": "#22c55e", "caution": "#f59e0b", "fragile": "#ef4444"}[_fg_sev]
+                _fg_why       = (" · most exposed: " + ", ".join(_frag["exposed"])) if _frag["exposed"] else ""
+                _fg_mult_val  = _frag.get("mult") or 1.0
+                _fg_left, _fg_right = st.columns([2, 3])
+                with _fg_left:
+                    _fg_fig = go.Figure(go.Indicator(
+                        mode="gauge+number",
+                        value=_fg_mult_val,
+                        number={"suffix": "×", "font": {"size": 26, "color": "#f0f2f5"}},
+                        title={"text": ""},
+                        gauge={
+                            "axis": {
+                                "range": [0, 3],
+                                "tickvals": [0, 1, 2, 3],
+                                "ticktext": ["0", "1×", "2×", "3×"],
+                                "tickwidth": 1, "tickcolor": "#4b5563",
+                                "tickfont": {"size": 9, "color": "#6b7280"},
+                            },
+                            "bar": {"color": _fg_bar_color, "thickness": 0.28},
+                            "bgcolor": "rgba(0,0,0,0)",
+                            "borderwidth": 0,
+                            "steps": [
+                                {"range": [0, PORTFOLIO_BETA_ELEVATED],
+                                 "color": "rgba(34,197,94,0.10)"},
+                                {"range": [PORTFOLIO_BETA_ELEVATED, PORTFOLIO_BETA_CEILING],
+                                 "color": "rgba(245,158,11,0.14)"},
+                                {"range": [PORTFOLIO_BETA_CEILING, 3],
+                                 "color": "rgba(239,68,68,0.10)"},
+                            ],
+                            "threshold": {
+                                "line": {"color": "#6b7280", "width": 1},
+                                "thickness": 0.75, "value": 1.0,
+                            },
+                        },
+                    ))
+                    _fg_fig.update_layout(
+                        height=130, margin={"l": 5, "r": 5, "t": 10, "b": 0},
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_fg_fig, use_container_width=True,
+                                    config={"displayModeBar": False})
+                with _fg_right:
+                    _hb = st.session_state.get("_highbeta_share")
+                    _hb_warn  = (_hb is not None and _hb >= CONCENTRATION_HIGHBETA_SHARE_WARN)
+                    _hb_color = "#f59e0b" if _hb_warn else "#6b7280"
+                    _hb_line  = (
+                        f"<div style='color:{_hb_color};font-size:0.75em;margin-top:8px'>"
+                        f"🔗 <b>{_hb:.0f}%</b> in high-beta (β ≥ {PORTFOLIO_BETA_ELEVATED:.1f}) names"
+                        + (" — correlated on risk-off days." if _hb_warn else " — moderate.")
+                        + "</div>"
+                    ) if (_hb is not None and _hb > 0) else ""
+                    st.markdown(
+                        f"<div style='padding-top:24px'>"
+                        f"<div style='color:#9ca3af;font-size:0.85em'>"
+                        f"{_fg_icon} {_fg_lead}</div>"
+                        f"<div style='color:#d1d5db;font-size:0.80em;margin-top:8px'>"
+                        f"A {abs(_frag['pullback_pct']):.0f}% pullback → "
+                        f"~<b>{_frag['implied_move']:+.0f}%</b>{_fg_why}</div>"
+                        + _hb_line +
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    for _ss_tk in _sent_shift_tickers:
-                        _ss = _sentiment_brief[_ss_tk]
-                        _ss_vs = _ss.get("vs_sector_pp")
-                        _ss_vs_txt = f", {_ss_vs:+.0f} pp vs sector avg" if _ss_vs is not None else ""
-                        _ss_buzz = _ss["buzz_score"]
-                        st.markdown(
-                            "<div style='background:#0f172a;border:1px solid #78350f;"
-                            "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                            f"<div style='color:#fbbf24;font-weight:700;font-size:0.86em'>"
-                            f"📰 {_ss_tk}</div>"
-                            f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
-                            f"News sentiment shifted bearish "
-                            f"({_ss['bullish_pct']:.0%} bullish{_ss_vs_txt}, "
-                            f"{_ss_buzz:.1f}× normal coverage). "
-                            f"Awareness only — check headlines.</div>"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
+            elif not port_df.empty:
+                # Withhold VISIBLY (never silently): holdings exist but beta couldn't be
+                # computed — say so rather than imply zero exposure. Matches the
+                # fundamentals-gate "withhold with a visible reason" precedent.
+                st.markdown(
+                    "<div style='background:#1c1917;border:1px solid #4b5563;"
+                    "border-radius:12px;padding:14px 20px;margin-bottom:12px;min-height:96px;"
+                    "color:#9ca3af;font-size:0.8em'>"
+                    "🛡️ Pullback-exposure read unavailable — portfolio beta couldn't be computed "
+                    "(market data offline?). Full breakdown: Risk &amp; Portfolio → Stress Testing.</div>",
+                    unsafe_allow_html=True,
+                )
 
-        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+    # Action summary chip — counts moved out of the tone chip
+    with _act_col:
+        # Counts mirror the post-split buckets (and the Tune-up lane) rendered in
+        # the defensive column below — never the raw act_today/review_list lists —
+        # so the chip can't contradict the section headers.
+        _act_n      = len(_split_def["act"])
+        _grow_n     = len(_db_grow.get("new_picks", [])) + len(_db_grow.get("add_positions", []))
+        _review_n   = len(_split_def["aware"])
+        _tuneup_n   = len(_db_tuneup)
+        _act_color  = "#7f1d1d" if _act_n > 0 else "#0f172a"
+        _act_border = "#ef4444" if _act_n > 0 else "#334155"
+        st.markdown(
+            f"<div style='background:{_act_color};border:1px solid {_act_border};"
+            f"border-radius:12px;padding:14px 20px;min-height:165px'>"
+            f"<div style='font-size:0.72em;font-weight:700;letter-spacing:0.08em;"
+            f"text-transform:uppercase;color:#9ca3af;margin-bottom:8px'>Today's Actions</div>"
+            f"<div style='color:#f9fafb;font-size:0.95em;font-weight:600;line-height:1.7'>"
+            f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} urgent action{'s' if _act_n != 1 else ''}<br>"
+            f"🟢 {_grow_n} growth setup{'s' if _grow_n != 1 else ''}<br>"
+            f"🟡 {_review_n} to review<br>"
+            f"🔧 {_tuneup_n} to tune up"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-        # ── Buy Candidates — OVERFLOW only, in the left "offense" column ──────
-        # De-duplicated against Grow Today: any ticker already shown there
-        # (made the pick cap, or surfaced in Filtered Out / macro-blocked /
-        # pending) is dropped so the same name never appears twice in the
-        # brief. What remains is the overflow — confirmed/unverified buys
-        # beyond the Grow Today pick cap. Rendered in the left column under
-        # Grow Today so the whole brief stays a clean 2-column offense/defense
-        # split (no full-width banner crossing the page).
-        with _db_col_left:
-            _grow_shown: set = set()
-            for _gk in ("new_picks", "add_positions", "composite_skipped",
-                        "macro_blocked_picks", "composite_unavailable"):
-                for _gp_item in (_db_grow.get(_gk, []) or []):
-                    _gt = _gp_item.get("ticker")
-                    if _gt:
-                        _grow_shown.add(str(_gt).upper())
-            _db_buys_unique = [
-                b for b in _db_buys
-                if str(b.get("ticker", "")).upper() not in _grow_shown
-            ]
+    # Cross-asset macro note — shown when ≥ CROSS_ASSET_STRESS_BRIEF_SCORE signals are stressed
+    from stock_analyzer.constants import CROSS_ASSET_STRESS_BRIEF_SCORE as _CA_BRIEF_MIN
+    _ca_brief = _cached_cross_asset()
+    if _ca_brief.get("score", 0) >= _CA_BRIEF_MIN:
+        st.info(
+            f"📡 **Cross-asset:** {_ca_brief['summary']} "
+            f"Check the **🔗 Risk Analysis** tab for the full breakdown.",
+            icon=None,
+        )
+    elif _ca_brief.get("label") == "—":
+        # Total cross-asset outage: the module returns label "—" (never a
+        # fabricated "Calm") precisely so blind ≠ calm. Echo that quietly on
+        # the Brief so a silent card isn't read as a macro all-clear.
+        st.caption(
+            "📡 Cross-asset macro signals are offline (market data unavailable) — "
+            "no stress read this run."
+        )
 
-            _db_confirmed   = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "confirmed")
-            _db_unverified  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "unverified")
-            _db_conflicted  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
-            _db_c2_label    = f"🟢 More Buy Candidates ({len(_db_buys_unique)})"
-            _db_c2_parts    = []
-            if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
-            if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
-            if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
-            _db_c2_sub = " · ".join(_db_c2_parts)
-            # Freshness stamp — when the candidates came from a persisted scan
-            # (cron post-open, or a prior manual scan) rather than a live in-session
-            # run, say so + when, so the list never reads as silently stale.
-            _scan_meta  = st.session_state.get("_scanner_results_meta") or {}
-            _scan_src   = {"cron": "auto-scan", "app": "your scan"}.get(_scan_meta.get("source"), "scan")
-            _scan_stamp = f"📡 From the {_scan_meta['scan_date']} {_scan_src}." if _scan_meta.get("scan_date") else ""
-            st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+    # ── Quick Research — label · input · button on one row ────────────────
+    # Collapsed from a header banner + caption + input row down to a single
+    # row. The dropped caption ("instant actionable summary") now lives in the
+    # button tooltip; the placeholder already carries the "any ticker" hint.
+    _qr_lbl, _qr_ic1, _qr_ic2 = st.columns([2, 6, 1.3])
+    with _qr_lbl:
+        st.markdown(
+            "<div style='padding-top:8px;color:#f9fafb;font-size:0.95em;"
+            "font-weight:700;white-space:nowrap'>🔍 Research a Stock</div>",
+            unsafe_allow_html=True,
+        )
+    with _qr_ic1:
+        _qr_ticker_in = st.text_input(
+            "ticker", key="_qr_ticker_input",
+            placeholder="e.g. RKLB, TSLA, AAPL  — any ticker you've seen in the news",
+            label_visibility="collapsed",
+        )
+    with _qr_ic2:
+        _qr_btn = st.button(
+            "Research →", key="_qr_btn", use_container_width=True,
+            help="Enter any ticker for an instant actionable summary — spot a news catalyst fast.",
+        )
+
+    if _qr_btn and _qr_ticker_in.strip():
+        _t = _qr_ticker_in.strip().upper()
+        with st.spinner(f"Analyzing {_t}..."):
+            try:
+                _qr_raw = load_all(_t)
+                # Build portfolio context so the 5th bullet is portfolio-aware
+                _qr_held_row = port_df[port_df["Ticker"] == _t]
+                _qr_is_held  = not _qr_held_row.empty
+                _qr_sector   = _qr_raw.get("sector", "")
+                # Concentration gate basis (equity, 2026-07-09 — reqs G-19):
+                # sum the Gate Weight (%) column (== equity Weight) so the entry
+                # caution matches the hard gate.
+                _qr_gcol = "Gate Weight (%)" if "Gate Weight (%)" in port_df.columns else "Weight (%)"
+                _qr_sec_wt   = (
+                    float(port_df[port_df["Sector"] == _qr_sector][_qr_gcol].sum())
+                    if _qr_sector else 0.0
+                )
+                # Sector-level Act Today awareness — when the user asks about
+                # a ticker in a sector where OTHER positions are flagged for
+                # action, that signals sector stress even if THIS ticker
+                # looks individually fine. Tells the user to wait for the
+                # broader sector picture to stabilise before adding.
+                _qr_sector_acts = []
+                if _qr_sector:
+                    _qr_held_tickers_in_sec = set(
+                        port_df[port_df["Sector"] == _qr_sector]["Ticker"].tolist()
+                    )
+                    _qr_sector_acts = [
+                        a for a in _daily_brief.get("act_today", [])
+                        if a.get("ticker") and a["ticker"] in _qr_held_tickers_in_sec
+                        and a["ticker"] != _t
+                    ]
+                _qr_ctx = {
+                    "held":              _qr_is_held,
+                    "held_shares":       float(_qr_held_row["Shares"].iloc[0])   if _qr_is_held else None,
+                    "held_avg_cost":     float(_qr_held_row["Avg Cost"].iloc[0]) if _qr_is_held else None,
+                    "held_pnl_pct":      float(_qr_held_row["P&L (%)"].iloc[0])  if _qr_is_held else None,
+                    "held_signal":       str(_qr_held_row["Signal"].iloc[0])     if _qr_is_held else None,
+                    "sector_of_ticker":  _qr_sector,
+                    "sector_weight_pct": _qr_sec_wt,
+                    "portfolio_beta":    _port_risk.get("beta"),
+                    "ticker_beta":       (_qr_raw.get("risk_metrics") or {}).get("beta"),
+                    "act_today_flags":   [a for a in _daily_brief.get("act_today", [])
+                                          if a.get("ticker") == _t],
+                    "sector_act_today":  _qr_sector_acts,
+                }
+                st.session_state["_qr_result"] = _qr_research(_t, _qr_raw, portfolio_ctx=_qr_ctx)
+            except Exception as _qr_e:
+                st.session_state["_qr_result"] = {"error": str(_qr_e), "ticker": _t}
+
+    _qr_res = st.session_state.get("_qr_result")
+    if _qr_res:
+        if "error" in _qr_res:
+            st.error(f"Could not load data for {_qr_res['ticker']}: {_qr_res['error']}")
+        else:
+            _qr_e = _qr_res["entry"]
+            # Header strip: ticker | name | sector | price | entry verdict badge
+            # Composite chip shows "{score}/100" only when the verdict is real;
+            # a withheld verdict (fundamentals missing) carries score=None so the
+            # chip reads "🚫 Verdict withheld" with no fabricated number (§9 P1).
+            _qr_score_sfx = (
+                f" {_qr_res['score']:.0f}/100" if _qr_res.get("score") is not None else ""
+            )
             st.markdown(
-                f"<div style='background:#14532d;border-left:4px solid #22c55e;"
-                f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
-                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
-                + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
-                + f"</div>",
+                f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;"
+                f"border-top:1px solid #374151;padding-top:10px;margin-top:4px'>"
+                f"<span style='color:#fbbf24;font-size:1em;font-weight:700'>{_qr_res['ticker']}</span>"
+                + (f"<span style='color:#d1d5db;font-size:0.85em'>{_qr_res['name']}</span>"
+                   if _qr_res.get("name") and _qr_res["name"] != _qr_res["ticker"] else "")
+                + (f"<span style='color:#9ca3af;font-size:0.8em'>{_qr_res['sector']}</span>"
+                   if _qr_res.get("sector") else "")
+                + (f"<span style='color:#f9fafb;font-size:0.9em'>${_qr_res['price']:.2f}</span>"
+                   if _qr_res.get("price") else "")
+                + f"<span style='background:{_qr_e['color']}22;border:1px solid {_qr_e['color']};"
+                f"color:{_qr_e['color']};padding:2px 10px;border-radius:10px;"
+                f"font-size:0.78em;font-weight:700'>{_qr_e['icon']} {_qr_e['label']}</span>"
+                f"<span style='background:{_qr_res['signal_color']}22;border:1px solid {_qr_res['signal_color']};"
+                f"color:{_qr_res['signal_color']};padding:2px 10px;border-radius:10px;"
+                f"font-size:0.78em;font-weight:700'>{_qr_res['signal_icon']} {_qr_res['signal']}{_qr_score_sfx}</span>"
+                f"</div>",
                 unsafe_allow_html=True,
             )
-            if not _db_buys:
-                st.caption(
-                    "No scan results yet. The pre-market **auto-scan** populates this "
-                    "each trading day (~10:00 AM ET) — or run the Market Scanner now."
+            # 4-bullet actionable summary
+            for _qr_b in _qr_res["bullets"]:
+                st.markdown(f"- {_qr_b}")
+            # Recent headlines (top 3)
+            if _qr_res.get("headlines"):
+                st.markdown(
+                    "<div style='color:#6b7280;font-size:0.8em;margin-top:4px'>"
+                    "<strong style='color:#9ca3af'>Recent headlines:</strong></div>",
+                    unsafe_allow_html=True,
                 )
-                if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
-                    st.session_state["_pending_page"] = "🔍 Market Scanner"
+                for _qr_h in _qr_res["headlines"][:3]:
+                    _qr_dot = (
+                        "🟢" if _qr_h.get("label") == "Positive" else
+                        "🔴" if _qr_h.get("label") == "Negative" else "⚪"
+                    )
+                    _qr_link = _safe_link(
+                        _qr_h.get("url", ""),
+                        _qr_h.get("headline", ""),
+                        max_len=200,
+                        style="color:#60a5fa",
+                    )
+                    st.markdown(
+                        f"<div style='color:#9ca3af;font-size:0.78em;margin-top:2px'>"
+                        f"{_qr_dot} {_qr_link}</div>",
+                        unsafe_allow_html=True,
+                    )
+            # Action buttons
+            _qr_bc1, _qr_bc2 = st.columns([3, 1])
+            with _qr_bc1:
+                if st.button(f"▶ Analyze {_qr_res['ticker']}", key="_qr_full_btn"):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _qr_res["ticker"]
+                    st.session_state["_nav_origin"]      = "📋 Today's Brief"
                     st.rerun()
-            elif not _db_buys_unique:
-                # Scanner ran, but every candidate is already represented in
-                # Grow Today above — no need to repeat them here.
+            with _qr_bc2:
+                if st.button("✕ Clear", key="_qr_clear_btn"):
+                    del st.session_state["_qr_result"]
+                    st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── Grow Today (before Act Today on bull days, after on bear/flat) ────
+    def _fmt_first_seen(ts_val) -> str:
+        """Render '_first_seen_at' from the recommendations log as a small
+        'Recommended HH:MM ET' chip. Returns empty string when no value
+        is present (e.g. logging table not yet provisioned)."""
+        if not ts_val:
+            return ""
+        try:
+            _dt = pd.to_datetime(ts_val, utc=True, errors="coerce")
+            if pd.isna(_dt):
+                return ""
+            _et = _dt.tz_convert("America/New_York")
+            return _et.strftime("%-I:%M %p ET").lstrip("0") if hasattr(_et, "strftime") else ""
+        except Exception:
+            try:
+                # Windows strftime doesn't support %-I; fall back to %I and strip
+                _et = pd.to_datetime(ts_val, utc=True).tz_convert("America/New_York")
+                return _et.strftime("%I:%M %p ET").lstrip("0")
+            except Exception:
+                return ""
+
+    def _render_grow_today(grow: dict, tone: str):
+        if not grow:
+            return
+        new_picks    = grow.get("new_picks", [])
+        add_pos      = grow.get("add_positions", [])
+        deploy_note  = grow.get("deploy_note")
+        bear_msg     = grow.get("message")
+        lead_secs_ui = grow.get("leading_sectors", [])
+        risk_banner  = grow.get("risk_banner")
+        blocked_adds  = grow.get("risk_blocked_adds", [])
+        conc_blocked  = grow.get("concentration_blocked_adds", [])
+        sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
+        cooldown_adds = grow.get("cooldown_adds", [])
+        macro_blocked = grow.get("macro_blocked_picks", [])
+        comp_skipped  = grow.get("composite_skipped", [])
+        comp_unavail  = grow.get("composite_unavailable", [])
+
+        _g_label = (
+            "📈 Grow Today"      if tone == "bull" else
+            "🛡️ Defer New Entries" if tone == "bear" else
+            "📈 High-Conviction Entries Only"
+        )
+        _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
+        _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
+        _g_count = f" ({len(new_picks) + len(add_pos)} setups)" if (new_picks or add_pos) else ""
+
+        st.markdown(
+            f"<div style='background:{_g_bg};border-left:4px solid {_g_bdr};"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_g_label}{_g_count}</span>"
+            + (f"<span style='color:#86efac;font-size:0.82em;margin-left:8px'>"
+               f"Sector leaders: {', '.join(ls['sector'] for ls in lead_secs_ui[:2])}</span>"
+               if lead_secs_ui and tone == "bull" else "")
+            + (f"<div style='color:#86efac;font-size:0.78em;margin-top:4px'>"
+               f"Cleared all 5 portfolio checks — vetted for entry.</div>"
+               if tone != "bear" else "")
+            + f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        if bear_msg:
+            st.caption(f"🛡️ {bear_msg}")
+            return
+
+
+        # Reach line: make the screening funnel visible — the brief draws
+        # from the curated SECTOR_UNIVERSE + watchlist + the broad discovery
+        # universe (movers pass), but only the finalists get composite-scored.
+        # Without this the user can't tell the engine looks beyond the
+        # ~70 curated names. Read-only; reflects what actually ran this session.
+        _sr_reach = st.session_state.get("scanner_results")
+        if _sr_reach is not None and not _sr_reach.empty:
+            _tracked_set = set().union(*SECTOR_UNIVERSE.values())
+            _tracked_n   = len(_tracked_set)
+            _wl_reach    = st.session_state.get("watchlist", []) or []
+            _wl_extra_n  = len([t for t in _wl_reach if str(t).upper() not in _tracked_set])
+            _disc_extra_n = len(discovery_tickers(exclude=_tracked_set))
+            _movers_ran  = "_movers_candidates" in st.session_state
+            _cov         = st.session_state.get("_grow_composites_coverage") or {}
+            _finalists_n = len(_cov.get("intended", []) or [])
+
+            _reach_parts = [f"{_tracked_n} tracked"]
+            if _wl_extra_n:
+                _reach_parts.append(f"{_wl_extra_n} watchlist-only")
+            if _movers_ran:
+                _reach_parts.append(f"{_disc_extra_n} discovery")
+            _reach_src = " + ".join(_reach_parts)
+            if _finalists_n:
                 st.caption(
-                    "All scanner candidates are already reflected in Grow Today above "
-                    "(picks, Filtered Out, or pending)."
+                    f"🔭 Screened {_reach_src} names → "
+                    f"{_finalists_n} reached full composite scoring."
+                )
+            else:
+                st.caption(f"🔭 Screened {_reach_src} names — run Refresh Signals for a fresh pass.")
+
+            # ── Reach-funnel Sankey — the SAME real numbers drawn to scale ──
+            # universe → reached composite scoring → New Positions to Initiate.
+            # Pure subtraction off the reach counts above, so it ALWAYS balances
+            # and never fabricates: "not scored" = universe − scored; the scored
+            # split = picks + below-buy-bar + other-filters (residual).
+            _fn_universe = _tracked_n + _wl_extra_n + (_disc_extra_n if _movers_ran else 0)
+            _fn_scored   = _finalists_n
+            _fn_picks    = len(new_picks)
+            if _fn_scored > 0 and _fn_universe >= _fn_scored >= _fn_picks:
+                with st.expander("🔎 How today's screen funnelled down to picks", expanded=True):
+                    _fn_notscored = _fn_universe - _fn_scored
+                    _fn_belowbar  = min(len(comp_skipped), _fn_scored - _fn_picks)
+                    _fn_other     = (_fn_scored - _fn_picks) - _fn_belowbar
+                    _fn_labels = [
+                        f"Screened ({_fn_universe})",
+                        f"Reached composite scoring ({_fn_scored})",
+                        f"Not scored this pass ({_fn_notscored})",
+                        f"✅ New Positions to Initiate ({_fn_picks})",
+                        f"Composite below Buy bar ({_fn_belowbar})",
+                        f"Other filters ({_fn_other})",
+                    ]
+                    _fn_ncolor = ["#60a5fa", "#38bdf8", "#475569", "#22c55e", "#f59e0b", "#64748b"]
+                    _fn_links = [
+                        (0, 1, _fn_scored,    "rgba(56,189,248,0.45)"),
+                        (0, 2, _fn_notscored, "rgba(71,85,105,0.25)"),
+                        (1, 3, _fn_picks,     "rgba(34,197,94,0.5)"),
+                        (1, 4, _fn_belowbar,  "rgba(245,158,11,0.35)"),
+                        (1, 5, _fn_other,     "rgba(100,116,139,0.3)"),
+                    ]
+                    _fn_links = [(s, t, v, c) for (s, t, v, c) in _fn_links if v > 0]
+                    if _fn_links:
+                        _fs, _ft, _fv, _fc = zip(*_fn_links)
+                        _fn_fig = go.Figure(go.Sankey(
+                            arrangement="snap",
+                            node=dict(
+                                # pad is generous on purpose: the funnel is
+                                # heavily value-skewed (e.g. 206 not-scored vs
+                                # a 12-name scored band), so the terminal nodes
+                                # collapse to a few px and their labels collide.
+                                # A large gap separates the labels while band
+                                # WIDTHS stay drawn-to-scale (thickness=value).
+                                label=_fn_labels, color=_fn_ncolor, pad=34, thickness=14,
+                                line=dict(color="rgba(255,255,255,0.08)", width=0.5),
+                            ),
+                            link=dict(source=list(_fs), target=list(_ft),
+                                      value=list(_fv), color=list(_fc)),
+                        ))
+                        _fn_fig.update_layout(
+                            # l/r margins give the right-edge node labels room
+                            # so they never clip the container.
+                            height=280, margin=dict(l=8, r=8, t=10, b=6),
+                            template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                            font=dict(size=11, color="#cbd5e1"),
+                        )
+                        st.plotly_chart(_fn_fig, use_container_width=True)
+                        st.caption(
+                            f"The funnel above, drawn to scale. Of **{_fn_universe}** names "
+                            f"screened, **{_fn_scored}** reached full composite scoring and "
+                            f"**{_fn_picks}** cleared every gate into New Positions to Initiate. "
+                            f"**Other filters** = scored names dropped for sector-cap / macro / "
+                            f"data / flat-day caution (the banners below name the specifics). "
+                            f"Every band is a real count — pure subtraction, nothing fabricated."
+                        )
+
+        # Composite-fetch failure banner — picks where load_all() couldn't
+        # fetch composite data (yfinance transient errors, etc) are held
+        # OUT of new_picks entirely (see daily_briefing.composite_unavailable).
+        # We surface them here as one aggregate notice with a Refresh button
+        # rather than as half-validated cards inside the actionable list.
+        # The "decides, not informs" posture: we don't recommend what we
+        # can't validate. The user gets one obvious recovery action.
+        if comp_unavail:
+            _unavail_tickers = [p.get("ticker", "") for p in comp_unavail]
+            _bn_c1, _bn_c2 = st.columns([5, 1])
+            with _bn_c1:
+                st.markdown(
+                    "<div style='background:#3b2a0a;border:1px solid #f59e0b;"
+                    "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                    f"<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                    f"🔍 Couldn't score {len(comp_unavail)} candidate"
+                    f"{'s' if len(comp_unavail) != 1 else ''} — data source returned an error</div>"
+                    f"<div style='color:#fcd34d;font-size:0.78em'>"
+                    f"Affected: <b>{', '.join(_unavail_tickers[:5])}</b>"
+                    + (f" (+{len(_unavail_tickers)-5} more)" if len(_unavail_tickers) > 5 else "")
+                    + "</div>"
+                    "<div style='color:#fde68a;font-size:0.74em;margin-top:4px;font-style:italic'>"
+                    "Set aside until data loads — momentum alone isn't enough to recommend. "
+                    "Click Retry to try the data fetch again."
+                    "</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with _bn_c2:
+                _rg_locked, _rg_rem = _refresh_gate("data")
+                if st.button("🔁 Retry", key="_db_grow_retry_comp",
+                             disabled=_rg_locked,
+                             help=(f"Cooling down — available in {_rg_rem}s."
+                                   if _rg_locked else
+                                   "Clear cache and re-fetch composite data for the affected tickers")):
+                    _refresh_gate_arm("data")
+                    st.cache_data.clear()
+                    st.session_state.pop("_grow_composites", None)
+                    st.session_state.pop("_grow_composites_coverage", None)
+                    st.rerun()
+
+        # Risk banner: shown when Act Today has active portfolio risk flags
+        if risk_banner:
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin-bottom:10px'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                "⚠️ Active Risk Alerts — resolve Act Today before deploying new capital</div>"
+                + "".join(
+                    f"<div style='color:#fcd34d;font-size:0.79em'>• {flag}</div>"
+                    for flag in risk_banner
+                )
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+        if not new_picks and not add_pos:
+            # No actionable setups — show the empty-state message, but
+            # DON'T early-return. Filtered-out / macro-blocked candidates
+            # are still rendered below so the user understands WHY there
+            # are no recommendations today (composite said no, sector had
+            # a macro event, etc.) rather than wondering "did anything
+            # even get screened?"
+            #
+            # Make the funnel explicit: "of X scanned, Y rejected, Z
+            # couldn't be scored" — without this, the unverified banner
+            # above and the empty-state message below look contradictory
+            # (banner says "2 candidates...", body says "no setups",
+            # and the user has no way to know those are different things).
+            _comp_cov     = st.session_state.get("_grow_composites_coverage") or {}
+            _scanned_n    = len(_comp_cov.get("intended", []) or [])
+            # Keep these SEPARATE. composite_skipped = reached full scoring but
+            # fell below the Buy bar (a merit rejection). macro_blocked = MET
+            # the criteria (often top momentum) but were suppressed ONLY for an
+            # imminent macro event — they get their own detailed block below.
+            # Lumping the two as "didn't meet criteria" both mislabelled the
+            # macro picks (a score-100 name did NOT fail on merit) and broke
+            # the arithmetic (the combined count could exceed the count
+            # actually evaluated, e.g. "of 12 evaluated, 16 didn't meet…").
+            _belowbar_n   = len(comp_skipped)
+            _macro_n      = len(macro_blocked)
+            _couldnt_n    = len(comp_unavail)
+            if _scanned_n > 0 and tone == "bull":
+                _funnel_parts = []
+                if _belowbar_n:
+                    _funnel_parts.append(f"{_belowbar_n} fell below it")
+                if _couldnt_n:
+                    _funnel_parts.append(
+                        f"{_couldnt_n} couldn't be scored (see banner above)"
+                    )
+                _funnel = f" ({'; '.join(_funnel_parts)})" if _funnel_parts else ""
+                if _macro_n:
+                    _mp_word = "pick was" if _macro_n == 1 else "picks were"
+                    _macro_note = (
+                        f" Separately, {_macro_n} strong {_mp_word} suppressed "
+                        "for an imminent macro event (see below)."
+                    )
+                else:
+                    _macro_note = ""
+                # When the emptiness is macro-driven, a re-scan can't un-block
+                # the suppressed names — so don't suggest one (§2B calm).
+                _tail = (
+                    "These re-evaluate automatically once the event resolves."
+                    if _macro_n else
+                    "Run Market Scanner for a fresh pass."
+                )
+                st.caption(
+                    f"Today's scan: none of the scored candidates cleared the "
+                    f"buy threshold{_funnel}.{_macro_note} {_tail}"
+                )
+            elif tone == "bull":
+                st.caption(
+                    "No high-confidence setups meet today's criteria. "
+                    "Run Market Scanner to refresh candidates."
                 )
             else:
                 st.caption(
-                    "📡 Scanner picks — not yet validated by the full portfolio check. "
-                    "Run Analysis before entering."
-                    + (f"  {_scan_stamp}" if _scan_stamp else "")
+                    "Flat market — waiting for clearer direction before adding new positions."
                 )
-                for _db_buy in _db_buys_unique:
-                    _xref       = _db_buy.get("xref", {})
-                    _reconciled = _xref.get("verdict_reconciled", {}) or {}
-                    _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
-                    _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
-                    _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
-                    _vagreed    = _xref.get("agreed", [])
-                    _vconflicts = _xref.get("conflicts", [])
-                    _vlayers    = _xref.get("layers_checked", 0)
-                    _db_bg      = "#1c1917"
-                    st.markdown(
-                        f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
-                        f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
-                        f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-                        f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
-                        f"{_db_buy['icon']} {_db_buy['action']} — "
-                        f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
-                        f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
-                        + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
-                        + f"</span>"
-                        f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
-                        f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
-                        f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
-                        f"</div>"
-                        # Resolution one-liner — replaces the diffuse "Verify" guidance
-                        # block with the explicit reconciled verdict for this ticker.
-                        + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
-                           f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
-                        + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
-                           f"📊 {_db_buy.get('scanner_signal','')} · "
-                           f"RSI {_db_buy.get('rsi',0):.0f} · "
-                           f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
-                           f"{_db_buy.get('trend','')}"
-                           f"</div>" if _db_buy.get("rsi") else "")
-                        + ("".join(
-                            f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
-                            for c in _vconflicts
-                        ) if _vconflicts else "")
-                        + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
-                           f"✓ {' · '.join(_vagreed[:3])}"
-                           + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
-                           + f"</div>" if _vagreed else "")
-                        + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                           f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
-                           f"</div>" if _db_buy.get("_first_seen_at") else "")
-                        + f"</div>",
-                        unsafe_allow_html=True,
+            # Hide the re-scan CTA when emptiness is macro-driven — a fresh
+            # scan can't un-block names suppressed for an imminent event, so
+            # prompting it is a futile action (§2B calm). The sidebar nav
+            # still reaches the Market Scanner page.
+            if tone == "bull" and not macro_blocked:
+                if st.button("🔍 Run Market Scanner", key="_db_grow_scanner"):
+                    st.session_state["_pending_page"] = "🔍 Market Scanner"
+                    st.rerun()
+
+        # New picks
+        if new_picks:
+            st.markdown("**🆕 New Positions to Initiate**")
+        _ac_cov_map = _cached_analyst_coverage_recent()   # hoisted; one query, annotation-only
+        for _gp in new_picks:
+            _gx         = _gp.get("xref", {})
+            _reconciled = _gx.get("verdict_reconciled", {}) or {}
+            # Prefer the central reconciliation engine's color/label/one-liner.
+            # Falls back to the legacy verdict_* fields if the engine didn't run.
+            _vc         = _reconciled.get("color") or _gx.get("verdict_color", "#22c55e")
+            _vl         = _reconciled.get("label") or _gx.get("verdict_label", "")
+            _v_one      = _reconciled.get("one_liner") or _gx.get("verdict_one_liner", "")
+            _sz         = _gp.get("sizing", {})
+            _conv       = _gp.get("conviction", "unverified")
+            _comp_sc    = _gp.get("composite_score")   # None if not yet fetched
+            _comp_lbl   = _gp.get("composite_label", "")
+
+            # Conviction badge: color + text driven by composite score
+            _conv_cfg = {
+                "high":       ("#22c55e", "✅ High Conviction"),
+                "moderate":   ("#f59e0b", "🟡 Moderate Setup"),
+                "low":        ("#ef4444", "⚠ Low Composite"),
+                "unverified": ("#f59e0b", "🔍 Verify — Run Analysis First"),
+            }
+            _conv_clr, _conv_txt = _conv_cfg.get(_conv, _conv_cfg["unverified"])
+
+            # Score line: always show momentum; show composite when available
+            _score_line = f"Momentum {_gp['score']:.0f}/100"
+            if _comp_sc is not None:
+                _score_line += f" · Composite {_comp_sc:.0f}/100"
+                if _comp_lbl:
+                    _score_line += f" ({_comp_lbl})"
+
+            # Mover badge: this candidate entered via today's 1-day breakout
+            # (from the broad discovery universe) rather than the curated
+            # scanner. Same list, same gates — the badge just shows the
+            # entry trigger so the user knows it's a fresh breakout.
+            _mover_badge = ""
+            if _gp.get("is_mover") and _gp.get("day_change") is not None:
+                _mover_badge = (
+                    f"<span style='background:#052e16;border:1px solid #22c55e;color:#4ade80;"
+                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'"
+                    f" title='Surfaced from the broad ~200-name discovery universe — a breakout outside your tracked list'>"
+                    f"🔥 +{_gp['day_change']:.1f}% today</span>"
+                )
+
+            # Steady-vs-yesterday chip (calm advisor 2C): a calm grey marker
+            # telling the user this is the same conviction holding, not a
+            # fresh daily call. Annotate-only; absent when the pick moved.
+            _steady_chip = ""
+            if _gp.get("_hysteresis", {}).get("stable"):
+                _steady_chip = (
+                    f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
+                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
+                    f"title='Position unchanged from the previous trading session — score and verdict held steady'>"
+                    f"↔ Steady vs yesterday</span>"
+                )
+
+            st.markdown(
+                f"<div style='background:#111827;border-left:3px solid {_vc};"
+                f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                f"<span style='color:#f9fafb;font-weight:700'>{_gp['ticker']}</span>"
+                f"<span style='color:#9ca3af;font-size:0.8em'>{_score_line} · {_gp['sector']}"
+                + (f" 🔥" if _gp.get("is_leader") else "")
+                + f"</span>"
+                + _mover_badge
+                # Cross-reference verdict badge
+                + f"<span style='background:{_vc}22;border:1px solid {_vc};color:{_vc};"
+                f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_vl}</span>"
+                # Conviction badge (composite-driven)
+                f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
+                f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_conv_txt}</span>"
+                + _steady_chip
+                + f"</div>"
+                # Resolution one-liner — explicit verdict that reconciles
+                # momentum vs composite vs news vs earnings into one sentence.
+                + (f"<div style='color:{_vc};font-size:0.85em;margin-top:6px;"
+                   f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
+                + f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
+                f"💡 <em>{_gp['thesis']}</em></div>"
+                + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
+                   f"📐 Suggested: {_sz.get('shares',0)} shares · "
+                   f"Entry zone ${_sz.get('entry_lo', _gp['price']):.2f}–${_sz.get('entry_hi', _gp['price']):.2f} "
+                   f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
+                   f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
+                   f"</div>" if _sz else "")
+                + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                   f"⏱ First surfaced: {_fmt_first_seen(_gp.get('_first_seen_at'))}"
+                   f"</div>" if _gp.get("_first_seen_at") else "")
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+            _ac_cov = _ac_cov_map.get(str(_gp["ticker"]).upper())
+            if _ac_cov and (_ac_cov.get("consensus_rating") or _ac_cov.get("avg_pt") is not None):
+                _ac_parts = []
+                if _ac_cov.get("consensus_rating"):
+                    _ac_parts.append(str(_ac_cov["consensus_rating"]))
+                if _ac_cov.get("avg_pt") is not None:
+                    try:
+                        _ac_parts.append(f"avg PT ${float(_ac_cov['avg_pt']):.2f}")
+                    except (TypeError, ValueError):
+                        pass
+                if _ac_parts:
+                    st.caption(f"🏦 Your saved research: {' · '.join(_ac_parts)} ({_ac_cov.get('n_firms', '?')} firms) — awareness only")
+            if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
+                st.session_state["_pending_page"]    = "📈 Analysis"
+                st.session_state["_analysis_ticker"] = _gp["ticker"]
+                st.rerun()
+
+        # Add-to-winner
+        if add_pos:
+            st.markdown("**➕ Add to Winning Positions**")
+        for _ga in add_pos:
+            _sz = _ga.get("sizing", {})
+            _ga_steady_chip = ""
+            if _ga.get("_hysteresis", {}).get("stable"):
+                _ga_steady_chip = (
+                    f"<span style='background:#1e293b;border:1px solid #475569;color:#94a3b8;"
+                    f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600' "
+                    f"title='Position unchanged from the previous trading session — score and verdict held steady'>"
+                    f"↔ Steady vs yesterday</span>"
+                )
+            st.markdown(
+                f"<div style='background:#052e16;border-left:3px solid #4ade80;"
+                f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                f"<span style='color:#f9fafb;font-weight:700'>{_ga['ticker']}</span>"
+                f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
+                f"Score {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
+                + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
+                + f"</span>"
+                + _ga_steady_chip
+                + f"</div>"
+                f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
+                f"💡 <em>{_ga['thesis']}</em></div>"
+                + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
+                   f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
+                   f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
+                + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                   f"⏱ First surfaced: {_fmt_first_seen(_ga.get('_first_seen_at'))}"
+                   f"</div>" if _ga.get("_first_seen_at") else "")
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button(f"▶ Analyze {_ga['ticker']}", key=f"_db_grow_add_{_ga['ticker']}"):
+                st.session_state["_pending_page"]    = "📈 Analysis"
+                st.session_state["_analysis_ticker"] = _ga["ticker"]
+                st.rerun()
+
+        # Post-add cooldown — you already acted on this add recently; the app
+        # is deliberately staying quiet so it doesn't read as day-trading.
+        if cooldown_adds:
+            _cd_rows = "".join(
+                f"<div style='color:#93c5fd;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                f"(Score {b.get('score',0):.0f} · P&L {b.get('pnl_pct',0):+.1f}%) — "
+                f"{b.get('reason','recently added')}</div>"
+                for b in cooldown_adds[:4]
+            )
+            st.markdown(
+                "<div style='background:#0f172a;border:1px solid #475569;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#cbd5e1;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                "🌱 Add Paused — Recently Added (settling)</div>"
+                + _cd_rows
+                + "<div style='color:#94a3b8;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "You already acted on these — the trend's still intact, but adding again "
+                "this soon is churn, not conviction. They'll return to the add list after "
+                "the new shares settle (or if you trim and the thesis re-strengthens)."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        # When a margin debit tightened the gate (account-basis), say so — the
+        # suppression weights run higher than the equity-only view shown
+        # elsewhere, and the user should know WHY (CLAUDE.md: never silently).
+        _gate_margin_note = (
+            "<div style='color:#fcd34d;font-size:0.74em;margin-top:6px;font-style:italic'>"
+            "⚖️ Tightened by margin — gated on your net capital, not gross stock holdings."
+            "</div>"
+            if (st.session_state.get("_acct_gate_cache") or {}).get("basis")
+               in ("account", "over-levered") else ""
+        )
+
+        # Single-name concentration ceiling suppressed an add — surface why
+        # so the user understands the position is capped, not signal-weak.
+        if conc_blocked:
+            _cn_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                f"({b.get('weight',0):.1f}% weight · Score {b.get('score',0):.0f}) — "
+                f"{b.get('reason','position at single-name ceiling')}</div>"
+                for b in conc_blocked[:3]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                f"🔒 Add Suppressed — Single-Name Ceiling ({int(SINGLE_NAME_CEILING)}%)</div>"
+                + _cn_rows
+                + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "These winners qualify on signal but already exceed the institutional "
+                "single-name ceiling. Adding more would concentrate idiosyncratic risk. "
+                "Trim back to target before considering further adds."
+                "</div>"
+                + _gate_margin_note
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Sector hard-cap breach — adds AND new picks in an over-cap sector are
+        # suppressed so the Brief never says "add here" while Act Today says
+        # "trim this sector". The protect-capital signal wins (the ESTC case).
+        if sector_blocked:
+            _sb_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                f"({b.get('sector','?')} · Score {b.get('score',0):.0f}) — "
+                f"{b.get('reason','sector over hard cap')}</div>"
+                for b in sector_blocked[:4]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                f"🔒 Suppressed — Sector Hard Cap ({int(SECTOR_CEILING)}%)</div>"
+                + _sb_rows
+                + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "These names qualify on signal, but their sector is already over the "
+                "institutional hard cap. Adding more would deepen a concentration the "
+                "Risk Advisor is recommending you trim. A Strong Buy here is a KEEP, not an add."
+                "</div>"
+                + _gate_margin_note
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Risk Advisor suppressed an add-to-winner — surface the conflict so the
+        # user understands why a winning held position isn't on the add list.
+        if blocked_adds:
+            _reason_label = {
+                "beta":   "high portfolio beta",
+                "sharpe": "poor risk-adjusted return",
+            }
+            _rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                f"(Strong Buy, Score {b.get('score',0):.0f}, P&L {b.get('pnl_pct',0):+.1f}%) — "
+                f"Risk Advisor flagged for trim due to "
+                f"{_reason_label.get(b.get('reason',''), b.get('reason',''))}.</div>"
+                for b in blocked_adds[:3]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                "🔀 Add-to-Winner Suppressed — Risk Advisor Conflict</div>"
+                + _rows
+                + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "These positions qualify as winners but Risk Advisor recommends trimming them. "
+                "Adding more would compound the risk metric being flagged. "
+                "Resolve in Portfolio → Risk Advisor before adding.</div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+        if deploy_note:
+            st.info(f"💰 {deploy_note}")
+
+        # ─────────────────────────────────────────────────────────────────
+        # BELOW THE FOLD — "Here's what we considered but didn't recommend"
+        # These blocks are informational, not actionable, so they live
+        # below the action items. They tell the user WHY a hot ticker
+        # didn't make the cut (composite said no, macro event imminent,
+        # etc.) — important context but lower priority than what to act on.
+        # ─────────────────────────────────────────────────────────────────
+
+        # Macro-blocked picks — sector has imminent HIGH-impact catalyst.
+        if macro_blocked:
+            _mb_shown = macro_blocked[:4]
+            _mb_extra = len(macro_blocked) - len(_mb_shown)
+            _mb_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                f"({b.get('sector','—')}, Score {b.get('score',0):.0f}) — {b.get('reason','')}</div>"
+                for b in _mb_shown
+            )
+            if _mb_extra > 0:
+                _mb_rows += (
+                    f"<div style='color:#fcd34d;font-size:0.79em;opacity:0.85'>"
+                    f"• …and {_mb_extra} more in affected sectors</div>"
+                )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin-top:12px;margin-bottom:8px'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                f"🌐 Picks Suppressed — Imminent HIGH-Impact Macro Event ({len(macro_blocked)})</div>"
+                + _mb_rows
+                + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "These sectors have a HIGH-impact macro release within "
+                f"{MACRO_IMMINENT_DAYS} days. Opening fresh positions into a known binary "
+                "catalyst is the institutional anti-pattern this gate blocks. "
+                "Revisit after the event resolves and the dust settles."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        # Composite-conflict suppression — momentum was hot but the full
+        # composite (Technical + Fundamental + Sentiment) was below the
+        # Buy threshold. Surfaces what was considered AND rejected so the
+        # user makes the decision on the Brief itself.
+        if comp_skipped:
+            _cs_rows = "".join(
+                f"<div style='color:#fca5a5;font-size:0.79em;margin-bottom:2px'>"
+                f"• <b>{c['ticker']}</b> ({c.get('sector','—')}) — "
+                f"Momentum <b>{c.get('momentum_score',0):.0f}/100</b> "
+                f"but composite <b>{c.get('composite_label','Hold')} "
+                f"{c.get('composite_score',0):.1f}/100</b> "
+                "→ skip (composite contradicts momentum)."
+                "</div>"
+                for c in comp_skipped[:5]
+            )
+            st.markdown(
+                "<div style='background:#3f1d1d;border:1px solid #ef4444;"
+                "border-radius:8px;padding:8px 14px;margin-top:8px;margin-bottom:4px'>"
+                "<div style='color:#fca5a5;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                f"⛔ Screened but Filtered Out ({len(comp_skipped)}) — Composite Says No</div>"
+                + _cs_rows
+                + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "Momentum (a single-factor breakout signal) caught these names, "
+                "but the full composite — Technical + Fundamental + Sentiment — "
+                "is below the Buy threshold (65). Decision: skip until composite "
+                "recovers. Track on the Watchlist for a re-look."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── Two-column layout: Act Today (left) | Grow Today (right) ────────
+    _db_col_right, _db_col_left = st.columns([1, 1])
+
+    with _db_col_left:
+        _render_grow_today(_db_grow, _db_tone)
+
+    with _db_col_right:
+        # ── Act vs Awareness split (calm advisor 2B) ────────────────────
+        # Split the defensive column by URGENCY, not origin: "Act Today" holds
+        # genuine same-day trade decisions; "Monitoring / Awareness" holds FYI
+        # items. Each item keeps its origin card template (_source) but lands in
+        # the bucket decision_bucket.classify_bucket assigns. Empty Act bucket =
+        # "you're set for today" (derived; no new persistence).
+        # _split_def computed once above (shared with the summary chip) so the
+        # chip counts and these section headers can't drift apart.
+        _act_bucket   = _split_def["act"]
+        _aware_bucket = _split_def["aware"]
+
+        _db_trades = st.session_state.get("trades_df")
+
+        def _journal_context(ticker: str) -> dict | None:
+            if _db_trades is None or _db_trades.empty:
+                return None
+            t = str(ticker).strip().upper()
+            df = _db_trades[_db_trades["ticker"].astype(str).str.upper() == t]
+            if df.empty:
+                return None
+            df = df.sort_values("traded_at", ascending=False)
+            # Entry thesis = notes on the most recent BUY (with non-empty notes)
+            thesis, thesis_date = "", ""
+            buys = df[df["action"].astype(str).str.upper() == "BUY"]
+            for _, _row in buys.iterrows():
+                n = str(_row.get("notes") or "").strip()
+                if n and n.lower() != "nan":
+                    thesis, thesis_date = n, str(_row.get("traded_at", ""))[:10]
+                    break
+            # Lessons = up to 2 most recent non-empty lesson entries
+            lessons = []
+            for _, _row in df.iterrows():
+                l = str(_row.get("lesson") or "").strip()
+                if l and l.lower() != "nan":
+                    lessons.append({"text": l, "date": str(_row.get("traded_at", ""))[:10]})
+                    if len(lessons) >= 2:
+                        break
+            if not thesis and not lessons:
+                return None
+            return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
+
+        # Format a structured action dict into (color, label, text) so each
+        # item renders the directive directly instead of a "consider X" prose.
+        def _fmt_action(action: dict) -> tuple[str, str, str]:
+            t = (action or {}).get("type", "")
+            if t == "WATCH":
+                return ("#94a3b8", "WATCH",
+                        "no action today — see Trigger below for what would escalate.")
+            if t == "TIGHTEN_ONLY":
+                ns = action.get("new_stop")
+                return ("#fbbf24", "ACT",
+                        f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
+            if t == "TRIM_AND_TIGHTEN":
+                ns = action.get("new_stop")
+                stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
+                return ("#22c55e", "ACT",
+                        f"Trim {action['trim_shares']} shares "
+                        f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
+                        f"{stop_str}")
+            if t == "TRIM_TO_TARGET":
+                return ("#fbbf24", "ACT",
+                        f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
+                        f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
+            if t == "PROTECTIVE_TRIM":
+                return ("#fbbf24", "ACT",
+                        f"Trim {action['trim_ticker']} (weakest in sector, score "
+                        f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
+                        f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
+                        f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
+            if t == "DETERIORATION_WATCH":
+                return ("#94a3b8", "WATCH",
+                        "no action today — early deterioration; watching for follow-through "
+                        "(see Trigger for what escalates it to a TRIM).")
+            return ("#94a3b8", "—", "—")
+
+        # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
+        # Two complementary sources (primary + backup so both don't fail
+        # together): (1) Grow Today's verified new picks above COMPOSITE_BUY,
+        # (2) Add-to-Winner candidates (existing positions with room).
+        def _alt_targets(skip_ticker: str | None) -> list[str]:
+            _grow_picks = _db_grow.get("new_picks", []) or []
+            _add_picks  = _db_grow.get("add_positions", []) or []
+            _alts: list[tuple[str, float]] = []
+            _seen: set = set()
+            for _p in _grow_picks:
+                _t = str(_p.get("ticker", "")).upper()
+                _cs = _p.get("composite_score")
+                if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
+                    continue
+                if _cs is None:
+                    continue
+                _alts.append((_t, _cs))
+                _seen.add(_t)
+            if len(_alts) < 3:
+                for _p in _add_picks:
+                    _t = str(_p.get("ticker", "")).upper()
+                    _cs = _p.get("score")
+                    if not _t or _t == (skip_ticker or "").upper() or _t in _seen:
+                        continue
+                    _alts.append((_t, _cs))
+                    _seen.add(_t)
+                    if len(_alts) >= 3:
+                        break
+            _alts.sort(key=lambda x: -(x[1] or 0))
+            return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
+
+        # Load BROKEN thesis tickers once per render — additive only; no-ops
+        # if AI Insights has never been used or the table doesn't exist yet.
+        if "_broken_thesis_tickers" not in st.session_state:
+            try:
+                _rv_df = db.load_thesis_reviews()
+                if not _rv_df.empty:
+                    # Keep only the most-recent review per ticker
+                    _rv_latest = (
+                        _rv_df.sort_values("reviewed_at", ascending=False)
+                        .drop_duplicates(subset="ticker")
                     )
-                    if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
+                    st.session_state["_broken_thesis_tickers"] = set(
+                        _rv_latest.loc[
+                            _rv_latest["status"] == "BROKEN", "ticker"
+                        ].astype(str).str.upper()
+                    )
+                else:
+                    st.session_state["_broken_thesis_tickers"] = set()
+            except Exception:
+                st.session_state["_broken_thesis_tickers"] = set()
+        _broken_thesis_tickers = st.session_state.get("_broken_thesis_tickers", set())
+
+        def _render_act_card(_db_item, in_act=False):
+            _db_is_crit = _db_item["priority"] == "critical"
+            _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
+            # Red left bar for any Act-bucket card (or a critical one); amber only
+            # when this act-origin item is shown in the calm Awareness lane.
+            _db_border  = "#ef4444" if (in_act or _db_is_crit) else "#f59e0b"
+            _db_ticker  = _db_item.get("ticker")
+            _db_weight_txt = (
+                f" · {_db_item['weight']:.1f}% of portfolio"
+                if _db_item.get("weight") else ""
+            )
+            _db_pnl_txt = (
+                f" · P&L {_db_item['pnl_pct']:+.1f}%"
+                if _db_item.get("pnl_pct") is not None and _db_item.get("weight") else ""
+            )
+            # Body: structured ACT/Why/Trigger when present (matches
+            # Review Before Close); falls back to legacy reason / risk
+            # flags for older item shapes.
+            _db_directive = _db_item.get("directive", "")
+            _db_why       = _db_item.get("why", "")
+            _db_trigger   = _db_item.get("trigger", "")
+            _db_flags     = _db_item.get("risk_flags", []) or []
+            _act_color    = "#ef4444" if (in_act or _db_is_crit) else "#fbbf24"
+
+            _body = ""
+            if _db_directive:
+                _body += (
+                    f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
+                    f"<span style='color:{_act_color};font-weight:700'>→ ACT:</span> "
+                    f"<span style='color:#f1f5f9'>{_db_directive}</span></div>"
+                )
+            if _db_why:
+                _body += (
+                    f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                    f"<b>Why:</b> {_db_why}</div>"
+                )
+            if _db_trigger:
+                _body += (
+                    f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                    f"<b>Trigger:</b> {_db_trigger}</div>"
+                )
+            # Risk flags: one sub-block per flag (consolidated multi-risk).
+            for _flag in _db_flags:
+                _body += (
+                    f"<div style='color:#e7e5e4;font-size:0.81em;margin-top:6px;"
+                    f"border-left:2px solid #f59e0b;padding-left:8px'>"
+                    f"<span style='color:#fbbf24;font-weight:600'>{_flag.get('title','Risk')}</span><br>"
+                    f"<span style='color:#d1d5db'>{_flag.get('recommendation','')}</span></div>"
+                )
+            # Back-compat: anything without the new fields still shows reason.
+            if not _body and _db_item.get("reason"):
+                _body = (
+                    f"<div style='color:#d1d5db;font-size:0.82em;margin-top:4px'>"
+                    f"{_db_item['reason']}</div>"
+                )
+
+            st.markdown(
+                f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                f"{_db_item['icon']} {_db_item['action']}"
+                + (f" — <span style='color:#fbbf24'>{_db_ticker}</span>" if _db_ticker else "")
+                + f"<span style='color:#9ca3af;font-weight:400'>{_db_weight_txt}{_db_pnl_txt}</span>"
+                f"</div>"
+                + _body
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+            if _db_ticker:
+                _act_cols = st.columns([2, 3, 5])
+                with _act_cols[0]:
+                    if st.button(f"▶ Analyze {_db_ticker}", key=f"_db_act_{_db_ticker}_{_db_item['action'][:10]}",
                                  use_container_width=False):
                         st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _db_buy["ticker"]
+                        st.session_state["_analysis_ticker"] = _db_ticker
                         st.rerun()
+                # Combined elevated card: when BROKEN thesis + TRIM/EXIT coincide,
+                # show a lightweight AI note link (core card is complete without it).
+                if str(_db_ticker).upper() in _broken_thesis_tickers:
+                    with _act_cols[1]:
+                        if st.button(
+                            "🔴 Thesis broken — view AI note →",
+                            key=f"_db_act_ainote_{_db_ticker}_{_db_item['action'][:10]}",
+                            use_container_width=False,
+                        ):
+                            st.session_state["_pending_page"] = "🧠 AI Insights"
+                            st.rerun()
+
+            # ── Rebalance plan (Hard-Cap-Breach / sector-concentration cards) ──
+            # Completes the trim→redeploy loop that the copy promises but the
+            # card never delivered: names the lowest-conviction holdings to trim
+            # AND engine-vetted, correlation-checked buy candidates in the
+            # under-represented sectors. Button-gated (not an expander, whose
+            # body always executes) so NO scoring / correlation compute runs
+            # until the user asks — keeps the default Brief calm (§2B) and
+            # avoids a per-rerun fetch storm. INVARIANTS: the engine composite +
+            # COMPOSITE_BUY are the SOLE ranker/gate; correlation-to-book and
+            # saved analyst research only ANNOTATE (never reorder past the
+            # composite, never gate).
+            _rebal_flag = next(
+                (f for f in _db_flags if f.get("rec_type") == "sector_concentration"),
+                None,
+            )
+            if _rebal_flag is not None:
+                _rebal_sfx  = _db_item["action"][:10]
+                _rebal_key  = f"_rebal_open_{_db_ticker}_{_rebal_sfx}"
+                if st.button(
+                    "🔎 Rebalance plan — what to trim, where to redeploy",
+                    key=f"_rebal_btn_{_db_ticker}_{_rebal_sfx}",
+                ):
+                    st.session_state[_rebal_key] = not st.session_state.get(_rebal_key, False)
+                if st.session_state.get(_rebal_key, False):
+                    _trim       = _rebal_flag.get("trim_candidates", []) or []
+                    _redep_secs = _rebal_flag.get("redeploy_sectors", []) or []
+
+                    # ── Trim first: lowest-conviction names in the sector ──
+                    if _trim:
+                        _tt_dollar = _rebal_flag.get("trim_target_dollar")
+                        _tt_pp     = _rebal_flag.get("trim_target_pp")
+                        _tt_denom  = _rebal_flag.get("trim_target_denom")
+                        _tc_by_tkr = {c.get("ticker"): c for c in _trim}
+
+                        # Basis sub-line for WHY a name is low-conviction: the
+                        # composite's three pillars (from the held bundle) +
+                        # recent momentum + the pillar capping it. Display-only;
+                        # order stays composite-ascending (engine authority).
+                        def _trim_basis(_t, _tc):
+                            _hb = (held_data or {}).get(_t) or {}
+                            _tsc  = _hb.get("t_score")
+                            _bqsc = _hb.get("bq_score", _hb.get("f_score"))
+                            _vsc  = _hb.get("val_score")
+                            _ssc  = _hb.get("s_score")
+                            _hist = _hb.get("df") if _hb.get("df") is not None else _hb.get("history")
+                            _cl = (
+                                _hist["Close"]
+                                if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
+                                else None
+                            )
+                            _bits = []
+                            if isinstance(_tc.get("score"), (int, float)):
+                                _bits.append(f"composite {_tc['score']:.0f}/100")
+                            if isinstance(_tc.get("weight"), (int, float)):
+                                _bits.append(f"{_tc['weight']:.1f}% held")
+                            if isinstance(_tc.get("pnl_pct"), (int, float)):
+                                _bits.append(f"P&L {_tc['pnl_pct']:+.1f}%")
+                            _pill = []
+                            if isinstance(_tsc,  (int, float)): _pill.append(f"tech {_tsc:.0f}")
+                            if isinstance(_bqsc, (int, float)): _pill.append(f"bq {_bqsc:.0f}")
+                            if isinstance(_vsc,  (int, float)): _pill.append(f"val {_vsc:.0f}")
+                            if isinstance(_ssc,  (int, float)): _pill.append(f"sentiment {_ssc:.0f}")
+                            if _pill: _bits.append(" ".join(_pill))
+                            _r1w = trailing_return(_cl, 5) if _cl is not None else None
+                            _r1m = trailing_return(_cl, 21) if _cl is not None else None
+                            _mom = []
+                            if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
+                            if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
+                            if _mom: _bits.append(" ".join(_mom))
+                            _pm = {"business_quality": _bqsc, "valuation": _vsc, "technicals": _tsc, "sentiment": _ssc}
+                            _pv = {k: v for k, v in _pm.items() if isinstance(v, (int, float))}
+                            if _pv:
+                                _wk = min(_pv, key=_pv.get)
+                                _bits.append(f"capped by {_wk} ({_pv[_wk]:.0f})")
+                            if _bits:
+                                st.caption("    ↳ " + "  ·  ".join(_bits))
+
+                        _tax_txt = {
+                            "gain": "realizes a gain (taxable)",
+                            "loss": "realizes a loss (offsets gains)",
+                            "flat": "~breakeven",
+                        }
+                        _alloc = (
+                            trim_allocation(_trim, _tt_dollar, _tt_denom)
+                            if _tt_dollar else {"rows": [], "total_allocated": 0, "target": 0, "shortfall": 0}
+                        )
+                        if _alloc["rows"]:
+                            # NOTE: escape literal "$" as "\$" in every st.markdown/
+                            # st.caption below — Streamlit renders a $…$ PAIR as LaTeX
+                            # math, so a line with two unescaped dollars (e.g. the
+                            # running total) garbles into italic math.
+                            _hdr = f"**Trim first — the plan (target: trim ~\\${_tt_dollar:,.0f}"
+                            if isinstance(_tt_pp, (int, float)): _hdr += f" · {_tt_pp:.0f}pp"
+                            _hdr += f" → {SECTOR_ELEVATED:.0f}%):**"
+                            st.markdown(_hdr)
+                            # Display cap only (NOT a gate): rows past it are
+                            # rolled up into a remainder line so the running
+                            # total still reflects every name. Deliberately >
+                            # the 3-name candidate display — a trim plan may
+                            # legitimately span more names to reach the target.
+                            _PLAN_CAP = 5
+                            for _i, _row in enumerate(_alloc["rows"][:_PLAN_CAP], 1):
+                                _t = _row["ticker"]
+                                _verb = "sell ALL" if _row["full"] else "trim"
+                                _pp = f" · {_row['cut_pp']:.0f}pp" if _row.get("cut_pp") is not None else ""
+                                _sh_val = _row.get("shares")
+                                if _sh_val:
+                                    _sh = (f" · ≈{_sh_val:,.0f} sh" if _sh_val >= 1
+                                           else f" · ≈{_sh_val:.2f} sh")
+                                else:
+                                    _sh = ""
+                                _tail = " · full exit" if _row["full"] else " · partial"
+                                _tx = _tax_txt.get(_row.get("tax_dir"), "")
+                                st.markdown(
+                                    f"**{_i}. {_t}** — {_verb} ~\\${_row['cut_dollar']:,.0f}{_pp}{_sh}{_tail}"
+                                    + (f" · 🧾 {_tx}" if _tx else "")
+                                )
+                                _trim_basis(_t, _tc_by_tkr.get(_t, {}))
+                            _extra = _alloc["rows"][_PLAN_CAP:]
+                            if _extra:
+                                _ex_sum = sum(r["cut_dollar"] for r in _extra)
+                                st.caption(
+                                    f"    + ~\\${_ex_sum:,.0f} to trim across {len(_extra)} more "
+                                    "low-conviction name(s)"
+                                )
+                            st.caption(
+                                f"✓ **\\${_alloc['total_allocated']:,.0f}** of ~\\${_alloc['target']:,.0f} "
+                                f"· sector → ~{SECTOR_ELEVATED:.0f}%"
+                            )
+                            if _alloc["shortfall"] > 0:
+                                st.caption(
+                                    f"⚠️ ~\\${_alloc['shortfall']:,.0f} of the target isn't covered by your "
+                                    "scored names in this sector — trim the remainder across the sector's "
+                                    "other holdings."
+                                )
+                        else:
+                            # Fallback (no target available, e.g. legacy cached
+                            # rec): basis-only priority list, the shipped shape.
+                            st.markdown("**Trim first — your lowest-conviction names:**")
+                            for _tc in _trim[:DIVERSIFY_DISPLAY_TOP]:
+                                _t = _tc.get("ticker")
+                                st.markdown(
+                                    f"• **{_t}** — composite {_tc['score']:.0f}/100 · "
+                                    f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
+                                )
+                                _trim_basis(_t, _tc)
+                        st.caption(
+                            "_Greedy: your weakest-conviction names are trimmed first (engine order — small "
+                            "gaps are within scoring noise). Shares are approximate; the $/pp are the target. "
+                            "Two honest schools when a sector MUST be cut: **trim the laggard** (momentum) or "
+                            "**take profit on the runner** (rebalance) — the final call is yours._"
+                        )
+
+                    # ── Redeploy: engine-vetted candidates in under-rep sectors ──
+                    if _redep_secs:
+                        _held_set = (
+                            set(port_df["Ticker"].tolist())
+                            if (port_df is not None and not port_df.empty) else set()
+                        )
+                        _grow_cache = st.session_state.get("_grow_composites", {}) or {}
+                        _port_ret   = portfolio_return_series(port_df, held_data)
+                        _ac_map     = _cached_analyst_coverage_recent()
+
+                        _cand_rows: list[dict] = []
+                        with st.spinner("Scoring redeploy candidates…"):
+                            for _sec in _redep_secs:
+                                _sec_name = _sec.get("sector")
+                                _pool = diversifying_candidate_pool(
+                                    _sec_name, _held_set, cap=DIVERSIFY_SCAN_CAP
+                                )
+                                _quality: dict = {}
+                                _bundles: dict = {}
+                                for _cand in _pool:
+                                    _cb = _grow_cache.get(_cand)
+                                    if _cb is None:
+                                        try:
+                                            _cb = load_all(_cand)
+                                        except Exception:
+                                            _cb = None
+                                    if _cb is None:
+                                        continue
+                                    _bundles[_cand] = _cb
+                                    _cprice = _cb.get("current_price")
+                                    _cstop  = _cb.get("stop")
+                                    _ctgt   = (_cb.get("targets") or {}).get("base")
+                                    _crr = (
+                                        risk_reward(_cprice, _cstop, _ctgt)
+                                        if (_cprice and _cstop and _ctgt) else None
+                                    )
+                                    _quality[_cand] = {
+                                        "score":  _cb.get("total"),
+                                        "signal": (_cb.get("rec") or {}).get("label"),
+                                        "rr":     _crr,
+                                    }
+                                _annot = annotate_add_candidates(
+                                    _pool, _quality, buy_gate=COMPOSITE_BUY
+                                )
+                                for _a in _annot:
+                                    _a["sector"]  = _sec_name
+                                    _a["_bundle"] = _bundles.get(_a["ticker"])
+                                _cand_rows.extend(_annot)
+
+                        # Global re-rank across sectors: gate-passers (composite
+                        # desc) → scored-failers → unscored. Composite is primary.
+                        def _rebal_rank(c: dict) -> tuple:
+                            tier = 0 if c["passes"] is True else (1 if c["passes"] is False else 2)
+                            return (tier, -(c["score"] if isinstance(c["score"], (int, float)) else 0))
+                        _cand_rows.sort(key=_rebal_rank)
+                        # Dedup by ticker (keep the best-ranked instance). A ticker
+                        # could in principle appear in two redeploy sectors' pools;
+                        # two identical Analyze-button keys would raise
+                        # StreamlitDuplicateElementId. Latent today (rosters are
+                        # disjoint) — cheap to harden, also avoids double-display.
+                        _seen_t: set = set()
+                        _deduped: list[dict] = []
+                        for _c in _cand_rows:
+                            _tk = str(_c["ticker"]).upper()
+                            if _tk in _seen_t:
+                                continue
+                            _seen_t.add(_tk)
+                            _deduped.append(_c)
+                        _cand_rows = _deduped
+                        _display = _cand_rows[:DIVERSIFY_DISPLAY_TOP]
+
+                        # Correlation-to-book for the displayed names only.
+                        for _c in _display:
+                            _bd = _c.get("_bundle") or {}
+                            _hist = _bd.get("df") if _bd.get("df") is not None else _bd.get("history")
+                            _close = (
+                                _hist["Close"]
+                                if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
+                                else None
+                            )
+                            _c["corr"] = (
+                                correlation_to_portfolio(_close, _port_ret)
+                                if (_close is not None and _port_ret is not None) else None
+                            )
+                        # "Cleanest diversifier" = lowest corr among displayed
+                        # gate-passers (correlation as a HIGHLIGHT, not a re-rank).
+                        _passers_corr = [
+                            c for c in _display
+                            if c["passes"] is True and isinstance(c.get("corr"), (int, float))
+                        ]
+                        _cleanest = (
+                            min(_passers_corr, key=lambda c: c["corr"])["ticker"]
+                            if _passers_corr else None
+                        )
+
+                        def _corr_label(cv) -> str:
+                            if not isinstance(cv, (int, float)):
+                                return "corr to your book: n/a"
+                            if cv < REDEPLOY_CORR_DIVERSIFIER_MAX:
+                                return f"🟢 corr {cv:.2f} to your book — genuine diversifier"
+                            if cv >= REDEPLOY_CORR_CORRELATED_MIN:
+                                return f"🔴 corr {cv:.2f} to your book — limited benefit (moves with your book)"
+                            return f"🟡 corr {cv:.2f} to your book — partial diversifier"
+
+                        st.markdown("**Redeploy into — engine-vetted candidates:**")
+                        if any(c["passes"] is True for c in _cand_rows):
+                            _best = next(c for c in _cand_rows if c["passes"] is True)
+                            st.success(
+                                f"**{_best['ticker']}** ({_best['sector']}) clears the Buy gate "
+                                f"({_best['score']:.0f} ≥ {COMPOSITE_BUY:.0f}) — a genuine redeploy entry, "
+                                "not just a sector filler.",
+                                icon="🎯",
+                            )
+                        else:
+                            st.warning(
+                                f"No under-represented-sector name clears the Buy gate "
+                                f"(≥ {COMPOSITE_BUY:.0f}) today. Trimming is still sound — wait for a "
+                                "better entry or pick your own name.",
+                                icon="🚦",
+                            )
+
+                        for _c in _display:
+                            _t = _c["ticker"]
+                            _gate_icon = (
+                                "✅" if _c["passes"] is True
+                                else ("⚠️" if _c["passes"] is False else "—")
+                            )
+                            _score_txt = (
+                                f"{_c['score']:.0f}/100"
+                                if isinstance(_c["score"], (int, float)) else "score n/a"
+                            )
+                            _rr = _c.get("rr")
+                            _rr_txt = (
+                                f" · R:R {_rr:.1f}:1"
+                                if isinstance(_rr, (int, float)) and _rr > 0 else ""
+                            )
+                            _clean_badge = " · 🏆 cleanest diversifier" if _t == _cleanest else ""
+                            st.markdown(
+                                f"{_gate_icon} **{_t}** ({_c['sector']}) — {_score_txt}"
+                                + (f" · {_c['signal']}" if _c.get("signal") else "")
+                                + _rr_txt
+                            )
+                            st.caption(f"{_corr_label(_c.get('corr'))}{_clean_badge}")
+                            # Analyst awareness note — display-only; NEVER ranks/gates.
+                            _ac = _ac_map.get(str(_t).upper())
+                            if _ac and (_ac.get("consensus_rating") or _ac.get("avg_pt") is not None):
+                                _ap = []
+                                if _ac.get("consensus_rating"):
+                                    _ap.append(str(_ac["consensus_rating"]))
+                                if _ac.get("avg_pt") is not None:
+                                    _ap.append(f"avg PT ${float(_ac['avg_pt']):.2f}")
+                                if _ap:
+                                    st.caption(
+                                        f"🏦 Your saved research: {' · '.join(_ap)} "
+                                        f"({_ac.get('n_firms', '?')} firms) — awareness only"
+                                    )
+                            if st.button(f"▶ Analyze {_t}", key=f"_rebal_an_{_t}_{_rebal_sfx}"):
+                                st.session_state["_pending_page"]    = "📈 Analysis"
+                                st.session_state["_analysis_ticker"] = _t
+                                st.rerun()
+
+                        st.caption(
+                            f"_Ranked by your engine's composite (Buy gate {COMPOSITE_BUY:.0f}); "
+                            "correlation measured against your actual book. Full options on "
+                            "⚠️ Alerts & Actions → Add for Diversification._"
+                        )
+
+        def _render_review_card(_db_rev, _card_idx=0, in_act=False):
+            # Red accents when this review item was promoted into the red "Act
+            # Today" bucket (e.g. a PROTECTIVE_TRIM); amber/grey keep the calm
+            # Monitoring styling otherwise.
+            _db_border  = ("#ef4444" if in_act
+                           else "#f59e0b" if _db_rev.get("priority") == "medium"
+                           else "#78716c")
+            _db_bg      = "#1c1917"
+            _db_ticker  = _db_rev.get("ticker")
+            _headline   = _db_rev.get("headline", "")
+            _action     = _db_rev.get("action", {}) or {}
+            _why        = _db_rev.get("why", "")
+            _trigger    = _db_rev.get("trigger", "")
+            _act_color, _act_label, _act_text = _fmt_action(_action)
+            if in_act:
+                _act_color = "#ef4444"  # match the red Act Today header
+
+            # Append alternatives only on weak-large TRIM_TO_TARGET items —
+            # this is the case where we're freeing capital and the user
+            # naturally needs to know where to put it.
+            if (_action.get("type") == "TRIM_TO_TARGET"
+                    and _action.get("reason_key") == "weak_large"):
+                _alts = _alt_targets(_db_ticker)
+                if _alts:
+                    _act_text += f" Reallocate to: {', '.join(_alts)}."
+                else:
+                    _act_text += (
+                        " No composite-verified deployment options in today's "
+                        "brief — consider Watchlist or hold cash."
+                    )
+
+            # Title line: icon + ticker (or event name for macro) + headline
+            _title_left = _db_rev["icon"]
+            if _db_ticker:
+                _title_left += f" <span style='color:#fbbf24'>{_db_ticker}</span>"
+            elif _db_rev.get("event"):
+                _title_left += f" <span style='color:#fbbf24'>{_db_rev['event']}</span>"
+
+            # Lifecycle badge (calm-advisor): 🌱 Settling / 📈 Winning / ⚠️ At Risk.
+            # "established" is un-badged (returns None). Tells the user WHERE this
+            # position is in its life so a stop nudge reads in context.
+            _lc = lifecycle_badge(_db_rev.get("lifecycle"))
+            if _lc:
+                _title_left += (
+                    f" <span style='background:{_lc['color']}22;color:{_lc['color']};"
+                    f"border:1px solid {_lc['color']};border-radius:8px;padding:1px 7px;"
+                    f"font-size:0.74em;font-weight:700;margin-left:6px' title=\"{_lc['tip']}\">"
+                    f"{_lc['emoji']} {_lc['label']}</span>"
+                )
+
+            # Manual-stop badge: if this ticker already has a user-set stop,
+            # surface it next to the headline so the user immediately sees
+            # "I've already acted on this; here's the level I set." Reads
+            # _manual_stops from session_state so it survives full reruns.
+            _ms_map = st.session_state.get("_manual_stops", {}) or {}
+            _ms_for_item = _ms_map.get(str(_db_ticker or "").upper())
+            if _ms_for_item:
+                _ms_set_at = str(_ms_for_item.get("set_at", ""))[:10]
+                _ms_p_val  = float(_ms_for_item.get("stop_price") or 0)
+                _title_left += (
+                    f" <span style='background:#1e3a8a;color:#bfdbfe;"
+                    f"border-radius:8px;padding:1px 6px;font-size:0.82em;"
+                    f"margin-left:6px'>"
+                    f"📌 manual stop ${_ms_p_val:.2f}"
+                    + (f" · set {_ms_set_at}" if _ms_set_at else "")
+                    + "</span>"
+                )
+
+            st.markdown(
+                f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
+                f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                f"{_title_left}"
+                + (f" <span style='color:#a8a29e;font-weight:400'>· {_headline}</span>" if _headline else "")
+                + f"</div>"
+                f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:6px'>"
+                f"<span style='color:{_act_color};font-weight:700'>→ {_act_label}:</span> "
+                f"<span style='color:#f1f5f9'>{_act_text}</span></div>"
+                + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                   f"<b>Why:</b> {_why}</div>" if _why else "")
+                + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
+                   f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
+                + f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Weak-large-position items get Trade Journal context injected so the
+            # user can re-evaluate the position against their original reasoning,
+            # not just the current weight/score metrics.
+            if _db_rev.get("icon") == "🔍" and _db_ticker:
+                _jctx = _journal_context(_db_ticker)
+                if _jctx:
+                    _parts = []
+                    if _jctx.get("thesis"):
+                        _t_clip = _jctx["thesis"][:240] + ("…" if len(_jctx["thesis"]) > 240 else "")
+                        _date_tag = f" <span style='color:#78716c'>({_jctx['thesis_date']})</span>" if _jctx.get("thesis_date") else ""
+                        _parts.append(
+                            f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                            f"📒 <b>Your entry thesis</b>{_date_tag}: "
+                            f"<span style='color:#e7e5e4;font-style:italic'>“{_html.escape(str(_t_clip))}”</span></div>"
+                        )
+                    for _ln in _jctx.get("lessons", []):
+                        _l_clip = _ln["text"][:200] + ("…" if len(_ln["text"]) > 200 else "")
+                        _l_date = f" <span style='color:#78716c'>({_ln['date']})</span>" if _ln.get("date") else ""
+                        _parts.append(
+                            f"<div style='color:#fcd34d;font-size:0.78em;margin-top:2px'>"
+                            f"💡 <b>Lesson</b>{_l_date}: "
+                            f"<span style='color:#e7e5e4;font-style:italic'>“{_l_clip}”</span></div>"
+                        )
+                    if _parts:
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid #fbbf24;"
+                            f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0'>"
+                            + "".join(_parts)
+                            + f"<div style='color:#a8a29e;font-size:0.74em;margin-top:6px'>"
+                            "Re-evaluate this large position against your original reasoning before trimming."
+                            f"</div></div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.markdown(
+                        f"<div style='background:#1c1917;border-left:3px solid #57534e;"
+                        f"border-radius:6px;padding:8px 14px;margin:-4px 0 6px 0;"
+                        f"color:#a8a29e;font-size:0.76em;font-style:italic'>"
+                        f"📒 No Trade Journal entry found for {_db_ticker}. "
+                        "Log your entry thesis next time so weak-position reviews can be grounded in original reasoning."
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            _action_type = _action.get("type")
+
+            # Trim subject computed UP FRONT (before the _db_ticker gate): a
+            # PROTECTIVE_TRIM card carries ticker=None with its real subject in
+            # action.trim_ticker (the weakest sector holding), so it must NOT be
+            # gated behind the headline ticker — that's the macro de-risk trim
+            # the whole Phase-B logging affordance is for.
+            _trim_tkr = ""
+            _trim_sh_f = 0.0
+            if _action_type in ("TRIM_TO_TARGET", "TRIM_AND_TIGHTEN", "PROTECTIVE_TRIM"):
+                _trim_tkr = str(_action.get("trim_ticker") or _db_ticker or "").upper()
+                try:
+                    _trim_sh_f = float(_action.get("trim_shares") or 0)
+                except (TypeError, ValueError):
+                    _trim_sh_f = 0.0
+            _has_trim = bool(_trim_tkr) and _trim_sh_f > 0
+
+            if _db_ticker or _has_trim:
+                _btn_c1, _btn_c2 = st.columns([1, 5])
+                with _btn_c1:
+                    if _db_ticker and st.button(f"▶ Analyze {_db_ticker}",
+                                 key=f"_db_rev_{_db_ticker}_{_db_rev['icon']}",
+                                 use_container_width=False):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _db_ticker
+                        st.rerun()
+
+                # Action Log Phase B — in-context "log this trim". The app has no
+                # brokerage execution path, so the loop closes by RECORDING the
+                # trade you placed: one click pre-fills the Trade Journal SELL
+                # form (ticker + suggested shares + decision context) so you don't
+                # navigate away; once logged, holdings recompute and this trim
+                # recommendation stops re-firing. Key uses the per-render card
+                # index so two macro cards trimming the same name can't collide.
+                if _has_trim:
+                    _trim_px = (st.session_state.get("_live_prices", {}).get(_trim_tkr, {}) or {}).get("price")
+                    with _btn_c2:
+                        _render_trade_button(
+                            ticker=_trim_tkr,
+                            suggested_action="SELL",
+                            shares=_trim_sh_f,
+                            price=float(_trim_px) if _trim_px else None,
+                            trigger="RECOMMENDATION",
+                            signal_context=(f"{_act_label}: {_act_text}")[:140],
+                            followed_intent="yes",
+                            notes=(f"Trim per Daily Brief — {_act_text}")[:240],
+                            key_suffix=f"trimlog_{_card_idx}",
+                            label=f"📒 Log this trim ({int(_trim_sh_f)} sh {_trim_tkr})",
+                        )
+
+                # "Mark Done" form for stop-raise actions. The app can't place
+                # the order at your brokerage — but it can record that YOU did,
+                # so the same recommendation stops re-firing every render. Two
+                # action types qualify: TIGHTEN_ONLY (raise stop) and
+                # TRIM_AND_TIGHTEN (its stop-raise half — the trim half logs via
+                # the "📒 Log this trim" button above).
+                if _action_type in ("TIGHTEN_ONLY", "TRIM_AND_TIGHTEN"):
+                    _rec_stop = _action.get("new_stop")
+                    with _btn_c2:
+                        with st.expander(
+                            f"✅ Mark Done — log the stop I placed at brokerage",
+                            expanded=False,
+                        ):
+                            st.caption(
+                                "The app advises; your brokerage executes. Once you've "
+                                "placed the stop-loss order at Fidelity / Schwab / IBKR / "
+                                "wherever, log the level here so this recommendation stops "
+                                "re-appearing tomorrow."
+                            )
+                            _md_form_key = f"_md_form_{_db_ticker}_{_action_type}"
+                            with st.form(_md_form_key, clear_on_submit=True):
+                                _md_col1, _md_col2 = st.columns([1, 2])
+                                with _md_col1:
+                                    _new_stop_input = st.number_input(
+                                        "Stop placed at ($)",
+                                        min_value=0.0,
+                                        value=float(_rec_stop) if _rec_stop else 0.0,
+                                        step=0.01,
+                                        format="%.2f",
+                                        key=f"_md_price_{_db_ticker}",
+                                    )
+                                with _md_col2:
+                                    _note_input = st.text_input(
+                                        "Note (optional)",
+                                        placeholder="e.g. 'GTC stop at Fidelity 2026-05-29'",
+                                        key=f"_md_note_{_db_ticker}",
+                                    )
+                                _sub_c1, _sub_c2 = st.columns([1, 1])
+                                with _sub_c1:
+                                    _md_submitted = st.form_submit_button(
+                                        "💾 Save",
+                                        type="primary",
+                                        use_container_width=True,
+                                        disabled=st.session_state.get("_readonly", False),
+                                        help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                                    )
+                                with _sub_c2:
+                                    _md_revert = st.form_submit_button(
+                                        "↩️ Revert to ATR",
+                                        use_container_width=True,
+                                        disabled=st.session_state.get("_readonly", False),
+                                        help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else "Clear any manual stop override for this ticker",
+                                    )
+                                if _md_submitted and _new_stop_input > 0:
+                                    if db.save_manual_stop(
+                                        ticker=_db_ticker,
+                                        stop_price=float(_new_stop_input),
+                                        note=_note_input or None,
+                                        source_action=f"review_{_action_type.lower()}",
+                                    ):
+                                        st.success(
+                                            f"Manual stop ${_new_stop_input:.2f} saved for "
+                                            f"{_db_ticker}. The Brief will stop re-suggesting "
+                                            "this until price moves enough to warrant a "
+                                            "further tighten."
+                                        )
+                                        st.rerun()
+                                if _md_revert:
+                                    if db.clear_manual_stop(_db_ticker):
+                                        st.info(
+                                            f"Manual stop cleared for {_db_ticker}. "
+                                            "Reverted to ATR-derived stop."
+                                        )
+                                        st.rerun()
+
+        def _render_defensive_card(_item, _card_idx=0, in_act=False):
+            # in_act = this card sits in the red "Act Today" bucket → red accents
+            # (left bar + "→ LABEL:") so it reads as part of that section, matching
+            # the all-green offensive column. Awareness / Tune-up keep calm styling.
+            if _item.get("_source") == "review":
+                _render_review_card(_item, _card_idx, in_act=in_act)
+            else:
+                _render_act_card(_item, in_act=in_act)
+
+        # Act Today — genuine decisions only
+        _act_label  = (f"🔴 Act Today ({len(_act_bucket)})" if _act_bucket
+                       else "✅ Act Today — you're set")
+        _act_bg     = "#7f1d1d" if _act_bucket else "#14532d"
+        _act_border = "#ef4444" if _act_bucket else "#22c55e"
+        st.markdown(
+            f"<div style='background:{_act_bg};border-left:4px solid {_act_border};"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_act_label}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not _act_bucket:
+            _n_aware = len(_aware_bucket)
+            st.markdown(
+                f"<div style='background:#052e16;border:1px solid #22c55e;border-radius:8px;"
+                f"padding:12px 16px;margin-bottom:10px'>"
+                f"<span style='color:#86efac;font-weight:700'>✅ Nothing to act on — you're set for today.</span>"
+                f"<span style='color:#bbf7d0;font-size:0.85em'> Monitoring {_n_aware} "
+                f"item{'s' if _n_aware != 1 else ''} below — no trade needed.</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            for _ci, _item in enumerate(_act_bucket):
+                _render_defensive_card(_item, _ci, in_act=True)
+
+        # Monitoring / Awareness — FYI, nothing to execute
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background:#1e293b;border-left:4px solid #475569;"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+            f"👁️ Monitoring / Awareness ({len(_aware_bucket)})</span>"
+            f"<span style='color:#94a3b8;font-size:0.82em'> · FYI — no action needed</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not _aware_bucket:
+            st.caption("Nothing to monitor today — every position is steady.")
+        else:
+            for _ci, _item in enumerate(_aware_bucket):
+                _render_defensive_card(_item, 1000 + _ci)
+
+        # Portfolio Tune-up — slow-moving risk-metric improvements (Sharpe /
+        # beta / volatility / drawdown / tail). NOT time-boxed decisions, so
+        # they live below Act Today / Awareness as standing quality work you
+        # do when rebalancing — not on the clock (§2B calm posture).
+        if _db_tuneup:
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='background:#1e293b;border-left:4px solid #64748b;"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                f"🔧 Portfolio Tune-up ({len(_db_tuneup)})</span>"
+                f"<span style='color:#94a3b8;font-size:0.82em'> · standing quality — not time-sensitive</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            for _tu in _db_tuneup:
+                _tu_tk = ", ".join(_tu.get("tickers", [])[:4])
+                st.markdown(
+                    "<div style='background:#0f172a;border:1px solid #334155;"
+                    "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#cbd5e1;font-weight:700;font-size:0.86em'>"
+                    f"{_tu.get('title','Portfolio metric')}</div>"
+                    + (f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
+                       f"{_tu.get('recommendation','')}</div>" if _tu.get("recommendation") else "")
+                    + (f"<div style='color:#64748b;font-size:0.76em;margin-top:4px'>"
+                       f"Positions: {_tu_tk}</div>" if _tu_tk else "")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+            st.caption(
+                "These lift risk-adjusted quality over time — act on them when you're "
+                "rebalancing or have fresh capital, not on the clock."
+            )
+
+        # News Sentiment Shift — brief awareness cards for held positions
+        _sentiment_brief = _cached_sentiment(",".join(sorted(held_tickers))) if held_tickers else {}
+        if _sentiment_brief:
+            from stock_analyzer.news_sentiment import is_sentiment_shift as _is_shift
+            _sent_shift_tickers = [
+                t for t in held_tickers
+                if t in _sentiment_brief and _is_shift(_sentiment_brief[t])
+            ]
+            if _sent_shift_tickers:
+                st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
+                    f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                    f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                    f"📰 News Sentiment Shift ({len(_sent_shift_tickers)})</span>"
+                    f"<span style='color:#94a3b8;font-size:0.82em'>"
+                    f" · narrative may be changing — check headlines</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                for _ss_tk in _sent_shift_tickers:
+                    _ss = _sentiment_brief[_ss_tk]
+                    _ss_vs = _ss.get("vs_sector_pp")
+                    _ss_vs_txt = f", {_ss_vs:+.0f} pp vs sector avg" if _ss_vs is not None else ""
+                    _ss_buzz = _ss["buzz_score"]
+                    st.markdown(
+                        "<div style='background:#0f172a;border:1px solid #78350f;"
+                        "border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                        f"<div style='color:#fbbf24;font-weight:700;font-size:0.86em'>"
+                        f"📰 {_ss_tk}</div>"
+                        f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
+                        f"News sentiment shifted bearish "
+                        f"({_ss['bullish_pct']:.0%} bullish{_ss_vs_txt}, "
+                        f"{_ss_buzz:.1f}× normal coverage). "
+                        f"Awareness only — check headlines.</div>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+    st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+    # ── Buy Candidates — OVERFLOW only, in the left "offense" column ──────
+    # De-duplicated against Grow Today: any ticker already shown there
+    # (made the pick cap, or surfaced in Filtered Out / macro-blocked /
+    # pending) is dropped so the same name never appears twice in the
+    # brief. What remains is the overflow — confirmed/unverified buys
+    # beyond the Grow Today pick cap. Rendered in the left column under
+    # Grow Today so the whole brief stays a clean 2-column offense/defense
+    # split (no full-width banner crossing the page).
+    with _db_col_left:
+        _grow_shown: set = set()
+        for _gk in ("new_picks", "add_positions", "composite_skipped",
+                    "macro_blocked_picks", "composite_unavailable"):
+            for _gp_item in (_db_grow.get(_gk, []) or []):
+                _gt = _gp_item.get("ticker")
+                if _gt:
+                    _grow_shown.add(str(_gt).upper())
+        _db_buys_unique = [
+            b for b in _db_buys
+            if str(b.get("ticker", "")).upper() not in _grow_shown
+        ]
+
+        _db_confirmed   = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "confirmed")
+        _db_unverified  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "unverified")
+        _db_conflicted  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
+        _db_c2_label    = f"🟢 More Buy Candidates ({len(_db_buys_unique)})"
+        _db_c2_parts    = []
+        if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
+        if _db_unverified: _db_c2_parts.append(f"🔍 {_db_unverified} need verification")
+        if _db_conflicted: _db_c2_parts.append(f"⚠️ {_db_conflicted} conflicted")
+        _db_c2_sub = " · ".join(_db_c2_parts)
+        # Freshness stamp — when the candidates came from a persisted scan
+        # (cron post-open, or a prior manual scan) rather than a live in-session
+        # run, say so + when, so the list never reads as silently stale.
+        _scan_meta  = st.session_state.get("_scanner_results_meta") or {}
+        _scan_src   = {"cron": "auto-scan", "app": "your scan"}.get(_scan_meta.get("source"), "scan")
+        _scan_stamp = f"📡 From the {_scan_meta['scan_date']} {_scan_src}." if _scan_meta.get("scan_date") else ""
+        st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background:#14532d;border-left:4px solid #22c55e;"
+            f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
+            + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
+            + f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not _db_buys:
+            st.caption(
+                "No scan results yet. The pre-market **auto-scan** populates this "
+                "each trading day (~10:00 AM ET) — or run the Market Scanner now."
+            )
+            if st.button("🔍 Go to Market Scanner", key="_db_to_scanner"):
+                st.session_state["_pending_page"] = "🔍 Market Scanner"
+                st.rerun()
+        elif not _db_buys_unique:
+            # Scanner ran, but every candidate is already represented in
+            # Grow Today above — no need to repeat them here.
+            st.caption(
+                "All scanner candidates are already reflected in Grow Today above "
+                "(picks, Filtered Out, or pending)."
+            )
+        else:
+            st.caption(
+                "📡 Scanner picks — not yet validated by the full portfolio check. "
+                "Run Analysis before entering."
+                + (f"  {_scan_stamp}" if _scan_stamp else "")
+            )
+            for _db_buy in _db_buys_unique:
+                _xref       = _db_buy.get("xref", {})
+                _reconciled = _xref.get("verdict_reconciled", {}) or {}
+                _vcolor     = _reconciled.get("color") or _xref.get("verdict_color", "#86efac")
+                _vlabel     = _reconciled.get("label") or _xref.get("verdict_label", "")
+                _v_one      = _reconciled.get("one_liner") or _xref.get("verdict_one_liner", "")
+                _vagreed    = _xref.get("agreed", [])
+                _vconflicts = _xref.get("conflicts", [])
+                _vlayers    = _xref.get("layers_checked", 0)
+                _db_bg      = "#1c1917"
+                st.markdown(
+                    f"<div style='background:{_db_bg};border-left:3px solid {_vcolor};"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:4px'>"
+                    f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+                    f"<span style='color:#f9fafb;font-weight:700;font-size:0.9em'>"
+                    f"{_db_buy['icon']} {_db_buy['action']} — "
+                    f"<span style='color:#fbbf24'>{_db_buy['ticker']}</span></span>"
+                    f"<span style='color:#9ca3af;font-size:0.8em'>Score {_db_buy['score']:.0f}/100"
+                    + (f" · {_db_buy.get('sector','')}" if _db_buy.get('sector') else "")
+                    + f"</span>"
+                    f"<span style='background:{_vcolor}22;border:1px solid {_vcolor};"
+                    f"color:{_vcolor};padding:2px 10px;border-radius:12px;"
+                    f"font-size:0.75em;font-weight:700;white-space:nowrap'>{_vlabel}</span>"
+                    f"</div>"
+                    # Resolution one-liner — replaces the diffuse "Verify" guidance
+                    # block with the explicit reconciled verdict for this ticker.
+                    + (f"<div style='color:{_vcolor};font-size:0.85em;margin-top:5px;"
+                       f"font-weight:600'>→ {_v_one}</div>" if _v_one else "")
+                    + (f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>"
+                       f"📊 {_db_buy.get('scanner_signal','')} · "
+                       f"RSI {_db_buy.get('rsi',0):.0f} · "
+                       f"1M {_db_buy.get('mom_1m',0):+.1f}% · "
+                       f"{_db_buy.get('trend','')}"
+                       f"</div>" if _db_buy.get("rsi") else "")
+                    + ("".join(
+                        f"<div style='color:#fca5a5;font-size:0.8em;margin-top:3px'>⚠ {c}</div>"
+                        for c in _vconflicts
+                    ) if _vconflicts else "")
+                    + (f"<div style='color:#6b7280;font-size:0.75em;margin-top:3px'>"
+                       f"✓ {' · '.join(_vagreed[:3])}"
+                       + (f" +{len(_vagreed)-3} more" if len(_vagreed) > 3 else "")
+                       + f"</div>" if _vagreed else "")
+                    + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                       f"⏱ First surfaced: {_fmt_first_seen(_db_buy.get('_first_seen_at'))}"
+                       f"</div>" if _db_buy.get("_first_seen_at") else "")
+                    + f"</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
+                             use_container_width=False):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _db_buy["ticker"]
+                    st.rerun()
+
+    st.divider()
+
+    tab_evening, tab_portfolio, tab_riskalerts, tab_analytics, tab_brief = st.tabs([
+        "🌙 Evening Debrief",
+        "📊 Portfolio",
+        f"⚠️ Risk & Alerts{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
+        "📈 Analytics",
+        "🤖 AI Brief",
+    ])
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — EVENING DEBRIEF
@@ -6577,7 +6576,8 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2 — OVERVIEW
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_ov:
+
+    with tab_portfolio:
         # Charts row
         ch1, ch2 = st.columns([1, 1])
 
@@ -7949,7 +7949,7 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2 — PERFORMANCE VS SPY
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_perf:
+
         _pc1, _pc2 = st.columns([3, 1])
         _pc1.markdown("### Portfolio Performance vs S&P 500")
         _perf_period = _pc2.radio(
@@ -8251,7 +8251,7 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 4 — P&L ATTRIBUTION WATERFALL
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_pnl:
+
         st.caption(
             "Shows each position's dollar contribution to total portfolio P&L — "
             "largest winners on the left, largest losers on the right. "
@@ -8381,7 +8381,8 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 5 — ALERTS & ACTIONS
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_act:
+
+    with tab_riskalerts:
         # ── Active Alerts — grouped by category ──────────────────────────────
         _danger_alerts  = [a for a in alert_list if a["level"] == "danger"]
         _warning_alerts = [a for a in alert_list if a["level"] == "warning"]
@@ -9111,7 +9112,7 @@ if page == "🏠 Home":
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 3 — RISK ANALYSIS
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_risk:
+
         # ── Leverage / margin AWARENESS (text-only — NEVER gates) ──────────────
         # Concentration gates are equity-basis (2026-07-09 policy); leverage risk
         # lives HERE as monitoring, not a suppression, so a transient margin
@@ -10150,7 +10151,8 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 4 — RELATIVE STRENGTH
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_rs:
+
+    with tab_analytics:
         if not h_rets:
             st.info("Need at least 1 holding with price history to compute relative strength.")
         else:
@@ -10290,7 +10292,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 6 — SECTOR ROTATION HEATMAP
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_heat:
+
         st.caption(
             "Multi-period return heatmap for every sector ETF. "
             "Green = outperforming, red = underperforming. "
@@ -10446,7 +10448,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
 
     # TAB 7 — RANKINGS
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab_rank:
+
         st.caption(
             "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
             "Shows whether you're holding the best names in each sector or just familiar ones. "
@@ -10613,6 +10615,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
 
     # TAB 7 — AI MONITORING BRIEF
     # ═══════════════════════════════════════════════════════════════════════════
+
     with tab_brief:
         import os, re as _re
 
