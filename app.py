@@ -2247,6 +2247,10 @@ def _render_holdings_earnings(port_df, held_data):
                 "HOLD_OR_ADD": "💪",
                 "HOLD":       "✅",
             }.get(_action, "📌")
+            # Display-only label — standardize MONITOR to "Watch" (Consistency #2);
+            # leave the internal _action value (used for comparisons/lookups above
+            # and below) untouched.
+            _act_label = "Watch" if _action == "MONITOR" else _action
             _bclr = {
                 "HIGH":   "#ff4444",
                 "MEDIUM": "#ffbb33",
@@ -2257,7 +2261,7 @@ def _render_holdings_earnings(port_df, held_data):
             _earn_dt_str = _pb["earnings_date"].strftime("%b %d") if _pb["earnings_date"] else "—"
 
             with st.expander(
-                f"{_act_icon} **{_action}** · {_pb['ticker']} — {_pb['company']}  "
+                f"{_act_icon} **{_act_label}** · {_pb['ticker']} — {_pb['company']}  "
                 f"| {_urg_icon} {_earn_dt_str} ({_pb['days_until']}d)  "
                 f"| Est. move ±{_pb['est_move']:.0f}%",
                 expanded=_expand,
@@ -2343,7 +2347,7 @@ def _render_holdings_earnings(port_df, held_data):
                     f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
                     f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
                     f"letter-spacing:0.09em;text-transform:uppercase'>"
-                    f"{_act_icon} Pre-Earnings Action: {_action}</span><br>"
+                    f"{_act_icon} Pre-Earnings Action: {_act_label}</span><br>"
                     f"<span style='color:#eee;font-size:0.9em'>{_pb['detail']}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
@@ -5318,7 +5322,9 @@ if page == "🏠 Home":
         def _fmt_action(action: dict) -> tuple[str, str, str]:
             t = (action or {}).get("type", "")
             if t == "WATCH":
-                return ("#94a3b8", "WATCH",
+                # "Watch" is the display label (Consistency #2); the comparison above
+                # still keys on the internal "WATCH" action type.
+                return ("#94a3b8", "Watch",
                         "no action today — see Trigger below for what would escalate.")
             if t == "TIGHTEN_ONLY":
                 ns = action.get("new_stop")
@@ -5342,7 +5348,7 @@ if page == "🏠 Home":
                         f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
                         f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
             if t == "DETERIORATION_WATCH":
-                return ("#94a3b8", "WATCH",
+                return ("#94a3b8", "Watch",
                         "no action today — early deterioration; watching for follow-through "
                         "(see Trigger for what escalates it to a TRIM).")
             return ("#94a3b8", "—", "—")
@@ -7099,7 +7105,7 @@ if page == "🏠 Home":
                 for _ni_ai, _al in enumerate(_ni_alts):
                     _al_border = "#ef4444" if _al["alert_level"] == "critical" else "#f59e0b"
                     _al_bg     = "#1a0000" if _al["alert_level"] == "critical" else "#1a1000"
-                    _al_tag    = "🔴 CRITICAL" if _al["alert_level"] == "critical" else "🟡 WATCH"
+                    _al_tag    = "🔴 CRITICAL" if _al["alert_level"] == "critical" else "🟡 Watch"
                     _al_link   = _safe_link(_al.get("url", ""), _al.get("title", ""), max_len=90)
                     st.markdown(
                         f"<div style='background:{_al_bg};border-left:4px solid {_al_border};"
@@ -8198,9 +8204,13 @@ if page == "🏠 Home":
                         _bclr  = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33",
                                   "MONITOR": "#ffbb33", "OK": "#00C851"}.get(_pri, "#888")
                         _expand = _pri in ("HIGH", "MEDIUM")
+                        # Display-only label — standardize MONITOR to "Watch"
+                        # (Consistency #2); _pri itself keeps driving the icon/color
+                        # lookups and the _expand check above.
+                        _pri_label = "Watch" if _pri == "MONITOR" else _pri
 
                         with st.expander(
-                            f"{_icon} **{_pri}** · {_prec['title']}",
+                            f"{_icon} **{_pri_label}** · {_prec['title']}",
                             expanded=_expand,
                         ):
                             # Metrics mini-strip
@@ -13968,6 +13978,17 @@ elif page == "📋 Watchlist":
             "HOLD_OFF_EARNINGS": "⚠️",
             "REMOVE":            "🔴",
         }.get(_action, "📌")
+        # Human label for the card title / detail banner — never render the raw
+        # action code (I3 leak audit). Consistency #7: ENTER_NOW's card title
+        # reads "Ready to Enter" (the fuller card-title phrase).
+        _a_label  = {
+            "ENTER_NOW":         "Ready to Enter",
+            "NEAR_ENTRY":        "Near Entry",
+            "WAIT_ENTRY":        "Wait for Entry",
+            "WAIT_CATALYST":     "Wait for Catalyst",
+            "HOLD_OFF_EARNINGS": "Hold Off — Earnings Soon",
+            "REMOVE":            "Remove",
+        }.get(_action, _action.replace("_", " ").title())
         _bclr = {
             "HIGH":    "#ff4444",
             "MEDIUM":  "#ffbb33",
@@ -13993,7 +14014,7 @@ elif page == "📋 Watchlist":
                 pass
 
         with st.expander(
-            f"{_a_icon} **{_action.replace('_', ' ')}** · {_ticker}  "
+            f"{_a_icon} **{_a_label}** · {_ticker}  "
             f"| Score {_wr['score']:.0f}/100 · {_wr['signal']}  "
             f"| Readiness {_wr['readiness_pct']}%",
             expanded=_expand,
@@ -14120,7 +14141,7 @@ elif page == "📋 Watchlist":
                 f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
                 f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
                 f"letter-spacing:0.09em;text-transform:uppercase'>"
-                f"{_a_icon} Action: {_action.replace('_', ' ')}</span><br>"
+                f"{_a_icon} Action: {_a_label}</span><br>"
                 f"<span style='color:#eee;font-size:0.9em'>{_wr['detail']}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -18880,7 +18901,7 @@ elif page == "📅 Economic Calendar":
                     _actions_needed = _pb["protect_count"] + _pb["watch_count"]
                     with st.expander(
                         f"⚡ Pre-Event Actions — "
-                        f"{_pb['protect_count']} PROTECT  ·  {_pb['watch_count']} WATCH  ·  "
+                        f"{_pb['protect_count']} PROTECT  ·  {_pb['watch_count']} Watch  ·  "
                         f"{_pb['opp_count']} OPPORTUNITY  ·  "
                         f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} HOLD",
                         expanded=(_pb_urgent and _actions_needed > 0),
@@ -18889,6 +18910,10 @@ elif page == "📅 Economic Calendar":
                             _ac     = _pos["action"]
                             _ac_clr, _ac_bg = _action_colors.get(_ac, ("#6b7280", "#111"))
                             _ac_ico = _action_icons.get(_ac, "")
+                            # Display-only label — standardize WATCH to "Watch"
+                            # (Consistency #2); _ac keeps driving the color/icon
+                            # lookups above and the comparison below.
+                            _ac_label = "Watch" if _ac == "WATCH" else _ac
 
                             _bear_str = f"${_pos['bear_impact']:+,.0f}" if _pos["bear_impact"] != 0 else "—"
                             _bull_str = f"${_pos['bull_impact']:+,.0f}" if _pos["bull_impact"] != 0 else "—"
@@ -18898,7 +18923,7 @@ elif page == "📅 Economic Calendar":
                             _pa1.markdown(
                                 f"<span style='background:{_ac_bg};border:1px solid {_ac_clr};"
                                 f"color:{_ac_clr};padding:3px 10px;border-radius:4px;"
-                                f"font-size:0.8em;font-weight:700'>{_ac_ico} {_ac}</span>"
+                                f"font-size:0.8em;font-weight:700'>{_ac_ico} {_ac_label}</span>"
                                 f"&nbsp;&nbsp;<b>{_pos['ticker']}</b> "
                                 f"<span style='color:#aaa;font-size:0.85em'>({_pos['sector']})</span>",
                                 unsafe_allow_html=True,
@@ -19281,12 +19306,16 @@ elif page == "📅 Economic Calendar":
                                     _imp   = _pp["dollar_impact"]
                                     _mc    = "#00C851" if _imp >= 0 else "#ef4444"
                                     _smc   = "#00C851" if _pp["sector_move"] >= 0 else "#ef4444"
+                                    # Display-only label — standardize WATCH to "Watch"
+                                    # (Consistency #2); _act keeps driving the color/icon
+                                    # lookups above.
+                                    _act_label = "Watch" if _act == "WATCH" else _act
 
                                     with st.expander(
                                         f"{_aicon} **{_pp['ticker']}**  ·  "
                                         f"Sector {_pp['sector_move']:+.1f}%  ·  "
                                         f"${_imp:+,.0f}  ·  "
-                                        f"**{_act}**"
+                                        f"**{_act_label}**"
                                     ):
                                         _ppc1, _ppc2 = st.columns(2)
                                         with _ppc1:
@@ -19307,7 +19336,7 @@ elif page == "📅 Economic Calendar":
                                             st.markdown(
                                                 f"<span style='color:{_aclr};"
                                                 f"font-weight:bold;font-size:1.05em'>"
-                                                f"{_aicon} {_act}</span>",
+                                                f"{_aicon} {_act_label}</span>",
                                                 unsafe_allow_html=True,
                                             )
                                             st.markdown(_pp["action_detail"])
@@ -19708,10 +19737,10 @@ The app uses three color bands across all pages — the color always carries the
 
 | Page | 🔴 Red (act today) | 🟡 Amber (watch) | 🟢 Green (clear) |
 |---|---|---|---|
-| 🏠 Home — Act Today | EXIT · TRIM · Stop Breached | WATCH · MONITOR | ✅ You're set for today |
+| 🏠 Home — Act Today | EXIT · TRIM · Stop Breached | Watch | ✅ You're set for today |
 | 🔔 Signal badges | ❌ Skip — Signals Disagree | ⚠️ Caution · 🔍 Verify | ✅ Go — All Signals Agree |
-| 📋 Watchlist | REMOVE | WAIT_ENTRY · WAIT_CATALYST · HOLD_OFF_EARNINGS | ENTER_NOW · NEAR_ENTRY |
-| 📅 Economic Calendar | PROTECT | WATCH | OPPORTUNITY · HOLD |
+| 📋 Watchlist | Remove | Wait for Entry · Wait for Catalyst · Hold Off — Earnings Soon | Ready to Enter · Near Entry |
+| 📅 Economic Calendar | PROTECT | Watch | OPPORTUNITY · HOLD |
 | Risk Advisor cards | HIGH | MEDIUM | OK |
 
 **Rule of thumb:** red = decide today; amber = keep in view, don't trade yet; green = the app has nothing to add right now.

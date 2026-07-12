@@ -346,7 +346,10 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         # verdict in the recommendations log for things that were actually
         # fully confirmed.
         verdict       = "confirmed"
-        verdict_label = "✅ Confirmed — All Signals Aligned"
+        # Compact form (Consistency #6) — this legacy field only ever renders as a
+        # small nowrap badge (app.py Grow Today / scanner-picks pills), never as a
+        # card headline; the verbose one-liner for that role is verdict_one_liner.
+        verdict_label = "✅ Confirmed"
         verdict_color = "#22c55e"
 
     # ── Central reconciliation — populates the explicit one-liner the UI ─────
