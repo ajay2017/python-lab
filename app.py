@@ -15873,7 +15873,7 @@ elif page == "📒 Trade Journal":
                 "notes":        st.column_config.TextColumn("Notes",            disabled=True),
             },
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             key="trade_history_editor",
         )
 
@@ -16134,7 +16134,7 @@ elif page == "📒 Trade Journal":
                                 ),
                             },
                             hide_index=True,
-                            use_container_width=True,
+                            width='stretch',
                             key="_bi_editor",
                         )
 
@@ -16417,7 +16417,7 @@ elif page == "📒 Trade Journal":
                                 ),
                             },
                             hide_index=True,
-                            use_container_width=True,
+                            width='stretch',
                             key="_ss_editor",
                         )
 
@@ -20760,7 +20760,7 @@ elif page == "🧠 AI Insights":
                         _ac_andf_i[["firm", "analyst", "rating", "price_target", "upside_pct"]],
                         num_rows="dynamic",
                         key=f"_ac_editor_{_ac_nonce}_{_i}",
-                        use_container_width=True,
+                        width='stretch',
                     )
 
                     _ac_thesis_i = st.text_area(
