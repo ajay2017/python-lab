@@ -1184,6 +1184,26 @@ def _render_trade_button(
         st.rerun()
 
 
+def _render_portfolio_not_loaded(show_home_button: bool = True, key_suffix: str = "") -> None:
+    """
+    Render the shared "holdings not loaded this session" empty state, used by
+    any page/section that reads from the `_port_df_enriched` / `_last_port_df`
+    / `_last_held_data` session-state caches a Home page visit populates.
+
+    show_home_button=False for a site rendered from WITHIN Home itself, where
+    a "Go to Home" button would be nonsensical (e.g. Risk Analysis's Rate
+    Sensitivity table uses its own distinct copy instead — see that call site).
+    """
+    st.info(
+        "Open the 🏠 Home page once this session to load your holdings — "
+        "then this section will populate."
+    )
+    if show_home_button:
+        if st.button("▶ Go to Home", key=f"_pnl_go_home_{key_suffix or 'default'}"):
+            st.session_state["_pending_page"] = "🏠 Home"
+            st.rerun()
+
+
 def _fill_news_slot(slot, items: list) -> None:
     """Render curated news items into a sidebar container slot."""
     with slot:
@@ -9598,7 +9618,7 @@ if page == "🏠 Home":
                         f"**Weighted portfolio TLT correlation: {_wtd_corr:+.3f}** — book is broadly **{_exp_label}**."
                     )
         else:
-            st.info("Rate sensitivity unavailable — portfolio data not loaded.")
+            st.info("No holdings recorded — add trades via 📒 Trade Journal to see rate sensitivity.")
 
         # ── Risk Action Plan ──────────────────────────────────────────────────
         if _risk_advisor_recs:
@@ -11014,7 +11034,7 @@ elif page == "🌐 Macro":
 
     port_df = st.session_state.get("_port_df_enriched", pd.DataFrame())
     if port_df.empty:
-        st.info("Portfolio data not yet loaded — visit **Home** first to initialise your holdings, then return here.")
+        _render_portfolio_not_loaded(show_home_button=True, key_suffix="macro")
     else:
         if st.button("📡 Load macro signals (TLT · SPY · VIX)", key="_macro_load_btn"):
             _macro_raw = {}
@@ -18108,13 +18128,7 @@ elif page == "💰 Account":
                 f"Cash as of {str(_acct['updated_at'])[:10]}"
                 + (f" · {_acct['note']}" if _acct.get("note") else "")
             )
-        st.info(
-            "Open the 🏠 Home page once this session to load your holdings — then total "
-            "account value, cash %, and true concentration appear here."
-        )
-        if st.button("▶ Go to Home", key="_acct_go_home"):
-            st.session_state["_pending_page"] = "🏠 Home"
-            st.rerun()
+        _render_portfolio_not_loaded(show_home_button=True, key_suffix="acct")
     else:
         st.info(
             "💡 Set your uninvested **cash balance** below to unlock total-account value, "
@@ -18122,7 +18136,7 @@ elif page == "💰 Account":
             "the app is **invested-equity only** (it excludes cash it can't see)."
         )
         if not _have_pf:
-            st.caption("Tip: open 🏠 Home once this session to load your holdings for the full view.")
+            _render_portfolio_not_loaded(show_home_button=True, key_suffix="acct_nocash")
 
     # Cash entry — always available; data-sanity validated; read-only-viewer aware.
     if not db.is_readonly():
@@ -18300,13 +18314,7 @@ elif page == "🔔 Catalyst Watch":
     _cw_pdf = st.session_state.get("_last_port_df")
     _cw_hd  = st.session_state.get("_last_held_data")
     if _cw_pdf is None or _cw_hd is None or (hasattr(_cw_pdf, "empty") and _cw_pdf.empty):
-        st.info(
-            "Open the 🏠 Home page once this session to load your holdings — then your "
-            "per-position earnings detail and Pre-Earnings Playbook appear here."
-        )
-        if st.button("▶ Go to Home", key="_cw_go_home"):
-            st.session_state["_pending_page"] = "🏠 Home"
-            st.rerun()
+        _render_portfolio_not_loaded(show_home_button=True, key_suffix="cw")
     else:
         _render_holdings_earnings(_cw_pdf, _cw_hd)
         _cw_hold_tk = sorted({
