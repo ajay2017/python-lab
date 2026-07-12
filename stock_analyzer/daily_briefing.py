@@ -316,7 +316,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         verdict_color = "#ef4444"
     elif earnings_conflict:
         verdict       = "caution"
-        verdict_label = "⚠️ Caution — Earnings Within 7 Days"
+        verdict_label = f"⚠️ Caution — Earnings Within {EARNINGS_IMMINENT_DAYS} Days"
         verdict_color = "#f59e0b"
     elif sentiment_conflict:
         verdict       = "mixed"

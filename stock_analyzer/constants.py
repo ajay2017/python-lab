@@ -73,6 +73,14 @@ DIVERSIFY_DISPLAY_TOP = 3         # ranked candidates shown per sector
 REDEPLOY_CORR_DIVERSIFIER_MAX = 0.40   # corr below this → "genuine diversifier"
 REDEPLOY_CORR_CORRELATED_MIN  = 0.70   # corr at/above this → "limited benefit"
 
+# ── Portfolio correlation pairs (Risk Analysis "High-Correlation Pairs") ─────
+# Pairwise correlation among YOUR CURRENT HOLDINGS (portfolio.diversification_score)
+# — a different surface from the redeploy-candidate labels above (REDEPLOY_CORR_*).
+# AWARENESS ONLY — never gates/suppresses a recommendation; DANGER also seeds
+# an advisory "consider trimming one side" note (portfolio.diversification_recommendations).
+CORR_HIGH_PAIRS_THRESHOLD   = 0.65   # "warning" tier — pair flagged as meaningfully correlated
+CORR_DANGER_PAIRS_THRESHOLD = 0.80   # "danger" tier — pair flagged as near-duplicate exposure
+
 # ── Grow Today candidate funnel ──────────────────────────────────────────────
 # max_picks: how many NEW positions the daily brief will recommend. Lower on
 # flat/bear days (capital-preservation posture). Investment-policy values —
@@ -250,6 +258,7 @@ MATERIAL_ADD_RESET_THRESHOLD   = 25.0   # a non-initial lot ≥ this % of the po
 # thresholds (set with the user), not operational knobs.
 RISK_OFF_TREND_MA       = 200    # SPY below its N-day MA = de-risk. Basis: Faber, "A Quantitative Approach to Tactical Asset Allocation" (SSRN 962461) — 10-month/200-day trend rule.
 RISK_OFF_VIX_LEVEL      = 25.0   # VIX ≥ this = high-vol regime. Basis: regime literature (<15 complacent, 15–20 normal, 20–30 elevated, 30+ stress); dynamic-allocation studies use ≥25 as the high-vol cut.
+RISK_ON_VIX_LEVEL       = 15.0   # VIX ≤ this = complacent/risk-on regime. Same regime-literature basis as RISK_OFF_VIX_LEVEL above (<15 complacent).
 RISK_OFF_NAME_MIN_BETA  = 1.2    # only trim genuinely high-beta drivers (β ≥ this); leaves defensives alone.
 RISK_OFF_TRIM_TOP_N     = 3      # act on the top-N beta contributors (β × weight), not the whole book.
 RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position (or tighten the stop instead).
@@ -433,6 +442,12 @@ MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = 
 # suppress that); it just removes the blind spot of a tracked name reporting
 # without warning. Post-print confirmation still surfaces via the Movers scan.
 CATALYST_WATCH_WINDOW_DAYS = 7
+
+# Forward window (days) for macro-event awareness — high-impact events
+# (FOMC, CPI, NFP, GDP) shown ahead on the Economic Calendar page and in
+# Home's macro-calendar preamble. Display-only window, same pattern as
+# CATALYST_WATCH_WINDOW_DAYS above; not a gate.
+ECONOMIC_CALENDAR_WINDOW_DAYS = 45
 
 # ── Macro-event playbook gates (macro_playbook.py) ───────────────────────────
 # Pre-event PROTECT / WATCH classification thresholds. Values surfaced here

@@ -113,6 +113,10 @@ from stock_analyzer.constants import (
     COMPOSITE_WEIGHTS,
     EARNINGS_IMMINENT_DAYS,
     UNCLASSIFIED_SECTOR,
+    ECONOMIC_CALENDAR_WINDOW_DAYS,
+    CORR_HIGH_PAIRS_THRESHOLD,
+    RISK_OFF_VIX_LEVEL,
+    RISK_ON_VIX_LEVEL,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
@@ -644,13 +648,13 @@ _TIPS = {
     ),
     "Composite Score": (
         "Weighted composite signal combining four analytical dimensions:\n\n"
-        "• Technical (25%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
-        "• Business Quality (35%): Revenue & Earnings Growth, Margins, Debt/Equity\n"
-        "• Valuation (30%): Forward P/E, FCF Yield, Analyst PT Upside, Consensus Rating\n"
-        "• Sentiment (10%): VADER analysis of latest news headlines\n\n"
+        f"• Technical ({int(COMPOSITE_WEIGHTS['technical']*100)}%): RSI, MACD, Moving Averages, Bollinger Bands, Volume\n"
+        f"• Business Quality ({int(COMPOSITE_WEIGHTS['business_quality']*100)}%): Revenue & Earnings Growth, Margins, Debt/Equity\n"
+        f"• Valuation ({int(COMPOSITE_WEIGHTS['valuation']*100)}%): Forward P/E, FCF Yield, Analyst PT Upside, Consensus Rating\n"
+        f"• Sentiment ({int(COMPOSITE_WEIGHTS['sentiment']*100)}%): VADER analysis of latest news headlines\n\n"
         "Score thresholds:\n"
-        "• ≥ 75 → Strong Buy\n• 65–74 → Buy\n"
-        "• 44–64 → Hold\n• 30–43 → Sell\n• < 30 → Strong Sell\n\n"
+        f"• ≥ {COMPOSITE_STRONG_BUY} → Strong Buy\n• {COMPOSITE_BUY}–{COMPOSITE_STRONG_BUY - 1} → Buy\n"
+        f"• {COMPOSITE_HOLD}–{COMPOSITE_BUY - 1} → Hold\n• {COMPOSITE_SELL}–{COMPOSITE_HOLD - 1} → Sell\n• < {COMPOSITE_SELL} → Strong Sell\n\n"
         "Note: The Scanner uses momentum-only scoring (no fundamentals). "
         "A stock can score 85 on momentum and 52 composite — both are correct."
     ),
@@ -3126,7 +3130,7 @@ if page == "🏠 Home":
                 or os.environ.get("FRED_API_KEY", "")
             )
             st.session_state[_mc_day_key] = build_macro_calendar(
-                port_df, fred_key=_fred_k or None, days_ahead=45, days_behind=7,
+                port_df, fred_key=_fred_k or None, days_ahead=ECONOMIC_CALENDAR_WINDOW_DAYS, days_behind=7,
                 today=_today_et(),
             )
         _macro_events = st.session_state[_mc_day_key]
@@ -7449,7 +7453,7 @@ if page == "🏠 Home":
                 st.markdown(_header)
             for _ad in _rb_plan["adds"]:
                 _ad_exp  = _ad["urgency"] >= 40 or bool(_ad.get("news_warning"))
-                _ad_icon = "💪" if _ad["score"] >= 65 else "👁️"
+                _ad_icon = "💪" if _ad["score"] >= COMPOSITE_BUY else "👁️"
                 _nw      = _ad.get("news_warning")
                 # Title icon override — surface news flag in the collapsed header
                 if _nw:
@@ -9489,7 +9493,7 @@ if page == "🏠 Home":
             dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
                        help=_tip("Portfolio Correlation"))
             dc3.metric("High-Correlation Pairs", len(risk_pairs),
-                       help="Pairs with correlation ≥ 0.65")
+                       help=f"Pairs with correlation ≥ {CORR_HIGH_PAIRS_THRESHOLD}")
             st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
 
             if risk_pairs:
@@ -9815,10 +9819,10 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                                             "#00C851" if "Buy" in _dp_clabel else
                                             "#ff4444" if "Sell" in _dp_clabel else "#888"
                                         ) if _dp_clabel else (
-                                            "#00C851" if _dp_mom_sc >= 65 else "#888"
+                                            "#00C851" if _dp_mom_sc >= COMPOSITE_BUY else "#888"
                                         )
                                         _sc_clr = (
-                                            "#00C851" if _dp_mom_sc >= 65 else
+                                            "#00C851" if _dp_mom_sc >= COMPOSITE_BUY else
                                             "#ffbb33" if _dp_mom_sc >= 50 else "#888"
                                         )
                                         _rsi_str = f"RSI {_dp_rsi:.0f}" if _dp_rsi is not None else ""
@@ -11056,8 +11060,8 @@ elif page == "🌐 Macro":
             _s1.metric("Rates (TLT 3mo)", f"{_tlt:+.1f}%",
                        help=_sig.get("Rates (TLT)", ""))
             _s2.metric("Volatility (VIX)", f"{_vix:.0f}",
-                       delta="risk-off" if _vix >= 25 else "risk-on" if _vix <= 15 else "neutral",
-                       delta_color="inverse" if _vix >= 25 else "normal",
+                       delta="risk-off" if _vix >= RISK_OFF_VIX_LEVEL else "risk-on" if _vix <= RISK_ON_VIX_LEVEL else "neutral",
+                       delta_color="inverse" if _vix >= RISK_OFF_VIX_LEVEL else "normal",
                        help=_sig.get("Volatility (VIX)", ""))
             _s3.metric("Market (SPY 3mo)", f"{_spy:+.1f}%",
                        help=_sig.get("Market (SPY)", ""))
@@ -11183,7 +11187,9 @@ elif page == "🔍 Market Scanner":
         "It is a fast filter, not a buy signal. A high momentum score means the stock is moving — "
         "**not** that fundamentals or sentiment support the move.  \n"
         "For any ticker that catches your eye, run a full analysis on the **Analysis** page, "
-        "which adds Business Quality (35%), Valuation (30%), and Sentiment (10%) data to form a composite score. "
+        f"which adds Business Quality ({int(COMPOSITE_WEIGHTS['business_quality']*100)}%), "
+        f"Valuation ({int(COMPOSITE_WEIGHTS['valuation']*100)}%), and "
+        f"Sentiment ({int(COMPOSITE_WEIGHTS['sentiment']*100)}%) data to form a composite score. "
         "A stock can score 85 on momentum and 52 composite — both numbers are correct; they answer different questions.",
         icon="ℹ️",
     )
@@ -11777,8 +11783,8 @@ elif page == "🔍 Market Scanner":
                     text=[f"{s:.0f}" for s in sector_avg["Score"]],
                     textposition="outside",
                 ))
-                heat_fig.add_hline(y=65, line_dash="dash", line_color="white",
-                                   annotation_text="Buy threshold")
+                heat_fig.add_hline(y=COMPOSITE_BUY, line_dash="dash", line_color="white",
+                                   annotation_text=f"Buy threshold ({COMPOSITE_BUY})")
                 heat_fig.update_layout(
                     template="plotly_dark", height=260,
                     yaxis_title="Avg Score", yaxis_range=[0, 105],
@@ -12178,7 +12184,7 @@ elif page == "📈 Analysis":
 
     def _sc(v):
         if not isinstance(v, (int, float)): return ""
-        if v >= 65: return "color:#00C851;font-weight:bold"
+        if v >= COMPOSITE_BUY: return "color:#00C851;font-weight:bold"
         if v >= 50: return "color:#ffbb33"
         return "color:#ff4444"
 
@@ -17999,10 +18005,10 @@ elif page == "📜 Recommendations History":
     )
     with st.expander("ℹ️ How to read this table", expanded=False):
         st.markdown(
-            """
+            f"""
 **Verdict** — the App's confidence at the moment the rec was first surfaced:
-- **✅ Confirmed** — composite cleared the Buy gate (≥ 65) AND no conflicts. Highest signal weight; these are the "the App tells you to act" rows.
-- **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within 7 days, etc.). The App surfaced the pick but flagged a watch-out.
+- **✅ Confirmed** — composite cleared the Buy gate (≥ {COMPOSITE_BUY}) AND no conflicts. Highest signal weight; these are the "the App tells you to act" rows.
+- **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within {EARNINGS_IMMINENT_DAYS} days, etc.). The App surfaced the pick but flagged a watch-out.
 - **❌ Conflicted** — hard conflict (composite says Hold/Sell while momentum says Buy, or earnings + signal conflict). Don't act on these.
 - **🔍 Unverified** — composite wasn't loaded for the ticker at surface time, so the App couldn't verify the multi-factor signal. *Treat these as momentum-only suggestions* — they need an Analysis page check before acting.
 
@@ -18435,7 +18441,7 @@ elif page == "📅 Economic Calendar":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("📅 Economic Calendar")
     st.caption(
-        "High-impact macro events for the next 45 days — FOMC, CPI, NFP, GDP and more. "
+        f"High-impact macro events for the next {ECONOMIC_CALENDAR_WINDOW_DAYS} days — FOMC, CPI, NFP, GDP and more. "
         "Static backbone (Fed/BLS/BEA schedules) enriched with official released values from FRED (St. Louis Fed). "
         "Holdings at risk column maps each event to your specific positions."
     )
@@ -18495,7 +18501,7 @@ elif page == "📅 Economic Calendar":
             _ec_events = build_macro_calendar(
                 st.session_state.get("_port_df_enriched", pd.DataFrame()),
                 fred_key=_ec_fred_key or None,
-                days_ahead=45,
+                days_ahead=ECONOMIC_CALENDAR_WINDOW_DAYS,
                 days_behind=7,
                 today=_today_et(),
             )
@@ -18522,7 +18528,7 @@ elif page == "📅 Economic Calendar":
     _ec_week = [e for e in _ec_fwd if (e["date"] - _today_et()).days <= 7]
     _ec_next = _ec_high[0] if _ec_high else (_ec_fwd[0] if _ec_fwd else None)
     _ek1, _ek2, _ek3, _ek4 = st.columns(4)
-    _ek1.metric("Events next 45d",  len(_ec_fwd))
+    _ek1.metric(f"Events next {ECONOMIC_CALENDAR_WINDOW_DAYS}d",  len(_ec_fwd))
     _ek2.metric("🔴 High impact",    len(_ec_high))
     _ek3.metric("This week",         len(_ec_week),
                 delta="⚠️ Be prepared" if _ec_week else None,
@@ -18775,7 +18781,7 @@ elif page == "📅 Economic Calendar":
             _playbooks = build_event_playbooks(_ec_fwd, _pb_port, _pb_total)
 
             if not _playbooks:
-                st.info("No upcoming HIGH-impact events with playbook data in the next 45 days.")
+                st.info(f"No upcoming HIGH-impact events with playbook data in the next {ECONOMIC_CALENDAR_WINDOW_DAYS} days.")
             else:
                 st.markdown(
                     "For each upcoming HIGH-impact event: scenario analysis, position-level pre-event "

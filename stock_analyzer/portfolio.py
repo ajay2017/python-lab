@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -903,9 +903,9 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
             pair_w = (w[t1] / total_w) * (w[t2] / total_w)
             weighted_sum += c * pair_w
             weight_sum += pair_w
-            if c >= 0.80:
+            if c >= CORR_DANGER_PAIRS_THRESHOLD:
                 risk_pairs.append({"t1": t1, "t2": t2, "corr": round(c, 2), "level": "danger"})
-            elif c >= 0.65:
+            elif c >= CORR_HIGH_PAIRS_THRESHOLD:
                 risk_pairs.append({"t1": t1, "t2": t2, "corr": round(c, 2), "level": "warning"})
 
     avg_corr = weighted_sum / weight_sum if weight_sum else 0.0
