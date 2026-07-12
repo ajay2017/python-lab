@@ -378,6 +378,19 @@ def _safe_link(url: str | None, title: str, max_len: int = 90, style: str = "col
     return f"<span style='{style}'>{safe_title}</span>"
 
 
+# ── Analyst-coverage report-type labels (display only — the DB value and the
+# AI-extraction contract, stock_analyzer/analyst_intel.py, stay on the raw
+# tokens below; never change the keys here, only the display strings) ────────
+_ANALYST_RTYPE_LABELS = {
+    "initiation": "Initiation",
+    "upgrade": "Upgrade",
+    "downgrade": "Downgrade",
+    "reiteration": "Reiteration",
+    "pt_change": "Price Target Change",
+    "other": "Other",
+}
+
+
 # ── Glossary tooltips ─────────────────────────────────────────────────────────
 _TIPS = {
     "P/E Ratio": (
@@ -1438,7 +1451,7 @@ with st.sidebar:
     if mkt.get("calendar_stale"):
         # The hardcoded NYSE holiday calendar has run out — holiday detection can
         # no longer be trusted, so warn loudly rather than silently show "open."
-        st.caption("⚠️ Holiday calendar is out of date — update NYSE_HOLIDAYS in constants.py.")
+        st.caption("⚠️ Holiday calendar is out of date — contact your administrator to update the market calendar.")
     if not mkt["is_open"]:
         # Compute last trading day for the closed-market note
         from datetime import timedelta as _td
@@ -13543,10 +13556,11 @@ elif page == "📈 Analysis":
                     )
                 else:
                     for _covi, _covrow in _cov_df.iterrows():
-                        _cov_co    = _covrow.get("company") or ""
-                        _cov_rdate = str(_covrow.get("article_date") or "")[:10]
-                        _cov_rt    = str(_covrow.get("report_type") or "")
-                        _cov_crat  = _covrow.get("consensus_rating")
+                        _cov_co     = _covrow.get("company") or ""
+                        _cov_rdate  = str(_covrow.get("article_date") or "")[:10]
+                        _cov_rt_raw = str(_covrow.get("report_type") or "")
+                        _cov_rt     = _ANALYST_RTYPE_LABELS.get(_cov_rt_raw, _cov_rt_raw)
+                        _cov_crat   = _covrow.get("consensus_rating")
                         _cov_a_pt  = _covrow.get("avg_pt")
                         _cov_h_pt  = _covrow.get("high_pt")
                         _cov_l_pt  = _covrow.get("low_pt")
@@ -13743,7 +13757,7 @@ elif page == "📋 Watchlist":
     st.caption(
         "Your opportunity pipeline. Each stock on the watchlist is analysed for buy readiness — "
         "when to open, when to wait, and when the thesis has broken. "
-        "A Institutional PM doesn't just track watchlist tickers; they actively manage them."
+        "An institutional PM doesn't just track watchlist tickers; they actively manage them."
     )
 
     # ── Sidebar: manage watchlist ─────────────────────────────────────────────
@@ -14353,8 +14367,8 @@ elif page == "📒 Trade Journal":
 
     if not db.has_db():
         st.warning(
-            "🟡 **No Supabase connection** — trades will only last for this session.  \n"
-            "Add your Supabase credentials in `.streamlit/secrets.toml` to persist trades permanently."
+            "🟡 **No database connection** — trades will only last for this session.  \n"
+            "Connect a database via your Streamlit Cloud app secrets to persist trades permanently."
         )
 
     # ── Defensive drift check ────────────────────────────────────────────────
@@ -16548,15 +16562,13 @@ elif page == "📒 Trade Journal":
                                     )
     if not db.has_db():
         st.info(
-            "💡 **Supabase not connected** — trades above are session-only and will be lost on refresh.  \n"
-            "Run the SQL in `stock_analyzer/db.py` to create the `trades` table, "
-            "then add your credentials to `.streamlit/secrets.toml`."
+            "💡 **Database not connected** — trades above are session-only and will be lost on refresh.  \n"
+            "Connect a database via your Streamlit Cloud app secrets to persist trades between sessions."
         )
     else:
         st.markdown(
             "<div style='font-size:0.78em;color:#444;margin-top:6px'>"
-            "📌 To create the trades table in Supabase, run the SQL in "
-            "<code>stock_analyzer/db.py</code> → Supabase SQL Editor → New Query</div>",
+            "📌 A database connection is required for this feature.</div>",
             unsafe_allow_html=True,
         )
 
@@ -17472,9 +17484,8 @@ elif page == "📜 Recommendations History":
 
     if not db.has_db():
         st.warning(
-            "🟡 Supabase not connected — recommendations history requires the "
-            "`recommendations` table. Run the SQL migration in `stock_analyzer/db.py` "
-            "and set credentials in `.streamlit/secrets.toml`."
+            "🟡 Database not connected — recommendations history requires an "
+            "active database connection. Connect one via your Streamlit Cloud app secrets."
         )
         st.stop()
 
@@ -17495,6 +17506,11 @@ elif page == "📜 Recommendations History":
     from datetime import date as _rh_date, timedelta as _rh_td
 
     # ── Filter bar ──────────────────────────────────────────────────────────
+    _REC_TYPE_LABELS = {
+        "new_pick": "New Position",
+        "add_winner": "Add to Winner",
+        "buy_candidate": "Opportunity Watch",
+    }
     _rh_c1, _rh_c2, _rh_c3 = st.columns([1.4, 1.2, 1.2])
     with _rh_c1:
         _rh_range_label = st.selectbox(
@@ -17528,6 +17544,7 @@ elif page == "📜 Recommendations History":
             "Rec type",
             ["new_pick", "add_winner", "buy_candidate"],
             default=["new_pick", "add_winner"],
+            format_func=lambda v: _REC_TYPE_LABELS.get(v, v),
             key="_rh_type_filter",
         )
     with _rh_c3:
@@ -17896,7 +17913,7 @@ elif page == "📜 Recommendations History":
         if _rh_types:
             _rh_t_df = _rh_pd.DataFrame([
                 {
-                    "Type":         rt,
+                    "Type":         _REC_TYPE_LABELS.get(rt, rt),
                     "Total":        st_["n_total"],
                     "Acted":        st_["n_acted"],
                     "Action rate":  f"{st_['action_rate']:.0f}%" if st_["action_rate"] is not None else "—",
@@ -17933,7 +17950,7 @@ elif page == "📜 Recommendations History":
         _rh_rows.append({
             "Date":      r["rec_date"].isoformat() if r["rec_date"] else "—",
             "Ticker":    r["ticker"],
-            "Type":      r["rec_type"],
+            "Type":      _REC_TYPE_LABELS.get(r["rec_type"], r["rec_type"]),
             "Sector":    r["sector"] or "—",
             "Composite": (
                 f"{r['composite_score']:.0f}" if r["composite_score"] is not None else "—"
@@ -20128,7 +20145,7 @@ elif page == "🧠 AI Insights":
                 if _wd_days < 5:
                     st.warning(
                         f"Only {_wd_days} trading day(s) of snapshot data available — need 5. "
-                        f"Check back after more days accumulate (DDL activated 2026-06-27)."
+                        f"Check back after more days accumulate."
                     )
                 else:
                     _wd_recs   = _ai_db.load_recommendations(
@@ -20187,7 +20204,7 @@ elif page == "🧠 AI Insights":
             st.info(
                 "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
                 "or wait for the Sunday evening cron (runs automatically once "
-                "`daily_snapshots` has ≥5 trading days of data — DDL activated 2026-06-27)."
+                "`daily_snapshots` has ≥5 trading days of data)."
             )
         else:
             _wd = _wd_df.iloc[0]
@@ -20739,6 +20756,7 @@ elif page == "🧠 AI Insights":
                             "Report type",
                             options=_ac_rtype_opts,
                             index=_ac_rtype_idx_i,
+                            format_func=lambda v: _ANALYST_RTYPE_LABELS.get(v, v),
                             key=f"_ac_rtype_{_ac_nonce}_{_i}",
                         )
 
@@ -20936,11 +20954,12 @@ elif page == "🧠 AI Insights":
             st.markdown(f"Showing reports with article date within the last **{_AC_FRESH_DAYS} days**.")
 
             for _ac_i, _ac_row in _ac_df.iterrows():
-                _ac_t     = str(_ac_row.get("ticker") or "").upper()
-                _ac_co    = _ac_row.get("company") or ""
-                _ac_rdate = str(_ac_row.get("article_date") or "")[:10]
-                _ac_rt    = str(_ac_row.get("report_type") or "")
-                _ac_rowid = _ac_row.get("id")
+                _ac_t      = str(_ac_row.get("ticker") or "").upper()
+                _ac_co     = _ac_row.get("company") or ""
+                _ac_rdate  = str(_ac_row.get("article_date") or "")[:10]
+                _ac_rt_raw = str(_ac_row.get("report_type") or "")
+                _ac_rt     = _ANALYST_RTYPE_LABELS.get(_ac_rt_raw, _ac_rt_raw)
+                _ac_rowid  = _ac_row.get("id")
                 _ac_crat  = _ac_row.get("consensus_rating")
                 _ac_a_pt  = _ac_row.get("avg_pt")
                 _ac_h_pt  = _ac_row.get("high_pt")
