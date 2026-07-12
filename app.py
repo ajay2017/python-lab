@@ -2158,7 +2158,7 @@ def _render_holdings_earnings(port_df, held_data):
 
         st.dataframe(
             _earn_df.style.apply(_earn_row_style, axis=1),
-            use_container_width=True, hide_index=True,
+            width='stretch', hide_index=True,
         )
         st.caption(
             "🔴 Imminent = ≤7 days · 🟡 Soon = 8–14 days · 🟢 Ahead = >14 days  |  "
@@ -2395,7 +2395,7 @@ if page == "🏠 Home":
                         _sc[2].metric("Open P&L", f"${_s_open:+,.0f}")
                         st.dataframe(
                             pd.DataFrame(_s_rows),
-                            hide_index=True, use_container_width=True,
+                            hide_index=True, width='stretch',
                             column_config={
                                 "Last":  st.column_config.NumberColumn(format="$%.2f"),
                                 "Day %": st.column_config.NumberColumn(format="%+.2f%%"),
@@ -6810,7 +6810,7 @@ if page == "🏠 Home":
                     "Score":           "{:.0f}",
                 })
             )
-        st.dataframe(styled, use_container_width=True)
+        st.dataframe(styled, width='stretch')
         _sig_ts = st.session_state.get("_signals_computed_at", "")
         st.caption(
             f"Signals & scores computed at load time"
@@ -7568,7 +7568,7 @@ if page == "🏠 Home":
                     "Velocity":      lambda v: f"{v:+.3f}" if v is not None else "—",
                     "Price 7d (%)":  lambda v: f"{v:+.1f}%" if v is not None else "—",
                 }),
-                use_container_width=True, hide_index=True,
+                width='stretch', hide_index=True,
             )
             st.caption(
                 "Sentiment score: VADER compound −1.0 (very negative) → +1.0 (very positive).  "
@@ -7796,7 +7796,7 @@ if page == "🏠 Home":
                         "Tax at LTCG ($)": lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
                         "Savings ($)":     lambda v: f"${v:,.0f}"  if isinstance(v, (int,float)) and v > 0 else "—",
                     }),
-                use_container_width=True, hide_index=True,
+                width='stretch', hide_index=True,
             )
             st.caption(
                 "🟡 **STCG** = held ≤365 days — short-term rate applies  ·  "
@@ -9552,7 +9552,7 @@ if page == "🏠 Home":
             _rs_display["Sector Score"] = _rs_display["Sector Score"].apply(lambda v: f"{v:+.2f}")
             st.dataframe(
                 _rs_display,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config={
                     "Ticker":       st.column_config.TextColumn("Ticker", width="small"),
@@ -9975,7 +9975,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                             "Est. Move (%)":    "{:+.1f}%",
                             "Est. P&L ($)":     "${:+,.0f}",
                         }),
-                        use_container_width=True, hide_index=True,
+                        width='stretch', hide_index=True,
                     )
 
             # Most exposed + any gainers
@@ -10068,7 +10068,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                                     "Actual (%)":       lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A",
                                     "Δ (Actual−Model)": lambda v: f"{v:+.1f}pp" if pd.notna(v) else "—",
                                 }),
-                                use_container_width=True, hide_index=True,
+                                width='stretch', hide_index=True,
                             )
                             _n_avail = sum(1 for r in _hist_cmp_rows if r["Actual (%)"] is not None)
                             _n_na    = len(_hist_cmp_rows) - _n_avail
@@ -10115,7 +10115,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                             "Est. P&L ($)":   "${:+,.0f}",
                             "Post Value ($)":  "${:,.0f}",
                         }),
-                        use_container_width=True, hide_index=True,
+                        width='stretch', hide_index=True,
                     )
                     st.caption(
                         "🔴 Red = estimated loss > 20% of portfolio  ·  "
@@ -10250,7 +10250,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                         .map(_status_col, subset=["Status"])
                         .format(_fmt, na_rep="—")
                     )
-                    st.dataframe(_styled_rs, use_container_width=True)
+                    st.dataframe(_styled_rs, width='stretch')
 
                     # Institutional-style insight callouts
                     _valid = rs_df.dropna(subset=["Alpha (%)"])
@@ -10413,7 +10413,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                 )
                 st.dataframe(
                     _exp_tbl[["Sector", "ETF", "1W %", "1M %", "3M %", "6M %", "My Exposure", "Alignment"]],
-                    use_container_width=True, hide_index=True,
+                    width='stretch', hide_index=True,
                 )
             else:
                 st.info("None of your holdings map to a tracked sector ETF.")
@@ -10534,7 +10534,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                         "Composite Score": "{:.0f}",
                     }, na_rep="—")
                 )
-                st.dataframe(_styled_rank, use_container_width=True)
+                st.dataframe(_styled_rank, width='stretch')
                 st.caption(
                     "**Scanner Score** = momentum-only (consistent across all 80 tickers).  "
                     "**Composite Score** = technical + fundamental + sentiment (your holdings only).  "
@@ -11140,7 +11140,7 @@ elif page == "🌐 Macro":
                     .map(_rate_col,  subset=["Rate Sensitivity"])
                     .format({"Weight (%)": "{:.1f}%", "Rate Sensitivity": "{:+.2f}"})
                 )
-                st.dataframe(_styled_expo, use_container_width=True)
+                st.dataframe(_styled_expo, width='stretch')
 
                 if _headwind_weight > 30:
                     _heads = expo_df[expo_df["Macro Alignment"] == "Headwind ↓"]["Sector"].unique().tolist()
@@ -11526,7 +11526,7 @@ elif page == "🔍 Market Scanner":
                     "Upside": lambda x: f"{x:+.1f}%" if isinstance(x, (int, float)) else "—",
                 })
                 .hide(axis="index"),
-                use_container_width=True,
+                width='stretch',
             )
             st.caption(
                 "✅ Confirmed = momentum + analyst consensus + positive revisions all aligned  ·  "
@@ -11824,7 +11824,7 @@ elif page == "🔍 Market Scanner":
             })
             .hide(axis="index")
         )
-        st.dataframe(styled, use_container_width=True)
+        st.dataframe(styled, width='stretch')
 
         # ── Quick Analyze — pick any ticker from filtered results ─────────────
         # Complements the per-card Analyze buttons above. Lets the user jump
@@ -12172,7 +12172,7 @@ elif page == "📈 Analysis":
     st.dataframe(
         summary_df.style.map(_sig, subset=["Signal"]).map(_sc, subset=["Score"])
         .format({"Score": lambda v: f"{v:.1f}" if isinstance(v, (int, float)) else str(v)}),
-        use_container_width=True,
+        width='stretch',
     )
 
     # ── Price cross-check (analysed tickers) ────────────────────────────────
@@ -13607,7 +13607,7 @@ elif page == "📈 Analysis":
                             if _firm_rows:
                                 st.dataframe(
                                     pd.DataFrame(_firm_rows),
-                                    use_container_width=True,
+                                    width='stretch',
                                     hide_index=True,
                                 )
 
@@ -15502,7 +15502,7 @@ elif page == "📒 Trade Journal":
                         _trig_display[_tc] = _trig_display[_tc].apply(
                             lambda v: f"{v:.2f}" if pd.notna(v) else "—"
                         )
-                st.dataframe(_trig_display, use_container_width=True, hide_index=True)
+                st.dataframe(_trig_display, width='stretch', hide_index=True)
 
             # ── Hold time breakdown ───────────────────────────────────────────
             _hs = _ta["hold_stats"]
@@ -15956,7 +15956,7 @@ elif page == "📒 Trade Journal":
                     corrs     = res["realized_pnl_corrections"]
                     warns     = res["warnings"]
                     st.markdown("**Recomputed holdings**")
-                    st.dataframe(new_h, hide_index=True, use_container_width=True)
+                    st.dataframe(new_h, hide_index=True, width='stretch')
                     if corrs:
                         st.markdown(f"**Realized-P&L corrections to apply ({len(corrs)})**")
                         _corr_rows = []
@@ -15971,7 +15971,7 @@ elif page == "📒 Trade Journal":
                                 "Corrected basis": f"${_c['cost_basis']:.2f}",
                             })
                         st.dataframe(pd.DataFrame(_corr_rows), hide_index=True,
-                                     use_container_width=True)
+                                     width='stretch')
                     else:
                         st.caption("No realized_pnl corrections needed — all SELL rows are accurate.")
                     if warns:
@@ -16014,7 +16014,7 @@ elif page == "📒 Trade Journal":
             if _bi_last.get("holdings_df") is not None:
                 st.markdown("**Resulting holdings after import**")
                 st.dataframe(_bi_last["holdings_df"], hide_index=True,
-                             use_container_width=True)
+                             width='stretch')
 
         # ── Tabs: CSV vs Screenshot ────────────────────────────────────────────
         _bi_csv_tab, _bi_ss_tab = st.tabs(["📄 CSV", "📋 Paste history"])
@@ -16074,7 +16074,7 @@ elif page == "📒 Trade Journal":
                                 "Verify your CSV or add them manually via the Log a Trade form."
                             )
                             st.dataframe(_bi_invalid, hide_index=True,
-                                         use_container_width=True)
+                                         width='stretch')
 
                     if _bi_trades.empty:
                         st.info("No Buy/Sell rows found to import.")
@@ -16347,7 +16347,7 @@ elif page == "📒 Trade Journal":
                             expanded=False,
                         ):
                             st.dataframe(_ss_invalid, hide_index=True,
-                                         use_container_width=True)
+                                         width='stretch')
 
                     if _ss_trades.empty:
                         st.info(
@@ -16450,7 +16450,7 @@ elif page == "📒 Trade Journal":
                                     )
                                     st.dataframe(
                                         _ss_app_only, hide_index=True,
-                                        use_container_width=True,
+                                        width='stretch',
                                     )
 
                         if st.button(
@@ -17811,7 +17811,7 @@ elif page == "📜 Recommendations History":
         ])
         with st.expander(f"📄 All {_rh_ms['n_distinct']} skipped names (table)", expanded=False):
             st.dataframe(
-                _rh_mt, hide_index=True, use_container_width=True,
+                _rh_mt, hide_index=True, width='stretch',
                 height=min(480, 60 + 35 * len(_rh_mt)),
             )
 
@@ -17851,7 +17851,7 @@ elif page == "📜 Recommendations History":
                 }
                 for v in _rh_verd
             ])
-            st.dataframe(_rh_v_df, hide_index=True, use_container_width=True)
+            st.dataframe(_rh_v_df, hide_index=True, width='stretch')
             st.caption(
                 "This is the cleanest read on the engine: **Confirmed** is what the "
                 "App actually recommends; **Conflicted / Caution** are surfaced for "
@@ -17880,7 +17880,7 @@ elif page == "📜 Recommendations History":
                 }
                 for b in _rh_band
             ])
-            st.dataframe(_rh_band_df, hide_index=True, use_container_width=True)
+            st.dataframe(_rh_band_df, hide_index=True, width='stretch')
             st.caption(
                 "Higher-composite bands should ideally have higher action rate "
                 "*and* better **α** — that confirms the composite gate is doing its "
@@ -17907,7 +17907,7 @@ elif page == "📜 Recommendations History":
                 }
                 for rt, st_ in _rh_types.items()
             ])
-            st.dataframe(_rh_t_df, hide_index=True, use_container_width=True)
+            st.dataframe(_rh_t_df, hide_index=True, width='stretch')
 
     # ── Detailed table ──────────────────────────────────────────────────────
     st.markdown("### 📋 All recommendations")
@@ -17951,7 +17951,7 @@ elif page == "📜 Recommendations History":
         st.dataframe(
             _rh_pd.DataFrame(_rh_rows),
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             height=min(560, 60 + 35 * len(_rh_rows)),
         )
         _rh_tickers = sorted({r["Ticker"] for r in _rh_rows if r.get("Ticker") and r["Ticker"] != "—"})
@@ -18072,7 +18072,7 @@ elif page == "💰 Account":
             )
             st.dataframe(
                 _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
-                hide_index=True, use_container_width=True,
+                hide_index=True, width='stretch',
             )
     elif _cash is not None and not _have_pf:
         st.metric("Net Cash" if _cash < 0 else "Cash", _m(f"${_cash:,.0f}"),
