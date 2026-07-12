@@ -227,7 +227,7 @@ Supporting day traders would mean intraday/real-time data feeds, Level 2 / order
 | F-29 | Entry timing verdicts (boundaries inclusive): High Risk — Avoid Chasing (RSI≥80 or 1D≥15% or 5D≥25%), Wait for Pullback (RSI≥68 or 1D≥5% or 5D≥12%), Oversold — Potential Entry (RSI≤35), Normal Entry Conditions otherwise |
 | F-30 | All Analyze buttons navigate to Stock Analysis with a Back button returning to Today's Brief |
 | F-31 | On flat market days, Grow Today must output confirmed-verdict picks before unverified-verdict picks so highest-conviction ideas lead |
-| F-32 | Pre-Market Intel panel: visible 4:00–9:29 AM ET weekdays only; appears at top of Today's Brief tab |
+| F-32 | Pre-Market Intel panel: visible 4:00–9:29 AM ET weekdays only; appears at top of Today's Brief |
 | F-33 | Pre-Market Intel shows US futures (S&P 500, Nasdaq 100, Dow, Russell 2000) with price and % change vs prior close |
 | F-34 | Pre-Market Intel shows overnight % change for major global indices (Nikkei, Hang Seng, DAX, FTSE, CAC 40) |
 | F-35 | Pre-Market Intel shows pre-market movers (≥0.5% change) for all held positions and watchlist tickers; held positions are visually distinguished |
@@ -452,7 +452,7 @@ The 📊 Recommendations History page is the **rule-based** retrospective over e
 | NF-40 | All navigation between pages must use session-state-based routing (nav_page) without page reload |
 | NF-41 | Analyze buttons must navigate to Stock Analysis and set a Back button to return to the origin page |
 | NF-42 | The app must be usable on a standard desktop browser; no mobile-specific layout required |
-| NF-43 | Urgent action count must be visible on the Today's Brief tab badge without opening the tab |
+| NF-43 | Urgent action count must be visible on Today's Brief without any click (2026-07-12: Today's Brief is a promoted full-width section, not a tab, so this is now always-on rather than a tab-badge) |
 
 ### 4.6 Maintainability
 
