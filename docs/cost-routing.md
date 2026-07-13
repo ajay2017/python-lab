@@ -130,12 +130,14 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-07-12 | Nav follow-up — investigate Risk & Alerts split feasibility + nav placement | Sonnet (Explore) | — | — | — | n/a | Parallel with the AI Brief row above. Found the two halves (Alerts & Actions / Risk Analysis) share no state with each other, only upstream `port_df`/`held_data` — recommended splitting into 2 standalone pages, both under PORTFOLIO. Token usage not included in this agent's returned result. |
 | 2026-07-12 | Nav follow-up Phase A — extract Portfolio Allocation + Analytics into a new standalone PORTFOLIO-group page | — | — | — | — | n/a — lead | Judgment-heavy structural move (2nd of its kind this session); built inline via a one-shot slice/reassemble script + independent byte-for-byte verification (targeted, not generic diff — reordering confused `difflib`). Not delegated, matching the Phase-3 precedent for this class of change. Committed 2a61398. |
 | 2026-07-12 | Nav follow-up Phase A — Opus review (dependency completeness, cache placement, gate/st.stop() correctness, nav-string exact-match, scope discipline) | — | — | — | — | n/a — lead | Mandatory review (structural nav change). SHIP, 0 blocking; 1 non-blocking finding (a rebind derived a ticker subset instead of Home's full list, risking a stale-comment cache-key mismatch in a failed-load edge case, awareness-only impact) — fixed before commit by publishing Home's actual list instead of deriving a subset. |
+| 2026-07-12 | Nav follow-up Phase B — rename Home's "AI Brief" tab to "AI Snapshot" (label, cache-key string, mutual cross-reference captions, User Guide + requirements.md + architecture.md sync) | — | — | — | — | n/a — lead | Small, low-risk (label/doc-only, no data/session-state plumbing beyond a string rename) — done inline, no separate review pass needed unlike Phase A's structural move. Also fixed a Phase-A doc-sync miss (Portfolio Allocation was never added to the User Guide's page list). Committed bb508c7. |
+| 2026-07-12 | Nav follow-up Phase A+B — architecture.md Known-Behaviours row | Haiku (doc-writer) | 55,543 | ~$0.08 | ~$0.38 | ~$0.30 | Mechanical doc row; facts pinned by lead (both commit hashes, exact behavior) before handoff. Doc-writer correctly declined to claim queued Phase C is done. |
 
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 1,151,872 | ~$4.25 | ~$8.76 | **~$4.52 (≈52% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
+| **To date** | 1,207,415 | ~$4.33 | ~$9.14 | **~$4.82 (≈53% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 
