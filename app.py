@@ -18311,7 +18311,9 @@ elif page == "📊 Predictive Analytics":
             with st.spinner("Loading all-time recommendations…"):
                 # All time — more history = better calibration
                 _pac_recs_df   = db.load_recommendations()
-                _pac_trades_df = st.session_state.get("trades_df") or db.load_trades()
+                _pac_trades_df = st.session_state.get("trades_df")
+                if _pac_trades_df is None:
+                    _pac_trades_df = db.load_trades()
 
             if _pac_recs_df is None or _pac_recs_df.empty:
                 st.info(
