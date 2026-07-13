@@ -3889,6 +3889,7 @@ if page == "🏠 Home":
     # informs" operating posture (CLAUDE.md) means this should dominate the
     # viewport before any tab click, not compete with 10 other topics.
     # ═══════════════════════════════════════════════════════════════════════════
+    st.divider()
     st.subheader(f"📋 Today's Brief{_db_icon}")
     from datetime import datetime as _dt
 
