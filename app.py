@@ -21008,7 +21008,8 @@ elif page == "🧠 AI Insights":
             st.caption(
                 "Paste a CNBC Pro earnings-preview article. The extractor pulls beat rate, "
                 "post-earnings reaction history, and 'what to watch' per ticker. "
-                "Results enrich the **📋 Pre-Earnings Playbook** on 🔔 Catalyst Watch."
+                "Results enrich the **📋 Pre-Earnings Playbook** on 🔔 Catalyst Watch, and saved "
+                "tickers are added to your **watchlist** so they're scanned for Grow Today."
             )
             _ep_col1, _ep_col2 = st.columns([3, 1])
             with _ep_col1:
@@ -21098,7 +21099,23 @@ elif page == "🧠 AI Insights":
                             st.warning("No stocks selected to save.")
                         else:
                             db.save_earnings_context(_ep_collected)
-                            st.success(f"Saved {len(_ep_collected)} stock(s) to earnings context.")
+                            # A CNBC pre-earnings mention is a research signal on its own —
+                            # add saved tickers to the watchlist so the next scan picks them
+                            # up for Grow Today (mirrors F-154's Stock Research mode, which
+                            # already treats Ideas Inbox saves as watchlist candidates).
+                            _ep_new_wl = [
+                                _epc["ticker"] for _epc in _ep_collected
+                                if _epc["ticker"] not in st.session_state.watchlist
+                            ]
+                            for _ep_t in _ep_new_wl:
+                                st.session_state.watchlist.append(_ep_t)
+                            if _ep_new_wl:
+                                db.save_watchlist(st.session_state.watchlist)
+                            _ep_wl_note = (
+                                f" · added {', '.join(_ep_new_wl)} to watchlist"
+                                if _ep_new_wl else " · already on watchlist"
+                            )
+                            st.success(f"Saved {len(_ep_collected)} stock(s) to earnings context{_ep_wl_note}.")
                             for _k in ("_ep_preview", "_ep_preview_nonce", "_ep_paste"):
                                 st.session_state.pop(_k, None)
                             st.rerun()
