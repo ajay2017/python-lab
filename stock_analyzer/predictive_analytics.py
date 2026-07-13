@@ -48,10 +48,9 @@ def calibration_by_score_band(
             continue
         try:
             score = float(r["composite_score"])
+            floor = int((score // band_size) * band_size)
         except (TypeError, ValueError):
             continue
-
-        floor = int((score // band_size) * band_size)
         if floor not in buckets:
             buckets[floor] = {
                 "band_floor":    floor,
@@ -138,10 +137,10 @@ def calibration_by_sector(
             continue
         try:
             score = float(r["composite_score"])
+            band  = _broad(score)
         except (TypeError, ValueError):
             continue
         sector = str(r.get("sector") or "Unknown").strip() or "Unknown"
-        band   = _broad(score)
         acc.setdefault(sector, {}).setdefault(band, []).append(float(alpha))
 
     result: dict[str, dict[str, Any]] = {}
