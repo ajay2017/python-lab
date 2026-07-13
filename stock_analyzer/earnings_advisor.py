@@ -16,6 +16,7 @@ from stock_analyzer.constants import (
     EARNINGS_BEAT_RATE_REDUCE_THRESHOLD,
     EARNINGS_BEAT_RATE_STRONG_THRESHOLD,
     EARNINGS_BEARISH_REACTION_COMPOSITE_GATE,
+    EARNINGS_MIN_BEAT_RATE_ENTRY,
     COMPOSITE_BUY,
 )
 
@@ -517,3 +518,82 @@ def build_earnings_playbook(
 
     playbook.sort(key=lambda x: x["days_until"])
     return playbook
+
+
+def build_earnings_catalyst_candidates(
+    watchlist_tickers: list,
+    held_tickers: set,
+    composites: dict,
+    earnings_context: dict,
+    today: _date | None = None,
+    lookahead_days: int = 30,
+) -> list:
+    """
+    Surfaces watchlist names near earnings with a strong historical setup.
+
+    Filters (all must pass):
+      - not held
+      - earnings_context row exists for the ticker (CNBC data pasted)
+      - beat_rate_pct >= EARNINGS_MIN_BEAT_RATE_ENTRY
+      - recent_reaction_direction != 'bearish'
+      - earnings_date within lookahead_days
+      - composite score (bundle["total"]) >= COMPOSITE_BUY
+
+    Returns empty list when no candidates pass — normal until CNBC articles
+    have been pasted for watchlist names via the Pre-Earnings paste flow.
+    Sorted by rank_score desc (beat_rate * composite * reaction_multiplier).
+    """
+    if today is None:
+        today = _today_et()
+
+    candidates = []
+    for ticker in watchlist_tickers:
+        if ticker in held_tickers:
+            continue
+
+        ctx = earnings_context.get(ticker)
+        if not ctx:
+            continue
+
+        beat_rate = ctx.get("beat_rate_pct")
+        if beat_rate is None or beat_rate < EARNINGS_MIN_BEAT_RATE_ENTRY:
+            continue
+
+        reaction = ctx.get("recent_reaction_direction")
+        if reaction == "bearish":
+            continue
+
+        earn_date_str = ctx.get("earnings_date")
+        if not earn_date_str:
+            continue
+        try:
+            earn_date = _datetime.strptime(str(earn_date_str), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        days_until = (earn_date - today).days
+        if days_until < 0 or days_until > lookahead_days:
+            continue
+
+        bundle = composites.get(ticker)
+        if bundle is None:
+            continue
+        score = _f(bundle.get("total"), 0.0)
+        if score < COMPOSITE_BUY:
+            continue
+
+        reaction_mult = 1.2 if reaction == "bullish" else 1.0
+        rank_score = beat_rate * score * reaction_mult
+
+        candidates.append({
+            "ticker":               ticker,
+            "beat_rate":            beat_rate,
+            "reaction":             reaction or "mixed",
+            "earn_date":            earn_date.isoformat(),
+            "days_until":           days_until,
+            "score":                round(score, 1),
+            "rank_score":           rank_score,
+            "consensus_growth_pct": ctx.get("consensus_growth_pct"),
+            "what_to_watch_cnbc":   ctx.get("what_to_watch_cnbc"),
+        })
+
+    return sorted(candidates, key=lambda x: x["rank_score"], reverse=True)

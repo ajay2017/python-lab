@@ -448,6 +448,7 @@ CATALYST_WATCH_WINDOW_DAYS = 7
 EARNINGS_BEAT_RATE_REDUCE_THRESHOLD      = 60.0  # below this + weak composite → REDUCE pressure
 EARNINGS_BEAT_RATE_STRONG_THRESHOLD      = 75.0  # above this + bullish reaction → strengthens HOLD_OR_ADD
 EARNINGS_BEARISH_REACTION_COMPOSITE_GATE = 75    # bearish reaction history + composite < this → REDUCE
+EARNINGS_MIN_BEAT_RATE_ENTRY             = 70.0  # catalyst scanner — min beat rate to surface a watchlist candidate
 
 # Forward window (days) for macro-event awareness — high-impact events
 # (FOMC, CPI, NFP, GDP) shown ahead on the Economic Calendar page and in

@@ -18589,6 +18589,76 @@ elif page == "🔔 Catalyst Watch":
         unsafe_allow_html=True,
     )
 
+    # ── Phase 3 — Catalyst Scanner: watchlist entry candidates ──────────────
+    st.divider()
+    st.markdown("## 🎯 Entry Candidates")
+    st.caption(
+        "Watchlist names near earnings with a strong historical beat rate, a positive or "
+        "mixed post-earnings reaction pattern, and a composite score above the entry threshold. "
+        "Awareness only — never a Buy recommendation. Research any name on the Analysis page."
+    )
+
+    _cw_watchlist_tickers = list(st.session_state.get("watchlist", []))
+    _cw_composites        = st.session_state.get("_grow_composites") or {}
+
+    if not _cw_watchlist_tickers:
+        st.info("No watchlist names configured. Add tickers to your watchlist to use the Catalyst Scanner.")
+    else:
+        from stock_analyzer.earnings_advisor import build_earnings_catalyst_candidates as _build_candidates
+        from stock_analyzer.db import load_earnings_context_batch as _load_ec_batch
+
+        _cw_ec_batch = _load_ec_batch(list(_cw_watchlist_tickers), max_age_days=90)
+        _cw_candidates = _build_candidates(
+            watchlist_tickers=_cw_watchlist_tickers,
+            held_tickers=_cw_held,
+            composites=_cw_composites,
+            earnings_context=_cw_ec_batch,
+            today=_cw_today,
+            lookahead_days=30,
+        )
+
+        if not _cw_candidates:
+            if not _cw_ec_batch:
+                st.info(
+                    "No CNBC earnings articles pasted for watchlist names yet. "
+                    "Use **🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings** to paste articles "
+                    "and the scanner will populate here."
+                )
+            else:
+                st.info(
+                    "No watchlist names currently pass all filters (beat rate ≥ 70%, "
+                    "composite ≥ 65, reaction not bearish, earnings within 30 days)."
+                )
+        else:
+            st.caption(f"{len(_cw_candidates)} candidate{'s' if len(_cw_candidates) != 1 else ''} · ranked by beat rate × composite × reaction")
+            for _cand in _cw_candidates:
+                _rxn_emoji = {"bullish": "🟢", "mixed": "🟡"}.get(_cand["reaction"], "🟡")
+                with st.expander(
+                    f"🎯 **{_cand['ticker']}** · Beat rate {_cand['beat_rate']:.0f}% · "
+                    f"Score {_cand['score']:.0f} · {_cand['earn_date']} ({_cand['days_until']}d) "
+                    f"· {_rxn_emoji} {_cand['reaction'].capitalize()} reaction",
+                    expanded=False,
+                ):
+                    _c1, _c2, _c3, _c4 = st.columns(4)
+                    _c1.metric("Historical Beat Rate", f"{_cand['beat_rate']:.0f}%")
+                    _c2.metric("Composite Score",      f"{_cand['score']:.0f}/100")
+                    _c3.metric("Days to Earnings",     str(_cand["days_until"]))
+                    if _cand["consensus_growth_pct"] is not None:
+                        _c4.metric("Consensus Growth", f"{_cand['consensus_growth_pct']:+.0f}%")
+                    if _cand["what_to_watch_cnbc"]:
+                        st.markdown(f"**What to watch (CNBC):** {_cand['what_to_watch_cnbc']}")
+                    if st.button("▶ Analyse", key=f"_cw_cand_analyze_{_cand['ticker']}"):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _cand["ticker"]
+                        st.rerun()
+    st.markdown(
+        "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
+        "Candidates shown only when CNBC Pre-Earnings articles have been pasted for these tickers "
+        "via AI Insights → Ideas Inbox. The engine does not recommend buying into earnings; "
+        "proximity gates remain active on Grow Today.</div>",
+        unsafe_allow_html=True,
+    )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE 6 — ECONOMIC CALENDAR
