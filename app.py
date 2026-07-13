@@ -1427,6 +1427,7 @@ with st.sidebar:
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
             ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
             ("Recommendations", "📜 Recommendations History",  ":material/history:"),
+            ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
         ]),
         ("ALERTS", [
             ("Catalyst Watch",    "🔔 Catalyst Watch",    ":material/bolt:"),
@@ -18252,6 +18253,379 @@ delete from recommendations where rec_date < '2026-05-27';
 ```
 """
         )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — PREDICTIVE ANALYTICS
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "📊 Predictive Analytics":
+    _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
+    st.title("📊 Predictive Analytics")
+    st.caption(
+        "Your personal edge map — built from every recommendation this app has "
+        "surfaced and how each played out. Signal Calibration shows where in the "
+        "composite-score range your alpha is actually consistent, not just where "
+        "the engine *thinks* it should be. Alpha Attribution (coming once you have "
+        "6+ months of daily snapshots) will decompose alpha by sector, hold duration, "
+        "and market regime."
+    )
+
+    if not db.has_db():
+        st.warning(
+            "🟡 Database not connected — Predictive Analytics requires an active "
+            "database connection. Connect one via your Streamlit Cloud app secrets."
+        )
+        st.stop()
+
+    from stock_analyzer.recommendations_history import (
+        match_recs_to_trades,
+        compute_outcomes,
+    )
+    from stock_analyzer.predictive_analytics import (
+        calibration_by_score_band,
+        calibration_by_sector,
+        personal_alpha_threshold,
+        total_graded,
+    )
+    from stock_analyzer.constants import (
+        REC_SCORE_MIN_DAYS,
+        PREDICTIVE_MIN_BAND_N,
+        PREDICTIVE_SCORE_BAND_SIZE,
+    )
+    import pandas as _pa_pd
+
+    _pa_tab1, _pa_tab2 = st.tabs(["🎯 Signal Calibration", "📊 Alpha Attribution"])
+
+    # ── TAB 1 — Signal Calibration ────────────────────────────────────────────
+    with _pa_tab1:
+
+        # ── Load + cache enriched outcome set ─────────────────────────────────
+        # Use an explicit Refresh button so live-price fetches don't fire on
+        # every Streamlit rerun. Cache persists for the session.
+        _pac_refresh_col = st.columns([5, 1])[1]
+        with _pac_refresh_col:
+            if st.button("🔄 Refresh", key="_pac_refresh"):
+                st.session_state.pop("_pac_enriched", None)
+
+        if st.session_state.get("_pac_enriched") is None:
+            with st.spinner("Loading all-time recommendations…"):
+                # All time — more history = better calibration
+                _pac_recs_df   = db.load_recommendations()
+                _pac_trades_df = st.session_state.get("trades_df") or db.load_trades()
+
+            if _pac_recs_df is None or _pac_recs_df.empty:
+                st.info(
+                    "No recommendations recorded yet. As Today's Brief surfaces "
+                    "picks day after day this page will fill in."
+                )
+                st.stop()
+
+            # Live prices for every ticker in the full history
+            _pac_tickers = sorted({
+                str(t).strip().upper()
+                for t in _pac_recs_df["ticker"].dropna().tolist()
+                if str(t).strip()
+            })
+            _pac_prices: dict = {}
+            if _pac_tickers:
+                try:
+                    _px2 = fetch_live_prices(_pac_tickers)
+                    _pac_prices = {
+                        t: float(d.get("price", 0))
+                        for t, d in (_px2 or {}).items()
+                        if d and d.get("price")
+                    }
+                except Exception:
+                    _pac_prices = {}
+
+            # SPY close-by-date for alpha computation (1y for full coverage)
+            _pac_spy_by_date: dict = {}
+            try:
+                _pac_spy_hist = _cached_spy("1y")
+                if _pac_spy_hist is not None and not _pac_spy_hist.empty \
+                        and "Close" in _pac_spy_hist.columns:
+                    for _si, _sr in _pac_spy_hist.iterrows():
+                        _sd2 = _si.date() if hasattr(_si, "date") else None
+                        try:
+                            _sc2 = float(_sr["Close"])
+                        except (TypeError, ValueError):
+                            _sc2 = None
+                        if _sd2 is not None and _sc2 and _sc2 > 0:
+                            _pac_spy_by_date[_sd2] = _sc2
+            except Exception:
+                _pac_spy_by_date = {}
+
+            _pac_matched  = match_recs_to_trades(_pac_recs_df, _pac_trades_df)
+            _pac_enriched = compute_outcomes(
+                _pac_matched, _pac_prices, today=_today_et(),
+                spy_close_by_date=_pac_spy_by_date,
+                min_days=REC_SCORE_MIN_DAYS,
+            )
+            st.session_state["_pac_enriched"] = _pac_enriched
+        else:
+            _pac_enriched = st.session_state["_pac_enriched"]
+
+        # ── Data coverage banner ───────────────────────────────────────────────
+        _pac_n_total  = len(_pac_enriched)
+        _pac_n_graded = total_graded(_pac_enriched)
+        _pac_n_mature = sum(1 for r in _pac_enriched if not r.get("outcome_maturing"))
+
+        _pac_bm1, _pac_bm2, _pac_bm3 = st.columns(3)
+        _pac_bm1.metric(
+            "Total recs (all time)",
+            f"{_pac_n_total:,}",
+            help="Every recommendation surfaced since the table was created.",
+        )
+        _pac_bm2.metric(
+            "Mature recs",
+            f"{_pac_n_mature:,}",
+            help=f"Aged ≥ {REC_SCORE_MIN_DAYS} days — old enough to grade.",
+        )
+        _pac_bm3.metric(
+            "Calibration set",
+            f"{_pac_n_graded:,}",
+            help="Mature recs with a live price AND an SPY benchmark — "
+                 "the working set for all charts below.",
+        )
+
+        # Gate: need at least 2× PREDICTIVE_MIN_BAND_N graded outcomes
+        _pac_min_required = PREDICTIVE_MIN_BAND_N * 2
+        if _pac_n_graded < _pac_min_required:
+            st.info(
+                f"📅 Not enough outcome history yet — calibration needs at least "
+                f"**{_pac_min_required} graded recommendations** (you have "
+                f"{_pac_n_graded}). Keep the app running and return once more "
+                f"picks have had time to mature (≥ {REC_SCORE_MIN_DAYS} days old "
+                f"with a live price and SPY benchmark)."
+            )
+            st.stop()
+
+        # ── Calibration computation ────────────────────────────────────────────
+        _pac_bands   = calibration_by_score_band(
+            _pac_enriched, band_size=PREDICTIVE_SCORE_BAND_SIZE
+        )
+        _pac_sectors = calibration_by_sector(
+            _pac_enriched, min_n=PREDICTIVE_MIN_BAND_N - 2
+        )
+        _pac_thresh  = personal_alpha_threshold(_pac_bands, min_n=PREDICTIVE_MIN_BAND_N)
+
+        # ── Personal threshold callout ─────────────────────────────────────────
+        st.divider()
+        if _pac_thresh is not None:
+            # Count how many graded outcomes are in the threshold-and-above bands
+            _pac_thresh_n = sum(
+                b["n"] for b in _pac_bands if b["band_floor"] >= _pac_thresh
+            )
+            _pac_thresh_alpha = next(
+                (b["avg_alpha"] for b in _pac_bands if b["band_floor"] == _pac_thresh),
+                None,
+            )
+            st.success(
+                f"**Your personal alpha threshold: composite ≥ {_pac_thresh}**  \n"
+                f"Every score band from {_pac_thresh} upward has delivered positive "
+                f"alpha in your history (n={_pac_thresh_n} outcomes"
+                + (f"; avg alpha at this band: {_pac_thresh_alpha:+.1f}pp vs SPY" if _pac_thresh_alpha is not None else "")
+                + ").  \nThis is where the engine's signal has actually worked for *you* — "
+                f"not just for the general backtest."
+            )
+        else:
+            st.info(
+                "📊 **Personal threshold: not yet determinable.**  \n"
+                f"Either no score band has ≥ {PREDICTIVE_MIN_BAND_N} outcomes yet, "
+                "or alpha hasn't been consistently positive above any single floor. "
+                "More history will sharpen this."
+            )
+
+        # ── Calibration curve ─────────────────────────────────────────────────
+        st.subheader("Calibration Curve — Avg Alpha by Score Band")
+        st.caption(
+            "Each bar = one composite-score band. Height = average alpha (your return "
+            "minus SPY over the same window). The sample size (n) appears inside each bar; "
+            f"bands with fewer than {PREDICTIVE_MIN_BAND_N} outcomes are shown in grey — "
+            "treat them as indicative only."
+        )
+
+        if _pac_bands:
+            _pac_bar_x      = [b["band_label"] for b in _pac_bands]
+            _pac_bar_y      = [b["avg_alpha"] if b["avg_alpha"] is not None else 0 for b in _pac_bands]
+            _pac_bar_n      = [b["n"] for b in _pac_bands]
+            _pac_bar_colors = []
+            for b in _pac_bands:
+                if b["n"] < PREDICTIVE_MIN_BAND_N:
+                    _pac_bar_colors.append("#666666")   # grey — thin data
+                elif (b["avg_alpha"] or 0) >= 0:
+                    _pac_bar_colors.append("#00C851")   # green
+                else:
+                    _pac_bar_colors.append("#ff4444")   # red
+
+            _pac_bar_text = [
+                f"n={n}" for n in _pac_bar_n
+            ]
+
+            _pac_calib_fig = go.Figure(go.Bar(
+                x=_pac_bar_x,
+                y=_pac_bar_y,
+                marker_color=_pac_bar_colors,
+                text=_pac_bar_text,
+                textposition="inside",
+                insidetextanchor="middle",
+                customdata=[[b["p_positive_alpha"], b["n_acted"], b["n_missed"]]
+                            for b in _pac_bands],
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    "Avg alpha: %{y:+.2f}pp<br>"
+                    "P(positive alpha): %{customdata[0]:.0%}<br>"
+                    "Acted: %{customdata[1]} · Missed: %{customdata[2]}<extra></extra>"
+                ),
+            ))
+            _pac_calib_fig.add_hline(
+                y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
+            )
+            if _pac_thresh is not None:
+                _pac_calib_fig.add_vline(
+                    x=str(next(
+                        (b["band_label"] for b in _pac_bands if b["band_floor"] == _pac_thresh),
+                        "",
+                    )),
+                    line_dash="dot",
+                    line_color="#FFD700",
+                    annotation_text=f"  ≥ {_pac_thresh} threshold",
+                    annotation_font_color="#FFD700",
+                    annotation_position="top right",
+                )
+            _pac_calib_fig.update_layout(
+                template="plotly_dark",
+                height=320,
+                yaxis_title="Avg Alpha vs SPY (pp)",
+                xaxis_title="Composite Score Band",
+                margin=dict(l=0, r=0, t=10, b=0),
+                showlegend=False,
+            )
+            st.plotly_chart(_pac_calib_fig, use_container_width=True)
+
+        # ── Sector × Score heatmap ─────────────────────────────────────────────
+        st.subheader("Sector × Score — Where Your Edge Lives")
+        st.caption(
+            "Average alpha by sector and score tier. Cells with fewer than "
+            f"{PREDICTIVE_MIN_BAND_N - 2} outcomes are hidden. Green = positive alpha "
+            "historically; red = negative. Use this to see which sector + score "
+            "combinations have actually worked vs which are noise."
+        )
+
+        if _pac_sectors:
+            _pac_band_order = ["< 65", "65–74", "75+"]
+            _pac_sec_rows   = sorted(_pac_sectors.keys())
+            # Build a DataFrame for display
+            _pac_hm_data = []
+            for _sec in _pac_sec_rows:
+                _row = {"Sector": _sec}
+                for _band in _pac_band_order:
+                    cell = _pac_sectors.get(_sec, {}).get(_band)
+                    if cell:
+                        _row[_band] = f"{cell['avg_alpha']:+.1f}pp (n={cell['n']})"
+                    else:
+                        _row[_band] = "—"
+                _pac_hm_data.append(_row)
+
+            _pac_hm_df = _pa_pd.DataFrame(_pac_hm_data).set_index("Sector")
+
+            # Color styling: green positive, red negative, grey —
+            def _pac_color_cell(val):
+                if val == "—":
+                    return "color: #555555"
+                try:
+                    num = float(str(val).split("pp")[0].replace("+", ""))
+                    if num > 0:
+                        return "color: #00C851; font-weight:600"
+                    elif num < 0:
+                        return "color: #ff4444; font-weight:600"
+                except (ValueError, IndexError):
+                    pass
+                return ""
+
+            _pac_styled = _pac_hm_df.style.applymap(_pac_color_cell)
+            st.dataframe(_pac_styled, use_container_width=True)
+        else:
+            st.info(
+                f"No sector cells have ≥ {PREDICTIVE_MIN_BAND_N - 2} outcomes yet. "
+                "Keep using the app and this heatmap will fill in over time."
+            )
+
+        # ── Raw outcome table ──────────────────────────────────────────────────
+        with st.expander("📋 Raw calibration dataset", expanded=False):
+            st.caption(
+                "Every mature recommendation with a graded alpha. "
+                "Sorted by composite score descending."
+            )
+            _pac_raw_rows = [
+                {
+                    "Date":      r["rec_date"],
+                    "Ticker":    r["ticker"],
+                    "Sector":    r["sector"],
+                    "Score":     r["composite_score"],
+                    "Conviction":r["conviction"],
+                    "Acted":     "✓" if r["acted_on"] else "—",
+                    "Outcome %": (f"{r['outcome_pct']:+.1f}%" if r.get("outcome_pct") is not None else "—"),
+                    "Alpha pp":  (f"{r['alpha_pct']:+.1f}" if r.get("alpha_pct") is not None else "—"),
+                    "Days":      r.get("days_since"),
+                }
+                for r in _pac_enriched
+                if not r.get("outcome_maturing") and r.get("alpha_pct") is not None
+            ]
+            if _pac_raw_rows:
+                _pac_raw_df = _pa_pd.DataFrame(_pac_raw_rows).sort_values(
+                    "Score", ascending=False
+                )
+                st.dataframe(_pac_raw_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No graded outcomes yet.")
+
+    # ── TAB 2 — Alpha Attribution (placeholder) ───────────────────────────────
+    with _pa_tab2:
+        st.subheader("📊 Alpha Attribution")
+        st.info(
+            "**Coming once you have 6+ months of daily portfolio snapshots.**  \n\n"
+            "Factor attribution decomposes your realized alpha into the dimensions "
+            "that actually drove it: which sectors, which hold-duration bands "
+            "(< 30 days / 30–90 days / 90+ days), and which score tiers contributed "
+            "most — and whether your capital allocation *follows* your edge or works "
+            "against it.  \n\n"
+            "This tab activates automatically once `daily_snapshots` has ≥ 180 days "
+            "of coverage."
+        )
+
+        # Coverage status
+        try:
+            _pa_snaps = db.load_daily_snapshots()
+            if _pa_snaps is not None and not _pa_snaps.empty \
+                    and "snapshot_date" in _pa_snaps.columns:
+                _pa_snaps["snapshot_date"] = _pa_pd.to_datetime(
+                    _pa_snaps["snapshot_date"], utc=True
+                ).dt.date
+                _pa_earliest = _pa_snaps["snapshot_date"].min()
+                _pa_latest   = _pa_snaps["snapshot_date"].max()
+                _pa_days_cov = (_pa_latest - _pa_earliest).days + 1
+                _pa_days_need = 180
+
+                _pa_c1, _pa_c2, _pa_c3 = st.columns(3)
+                _pa_c1.metric("Earliest snapshot", str(_pa_earliest))
+                _pa_c2.metric("Latest snapshot",   str(_pa_latest))
+                _pa_c3.metric(
+                    "Coverage",
+                    f"{_pa_days_cov} days",
+                    delta=f"{_pa_days_cov - _pa_days_need:+d} vs 180-day target",
+                    delta_color="normal",
+                )
+                if _pa_days_cov < _pa_days_need:
+                    _pa_pct = min(100, int(_pa_days_cov / _pa_days_need * 100))
+                    st.progress(
+                        _pa_pct / 100,
+                        text=f"{_pa_pct}% to activation — {_pa_days_need - _pa_days_cov} more days needed",
+                    )
+            else:
+                st.caption("No daily snapshots recorded yet.")
+        except Exception:
+            st.caption("Could not load snapshot coverage.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

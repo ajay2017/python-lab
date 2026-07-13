@@ -685,3 +685,15 @@ REC_SCORE_MIN_DAYS = 5
 # NOT a decision gate — it never affects what the engine recommends, only whether
 # the report has enough graded history to comment. Safe to tune from observation.
 MONTHLY_REPORT_MIN_GRADED = 5
+
+# ── Predictive Analytics — Signal Calibration ─────────────────────────────────
+# Minimum number of mature outcomes in a composite-score band before the band
+# is shown in the Signal Calibration chart. Below this, the band is labelled
+# "Too few" to avoid misleading averages on 1-2 data points.
+# Measurement floor only — NOT a decision gate.
+PREDICTIVE_MIN_BAND_N = 5
+
+# Width of each composite-score band in the calibration chart (5-point gives
+# enough granularity to reveal where personal edge starts without producing
+# too many empty bands on a small history). Safe to tune from observation.
+PREDICTIVE_SCORE_BAND_SIZE = 5

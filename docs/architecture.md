@@ -206,6 +206,8 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `RR_ENTRY_MIN` | 2.0 | Min reward:risk for a favourable entry. Hard-gates Watchlist ENTER_NOW (G-13); on Analysis it drives a caveat, not a block |
 | `CATALYST_WATCH_WINDOW_DAYS` | 7 | Forward window for the Catalyst Watch earnings-awareness panel |
 | `REC_SCORE_MIN_DAYS` | 5 | Min calendar days a rec must be live before its OUTCOME is scored on the Recommendations History page and included in the aggregate metrics (avg outcome / alpha / best / worst). Younger recs display with ⏳ label but are excluded from the scorecard — one session of price wiggle isn't a meaningful outcome. **Measurement-only; never affects what the engine recommends**, only how long the scorecard waits before grading. Safe to tune from observation. |
+| `PREDICTIVE_MIN_BAND_N` | 5 | Minimum mature outcomes in a composite-score band before Signal Calibration (F-178) renders that band's bar. Below this the band is still drawn but coloured grey — labelled "Too few" to prevent misleading averages on 1–2 data points. Measurement floor only; **not a decision gate**. |
+| `PREDICTIVE_SCORE_BAND_SIZE` | 5 | Width of each composite-score interval in the Signal Calibration chart (F-178). 5-point bands (65–69, 70–74, …) give enough granularity to show where personal edge starts without producing too many empty bands on a small history. |
 | `RISK_PCT_PER_TRADE` | 0.015 | 1.5% portfolio risk per trade (Moderate) |
 | `EARNINGS_IMMINENT_DAYS` | 7 | Trades within this window flagged caution |
 | `EARNINGS_BEAT_RATE_REDUCE_THRESHOLD` | 60.0 | Pre-Earnings Playbook (F-174) — CNBC-sourced historical beat rate below this, combined with composite < `COMPOSITE_BUY`, adds a REDUCE condition |
