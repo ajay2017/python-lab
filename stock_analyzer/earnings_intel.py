@@ -167,6 +167,84 @@ def extract_results(
         return None
 
 
+# ── Auto-fetch from Finnhub (no LLM) ─────────────────────────────────────────
+
+def fetch_recent_results(
+    tickers: list[str],
+    finnhub_key: str,
+    lookback_days: int = 90,
+) -> list[dict]:
+    """
+    Fetch the most recent reported quarter EPS data from Finnhub for each ticker.
+
+    Returns a list of partial result dicts (one per ticker with data within
+    lookback_days of today). Fields: ticker, actual_eps, estimated_eps, eps_beat,
+    eps_surprise_pct, quarter_period (Finnhub's quarter-end date string).
+
+    Revenue and guidance_direction are NOT fetched — Finnhub free tier omits them.
+    report_date is intentionally absent; the caller sets it to the actual report
+    date (shown as an editable field in the UI, defaulting to today).
+
+    Returns [] on total failure or empty data; partial successes included.
+    """
+    if not finnhub_key or not tickers:
+        return []
+    try:
+        import requests
+        from datetime import datetime, timedelta
+        import pytz
+        _et   = pytz.timezone("America/New_York")
+        today = datetime.now(_et).date()
+        cutoff = today - timedelta(days=lookback_days)
+        results: list[dict] = []
+        for ticker in tickers:
+            try:
+                resp = requests.get(
+                    "https://finnhub.io/api/v1/stock/earnings",
+                    params={"symbol": ticker.upper(), "limit": 1, "token": finnhub_key},
+                    timeout=8,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if not isinstance(data, list) or not data:
+                    continue
+                row = data[0]
+                # `period` is the quarter-end date (e.g. "2026-06-30") — not the
+                # actual report date, but a reliable proxy for "quarter just ended"
+                period_str = row.get("period") or ""
+                try:
+                    period_date = datetime.strptime(period_str, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                if period_date < cutoff:
+                    continue  # older than lookback window
+                actual   = row.get("actual")
+                estimate = row.get("estimate")
+                surprise = row.get("surprise")
+                surprise_pct = row.get("surprisePercent")
+                if actual is None:
+                    continue
+                eps_beat = None
+                if actual is not None and estimate is not None:
+                    try:
+                        eps_beat = bool(float(actual) > float(estimate))
+                    except (TypeError, ValueError):
+                        pass
+                results.append({
+                    "ticker":            ticker.upper(),
+                    "actual_eps":        float(actual) if actual is not None else None,
+                    "estimated_eps":     float(estimate) if estimate is not None else None,
+                    "eps_beat":          eps_beat,
+                    "eps_surprise_pct":  round(float(surprise_pct), 2) if surprise_pct is not None else None,
+                    "quarter_period":    period_str,  # quarter-end date for display
+                })
+            except Exception:
+                continue
+        return results
+    except Exception:
+        return []
+
+
 # ── Shared JSON helper ────────────────────────────────────────────────────────
 
 def _parse_json_response(text: str, list_key: str) -> list[dict] | None:

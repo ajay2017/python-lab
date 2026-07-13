@@ -21009,103 +21009,168 @@ elif page == "🧠 AI Insights":
         # ── Post-Earnings Results paste flow ──────────────────────────────────
         elif _inbox_mode == "📥 Post-Earnings Results":
             st.caption(
-                "Paste a post-earnings results article. The extractor pulls EPS, revenue, "
-                "guidance direction, and key narrative per ticker. Results trigger an "
-                "**F-1 thesis checkpoint** on 🧠 AI Insights → Positions tab."
+                "Select which holdings reported recently, fetch EPS data from Finnhub, "
+                "then set the guidance direction per company. No paste or LLM required. "
+                "Results trigger the **F-1 thesis checkpoint** on 🧠 AI Insights → Positions tab."
             )
-            _er_col1, _er_col2 = st.columns([3, 1])
-            with _er_col1:
-                _er_paste = st.text_area(
-                    "Paste the earnings results article",
-                    height=200,
-                    key="_er_paste",
-                    placeholder="Paste the full text of an earnings results article (CNBC, WSJ, Bloomberg, press release)…",
-                )
-            with _er_col2:
+
+            from stock_analyzer.providers._util import get_secret as _get_secret
+            _fh_key = _get_secret("FINNHUB_API_KEY") or ""
+
+            # Ticker selector — held tickers (the user knows which ones just reported)
+            _er_held_tickers = sorted(st.session_state.get("_last_held_tickers") or [])
+
+            _er_tickers_sel = st.multiselect(
+                "Which holdings just reported earnings?",
+                options=_er_held_tickers,
+                default=st.session_state.get("_er_tickers_sel", []),
+                key="_er_tickers_sel",
+                placeholder="Select one or more tickers…",
+            )
+
+            _er_fetch_col, _er_date_col = st.columns([2, 1])
+            with _er_date_col:
                 from datetime import date as _dt_date
-                _er_article_date = st.date_input(
+                _er_report_date = st.date_input(
                     "Report date",
                     value=_dt_date.today(),
-                    key="_er_article_date",
-                    help="Used to resolve day-of-week references to absolute dates.",
+                    key="_er_report_date",
+                    help="The date the results were published (used for the F-1 checkpoint lookback).",
                 )
-            if st.button(
-                "Extract results",
-                key="_er_extract_btn",
-                disabled=not _ai_api_key,
-                help="Requires Anthropic API key in Streamlit secrets.",
-            ):
-                if not _er_paste or not _er_paste.strip():
-                    st.warning("Paste an article first.")
-                else:
-                    with st.spinner("Extracting earnings results…"):
-                        _er_parsed = _earn_intel.extract_results(_er_paste, _er_article_date, _ai_api_key)
-                    if _er_parsed is None:
-                        st.error("Extraction failed — LLM offline or parse error.")
-                        _er_err = getattr(_earn_intel, "LAST_RESULTS_ERROR", None)
-                        if _er_err:
-                            st.caption(f"Details: {_er_err}")
-                    elif not _er_parsed:
-                        st.info("No earnings results found in this text.")
-                    else:
-                        st.session_state["_er_preview"]       = _er_parsed
-                        st.session_state["_er_preview_nonce"] = str(uuid.uuid4())[:8]
-                        st.rerun()
+            with _er_fetch_col:
+                if st.button(
+                    "⬇️ Fetch EPS from Finnhub",
+                    key="_er_fetch_btn",
+                    disabled=not _er_tickers_sel or not _fh_key,
+                    help=(
+                        "Requires FINNHUB_API_KEY in Streamlit secrets."
+                        if not _fh_key else
+                        "Fetches actual vs estimated EPS and surprise % for selected tickers."
+                    ),
+                ):
+                    with st.spinner(f"Fetching EPS data for {len(_er_tickers_sel)} ticker(s)…"):
+                        _er_fetched = _earn_intel.fetch_recent_results(
+                            _er_tickers_sel, _fh_key, lookback_days=90
+                        )
+                    if not _er_fetched:
+                        st.warning(
+                            "No recent EPS data found on Finnhub for the selected tickers. "
+                            "This can happen if the quarter hasn't ended yet, or if the ticker "
+                            "isn't covered on the free tier. Use the manual entry cards below."
+                        )
+                        # Still populate blank cards so the user can enter manually
+                        _er_fetched = [{"ticker": t} for t in _er_tickers_sel]
+                    st.session_state["_er_preview"]       = _er_fetched
+                    st.session_state["_er_preview_nonce"] = str(uuid.uuid4())[:8]
+                    st.rerun()
 
+            # Manual entry fallback — show blank cards without fetching
+            if _er_tickers_sel and not st.session_state.get("_er_preview"):
+                if st.button("Enter manually (no Finnhub fetch)", key="_er_manual_btn"):
+                    st.session_state["_er_preview"]       = [{"ticker": t} for t in _er_tickers_sel]
+                    st.session_state["_er_preview_nonce"] = str(uuid.uuid4())[:8]
+                    st.rerun()
+
+            # ── Review cards ──────────────────────────────────────────────────
             if st.session_state.get("_er_preview"):
                 _er_pv_list = [r for r in (st.session_state["_er_preview"] or []) if isinstance(r, dict)]
                 if not _er_pv_list:
                     st.session_state.pop("_er_preview", None)
                     st.rerun()
-                _er_nonce = st.session_state.get("_er_preview_nonce", "x")
-                st.markdown(f"**Review and edit — {len(_er_pv_list)} stock(s) extracted. Untick any you don't want, then save.**")
-                _er_collected: list[dict] = []
+                _er_nonce         = st.session_state.get("_er_preview_nonce", "x")
                 _er_guidance_opts = ["raised", "maintained", "lowered", "withdrawn", "unknown"]
+                st.markdown(f"**{len(_er_pv_list)} ticker(s) — confirm EPS data and set guidance direction, then save.**")
+                _er_collected: list[dict] = []
+
                 for _ri, _rrec in enumerate(_er_pv_list):
-                    _er_exp_label = f"{str(_rrec.get('ticker') or '?').upper()} — {_rrec.get('company', '')}"
-                    with st.expander(_er_exp_label, expanded=True):
+                    _er_t = str(_rrec.get("ticker") or "?").upper()
+                    _er_actual   = _rrec.get("actual_eps")
+                    _er_estimate = _rrec.get("estimated_eps")
+                    _er_surp_pct = _rrec.get("eps_surprise_pct")
+                    _er_beat     = _rrec.get("eps_beat")
+                    _er_period   = _rrec.get("quarter_period", "")
+
+                    # Header chip: Beat / Miss / Unknown
+                    if _er_beat is True:
+                        _er_chip = f"<span style='color:#22c55e;font-weight:700'>✓ Beat</span>"
+                    elif _er_beat is False:
+                        _er_chip = f"<span style='color:#ef4444;font-weight:700'>✗ Miss</span>"
+                    else:
+                        _er_chip = "<span style='color:#9ca3af'>— Enter manually</span>"
+
+                    with st.expander(f"**{_er_t}**  {_er_chip}", expanded=True):
                         _er_inc = st.checkbox("Include", value=True, key=f"_er_inc_{_er_nonce}_{_ri}")
+
+                        # EPS row (auto-filled or blank for manual entry)
                         _erc1, _erc2 = st.columns(2)
                         with _erc1:
-                            _er_ticker_i = st.text_input("Ticker", value=str(_rrec.get("ticker") or "").upper(), key=f"_er_ticker_{_er_nonce}_{_ri}").upper().strip()
-                            _er_rdate_i  = st.text_input("Report date (YYYY-MM-DD)", value=str(_rrec.get("report_date") or str(_er_article_date)), key=f"_er_rdate_{_er_nonce}_{_ri}")
-                            _er_eps_a_i  = st.number_input("Actual EPS ($)", value=float(_rrec.get("actual_eps") or 0.0), step=0.01, key=f"_er_eps_a_{_er_nonce}_{_ri}") if _rrec.get("actual_eps") is not None else None
-                            _er_eps_e_i  = st.number_input("Estimated EPS ($)", value=float(_rrec.get("estimated_eps") or 0.0), step=0.01, key=f"_er_eps_e_{_er_nonce}_{_ri}") if _rrec.get("estimated_eps") is not None else None
+                            _er_eps_a_i = st.number_input(
+                                "Actual EPS ($)",
+                                value=float(_er_actual) if _er_actual is not None else 0.0,
+                                step=0.01, format="%.2f",
+                                key=f"_er_eps_a_{_er_nonce}_{_ri}",
+                            )
+                            _er_eps_e_i = st.number_input(
+                                "Estimated EPS ($)",
+                                value=float(_er_estimate) if _er_estimate is not None else 0.0,
+                                step=0.01, format="%.2f",
+                                key=f"_er_eps_e_{_er_nonce}_{_ri}",
+                            )
+                            _er_rdate_i = st.text_input(
+                                "Report date (YYYY-MM-DD)",
+                                value=str(_er_report_date),
+                                key=f"_er_rdate_{_er_nonce}_{_ri}",
+                                help=f"Quarter period: {_er_period}" if _er_period else "Set to the actual report date.",
+                            )
                         with _erc2:
-                            _er_rev_a_i  = st.number_input("Actual Revenue ($B)", value=float(_rrec.get("actual_revenue") or 0.0), step=0.1, key=f"_er_rev_a_{_er_nonce}_{_ri}") if _rrec.get("actual_revenue") is not None else None
-                            _er_rev_e_i  = st.number_input("Estimated Revenue ($B)", value=float(_rrec.get("estimated_revenue") or 0.0), step=0.1, key=f"_er_rev_e_{_er_nonce}_{_ri}") if _rrec.get("estimated_revenue") is not None else None
-                            _er_guide_raw = _rrec.get("guidance_direction") or "unknown"
-                            _er_guide_idx = _er_guidance_opts.index(_er_guide_raw) if _er_guide_raw in _er_guidance_opts else 4
-                            _er_guide_i  = st.selectbox("Guidance", options=_er_guidance_opts, index=_er_guide_idx, key=f"_er_guide_{_er_nonce}_{_ri}")
-                            _er_surp_i   = st.number_input("EPS surprise (%)", value=float(_rrec.get("eps_surprise_pct") or 0.0), step=0.1, key=f"_er_surp_{_er_nonce}_{_ri}") if _rrec.get("eps_surprise_pct") is not None else None
-                        _er_narr_i = st.text_area("Key narrative (management commentary)", value=str(_rrec.get("key_narrative") or ""), height=80, key=f"_er_narr_{_er_nonce}_{_ri}")
-                        if _er_inc and _er_ticker_i and _er_rdate_i.strip():
-                            _eps_beat_i = (bool(_er_eps_a_i > _er_eps_e_i) if _er_eps_a_i is not None and _er_eps_e_i is not None else None)
-                            _rev_beat_i = (bool(_er_rev_a_i > _er_rev_e_i) if _er_rev_a_i is not None and _er_rev_e_i is not None else None)
+                            # Guidance — the one field the user always sets manually
+                            _er_guide_i = st.selectbox(
+                                "Guidance direction",
+                                options=_er_guidance_opts,
+                                index=4,  # default "unknown"
+                                key=f"_er_guide_{_er_nonce}_{_ri}",
+                                help="Did management raise, maintain, lower, or withdraw guidance?",
+                            )
+                            if _er_surp_pct is not None:
+                                st.metric(
+                                    "EPS surprise",
+                                    f"{_er_surp_pct:+.1f}%",
+                                    delta=None,
+                                )
+                            _er_narr_i = st.text_input(
+                                "Note (optional)",
+                                value="",
+                                placeholder="e.g. Beat on NII but management flagged credit headwinds",
+                                key=f"_er_narr_{_er_nonce}_{_ri}",
+                            )
+
+                        if _er_inc and _er_rdate_i.strip():
+                            _eps_beat_i = bool(_er_eps_a_i > _er_eps_e_i) if (_er_eps_a_i or _er_eps_e_i) else None
                             _er_collected.append({
-                                "ticker":             _er_ticker_i,
-                                "company":            str(_rrec.get("company") or "").strip() or None,
+                                "ticker":             _er_t,
                                 "report_date":        _er_rdate_i.strip(),
-                                "actual_eps":         _er_eps_a_i,
-                                "estimated_eps":      _er_eps_e_i,
+                                "actual_eps":         _er_eps_a_i if _er_eps_a_i else None,
+                                "estimated_eps":      _er_eps_e_i if _er_eps_e_i else None,
                                 "eps_beat":           _eps_beat_i,
-                                "eps_surprise_pct":   _er_surp_i,
-                                "actual_revenue":     _er_rev_a_i,
-                                "estimated_revenue":  _er_rev_e_i,
-                                "rev_beat":           _rev_beat_i,
+                                "eps_surprise_pct":   _er_surp_pct,
                                 "guidance_direction": _er_guide_i if _er_guide_i != "unknown" else None,
                                 "key_narrative":      _er_narr_i.strip() or None,
-                                "article_source":     "cnbc_pro",
+                                "article_source":     "finnhub_auto",
                             })
+
                 _er_sv_col, _er_disc_col = st.columns([2, 1])
                 with _er_sv_col:
-                    if st.button("💾 Save earnings results", key="_er_save_btn", disabled=st.session_state.get("_readonly", False)):
+                    if st.button(
+                        "💾 Save results",
+                        key="_er_save_btn",
+                        disabled=st.session_state.get("_readonly", False),
+                    ):
                         if not _er_collected:
-                            st.warning("No stocks selected to save.")
+                            st.warning("No tickers included — check at least one and ensure date is set.")
                         else:
                             db.save_earnings_results(_er_collected)
-                            st.success(f"Saved {len(_er_collected)} result(s).")
-                            for _k in ("_er_preview", "_er_preview_nonce", "_er_paste"):
+                            st.success(f"Saved {len(_er_collected)} result(s). Check AI Insights → Positions for the thesis checkpoint.")
+                            for _k in ("_er_preview", "_er_preview_nonce"):
                                 st.session_state.pop(_k, None)
                             st.rerun()
                 with _er_disc_col:
