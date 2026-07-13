@@ -1414,7 +1414,7 @@ with st.sidebar:
             ("Scanner", "🔍 Market Scanner",           ":material/radar:"),
             ("User Guide", "📖 User Guide",           ":material/help:"),
         ]),
-        ("ANALYSIS", [
+        ("RESEARCH", [
             ("Analysis", "📈 Analysis",               ":material/trending_up:"),
             ("Compare",  "⚖️ Compare",                ":material/compare_arrows:"),
             ("Watchlist","📋 Watchlist",               ":material/bookmarks:"),
