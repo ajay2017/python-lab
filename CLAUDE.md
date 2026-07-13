@@ -26,7 +26,7 @@ Personal portfolio intelligence app for a single user. Streamlit Community Cloud
 
 ## Coordination pattern
 
-Features that own state publish to `st.session_state`; downstream features read and gate. When a producer fails, set the cache to `None` (not an empty container) so consumers can detect "offline" rather than silently disabling gates. Existing cache keys: `_port_risk_cache`, `_risk_high_alerts_cache`, `_grow_today_sectors_cache`, `_grow_composites`, `_grow_composites_coverage`, `_daily_brief_offline`, `_acct_gate_cache` (concentration gate basis — now equity; see account-baseline), `_leverage_cache` (margin/leverage awareness — read-only, never gates).
+Features that own state publish to `st.session_state`; downstream features read and gate. When a producer fails, set the cache to `None` (not an empty container) so consumers can detect "offline" rather than silently disabling gates. Existing cache keys: `_port_risk_cache`, `_risk_high_alerts_cache`, `_risk_advisor_recs_cache` (full recommendation list — feeds the standalone Portfolio Allocation page), `_grow_today_sectors_cache`, `_grow_composites`, `_grow_composites_coverage`, `_daily_brief_offline`, `_acct_gate_cache` (concentration gate basis — now equity; see account-baseline), `_leverage_cache` (margin/leverage awareness — read-only, never gates).
 
 When adding a new advisor or recommendation feature, **always** check whether its decision overlaps with another feature's. If yes, wire coordination via the same publish/consume pattern.
 
@@ -53,7 +53,7 @@ When adding a new advisor or recommendation feature, **always** check whether it
 
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — call them out in the body and name the constant + old→new value.
 - **Feature commits must sync the docs that describe behaviour:** a user-facing feature or gate touches `docs/requirements.md` (the functional spec), not just `docs/architecture.md`. requirements.md silently drifted ~3 weeks once because per-feature docs commits hit architecture but skipped requirements — don't repeat that.
-- **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with Claude Opus 4.8 <ajay.x.ku@accenture.com>`, written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling).
+- **Claude-authored commits** end with the trailer `Co-Authored-By: Ajay with <model> <ajay.x.ku@accenture.com>`, written via `.git/COMMIT_MSG.txt` + `git commit -F` (dodges PowerShell here-string mangling). Use the **actual model name from the session context** (e.g. `Claude Sonnet 4.6`, `Claude Opus 4.8`, `Claude Haiku 4.5`) — never hardcode a model name.
 
 ## Documentation integrity (zero-hallucination)
 
