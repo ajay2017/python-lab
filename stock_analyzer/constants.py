@@ -649,6 +649,14 @@ REFRESH_COOLDOWN_SEC = 60
 # observation; NOT an investment-decision threshold.
 PROVIDER_RL_COOLDOWN_SEC = 120
 
+# Today's Brief auto-refresh cadence — the Home freshness chip promises
+# "auto-refreshes in N min" / "stale" off this same number (app.py). Ticking
+# just re-runs the memoized synthesis against already-cached bundles (no
+# st.cache_data.clear(), no scan_sectors() re-scan) so the incremental API
+# cost is bounded to the existing 30-min load_all() TTL, not multiplied.
+# Operational cadence knob, NOT an investment threshold.
+BRIEF_AUTO_REFRESH_MINUTES = 30
+
 # ── Advisory-AI request timeout (operational infra knob, NOT an investment
 # threshold) ─────────────────────────────────────────────────────────────────
 # Per-request wall-clock cap (seconds) on each Anthropic LLM call in the AI

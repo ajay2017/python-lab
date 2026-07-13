@@ -103,6 +103,7 @@ from stock_analyzer.constants import (
     CATALYST_WATCH_WINDOW_DAYS,
     GROW_CANDIDATE_POOL,
     REFRESH_COOLDOWN_SEC,
+    BRIEF_AUTO_REFRESH_MINUTES,
     FRAGILITY_PULLBACK_PCT,
     DATA_LOAD_MAX_WORKERS,
     DATA_LOAD_STAGGER_SEC,
@@ -3053,6 +3054,7 @@ if page == "🏠 Home":
         ),
         st.session_state.get("_scanner_ver", 0),
         st.session_state.get("_brief_refresh_nonce", 0),
+        st.session_state.get("_brief_auto_refresh_nonce", 0),
         _SYNTH_SCHEMA_VER,
     )
     _synth_cache = st.session_state.get("_home_synth_cache")
@@ -3946,7 +3948,7 @@ if page == "🏠 Home":
                 _b_age_mins = int((_b_now_et - _b_built_at).total_seconds() // 60)
             except Exception:
                 _b_age_mins = 0
-            _b_remaining = max(0, 30 - _b_age_mins)
+            _b_remaining = max(0, BRIEF_AUTO_REFRESH_MINUTES - _b_age_mins)
             _b_freshness = (
                 f"auto-refreshes in {_b_remaining} min · or click Refresh Signals"
                 if _b_remaining > 0 else
@@ -3962,6 +3964,35 @@ if page == "🏠 Home":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+    # Watchdog — makes the "auto-refreshes in N min" promise above real. Ticks
+    # every 60s (same pattern as the live-price strip fragment) but only forces
+    # a full-app rerun once the Brief is actually past BRIEF_AUTO_REFRESH_MINUTES
+    # AND the market is open AND Setup isn't Locked. The rerun re-bumps
+    # _brief_auto_refresh_nonce (part of _synth_sig) so the memoized synthesis
+    # rebuilds against whatever load_all()'s own 30-min TTL cache already has —
+    # it deliberately never calls st.cache_data.clear() or scan_sectors(), so it
+    # can't multiply provider-quota usage beyond the existing TTL cadence.
+    @st.fragment(run_every=60)
+    def _brief_freshness_watchdog():
+        _wd_built_at = st.session_state.get("_brief_built_at")
+        if _wd_built_at is None or st.session_state.get("_brief_locked", False):
+            return
+        _wd_age_min = (
+            datetime.now(_pytz.timezone("America/New_York")) - _wd_built_at
+        ).total_seconds() / 60
+        if _wd_age_min < BRIEF_AUTO_REFRESH_MINUTES:
+            return
+        _wd_mkt = market_status()
+        if not (is_premarket() or _wd_mkt["is_open"]):
+            return
+        if _refresh_gate("data")[0]:
+            return
+        st.session_state["_brief_auto_refresh_nonce"] = \
+            st.session_state.get("_brief_auto_refresh_nonce", 0) + 1
+        st.rerun(scope="app")
+
+    _brief_freshness_watchdog()
 
     # Col 2 — Refresh macro
     with _sb_c2:
