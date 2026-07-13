@@ -18283,6 +18283,7 @@ elif page == "📊 Predictive Analytics":
         calibration_by_score_band,
         calibration_by_sector,
         personal_alpha_threshold,
+        synthesize_directives,
         total_graded,
         acted_vs_missed_comparison,
         by_conviction,
@@ -18396,6 +18397,28 @@ elif page == "📊 Predictive Analytics":
     _pac_conv     = by_conviction(_pac_enriched, min_n=3)
     _pac_rtype    = by_rec_type_stats(_pac_enriched, min_n=3)
     _pac_sec_alph = by_sector_alpha(_pac_enriched, min_n=3)
+
+    # ── Synthesis — "What This Means For You" ──────────────────────────────────
+    _pac_directives = synthesize_directives(
+        _pac_bands, _pac_thresh, _pac_avm, _pac_conv, _pac_rtype, _pac_sec_alph,
+        _pac_n_graded, min_n=PREDICTIVE_MIN_BAND_N,
+    )
+    st.divider()
+    st.markdown("### 📋 What This Means For You")
+    st.caption(
+        "Synthesized from all four models. Click a tab to see the evidence behind each directive."
+    )
+    for _pd in _pac_directives:
+        _src_note = f"  *(evidence → {_pd['source_tab']})*" if _pd["source_tab"] != "all models" else ""
+        if _pd["type"] == "action":
+            st.success(f"**Action:** {_pd['text']}{_src_note}")
+        elif _pd["type"] == "caution":
+            st.warning(f"**Caution:** {_pd['text']}{_src_note}")
+        elif _pd["type"] == "watch":
+            st.info(f"**Watch:** {_pd['text']}{_src_note}")
+        else:
+            st.caption(f"ℹ️ {_pd['text']}")
+    st.divider()
 
     # ── 5 tabs ─────────────────────────────────────────────────────────────────
     _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5 = st.tabs([

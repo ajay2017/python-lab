@@ -183,6 +183,193 @@ def personal_alpha_threshold(
     return None
 
 
+def synthesize_directives(
+    bands: list[dict],
+    thresh: int | None,
+    avm: dict,
+    conv: list[dict],
+    rtype: list[dict],
+    sec_alph: list[dict],
+    n_graded: int,
+    min_n: int = 5,
+) -> list[dict]:
+    """
+    Synthesize 2–5 ranked directives from all model outputs.
+
+    Reads across score calibration, decision quality, sector alpha, and
+    signal breakdown to produce concrete, actionable guidance — even when
+    data is thin (in that case, directives tell you what to *watch for*
+    rather than what to act on now).
+
+    Each directive dict:
+        type       — "action" | "caution" | "watch" | "context"
+        text       — 1–2 sentences, plain English
+        source_tab — which tab holds the supporting evidence
+
+    Ordered: action → caution → watch → context.
+    """
+    directives: list[dict] = []
+
+    # ── Score Calibration ──────────────────────────────────────────────────────
+    thick_bands = [b for b in bands if b["n"] >= min_n]
+    all_neg     = thick_bands and all((b["avg_alpha"] or 0) <= 0 for b in thick_bands)
+
+    if thresh is not None:
+        directives.append({
+            "type": "action",
+            "text": (
+                f"Your alpha turns consistently positive at composite ≥ {thresh}. "
+                f"Treat sub-{thresh} recs as speculative — consider reducing size or skipping."
+            ),
+            "source_tab": "🎯 Score Calibration",
+        })
+    elif all_neg:
+        directives.append({
+            "type": "watch",
+            "text": (
+                "All score bands are showing negative alpha vs SPY right now. "
+                "In a persistent bull market, beating SPY is a high bar — this "
+                "reflects the regime, not necessarily engine failure. "
+                "Don't tune thresholds down; watch for the first band to flip green "
+                "as conditions shift."
+            ),
+            "source_tab": "🎯 Score Calibration",
+        })
+    elif any((b["avg_alpha"] or 0) > 0 for b in thick_bands):
+        directives.append({
+            "type": "watch",
+            "text": (
+                "Positive alpha appears in some score bands but not consistently "
+                "enough to confirm a personal threshold yet. "
+                "Sector and decision-quality patterns are more actionable than score alone right now."
+            ),
+            "source_tab": "🎯 Score Calibration",
+        })
+
+    # ── Decision Quality ───────────────────────────────────────────────────────
+    edge    = avm.get("edge", "insufficient")
+    edge_pp = avm.get("edge_pp")
+
+    if edge == "acting" and edge_pp is not None and edge_pp >= 0.5:
+        directives.append({
+            "type": "action",
+            "text": (
+                f"Your discretion is adding {edge_pp:.1f}pp of alpha — you're filtering "
+                f"signal from noise effectively. Don't feel pressure to act on every signal; "
+                f"your selectivity is working."
+            ),
+            "source_tab": "⚖️ Decision Quality",
+        })
+    elif edge == "passing" and edge_pp is not None and edge_pp >= 0.5:
+        directives.append({
+            "type": "caution",
+            "text": (
+                f"Following every engine signal would have added {edge_pp:.1f}pp more alpha "
+                f"than your current act rate. Review what's making you pass — the engine "
+                f"may be seeing something you're discounting."
+            ),
+            "source_tab": "⚖️ Decision Quality",
+        })
+    elif edge in ("neutral", "insufficient"):
+        directives.append({
+            "type": "context",
+            "text": (
+                "Your act/pass decisions are producing similar alpha to passing on everything. "
+                "Discretion isn't adding or removing measurable edge yet — "
+                "use score and sector patterns as your primary guide for now."
+            ),
+            "source_tab": "⚖️ Decision Quality",
+        })
+
+    # ── Sector Alpha ───────────────────────────────────────────────────────────
+    if sec_alph:
+        best  = sec_alph[0]
+        worst = sec_alph[-1]
+
+        if (best["avg_alpha"] or 0) > 0:
+            directives.append({
+                "type": "action",
+                "text": (
+                    f"Your strongest sector is {best['sector']} "
+                    f"({best['avg_alpha']:+.1f}pp avg alpha, n={best['n']}). "
+                    f"When composites are borderline, prioritize recs here — "
+                    f"this is where the engine's signal has worked best for you."
+                ),
+                "source_tab": "🌐 Sector Alpha",
+            })
+        else:
+            directives.append({
+                "type": "watch",
+                "text": (
+                    "No sector shows consistently positive alpha yet. "
+                    "As history grows, sector patterns will be the first reliable "
+                    "edge to emerge — check back each quarter."
+                ),
+                "source_tab": "🌐 Sector Alpha",
+            })
+
+        if len(sec_alph) > 1 and (worst["avg_alpha"] or 0) < -3:
+            directives.append({
+                "type": "caution",
+                "text": (
+                    f"Recs in {worst['sector']} have cost the most alpha "
+                    f"({worst['avg_alpha']:+.1f}pp avg, n={worst['n']}). "
+                    f"Be more skeptical of engine signals here until the pattern reverses."
+                ),
+                "source_tab": "🌐 Sector Alpha",
+            })
+
+    # ── Signal Breakdown ───────────────────────────────────────────────────────
+    if len(rtype) >= 2:
+        rt_best, rt_worst = rtype[0], rtype[-1]
+        if (rt_best["avg_alpha"] is not None and rt_worst["avg_alpha"] is not None
+                and rt_best["avg_alpha"] - rt_worst["avg_alpha"] >= 1.0):
+            directives.append({
+                "type": "action",
+                "text": (
+                    f"{rt_best['label']} recs outperform {rt_worst['label']} "
+                    f"by {rt_best['avg_alpha'] - rt_worst['avg_alpha']:.1f}pp. "
+                    f"Lean into {rt_best['label']} signals — that's where your alpha edge is strongest."
+                ),
+                "source_tab": "🏷️ Signal Breakdown",
+            })
+
+    if len(conv) >= 2:
+        cv_best, cv_worst = conv[0], conv[-1]
+        if (cv_best["avg_alpha"] is not None and cv_worst["avg_alpha"] is not None
+                and cv_best["avg_alpha"] - cv_worst["avg_alpha"] >= 1.5):
+            directives.append({
+                "type": "action",
+                "text": (
+                    f"{cv_best['conviction']} signals outperform {cv_worst['conviction']} "
+                    f"by {cv_best['avg_alpha'] - cv_worst['avg_alpha']:.1f}pp. "
+                    f"Use conviction tier as a sizing signal — larger positions on "
+                    f"{cv_best['conviction']} when score and sector also align."
+                ),
+                "source_tab": "🏷️ Signal Breakdown",
+            })
+
+    # ── Context (always) ───────────────────────────────────────────────────────
+    thin_count = sum(1 for b in bands if b["n"] < min_n)
+    directives.append({
+        "type": "context",
+        "text": (
+            f"Based on {n_graded} graded outcomes"
+            + (
+                f" — {thin_count} score band{'s' if thin_count != 1 else ''} still "
+                f"below the {min_n}-outcome confidence floor"
+                if thin_count > 0 else ""
+            )
+            + ". Patterns will sharpen as recommendations mature over the coming weeks."
+        ),
+        "source_tab": "all models",
+    })
+
+    _order = {"action": 0, "caution": 1, "watch": 2, "context": 3}
+    directives.sort(key=lambda d: _order.get(d["type"], 99))
+    return directives
+
+
 def total_graded(enriched: list[dict]) -> int:
     """Count of mature rows that have a non-None alpha_pct — the working set
     for all calibration functions."""
