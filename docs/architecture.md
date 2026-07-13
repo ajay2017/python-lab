@@ -23,7 +23,7 @@
 | Charting | Plotly | ≥5.20.0 | Interactive charts (candlestick, bar, pie) |
 | Sentiment | vaderSentiment | 3.3.2 | News headline sentiment scoring |
 | Database | Supabase (PostgreSQL) | client 2.29.0 | Holdings, watchlist, and trade persistence |
-| AI / LLM | Anthropic / OpenAI / Google | Latest | AI Brief generation |
+| AI / LLM | Anthropic / OpenAI / Google | Latest | AI Snapshot generation (Home tab) + AI Insights (Anthropic-only) |
 | Timezone | pytz | ≥2024.1 | All time comparisons use America/New_York (ET) |
 | Deployment | Streamlit Community Cloud | — | Hosting; secrets injected via dashboard |
 
@@ -1102,7 +1102,7 @@ All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. T
 | Finnhub (REST, free) | **Real-time live-price primary**; price cross-check source; **news-sentiment read** (`/stock/news-sentiment` → bullish%/buzz/sector-avg) for the F-74 awareness surfaces | 60 calls/min (free) | Per-symbol; rate-limit/error skips that ticker → gap-fill to yfinance; news-sentiment returns `None` on any error (awareness-only, never blocks); `api_health("finnhub")` |
 | FMP / Financial Modeling Prep (REST, free, `/stable/`) | Failover for live prices, history, and full analysis bundle (profile/ratios/growth/targets/news/earnings/grades) | 250 calls/day (free) | Only invoked when higher-priority providers fail; key redacted from logged errors; `api_health("fmp")` |
 | Supabase REST API | Holdings, watchlist, trades, manual_stops CRUD | Generous free tier | Connection errors surface as UI warnings |
-| Anthropic / OpenAI / Google | AI Brief generation | Per-account | Errors surfaced in AI Brief tab; rest of app unaffected |
+| Anthropic / OpenAI / Google | AI Snapshot generation | Per-account | Errors surfaced in AI Snapshot tab; rest of app unaffected |
 | FRED (St. Louis Fed) | Economic-calendar actuals + release-drift dates | 120 req/min (free key) | `api_health("fred")`; macro calendar degrades to static backbone without a key |
 | US Treasury / Yahoo `^IRX` | 13-week T-bill rate for risk-free rate | Daily cached | Falls back to 4.5% if unavailable |
 

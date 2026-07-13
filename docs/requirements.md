@@ -333,12 +333,14 @@ Supporting day traders would mean intraday/real-time data feeds, Level 2 / order
 | F-105 | When `_daily_brief_offline` is True, the Watchlist must surface an explicit warning that coordination gates are disabled and instruct the user to revisit the Portfolio page. |
 | F-106 | "Log Planned Trade" button on an ENTER_NOW card must prefill the Trade Journal form with ticker, price, stop, and trigger=`WATCHLIST_ENTRY`, and route via `_pending_page` (never assign `nav_page` directly — that key is widget-bound and raises `StreamlitAPIException`). |
 
-### 3.9 AI Brief
+### 3.9 AI Snapshot
+
+Renamed from "AI Brief" (2026-07-12) — the Home tab shares no functional overlap with the standalone 🧠 AI Insights page (thesis tracking / weekly debrief / monthly report / analyst coverage), but the two names were confusable (undocumented, same "AI"/"Brief" wording as Today's Brief). Both surfaces now carry a mutual cross-reference caption.
 
 | ID | Requirement |
 |----|-------------|
-| F-110 | Generate a natural language portfolio brief using an LLM (Anthropic / OpenAI / Google) |
-| F-111 | Brief should summarise portfolio state, key risks, and suggested actions |
+| F-110 | Generate a natural language portfolio snapshot using an LLM (Anthropic / OpenAI / Google) |
+| F-111 | Snapshot should summarise portfolio state, key risks, and suggested actions |
 
 ### 3.10 Market Data Layer (multi-source: failover + cross-check)
 

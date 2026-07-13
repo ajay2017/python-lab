@@ -6334,7 +6334,7 @@ if page == "🏠 Home":
     tab_evening, tab_riskalerts, tab_brief = st.tabs([
         "🌙 Evening Debrief",
         f"⚠️ Risk & Alerts{'  🔴' if n_danger else ('  🟡' if n_warning else '')}",
-        "🤖 AI Brief",
+        "🤖 AI Snapshot",
     ])
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -8443,10 +8443,14 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
         # ── Header row: title + action button slot, then brief slot ──────────
         _hdr_l, _hdr_r = st.columns([5, 2])
         with _hdr_l:
-            st.markdown("### AI Monitoring Brief")
+            st.markdown("### AI Snapshot")
             st.caption(
-                "Institutional-style morning brief generated from your live portfolio data, "
-                "active alerts, market indices and news."
+                "Institutional-style, point-in-time narrative generated from your live "
+                "portfolio data, active alerts, market indices and news."
+            )
+            st.caption(
+                "💡 For thesis health, weekly/monthly reflection, and analyst research, "
+                "see 🧠 AI Insights instead."
             )
         _action_slot = _hdr_r.empty()
         _info_slot   = st.empty()
@@ -8541,7 +8545,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
             raise ValueError(f"Unknown provider: {provider}")
 
         # ── Brief cache key: invalidate when provider or model changes ────────
-        _brief_cache_key = f"_ai_brief__{_sel_provider}__{_sel_model}"
+        _brief_cache_key = f"_ai_snapshot__{_sel_provider}__{_sel_model}"
         _brief_cached    = st.session_state.get(_brief_cache_key)
         _brief_ts        = st.session_state.get(f"{_brief_cache_key}__ts", "")
 
@@ -19698,12 +19702,14 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags.
+- **📊 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **📒 Trade Journal** — your logged trades (the source of truth for holdings, P&L, position age); log by hand or **📥 import a Robinhood statement**.
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — upcoming earnings for held + watchlist + sector names (awareness, not a buy signal).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates.
+- **🤖 AI Snapshot** (a tab on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
 """
         )
 
@@ -19829,6 +19835,10 @@ elif page == "🧠 AI Insights":
         "LLM-powered awareness layer. The rule-based engine continues to make all "
         "decisions and issue all recommendations — this page adds language and "
         "context. If the AI layer is offline, every other page is unaffected."
+    )
+    st.caption(
+        "💡 For a live, point-in-time narrative of your book right now, see "
+        "🤖 AI Snapshot on 🏠 Home instead."
     )
 
     _ai_api_key = st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
