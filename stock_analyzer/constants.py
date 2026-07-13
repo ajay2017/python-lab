@@ -405,6 +405,7 @@ NEWS_SENTIMENT_CRITICAL =  -0.25   # critical-news Act Today threshold
 NEWS_SENTIMENT_NEGATIVE =  -0.15   # cross-reference "negative news" conflict
 NEWS_SENTIMENT_WARN     =  -0.05   # warning-news Review Before Close
 NEWS_SENTIMENT_POSITIVE =   0.10   # treat as supporting signal in xref
+NEWS_CRITICAL_MIN_HEADLINES     = 2     # min qualifying headlines per ticker before firing Critical News Act Today
 
 # ── News-Intelligence "Opportunity Signals" inclusion (Overview) ─────────────
 # A held name surfaces as a positive-news opportunity when BOTH hold: the

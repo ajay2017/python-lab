@@ -46,6 +46,7 @@ from stock_analyzer.constants import (
     NEWS_SENTIMENT_NEGATIVE,
     NEWS_SENTIMENT_WARN,
     NEWS_SENTIMENT_POSITIVE,
+    NEWS_CRITICAL_MIN_HEADLINES,
     STOP_PROFIT_LOCK_PNL_PCT,
     STOP_PROFIT_LOCK_TRIM_PCT,
     STOP_TIGHTEN_ATR_MULT,
@@ -1153,37 +1154,47 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             "dollar_risk": d.get("dollar_risk"),
         })
 
-    # 3 — Critical news on held positions (compound ≤ -0.25, tier ≤ 2)
+    # 3 — Critical news on held positions (compound ≤ NEWS_SENTIMENT_CRITICAL, tier ≤ 2,
+    #     minimum NEWS_CRITICAL_MIN_HEADLINES qualifying headlines per ticker)
     held_tickers = set(port_df["Ticker"].tolist())
+    _crit_by_ticker: dict = {}
     for item in (news_items or []):
-        ticker = str(item.get("ticker", "")).upper()
-        if (ticker in held_tickers
+        _t = str(item.get("ticker", "")).upper()
+        if (_t in held_tickers
                 and item.get("compound", 0) <= NEWS_SENTIMENT_CRITICAL
                 and item.get("tier", 3) <= 2):
-            if ticker not in {i["ticker"] for i in items}:
-                pm = port_df[port_df["Ticker"] == ticker]
-                row = pm.iloc[0] if not pm.empty else {}
-                items.append({
-                    "priority": "high",
-                    "icon":     "🚨",
-                    "ticker":   ticker,
-                    "kind":     "critical_news",
-                    "action":   "MONITOR — Critical News",
-                    "directive": (
-                        "Hold for now, but tighten your stop and re-evaluate the thesis "
-                        "after the news is confirmed."
-                    ),
-                    "why": (
-                        f"One tier-{item.get('tier',3)} headline at sentiment "
-                        f"{item.get('compound',0):+.2f}: \"{item.get('headline','news alert')[:80]}\" "
-                        "— material, but a single headline isn't a mechanical sell."
-                    ),
-                    "trigger": (
-                        "A second negative headline OR price −3% intraday → exit."
-                    ),
-                    "weight":  _f(row.get("Weight (%)") if hasattr(row, "get") else 0),
-                    "pnl_pct": _f(row.get("P&L (%)") if hasattr(row, "get") else 0),
-                })
+            _crit_by_ticker.setdefault(_t, []).append(item)
+
+    for ticker, _crit_items in _crit_by_ticker.items():
+        if len(_crit_items) < NEWS_CRITICAL_MIN_HEADLINES:
+            continue
+        if ticker not in {i["ticker"] for i in items}:
+            pm = port_df[port_df["Ticker"] == ticker]
+            row = pm.iloc[0] if not pm.empty else {}
+            _worst = min(_crit_items, key=lambda x: x.get("compound", 0))
+            _n = len(_crit_items)
+            items.append({
+                "priority": "high",
+                "icon":     "🚨",
+                "ticker":   ticker,
+                "kind":     "critical_news",
+                "action":   "MONITOR — Critical News",
+                "directive": (
+                    "Hold for now, but tighten your stop and re-evaluate the thesis "
+                    "after the news is confirmed."
+                ),
+                "why": (
+                    f"{_n} tier-{_worst.get('tier', 2)} headline{'s' if _n > 1 else ''} "
+                    f"at sentiment {_worst.get('compound', 0):+.2f}: "
+                    f"\"{(_worst.get('title') or _worst.get('headline', 'news alert'))[:80]}\" "
+                    "— material, but not a mechanical sell."
+                ),
+                "trigger": (
+                    "Price −3% intraday or further headline deterioration → re-evaluate."
+                ),
+                "weight":  _f(row.get("Weight (%)") if hasattr(row, "get") else 0),
+                "pnl_pct": _f(row.get("P&L (%)") if hasattr(row, "get") else 0),
+            })
 
     # 4 — Today's HIGH-impact macro events
     from stock_analyzer.macro_calendar import HIGH as MC_HIGH

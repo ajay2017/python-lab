@@ -2568,6 +2568,20 @@ if page == "🏠 Home":
         _news = curate_news_items(held_data)
         st.session_state["_sidebar_news"] = _news
         _fill_news_slot(_news_slot, _news)
+        # LLM suppress-only rescore — raises VADER false-positives toward neutral; never lowers scores
+        try:
+            from stock_analyzer.news_intelligence import rescore_news_items_llm as _rescore_llm
+            _ant_key = st.secrets.get("anthropic", {}).get("api_key", "")
+            if _ant_key and _news:
+                import datetime as _dt
+                _llm_ck = (f"_news_llm_{_dt.date.today().isoformat()}_"
+                           f"{','.join(sorted({n.get('ticker', '') for n in _news}))}")
+                if _llm_ck not in st.session_state:
+                    st.session_state[_llm_ck] = _rescore_llm(_news, _ant_key)
+                _news = st.session_state[_llm_ck]
+                st.session_state["_sidebar_news"] = _news
+        except Exception:
+            pass
 
     # ── Live price strip — fragment auto-refreshes every 60 s ────────────
     @st.fragment(run_every=60)
@@ -12270,6 +12284,20 @@ elif page == "📈 Analysis":
     _news = curate_news_items(results)
     st.session_state["_sidebar_news"] = _news
     _fill_news_slot(_news_slot, _news)
+    # LLM suppress-only rescore — raises VADER false-positives toward neutral; never lowers scores
+    try:
+        from stock_analyzer.news_intelligence import rescore_news_items_llm as _rescore_llm
+        _ant_key = st.secrets.get("anthropic", {}).get("api_key", "")
+        if _ant_key and _news:
+            import datetime as _dt
+            _llm_ck = (f"_news_llm_{_dt.date.today().isoformat()}_"
+                       f"{','.join(sorted({n.get('ticker', '') for n in _news}))}")
+            if _llm_ck not in st.session_state:
+                st.session_state[_llm_ck] = _rescore_llm(_news, _ant_key)
+            _news = st.session_state[_llm_ck]
+            st.session_state["_sidebar_news"] = _news
+    except Exception:
+        pass
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")

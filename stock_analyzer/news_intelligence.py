@@ -186,3 +186,84 @@ def build_news_intelligence(news_items: list, port_df, reduce_tickers=None) -> d
         "sector_digest": sector_digest,
         "held_news":     held_news,
     }
+
+
+def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0) -> list[dict]:
+    """
+    Re-score VADER compound scores using Claude Haiku financial-domain scoring.
+
+    SUPPRESS-ONLY: the LLM score is accepted only when it is HIGHER than the VADER score
+    (moves toward neutral/positive). The LLM can never newly push a score into negative
+    territory — it acts as a false-positive noise filter, not a new signal generator.
+
+    Falls back to original VADER scores on any failure (API down, timeout, parse error,
+    out-of-range score). Never blocks the caller — exceptions are swallowed.
+    """
+    if not items or not api_key:
+        return items
+
+    try:
+        import anthropic
+        import json
+
+        headline_lines = []
+        for i, item in enumerate(items):
+            title = item.get("title") or item.get("headline", "")
+            ticker = item.get("ticker", "")
+            headline_lines.append(f'{i}. {ticker}: "{title}"')
+
+        prompt = (
+            "You are a financial sentiment analyst. Score each headline for financial sentiment "
+            "from -1.0 (very bearish) to +1.0 (very bullish) from an investor's perspective. "
+            "Apply financial domain knowledge: FDA approval = bullish, earnings beat = bullish, "
+            "analyst upgrade = bullish, 'don't sell' = bullish, regulatory delay = bearish, "
+            "earnings miss = bearish, analyst downgrade = bearish, layoffs = bearish. "
+            "Return ONLY a JSON array with no other text:\n"
+            '[{"idx": 0, "score": 0.3}, {"idx": 1, "score": -0.6}, ...]\n\n'
+            "Headlines:\n" + "\n".join(headline_lines)
+        )
+
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            max_retries=0,
+            timeout=anthropic.Timeout(timeout),
+        )
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = response.content[0].text.strip()
+        # Strip markdown code fences if the model wraps the JSON
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        scores = json.loads(raw.strip())
+
+        result = [dict(item) for item in items]  # shallow copy each dict
+        for entry in scores:
+            idx = entry.get("idx")
+            llm_score = entry.get("score")
+            if not isinstance(idx, int) or idx < 0 or idx >= len(items):
+                continue
+            if not isinstance(llm_score, (int, float)):
+                continue
+            llm_score = float(llm_score)
+            if not (-1.0 <= llm_score <= 1.0):
+                continue
+            vader_score = items[idx].get("compound", 0.0)
+            if llm_score <= vader_score:
+                continue  # suppress-only: LLM cannot lower a VADER score
+            new_score = round(llm_score, 3)
+            label = ("Positive" if new_score >= 0.05 else
+                     "Negative" if new_score <= -0.05 else "Neutral")
+            result[idx]["compound"] = new_score
+            result[idx]["label"] = label
+
+        return result
+
+    except Exception:
+        return items
