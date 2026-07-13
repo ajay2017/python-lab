@@ -7818,7 +7818,7 @@ elif page == "🔗 Risk Analysis":
         except Exception:
             _lv_line = ""
         st.warning(
-            f"⚖️ **Leverage — awareness only (not a gate).** You're carrying a "
+            f"**Leverage — awareness only (not a gate).** You're carrying a "
             f"**\\${_lv_debit:,.0f} margin debit**: \\${_lv_eq:,.0f} of stock on "
             f"**\\${_lv_nc:,.0f} of your own capital**"
             + (f" (**{_lv_ratio:.1f}× leverage**)" if isinstance(_lv_ratio, (int, float)) else "")
