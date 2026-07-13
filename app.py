@@ -19624,6 +19624,8 @@ The Home brief is split into **offense** (left) and **defense** (right).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means a pick's conviction is unchanged from yesterday — continuity, not a fresh call.
+
+**Freshness:** the "📌 Built at HH:MM ET" chip auto-refreshes the Brief roughly every 30 minutes on its own during market hours — you don't need to click "Refresh Signals" just to keep it current. It re-checks whatever's already scanned rather than running a brand-new scan, so it won't pick up a stock that was never scanned in the first place (see *how the app finds candidates* below). Click **🔒 Lock Setup** to freeze the Brief for the day if you don't want it changing under you after you've decided what to do.
 """
         )
 
@@ -19636,6 +19638,8 @@ Two separate questions live here — keeping them apart answers most *"why didn'
 - **~80 curated names** across 12 sectors (the core list the scanner runs daily),
 - **your Watchlist**, and
 - a broad **~200-name "discovery" universe** of liquid large/mid-caps, swept for big 1-day movers so a breakout in a name you *don't* track can still surface.
+
+A ticker that's never been scanned can't be recommended no matter how good it looks elsewhere in the app — e.g. a strong score on the 📈 Analysis page doesn't put it in Grow Today unless it's also on the Watchlist (or curated/discovery universe). Saving a **📅 Pre-Earnings** card in the 🧠 AI Insights → Ideas Inbox adds the ticker to your Watchlist automatically for exactly this reason (the **📰 Stock Research** mode has its own explicit "➕ Add to Watchlist" button per card instead).
 
 The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tracked + N watchlist + N discovery names → N reached full composite scoring"* — so you can always see how wide the net was that day.
 
