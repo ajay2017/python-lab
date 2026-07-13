@@ -13,6 +13,10 @@ from datetime import date as _date, datetime as _datetime
 from stock_analyzer.constants import (
     EARNINGS_IMMINENT_DAYS,
     EARNINGS_URGENCY_SOON_DAYS,
+    EARNINGS_BEAT_RATE_REDUCE_THRESHOLD,
+    EARNINGS_BEAT_RATE_STRONG_THRESHOLD,
+    EARNINGS_BEARISH_REACTION_COMPOSITE_GATE,
+    COMPOSITE_BUY,
 )
 
 _ET = _pytz.timezone("America/New_York")
@@ -145,6 +149,8 @@ def _recommend(
     shares: int,
     market_value: float,
     est_move: float,
+    beat_rate: float | None = None,
+    reaction: str | None = None,
 ) -> tuple[str, str, str, str]:
     """
     Returns (action, priority, detail, institutional_lens).
@@ -240,6 +246,54 @@ def _recommend(
             ),
         )
 
+    # ── REDUCE — poor beat history + weak composite (CNBC enrichment) ────────
+    if (
+        beat_rate is not None
+        and beat_rate < EARNINGS_BEAT_RATE_REDUCE_THRESHOLD
+        and score < COMPOSITE_BUY
+        and weight >= 5
+    ):
+        trim_sh = max(1, int(shares * 0.35))
+        return (
+            "REDUCE",
+            "MEDIUM",
+            (
+                f"Historical beat rate **{beat_rate:.0f}%** is below the {EARNINGS_BEAT_RATE_REDUCE_THRESHOLD:.0f}% threshold "
+                f"and composite score **{score:.0f}/100** is below the entry gate — "
+                "a low-beat-rate name with weak fundamentals heading into an earnings binary event is a compounding risk. "
+                f"**Trim 35%: sell {trim_sh:,} shares** before the report."
+            ),
+            (
+                "Historical beat rates below 60% combined with a sub-entry composite score mean both "
+                "the fundamental signal and the historical execution pattern argue against holding full size "
+                "into an uncertain binary event. Reduce to limit the downside; re-enter after confirmation."
+            ),
+        )
+
+    # ── REDUCE — bearish post-earnings reaction history + composite gate ──────
+    if (
+        reaction == "bearish"
+        and score < EARNINGS_BEARISH_REACTION_COMPOSITE_GATE
+        and weight >= 5
+    ):
+        trim_sh = max(1, int(shares * 0.35))
+        return (
+            "REDUCE",
+            "MEDIUM",
+            (
+                f"Post-earnings reaction history is **bearish** and composite score **{score:.0f}/100** "
+                f"is below the {EARNINGS_BEARISH_REACTION_COMPOSITE_GATE} gate — "
+                "holding through a report where the stock has historically sold off, with a weak composite, "
+                "stacks two negative factors. "
+                f"**Trim 35%: sell {trim_sh:,} shares** before the report."
+            ),
+            (
+                "When a name has a documented pattern of selling off after earnings and its own composite "
+                "is flagging weakness, the expected-value calculation on holding through the report is "
+                "negative even in the beat scenario. Reduce size; you can always re-add after a positive reaction."
+            ),
+        )
+
     # ── MONITOR — stop unavailable (data integrity gap) ──────────────────────
     if gap_to_stop is None:
         return (
@@ -283,6 +337,15 @@ def _recommend(
 
     # ── HOLD_OR_ADD — high conviction + positive revisions ───────────────────
     if score >= 68 and net_rev >= 2:
+        _hoa_extras = []
+        if beat_rate is not None and beat_rate >= EARNINGS_BEAT_RATE_STRONG_THRESHOLD:
+            _hoa_extras.append(f"historical beat rate **{beat_rate:.0f}%**")
+        if reaction == "bullish":
+            _hoa_extras.append("**bullish post-earnings reaction history**")
+        _hoa_context = (
+            " Combined with " + " and ".join(_hoa_extras) + ", this is a high-quality earnings setup."
+            if _hoa_extras else ""
+        )
         return (
             "HOLD_OR_ADD",
             "OK",
@@ -290,7 +353,7 @@ def _recommend(
                 f"Strong setup heading into earnings: score **{score:.0f}/100** with "
                 f"**+{net_rev} net analyst upgrades** in 90 days — analysts are raising estimates, "
                 "not cutting. Positive revision momentum into earnings is historically the strongest "
-                "predictor of a beat-and-raise. "
+                f"predictor of a beat-and-raise.{_hoa_context} "
                 "**Hold full position.** If conviction is high, a small add (5–10% of current size) "
                 "on any pre-earnings weakness could be warranted."
             ),
@@ -329,6 +392,7 @@ def build_earnings_playbook(
     held_data: dict,
     today: _date | None = None,
     lookahead_days: int = 30,
+    earnings_context: dict[str, dict] | None = None,
 ) -> list[dict]:
     """
     Returns a list of playbook dicts for all holdings with earnings
@@ -369,6 +433,10 @@ def build_earnings_playbook(
         if days_until < 0 or days_until > lookahead_days:
             continue
 
+        ctx       = (earnings_context or {}).get(ticker) or {}
+        beat_rate = ctx.get("beat_rate_pct")           # float | None
+        reaction  = ctx.get("recent_reaction_direction")  # str | None
+
         info      = data.get("info") or {}
         rev       = data.get("revisions") or {}
         rm        = data.get("risk_metrics") or {}
@@ -397,6 +465,7 @@ def build_earnings_playbook(
         action, priority, detail, inst_lens = _recommend(
             days_until, score, weight, pnl_pct,
             gap, net_rev, signal, shares, mval, est_move,
+            beat_rate=beat_rate, reaction=reaction,
         )
 
         watch = _SECTOR_WATCH.get(sector, _DEFAULT_WATCH)
@@ -407,6 +476,13 @@ def build_earnings_playbook(
             "earnings_date": earn_date,
             "days_until":    days_until,
             "urgency":       urgency,
+            # CNBC enrichment (None when no context pasted)
+            "beat_rate_pct":             beat_rate,
+            "recent_reaction_direction": reaction,
+            "recent_reaction_summary":   ctx.get("recent_reaction_summary"),
+            "consensus_growth_pct":      ctx.get("consensus_growth_pct"),
+            "what_to_watch_cnbc":        ctx.get("what_to_watch_cnbc"),
+            "has_cnbc_context":          bool(ctx),
             # Position state
             "weight":        weight,
             "shares":        shares,

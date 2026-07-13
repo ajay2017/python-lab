@@ -443,6 +443,12 @@ MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = 
 # without warning. Post-print confirmation still surfaces via the Movers scan.
 CATALYST_WATCH_WINDOW_DAYS = 7
 
+# Earnings Playbook — beat-rate and reaction-posture thresholds.
+# These are investment-policy values; discuss with the user before changing.
+EARNINGS_BEAT_RATE_REDUCE_THRESHOLD      = 60.0  # below this + weak composite → REDUCE pressure
+EARNINGS_BEAT_RATE_STRONG_THRESHOLD      = 75.0  # above this + bullish reaction → strengthens HOLD_OR_ADD
+EARNINGS_BEARISH_REACTION_COMPOSITE_GATE = 75    # bearish reaction history + composite < this → REDUCE
+
 # Forward window (days) for macro-event awareness — high-impact events
 # (FOMC, CPI, NFP, GDP) shown ahead on the Economic Calendar page and in
 # Home's macro-calendar preamble. Display-only window, same pattern as

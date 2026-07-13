@@ -65,6 +65,7 @@ from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
+from stock_analyzer import earnings_intel as _earn_intel
 from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
 from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.stress_test import (
@@ -1400,9 +1401,10 @@ with st.sidebar:
     # of script). Buttons set _pending_page + rerun — never write nav_page
     # directly (raises StreamlitAPIException per CLAUDE.md).
     _cur_page = st.session_state.get("nav_page", "🏠 Home")
-    _cw_alerts   = len(st.session_state.get("_risk_high_alerts_cache") or [])
-    _n_danger_nav  = st.session_state.get("_n_danger_cache") or 0
-    _n_warning_nav = st.session_state.get("_n_warning_cache") or 0
+    _cw_alerts        = len(st.session_state.get("_risk_high_alerts_cache") or [])
+    _earnings_alerts  = st.session_state.get("_earnings_posture_alerts_cache") or 0
+    _n_danger_nav     = st.session_state.get("_n_danger_cache") or 0
+    _n_warning_nav    = st.session_state.get("_n_warning_cache") or 0
 
     _NAV_GROUPS = [
         ("MAIN", [
@@ -1441,8 +1443,13 @@ with st.sidebar:
         )
         for _disp, _dest, _icon in _grp_items:
             # Catalyst Watch / Alerts & Actions get a live alert badge on their label
-            if _dest == "🔔 Catalyst Watch" and _cw_alerts > 0:
-                _btn_label = f"Catalyst Watch  🔴 {_cw_alerts}"
+            if _dest == "🔔 Catalyst Watch" and (_cw_alerts > 0 or _earnings_alerts > 0):
+                _cw_parts = []
+                if _cw_alerts > 0:
+                    _cw_parts.append(f"🔴 {_cw_alerts} risk")
+                if _earnings_alerts > 0:
+                    _cw_parts.append(f"⚡ {_earnings_alerts} earnings")
+                _btn_label = f"Catalyst Watch  {' · '.join(_cw_parts)}"
             elif _dest == "⚠️ Alerts & Actions" and _n_danger_nav > 0:
                 _btn_label = f"Alerts & Actions  🔴 {_n_danger_nav}"
             elif _dest == "⚠️ Alerts & Actions" and _n_warning_nav > 0:
@@ -2215,9 +2222,21 @@ def _render_holdings_earnings(port_df, held_data):
 
     # ── Pre-Earnings Playbook ─────────────────────────────────────────────
     try:
-        _playbook = build_earnings_playbook(port_df, held_data)
+        _earn_held_tickers = [
+            str(r.get("Ticker", "")).strip().upper()
+            for _, r in port_df.iterrows()
+            if str(r.get("Ticker", "")).strip()
+        ]
+        _earn_ctx_batch = db.load_earnings_context_batch(_earn_held_tickers, max_age_days=30)
+        _playbook = build_earnings_playbook(port_df, held_data, earnings_context=_earn_ctx_batch)
     except Exception:
+        _earn_ctx_batch = {}
         _playbook = []
+
+    # Publish earnings alert count for nav badge
+    _pb_exit_count   = sum(1 for p in _playbook if p["action"] == "EXIT")
+    _pb_reduce_count = sum(1 for p in _playbook if p["action"] == "REDUCE")
+    st.session_state["_earnings_posture_alerts_cache"] = _pb_exit_count + _pb_reduce_count
 
     if _playbook:
         st.divider()
@@ -2270,10 +2289,11 @@ def _render_holdings_earnings(port_df, held_data):
 
             _earn_dt_str = _pb["earnings_date"].strftime("%b %d") if _pb["earnings_date"] else "—"
 
+            _cnbc_badge = "  📰 CNBC" if _pb.get("has_cnbc_context") else ""
             with st.expander(
                 f"{_act_icon} **{_act_label}** · {_pb['ticker']} — {_pb['company']}  "
                 f"| {_urg_icon} {_earn_dt_str} ({_pb['days_until']}d)  "
-                f"| Est. move ±{_pb['est_move']:.0f}%",
+                f"| Est. move ±{_pb['est_move']:.0f}%{_cnbc_badge}",
                 expanded=_expand,
             ):
                 # Metrics strip
@@ -2304,6 +2324,11 @@ def _render_holdings_earnings(port_df, held_data):
                         _ae_lines.append(f"- **Rev Growth:** {_pb['rev_growth']*100:.1f}%")
                     if _pb["earn_growth"] is not None:
                         _ae_lines.append(f"- **Earn Growth:** {_pb['earn_growth']*100:.1f}%")
+                    # CNBC enrichment lines
+                    if _pb.get("beat_rate_pct") is not None:
+                        _ae_lines.append(f"- **Historical beat rate:** {_pb['beat_rate_pct']:.0f}%")
+                    if _pb.get("consensus_growth_pct") is not None:
+                        _ae_lines.append(f"- **Consensus EPS growth:** {_pb['consensus_growth_pct']:.0f}% YoY")
                     if _ae_lines:
                         st.markdown("\n".join(_ae_lines))
                     else:
@@ -2330,6 +2355,23 @@ def _render_holdings_earnings(port_df, held_data):
                                 f"{_rv_icon} {_rv_firm}</div>",
                                 unsafe_allow_html=True,
                             )
+
+                    # CNBC reaction history
+                    if _pb.get("recent_reaction_summary") or _pb.get("recent_reaction_direction"):
+                        _rxn_dir = _pb.get("recent_reaction_direction") or ""
+                        _rxn_color = (
+                            "#00C851" if _rxn_dir == "bullish"
+                            else "#ff4444" if _rxn_dir == "bearish"
+                            else "#ffbb33"
+                        )
+                        _rxn_text = _pb.get("recent_reaction_summary") or _rxn_dir.capitalize()
+                        st.markdown(
+                            f"<div style='font-size:0.88em;color:#bbb;margin-top:6px'>"
+                            f"Post-earnings reaction: "
+                            f"<span style='color:{_rxn_color};font-weight:600'>{_rxn_text}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with _pb_ar:
                     # Stop vs estimated move
@@ -2364,10 +2406,13 @@ def _render_holdings_earnings(port_df, held_data):
                 )
 
                 # What to watch during the report
-                if _pb.get("watch_for"):
+                _watch_items = list(_pb.get("watch_for") or [])
+                if _pb.get("what_to_watch_cnbc"):
+                    _watch_items.insert(0, f"📰 **CNBC:** {_pb['what_to_watch_cnbc']}")
+                if _watch_items:
                     st.markdown("**What to Watch During the Report**")
                     _wf_cols = st.columns(2)
-                    for _wi, _witem in enumerate(_pb["watch_for"]):
+                    for _wi, _witem in enumerate(_watch_items):
                         _wf_cols[_wi % 2].markdown(f"- {_witem}")
 
                 # Institutional Lens
@@ -20236,6 +20281,85 @@ elif page == "🧠 AI Insights":
                                         st.markdown(f"**{_result['status']}**")
                                         st.markdown(_result["summary"])
 
+                        # ── Earnings checkpoint CTA (Phase 2) ─────────────────
+                        _earn_result = db.load_earnings_result(_ticker, lookback_days=14)
+                        if _earn_result and _thesis:
+                            _er_rdate  = str(_earn_result.get("report_date", ""))[:10]
+                            _er_eps_b  = _earn_result.get("eps_beat")
+                            _er_rev_b  = _earn_result.get("rev_beat")
+                            _er_guide  = _earn_result.get("guidance_direction") or ""
+                            _er_signal_icon = (
+                                "📈" if (_er_eps_b and _er_rev_b and _er_guide in ("raised", "maintained"))
+                                else "📉" if (_er_eps_b is False and _er_rev_b is False)
+                                else "📊"
+                            )
+                            st.markdown("")
+                            st.markdown(
+                                f"{_er_signal_icon} **Earnings checkpoint** — "
+                                f"Q results posted ({_er_rdate}) — does this change your thesis?"
+                            )
+                            _earn_ckpt_key = f"_earn_ckpt_{_ticker}_{_er_rdate}"
+                            if st.button(
+                                "Review earnings checkpoint",
+                                key=f"_earn_ckpt_btn_{_ticker}",
+                                disabled=not _ai_api_key,
+                                help="Requires Anthropic API key. Generates a suggested thesis status update based on the latest results.",
+                            ):
+                                with st.spinner(f"Checking {_ticker} thesis against earnings results…"):
+                                    _ckpt_result = _ta.generate_earnings_thesis_update(
+                                        ticker=_ticker,
+                                        user_thesis=_thesis,
+                                        earnings_result=_earn_result,
+                                        api_key=_ai_api_key,
+                                    )
+                                if _ckpt_result is None:
+                                    st.error("Checkpoint failed — LLM offline or API key invalid.")
+                                else:
+                                    st.session_state[_earn_ckpt_key] = _ckpt_result
+                                    st.rerun()
+                            if st.session_state.get(_earn_ckpt_key):
+                                _ckpt = st.session_state[_earn_ckpt_key]
+                                _ckpt_status = _ckpt.get("suggested_status", "WEAKENING")
+                                _ckpt_rat    = _ckpt.get("rationale", "")
+                                _ckpt_color  = _status_colour.get(_ckpt_status, "#6b7280")
+                                st.markdown(
+                                    f"<div style='padding:10px 14px;background:#1a1a1a;"
+                                    f"border-radius:6px;border-left:4px solid {_ckpt_color};margin:8px 0'>"
+                                    f"<span style='font-size:0.8em;color:{_ckpt_color};font-weight:600'>"
+                                    f"Suggested status: {_ckpt_status}</span><br>"
+                                    f"<span style='color:#eee;font-size:0.88em'>{_ckpt_rat}</span>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+                                _ckpt_c1, _ckpt_c2 = st.columns(2)
+                                with _ckpt_c1:
+                                    if st.button(
+                                        f"Confirm — update thesis to {_ckpt_status}",
+                                        key=f"_ckpt_confirm_{_ticker}",
+                                        disabled=st.session_state.get("_readonly", False),
+                                    ):
+                                        _trade_date = _trade_date_by_ticker.get(_ticker) or str(date.today())
+                                        from datetime import timezone as _tz
+                                        from datetime import datetime as _dt_now
+                                        _saved_ckpt = _ai_db.save_thesis_review({
+                                            "ticker":      _ticker,
+                                            "trade_date":  _trade_date,
+                                            "reviewed_at": _dt_now.now(_tz.utc).isoformat(),
+                                            "status":      _ckpt_status,
+                                            "summary":     f"[Earnings checkpoint {_er_rdate}] {_ckpt_rat}",
+                                            "inputs_hash": f"earnings_{_er_rdate}",
+                                        })
+                                        if _saved_ckpt:
+                                            st.success(f"Thesis updated to {_ckpt_status}.")
+                                            st.session_state.pop(_earn_ckpt_key, None)
+                                            st.rerun()
+                                        else:
+                                            st.error("Save failed — DB offline.")
+                                with _ckpt_c2:
+                                    if st.button("Dismiss", key=f"_ckpt_dismiss_{_ticker}"):
+                                        st.session_state.pop(_earn_ckpt_key, None)
+                                        st.rerun()
+
                         # Edit existing thesis
                         st.divider()
                         _edit_val = st.text_area(
@@ -20764,55 +20888,277 @@ elif page == "🧠 AI Insights":
         # ── Analyst Coverage — Ideas Inbox (Phase 1) ─────────────────────────────
         st.subheader("📋 Analyst Coverage — Ideas Inbox")
         st.caption(
-            "Awareness context only — analyst ratings and price targets are NEVER used by "
-            "the rule-based engine to score, gate, or override a verdict. Capturing Wall "
-            "Street perspective lets you see it alongside the engine's own scores."
+            "Awareness context only — analyst ratings, price targets, and earnings data captured "
+            "here are NEVER used by the rule-based engine to score, gate, or override a verdict."
         )
 
-        # (a) Capture + extract ───────────────────────────────────────────────────
-        _ac_paste = st.text_area(
-            "Paste the analyst article text",
-            height=200,
-            key="_ac_paste",
-            placeholder=(
-                "Paste the full text of an analyst research article "
-                "(CNBC Pro, Goldman, JPMorgan, BofA, Morgan Stanley, etc.)…"
-            ),
+        _inbox_mode = st.radio(
+            "Mode",
+            options=["📰 Stock Research", "📅 Pre-Earnings", "📥 Post-Earnings Results"],
+            horizontal=True,
+            key="_inbox_mode_select",
+            label_visibility="collapsed",
         )
-        if st.button(
-            "Extract",
-            key="_ac_extract_btn",
-            disabled=not _ai_api_key,
-            help=(
-                "Requires Anthropic API key in Streamlit secrets. "
-                "Extracts structured analyst data from the pasted article."
-            ),
-        ):
-            if not _ac_paste or not _ac_paste.strip():
-                st.warning("Paste an article first.")
-            else:
-                with st.spinner("Extracting analyst data…"):
-                    _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
-                if _ac_parsed is None:
-                    st.error(
-                        "Extraction failed — the LLM is offline, or it returned data the app "
-                        "couldn't parse. If you pasted a very long roundup (many separate calls), "
-                        "try a section at a time."
-                    )
-                    _ac_reason = getattr(_ai_intel, "LAST_EXTRACT_ERROR", None)
-                    if _ac_reason:
-                        st.caption(f"Details: {_ac_reason}")
-                elif not _ac_parsed:
-                    st.info("No analyst coverage with a price target / write-up found in this text.")
+        st.markdown("")
+
+        # ── Pre-Earnings paste flow ────────────────────────────────────────────
+        if _inbox_mode == "📅 Pre-Earnings":
+            st.caption(
+                "Paste a CNBC Pro earnings-preview article. The extractor pulls beat rate, "
+                "post-earnings reaction history, and 'what to watch' per ticker. "
+                "Results enrich the **📋 Pre-Earnings Playbook** on 🔔 Catalyst Watch."
+            )
+            _ep_col1, _ep_col2 = st.columns([3, 1])
+            with _ep_col1:
+                _ep_paste = st.text_area(
+                    "Paste the CNBC Pro earnings preview article",
+                    height=200,
+                    key="_ep_paste",
+                    placeholder="Paste the full text of a CNBC Pro 'stocks to watch this earnings week' article…",
+                )
+            with _ep_col2:
+                from datetime import date as _dt_date
+                _ep_article_date = st.date_input(
+                    "Article date",
+                    value=_dt_date.today(),
+                    key="_ep_article_date",
+                    help="Used to resolve day-of-week references ('Tuesday') to absolute dates.",
+                )
+            if st.button(
+                "Extract earnings preview",
+                key="_ep_extract_btn",
+                disabled=not _ai_api_key,
+                help="Requires Anthropic API key in Streamlit secrets.",
+            ):
+                if not _ep_paste or not _ep_paste.strip():
+                    st.warning("Paste an article first.")
                 else:
-                    # _ac_parsed is now a list[dict] — one record per stock
-                    st.session_state["_ac_preview"]       = _ac_parsed
-                    st.session_state["_ac_raw_text"]      = _ac_paste
-                    st.session_state["_ac_preview_nonce"] = str(uuid.uuid4())[:8]
+                    with st.spinner("Extracting earnings preview data…"):
+                        _ep_parsed = _earn_intel.extract_playbook(_ep_paste, _ep_article_date, _ai_api_key)
+                    if _ep_parsed is None:
+                        st.error("Extraction failed — LLM offline or parse error.")
+                        _ep_err = getattr(_earn_intel, "LAST_PLAYBOOK_ERROR", None)
+                        if _ep_err:
+                            st.caption(f"Details: {_ep_err}")
+                    elif not _ep_parsed:
+                        st.info("No earnings preview data found in this text.")
+                    else:
+                        st.session_state["_ep_preview"]       = _ep_parsed
+                        st.session_state["_ep_preview_nonce"] = str(uuid.uuid4())[:8]
+                        st.rerun()
+
+            if st.session_state.get("_ep_preview"):
+                _ep_pv_list = [r for r in (st.session_state["_ep_preview"] or []) if isinstance(r, dict)]
+                if not _ep_pv_list:
+                    st.session_state.pop("_ep_preview", None)
                     st.rerun()
+                _ep_nonce = st.session_state.get("_ep_preview_nonce", "x")
+                st.markdown(f"**Review and edit — {len(_ep_pv_list)} stock(s) extracted. Untick any you don't want, then save.**")
+                _ep_collected: list[dict] = []
+                _ep_rxn_opts  = ["bullish", "bearish", "mixed", "unknown"]
+                for _ei, _erec in enumerate(_ep_pv_list):
+                    _ep_exp_label = f"{str(_erec.get('ticker') or '?').upper()} — {_erec.get('company', '')}"
+                    with st.expander(_ep_exp_label, expanded=True):
+                        _ep_inc = st.checkbox("Include", value=True, key=f"_ep_inc_{_ep_nonce}_{_ei}")
+                        _epc1, _epc2 = st.columns(2)
+                        with _epc1:
+                            _ep_ticker_i  = st.text_input("Ticker", value=str(_erec.get("ticker") or "").upper(), key=f"_ep_ticker_{_ep_nonce}_{_ei}").upper().strip()
+                            _ep_company_i = st.text_input("Company", value=str(_erec.get("company") or ""), key=f"_ep_company_{_ep_nonce}_{_ei}")
+                            _ep_edate_i   = st.text_input("Earnings date (YYYY-MM-DD)", value=str(_erec.get("earnings_date") or ""), key=f"_ep_edate_{_ep_nonce}_{_ei}")
+                        with _epc2:
+                            _ep_beat_raw  = _erec.get("beat_rate_pct")
+                            _ep_beat_i    = st.number_input("Beat rate (%)", min_value=0.0, max_value=100.0, value=float(_ep_beat_raw) if _ep_beat_raw is not None else 0.0, step=1.0, key=f"_ep_beat_{_ep_nonce}_{_ei}") if _ep_beat_raw is not None else None
+                            _ep_rxn_raw   = _erec.get("recent_reaction_direction") or "unknown"
+                            _ep_rxn_idx   = _ep_rxn_opts.index(_ep_rxn_raw) if _ep_rxn_raw in _ep_rxn_opts else 3
+                            _ep_rxn_i     = st.selectbox("Post-earnings reaction", options=_ep_rxn_opts, index=_ep_rxn_idx, key=f"_ep_rxn_{_ep_nonce}_{_ei}")
+                            _ep_growth_raw = _erec.get("consensus_growth_pct")
+                            _ep_growth_i  = st.number_input("Consensus EPS growth (%)", value=float(_ep_growth_raw) if _ep_growth_raw is not None else 0.0, step=0.5, key=f"_ep_growth_{_ep_nonce}_{_ei}") if _ep_growth_raw is not None else None
+                        _ep_rxn_summ_i = st.text_area("Reaction summary", value=str(_erec.get("recent_reaction_summary") or ""), height=60, key=f"_ep_rxn_summ_{_ep_nonce}_{_ei}")
+                        _ep_watch_i    = st.text_area("What to watch (CNBC narrative)", value=str(_erec.get("what_to_watch_cnbc") or ""), height=60, key=f"_ep_watch_{_ep_nonce}_{_ei}")
+                        if _ep_inc and _ep_ticker_i:
+                            _ep_collected.append({
+                                "ticker":                    _ep_ticker_i,
+                                "company":                   _ep_company_i.strip() or None,
+                                "earnings_date":             _ep_edate_i.strip() or None,
+                                "earnings_time":             _erec.get("earnings_time"),
+                                "beat_rate_pct":             _ep_beat_i,
+                                "recent_reaction_direction": _ep_rxn_i if _ep_rxn_i != "unknown" else None,
+                                "recent_reaction_summary":   _ep_rxn_summ_i.strip() or None,
+                                "consensus_growth_pct":      _ep_growth_i,
+                                "what_to_watch_cnbc":        _ep_watch_i.strip() or None,
+                                "article_date":              str(_ep_article_date),
+                                "article_source":            "cnbc_pro",
+                            })
+                _ep_sv_col, _ep_disc_col = st.columns([2, 1])
+                with _ep_sv_col:
+                    if st.button("💾 Save earnings preview", key="_ep_save_btn", disabled=st.session_state.get("_readonly", False)):
+                        if not _ep_collected:
+                            st.warning("No stocks selected to save.")
+                        else:
+                            db.save_earnings_context(_ep_collected)
+                            st.success(f"Saved {len(_ep_collected)} stock(s) to earnings context.")
+                            for _k in ("_ep_preview", "_ep_preview_nonce", "_ep_paste"):
+                                st.session_state.pop(_k, None)
+                            st.rerun()
+                with _ep_disc_col:
+                    if st.button("Discard", key="_ep_discard_btn"):
+                        for _k in ("_ep_preview", "_ep_preview_nonce"):
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+
+        # ── Post-Earnings Results paste flow ──────────────────────────────────
+        elif _inbox_mode == "📥 Post-Earnings Results":
+            st.caption(
+                "Paste a post-earnings results article. The extractor pulls EPS, revenue, "
+                "guidance direction, and key narrative per ticker. Results trigger an "
+                "**F-1 thesis checkpoint** on 🧠 AI Insights → Positions tab."
+            )
+            _er_col1, _er_col2 = st.columns([3, 1])
+            with _er_col1:
+                _er_paste = st.text_area(
+                    "Paste the earnings results article",
+                    height=200,
+                    key="_er_paste",
+                    placeholder="Paste the full text of an earnings results article (CNBC, WSJ, Bloomberg, press release)…",
+                )
+            with _er_col2:
+                from datetime import date as _dt_date
+                _er_article_date = st.date_input(
+                    "Report date",
+                    value=_dt_date.today(),
+                    key="_er_article_date",
+                    help="Used to resolve day-of-week references to absolute dates.",
+                )
+            if st.button(
+                "Extract results",
+                key="_er_extract_btn",
+                disabled=not _ai_api_key,
+                help="Requires Anthropic API key in Streamlit secrets.",
+            ):
+                if not _er_paste or not _er_paste.strip():
+                    st.warning("Paste an article first.")
+                else:
+                    with st.spinner("Extracting earnings results…"):
+                        _er_parsed = _earn_intel.extract_results(_er_paste, _er_article_date, _ai_api_key)
+                    if _er_parsed is None:
+                        st.error("Extraction failed — LLM offline or parse error.")
+                        _er_err = getattr(_earn_intel, "LAST_RESULTS_ERROR", None)
+                        if _er_err:
+                            st.caption(f"Details: {_er_err}")
+                    elif not _er_parsed:
+                        st.info("No earnings results found in this text.")
+                    else:
+                        st.session_state["_er_preview"]       = _er_parsed
+                        st.session_state["_er_preview_nonce"] = str(uuid.uuid4())[:8]
+                        st.rerun()
+
+            if st.session_state.get("_er_preview"):
+                _er_pv_list = [r for r in (st.session_state["_er_preview"] or []) if isinstance(r, dict)]
+                if not _er_pv_list:
+                    st.session_state.pop("_er_preview", None)
+                    st.rerun()
+                _er_nonce = st.session_state.get("_er_preview_nonce", "x")
+                st.markdown(f"**Review and edit — {len(_er_pv_list)} stock(s) extracted. Untick any you don't want, then save.**")
+                _er_collected: list[dict] = []
+                _er_guidance_opts = ["raised", "maintained", "lowered", "withdrawn", "unknown"]
+                for _ri, _rrec in enumerate(_er_pv_list):
+                    _er_exp_label = f"{str(_rrec.get('ticker') or '?').upper()} — {_rrec.get('company', '')}"
+                    with st.expander(_er_exp_label, expanded=True):
+                        _er_inc = st.checkbox("Include", value=True, key=f"_er_inc_{_er_nonce}_{_ri}")
+                        _erc1, _erc2 = st.columns(2)
+                        with _erc1:
+                            _er_ticker_i = st.text_input("Ticker", value=str(_rrec.get("ticker") or "").upper(), key=f"_er_ticker_{_er_nonce}_{_ri}").upper().strip()
+                            _er_rdate_i  = st.text_input("Report date (YYYY-MM-DD)", value=str(_rrec.get("report_date") or str(_er_article_date)), key=f"_er_rdate_{_er_nonce}_{_ri}")
+                            _er_eps_a_i  = st.number_input("Actual EPS ($)", value=float(_rrec.get("actual_eps") or 0.0), step=0.01, key=f"_er_eps_a_{_er_nonce}_{_ri}") if _rrec.get("actual_eps") is not None else None
+                            _er_eps_e_i  = st.number_input("Estimated EPS ($)", value=float(_rrec.get("estimated_eps") or 0.0), step=0.01, key=f"_er_eps_e_{_er_nonce}_{_ri}") if _rrec.get("estimated_eps") is not None else None
+                        with _erc2:
+                            _er_rev_a_i  = st.number_input("Actual Revenue ($B)", value=float(_rrec.get("actual_revenue") or 0.0), step=0.1, key=f"_er_rev_a_{_er_nonce}_{_ri}") if _rrec.get("actual_revenue") is not None else None
+                            _er_rev_e_i  = st.number_input("Estimated Revenue ($B)", value=float(_rrec.get("estimated_revenue") or 0.0), step=0.1, key=f"_er_rev_e_{_er_nonce}_{_ri}") if _rrec.get("estimated_revenue") is not None else None
+                            _er_guide_raw = _rrec.get("guidance_direction") or "unknown"
+                            _er_guide_idx = _er_guidance_opts.index(_er_guide_raw) if _er_guide_raw in _er_guidance_opts else 4
+                            _er_guide_i  = st.selectbox("Guidance", options=_er_guidance_opts, index=_er_guide_idx, key=f"_er_guide_{_er_nonce}_{_ri}")
+                            _er_surp_i   = st.number_input("EPS surprise (%)", value=float(_rrec.get("eps_surprise_pct") or 0.0), step=0.1, key=f"_er_surp_{_er_nonce}_{_ri}") if _rrec.get("eps_surprise_pct") is not None else None
+                        _er_narr_i = st.text_area("Key narrative (management commentary)", value=str(_rrec.get("key_narrative") or ""), height=80, key=f"_er_narr_{_er_nonce}_{_ri}")
+                        if _er_inc and _er_ticker_i and _er_rdate_i.strip():
+                            _eps_beat_i = (bool(_er_eps_a_i > _er_eps_e_i) if _er_eps_a_i is not None and _er_eps_e_i is not None else None)
+                            _rev_beat_i = (bool(_er_rev_a_i > _er_rev_e_i) if _er_rev_a_i is not None and _er_rev_e_i is not None else None)
+                            _er_collected.append({
+                                "ticker":             _er_ticker_i,
+                                "company":            str(_rrec.get("company") or "").strip() or None,
+                                "report_date":        _er_rdate_i.strip(),
+                                "actual_eps":         _er_eps_a_i,
+                                "estimated_eps":      _er_eps_e_i,
+                                "eps_beat":           _eps_beat_i,
+                                "eps_surprise_pct":   _er_surp_i,
+                                "actual_revenue":     _er_rev_a_i,
+                                "estimated_revenue":  _er_rev_e_i,
+                                "rev_beat":           _rev_beat_i,
+                                "guidance_direction": _er_guide_i if _er_guide_i != "unknown" else None,
+                                "key_narrative":      _er_narr_i.strip() or None,
+                                "article_source":     "cnbc_pro",
+                            })
+                _er_sv_col, _er_disc_col = st.columns([2, 1])
+                with _er_sv_col:
+                    if st.button("💾 Save earnings results", key="_er_save_btn", disabled=st.session_state.get("_readonly", False)):
+                        if not _er_collected:
+                            st.warning("No stocks selected to save.")
+                        else:
+                            db.save_earnings_results(_er_collected)
+                            st.success(f"Saved {len(_er_collected)} result(s).")
+                            for _k in ("_er_preview", "_er_preview_nonce", "_er_paste"):
+                                st.session_state.pop(_k, None)
+                            st.rerun()
+                with _er_disc_col:
+                    if st.button("Discard", key="_er_discard_btn"):
+                        for _k in ("_er_preview", "_er_preview_nonce"):
+                            st.session_state.pop(_k, None)
+                        st.rerun()
+
+        # ── Stock Research — Capture + extract ───────────────────────────────
+        if _inbox_mode == "📰 Stock Research":
+            _ac_paste = st.text_area(
+                "Paste the analyst article text",
+                height=200,
+                key="_ac_paste",
+                placeholder=(
+                    "Paste the full text of an analyst research article "
+                    "(CNBC Pro, Goldman, JPMorgan, BofA, Morgan Stanley, etc.)…"
+                ),
+            )
+            if st.button(
+                "Extract",
+                key="_ac_extract_btn",
+                disabled=not _ai_api_key,
+                help=(
+                    "Requires Anthropic API key in Streamlit secrets. "
+                    "Extracts structured analyst data from the pasted article."
+                ),
+            ):
+                if not _ac_paste or not _ac_paste.strip():
+                    st.warning("Paste an article first.")
+                else:
+                    with st.spinner("Extracting analyst data…"):
+                        _ac_parsed = _ai_intel.extract_report(_ac_paste, _ai_api_key)
+                    if _ac_parsed is None:
+                        st.error(
+                            "Extraction failed — the LLM is offline, or it returned data the app "
+                            "couldn't parse. If you pasted a very long roundup (many separate calls), "
+                            "try a section at a time."
+                        )
+                        _ac_reason = getattr(_ai_intel, "LAST_EXTRACT_ERROR", None)
+                        if _ac_reason:
+                            st.caption(f"Details: {_ac_reason}")
+                    elif not _ac_parsed:
+                        st.info("No analyst coverage with a price target / write-up found in this text.")
+                    else:
+                        # _ac_parsed is now a list[dict] — one record per stock
+                        st.session_state["_ac_preview"]       = _ac_parsed
+                        st.session_state["_ac_raw_text"]      = _ac_paste
+                        st.session_state["_ac_preview_nonce"] = str(uuid.uuid4())[:8]
+                        st.rerun()
 
         # (b) Editable preview — one expandable card per extracted stock ────────────
-        if st.session_state.get("_ac_preview"):
+        if _inbox_mode == "📰 Stock Research" and st.session_state.get("_ac_preview"):
             _ac_pv_raw = st.session_state["_ac_preview"]
             # Robust to a legacy/malformed stored preview: a session created before
             # the multi-stock change holds a single record DICT (not a list), which
@@ -21064,8 +21410,10 @@ elif page == "🧠 AI Insights":
                         st.session_state.pop(_k, None)
                     st.rerun()
 
-        # (c) Inbox library ───────────────────────────────────────────────────────
-        if _ac_df.empty:
+        # (c) Inbox library — shown only in Stock Research mode ──────────────────
+        if _inbox_mode != "📰 Stock Research":
+            pass
+        elif _ac_df.empty:
             st.info(
                 "No analyst coverage saved yet. Paste an article above to extract and "
                 "save the first one. (If you just applied the DDL, it will populate as "

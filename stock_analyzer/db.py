@@ -1086,6 +1086,122 @@ def delete_analyst_coverage(row_id) -> bool:
         return False
 
 
+# ── Earnings Context (Phase 1 — pre-earnings playbook enrichment) ─────────────
+
+def save_earnings_context(records: list[dict]) -> None:
+    """Bulk upsert earnings_context rows on (ticker, article_date).
+    Ships inert if the table doesn't exist yet (graceful degradation)."""
+    if _READONLY or not has_db() or not records:
+        return
+    try:
+        _client().table("earnings_context").upsert(
+            records, on_conflict="ticker,article_date"
+        ).execute()
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+
+
+def load_earnings_context(ticker: str, max_age_days: int = 30) -> dict | None:
+    """Return the most recent earnings_context row for ticker within max_age_days.
+    Returns None on any failure or missing table (graceful degradation)."""
+    if not has_db():
+        return None
+    try:
+        from datetime import datetime, timedelta
+        import pytz
+        _et = pytz.timezone("America/New_York")
+        cutoff = (datetime.now(tz=_et) - timedelta(days=max_age_days)).date().isoformat()
+        rows = (
+            _client()
+            .table("earnings_context")
+            .select("*")
+            .eq("ticker", ticker.strip().upper())
+            .gte("article_date", cutoff)
+            .order("article_date", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def load_earnings_context_batch(tickers: list[str], max_age_days: int = 30) -> dict[str, dict]:
+    """Fetch earnings_context rows for all tickers in one query.
+    Returns {ticker: row} — missing tickers are absent from the dict.
+    Returns {} on any failure (graceful degradation)."""
+    if not has_db() or not tickers:
+        return {}
+    try:
+        from datetime import datetime, timedelta
+        import pytz
+        _et = pytz.timezone("America/New_York")
+        cutoff = (datetime.now(tz=_et) - timedelta(days=max_age_days)).date().isoformat()
+        upper_tickers = [t.strip().upper() for t in tickers]
+        rows = (
+            _client()
+            .table("earnings_context")
+            .select("*")
+            .in_("ticker", upper_tickers)
+            .gte("article_date", cutoff)
+            .order("article_date", desc=True)
+            .execute()
+            .data
+        )
+        result: dict[str, dict] = {}
+        for row in (rows or []):
+            t = (row.get("ticker") or "").strip().upper()
+            if t and t not in result:
+                result[t] = row
+        return result
+    except Exception:
+        return {}
+
+
+# ── Earnings Results (Phase 2 — post-earnings F-1 thesis checkpoint) ──────────
+
+def save_earnings_results(records: list[dict]) -> None:
+    """Bulk upsert earnings_results rows on (ticker, report_date).
+    Ships inert if the table doesn't exist yet (graceful degradation)."""
+    if _READONLY or not has_db() or not records:
+        return
+    try:
+        _client().table("earnings_results").upsert(
+            records, on_conflict="ticker,report_date"
+        ).execute()
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+
+
+def load_earnings_result(ticker: str, lookback_days: int = 90) -> dict | None:
+    """Return the most recent earnings_results row for ticker within lookback_days.
+    Returns None on any failure or missing table (graceful degradation)."""
+    if not has_db():
+        return None
+    try:
+        from datetime import datetime, timedelta
+        import pytz
+        _et = pytz.timezone("America/New_York")
+        cutoff = (datetime.now(tz=_et) - timedelta(days=lookback_days)).date().isoformat()
+        rows = (
+            _client()
+            .table("earnings_results")
+            .select("*")
+            .eq("ticker", ticker.strip().upper())
+            .gte("report_date", cutoff)
+            .order("report_date", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def recalculate_from_trades(trades_df: pd.DataFrame) -> dict:
     """
     Replay every trade chronologically to derive the truthful holdings table

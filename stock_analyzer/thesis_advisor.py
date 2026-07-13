@@ -518,3 +518,107 @@ def bundle_evidence(bundle: dict) -> dict:
         "fundamentals":   fundamentals,
         "news_headlines": news_headlines,
     }
+
+
+# ── Phase 2 — Earnings Thesis Checkpoint ─────────────────────────────────────
+
+_EARNINGS_CHECKPOINT_PROMPT = """You are a disciplined portfolio analyst helping an investor check whether their investment thesis still holds after a quarterly earnings report.
+
+Your job: given the investor's original thesis and the actual earnings results, assess whether the thesis is INTACT, WEAKENING, or BROKEN. Write a concise 2-3 sentence explanation.
+
+Rules:
+- Only use facts from the earnings results provided. Do not invent events or outcomes.
+- INTACT: the earnings result is broadly consistent with the thesis and does not raise new doubts.
+- WEAKENING: the result introduces some doubt but does not decisively contradict the core thesis premise.
+- BROKEN: the result materially contradicts the key condition the investor stated, or the core premise has clearly reversed.
+- Be conservative: default to WEAKENING when uncertain. BROKEN requires a clear, specific contradiction.
+- Do not recommend buying, selling, or any portfolio action. Observation only.
+- End your response with exactly one verdict line on its own:
+    Verdict: INTACT
+    Verdict: WEAKENING
+    Verdict: BROKEN"""
+
+
+def generate_earnings_thesis_update(
+    ticker: str,
+    user_thesis: str,
+    earnings_result: dict,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+    max_tokens: int = 300,
+) -> dict | None:
+    """
+    Suggest a thesis status update based on actual earnings results.
+
+    earnings_result: a row dict from earnings_results table.
+
+    Returns:
+        suggested_status  — 'INTACT' | 'WEAKENING' | 'BROKEN'
+        rationale         — 2-3 sentence explanation
+        earnings_signal   — 'beat' | 'miss' | 'mixed' | 'unknown'
+
+    Returns None on any failure — caller degrades gracefully (no checkpoint
+    CTA shown). Does NOT write to thesis_reviews; that is the user's action.
+    """
+    if not api_key or not user_thesis or not earnings_result:
+        return None
+    try:
+        import anthropic
+        r = earnings_result
+        # Derive a simple earnings_signal label from the extracted facts
+        eps_beat = r.get("eps_beat")
+        rev_beat = r.get("rev_beat")
+        guidance = r.get("guidance_direction") or "unknown"
+        if eps_beat is True and rev_beat is True and guidance in ("raised", "maintained"):
+            earnings_signal = "beat"
+        elif eps_beat is False and rev_beat is False:
+            earnings_signal = "miss"
+        elif eps_beat is None and rev_beat is None:
+            earnings_signal = "unknown"
+        else:
+            earnings_signal = "mixed"
+
+        # Build the user prompt
+        result_parts = [f"Ticker: {ticker}"]
+        result_parts.append(f"Original thesis: {user_thesis.strip()}")
+        result_parts.append("")
+        result_parts.append("Earnings results:")
+        if r.get("actual_eps") is not None and r.get("estimated_eps") is not None:
+            beat_miss = "beat" if r.get("eps_beat") else "missed"
+            surprise  = (
+                f" (surprise: {r['eps_surprise_pct']:+.1f}%)" if r.get("eps_surprise_pct") is not None else ""
+            )
+            result_parts.append(
+                f"- EPS: actual ${r['actual_eps']:.2f} vs estimate ${r['estimated_eps']:.2f}"
+                f" — {beat_miss}{surprise}"
+            )
+        if r.get("actual_revenue") is not None and r.get("estimated_revenue") is not None:
+            rev_beat_miss = "beat" if r.get("rev_beat") else "missed"
+            result_parts.append(
+                f"- Revenue: actual ${r['actual_revenue']:.2f}B vs estimate ${r['estimated_revenue']:.2f}B"
+                f" — {rev_beat_miss}"
+            )
+        if guidance != "unknown":
+            result_parts.append(f"- Guidance: {guidance}")
+        if r.get("key_narrative"):
+            result_parts.append(f"- Management commentary: {r['key_narrative']}")
+
+        user_msg = "\n".join(result_parts)
+
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=_EARNINGS_CHECKPOINT_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
+        )
+        text = response.content[0].text if response.content else ""
+        parsed = _parse_response(text)
+        return {
+            "suggested_status": parsed["status"],
+            "rationale":        parsed["summary"],
+            "earnings_signal":  earnings_signal,
+        }
+    except Exception:
+        return None
