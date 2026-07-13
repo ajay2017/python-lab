@@ -46,7 +46,7 @@ Existing earnings-window constants in `constants.py` (do not change these values
 
 2. **Strictly additive / zero runtime dependency.** If `earnings_intel.py` is offline, the API
    key is absent, or either DB table doesn't exist yet, every other page is unaffected. Ships
-   inert until DDL is applied and an article is pasted.
+   inert until DDL is applied and an article is pasted. DDL applied 2026-07-13 — active.
 
 3. **Zero-hallucination on a decision surface.** The LLM extracts only stated atomic facts (beat
    rate %, reaction pattern, consensus growth). All aggregates and posture decisions are computed
@@ -114,7 +114,7 @@ Built as a function (not a constant) so it can reference `COMPOSITE_BUY` from
 
 ### New Supabase table — `earnings_context`
 
-Ships inert until DDL applied. RLS on, `FOR ALL TO service_role`.
+DDL applied 2026-07-13 — active. RLS on, `FOR ALL TO service_role`.
 
 ```sql
 create table if not exists earnings_context (
@@ -377,14 +377,14 @@ items near earnings have the best setup." If that gap is felt, build Phase 3.
 
 ---
 
-## Open DDL work (one-time, applied manually in Supabase)
+## DDL work (one-time, applied manually in Supabase)
 
-Both tables ship inert (graceful degradation) until DDL is applied.
+Both tables applied 2026-07-13 — active.
 
-| Table | Phase |
-|---|---|
-| `earnings_context` | Phase 1 |
-| `earnings_results` | Phase 2 |
+| Table | Phase | Status |
+|---|---|---|
+| `earnings_context` | Phase 1 | Applied 2026-07-13 |
+| `earnings_results` | Phase 2 | Applied 2026-07-13 |
 
 ---
 
