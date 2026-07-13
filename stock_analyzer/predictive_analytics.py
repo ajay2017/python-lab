@@ -190,3 +190,157 @@ def total_graded(enriched: list[dict]) -> int:
         1 for r in enriched
         if not r.get("outcome_maturing") and r.get("alpha_pct") is not None
     )
+
+
+# ── Decision Quality (Tab 2) ───────────────────────────────────────────────────
+
+def acted_vs_missed_comparison(enriched: list[dict]) -> dict:
+    """
+    Compare alpha outcomes between recs you acted on vs recs you passed.
+
+    Returns a dict with top-level summaries for each side plus the overall
+    discretion verdict:
+
+      acted   — {"n", "avg_alpha", "p_positive_alpha", "avg_outcome_pct"}
+      missed  — {"n", "avg_alpha", "p_positive_alpha", "avg_outcome_pct"}
+      edge    — "acting" | "passing" | "neutral" | "insufficient"
+      edge_pp — float | None  (magnitude of the alpha gap, positive always)
+    """
+    def _side(rows: list[dict]) -> dict:
+        alphas   = [float(r["alpha_pct"]) for r in rows if r.get("alpha_pct") is not None]
+        outcomes = [float(r["outcome_pct"]) for r in rows if r.get("outcome_pct") is not None]
+        n = len(rows)
+        return {
+            "n":                n,
+            "avg_alpha":        round(sum(alphas) / len(alphas), 2) if alphas else None,
+            "p_positive_alpha": round(sum(1 for a in alphas if a > 0) / len(alphas), 3) if alphas else None,
+            "avg_outcome_pct":  round(sum(outcomes) / len(outcomes), 2) if outcomes else None,
+        }
+
+    graded = [r for r in enriched if not r.get("outcome_maturing") and r.get("alpha_pct") is not None]
+    acted_rows  = [r for r in graded if r.get("acted_on")]
+    missed_rows = [r for r in graded if not r.get("acted_on")]
+
+    acted_stats  = _side(acted_rows)
+    missed_stats = _side(missed_rows)
+
+    aa = acted_stats["avg_alpha"]
+    am = missed_stats["avg_alpha"]
+
+    if aa is None or am is None or (acted_stats["n"] < 3 and missed_stats["n"] < 3):
+        edge, edge_pp = "insufficient", None
+    elif abs(aa - am) < 0.5:
+        edge, edge_pp = "neutral", round(abs(aa - am), 2)
+    elif aa > am:
+        edge, edge_pp = "acting", round(aa - am, 2)
+    else:
+        edge, edge_pp = "passing", round(am - aa, 2)
+
+    return {
+        "acted":   acted_stats,
+        "missed":  missed_stats,
+        "edge":    edge,
+        "edge_pp": edge_pp,
+    }
+
+
+# ── Signal Breakdown (Tab 3) ───────────────────────────────────────────────────
+
+_REC_TYPE_LABELS = {
+    "new_pick":      "New Position",
+    "add_winner":    "Add to Winner",
+    "buy_candidate": "Opportunity Watch",
+}
+
+
+def by_conviction(enriched: list[dict], min_n: int = 3) -> list[dict]:
+    """
+    Group mature graded outcomes by conviction level (BUY / Strong BUY / other).
+
+    Returns list of dicts sorted by avg_alpha descending:
+      conviction, n, avg_alpha, p_positive_alpha, avg_outcome_pct
+    """
+    acc: dict[str, list[dict]] = {}
+    for r in enriched:
+        if r.get("outcome_maturing") or r.get("alpha_pct") is None:
+            continue
+        conv = str(r.get("conviction") or "Unknown").strip() or "Unknown"
+        acc.setdefault(conv, []).append(r)
+
+    rows = []
+    for conv, recs in acc.items():
+        alphas   = [float(r["alpha_pct"]) for r in recs]
+        outcomes = [float(r["outcome_pct"]) for r in recs if r.get("outcome_pct") is not None]
+        n = len(alphas)
+        rows.append({
+            "conviction":       conv,
+            "n":                n,
+            "avg_alpha":        round(sum(alphas) / n, 2) if n else None,
+            "p_positive_alpha": round(sum(1 for a in alphas if a > 0) / n, 3) if n else None,
+            "avg_outcome_pct":  round(sum(outcomes) / len(outcomes), 2) if outcomes else None,
+        })
+    rows.sort(key=lambda x: (x["avg_alpha"] or -999), reverse=True)
+    return [r for r in rows if r["n"] >= min_n]
+
+
+def by_rec_type_stats(enriched: list[dict], min_n: int = 3) -> list[dict]:
+    """
+    Group mature graded outcomes by rec_type.
+
+    Returns list of dicts sorted by avg_alpha descending:
+      rec_type, label, n, avg_alpha, p_positive_alpha, avg_outcome_pct
+    """
+    acc: dict[str, list[dict]] = {}
+    for r in enriched:
+        if r.get("outcome_maturing") or r.get("alpha_pct") is None:
+            continue
+        rt = str(r.get("rec_type") or "unknown").strip()
+        acc.setdefault(rt, []).append(r)
+
+    rows = []
+    for rt, recs in acc.items():
+        alphas   = [float(r["alpha_pct"]) for r in recs]
+        outcomes = [float(r["outcome_pct"]) for r in recs if r.get("outcome_pct") is not None]
+        n = len(alphas)
+        rows.append({
+            "rec_type":         rt,
+            "label":            _REC_TYPE_LABELS.get(rt, rt),
+            "n":                n,
+            "avg_alpha":        round(sum(alphas) / n, 2) if n else None,
+            "p_positive_alpha": round(sum(1 for a in alphas if a > 0) / n, 3) if n else None,
+            "avg_outcome_pct":  round(sum(outcomes) / len(outcomes), 2) if outcomes else None,
+        })
+    rows.sort(key=lambda x: (x["avg_alpha"] or -999), reverse=True)
+    return [r for r in rows if r["n"] >= min_n]
+
+
+# ── Sector Alpha (Tab 4) ───────────────────────────────────────────────────────
+
+def by_sector_alpha(enriched: list[dict], min_n: int = 3) -> list[dict]:
+    """
+    Group mature graded outcomes by sector regardless of score band.
+
+    Returns list of dicts sorted by avg_alpha descending:
+      sector, n, avg_alpha, p_positive_alpha, avg_outcome_pct
+    """
+    acc: dict[str, list[dict]] = {}
+    for r in enriched:
+        if r.get("outcome_maturing") or r.get("alpha_pct") is None:
+            continue
+        sector = str(r.get("sector") or "Unknown").strip() or "Unknown"
+        acc.setdefault(sector, []).append(r)
+
+    rows = []
+    for sector, recs in acc.items():
+        alphas   = [float(r["alpha_pct"]) for r in recs]
+        outcomes = [float(r["outcome_pct"]) for r in recs if r.get("outcome_pct") is not None]
+        n = len(alphas)
+        rows.append({
+            "sector":           sector,
+            "n":                n,
+            "avg_alpha":        round(sum(alphas) / n, 2) if n else None,
+            "p_positive_alpha": round(sum(1 for a in alphas if a > 0) / n, 3) if n else None,
+            "avg_outcome_pct":  round(sum(outcomes) / len(outcomes), 2) if outcomes else None,
+        })
+    rows.sort(key=lambda x: (x["avg_alpha"] or -999), reverse=True)
+    return [r for r in rows if r["n"] >= min_n]
