@@ -4533,7 +4533,7 @@ if page == "🏠 Home":
     if _ca_brief.get("score", 0) >= _CA_BRIEF_MIN:
         st.info(
             f"📡 **Cross-asset:** {_ca_brief['summary']} "
-            f"Check the **🔗 Risk Analysis** tab for the full breakdown.",
+            f"Check the **🔗 Risk Analysis** page for the full breakdown.",
             icon=None,
         )
     elif _ca_brief.get("label") == "—":
@@ -19739,7 +19739,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
     with st.expander("🗺️ The pages, at a glance", expanded=False):
         st.markdown(
             """
-- **🏠 Home** — Today's Brief: the daily decision summary. Also includes **🔥 Stress Testing** (scenario impact + model-vs-actual historical comparison for COVID Crash, 2022 Rate Shock, and GFC 2008 windows).
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
@@ -19753,7 +19753,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — upcoming earnings for held + watchlist + sector names (awareness, not a buy signal).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
-- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
+- **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
 """
         )
@@ -19783,7 +19783,7 @@ It is **awareness, not a buy signal** — an upcoming earnings date is a *reason
     with st.expander("🔥 Stress Testing & Scenario Analysis", expanded=False):
         st.markdown(
             """
-The **🔥 Stress Testing** section on the Home page projects how your holdings would fare under market shock scenarios.
+The **🔥 Stress Testing** section on the 🔗 Risk Analysis page projects how your holdings would fare under market shock scenarios.
 
 **What it does:** Each position's estimated P&L under a chosen scenario (e.g., crash, rate shock) is calculated using its individual **beta vs SPY**. Named historical scenarios (COVID Crash, 2022 Rate Shock, GFC 2008) also apply **sector-specific shocks** instead of a pure beta move — reflecting that different sectors suffered differently in those events.
 

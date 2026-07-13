@@ -43,6 +43,9 @@ The "leverage my paid research" push — a full analyst-intelligence feature end
 - **Analyst Coverage — "Ideas Inbox"** (`analyst_intel.py` / `analyst_coverage` table; own surface on 🧠 AI Insights; reqs F-154/F-154a/F-154b; plan `docs/plans/analyst-coverage.md`; memory `project_analyst_coverage`) — paste CNBC Pro / broker research → LLM (`extract_report` → `list[dict]`) extracts **atomic per-firm facts as ONE record per covered stock** (a multi-stock "top picks" roundup never merges; `derive_consensus` computes avg/high/low PT + consensus label in pure Python so no arithmetic is hallucinated) → editable **N-card preview** → Supabase. **Awareness-only — never gates, scores, or moves a verdict.** Phase 1 Ideas Inbox capture (`19620b3`); Phase 2 (`f0cdd6b`) = 🏦 Analyst Coverage tab on 📈 Analysis (reconciles the provider `targetMeanPrice` consensus vs your saved research) + F-1 thesis reviewer ingests consensus as **CONTEXT ONLY** (never upgrades a verdict); Phase 3 (`ad4e5d7`) = Grow Today "New Positions to Initiate" card annotation (display-only); multi-stock extraction fix (`dd4023a`) + preview-hardening for legacy session state (`cacc0ab`). **Deferred by choice:** Brief awareness chip (calm-advisor persona), analyst-conviction tie-breaker (would influence recommendation order → violates awareness-only), PDF upload.
 - **🧠 AI Insights page IA refresh** (`b8bc336`) — flat vertical scroll → persistent **"At a glance" status strip** + **cadence tabs** (🩺 Positions · 📅 Debriefs · 🏦 Research). Structural re-housing only (no logic change); the status-strip + cadence-tabs pattern is the template for the eventual broader UX pass (memory `feedback_ui_polish`).
 - **CI Node 24** (`3295598`) — `actions/checkout@v5` + `actions/setup-python@v6` (GitHub's Node.js 20 runner deprecation); no workflow-behaviour change.
+- **pyarrow production segfault fix** (2026-07-10 → 07-12; `9e5c913`→`d6dfad9`) — an initial numpy ABI pin (`751cd4b`, 07-10) didn't hold; Streamlit Cloud deploys kept segfaulting on the first `st.dataframe` render. Root-caused to `requirements.txt` never pinning pyarrow — streamlit's own dependency spec deliberately leaves it unbounded — with the resolver almost certainly pulling a ~2-day-old pyarrow 25.0.0 release. Pinned `pyarrow==24.0.0` (`d6dfad9`); also migrated the remaining 4 `st.data_editor` calls off deprecated `use_container_width`. See `docs/architecture.md` §1 (tech-stack table).
+- **UX review remediation, 5 phases** (`1b33c8c`→`dfa1b77`; per `docs/reviews/2026-07-12-UX-review.md`) — dev-string/identifier leaks stripped from user copy (`1b33c8c`); 11 hardcoded display values single-sourced to `constants.py` (`699104f`); Home's original 11 tabs consolidated to a promoted Today's Brief section + 5 grouped tabs (`9c1de1f` — see `docs/architecture.md` §10 "Home page tab consolidation"); 4 differently-worded empty-state messages consolidated (`fa63ba4`); WATCH/MONITOR terminology standardized to "Watch" + remaining watchlist code leaks fixed (`dfa1b77`).
+- **Nav follow-up, 3 phases** (`2a61398`, `bb508c7`, `a810588`) — a "📊 Portfolio" Home tab collided with the pre-existing PORTFOLIO sidebar nav group. Phase A (`2a61398`) extracted Portfolio Allocation + Analytics into a new standalone page; Phase B (`bb508c7`) renamed Home's "AI Brief" tab to "AI Snapshot"; Phase C (`a810588`, 2026-07-13) split the remaining "Risk & Alerts" tab into two more standalone pages ("🔗 Risk Analysis", "⚠️ Alerts & Actions") and dropped `st.tabs()` from Home entirely — Home is now Today's Brief (promoted) + Evening Debrief + AI Snapshot as three sequential full-width sections. See `docs/architecture.md` §10 ("Nav follow-up — Portfolio Allocation extraction + AI Snapshot rename" / "Nav follow-up Phase C").
 
 ---
 
@@ -138,7 +141,7 @@ Under **App → Settings → Secrets** in `secrets.toml` TOML format:
 url = "https://<your-project-id>.supabase.co"
 key = "sb_secret_***"          # MUST be the service-role / secret key, not publishable
 
-ANTHROPIC_API_KEY = "sk-ant-..."   # Anthropic API for AI Brief
+ANTHROPIC_API_KEY = "sk-ant-..."   # Anthropic API for AI Snapshot, AI Insights, and the broker-import ticker fallback
 OPENAI_API_KEY    = "sk-..."       # optional
 GOOGLE_API_KEY    = "AIza..."      # optional
 
@@ -180,7 +183,7 @@ Refs #123                   # if applicable
 - **scope** (optional): the area — e.g. `pnl`, `brief`, `risk`, `db`, `constants`, `scanner`, `ui`
 - **summary**: imperative mood, lowercase, ≤72 chars, no trailing period
 - **Threshold/gate changes** (`stock_analyzer/constants.py`) are investment-policy decisions — say so in the body and name the constant + old→new value
-- Claude-authored commits end with: `Co-Authored-By: Ajay with Claude Opus 4.8 <ajay.x.ku@accenture.com>`
+- Claude-authored commits end with: `Co-Authored-By: Ajay with <model> <ajay.x.ku@accenture.com>` — use the actual model name from the session context (e.g. `Claude Sonnet 4.6`, `Claude Opus 4.8`)
 
 One-time setup per clone (wires the editor to pre-fill the format from `.gitmessage.txt`):
 
@@ -236,17 +239,7 @@ _Remaining (genuinely minor, optional):_ the macro pick-gate uses the static eve
 
 ## Phase 5+ queued
 
-**Evening Debrief (PM read companion to Today's Brief):**
-- New section/tab rendered after 3:30 PM ET (or always with a "preview" mode before that)
-- Reviews the day's activity against the AM read:
-  - Which Go-verdict picks were actioned in Trade Journal · entry vs. close price
-  - Which Skip/Filtered-Out picks would have worked anyway (learning loop)
-  - Held positions that crossed stops or earnings windows during the day
-  - Tomorrow's macro events + sector exposure heatmap
-- Closing summary: "Today's P&L attribution," "Risk events tomorrow," "One thing to fix"
-- Should consume the locked AM snapshot (if present) as the "what I planned" baseline so the debrief is a true delta vs. the morning plan
-
-**Concept:** AM Brief = "today's playbook"; Evening Debrief = "how it went + what's tomorrow." Together they make the loop closed without needing the user to remember anything between sessions.
+**Evening Debrief — ✅ SHIPPED** (see `stock_analyzer/evening_debrief.py`; renders as a Home section, after Today's Brief). This queue item was stale — removed 2026-07-13.
 
 **Brokerage sync (eliminate manual journaling + the drift class of bugs):**
 - One-way pull from brokerage API → `trades` + `holdings` tables. Brokerage state is canonical for shares and cost basis; app retains the decision-context columns (`signal_seen`, `followed_signal`, `deviation_reason`, `lesson`).

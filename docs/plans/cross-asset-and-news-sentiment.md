@@ -4,6 +4,16 @@
 gate or threshold is modified. Build in two independent phases (Phase 1 = cross-asset,
 Phase 2 = news sentiment) so each ships and can be reviewed before the next starts.
 
+**Phase 1 (Cross-Asset Pulse): ✅ SHIPPED 2026-06-29 (commit `184df33`).** Now lives on
+the standalone 🔗 Risk Analysis page (moved from a Home tab in the 2026-07-13 nav
+cleanup — see `docs/architecture.md` §10 "Nav follow-up Phase C"). **Phase 2 (News
+Sentiment via Finnhub) also ✅ SHIPPED, same day (commit `cd820e7`; reqs F-74)** — live
+as a News Sentiment row on the Home Position Drill-Down and a News Sentiment Shift card
+in Today's Brief (`stock_analyzer/news_sentiment.py`). Only **Phase 2b** (below —
+folding sentiment into the composite score) remains unshipped, per its own explicit
+"policy decision" framing. The "Risk Analysis tab"/"Risk tab" references throughout
+this doc predate the page move; read as "page."
+
 ---
 
 ## Why these two
