@@ -297,7 +297,6 @@ def rescore_headlines_llm(
         import anthropic
         import json
 
-        ticker_ctx = f" for {ticker} investors" if ticker else ""
         headline_lines = [
             f'{i}. "{h.get("headline", "")}"' for i, h in enumerate(headlines)
         ]
