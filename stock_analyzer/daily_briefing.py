@@ -1229,7 +1229,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 "icon":     "🚨",
                 "ticker":   ticker,
                 "kind":     "critical_news",
-                "action":   "MONITOR — Critical News",
+                "action":   "Watch — Critical News",
                 "directive": (
                     "Hold for now, but tighten your stop and re-evaluate the thesis "
                     "after the news is confirmed."

@@ -826,7 +826,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                 st.info(
                     f"**Adding to a position you hold — two stops are at work:**\n\n"
                     f"{_sz_line}\n"
-                    f"- **Protective stop ${_active:.2f}** — the real stop on your combined holding (the "
+                    f"- **Protective stop ${_active:.2f}** — the real stop on your combined position (the "
                     f"active level on the ladder below)."
                 )
             else:
@@ -882,7 +882,7 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
                        annotation_font_size=10, annotation_font_color="#f87171")
         _fig.add_vrect(x0=_active, x1=_xmax, fillcolor="#22c55e", opacity=0.06,
                        line_width=0, layer="below",
-                       annotation_text="✅ holding zone", annotation_position="bottom right",
+                       annotation_text="✅ position zone", annotation_position="bottom right",
                        annotation_font_size=10, annotation_font_color="#86efac")
         _fig.add_vline(x=_active, line_dash="solid", line_color="#dc2626", line_width=1.4)
         _fig.add_vline(x=price, line_dash="dash", line_color="#e5e7eb", line_width=1)
@@ -3878,7 +3878,7 @@ if page == "🏠 Home":
         _c3.metric("Today's P&L (held)", "Updating…", help="Loads with the live price strip")
     _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
                help=f"{n_danger} danger · {n_warning} warning — check ⚠️ Alerts & Actions")
-    _c5.metric("Avg Conviction",   f"{avg_score:.0f}/100")
+    _c5.metric("Avg Score",        f"{avg_score:.0f}/100")
     _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
                _div_label, delta_color="off")
     # Value = $ amount (masked under privacy); delta = % with explicit sign so
@@ -5056,7 +5056,7 @@ if page == "🏠 Home":
                     )
                 _funnel = f" ({'; '.join(_funnel_parts)})" if _funnel_parts else ""
                 if _macro_n:
-                    _mp_word = "pick was" if _macro_n == 1 else "picks were"
+                    _mp_word = "signal was" if _macro_n == 1 else "signals were"
                     _macro_note = (
                         f" Separately, {_macro_n} strong {_mp_word} suppressed "
                         "for an imminent macro event (see below)."
@@ -6602,16 +6602,16 @@ if page == "🏠 Home":
             "⏱ These verdicts reflect the AM snapshot — the composite, momentum, "
             "and sector context as of when the Brief was built (Lock the Brief in "
             "the morning to freeze this read deterministically). "
-            "**A Go-pick here doesn't mean the signal still holds now** — composites "
-            "drift through the day. Always re-run Analysis on a pick before acting "
+            "**A Go signal here doesn't mean it still holds now** — composites "
+            "drift through the day. Always re-run Analysis before acting "
             "post-AM."
         )
         _ed_pvr_c1, _ed_pvr_c2 = st.columns(2)
 
         with _ed_pvr_c1:
-            st.markdown("**✅ Go-verdict picks (AM)**")
+            st.markdown("**✅ Go signals (AM)**")
             if not _ed_gos:
-                st.caption("No Go-verdict picks in the AM read.")
+                st.caption("No Go signals in the AM read.")
             else:
                 for g in _ed_gos:
                     _tp     = g.get("today_pct")
@@ -8352,7 +8352,7 @@ elif page == "🔗 Risk Analysis":
     st.subheader("📉 Rate Sensitivity — How Your Holdings React to Rate Moves")
     st.caption(
         "TLT (20-yr Treasury ETF) falls when long rates rise. A negative TLT correlation "
-        "means the holding tends to DROP when rates rise (rate-sensitive, long-duration). "
+        "means the position tends to DROP when rates rise (rate-sensitive, long-duration). "
         "A positive correlation means it tends to RISE (rate beneficiary). "
         "TLT Corr is computed from 3-month daily return data; Sector Score is a structural "
         "sensitivity label (−1.0 = most rate-sensitive, +1.0 = most rate-resilient)."
@@ -8599,7 +8599,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                                     if st.button(
                                         "📊 Load Composite Scores",
                                         key=f"_def_load_comp_{_rtype}",
-                                        help="Fetches full Technical + Fundamental + Sentiment scores for each pick",
+                                        help="Fetches full Technical + Fundamental + Sentiment scores for each candidate",
                                     ):
                                         with st.spinner("Fetching composite scores…"):
                                             for _tc in _def_tickers:
@@ -10177,6 +10177,13 @@ elif page == "🥧 Portfolio Allocation":
 
             # Position table
             _tx_table_rows = []
+            _TX_ACTION_LABELS = {
+                "HARVEST":       "Harvest",
+                "WAIT":          "Wait",
+                "HOLD_FOR_LTCG": "Hold for LTCG",
+                "LTCG_ELIGIBLE": "LTCG Eligible",
+                "MONITOR":       "Watch",
+            }
             for _tr in _tax["rows"]:
                 _tx_table_rows.append({
                     "Ticker":         _tr["ticker"],
@@ -10187,17 +10194,17 @@ elif page == "🥧 Portfolio Allocation":
                     "Tax Today ($)":  _tr["tax_if_sold_today"],
                     "Tax at LTCG ($)": _tr["tax_if_ltcg"],
                     "Savings ($)":    _tr["tax_savings"],
-                    "Action":         _tr["action"],
+                    "Action":         _TX_ACTION_LABELS.get(_tr["action"], _tr["action"]),
                 })
             _tx_df = pd.DataFrame(_tx_table_rows)
 
             def _tx_row_style(row):
                 a = str(row.get("Action", ""))
-                if a == "HARVEST":
+                if a == "Harvest":
                     return ["background-color:rgba(74,158,255,0.10)"] * len(row)
-                if a == "WAIT":
+                if a == "Wait":
                     return ["background-color:rgba(0,200,81,0.10)"] * len(row)
-                if a == "HOLD_FOR_LTCG":
+                if a == "Hold for LTCG":
                     return ["background-color:rgba(255,187,51,0.07)"] * len(row)
                 return [""] * len(row)
 
@@ -17783,7 +17790,7 @@ elif page == "📜 Recommendations History":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("📜 Recommendations History")
     st.caption(
-        "Every pick Today's Brief has surfaced — captured at first sight. "
+        "Every signal Today's Brief has surfaced — captured at first sight. "
         "Cross-referenced with the Trade Journal to show what got acted on, "
         "what was missed, and how each played out. The substrate for spotting "
         "trends in your action discipline and the App's hit rate over time."
@@ -18309,7 +18316,7 @@ elif page == "📜 Recommendations History":
             f"""
 **Verdict** — the App's confidence at the moment the rec was first surfaced:
 - **✅ Confirmed** — composite cleared the Buy gate (≥ {COMPOSITE_BUY}) AND no conflicts. Highest signal weight; these are the "the App tells you to act" rows.
-- **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within {EARNINGS_IMMINENT_DAYS} days, etc.). The App surfaced the pick but flagged a watch-out.
+- **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within {EARNINGS_IMMINENT_DAYS} days, etc.). The App surfaced the signal but flagged a watch-out.
 - **❌ Conflicted** — hard conflict (composite says Hold/Sell while momentum says Buy, or earnings + signal conflict). Don't act on these.
 - **🔍 Unverified** — composite wasn't loaded for the ticker at surface time, so the App couldn't verify the multi-factor signal. *Treat these as momentum-only suggestions* — they need an Analysis page check before acting.
 
@@ -18613,7 +18620,7 @@ elif page == "📊 Predictive Analytics":
     # ── TAB 2 — Decision Quality ───────────────────────────────────────────────
     with _pa_tab2:
         st.caption(
-            "When the engine surfaced a pick and you passed, did you make the right call? "
+            "When the engine surfaced a signal and you passed, did you make the right call? "
             "Compares the alpha of recs you acted on vs recs you skipped."
         )
 
@@ -20480,7 +20487,7 @@ The Home brief is split into **offense** (left) and **defense** (right).
 - **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, mild negative news, a broad macro event to hold through.
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
-**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means a pick's conviction is unchanged from yesterday — continuity, not a fresh call.
+**Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
 
 **Freshness:** the "📌 Built at HH:MM ET" chip auto-refreshes the Brief roughly every 30 minutes on its own during market hours — you don't need to click "Refresh Signals" just to keep it current. It re-checks whatever's already scanned rather than running a brand-new scan, so it won't pick up a stock that was never scanned in the first place (see *how the app finds candidates* below). Click **🔒 Lock Setup** to freeze the Brief for the day if you don't want it changing under you after you've decided what to do.
 """
@@ -20508,7 +20515,7 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 > **scanned (~270)** → ranked by momentum → **finalists composite-scored** → cleared the gates → **recommended**
 
-**Data freshness gate:** picks require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the pick is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
+**Data freshness gate:** candidates require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the signal is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
@@ -20533,10 +20540,10 @@ A composite of **65 or higher** clears the Buy threshold. Momentum alone is *not
 **The bar for a *new* entry moves with the market tape.** Composite ≥ 65 is the baseline, but how strong a brand-new position must be depends on how much the market is helping you that day:
 
 - **Bull day** (S&P 500 up ≥ +0.5%): bar = **65**, up to **3** new picks. A rising tide assists a merely-good setup, so a solid "Buy" is worth initiating.
-- **Flat day** (S&P roughly −0.5% to +0.5%): bar jumps to **78**, capped at **1** pick. With no tailwind, a new name has to be strong enough to work *on its own* — a 67–77 "Buy" that would qualify on a bull day is held back here.
+- **Flat day** (S&P roughly −0.5% to +0.5%): bar jumps to **78**, capped at **1** entry. With no tailwind, a new name has to be strong enough to work *on its own* — a 67–77 "Buy" that would qualify on a bull day is held back here.
 - **Down day** (S&P down ≥ −0.5%): **no new entries** — the app defers initiating until the tape stabilises and focuses on protecting what you hold.
 
-This is why a name can show up as a Grow Today pick in the morning (bull open) and quietly drop off by the afternoon (tape gone flat): the *stock* didn't change — the bar it had to clear did. It's the same medium-term discipline as the loss protection below: don't chase risk the market isn't rewarding.
+This is why a name can show up in Grow Today in the morning (bull open) and quietly drop off by the afternoon (tape gone flat): the *stock* didn't change — the bar it had to clear did. It's the same medium-term discipline as the loss protection below: don't chase risk the market isn't rewarding.
 
 **"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy.
 """
@@ -20549,7 +20556,7 @@ The **verdict upgrade/downgrade expander** ("📈 What would change this signal?
 """
         )
 
-    with st.expander("🚦 Why a pick gets held back (the gates)", expanded=False):
+    with st.expander("🚦 Why a signal gets held back (the gates)", expanded=False):
         st.markdown(
             """
 When a name looks strong but isn't recommended, one of these gates fired — and the app shows you which:
@@ -20637,7 +20644,7 @@ The app's intelligence is computed live in your browser — so it can only reach
 
 - **🔴 Pre-market (~8:00 AM ET) — Protective alerts.** Re-checks every holding and emails you **only if there's a real same-day reduce decision**: a **stop breached**, a **deterioration EXIT**, or a **risk-off trim**. If nothing qualifies, you get **no email** — silence means "nothing to act on." It also won't nag: the same alert won't re-send day after day — only when the set of actions *changes*.
 
-- **📡 Mid-morning (~9:45 AM ET) — Market scan + buy list.** Runs the full sector scan in the background and saves it, so when you open the app your **buy candidates and new-pick ideas are already there** (stamped *"📡 from today's auto-scan"*) — no manual scan, no ~20-second wait. **It then emails you the high-conviction "New Positions to Initiate"** — the green *Go — Composite Confirms* setups only (no noise, no conflicting names) — so you can place the trade from your phone if you can't open the app. Each one lists the entry zone, suggested shares, and stop, with a reminder to **act only if the price is still in the entry zone**. Like the protective email, it's **exception-based**: if nothing clears the high-conviction bar (common on flat/down days), you get no email. (You can still hit **Refresh Signals** in-app any time to re-score on live prices.)
+- **📡 Mid-morning (~9:45 AM ET) — Market scan + buy list.** Runs the full sector scan in the background and saves it, so when you open the app your **buy candidates and new signals are already there** (stamped *"📡 from today's auto-scan"*) — no manual scan, no ~20-second wait. **It then emails you the high-conviction "New Positions to Initiate"** — the green *Go — Composite Confirms* setups only (no noise, no conflicting names) — so you can place the trade from your phone if you can't open the app. Each one lists the entry zone, suggested shares, and stop, with a reminder to **act only if the price is still in the entry zone**. Like the protective email, it's **exception-based**: if nothing clears the high-conviction bar (common on flat/down days), you get no email. (You can still hit **Refresh Signals** in-app any time to re-score on live prices.)
 
 - **🌙 After the close (~4:30 PM ET) — End of day.** Two things: **(1)** it saves a daily snapshot of your holdings so **"Today's P&L"** has an accurate prior-day baseline tomorrow — even on days you never opened the app. **(2)** If the **broad market actually fell sharply that day (about −3% or worse)**, it sends a brief **awareness** email showing roughly how far your book likely moved (your exposure × the drop) and your most-exposed names. That one is *awareness, not a directive* — pullback timing can't be predicted; the actionable de-risk, if warranted, comes in the next pre-market protective email.
 
@@ -20775,9 +20782,9 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
     with st.expander("📜 Recommendations History — the engine's report card", expanded=False):
         st.markdown(
             """
-The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every pick the app has surfaced, graded after the fact against what actually happened. It's the raw data the Monthly Intelligence Report narrates.
+The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every signal the app has surfaced, graded after the fact against what actually happened. It's the raw data the Monthly Intelligence Report narrates.
 
-- **The scorecard** matches each past recommendation to your trades to see whether you **acted** on it, then grades the outcome on **alpha** — its return *minus the market's* over the same window. (Beating the market in a down month is a win; trailing it in an up month isn't — raw return alone would credit or blame you for the market's move, not your pick.) It rolls up by conviction band and by cross-check verdict, and only grades picks old enough to have a meaningful outcome.
+- **The scorecard** matches each past recommendation to your trades to see whether you **acted** on it, then grades the outcome on **alpha** — its return *minus the market's* over the same window. (Beating the market in a down month is a win; trailing it in an up month isn't — raw return alone would credit or blame you for the market's move, not your selection.) It rolls up by conviction band and by cross-check verdict, and only grades picks old enough to have a meaningful outcome.
 - **🎯 Missed Opportunity** answers *"which names did I skip, and what did it cost?"* — names that surfaced as *New Positions to Initiate* but you never bought, ranked by how they did. To stay honest, magnitudes are shown **per $1,000** (you can't buy every name, so it never claims "your portfolio would have gained X%"). Names the app *steered you away from* (the awareness only "more buy candidates") are excluded — skipping those was correct, not a miss.
 - **The flow chart** visualises the same funnel: everything surfaced → acted vs. not-acted → win / loss / flat.
 
