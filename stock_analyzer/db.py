@@ -1888,15 +1888,16 @@ def save_sentiment_llm_cache(
         return False
     try:
         from datetime import datetime, timezone
+        import json as _json
         _client().table("sentiment_llm_cache").upsert(
             {
                 "ticker":     t,
                 "score_date": score_date,
-                "headlines":  headlines,
+                "headlines":  _json.loads(_json.dumps(headlines)),  # ensure JSON-safe
                 "avg_sent":   round(float(avg_sent), 6),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="ticker,score_date",
+            }
+            # no on_conflict: PostgREST uses PRIMARY KEY (ticker, score_date) automatically
         ).execute()
         return True
     except Exception:
