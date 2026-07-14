@@ -1419,15 +1419,15 @@ with st.sidebar:
             ("Compare",  "⚖️ Compare",                ":material/compare_arrows:"),
             ("Watchlist","📋 Watchlist",               ":material/bookmarks:"),
             ("Macro",    "🌐 Macro",                    ":material/public:"),
+            ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
         ]),
         ("PORTFOLIO", [
-            ("Portfolio Allocation", "📊 Portfolio Allocation", ":material/pie_chart:"),
+            ("Portfolio Allocation", "🥧 Portfolio Allocation", ":material/pie_chart:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Alerts & Actions", "⚠️ Alerts & Actions",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
             ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
             ("Recommendations", "📜 Recommendations History",  ":material/history:"),
-            ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
         ]),
         ("ALERTS", [
             ("Catalyst Watch",    "🔔 Catalyst Watch",    ":material/bolt:"),
@@ -4613,7 +4613,7 @@ if page == "🏠 Home":
             f"{'🔴' if _act_n > 0 else '⚪'} {_act_n} urgent action{'s' if _act_n != 1 else ''}<br>"
             f"🟢 {_grow_n} growth setup{'s' if _grow_n != 1 else ''}<br>"
             f"🟡 {_review_n} to review<br>"
-            f"🔧 {_tuneup_n} to tune up"
+            f"🔧 {_tuneup_n} to maintain"
             f"</div>"
             f"</div>",
             unsafe_allow_html=True,
@@ -4846,6 +4846,10 @@ if page == "🏠 Home":
 
         if bear_msg:
             st.caption(f"🛡️ {bear_msg}")
+            st.caption(
+                "Tone flips to Neutral or Growth once SPY recovers above its trend line "
+                "and volatility recedes — check today's tone status on the 🌐 Macro page."
+            )
             return
 
 
@@ -8308,8 +8312,8 @@ elif page == "🔗 Risk Analysis":
         "TLT (20-yr Treasury ETF) falls when long rates rise. A negative TLT correlation "
         "means the holding tends to DROP when rates rise (rate-sensitive, long-duration). "
         "A positive correlation means it tends to RISE (rate beneficiary). "
-        "TLT Corr is computed from 3-month daily return data; Sector Score is the "
-        "macro.RATE_SENSITIVITY structural label (−1.0 = most sensitive, +1.0 = most beneficial)."
+        "TLT Corr is computed from 3-month daily return data; Sector Score is a structural "
+        "sensitivity label (−1.0 = most rate-sensitive, +1.0 = most rate-resilient)."
     )
     _tlt_df = _cached_tlt("3mo")
     _rs_rows = rate_sensitivity_per_ticker(port_df, held_data, _tlt_df if not _tlt_df.empty else None)
@@ -8385,12 +8389,12 @@ elif page == "🔗 Risk Analysis":
         ):
             st.markdown(
                 f"""
-**Two thresholds, both static** — defined in `stock_analyzer/constants.py`:
+**Two thresholds, both static:**
 
 | Threshold | Value | Meaning |
 |---|---|---|
-| `PORTFOLIO_BETA_ELEVATED` | **{PORTFOLIO_BETA_ELEVATED:.1f}** | Soft warning — Risk Advisor recommends trimming |
-| `PORTFOLIO_BETA_CEILING`  | **{PORTFOLIO_BETA_CEILING:.1f}** | Hard ceiling — trim required, do not add high-beta names |
+| Soft warning | **{PORTFOLIO_BETA_ELEVATED:.1f}** | Risk Advisor recommends trimming |
+| Hard ceiling | **{PORTFOLIO_BETA_CEILING:.1f}** | Trim required — do not add high-beta names |
 
 **Why these specific numbers?**
 
@@ -8400,8 +8404,6 @@ elif page == "🔗 Risk Analysis":
 **Why static, not regime-adjusted?**
 
 The app deliberately keeps target beta fixed across regimes. In risk-off conditions, the response is to **trim harder toward the same target**, not to lower the target itself. A moving target makes it impossible to evaluate whether trades improved the risk profile. Investment policy, not market-timing.
-
-**To change these values**, edit `stock_analyzer/constants.py` and update `project_decision_thresholds.md` with the rationale — they are treated as policy decisions, not code tuning.
 """
             )
 
@@ -8920,8 +8922,8 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — PORTFOLIO ALLOCATION
 # ═════════════════════════════════════════════════════════════════════════════
-elif page == "📊 Portfolio Allocation":
-    st.title("📊 Portfolio Allocation")
+elif page == "🥧 Portfolio Allocation":
+    st.title("🥧 Portfolio Allocation")
     _pa_pdf = st.session_state.get("_port_df_enriched")
     _pa_hd  = st.session_state.get("_last_held_data")
     if _pa_pdf is None or _pa_hd is None or (hasattr(_pa_pdf, "empty") and _pa_pdf.empty):
@@ -8935,7 +8937,7 @@ elif page == "📊 Portfolio Allocation":
     h_rets              = holding_returns(held_data)
     _risk_advisor_recs  = st.session_state.get("_risk_advisor_recs_cache") or []
 
-    _pa_tab1, _pa_tab2 = st.tabs(["📊 Portfolio Allocation", "📈 Analytics"])
+    _pa_tab1, _pa_tab2 = st.tabs(["🥧 Portfolio Allocation", "📈 Analytics"])
     with _pa_tab1:
         # Charts row
         ch1, ch2 = st.columns([1, 1])
@@ -12375,7 +12377,7 @@ elif page == "📈 Analysis":
         rows.append({
             "Ticker":           ticker,
             "Price":            f"${price:.2f}" if price else "N/A",
-            "Score":            r["total"] if _sc_fund_ok else "—",
+            "Composite Score":  r["total"] if _sc_fund_ok else "—",
             "Signal":           (f"{r['rec']['icon']} {r['rec']['label']}"
                                  if _sc_fund_ok else "🚫 Withheld"),
             "Position / Entry": _sc_position,
@@ -12406,8 +12408,8 @@ elif page == "📈 Analysis":
         return "color:#ff4444"
 
     st.dataframe(
-        summary_df.style.map(_sig, subset=["Signal"]).map(_sc, subset=["Score"])
-        .format({"Score": lambda v: f"{v:.1f}" if isinstance(v, (int, float)) else str(v)}),
+        summary_df.style.map(_sig, subset=["Signal"]).map(_sc, subset=["Composite Score"])
+        .format({"Composite Score": lambda v: f"{v:.1f}" if isinstance(v, (int, float)) else str(v)}),
         width='stretch',
     )
 
@@ -12500,9 +12502,9 @@ elif page == "📈 Analysis":
                     f"<span style='color:#888;font-size:0.85em'> "
                     f"(<abbr title='{_tip('RSI').split(chr(10))[0]}' style='cursor:help'>Technical</abbr> "
                     f"{r['t_score']:.0f} × 25% + "
-                    f"<abbr title='Revenue &amp; earnings growth · margins · debt/equity' style='cursor:help'>BQ</abbr> "
+                    f"<abbr title='Revenue &amp; earnings growth · margins · debt/equity' style='cursor:help'>Business Quality</abbr> "
                     f"{r.get('bq_score', r['f_score']):.0f} × 35% + "
-                    f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Val</abbr> "
+                    f"<abbr title='{_tip('FCF Yield').split(chr(10))[0]}' style='cursor:help'>Valuation</abbr> "
                     f"{r.get('val_score', 50):.0f} × 30% + "
                     f"Sentiment {r['s_score']:.0f} × 10%)"
                     f"</span><br>{rec['rationale']}"
@@ -18263,9 +18265,8 @@ elif page == "📊 Predictive Analytics":
     st.title("📊 Predictive Analytics")
     st.caption(
         "Your personal edge map — built from every recommendation this app has "
-        "surfaced and how each played out. Five lenses on the same dataset: "
-        "score calibration, decision quality, signal type breakdown, sector alpha, "
-        "and (coming soon) full factor attribution."
+        "surfaced and how each played out. Four live lenses: "
+        "score calibration, decision quality, signal type breakdown, and sector alpha."
     )
 
     if not db.has_db():
@@ -18304,7 +18305,7 @@ elif page == "📊 Predictive Analytics":
             st.session_state.pop("_pac_enriched", None)
 
     if st.session_state.get("_pac_enriched") is None:
-        with st.spinner("Loading all-time recommendations…"):
+        with st.spinner("Loading all-time recommendations and pricing data — this may take a moment…"):
             _pac_recs_df   = db.load_recommendations()
             _pac_trades_df = st.session_state.get("trades_df")
             if _pac_trades_df is None:
@@ -18420,13 +18421,12 @@ elif page == "📊 Predictive Analytics":
             st.caption(f"ℹ️ {_pd['text']}")
     st.divider()
 
-    # ── 5 tabs ─────────────────────────────────────────────────────────────────
-    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5 = st.tabs([
+    # ── 4 live tabs ─────────────────────────────────────────────────────────────
+    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4 = st.tabs([
         "🎯 Score Calibration",
         "⚖️ Decision Quality",
         "🏷️ Signal Breakdown",
         "🌐 Sector Alpha",
-        "📊 Alpha Attribution",
     ])
 
     # ── TAB 1 — Score Calibration ─────────────────────────────────────────────
@@ -18821,18 +18821,15 @@ elif page == "📊 Predictive Analytics":
                 f"No sector cells have ≥ {PREDICTIVE_MIN_BAND_N - 2} outcomes yet."
             )
 
-    # ── TAB 5 — Alpha Attribution (placeholder) ───────────────────────────────
-    with _pa_tab5:
-        st.subheader("📊 Alpha Attribution")
+    # ── Alpha Attribution — activates after 180 days of snapshots ───────────
+    with st.expander("📊 Alpha Attribution — activates after 180 days of snapshots", expanded=False):
         st.info(
             "**Coming once you have 6+ months of daily portfolio snapshots.**  \n\n"
             "Factor attribution decomposes your realized alpha into the dimensions "
             "that actually drove it: which sectors, which hold-duration bands "
             "(< 30 days / 30–90 days / 90+ days), and which score tiers contributed "
             "most — and whether your capital allocation *follows* your edge or works "
-            "against it.  \n\n"
-            "This tab activates automatically once `daily_snapshots` has ≥ 180 days "
-            "of coverage."
+            "against it."
         )
         try:
             _pa_snaps = db.load_daily_snapshots()
@@ -20535,7 +20532,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags.
-- **📊 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
+- **🥧 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing.
 - **⚠️ Alerts & Actions** — active alerts, custom price alerts, rebalancing recommendations, and the Diversification Advisor.
 - **📒 Trade Journal** — your logged trades (the source of truth for holdings, P&L, position age); log by hand or **📥 import a Robinhood statement**.
