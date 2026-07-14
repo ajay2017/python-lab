@@ -3055,7 +3055,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 1
+    _SYNTH_SCHEMA_VER = 2  # bumped: mover one_liner text changed (Breakout today)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
