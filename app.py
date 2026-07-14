@@ -5095,7 +5095,7 @@ if page == "🏠 Home":
         # New picks
         if new_picks:
             st.markdown(
-                "<div style='background:#166534;border-left:4px solid #4ade80;"
+                "<div style='background:#15803d;border-left:4px solid #4ade80;"
                 "border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
                 "<span style='font-size:1em;font-weight:700;color:#f9fafb'>"
                 "🆕 New Positions to Initiate</span>"
@@ -6437,6 +6437,7 @@ if page == "🏠 Home":
                 "All scanner candidates are already reflected in Grow Today above "
                 "(picks, Filtered Out, or pending)."
             )
+        else:
             for _db_buy in _db_buys_unique:
                 _xref       = _db_buy.get("xref", {})
                 _reconciled = _xref.get("verdict_reconciled", {}) or {}
