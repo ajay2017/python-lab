@@ -191,6 +191,74 @@ _BRAND_LOGO_PATH = "assets/drishta_logo.png"
 _BRAND_PAGE_ICON = _BRAND_LOGO_PATH if os.path.exists(_BRAND_LOGO_PATH) else "👁"
 st.set_page_config(page_title="DRISHTA · Beyond Noise", page_icon=_BRAND_PAGE_ICON, layout="wide")
 
+# ── Cold-load overlay ─────────────────────────────────────────────────────────
+# Shown only on the first Home visit (synth cache miss). Pure CSS — zero JS,
+# zero Python overhead on warm reruns. position:fixed covers the full viewport
+# regardless of where the st.empty() placeholder sits in the page flow.
+# Radar metaphor fits the "DRISHTA = sight / Beyond Noise" brand.
+# Skeleton tiles mirror the real metric cards below (portfolio value, P&L, etc.)
+# so the layout doesn't jump when data loads.
+_DRISHTA_LOADING_HTML = """
+<style>
+  #_dr_ov {
+    position:fixed; inset:0; background:rgba(14,17,23,.97);
+    z-index:99999; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:18px;
+  }
+  #_dr_ov .dr-brand {
+    font-size:11px; letter-spacing:.28em; text-transform:uppercase;
+    color:#94a3b8; margin-bottom:-10px;
+  }
+  #_dr_ov .dr-tag {
+    font-size:13px; color:#475569; letter-spacing:.08em; margin-top:-2px;
+  }
+  @keyframes _drspin { to { transform:rotate(360deg); } }
+  .dr-sw { transform-origin:70px 70px; animation:_drspin 2.4s linear infinite; }
+  @keyframes _drping { 0%,100%{opacity:0} 45%,55%{opacity:1} }
+  .dr-p1 { animation:_drping 2.4s .55s infinite; }
+  .dr-p2 { animation:_drping 2.4s 1.35s infinite; }
+  @keyframes _drshim {
+    from { background-position:-400px 0; }
+    to   { background-position: 400px 0; }
+  }
+  .dr-sk {
+    background:linear-gradient(90deg,#161b27 25%,#1e2638 50%,#161b27 75%);
+    background-size:800px 100%;
+    animation:_drshim 1.8s ease-in-out infinite;
+    border-radius:6px;
+  }
+  .dr-tiles { display:flex; gap:12px; }
+  .dr-tile  { width:110px; height:58px; }
+  .dr-strip { width:360px; height:34px; }
+  .dr-card  { width:360px; height:70px; }
+</style>
+<div id="_dr_ov">
+  <span class="dr-brand">DRISHTA</span>
+  <svg width="140" height="140" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="70" cy="70" r="64" fill="none" stroke="#1e3554" stroke-width="1"/>
+    <circle cx="70" cy="70" r="42" fill="none" stroke="#1e3554" stroke-width="1"/>
+    <circle cx="70" cy="70" r="20" fill="none" stroke="#1e3554" stroke-width="1"/>
+    <line x1="70" y1="6"  x2="70"  y2="134" stroke="#1e3554" stroke-width=".5"/>
+    <line x1="6"  y1="70" x2="134" y2="70"  stroke="#1e3554" stroke-width=".5"/>
+    <g class="dr-sw">
+      <path d="M70,70 L70,6 A64,64 0 0,1 134,70 Z" fill="rgba(34,211,238,.07)"/>
+      <line x1="70" y1="70" x2="70" y2="6" stroke="#22d3ee" stroke-width="1.5" stroke-linecap="round"/>
+    </g>
+    <circle class="dr-p1" cx="95" cy="38" r="2.5" fill="#22d3ee"/>
+    <circle class="dr-p2" cx="48" cy="88" r="2.5" fill="#22d3ee"/>
+    <circle cx="70" cy="70" r="2.5" fill="#22d3ee"/>
+  </svg>
+  <span class="dr-tag">Scanning markets &middot; Building intelligence</span>
+  <div class="dr-tiles">
+    <div class="dr-sk dr-tile"></div>
+    <div class="dr-sk dr-tile"></div>
+    <div class="dr-sk dr-tile"></div>
+  </div>
+  <div class="dr-sk dr-strip"></div>
+  <div class="dr-sk dr-card"></div>
+</div>
+"""
+
 # ── Global UI theme ──────────────────────────────────────────────────────────
 # Injected once per page load. config.toml sets the base dark palette;
 # this block handles component-level overrides that config.toml can't reach.
@@ -1882,7 +1950,7 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
         return None
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_all(ticker: str, period: str = "6mo") -> dict:
     """Thin Streamlit-cached wrapper over bundle_loader.load_bundle (the shared
     pure pipeline, also used by the headless email-alerts cron). Supplies the
@@ -2510,7 +2578,10 @@ if page == "🏠 Home":
             pass
 
     held_data: dict = {}
-    with st.spinner("Loading full analysis…"):
+    _load_slot = st.empty()
+    if st.session_state.get("_home_synth_cache") is None and held_tickers:
+        _load_slot.markdown(_DRISHTA_LOADING_HTML, unsafe_allow_html=True)
+    try:
         _hd_results = _parallel_load_all(held_tickers)
         # Position age (calm-advisor / settling grace): days since the OLDEST
         # still-held lot was opened, via FIFO replay of the trade journal. None
@@ -2543,6 +2614,8 @@ if page == "🏠 Home":
                     bundle["days_since_last_buy"] = None
                     bundle["material_add_age_days"] = None
                 held_data[t] = bundle
+    finally:
+        _load_slot.empty()
 
     # Full scored view is ready — clear the instant snapshot (the Command Center
     # below supersedes it) and mark the cold load done so warm reruns skip the
