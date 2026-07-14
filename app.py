@@ -6127,7 +6127,7 @@ if page == "🏠 Home":
                             trigger="RECOMMENDATION",
                             signal_context=(f"{_act_label}: {_act_text}")[:140],
                             followed_intent="yes",
-                            notes=(f"Trim per Daily Brief — {_act_text}")[:240],
+                            notes=(f"Trim per Today's Brief — {_act_text}")[:240],
                             key_suffix=f"trimlog_{_card_idx}",
                             label=f"📒 Log this trim ({int(_trim_sh_f)} sh {_trim_tkr})",
                         )
@@ -8098,7 +8098,7 @@ elif page == "🔗 Risk Analysis":
                 if _posture["armed"]:
                     st.warning(
                         "Both your book fragility and the market regime are elevated — the "
-                        "**Daily Brief** is surfacing risk-off de-risk suggestions for your "
+                        "**Today's Brief** is surfacing risk-off de-risk suggestions for your "
                         "highest-beta names. This dial only shows the posture; act from there."
                     )
             st.caption(
@@ -9515,7 +9515,7 @@ elif page == "🥧 Portfolio Allocation":
                         f"margin-bottom:4px'>⚠️ NOT SHOWN AS ADDS</div>"
                         f"<div style='font-size:0.82em;color:#cbd5e1'>"
                         f"<b>{_supp_names}</b> {'also have' if _ni_opps else 'have'} positive news, but they're under a "
-                        f"<b>Reduce / Exit</b> call on the Daily Brief. The deterioration "
+                        f"<b>Reduce / Exit</b> call on Today's Brief. The deterioration "
                         f"signal leads the composite score, so treat the upbeat headline as "
                         f"context — not a reason to add.</div></div>",
                         unsafe_allow_html=True,
@@ -14115,7 +14115,7 @@ elif page == "📋 Watchlist":
 
     if _wl_brief_offline:
         st.warning(
-            "⚠ **Daily Briefing offline** — sector-overlap and active-risk-alert gates "
+            "⚠ **Today's Brief offline** — sector-overlap and active-risk-alert gates "
             "on ENTER_NOW recommendations cannot run. The Watchlist will still show "
             "stock-level signals, but coordination with Grow Today / Risk Advisor is "
             "currently disabled. Visit the Portfolio page first to rebuild the briefing."
