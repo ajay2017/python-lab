@@ -543,6 +543,13 @@ DATA_YF_REQUEST_TIMEOUT_SEC = 20
 # policy flavour (stale data drives the shown signals); adjustable.
 BUNDLE_CACHE_MAX_AGE_DAYS = 5
 
+# Max fundamentals age (days) allowed for a new-position recommendation.
+# Older fundamentals can make a deteriorating ticker appear composite-healthy.
+# More conservative than FUNDAMENTALS_CACHE_MAX_AGE_DAYS (7) which governs
+# held-position display — new-position recs carry higher trust expectations.
+# Investment-policy constant: Opus review before changing.
+GROW_TODAY_MAX_FUND_AGE_DAYS = 2
+
 # Price cross-check tolerances. The cross-check compares the live-price primary
 # (Finnhub, real-time) against an INDEPENDENT validator (yfinance, ~15-min
 # delayed). Because of that latency the two checks have different strictness:

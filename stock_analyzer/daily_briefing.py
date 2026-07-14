@@ -61,6 +61,7 @@ from stock_analyzer.constants import (
     GROW_MAX_PICKS_BULL,
     GROW_MAX_PICKS_DEFAULT,
     GROW_CANDIDATE_OVERFETCH,
+    GROW_TODAY_MAX_FUND_AGE_DAYS,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -723,6 +724,34 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _comp_data       = (composites or {}).get(ticker, {})
             _composite_score = _f(_comp_data.get("total")) if _comp_data else None
             _composite_label = str((_comp_data.get("rec") or {}).get("label", "")) if _comp_data else ""
+
+            # Staleness gate: if the bundle was served from the Supabase cache
+            # fallback (stale_as_of is not None), the composite could reflect data
+            # up to BUNDLE_CACHE_MAX_AGE_DAYS (5) old. That is too stale to back
+            # a new-position recommendation — a deteriorating ticker can appear
+            # composite-healthy on 5-day-old fundamentals and then score Sell on a
+            # fresh Analysis fetch minutes later (the INTC incident, 2026-07-14).
+            if _comp_data.get("stale_as_of") is not None:
+                composite_unavailable.append({
+                    "ticker":         ticker,
+                    "sector":         sector,
+                    "momentum_score": _f(row.get("Score", 0)),
+                })
+                continue
+
+            # Fundamentals freshness gate: new-position recs require recent
+            # fundamental data. fund_cache_age_days = None means a fresh yfinance
+            # .info fetch was used, which always passes. Stale fundamentals (older
+            # than GROW_TODAY_MAX_FUND_AGE_DAYS) can distort the composite enough
+            # to flip a Sell ticker to a Buy recommendation.
+            _fund_age = _comp_data.get("fund_cache_age_days")
+            if _fund_age is not None and _fund_age > GROW_TODAY_MAX_FUND_AGE_DAYS:
+                composite_unavailable.append({
+                    "ticker":         ticker,
+                    "sector":         sector,
+                    "momentum_score": _f(row.get("Score", 0)),
+                })
+                continue
 
             # Fundamentals gate: if the composite was computed on a fabricated
             # neutral-50 fundamental (no real data from any source), the verdict
