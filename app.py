@@ -20565,9 +20565,11 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags.
+- **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
+- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Four live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
 - **🥧 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing.
-- **⚠️ Alerts & Actions** — active alerts, custom price alerts, rebalancing recommendations, and the Diversification Advisor.
+- **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.
 - **📒 Trade Journal** — your logged trades (the source of truth for holdings, P&L, position age); log by hand or **📥 import a Robinhood statement**.
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
