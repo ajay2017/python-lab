@@ -2581,41 +2581,38 @@ if page == "🏠 Home":
     _load_slot = st.empty()
     if st.session_state.get("_home_synth_cache") is None and held_tickers:
         _load_slot.markdown(_DRISHTA_LOADING_HTML, unsafe_allow_html=True)
-    try:
-        _hd_results = _parallel_load_all(held_tickers)
-        # Position age (calm-advisor / settling grace): days since the OLDEST
-        # still-held lot was opened, via FIFO replay of the trade journal. None
-        # when there's no journal for the ticker — which must NOT silence
-        # management (classify_position_state treats None as "not settling").
-        # days_since_last_buy = age of the NEWEST still-held lot — i.e. how
-        # recently the user last added shares. Used to cool down repeat
-        # "add-to-winner" nudges right after the user acted on one (the PATH
-        # case: keep recommending an add the user already executed). None when
-        # there's no journal — then no cooldown (calm, not blind).
-        _hd_trades = st.session_state.get("trades_df")
-        for t in held_tickers:
-            bundle = _hd_results.get(t)
-            if bundle is None:
-                _why = st.session_state.get("_load_all_errs", {}).get(t, "")
-                st.warning(f"Could not load {t}" + (f" — {_why}" if _why else ""))
-            else:
-                try:
-                    _lots = _build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not None else []
-                    _ages = [l["days_held"] for l in _lots]
-                    bundle["position_age_days"]   = max(_ages) if _ages else None
-                    bundle["days_since_last_buy"] = min(_ages) if _ages else None
-                    # Days since the most recent MATERIAL add (≥ threshold % of
-                    # the position). Re-anchors the deterioration peak window so
-                    # averaging down doesn't measure drawdown from a stale
-                    # pre-add high (false EXIT). None when no qualifying add.
-                    bundle["material_add_age_days"] = exit_advisor.material_add_window_days(_lots)
-                except Exception:
-                    bundle["position_age_days"]   = None
-                    bundle["days_since_last_buy"] = None
-                    bundle["material_add_age_days"] = None
-                held_data[t] = bundle
-    finally:
-        _load_slot.empty()
+    _hd_results = _parallel_load_all(held_tickers)
+    # Position age (calm-advisor / settling grace): days since the OLDEST
+    # still-held lot was opened, via FIFO replay of the trade journal. None
+    # when there's no journal for the ticker — which must NOT silence
+    # management (classify_position_state treats None as "not settling").
+    # days_since_last_buy = age of the NEWEST still-held lot — i.e. how
+    # recently the user last added shares. Used to cool down repeat
+    # "add-to-winner" nudges right after the user acted on one (the PATH
+    # case: keep recommending an add the user already executed). None when
+    # there's no journal — then no cooldown (calm, not blind).
+    _hd_trades = st.session_state.get("trades_df")
+    for t in held_tickers:
+        bundle = _hd_results.get(t)
+        if bundle is None:
+            _why = st.session_state.get("_load_all_errs", {}).get(t, "")
+            st.warning(f"Could not load {t}" + (f" — {_why}" if _why else ""))
+        else:
+            try:
+                _lots = _build_open_lots(t, _hd_trades, _today_et()) if _hd_trades is not None else []
+                _ages = [l["days_held"] for l in _lots]
+                bundle["position_age_days"]   = max(_ages) if _ages else None
+                bundle["days_since_last_buy"] = min(_ages) if _ages else None
+                # Days since the most recent MATERIAL add (≥ threshold % of
+                # the position). Re-anchors the deterioration peak window so
+                # averaging down doesn't measure drawdown from a stale
+                # pre-add high (false EXIT). None when no qualifying add.
+                bundle["material_add_age_days"] = exit_advisor.material_add_window_days(_lots)
+            except Exception:
+                bundle["position_age_days"]   = None
+                bundle["days_since_last_buy"] = None
+                bundle["material_add_age_days"] = None
+            held_data[t] = bundle
 
     # Full scored view is ready — clear the instant snapshot (the Command Center
     # below supersedes it) and mark the cold load done so warm reruns skip the
@@ -3826,6 +3823,9 @@ if page == "🏠 Home":
                 "_daily_brief_offline":      st.session_state.get("_daily_brief_offline", False),
             },
         }
+    # Overlay covers the full synthesis (data load + brief build). Clear here
+    # so content appears in one shot rather than progressively after load_all.
+    _load_slot.empty()
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
