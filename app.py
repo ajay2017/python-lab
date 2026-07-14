@@ -7648,6 +7648,7 @@ elif page == "⚠️ Alerts & Actions":
                         f"📝 Log trade for {ticker}",
                         key=f"log_btn_{ticker}_{act['type']}",
                         use_container_width=True,
+                        type="primary",
                     ):
                         st.session_state["_tj_prefill"] = {
                             "ticker":  ticker,
@@ -20885,10 +20886,18 @@ elif page == "🧠 AI Insights":
             # Surface HIGH-priority alerts inline so they can't be missed
             if _beh_highs:
                 for _bhi in _beh_highs:
-                    st.warning(
+                    _bw_col, _bw_btn = st.columns([4, 1])
+                    _bw_col.warning(
                         f"**{_bhi['title']}** — "
                         "See Trade Journal → 🧠 Behavioral Analytics for full coaching."
                     )
+                    if _bw_btn.button(
+                        "📒 Open",
+                        key=f"beh_nav_{_bhi.get('insight_type','x')}",
+                        help="Go to Trade Journal → Behavioral Analytics",
+                    ):
+                        st.session_state["_pending_page"] = "📒 Trade Journal"
+                        st.rerun()
 
             st.caption("Full analysis, coaching cards, and trigger breakdown: Trade Journal → 🧠 Behavioral Analytics")
             st.markdown("---")
