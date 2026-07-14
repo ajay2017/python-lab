@@ -5203,7 +5203,7 @@ if page == "🏠 Home":
                 f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
                 f"<span style='color:#f9fafb;font-weight:700'>{_ga['ticker']}</span>"
                 f"<span style='color:#9ca3af;font-size:0.8em'>{_ga['signal']} · "
-                f"Score {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
+                f"Momentum {_ga['score']:.0f}/100 · P&L {_ga['pnl_pct']:+.1f}%"
                 + (f" 🔥 Sector leading" if _ga.get("is_leader") else "")
                 + f"</span>"
                 + _ga_steady_chip
@@ -7679,7 +7679,7 @@ elif page == "⚠️ Alerts & Actions":
         add_recs    = [r for r in div_recs if r["type"] == "ADD"]
 
         if reduce_recs:
-            st.markdown("### 🔻 Reduce / Rebalance")
+            st.subheader("🔻 Reduce / Rebalance")
             for rec in reduce_recs:
                 urgency_color = "#ff4444" if rec["urgency"] == "high" else "#ffbb33"
                 if rec["type"] == "REDUCE":
@@ -7725,7 +7725,7 @@ elif page == "⚠️ Alerts & Actions":
                         )
 
         if add_recs:
-            st.markdown("### ➕ Add for Diversification")
+            st.subheader("➕ Add for Diversification")
             for rec in add_recs:
                 with st.container(border=True):
                     ac1, ac2 = st.columns([3, 1])
@@ -7928,7 +7928,7 @@ elif page == "🔗 Risk Analysis":
         )
     # ── Portfolio Risk Dashboard ──────────────────────────────────────────
     if _port_risk:
-        st.markdown("### Portfolio Risk Dashboard")
+        st.subheader("Portfolio Risk Dashboard")
         _rfr_display = _get_rfr()
         st.caption(
             "All metrics derived from 6-month weighted daily portfolio returns. "
@@ -8311,7 +8311,7 @@ elif page == "🔗 Risk Analysis":
 
     # ── Rate Sensitivity Table ────────────────────────────────────────────
     st.divider()
-    st.markdown("### 📉 Rate Sensitivity — How Your Holdings React to Rate Moves")
+    st.subheader("📉 Rate Sensitivity — How Your Holdings React to Rate Moves")
     st.caption(
         "TLT (20-yr Treasury ETF) falls when long rates rise. A negative TLT correlation "
         "means the holding tends to DROP when rates rise (rate-sensitive, long-duration). "
@@ -8379,7 +8379,7 @@ elif page == "🔗 Risk Analysis":
     # ── Risk Action Plan ──────────────────────────────────────────────────
     if _risk_advisor_recs:
         st.divider()
-        st.markdown("### 📋 Risk Action Plan")
+        st.subheader("📋 Risk Action Plan")
         st.caption(
             "Synthesises your 7 portfolio risk metrics into ranked, evidence-backed actions. "
             "Each card shows the problem with dollar impact, which specific tickers are driving it, "
@@ -8650,7 +8650,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
 
     # ── Stress Testing ────────────────────────────────────────────────────
     st.divider()
-    st.markdown("### 🔥 Stress Testing & Scenario Analysis")
+    st.subheader("🔥 Stress Testing & Scenario Analysis")
     st.caption(
         "Estimates portfolio impact under market shock scenarios using each position's "
         "individual beta vs SPY. Historical scenarios apply sector-specific drawdowns "
