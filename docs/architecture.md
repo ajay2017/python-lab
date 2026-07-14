@@ -184,6 +184,8 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `CROSS_ASSET_STRESS_BRIEF_SCORE` | 2 | Aggregate stress score (count of stressed signals among those with data) at/above which Today's Brief shows the cross-asset one-liner |
 | `NEWS_SENTIMENT_BULLISH_THRESHOLD` / `_BEARISH_THRESHOLD` | 0.60 / 0.40 | Finnhub news-sentiment (F-74) label cutoffs: bullish_pct ≥ 0.60 → 🟢 Bullish, < 0.40 → 🔴 Bearish, between → 🟡 Neutral. Awareness-only |
 | `NEWS_SENTIMENT_SHIFT_ALERT_BULLISH` / `_SHIFT_BUZZ_MIN` | 0.40 / 1.0 | Brief held-position shift card fires when bullish_pct < 0.40 AND buzz_score > 1.0 (both required — low-buzz bearishness is thin/stale, not alerted) |
+| `NEWS_SENTIMENT_CRITICAL` | −0.25 | VADER compound threshold for a qualifying "critical news" headline — compound ≤ this AND tier ≤ 2 is required per headline before it counts toward the Critical News Act Today card. Hard gate |
+| `NEWS_CRITICAL_MIN_HEADLINES` | 2 | Min qualifying headlines per held ticker (compound ≤ `NEWS_SENTIMENT_CRITICAL`, tier ≤ 2) before the Critical News Act Today card fires. Prevents a single borderline VADER score from triggering a stop-tighten directive. Hard gate. |
 | `ANALYST_COVERAGE_FRESH_DAYS` | 30 | Analyst Coverage (F-154) — a saved report stays in the "recent" Ideas Inbox view this many days. Awareness-layer knob, not a gate |
 | `ANALYST_MIN_UPSIDE_PCT` | 15 | Reserved for the Phase-2 Brief chip (avg-PT upside to surface a held-name analyst nudge); UNUSED in Phase 1 |
 | `ANALYST_CONSENSUS_STRONG_BUY_FRAC` / `_BUY_FRAC` / `_SELL_FRAC` | 0.80 / 0.50 / 0.50 | Consensus **label** boundaries (fractions of rated firms) that classify the firm rating distribution into Strong Buy / Buy / Sell / Hold / Mixed. **Display-only classifications — NOT decision thresholds; never gate or score** |
@@ -1264,6 +1266,7 @@ flowchart LR
 | F-176 | F-1 Earnings Thesis Checkpoint | `thesis_advisor.py` | Sonnet 4.6 | On-demand (Positions tab CTA, gated on a recent `earnings_results` row) | 300 tok | DB `thesis_reviews` |
 | — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
 | — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
+| — | VADER rescorer (`rescore_news_items_llm`) | `news_intelligence.py` | Haiku | Home load + Analysis page (automatic, per held ticker set) | Small JSON list | Session, keyed by day + sorted-ticker-set. Suppress-only: can only raise a VADER compound score, never lower; removes false-positive negatives from financial news. temperature=0, 8s timeout, VADER fallback on any failure. Never creates a new Act Today card or flips a buy-candidate verdict. |
 
 ### 12.3 Prompt construction pattern
 
