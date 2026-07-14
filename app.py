@@ -5094,11 +5094,17 @@ if page == "🏠 Home":
 
         # New picks
         if new_picks:
-            st.markdown("**🆕 New Positions to Initiate**")
-            st.caption(
+            st.markdown(
+                "<div style='background:#166534;border-left:4px solid #4ade80;"
+                "border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                "<span style='font-size:1em;font-weight:700;color:#f9fafb'>"
+                "🆕 New Positions to Initiate</span>"
+                "<div style='color:#bbf7d0;font-size:0.82em;margin-top:4px'>"
                 "Composite score, sector diversity, concentration limits, macro event "
-                "check, and act-today conflicts all cleared. The app considers these "
-                "ready to enter within your sizing rules."
+                "check, and act-today conflicts all cleared. "
+                "The app considers these ready to enter within your sizing rules."
+                "</div></div>",
+                unsafe_allow_html=True,
             )
         _ac_cov_map = _cached_analyst_coverage_recent()   # hoisted; one query, annotation-only
         for _gp in new_picks:
@@ -6402,11 +6408,19 @@ if page == "🏠 Home":
         _scan_src   = {"cron": "auto-scan", "app": "your scan"}.get(_scan_meta.get("source"), "scan")
         _scan_stamp = f"📡 From the {_scan_meta['scan_date']} {_scan_src}." if _scan_meta.get("scan_date") else ""
         st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+        _db_c2_subtitle = (
+            "Scanner picks — not yet validated by the full portfolio check. "
+            "Run Analysis before entering. Unlike the picks above, concentration "
+            "limits, sector caps, and macro gates have not been applied — treat "
+            "these as research leads, not direct entry signals."
+            + (f"  {_scan_stamp}" if _scan_stamp else "")
+        )
         st.markdown(
             f"<div style='background:#14532d;border-left:4px solid #22c55e;"
             f"border-radius:8px;padding:10px 16px;margin-bottom:4px'>"
             f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_db_c2_label}</span>"
             + (f"<span style='color:#86efac;font-size:0.82em'> · {_db_c2_sub}</span>" if _db_c2_sub else "")
+            + f"<div style='color:#86efac;font-size:0.82em;margin-top:4px'>{_db_c2_subtitle}</div>"
             + f"</div>",
             unsafe_allow_html=True,
         )
@@ -6419,20 +6433,9 @@ if page == "🏠 Home":
                 st.session_state["_pending_page"] = "🔍 Market Scanner"
                 st.rerun()
         elif not _db_buys_unique:
-            # Scanner ran, but every candidate is already represented in
-            # Grow Today above — no need to repeat them here.
             st.caption(
                 "All scanner candidates are already reflected in Grow Today above "
                 "(picks, Filtered Out, or pending)."
-            )
-        else:
-            st.caption(
-                "📡 Scanner picks — not yet validated by the full portfolio check. "
-                "Run Analysis before entering. "
-                "Unlike the picks above, concentration limits, sector caps, and macro "
-                "gates have not been applied — treat these as research leads, not "
-                "direct entry signals."
-                + (f"  {_scan_stamp}" if _scan_stamp else "")
             )
             for _db_buy in _db_buys_unique:
                 _xref       = _db_buy.get("xref", {})
