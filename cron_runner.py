@@ -157,7 +157,41 @@ def _run_eod(now_et, force: bool) -> int:
     else:
         _log(f"daily_snapshot NOT written ({len(rows)} rows; DB offline / table missing / empty).")
 
-    # 2. Reactive pullback email — once per qualifying down-day (row 2 dedup).
+    # 2. Sentiment snapshot: persist VADER + Finnhub readings for all held tickers
+    # so Tier 3 sentiment-vs-price-move analysis has a growing daily series.
+    _held_bundles = payload.get("held_data") or {}
+    _snap_sentiment_rows: list = []
+    if _held_bundles:
+        _snap_sentiment_rows = []
+        for _stk, _sb in _held_bundles.items():
+            if not isinstance(_sb, dict):
+                continue
+            _finnhub_sent: dict = {}
+            try:
+                from stock_analyzer.news_sentiment import fetch_sentiment_for_tickers as _fsft
+                _finnhub_sent = _fsft([_stk]).get(_stk, {})
+            except Exception:
+                pass
+            _snap_sentiment_rows.append({
+                "ticker":         _stk,
+                "vader_compound": _sb.get("avg_sent"),
+                "vader_score":    _sb.get("s_score"),
+                "headline_count": len(_sb.get("headlines") or []),
+                "bullish_pct":    _finnhub_sent.get("bullish_pct"),
+                "bearish_pct":    _finnhub_sent.get("bearish_pct"),
+                "buzz_score":     _finnhub_sent.get("buzz_score"),
+                "company_score":  _finnhub_sent.get("company_score"),
+                "vs_sector_pp":   _finnhub_sent.get("vs_sector_pp"),
+                "source":         "cron",
+            })
+        if db.save_sentiment_snapshot(now_et.date(), _snap_sentiment_rows):
+            _log(f"sentiment_snapshot written ({len(_snap_sentiment_rows)} tickers, date={today_str}).")
+        else:
+            _log("sentiment_snapshot NOT written (DB offline / table missing / no rows).")
+    else:
+        _log("sentiment_snapshot skipped — no held_data in payload.")
+
+    # 3. Reactive pullback email — once per qualifying down-day (row 2 dedup).
     pb = payload.get("pullback")
     sent = False
     if not pb:
@@ -179,7 +213,7 @@ def _run_eod(now_et, force: bool) -> int:
                 _log(f"state saved (row={_EOD_ROW}, date={today_str}).")
             elif not sent:
                 _log("pullback email not sent (inert/failed) — state NOT saved so later slot can retry.")
-    _log(f"eod done · snapshot={bool(rows)} · pullback_sent={sent}")
+    _log(f"eod done · snapshot={bool(rows)} · sentiment={bool(_snap_sentiment_rows)} · pullback_sent={sent}")
     return 0
 
 

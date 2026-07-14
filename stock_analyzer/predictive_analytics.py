@@ -156,6 +156,130 @@ def calibration_by_sector(
     return result
 
 
+def calibration_by_verdict(
+    enriched: list[dict],
+    min_n: int = 0,
+) -> list[dict]:
+    """
+    Group graded outcomes by cross-check verdict to measure whether
+    sentiment-aligned recs (Confirmed) outperform conflicted/unverified ones.
+
+    Same graded-population filter as calibration_by_score_band:
+    outcome_maturing=False AND alpha_pct is not None.
+
+    Returns a list sorted Confirmed first, then by n descending. Each dict:
+        verdict           str
+        n                 int
+        n_acted           int
+        n_missed          int
+        p_positive_alpha  float | None
+        avg_alpha         float | None
+        avg_composite     float | None
+        avg_outcome_pct   float | None
+    """
+    buckets: dict[str, dict] = {}
+    for r in enriched:
+        if r.get("outcome_maturing"):
+            continue
+        alpha = r.get("alpha_pct")
+        if alpha is None:
+            continue
+        v = str(r.get("verdict") or "").strip() or "Unknown"
+        if v not in buckets:
+            buckets[v] = {"verdict": v, "n": 0, "n_acted": 0, "n_missed": 0,
+                          "_alphas": [], "_composites": [], "_outcomes": []}
+        b = buckets[v]
+        b["n"] += 1
+        if r.get("acted_on"):
+            b["n_acted"] += 1
+        else:
+            b["n_missed"] += 1
+        b["_alphas"].append(alpha)
+        if r.get("composite_score") is not None:
+            try:
+                b["_composites"].append(float(r["composite_score"]))
+            except (TypeError, ValueError):
+                pass
+        op = r.get("outcome_pct")
+        if op is not None:
+            b["_outcomes"].append(op)
+
+    result = []
+    for v, b in buckets.items():
+        alphas = b["_alphas"]
+        comps  = b["_composites"]
+        outs   = b["_outcomes"]
+        result.append({
+            "verdict":          v,
+            "n":                b["n"],
+            "n_acted":          b["n_acted"],
+            "n_missed":         b["n_missed"],
+            "p_positive_alpha": sum(1 for a in alphas if a > 0) / len(alphas) if alphas else None,
+            "avg_alpha":        round(sum(alphas) / len(alphas), 2) if alphas else None,
+            "avg_composite":    round(sum(comps) / len(comps), 1) if comps else None,
+            "avg_outcome_pct":  round(sum(outs) / len(outs), 2) if outs else None,
+        })
+
+    # Sort: Confirmed/confirmed first, then by n desc
+    def _sort_key(x):
+        is_conf = x["verdict"].lower() == "confirmed"
+        return (0 if is_conf else 1, -x["n"])
+
+    return sorted(result, key=_sort_key)
+
+
+def sentiment_alignment_summary(
+    by_verdict: list[dict],
+    min_n: int = 3,
+) -> dict:
+    """
+    Binary Confirmed vs all-others comparison.
+
+    Returns:
+        confirmed_avg_alpha  float | None
+        other_avg_alpha      float | None
+        edge_pp              float | None   (confirmed - other; positive = Confirmed wins)
+        confirmed_n          int
+        other_n              int
+        conclusion           str — 'confirmed_wins' | 'no_edge' | 'insufficient_data'
+    """
+    conf = next((b for b in by_verdict if b["verdict"].lower() == "confirmed"), None)
+    others = [b for b in by_verdict if b["verdict"].lower() != "confirmed"]
+
+    conf_alpha = conf["avg_alpha"] if conf else None
+    conf_n     = conf["n"] if conf else 0
+    other_n    = sum(b["n"] for b in others)
+    # weighted mean for the "other" group
+    if others:
+        _w_sum = sum(b["n"] * (b["avg_alpha"] or 0) for b in others if b["avg_alpha"] is not None)
+        _w_cnt = sum(b["n"] for b in others if b["avg_alpha"] is not None)
+        other_alpha = round(_w_sum / _w_cnt, 2) if _w_cnt else None
+    else:
+        other_alpha = None
+
+    edge_pp = (
+        round(conf_alpha - other_alpha, 2)
+        if (conf_alpha is not None and other_alpha is not None)
+        else None
+    )
+
+    if conf_n < min_n or other_n < min_n:
+        conclusion = "insufficient_data"
+    elif edge_pp is not None and edge_pp > 0:
+        conclusion = "confirmed_wins"
+    else:
+        conclusion = "no_edge"
+
+    return {
+        "confirmed_avg_alpha": conf_alpha,
+        "other_avg_alpha":     other_alpha,
+        "edge_pp":             edge_pp,
+        "confirmed_n":         conf_n,
+        "other_n":             other_n,
+        "conclusion":          conclusion,
+    }
+
+
 def personal_alpha_threshold(
     bands: list[dict],
     min_n: int = 5,
@@ -192,6 +316,7 @@ def synthesize_directives(
     sec_alph: list[dict],
     n_graded: int,
     min_n: int = 5,
+    sentiment_alignment=None,
 ) -> list[dict]:
     """
     Synthesize 2–5 ranked directives from all model outputs.
@@ -364,6 +489,29 @@ def synthesize_directives(
         ),
         "source_tab": "all models",
     })
+
+    # Sentiment alignment directive
+    if sentiment_alignment is not None and sentiment_alignment.get("conclusion") != "insufficient_data":
+        edge = sentiment_alignment.get("edge_pp")
+        if sentiment_alignment["conclusion"] == "confirmed_wins" and edge is not None and edge >= 2.0:
+            directives.append({
+                "type": "action",
+                "text": (
+                    f"Sentiment alignment adds {edge:+.1f}pp of alpha in your history — "
+                    f"favour Confirmed-verdict picks over Conflicted or Unverified ones "
+                    f"when conviction is similar."
+                ),
+                "source_tab": "🧭 Sentiment Alignment",
+            })
+        elif sentiment_alignment["conclusion"] == "no_edge":
+            directives.append({
+                "type": "watch",
+                "text": (
+                    "Sentiment alignment (Confirmed vs others) has not produced a measurable "
+                    "alpha edge in your history yet — continue tracking as the dataset grows."
+                ),
+                "source_tab": "🧭 Sentiment Alignment",
+            })
 
     _order = {"action": 0, "caution": 1, "watch": 2, "context": 3}
     directives.sort(key=lambda d: _order.get(d["type"], 99))

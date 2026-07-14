@@ -3549,42 +3549,9 @@ if page == "🏠 Home":
                         _pv = _port_px_map.get(_u, 0)
                         return _pv if _pv > 0 else None
 
-                    _rec_rows: list[dict] = []
-                    for _p in (_gt_today.get("new_picks") or []):
-                        _tk = str(_p.get("ticker", ""))
-                        _rec_rows.append({
-                            "ticker":           _tk,
-                            "rec_date":         _today_et(),
-                            "rec_type":         "new_pick",
-                            "price_at_surface": _price_for(_tk, _p.get("price")),
-                            "composite_score":  _p.get("composite_score"),
-                            "momentum_score":   _p.get("score"),
-                            "sector":           _p.get("sector", ""),
-                            "conviction":       _p.get("conviction", ""),
-                            "verdict":          ((_p.get("xref") or {}).get("verdict") or ""),
-                            "thesis":           _p.get("thesis", ""),
-                        })
-                    for _p in (_gt_today.get("add_positions") or []):
-                        _tk = str(_p.get("ticker", ""))
-                        _rec_rows.append({
-                            "ticker":           _tk,
-                            "rec_date":         _today_et(),
-                            "rec_type":         "add_winner",
-                            "price_at_surface": _price_for(_tk),  # add-to-winner doesn't carry an explicit price
-                            "composite_score":  _p.get("score"),
-                            "momentum_score":   _p.get("score"),
-                            "sector":           _p.get("sector", ""),
-                            "conviction":       "high",   # add-to-winner only fires on Strong Buy
-                            "verdict":          "confirmed",
-                            "thesis":           _p.get("thesis", ""),
-                        })
-                    # Composite lookup helper for buy_candidates — neither dict
-                    # branch carries composite directly. For held names port_df
-                    # has the composite as Score; for non-held names the pre-fetched
-                    # _grow_composites cache has it under .total. This is the same
-                    # source-of-truth chain lookup_composite uses internally; we
-                    # inline it here to avoid plumbing yet another argument through.
+                    # Lookup helpers — defined once, used by all three rec-row loops.
                     _grow_comp_cache = st.session_state.get("_grow_composites", {}) or {}
+                    _held_data_cache = st.session_state.get("_last_held_data", {}) or {}
                     _port_score_map: dict = {}
                     if port_df is not None and not port_df.empty and "Score" in port_df.columns:
                         _port_score_map = {
@@ -3604,7 +3571,56 @@ if page == "🏠 Home":
                                 pass
                         _ps = _port_score_map.get(_u, 0)
                         return _ps if _ps > 0 else None
+                    def _s_score_for(_tk: str):
+                        _u = str(_tk).upper()
+                        _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
+                        _s = _b.get("s_score")
+                        if _s is None:
+                            _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
+                            _s = _b2.get("s_score")
+                        return _s
+                    def _avg_sent_for(_tk: str):
+                        _u = str(_tk).upper()
+                        _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
+                        _a = _b.get("avg_sent")
+                        if _a is None:
+                            _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
+                            _a = _b2.get("avg_sent")
+                        return _a
 
+                    _rec_rows: list[dict] = []
+                    for _p in (_gt_today.get("new_picks") or []):
+                        _tk = str(_p.get("ticker", ""))
+                        _rec_rows.append({
+                            "ticker":           _tk,
+                            "rec_date":         _today_et(),
+                            "rec_type":         "new_pick",
+                            "price_at_surface": _price_for(_tk, _p.get("price")),
+                            "composite_score":  _p.get("composite_score"),
+                            "momentum_score":   _p.get("score"),
+                            "sector":           _p.get("sector", ""),
+                            "conviction":       _p.get("conviction", ""),
+                            "verdict":          ((_p.get("xref") or {}).get("verdict") or ""),
+                            "thesis":           _p.get("thesis", ""),
+                            "s_score":          _s_score_for(_tk),
+                            "avg_sent":         _avg_sent_for(_tk),
+                        })
+                    for _p in (_gt_today.get("add_positions") or []):
+                        _tk = str(_p.get("ticker", ""))
+                        _rec_rows.append({
+                            "ticker":           _tk,
+                            "rec_date":         _today_et(),
+                            "rec_type":         "add_winner",
+                            "price_at_surface": _price_for(_tk),
+                            "composite_score":  _p.get("score"),
+                            "momentum_score":   _p.get("score"),
+                            "sector":           _p.get("sector", ""),
+                            "conviction":       "high",
+                            "verdict":          "confirmed",
+                            "thesis":           _p.get("thesis", ""),
+                            "s_score":          _s_score_for(_tk),
+                            "avg_sent":         _avg_sent_for(_tk),
+                        })
                     for _p in (_daily_brief.get("buy_candidates") or []):
                         _bx = _p.get("xref") or {}
                         _tk = str(_p.get("ticker", ""))
@@ -3619,6 +3635,8 @@ if page == "🏠 Home":
                             "conviction":       "",
                             "verdict":          str(_bx.get("verdict") or ""),
                             "thesis":           "",
+                            "s_score":          _s_score_for(_tk),
+                            "avg_sent":         _avg_sent_for(_tk),
                         })
                     if _rec_rows:
                         _rec_save_result = db.save_recommendations(_rec_rows)
@@ -18299,8 +18317,9 @@ elif page == "📊 Predictive Analytics":
     st.title("📊 Predictive Analytics")
     st.caption(
         "Your personal edge map — built from every recommendation this app has "
-        "surfaced and how each played out. Four live lenses: "
-        "score calibration, decision quality, signal type breakdown, and sector alpha."
+        "surfaced and how each played out. Five live lenses: "
+        "score calibration, decision quality, signal type breakdown, sector alpha, "
+        "and sentiment alignment."
     )
 
     if not db.has_db():
@@ -18324,6 +18343,8 @@ elif page == "📊 Predictive Analytics":
         by_conviction,
         by_rec_type_stats,
         by_sector_alpha,
+        calibration_by_verdict,
+        sentiment_alignment_summary,
     )
     from stock_analyzer.constants import (
         REC_SCORE_MIN_DAYS,
@@ -18425,18 +18446,21 @@ elif page == "📊 Predictive Analytics":
         st.stop()
 
     # ── Pre-compute all models once ────────────────────────────────────────────
-    _pac_bands    = calibration_by_score_band(_pac_enriched, band_size=PREDICTIVE_SCORE_BAND_SIZE)
-    _pac_thresh   = personal_alpha_threshold(_pac_bands, min_n=PREDICTIVE_MIN_BAND_N)
-    _pac_sectors  = calibration_by_sector(_pac_enriched, min_n=PREDICTIVE_MIN_BAND_N - 2)
-    _pac_avm      = acted_vs_missed_comparison(_pac_enriched)
-    _pac_conv     = by_conviction(_pac_enriched, min_n=3)
-    _pac_rtype    = by_rec_type_stats(_pac_enriched, min_n=3)
-    _pac_sec_alph = by_sector_alpha(_pac_enriched, min_n=3)
+    _pac_bands      = calibration_by_score_band(_pac_enriched, band_size=PREDICTIVE_SCORE_BAND_SIZE)
+    _pac_thresh     = personal_alpha_threshold(_pac_bands, min_n=PREDICTIVE_MIN_BAND_N)
+    _pac_sectors    = calibration_by_sector(_pac_enriched, min_n=PREDICTIVE_MIN_BAND_N - 2)
+    _pac_avm        = acted_vs_missed_comparison(_pac_enriched)
+    _pac_conv       = by_conviction(_pac_enriched, min_n=3)
+    _pac_rtype      = by_rec_type_stats(_pac_enriched, min_n=3)
+    _pac_sec_alph   = by_sector_alpha(_pac_enriched, min_n=3)
+    _pac_by_verdict = calibration_by_verdict(_pac_enriched, min_n=0)
+    _pac_sent_align = sentiment_alignment_summary(_pac_by_verdict, min_n=PREDICTIVE_MIN_BAND_N)
 
     # ── Synthesis — "What This Means For You" ──────────────────────────────────
     _pac_directives = synthesize_directives(
         _pac_bands, _pac_thresh, _pac_avm, _pac_conv, _pac_rtype, _pac_sec_alph,
         _pac_n_graded, min_n=PREDICTIVE_MIN_BAND_N,
+        sentiment_alignment=_pac_sent_align,
     )
     st.divider()
     st.markdown("### 📋 What This Means For You")
@@ -18456,11 +18480,12 @@ elif page == "📊 Predictive Analytics":
     st.divider()
 
     # ── 4 live tabs ─────────────────────────────────────────────────────────────
-    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4 = st.tabs([
+    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5 = st.tabs([
         "🎯 Score Calibration",
         "⚖️ Decision Quality",
         "🏷️ Signal Breakdown",
         "🌐 Sector Alpha",
+        "🧭 Sentiment Alignment",
     ])
 
     # ── TAB 1 — Score Calibration ─────────────────────────────────────────────
@@ -18854,6 +18879,149 @@ elif page == "📊 Predictive Analytics":
             st.info(
                 f"No sector cells have ≥ {PREDICTIVE_MIN_BAND_N - 2} outcomes yet."
             )
+
+    # ── TAB 5 — Sentiment Alignment ───────────────────────────────────────────
+    with _pa_tab5:
+        st.caption(
+            "Does sentiment alignment at recommendation time predict better outcomes? "
+            "The verdict captures cross-check alignment — whether technical signals, "
+            "fundamentals, and news sentiment all agree (Confirmed) or conflict. "
+            "This tab measures whether Confirmed-verdict picks have delivered more alpha "
+            "than Conflicted, Caution, or Unverified ones in your personal history."
+        )
+
+        _sa_conclusion  = _pac_sent_align.get("conclusion", "insufficient_data")
+        _sa_conf_alpha  = _pac_sent_align.get("confirmed_avg_alpha")
+        _sa_other_alpha = _pac_sent_align.get("other_avg_alpha")
+        _sa_edge_pp     = _pac_sent_align.get("edge_pp")
+        _sa_conf_n      = _pac_sent_align.get("confirmed_n", 0)
+        _sa_other_n     = _pac_sent_align.get("other_n", 0)
+
+        if _sa_conclusion == "confirmed_wins":
+            st.success(
+                f"**Confirmed recs outperform non-Confirmed by {_sa_edge_pp:+.1f}pp** — "
+                f"news sentiment alignment is adding real edge in your history.  \n"
+                f"When the cross-check agrees (technical + fundamentals + news all aligned), "
+                f"your outcomes have been measurably better."
+            )
+        elif _sa_conclusion == "no_edge":
+            st.info(
+                "**Sentiment alignment has not produced a measurable alpha edge yet.** "
+                "Confirmed and non-Confirmed recs are delivering similar alpha in your history.  \n"
+                "Continue tracking as the dataset grows — this may sharpen once more "
+                "Confirmed recs have had time to mature."
+            )
+        else:
+            st.info(
+                f"📅 **Not enough data yet.** Both Confirmed and non-Confirmed groups need "
+                f"at least **{PREDICTIVE_MIN_BAND_N} graded recs** to compare "
+                f"(Confirmed: {_sa_conf_n}, others: {_sa_other_n}).  \n"
+                "Return once more picks have matured past their minimum grading window."
+            )
+
+        # ── Side-by-side: Confirmed vs Non-Confirmed ──────────────────────────
+        _sent_c1, _sent_c2 = st.columns(2)
+        with _sent_c1:
+            st.markdown("#### ✅ Confirmed recs")
+            _sc_a1, _sc_a2, _sc_a3 = st.columns(3)
+            _sc_a1.metric("Count", f"{_sa_conf_n:,}")
+            _sc_a2.metric(
+                "Avg alpha",
+                f"{_sa_conf_alpha:+.1f}pp" if _sa_conf_alpha is not None else "—",
+            )
+            _conf_row = next(
+                (b for b in _pac_by_verdict if b["verdict"].lower() == "confirmed"), None
+            )
+            _sc_a3.metric(
+                "Hit rate",
+                (f"{_conf_row['p_positive_alpha']:.0%}"
+                 if _conf_row and _conf_row.get("p_positive_alpha") is not None else "—"),
+                help="% of Confirmed recs that beat SPY",
+            )
+        with _sent_c2:
+            st.markdown("#### ⚠️ Non-Confirmed recs")
+            _sc_b1, _sc_b2, _sc_b3 = st.columns(3)
+            _sc_b1.metric("Count", f"{_sa_other_n:,}")
+            _sc_b2.metric(
+                "Avg alpha",
+                f"{_sa_other_alpha:+.1f}pp" if _sa_other_alpha is not None else "—",
+            )
+            _other_p_pos = None
+            _other_alphas = [b["p_positive_alpha"] for b in _pac_by_verdict
+                             if b["verdict"].lower() != "confirmed"
+                             and b.get("p_positive_alpha") is not None]
+            _other_ns     = [b["n"] for b in _pac_by_verdict
+                             if b["verdict"].lower() != "confirmed"
+                             and b.get("p_positive_alpha") is not None]
+            if _other_alphas and _other_ns:
+                _other_p_pos = sum(a * n for a, n in zip(_other_alphas, _other_ns)) / sum(_other_ns)
+            _sc_b3.metric(
+                "Hit rate",
+                f"{_other_p_pos:.0%}" if _other_p_pos is not None else "—",
+                help="% of non-Confirmed recs that beat SPY",
+            )
+
+        # ── Bar chart: Avg Alpha by Verdict ───────────────────────────────────
+        st.subheader("Avg Alpha by Verdict")
+        st.caption(
+            "Each bar shows the average alpha (your return minus SPY over the same window) "
+            "for all graded recs with that verdict. Bars in grey have fewer than "
+            f"{PREDICTIVE_MIN_BAND_N} outcomes — indicative only."
+        )
+        if _pac_by_verdict:
+            _sv_labels = [
+                f"{b['verdict']} (n={b['n']})" for b in _pac_by_verdict
+            ]
+            _sv_alphas = [b["avg_alpha"] if b["avg_alpha"] is not None else 0 for b in _pac_by_verdict]
+            _sv_colors = [
+                "#666666" if b["n"] < PREDICTIVE_MIN_BAND_N
+                else ("#00C851" if (b["avg_alpha"] or 0) >= 0 else "#ff4444")
+                for b in _pac_by_verdict
+            ]
+            _sv_fig = go.Figure(go.Bar(
+                x=_sv_alphas,
+                y=_sv_labels,
+                orientation="h",
+                marker_color=_sv_colors,
+                customdata=[[b["p_positive_alpha"], b["avg_composite"]] for b in _pac_by_verdict],
+                hovertemplate=(
+                    "<b>%{y}</b><br>"
+                    "Avg alpha: %{x:+.2f}pp<br>"
+                    "Hit rate: %{customdata[0]:.0%}<br>"
+                    "Avg composite: %{customdata[1]:.0f}<extra></extra>"
+                ),
+            ))
+            _sv_fig.add_vline(
+                x=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
+            )
+            _sv_fig.update_layout(
+                template="plotly_dark", height=max(180, 60 * len(_pac_by_verdict)),
+                xaxis_title="Avg Alpha vs SPY (pp)", yaxis_title=None,
+                margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
+                yaxis=dict(autorange="reversed"),
+            )
+            st.plotly_chart(_sv_fig, use_container_width=True)
+
+        # ── Per-verdict detail table ───────────────────────────────────────────
+        with st.expander("📋 Per-verdict detail", expanded=False):
+            if _pac_by_verdict:
+                _sv_rows = [
+                    {
+                        "Verdict":        b["verdict"],
+                        "Recs":           b["n"],
+                        "Acted":          b["n_acted"],
+                        "Avg Alpha (pp)": f"{b['avg_alpha']:+.1f}" if b["avg_alpha"] is not None else "—",
+                        "Hit Rate":       f"{b['p_positive_alpha']:.0%}" if b["p_positive_alpha"] is not None else "—",
+                        "Avg Composite":  f"{b['avg_composite']:.0f}" if b["avg_composite"] is not None else "—",
+                    }
+                    for b in _pac_by_verdict
+                ]
+                st.dataframe(
+                    _pa_pd.DataFrame(_sv_rows),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No graded outcomes yet.")
 
     # ── Alpha Attribution — activates after 180 days of snapshots ───────────
     with st.expander("📊 Alpha Attribution — activates after 180 days of snapshots", expanded=False):
@@ -20567,7 +20735,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
-- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Four live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
+- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Five live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, and Sentiment Alignment — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
 - **🥧 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing.
 - **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.

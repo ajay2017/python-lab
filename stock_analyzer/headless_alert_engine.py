@@ -427,4 +427,5 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
 
     pullback = _assess_pullback(ctx["spy_6mo"], ctx["fragility"], pullback_threshold)
     return {"snapshot_rows": snapshot_rows, "pullback": pullback,
-            "built_at": built_at, "errors": list(ctx["errors"])}
+            "built_at": built_at, "errors": list(ctx["errors"]),
+            "held_data": ctx.get("held_data", {})}

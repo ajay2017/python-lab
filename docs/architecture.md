@@ -909,6 +909,41 @@ CREATE TABLE earnings_results (
 
 **Post-earnings results (F-175) / F-1 checkpoint input (F-176).** Column list verified against `db.save_earnings_results`/`load_earnings_result`, the `app.py` write payload, and `thesis_advisor.generate_earnings_thesis_update`'s reads (`r.get("rev_beat")` etc.) — not transcribed from a migration file (none checked into the repo). Bulk-upserted via `db.save_earnings_results()` on conflict `(ticker, report_date)`; read by `db.load_earnings_result()` (most recent row per ticker within `lookback_days` — 90 from the capture UI, 14 from the F-1 checkpoint gate). The live UI path (`earnings_intel.fetch_recent_results()`, Finnhub, F-175) never populates `actual_revenue`/`estimated_revenue`/`rev_beat` — those exist in the row schema for the dormant LLM paste extractor (`extract_results()`), which is not wired to any UI, so today this table only ever receives EPS-level data. DDL applied 2026-07-13 — active. RLS: `FOR ALL TO service_role`.
 
+### 6.20 `sentiment_history` table
+
+```sql
+CREATE TABLE IF NOT EXISTS sentiment_history (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ticker         TEXT    NOT NULL,
+    snap_date      DATE    NOT NULL,
+    vader_compound FLOAT,
+    vader_score    FLOAT,
+    headline_count INT,
+    bullish_pct    FLOAT,
+    bearish_pct    FLOAT,
+    buzz_score     FLOAT,
+    company_score  FLOAT,
+    vs_sector_pp   FLOAT,
+    source         TEXT DEFAULT 'cron',
+    created_at     TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT sentiment_history_uniq UNIQUE(ticker, snap_date)
+);
+CREATE INDEX IF NOT EXISTS sentiment_history_ticker_date_idx
+    ON sentiment_history (ticker, snap_date DESC);
+```
+
+**Daily sentiment time-series for Tier 3 sentiment-vs-price-move analysis (F-179).** One row per (ticker, trading day). `vader_compound`/`vader_score` come from Pipeline A (VADER on yfinance/FMP headlines, same source as the composite score's 10% sentiment weight); `bullish_pct`/`bearish_pct`/`buzz_score`/`company_score`/`vs_sector_pp` come from Pipeline B (Finnhub `/stock/news-sentiment`, pre-aggregated ratios). Written by the EOD cron (`cron_runner._run_eod`) immediately after `save_daily_snapshot` — VADER values from `held_data` bundle + one Finnhub call per held ticker. Upserts on `(ticker, snap_date)`; last writer wins intraday. At least one of `vader_compound`/`bullish_pct` must be non-None (validated in `db.save_sentiment_snapshot`). Covers held tickers only (the cron's `_build_context` universe). **Ships inert until the DDL is applied** — `db.save_sentiment_snapshot` degrades silently (returns False). RLS: `FOR ALL TO service_role`.
+
+**New columns added to `recommendations` (§6.12) as part of F-179:**
+
+```sql
+ALTER TABLE recommendations
+    ADD COLUMN IF NOT EXISTS s_score  FLOAT,
+    ADD COLUMN IF NOT EXISTS avg_sent FLOAT;
+```
+
+`s_score` = the VADER sentiment score (0–100) at the time the rec was surfaced (what the composite's 10% sentiment pillar was built from). `avg_sent` = the raw VADER compound score (−1 to 1). Both are nullable — old rows have NULL; the upsert `ignore_duplicates=True` means a same-day re-surface leaves the first-seen row (and its stored `s_score`) untouched. Written by `db.save_recommendations` from the `app.py` rec-log path; sourced from `_grow_composites` (scanner bundles) and `_last_held_data` (held position bundles) session caches via `_s_score_for`/`_avg_sent_for` helpers. **Ships inert until the DDL is applied** — the extra dict keys pass through to `null` on the existing upsert, but the DB will reject them until the `ALTER TABLE` is run. RLS: `FOR ALL TO service_role`.
+
 ---
 
 ## 7. Navigation and State Management

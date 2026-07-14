@@ -605,6 +605,55 @@ def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
         return False
 
 
+def save_sentiment_snapshot(snap_date, rows: list[dict]) -> bool:
+    """Upsert daily sentiment readings into sentiment_history.
+
+    rows: list of dicts with keys: ticker, vader_compound, vader_score,
+    headline_count, bullish_pct, bearish_pct, buzz_score, company_score,
+    vs_sector_pp, source.  Upserts on (ticker, snap_date); last writer wins
+    intraday. Silently no-ops in READONLY mode or when DB is offline.
+    """
+    if _READONLY:
+        return False
+    if not has_db() or not rows:
+        return False
+    _date = snap_date.isoformat() if hasattr(snap_date, "isoformat") else str(snap_date)[:10]
+    payload = []
+    seen: set[str] = set()
+    for r in rows:
+        tk = str(r.get("ticker", "")).strip().upper()
+        if not tk or tk in seen:
+            continue
+        # Require at least one sentiment reading to be present
+        if r.get("vader_compound") is None and r.get("bullish_pct") is None:
+            continue
+        seen.add(tk)
+        payload.append({
+            "ticker":          tk,
+            "snap_date":       _date,
+            "vader_compound":  r.get("vader_compound"),
+            "vader_score":     r.get("vader_score"),
+            "headline_count":  r.get("headline_count"),
+            "bullish_pct":     r.get("bullish_pct"),
+            "bearish_pct":     r.get("bearish_pct"),
+            "buzz_score":      r.get("buzz_score"),
+            "company_score":   r.get("company_score"),
+            "vs_sector_pp":    r.get("vs_sector_pp"),
+            "source":          str(r.get("source") or "cron"),
+        })
+    if not payload:
+        return False
+    try:
+        _client().table("sentiment_history").upsert(
+            payload, on_conflict="ticker,snap_date"
+        ).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=f"sentiment_snapshot_upsert: {str(e)[:100]}")
+        return False
+
+
 # ── Last-known-good bundle cache (data-resilience) ─────────────────────────────
 # Optional table. Until created, load returns None and save no-ops, so load_all
 # keeps its honest "Could not load" failure exactly as before. See DDL at top.
@@ -1471,33 +1520,78 @@ def save_recommendations(records: list[dict]) -> dict:
             "conviction":       r.get("conviction"),
             "verdict":          r.get("verdict"),
             "thesis":           (str(r.get("thesis") or "")[:600]) or None,
+            "s_score":          r.get("s_score"),
+            "avg_sent":         r.get("avg_sent"),
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
-    # Try the modern upsert path first. Some older supabase-py versions don't
-    # accept ignore_duplicates as a kwarg; if that's the case, fall back to a
-    # plain insert and rely on the unique constraint to reject dups.
-    try:
-        _client().table("recommendations").upsert(
-            payload,
-            on_conflict="ticker,rec_date,rec_type",
-            ignore_duplicates=True,
-        ).execute()
+
+    # Columns that require the F-179 ALTER TABLE DDL before they exist.
+    # If Supabase returns a column-not-found error we strip them and retry so
+    # the existing recommendation log keeps working until the DDL is applied.
+    _F179_COLS = frozenset(("s_score", "avg_sent"))
+
+    def _upsert(rows):
+        try:
+            _client().table("recommendations").upsert(
+                rows,
+                on_conflict="ticker,rec_date,rec_type",
+                ignore_duplicates=True,
+            ).execute()
+            return True, None
+        except TypeError:
+            return None, "compat"   # ignore_duplicates unsupported — try insert
+        except Exception as exc:
+            return False, str(exc)
+
+    def _insert(rows):
+        try:
+            _client().table("recommendations").insert(rows).execute()
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+
+    def _strip_f179(rows):
+        return [{k: v for k, v in row.items() if k not in _F179_COLS} for row in rows]
+
+    def _col_missing(err_str):
+        low = (err_str or "").lower()
+        return ("does not exist" in low or "unknown column" in low) and \
+               any(c in low for c in _F179_COLS)
+
+    ok, err = _upsert(payload)
+    if ok is True:
         return {"attempted": len(payload), "saved": len(payload), "error": None}
-    except TypeError:
-        pass  # ignore_duplicates kwarg unsupported on this version
-    except Exception as e:
+    if ok is None:                  # TypeError compat path — fall through to insert
+        ok2, err2 = _insert(payload)
+        if ok2 is True:
+            return {"attempted": len(payload), "saved": len(payload), "error": None}
+        # column-not-found on the insert fallback?
+        if _col_missing(err2):
+            base = _strip_f179(payload)
+            ok3, err3 = _insert(base)
+            if ok3 is True:
+                return {"attempted": len(base), "saved": len(base), "error": None}
+            err2 = err3 or err2
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=f"rec_log_upsert: {str(e)[:100]}")
-        return {"attempted": len(payload), "saved": 0, "error": str(e)[:200]}
-    # Fallback path — older client
-    try:
-        _client().table("recommendations").insert(payload).execute()
-        return {"attempted": len(payload), "saved": len(payload), "error": None}
-    except Exception as e:
-        from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=f"rec_log_insert: {str(e)[:100]}")
-        return {"attempted": len(payload), "saved": 0, "error": str(e)[:200]}
+        _ah.record("supabase", "error", msg=f"rec_log_insert: {(err2 or '')[:100]}")
+        return {"attempted": len(payload), "saved": 0, "error": (err2 or "")[:200]}
+    # ok is False — upsert errored; if column-missing, retry without F-179 cols
+    if _col_missing(err):
+        base = _strip_f179(payload)
+        ok2, err2 = _upsert(base)
+        if ok2 is True:
+            return {"attempted": len(base), "saved": len(base), "error": None}
+        if ok2 is None:             # compat retry
+            ok3, err3 = _insert(base)
+            if ok3 is True:
+                return {"attempted": len(base), "saved": len(base), "error": None}
+            err = err3 or err
+        else:
+            err = err2 or err
+    from stock_analyzer import api_health as _ah
+    _ah.record("supabase", "error", msg=f"rec_log_upsert: {(err or '')[:100]}")
+    return {"attempted": len(payload), "saved": 0, "error": (err or "")[:200]}
 
 
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
