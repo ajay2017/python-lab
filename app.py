@@ -4223,13 +4223,13 @@ if page == "🏠 Home":
             ].head(GROW_CANDIDATE_POOL)["Ticker"].tolist()
             _grow_composites: dict = {}
             if _top_candidates:
-                with st.spinner(
-                    f"Validating top {len(_top_candidates)} picks with full analysis…"
-                ):
-                    _gc_results = _parallel_load_all(_top_candidates)
-                    for _tc, _b in _gc_results.items():
-                        if _b is not None:
-                            _grow_composites[_tc] = _b
+                _refresh_slot = st.empty()
+                _refresh_slot.markdown(_DRISHTA_LOADING_HTML, unsafe_allow_html=True)
+                _gc_results = _parallel_load_all(_top_candidates)
+                _refresh_slot.empty()
+                for _tc, _b in _gc_results.items():
+                    if _b is not None:
+                        _grow_composites[_tc] = _b
             st.session_state._grow_composites    = _grow_composites
             st.session_state._brief_signals_ts   = datetime.now()
             st.rerun()
