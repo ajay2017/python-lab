@@ -20508,6 +20508,10 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 > **scanned (~270)** → ranked by momentum → **finalists composite-scored** → cleared the gates → **recommended**
 
+**Data freshness gate:** picks require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the pick is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
+
+**Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
+
 **"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Fundamental + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page.
