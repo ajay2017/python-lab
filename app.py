@@ -5118,12 +5118,19 @@ if page == "🏠 Home":
             }
             _conv_clr, _conv_txt = _conv_cfg.get(_conv, _conv_cfg["unverified"])
 
-            # Score line: always show momentum; show composite when available
-            _score_line = f"Momentum {_gp['score']:.0f}/100"
+            # Score line: for curated scanner picks show the momentum gate score
+            # that qualified them; for movers the scanner score is irrelevant
+            # (movers bypass the momentum gate — they qualified via day change,
+            # already shown in the mover badge) so start directly with composite.
+            if _gp.get("is_mover"):
+                _score_line = ""
+            else:
+                _score_line = f"Momentum {_gp['score']:.0f}/100"
             if _comp_sc is not None:
-                _score_line += f" · Composite {_comp_sc:.0f}/100"
+                _comp_part = f"Composite {_comp_sc:.0f}/100"
                 if _comp_lbl:
-                    _score_line += f" ({_comp_lbl})"
+                    _comp_part += f" ({_comp_lbl})"
+                _score_line = f"{_score_line} · {_comp_part}".lstrip(" · ")
 
             # Mover badge: this candidate entered via today's 1-day breakout
             # (from the broad discovery universe) rather than the curated
