@@ -20654,70 +20654,116 @@ The app's intelligence is computed live in your browser — so it can only reach
 """
         )
 
-    with st.expander("🧠 AI Insights — thesis tracking, weekly debrief, monthly review & analyst coverage", expanded=False):
-        st.caption("How the AI layer fits into the app")
+    with st.expander("🧠 Where AI is used — sentiment scoring, news, thesis, earnings, debrief, monthly & analyst coverage", expanded=False):
+        st.caption("How the AI layer fits into the app — ten touchpoints across two tracks")
         st.graphviz_chart(
             """
-            digraph AI {
+            digraph DRISHTA_AI {
                 rankdir=LR
-                node [fontname="Helvetica" fontsize=10 margin="0.15,0.08"]
-                edge [fontname="Helvetica" fontsize=9 color="#444444"]
+                compound=true
+                node [fontname="Helvetica" fontsize=10 margin="0.2,0.1"]
+                edge [fontname="Helvetica" fontsize=9 color="#555555"]
+
+                subgraph cluster_data {
+                    label="Your data  &  market feeds"
+                    style=filled fillcolor="#f1f5f9" color="#94a3b8" fontsize=11
+                    MktData [label="Market data\\nyfinance · Finnhub · FMP" shape=cylinder style=filled fillcolor=white]
+                    Port    [label="Portfolio\\ntrades · thesis · history" shape=cylinder style=filled fillcolor=white]
+                    YFNews  [label="Yahoo Finance\\nnews  (live feed)" shape=cylinder style=filled fillcolor=white]
+                    Paste   [label="Pasted research\\nCNBC Pro · broker notes" shape=note style=filled fillcolor="#fffde7" color="#d97706"]
+                }
+
+                Haiku  [label="Haiku\\nFast extraction\\n& scoring" shape=ellipse style=filled fillcolor="#fce4ec" color="#b91c1c" fontsize=10]
+                Claude [label="Claude\\nReflection &\\nnarrative" shape=ellipse style=filled fillcolor="#fce4ec" color="#b91c1c" fontsize=10]
 
                 subgraph cluster_engine {
-                    label="Rules Engine  (always runs)"
-                    style=filled fillcolor="#eef2ff" color="#5566bb" fontsize=11
-                    DataSrc [label="Market data\\nand your portfolio" shape=cylinder fillcolor=white style=filled]
-                    Score   [label="Scoring  |  Gates\\nRecommendations"  shape=box style="rounded,filled" fillcolor=white]
-                    DataSrc -> Score
+                    label="Rules Engine  ·  always runs, zero AI dependency"
+                    style=filled fillcolor="#eef2ff" color="#4f6cdb" fontsize=11
+                    Comp  [label="Composite Score\\nTechnical 25%  ·  Fundamentals 35%\\nValuation 30%  ·  Sentiment 10%" shape=box style="rounded,filled" fillcolor=white]
+                    Gates [label="Gates  &  Thresholds\\nBUY ≥ 65  ·  sector caps  ·  stops\\nAll values rules-only  (constants.py)" shape=box style="rounded,filled" fillcolor=white]
+                    Comp -> Gates [label="hard decisions"]
                 }
 
-                Pkg [label="Evidence package\\nPython pre-computes:\\nP&L  ·  alpha  ·  signals\\nnews  ·  technicals" shape=box style="rounded,filled" fillcolor="#fffde7" color="#f0a800"]
+                SentScore [label="Sentiment score\\nBidirectional financial scoring\\nticker-aware · cached per day" shape=box style="rounded,filled" fillcolor="#fef3c7" color="#d97706"]
 
-                Claude [label="Claude AI\\n(one-shot prompt\\nper feature call)" shape=ellipse style=filled fillcolor="#fce4ec" color="#c2185b"]
-
-                subgraph cluster_ai {
-                    label="AI Insights  (additive — app works without AI)"
-                    style=filled fillcolor="#e8f5e9" color="#388e3c" fontsize=11
-                    F1 [label="Thesis Review\\nINTACT / WEAKENING / BROKEN" shape=box style="rounded,filled" fillcolor=white]
-                    F3 [label="Weekly Debrief\\nPortfolio narrative" shape=box style="rounded,filled" fillcolor=white]
-                    F4 [label="Monthly Report\\nEntry quality + Signal discipline" shape=box style="rounded,filled" fillcolor=white]
-                    F6 [label="Analyst Coverage\\nBroker research you paste" shape=box style="rounded,filled" fillcolor=white]
+                subgraph cluster_awareness {
+                    label="Awareness only  ·  engine never reads these back"
+                    style=filled fillcolor="#f0fdf4" color="#15803d" fontsize=11
+                    NewsFilter   [label="Sidebar news curation\\nSuppresses VADER false-positives\\nin Home news feed" shape=box style="rounded,filled" fillcolor=white]
+                    ThesisDraft  [label="Thesis Drafting\\nEditable falsifiable thesis\\nseeded at BUY — you own the text" shape=box style="rounded,filled" fillcolor=white]
+                    Playbook     [label="Earnings Playbook\\nBeat rate · reaction direction\\nconsensus growth · what to watch" shape=box style="rounded,filled" fillcolor=white]
+                    Coverage     [label="Analyst Coverage\\nIdeas Inbox — Wall St. vs engine\\nper-firm facts from your paste" shape=box style="rounded,filled" fillcolor=white]
+                    ThesisReview [label="Thesis Review\\nINTACT · WEAKENING · BROKEN\\nweekly + post-earnings checkpoint" shape=box style="rounded,filled" fillcolor=white]
+                    Debrief      [label="Weekly Debrief\\nPortfolio narrative vs market\\nevery Sunday · on demand" shape=box style="rounded,filled" fillcolor=white]
+                    Monthly      [label="Monthly Report\\nEntry quality · signal discipline\\nfrozen artifact per calendar month" shape=box style="rounded,filled" fillcolor=white]
+                    Snapshot     [label="AI Snapshot\\nOn-demand portfolio narrative\\nClaude · OpenAI · Gemini · Groq" shape=box style="rounded,filled" fillcolor=white]
                 }
 
-                Score  -> Pkg   [label="pre-computed facts only"]
-                Pkg    -> Claude [label="one-shot prompt"]
-                Claude -> F1
-                Claude -> F3
-                Claude -> F4
+                MktData -> Comp [color="#4f6cdb"]
+                Port    -> Comp [color="#4f6cdb"]
 
-                Research [label="Your pasted\\nanalyst research" shape=note fillcolor="#fffde7" style=filled color="#f0a800"]
-                Research -> Claude [label="you paste; AI extracts"]
-                Claude -> F6
+                YFNews -> Haiku [label="per-ticker\\nheadlines"]
+                Paste  -> Haiku [label="CNBC / broker text"]
+                Port   -> Haiku [label="entry evidence\\n(thesis draft)"]
 
-                Guarantee [label="AI never moves a gate\\nor feeds back to the engine" shape=note fillcolor="#fff9c4" style=filled color="#c8a000"]
-                Claude -> Guarantee [style=dashed arrowhead=none color="#aaaaaa"]
+                Port  -> Claude [label="facts &\\ntrade history"]
+                Comp  -> Claude [label="pre-computed\\nevidence package"]
+
+                Haiku -> SentScore   [label="financial\\nscoring" color="#d97706" style=bold fontcolor="#d97706"]
+                Haiku -> NewsFilter
+                Haiku -> ThesisDraft
+                Haiku -> Playbook
+                Haiku -> Coverage
+
+                SentScore -> Comp [label="10% weight" color="#d97706" style=bold fontcolor="#d97706"]
+
+                Claude -> ThesisReview
+                Claude -> Debrief
+                Claude -> Monthly
+                Claude -> Snapshot
+
+                Note [label="Gate thresholds are rules-only (constants.py).\\nSentiment (10% of composite) uses LLM scoring.\\nAll other AI outputs are awareness-only and\\nnever read back by the engine." shape=note style=filled fillcolor="#fff9c4" color="#a16207"]
             }
             """,
             use_container_width=True,
         )
         st.markdown(
             """
-The **🧠 AI Insights** page is an AI layer that sits **on top of** the rule-based engine — mostly *reflection* on what the rules have been doing (your picks, trades, and theses over weeks and months), plus one tool that folds in outside analyst research you paste. It's organized into tabs — **🩺 Positions**, **📅 Debriefs**, **🏦 Research** — with an *"at a glance"* status strip up top. One promise never changes: the AI **never moves a gate or sets a threshold** — that stays a rules decision, and if the AI is ever unavailable every other page and protection works exactly the same (this layer is purely additive). The reflective features only ever **describe numbers the engine already computed** (they can't invent a recommendation, a trade, or an outcome); the capture tool (Analyst Coverage) brings in outside research, but even that is **awareness only** and never gates.
+DRISHTA uses AI across **ten touchpoints** organised into two tracks. A **fast extraction track** (Haiku) runs per-request and handles scoring and structured data extraction. A **deep reflection track** (Claude) generates narrative intelligence about your decisions over time. The diagram above shows every data path.
 
-Four things live here:
+**One guarantee, precisely stated:** Gate thresholds — BUY ≥ 65, sector caps, stop rules — live in `constants.py` and are set by rules only. The AI never moves them. The **Sentiment pillar** (10% of composite) is the one place LLM scoring feeds back into the engine: Haiku re-scores news headlines with financial domain context that VADER alone cannot provide. Every other AI output is pure awareness — the engine never reads it back, and if the AI layer is offline every page and protection works exactly the same.
 
-- **📌 Thesis Tracking — "is my reason for owning this still true?"** When you log a buy you can write a *thesis* (why you're in it) — or tap **✨ Draft thesis** on the Trade Journal BUY form to have the app draft an **editable** starting point from its read on that stock (fundamentals, recent news, trend), complete with a built-in *"this breaks if…"* condition. You always edit and own the final wording — the draft is never saved on its own. For each holding that has one, the app weighs that original reason against current evidence — recent headlines, the fundamental and technical trend, the last earnings result — and labels it **INTACT**, **WEAKENING**, or **BROKEN**, with a short written read. It's deliberately conservative (leans WEAKENING when unsure; BROKEN needs a clear contradiction). **BROKEN does *not* sell anything** — it's awareness that your original reason has changed; the rule-based Trim/Exit protection fires on its own, separately. Reviews refresh weekly and on demand.
+---
 
-- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch. It's emailed to you on Sundays and can be generated on demand. (It needs about a week of history before the first one.)
+#### Fast track — Haiku (extraction & scoring)
 
-- **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on the slower questions:
-   - **Entry quality** — of the names the engine surfaced as high-conviction *New Positions to Initiate*, did they actually **beat the market**? Broken down by conviction tier, so you can see whether the highest-conviction picks really did best.
-   - **Signal discipline** — of those names, which did you **act on**, and did acting help or hurt? It shows what you *skipped* and what that cost or saved.
-  The report is **visual**: a flow chart (surfaced → acted / not-acted → outcome), a bar of average market-beating return by conviction tier, and a ranked *"what you skipped"* chart. Counts are **distinct names** (a name that surfaced on many days counts once), and each report is **frozen the moment it's generated** — so it reads the same whenever you reopen it. Once you have more than one month, a **month picker** lets you browse past reports.
+- **📊 Sentiment scoring** — For every ticker loaded in Analysis, Haiku re-scores the latest Yahoo Finance headlines with financial domain context. Ticker-aware: "IBM's earnings warning is great for CrowdStrike" scores very bullish for CRWD, not bearish for it. Bidirectional: can raise *and* lower VADER's near-neutral misses (e.g. "Apple Widens China Smartphone Lead" at +0.00 VADER → +0.40 LLM). Per-headline adjustments are capped at ±0.5 so no single article dominates. The resulting average feeds the **Sentiment pillar** (10% of composite). Scores are cached once per ticker per day in the database so the app and the premarket email alert always use the same composite — no divergence between what you see and what alerts on.
 
-- **🏦 Analyst Coverage — "what does Wall Street say, and does my engine agree?"** Paste a professional analyst article (CNBC Pro, a broker note) and the app pulls out the structured facts — each firm, its rating, price target, and thesis — into your **Ideas Inbox**. It handles multi-stock *"top picks"* articles (one record **per stock**, never merged) and always shows an **editable preview** so you can correct any misread before saving. Saved research then appears in three places: the **Ideas Inbox** itself (each card has **▶ Analyze** and **➕ Add to Watchlist**), a **🏦 Analyst Coverage** tab on the 📈 Analysis page — shown side-by-side with the data provider's *own* analyst consensus, so you see **Wall Street vs. your engine** at a glance — and as a small note on a *New Positions to Initiate* card when a pick overlaps your saved research. It's **awareness only**: analyst targets never change a score, a gate, or a verdict — the engine still decides. (CNBC/broker pages are paywalled, so you paste the text; the app can't fetch it for you.)
+- **📰 Sidebar news curation** — The Home news feed runs a lighter, suppress-only pass: Haiku raises VADER false-positives toward neutral but can never push a score into negative territory. This keeps the feed cleaner without risking false bearish signals on genuinely positive news.
 
-Nothing on this page issues a buy or sell — it's context and reflection to help you understand your own and the engine's behaviour; the engine remains the only thing that gates or recommends.
+- **✨ Thesis Drafting** — On the Trade Journal BUY form, tap **✨ Draft thesis** to have Haiku produce an editable, falsifiable starting thesis from entry-time evidence (fundamentals, trend, recent news), complete with a built-in *"this breaks if…"* clause. The draft is never saved automatically — you edit and own the final wording. That thesis then feeds the Thesis Review cycle below.
+
+- **📅 Earnings Playbook extraction** — Paste a CNBC Pro pre-earnings preview into Ideas Inbox and Haiku extracts: historical beat rate, typical post-earnings reaction direction, analyst consensus growth estimate, and what to watch on the call. Enriches Catalyst Watch playbook cards with structured intel rather than raw article text.
+
+- **🏦 Analyst Coverage extraction** — Paste a CNBC Pro or broker note (single-stock or a multi-stock "top picks" roundup) and Haiku extracts per-firm facts: firm name, rating, price target, and thesis summary. Multi-stock articles produce **one record per stock** — facts are never merged across names. Always shows an editable preview before saving. Awareness only: analyst targets never change a score, a gate, or a verdict.
+
+---
+
+#### Deep track — Claude (reflection & narrative)
+
+- **📌 Thesis Review — "is my reason for owning this still true?"** For each holding with a thesis, Claude weighs the original reason against current evidence — recent headlines, the fundamental and technical trend, the last earnings result — and labels it **INTACT**, **WEAKENING**, or **BROKEN** with a short written read. Deliberately conservative: leans WEAKENING when unsure; BROKEN needs a clear contradiction in the evidence. **BROKEN does not sell anything** — it's awareness that your original reason has changed; Trim/Exit protection fires on its own. Reviews refresh weekly and on demand.
+
+- **🎯 Post-earnings Thesis Checkpoint** — Within 14 days of a held position reporting earnings, a prompt surfaces on AI Insights → Positions. Claude compares the result (actual vs estimated EPS, beat/miss, surprise %) against your thesis and suggests INTACT / WEAKENING / BROKEN. Confirming the suggestion writes a timestamped review row tagged as an earnings checkpoint. Suggestion-only — never auto-saves or auto-changes a recommendation.
+
+- **🗓️ Weekly Debrief — "what happened, and what did I do?"** A short narrative recap of the past week: how your portfolio did *versus the market*, your biggest contributors and detractors, the decisions you made, and one thing to watch next week. Delivered by email every Sunday and available on demand. (Needs about a week of trade history before the first one generates meaningfully.)
+
+- **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
+
+- **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news. Your choice of provider: Claude, OpenAI, Gemini, or Groq. For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
+
+---
+
+Nothing on this page issues a buy or sell. The engine remains the only thing that gates or recommends.
 """
         )
 
