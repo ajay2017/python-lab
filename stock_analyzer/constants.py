@@ -406,6 +406,11 @@ NEWS_SENTIMENT_NEGATIVE =  -0.15   # cross-reference "negative news" conflict
 NEWS_SENTIMENT_WARN     =  -0.05   # warning-news Review Before Close
 NEWS_SENTIMENT_POSITIVE =   0.10   # treat as supporting signal in xref
 NEWS_CRITICAL_MIN_HEADLINES     = 2     # min qualifying headlines per ticker before firing Critical News Act Today
+# LLM bidirectional rescore — max points the LLM can shift any single headline's
+# VADER compound score in either direction. Prevents a single LLM outlier from
+# dominating the average while still giving the model full authority on genuine
+# bear/bull signals. Impact is further bounded by the 10% composite weight.
+SENTIMENT_LLM_MAX_SWING = 0.5
 
 # ── News-Intelligence "Opportunity Signals" inclusion (Overview) ─────────────
 # A held name surfaces as a positive-news opportunity when BOTH hold: the

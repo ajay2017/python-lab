@@ -149,6 +149,38 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         pass  # silent degrade — valuation scores on P/E + FCF alone
     val_score, val_signals = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
     avg_sent, headlines = analyze_news(bundle["news"])
+    # Bidirectional LLM rescore — ticker-aware financial context, persisted to
+    # sentiment_llm_cache so app + cron always use the same composite for a given
+    # ticker on a given UTC day. Cache miss → call LLM → write cache. Any failure
+    # at any step leaves avg_sent / headlines as the original VADER values (fail-open).
+    try:
+        import datetime as _dt
+        import os as _os
+        from stock_analyzer.news_intelligence import rescore_headlines_llm as _rescore_hl
+        _today = _dt.date.today().isoformat()
+        _cached = db.load_sentiment_llm_cache(ticker, _today)
+        if _cached is not None:
+            headlines = _cached["headlines"]
+            avg_sent  = _cached["avg_sent"]
+        else:
+            # Read key: env first (GitHub Actions cron), then st.secrets (Streamlit Cloud)
+            _ant_key = _os.getenv("ANTHROPIC_API_KEY", "").strip()
+            if not _ant_key:
+                try:
+                    import streamlit as _st
+                    _ant_key = (_st.secrets.get("anthropic") or {}).get("api_key", "")
+                except Exception:
+                    pass
+            if _ant_key:
+                _rescored = _rescore_hl(headlines, _ant_key, ticker)
+                if _rescored is not None:  # None = LLM failed; don't poison the day-cache
+                    _sc = [h["score"] for h in _rescored if isinstance(h.get("score"), (int, float))]
+                    _new_avg = round(sum(_sc) / len(_sc), 3) if _sc else avg_sent
+                    db.save_sentiment_llm_cache(ticker, _today, _rescored, _new_avg)
+                    headlines = _rescored
+                    avg_sent  = _new_avg
+    except Exception:
+        pass
     s_score = sentiment_score_0_100(avg_sent)
     total = combined_score(t_score, bq_score, val_score, s_score)
     rec = recommendation(total)

@@ -1841,6 +1841,68 @@ def save_sector_cache(ticker: str, sector: str) -> bool:
         return False
 
 
+# ── LLM sentiment day-cache (ticker × date) ─────────────────────────────────
+# Persists the bidirectional LLM-rescored headlines and their avg_sent so the
+# Streamlit app and the headless cron runner always read the same composite
+# for a given ticker on a given UTC day. System cache → NOT _READONLY-gated
+# (mirrors sector_cache / bundle_cache). One row per (ticker, score_date).
+
+def load_sentiment_llm_cache(ticker: str, score_date: str) -> dict | None:
+    """Return {"headlines": [...], "avg_sent": float} for ticker/date, or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for today)
+    — caller should run the LLM and then call save_sentiment_llm_cache. Never raises.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("sentiment_llm_cache")
+            .select("headlines,avg_sent")
+            .eq("ticker", t)
+            .eq("score_date", score_date)
+            .limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        if not isinstance(row.get("headlines"), list):
+            return None
+        return {"headlines": row["headlines"], "avg_sent": float(row["avg_sent"])}
+    except Exception:
+        return None
+
+
+def save_sentiment_llm_cache(
+    ticker: str, score_date: str, headlines: list, avg_sent: float
+) -> bool:
+    """Upsert LLM-rescored headlines + avg_sent for ticker/date.
+
+    Best-effort — a failure (table not created yet, RLS issue) is swallowed so
+    it never disrupts the load_bundle success path. The feature degrades to
+    per-request VADER on every failure; the next run retries the DB write.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return False
+    try:
+        from datetime import datetime, timezone
+        _client().table("sentiment_llm_cache").upsert(
+            {
+                "ticker":     t,
+                "score_date": score_date,
+                "headlines":  headlines,
+                "avg_sent":   round(float(avg_sent), 6),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="ticker,score_date",
+        ).execute()
+        return True
+    except Exception:
+        return False
+
+
 # ── Alert-cron dedup state (single row, id=1) ────────────────────────────────
 # Used ONLY by the headless email-alerts cron (exit-discipline Phase 3) to (a)
 # fire at most once per ET trading day and (b) skip an email whose protective set

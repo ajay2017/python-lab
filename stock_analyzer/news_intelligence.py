@@ -14,6 +14,7 @@ import time as _time
 from stock_analyzer.constants import (
     NEWS_OPPORTUNITY_COMPOUND_MIN,
     NEWS_OPPORTUNITY_SCORE_MIN,
+    SENTIMENT_LLM_MAX_SWING,
 )
 
 
@@ -267,3 +268,102 @@ def rescore_news_items_llm(items: list[dict], api_key: str, timeout: float = 8.0
 
     except Exception:
         return items
+
+
+def rescore_headlines_llm(
+    headlines: list[dict],
+    api_key: str,
+    ticker: str = "",
+    timeout: float = 8.0,
+) -> list[dict] | None:
+    """Bidirectional LLM rescore for VADER-annotated headline dicts (from analyze_news).
+
+    Works on the {"headline", "score", "label", "url"} format returned by analyze_news —
+    distinct from rescore_news_items_llm which targets the raw Yahoo news format.
+
+    Unlike the suppress-only sidebar version, this is fully bidirectional: the LLM can
+    both raise and lower scores using financial domain context. Per-headline adjustment
+    is capped at SENTIMENT_LLM_MAX_SWING to prevent a single LLM outlier from dominating
+    the average. Falls back to original VADER scores on any failure.
+
+    Ticker context is injected into the prompt so the LLM scores relative to THIS stock's
+    investment thesis (e.g. "IBM's earnings warning is great for CrowdStrike" scores very
+    bullish for CRWD even though the headline is bearish for IBM).
+    """
+    if not headlines or not api_key:
+        return headlines
+
+    try:
+        import anthropic
+        import json
+
+        ticker_ctx = f" for {ticker} investors" if ticker else ""
+        headline_lines = [
+            f'{i}. "{h.get("headline", "")}"' for i, h in enumerate(headlines)
+        ]
+
+        prompt = (
+            f"You are a financial sentiment analyst. Score each headline{ticker_ctx}.\n"
+            "How does each headline affect the investment thesis for this specific stock?\n"
+            "Score -1.0 (very bearish for this stock) to +1.0 (very bullish for this stock).\n"
+            "Domain knowledge: earnings beat/analyst upgrade/guidance raise/stock surge = bullish; "
+            "earnings miss/analyst downgrade/regulatory action/layoffs/fraud/competitor win = bearish; "
+            "competitor loss/market share gain = bullish for this stock; "
+            "generic industry noise with no direct implication = 0.0.\n"
+            "Return ONLY a JSON array with no other text:\n"
+            '[{"idx": 0, "score": 0.4}, {"idx": 1, "score": -0.3}, ...]\n\n'
+            "Headlines:\n" + "\n".join(headline_lines)
+        )
+
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            max_retries=0,
+            timeout=anthropic.Timeout(timeout),
+        )
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        scores = json.loads(raw.strip())
+
+        result = [dict(h) for h in headlines]
+        for entry in scores:
+            idx = entry.get("idx")
+            llm_score = entry.get("score")
+            if not isinstance(idx, int) or idx < 0 or idx >= len(headlines):
+                continue
+            if not isinstance(llm_score, (int, float)):
+                continue
+            llm_score = float(llm_score)
+            if not (-1.0 <= llm_score <= 1.0):
+                continue
+            vader_score = headlines[idx].get("score", 0.0)
+            # Apply swing cap: LLM can't shift a score more than MAX_SWING from VADER
+            delta = llm_score - vader_score
+            if abs(delta) > SENTIMENT_LLM_MAX_SWING:
+                llm_score = round(
+                    vader_score + SENTIMENT_LLM_MAX_SWING * (1.0 if delta > 0 else -1.0),
+                    3,
+                )
+            else:
+                llm_score = round(llm_score, 3)
+            label = (
+                "Positive" if llm_score >= 0.05 else
+                "Negative" if llm_score <= -0.05 else
+                "Neutral"
+            )
+            result[idx]["score"] = llm_score
+            result[idx]["label"] = label
+
+        return result
+
+    except Exception:
+        return None  # signals "LLM did not run" — caller must not write this to the day-cache
