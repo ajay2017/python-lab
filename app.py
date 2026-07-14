@@ -5095,6 +5095,11 @@ if page == "🏠 Home":
         # New picks
         if new_picks:
             st.markdown("**🆕 New Positions to Initiate**")
+            st.caption(
+                "Composite score, sector diversity, concentration limits, macro event "
+                "check, and act-today conflicts all cleared. The app considers these "
+                "ready to enter within your sizing rules."
+            )
         _ac_cov_map = _cached_analyst_coverage_recent()   # hoisted; one query, annotation-only
         for _gp in new_picks:
             _gx         = _gp.get("xref", {})
@@ -6423,7 +6428,10 @@ if page == "🏠 Home":
         else:
             st.caption(
                 "📡 Scanner picks — not yet validated by the full portfolio check. "
-                "Run Analysis before entering."
+                "Run Analysis before entering. "
+                "Unlike the picks above, concentration limits, sector caps, and macro "
+                "gates have not been applied — treat these as research leads, not "
+                "direct entry signals."
                 + (f"  {_scan_stamp}" if _scan_stamp else "")
             )
             for _db_buy in _db_buys_unique:
