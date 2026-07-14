@@ -7183,67 +7183,28 @@ elif page == "⚠️ Alerts & Actions":
 
     # ── Custom Price Alerts ───────────────────────────────────────────────
     st.divider()
-    st.subheader("🎯 Custom Price Alerts")
-    st.caption(
-        "Set a **take-profit target** (above current price) and/or a **floor alert** "
-        "(below current price) for each holding. Alerts fire the next time you load the page."
-    )
 
-    # Initialise alerts store
+    # Initialise store and seed widget session-state outside the expander so
+    # that the store exists and widget keys are primed on every run regardless
+    # of whether the user has the expander open.
     _pa_store = st.session_state.setdefault("_price_alerts", {})
     for _t in port_df["Ticker"]:
         _pa_store.setdefault(_t, {"target": 0.0, "floor": 0.0})
-
-    # Seed number-input session state from store on first load only
     for _t in port_df["Ticker"]:
         if f"_pa_tgt_{_t}" not in st.session_state:
             st.session_state[f"_pa_tgt_{_t}"] = float(_pa_store[_t].get("target") or 0.0)
         if f"_pa_flr_{_t}" not in st.session_state:
             st.session_state[f"_pa_flr_{_t}"] = float(_pa_store[_t].get("floor") or 0.0)
 
-    # Header row
-    _hc = st.columns([2, 2, 2, 2])
-    _hc[0].markdown("**Ticker**")
-    _hc[1].markdown("**Current price**")
-    _hc[2].markdown("**Take-Profit ($)** — alert when price ≥ this")
-    _hc[3].markdown("**Floor Alert ($)** — alert when price ≤ this")
-
-    for _, _pr in port_df.iterrows():
-        _t = _pr["Ticker"]
-        _c1, _c2, _c3, _c4 = st.columns([2, 2, 2, 2])
-        _c1.markdown(f"**{_t}**")
-        _c2.markdown(f"${_pr['Price']:.2f}")
-        _c3.number_input(
-            "take-profit", key=f"_pa_tgt_{_t}",
-            min_value=0.0, step=1.0, format="%.2f",
-            label_visibility="collapsed",
-        )
-        _c4.number_input(
-            "floor alert", key=f"_pa_flr_{_t}",
-            min_value=0.0, step=1.0, format="%.2f",
-            label_visibility="collapsed",
-        )
-
-    if st.button("💾 Save price alerts", key="_pa_save"):
-        for _t in port_df["Ticker"]:
-            _pa_store[_t] = {
-                "target": float(st.session_state.get(f"_pa_tgt_{_t}") or 0.0),
-                "floor":  float(st.session_state.get(f"_pa_flr_{_t}") or 0.0),
-            }
-        st.session_state["_pa_saved_ok"] = True
-        st.rerun()
-
-    if st.session_state.pop("_pa_saved_ok", False):
-        st.success("✅ Price alerts saved.")
-
-    # Check triggers — full detail shown here, badge summary shown in Command Center above
+    # Check triggers outside the expander — fired alerts stay visible without
+    # the user having to open the config form.
     _pa_fired = []
     for _, _pr in port_df.iterrows():
-        _t    = _pr["Ticker"]
-        _px   = float(_pr.get("Price") or 0)
-        _pa   = _pa_store.get(_t, {})
-        _tgt  = _pa.get("target") or 0.0
-        _flr  = _pa.get("floor")  or 0.0
+        _t   = _pr["Ticker"]
+        _px  = float(_pr.get("Price") or 0)
+        _pa  = _pa_store.get(_t, {})
+        _tgt = _pa.get("target") or 0.0
+        _flr = _pa.get("floor")  or 0.0
         if _tgt > 0 and _px >= _tgt:
             _pa_fired.append(("warning", f"🎯 **{_t}** hit take-profit target **${_tgt:.2f}** (current ${_px:.2f}) — consider locking in gains"))
         if _flr > 0 and _px <= _flr:
@@ -7253,6 +7214,49 @@ elif page == "⚠️ Alerts & Actions":
         for _lvl, _msg in _pa_fired:
             if _lvl == "danger":   st.error(_msg)
             else:                  st.warning(_msg)
+
+    with st.expander(
+        "⚙️ Custom Price Alerts — configure take-profit targets and floor alerts",
+        expanded=False,
+    ):
+        st.caption(
+            "Set a **take-profit target** (above current price) and/or a **floor alert** "
+            "(below current price) for each holding. Alerts fire the next time you load the page."
+        )
+        # Header row
+        _hc = st.columns([2, 2, 2, 2])
+        _hc[0].markdown("**Ticker**")
+        _hc[1].markdown("**Current price**")
+        _hc[2].markdown("**Take-Profit ($)** — alert when price ≥ this")
+        _hc[3].markdown("**Floor Alert ($)** — alert when price ≤ this")
+
+        for _, _pr in port_df.iterrows():
+            _t = _pr["Ticker"]
+            _c1, _c2, _c3, _c4 = st.columns([2, 2, 2, 2])
+            _c1.markdown(f"**{_t}**")
+            _c2.markdown(f"${_pr['Price']:.2f}")
+            _c3.number_input(
+                "take-profit", key=f"_pa_tgt_{_t}",
+                min_value=0.0, step=1.0, format="%.2f",
+                label_visibility="collapsed",
+            )
+            _c4.number_input(
+                "floor alert", key=f"_pa_flr_{_t}",
+                min_value=0.0, step=1.0, format="%.2f",
+                label_visibility="collapsed",
+            )
+
+        if st.button("💾 Save price alerts", key="_pa_save"):
+            for _t in port_df["Ticker"]:
+                _pa_store[_t] = {
+                    "target": float(st.session_state.get(f"_pa_tgt_{_t}") or 0.0),
+                    "floor":  float(st.session_state.get(f"_pa_flr_{_t}") or 0.0),
+                }
+            st.session_state["_pa_saved_ok"] = True
+            st.rerun()
+
+        if st.session_state.pop("_pa_saved_ok", False):
+            st.success("✅ Price alerts saved.")
 
     st.divider()
 
@@ -7575,7 +7579,7 @@ elif page == "⚠️ Alerts & Actions":
 
                 # ── Suggested action ──────────────────────────────────────
                 st.markdown("---")
-                st.markdown("**Suggested Action**")
+                st.markdown("**Recommended Action**")
                 if act["type"] == "review":
                     half = act["half_shares"]
                     half_val = half * act["price"]
@@ -8144,7 +8148,7 @@ elif page == "🔗 Risk Analysis":
                 f"<div style='margin-top:8px;font-size:0.85em;color:{_ca_color};font-weight:600'>"
                 f"Overall: {_ca_label} · {_ca_score} of {_ca_avail} signals stressed</div>"
                 f"<div style='font-size:0.78em;color:#6b7280;margin-top:2px'>"
-                f"Cross-asset signals update every 30 min. They are awareness-only — "
+                f"Cross-asset signals update every 30 min. They are awareness only — "
                 f"they never move a gate or change a recommendation.</div>",
                 unsafe_allow_html=True,
             )
@@ -8492,7 +8496,7 @@ The app deliberately keeps target beta fixed across regimes. In risk-off conditi
                         f"<div style='padding:10px 14px;background:#0d2137;border-radius:6px;"
                         f"border-left:4px solid #4a9eff;margin-bottom:10px'>"
                         f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
-                        f"letter-spacing:0.09em;text-transform:uppercase'>Recommendation</span><br>"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
                         f"<span style='color:#eee;font-size:0.9em'>{_rec['recommendation']}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -12301,6 +12305,35 @@ elif page == "📈 Analysis":
             st.session_state["_sidebar_news"] = _news
     except Exception:
         pass
+
+    # ── Single-ticker verdict summary — shown before the scorecard so the
+    # answer to "should I act?" is the first thing visible without scrolling.
+    # Full formula breakdown and per-pillar detail remain in the tab below.
+    if len(results) == 1:
+        _sv_ticker, _sv_r = next(iter(results.items()))
+        _sv_rec = _sv_r["rec"]
+        if not _sv_r.get("fundamentals_available", True):
+            st.markdown(
+                "<div style='padding:12px;border-radius:8px;background:#dc262618;"
+                "border-left:5px solid #dc2626;margin-bottom:10px'>"
+                f"<b style='font-size:1.1em;color:#dc2626'>🚫 Verdict withheld — "
+                f"fundamentals unavailable for {_sv_ticker}</b></div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f"<div style='padding:12px;border-radius:8px;"
+                f"background:{_sv_rec['color']}18;"
+                f"border-left:5px solid {_sv_rec['color']};margin-bottom:10px'>"
+                f"<b style='font-size:1.2em;color:{_sv_rec['color']}'>"
+                f"{_sv_rec['icon']} {_sv_rec['label']} · {_sv_r['total']}/100</b>"
+                f"<br><span style='color:#ccc;font-size:0.9em'>{_sv_rec['rationale']}</span>"
+                + (f"<br><small style='color:#888'>📍 {_sv_r['upside']}</small>"
+                   if _sv_r.get('upside') and _sv_rec['label'] not in ("Sell", "Strong Sell")
+                   and "upside" in (_sv_r.get('upside') or "").lower() else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
 
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
@@ -17959,7 +17992,7 @@ elif page == "📜 Recommendations History":
             st.plotly_chart(_rh_sk_fig, use_container_width=True)
             st.caption(
                 f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
-                f"a name recurring across days counts once. The awareness-only More Buy "
+                f"a name recurring across days counts once. The awareness only More Buy "
                 f"Candidates feed is excluded. Win/Loss count **matured** outcomes only "
                 f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recs within ±0.5%, "
                 f"fall into Flat / Open) — so this never disagrees with the metrics above. "
@@ -17981,7 +18014,7 @@ elif page == "📜 Recommendations History":
         st.markdown("### 🎯 Missed Opportunity — New Positions to Initiate you skipped")
         st.caption(
             "Scoped to **New Positions to Initiate** (`new_pick` — names that cleared "
-            "all gates). The awareness-only **More Buy Candidates** feed (Conflicted / "
+            "all gates). The awareness only **More Buy Candidates** feed (Conflicted / "
             "Unverified names the App flags to skip, e.g. a sub-65 composite) is "
             "**excluded** — skipping those was the correct call, not a miss."
         )
@@ -20551,7 +20584,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every pick the app has surfaced, graded after the fact against what actually happened. It's the raw data the Monthly Intelligence Report narrates.
 
 - **The scorecard** matches each past recommendation to your trades to see whether you **acted** on it, then grades the outcome on **alpha** — its return *minus the market's* over the same window. (Beating the market in a down month is a win; trailing it in an up month isn't — raw return alone would credit or blame you for the market's move, not your pick.) It rolls up by conviction band and by cross-check verdict, and only grades picks old enough to have a meaningful outcome.
-- **🎯 Missed Opportunity** answers *"which names did I skip, and what did it cost?"* — names that surfaced as *New Positions to Initiate* but you never bought, ranked by how they did. To stay honest, magnitudes are shown **per $1,000** (you can't buy every name, so it never claims "your portfolio would have gained X%"). Names the app *steered you away from* (the awareness-only "more buy candidates") are excluded — skipping those was correct, not a miss.
+- **🎯 Missed Opportunity** answers *"which names did I skip, and what did it cost?"* — names that surfaced as *New Positions to Initiate* but you never bought, ranked by how they did. To stay honest, magnitudes are shown **per $1,000** (you can't buy every name, so it never claims "your portfolio would have gained X%"). Names the app *steered you away from* (the awareness only "more buy candidates") are excluded — skipping those was correct, not a miss.
 - **The flow chart** visualises the same funnel: everything surfaced → acted vs. not-acted → win / loss / flat.
 
 It's a **learning** surface, not a recommendation surface — it shows how the engine *and* your own decisions have actually been doing.
