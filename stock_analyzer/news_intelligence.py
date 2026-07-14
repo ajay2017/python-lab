@@ -303,13 +303,21 @@ def rescore_headlines_llm(
         ]
 
         prompt = (
-            f"You are a financial sentiment analyst. Score each headline{ticker_ctx}.\n"
-            "How does each headline affect the investment thesis for this specific stock?\n"
-            "Score -1.0 (very bearish for this stock) to +1.0 (very bullish for this stock).\n"
-            "Domain knowledge: earnings beat/analyst upgrade/guidance raise/stock surge = bullish; "
-            "earnings miss/analyst downgrade/regulatory action/layoffs/fraud/competitor win = bearish; "
-            "competitor loss/market share gain = bullish for this stock; "
-            "generic industry noise with no direct implication = 0.0.\n"
+            f"You are a financial sentiment analyst. Score each headline for {ticker or 'this stock'} investors.\n"
+            f"Question: how does each headline affect the {ticker or 'this stock'} investment thesis specifically?\n\n"
+            "SCORING RULES (apply in order):\n"
+            f"1. Direct {ticker or 'stock'} news (earnings, guidance, analyst call, product, price target, "
+            f"   stock move, market share for {ticker or 'this company'}) → high magnitude ≥ 0.25\n"
+            "2. Analyst turns bullish on this stock / hits buy point = +0.3 to +0.5\n"
+            "3. Analyst turns bearish on this stock / stock slips on fundamentals = -0.3 to -0.5\n"
+            "4. This stock gains market share, widens competitive lead = +0.3 to +0.5\n"
+            "5. Competitor's bad earnings: only bearish for this stock if business models are DIRECTLY correlated "
+            "   (e.g. same customer segment). An enterprise IT company missing earnings is NOT bearish for a "
+            "   consumer tech company. When in doubt → 0.0.\n"
+            "6. Generic roundup or multi-stock list where this stock is one of many → 0.0\n"
+            "7. Macro/sector noise with no direct implication for this stock's fundamentals → 0.0\n\n"
+            "Be decisive: a clearly bullish or bearish signal scores ≥ 0.25 in magnitude. "
+            "Only use 0.0 for genuinely ambiguous or irrelevant headlines.\n\n"
             "Return ONLY a JSON array with no other text:\n"
             '[{"idx": 0, "score": 0.4}, {"idx": 1, "score": -0.3}, ...]\n\n'
             "Headlines:\n" + "\n".join(headline_lines)
