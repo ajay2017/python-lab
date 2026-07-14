@@ -23,7 +23,7 @@ Verdict tiers:
   Caution    — earnings within 7 days regardless of other signals (amber)
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime as _dt, time as _time, timedelta
 
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
@@ -531,6 +531,25 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _d = _days_until(_ev.get("date"), today)
         if _d is None or _d < 0 or _d > MACRO_IMMINENT_DAYS:
             continue
+        # Today's events: check whether the release has already resolved.
+        # FOMC (Fed Policy) is conservative — never lift same-day; the
+        # post-announcement volatility window makes it the wrong time to
+        # open new positions regardless of when the decision prints.
+        # All other HIGH events (CPI, NFP, GDP — 08:30 ET pre-market
+        # releases) lift when either (a) FRED confirms the actual is posted
+        # (secondary) or (b) the wall clock has passed the scheduled release
+        # time (primary). Fail-safe: any exception keeps the gate on.
+        if _d == 0 and _ev.get("category") != "Fed Policy":
+            _resolved = bool(_ev.get("released"))          # secondary: FRED
+            if not _resolved and _ev.get("time_et"):       # primary: clock
+                try:
+                    import pytz as _pytz
+                    _now_et = _dt.now(_pytz.timezone("America/New_York")).time()
+                    _resolved = _time.fromisoformat(_ev["time_et"]) <= _now_et
+                except Exception:
+                    pass                                   # keep gate on
+            if _resolved:
+                continue
         _affected = _aff_sectors(_ev.get("category", ""))
         if "__ALL__" in _affected:
             # All sectors affected — block every new pick (rare but intentional)
