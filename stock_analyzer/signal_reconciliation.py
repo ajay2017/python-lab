@@ -66,6 +66,7 @@ def reconcile_signals(
     composite_score: float | None = None,
     composite_signal: str | None = None,
     is_held: bool = False,
+    is_mover: bool = False,
     earnings_days: int | None = None,
     news_sentiment: float | None = None,
 ) -> dict:
@@ -81,8 +82,10 @@ def reconcile_signals(
     comp_class = _composite_class(composite_signal, composite_score)
     composite_available = comp_class != "unknown"
 
-    # Display strings used inside the one-liner
-    mom_str  = f"Momentum {momentum_score:.0f}"
+    # Display strings used inside the one-liner.
+    # Movers qualify via day-change breakout, not scanner momentum score —
+    # "Breakout today" is the honest context phrase for that entry trigger.
+    mom_str  = "Breakout today" if is_mover else f"Momentum {momentum_score:.0f}"
     comp_str = (
         f"Score: {composite_signal or 'n/a'}"
         + (f" ({composite_score:.0f}/100)" if composite_score is not None else "")

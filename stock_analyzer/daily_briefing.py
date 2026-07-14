@@ -179,7 +179,8 @@ def _trim_targets(risk_recs: list | None) -> dict[str, dict]:
 def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
                      held_data: dict, today: date,
                      earnings_lookup: dict | None = None,
-                     composites: dict | None = None) -> dict:
+                     composites: dict | None = None,
+                     is_mover: bool = False) -> dict:
     """
     Cross-check a buy candidate across all available signal layers.
 
@@ -370,6 +371,7 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         composite_score=comp_scr,
         composite_signal=comp_sig,
         is_held=is_held,
+        is_mover=is_mover,
         earnings_days=earn_days,
         news_sentiment=_news_compound,
     )
@@ -696,7 +698,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 continue
 
             xref = _cross_reference(ticker, row, port_df, news_items, held_data, today,
-                                    earnings_lookup=earnings_lookup, composites=composites)
+                                    earnings_lookup=earnings_lookup, composites=composites,
+                                    is_mover=is_mover)
 
             # Skip hard conflicts (applies to everything).
             if xref["verdict"] == "conflicted":
