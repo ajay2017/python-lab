@@ -32,28 +32,16 @@ All 8 Critical Issues, Improvements I8 & I9, and Quick Wins QW1–QW7 resolved i
 
 ## Pending
 
-### Tier 1 — Batch (display / copy / safety, one commit, no structural change)
+### ~~Tier 1 — Batch~~ Done — commit e9c288c (2026-07-15)
 
-Items that are pure copy, styling, or lightweight form-safety changes. No tabs reorganised, no decision logic touched. Can all ship in one commit.
+All 4 Tier 1 items shipped in one batch.
 
-**I10 — Standardize "Recommended Action" header** *(~10 min)*
-- `app.py:9955` Rebalancer trim card: `'Action'` → `'Recommended Action'`
-- `app.py:10052` Rebalancer add card: `'Action'` → `'Recommended Action'`
-- `app.py:15155` Watchlist card: `f"{_a_icon} Action: {_a_label}"` → `f"{_a_icon} Recommended Action: {_a_label}"`
-
-**I5 — Cash balance: save requires second confirm after sanity warning** *(~20 min)*
-- `app.py:20023-20037`: when either sanity check fires (`_new_cash > max(equity × 10, $1M)` or margin debit exceeds equity), set `st.session_state["_acct_implausible_pending"]` instead of calling `save_account_cash`; on next run render "Save anyway / Cancel" and clear the flag on either branch.
-- Same two-step session_state pattern as C6.
-
-**I1 — Economic Calendar vocabulary: pre-event OPPORTUNITY → ADD** *(~30 min, confirm label origin first)*
-- Need to verify whether `OPPORTUNITY` is a literal string produced by `economic_calendar_advisor.build_event_playbooks()` (display-label swap) or is routed through conditional logic in the advisor (broader change).
-- If display-label only: rename `OPPORTUNITY → ADD` so Pre-Event and Post-Event both use ADD for "entry signal"; leave `PROTECT` / `REDUCE` as intentionally distinct (different contexts).
-- Location: `app.py:20707-20716` (Pre-Event rendering).
-
-**I4 — Catalyst Watch Entry Candidates: de-escalate visual weight** *(~30 min)*
-- `app.py:20348-20380`: per-candidate body currently renders 4 `st.metric` tiles (same grid as a Buy card), with a per-ticker ▶ Analyse button.
-- Replace: `st.metric` grid → compact `st.caption` info row (beat rate, score, reaction inline as text); keep the expander header and the Analyse link but style it as secondary.
-- The "Awareness only" section disclaimer and page-level caption stay unchanged.
+| Finding | What was fixed |
+|---|---|
+| I10 | `'Action'` → `'Recommended Action'` on Rebalancer trim card, Rebalancer add card, and Watchlist recommendation card |
+| I1 | `OPPORTUNITY` routing token display-mapped to `"Add"` at render site only (same pattern as existing `WATCH→"Watch"` alias); expander header updated to match. Internal `macro_playbook.py` token unchanged |
+| I5 | Cash balance implausible-value entry now requires explicit confirmation: first submit sets `_acct_implausible_pending`; "Save anyway / Cancel" pair rendered until resolved |
+| I4 | Catalyst Watch Entry Candidates: 4-column `st.metric` grid replaced with compact `st.caption` info row; expander header + Analyse button unchanged |
 
 ---
 
