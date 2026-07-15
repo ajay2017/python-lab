@@ -11514,6 +11514,34 @@ elif page == "🏆 Portfolio Health":
     st.markdown(_ph_gauge, unsafe_allow_html=True)
 
     # ── Sub-score dimension cards ─────────────────────────────────────────────
+    _ph_dim_notes = {
+        "concentration": (
+            "Too much weight in one name or sector amplifies the impact of a single "
+            "bad move on your whole book. Score falls linearly toward 0 as you approach "
+            "the hard caps (15% single-name, 35% sector)."
+        ),
+        "sector_balance": (
+            "A spread across many sectors cushions sector-specific corrections. "
+            "Measured by entropy — a perfectly equal split scores 100; "
+            "holding only one sector scores near 0."
+        ),
+        "diversification": (
+            "Measures how independently your holdings move day-to-day. "
+            "High correlation means most positions fall together in a selloff "
+            "even if their sector labels look different."
+        ),
+        "factor_exposure": (
+            "A high-beta, fragile book amplifies market moves in both directions. "
+            "In a routine -10% pullback a fragile book can fall 2-3x that — "
+            "this score rewards calm, balanced beta."
+        ),
+        "signal_integrity": (
+            "Tracks how much of your book weight the engine still endorses at "
+            "Buy quality (composite ≥ 65). Holding deteriorating names without "
+            "acting erodes long-run returns — this score penalises drift."
+        ),
+    }
+
     st.markdown("#### Construction dimensions")
     _ph_cols = st.columns(5)
     _ph_dim_order = [
@@ -11558,22 +11586,21 @@ elif page == "🏆 Portfolio Health":
                 if _ph_pct is not None else "No data"
             )
 
+        _ph_note_txt = _ph_dim_notes.get(_ph_dim, "")
         with _ph_col:
             st.markdown(
-                f"""
-                <div style="
-                    border:1px solid #374151;border-radius:8px;
-                    padding:14px 12px;text-align:center;height:130px;
-                    display:flex;flex-direction:column;justify-content:center;gap:6px;">
-                  <div style="font-size:20px;">{_ph_icons[_ph_dim]}</div>
-                  <div style="font-size:11px;color:#9ca3af;font-weight:600;
-                               text-transform:uppercase;letter-spacing:.5px;">
-                    {_ph_dlabels[_ph_dim]}
-                  </div>
-                  <div style="font-size:28px;font-weight:800;color:{_ph_color};">{_ph_sval}</div>
-                  <div style="font-size:10px;color:#6b7280;line-height:1.3;">{_ph_ctx}</div>
-                </div>
-                """,
+                f'<div style="border:1px solid #374151;border-radius:8px;'
+                f'padding:14px 12px;text-align:center;'
+                f'display:flex;flex-direction:column;align-items:center;gap:5px;">'
+                f'<div style="font-size:20px;">{_ph_icons[_ph_dim]}</div>'
+                f'<div style="font-size:11px;color:#9ca3af;font-weight:600;'
+                f'text-transform:uppercase;letter-spacing:.5px;">{_ph_dlabels[_ph_dim]}</div>'
+                f'<div style="font-size:28px;font-weight:800;color:{_ph_color};">{_ph_sval}</div>'
+                f'<div style="font-size:10px;color:#6b7280;line-height:1.3;">{_ph_ctx}</div>'
+                f'<div style="width:100%;border-top:1px solid #1f2937;margin:6px 0 4px;"></div>'
+                f'<div style="font-size:10px;color:#4b5563;line-height:1.45;text-align:left;">'
+                f'{_ph_note_txt}</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
