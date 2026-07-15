@@ -18730,375 +18730,382 @@ elif page == "📜 Recommendations History":
         st.info("No recommendations match the current filters.")
         st.stop()
 
-    # ── Headline metrics ────────────────────────────────────────────────────
-    _rh_stats = summary_stats(_rh_enriched)
-    _rh_m1, _rh_m2, _rh_m3, _rh_m4 = st.columns(4)
-    _rh_m1.metric(
-        "Total recs",
-        f"{_rh_stats['n_total']:,}",
-        help=(
-            "Recommendation *surfacings* in range — a name recurs each day it "
-            "qualifies, so this exceeds the distinct-ticker count. The 'Missed "
-            "Opportunity' section below collapses to distinct names."
-        ),
-    )
-    _rh_m2.metric(
-        "Action rate",
-        f"{_rh_stats['action_rate']:.0f}%" if _rh_stats['action_rate'] is not None else "—",
-        f"{_rh_stats['n_acted']:,} acted",
-        help="Acted = same-day trade with trigger_type='RECOMMENDATION'.",
-    )
-    _rh_m3.metric(
-        "Avg acted outcome",
-        f"{_rh_stats['avg_acted_pct']:+.1f}%" if _rh_stats['avg_acted_pct'] is not None else "—",
-        f"{_rh_stats['avg_acted_alpha']:+.1f}pp vs SPY" if _rh_stats['avg_acted_alpha'] is not None else None,
-        delta_color="normal",
-        help=(
-            "Mean outcome across MATURE acted recs (BUY mark-to-market, SELL "
-            "realized). The 'vs SPY' delta is alpha — the same return minus SPY "
-            "over the same window. In a down tape the raw % misleads; alpha is "
-            "the regime-adjusted read of whether acting beat the market."
-        ),
-    )
-    _rh_m4.metric(
-        "Avg missed outcome",
-        f"{_rh_stats['avg_missed_pct']:+.1f}%" if _rh_stats['avg_missed_pct'] is not None else "—",
-        f"{_rh_stats['avg_missed_alpha']:+.1f}pp vs SPY" if _rh_stats['avg_missed_alpha'] is not None else None,
-        delta_color="normal",
-        help=(
-            "Mean would-have-gained across MATURE missed recs (price-at-surface → "
-            "now), with its SPY-relative alpha. Compare to acted: if missed alpha "
-            "≫ acted alpha, skipping cost you; if not, your discretion held up."
-        ),
-    )
+    _rh_tab_sum, _rh_tab_trends, _rh_tab_full = st.tabs([
+        "📊 Summary", "📈 Trends", "📋 Full Table"
+    ])
 
-    # Maturity + alpha context. Preserve the old raw acted−missed gap but frame
-    # it as secondary to the benchmark-relative read.
-    _rh_gap = _rh_stats.get("missed_alpha")
-    st.caption(
-        f"Outcomes exclude **{_rh_stats.get('n_maturing', 0)}** rec(s) younger than "
-        f"{REC_SCORE_MIN_DAYS} days (still listed below, flagged ⏳ — one session of "
-        f"wiggle isn't an outcome). **vs SPY** = alpha (return minus SPY over the same "
-        f"window). Raw acted−missed gap: "
-        f"{('+' if (_rh_gap or 0) >= 0 else '')}{_rh_gap:.1f}pp." if _rh_gap is not None else
-        f"Outcomes exclude **{_rh_stats.get('n_maturing', 0)}** rec(s) younger than "
-        f"{REC_SCORE_MIN_DAYS} days (flagged ⏳ below). **vs SPY** = alpha (return minus "
-        f"SPY over the same window)."
-    )
-
-    # Best / Worst banner
-    _best  = _rh_stats.get("best")
-    _worst = _rh_stats.get("worst")
-    if _best and _worst:
-        def _rh_alpha_str(bw):
-            a = bw.get("alpha_pct")
-            return f", {a:+.1f}pp vs SPY" if a is not None else ""
-        st.markdown(
-            f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
-            f"padding:10px 14px;margin:8px 0;color:#cbd5e1;font-size:0.92em'>"
-            f"🏆 <b>Best:</b> {_best['ticker']} on {_best['rec_date']} → "
-            f"<span style='color:#86efac'>{_best['outcome_pct']:+.2f}%</span> "
-            f"({'acted' if _best['acted_on'] else 'missed'}{_rh_alpha_str(_best)})"
-            f"  ·  💔 <b>Worst:</b> {_worst['ticker']} on {_worst['rec_date']} → "
-            f"<span style='color:#fca5a5'>{_worst['outcome_pct']:+.2f}%</span> "
-            f"({'acted' if _worst['acted_on'] else 'missed'}{_rh_alpha_str(_worst)})"
-            f"</div>",
-            unsafe_allow_html=True,
+    with _rh_tab_sum:
+        # ── Headline metrics ────────────────────────────────────────────────────
+        _rh_stats = summary_stats(_rh_enriched)
+        _rh_m1, _rh_m2, _rh_m3, _rh_m4 = st.columns(4)
+        _rh_m1.metric(
+            "Total recs",
+            f"{_rh_stats['n_total']:,}",
+            help=(
+                "Recommendation *surfacings* in range — a name recurs each day it "
+                "qualifies, so this exceeds the distinct-ticker count. The 'Missed "
+                "Opportunity' section below collapses to distinct names."
+            ),
+        )
+        _rh_m2.metric(
+            "Action rate",
+            f"{_rh_stats['action_rate']:.0f}%" if _rh_stats['action_rate'] is not None else "—",
+            f"{_rh_stats['n_acted']:,} acted",
+            help="Acted = same-day trade with trigger_type='RECOMMENDATION'.",
+        )
+        _rh_m3.metric(
+            "Avg acted outcome",
+            f"{_rh_stats['avg_acted_pct']:+.1f}%" if _rh_stats['avg_acted_pct'] is not None else "—",
+            f"{_rh_stats['avg_acted_alpha']:+.1f}pp vs SPY" if _rh_stats['avg_acted_alpha'] is not None else None,
+            delta_color="normal",
+            help=(
+                "Mean outcome across MATURE acted recs (BUY mark-to-market, SELL "
+                "realized). The 'vs SPY' delta is alpha — the same return minus SPY "
+                "over the same window. In a down tape the raw % misleads; alpha is "
+                "the regime-adjusted read of whether acting beat the market."
+            ),
+        )
+        _rh_m4.metric(
+            "Avg missed outcome",
+            f"{_rh_stats['avg_missed_pct']:+.1f}%" if _rh_stats['avg_missed_pct'] is not None else "—",
+            f"{_rh_stats['avg_missed_alpha']:+.1f}pp vs SPY" if _rh_stats['avg_missed_alpha'] is not None else None,
+            delta_color="normal",
+            help=(
+                "Mean would-have-gained across MATURE missed recs (price-at-surface → "
+                "now), with its SPY-relative alpha. Compare to acted: if missed alpha "
+                "≫ acted alpha, skipping cost you; if not, your discretion held up."
+            ),
         )
 
-    # ── Signal flow Sankey ────────────────────────────────────────────────────
-    # Scoped to New Positions to Initiate (new_pick), distinct by ticker, mature
-    # outcomes only — consistent with Missed Opportunity + F-4. Built from the
-    # pre-status-filter snapshot so both branches always show. Pure logic in
-    # recommendations_history.signal_flow().
-    _rh_flow = signal_flow(_rh_enriched_all, rec_types=("new_pick",))
-
-    if _rh_flow["n_total"] > 0:
-        _rh_sk_fig = _signal_flow_sankey(
-            _rh_flow,
-            "Signal flow — New Positions to Initiate → acted / missed → outcome",
-        )
-        if _rh_sk_fig is not None:
-            st.plotly_chart(_rh_sk_fig, use_container_width=True)
-            st.caption(
-                f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
-                f"a name recurring across days counts once. The awareness only More Buy "
-                f"Candidates feed is excluded. Win/Loss count **matured** outcomes only "
-                f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recs within ±0.5%, "
-                f"fall into Flat / Open) — so this never disagrees with the metrics above. "
-                f"Acted = mark-to-market (BUY) / realized (SELL); missed = surface-price → now."
-            )
-
-    # ── Missed Opportunity — what you skipped and what it cost ───────────────
-    # Distinct names surfaced but NEVER acted on, graded from their FIRST surfacing.
-    # Honest framing: per-$1k notional + named outliers — never a fabricated
-    # portfolio-% counterfactual (you can't buy every surfaced name; capital,
-    # concentration caps and the gates all bind).
-    _rh_missed = distinct_missed(_rh_enriched)
-    if _rh_missed:
-        _rh_ms  = missed_split(_rh_missed)
-        _rh_bm  = _rh_ms.get("biggest_miss")
-        _rh_bd  = _rh_ms.get("biggest_dodge")
-        _rh_p1k = _rh_ms.get("avg_per_1k")
-
-        st.markdown("### 🎯 Missed Opportunity — New Positions to Initiate you skipped")
+        # Maturity + alpha context. Preserve the old raw acted−missed gap but frame
+        # it as secondary to the benchmark-relative read.
+        _rh_gap = _rh_stats.get("missed_alpha")
         st.caption(
-            "Scoped to **New Positions to Initiate** (`new_pick` — names that cleared "
-            "all gates). The awareness only **More Buy Candidates** feed (Conflicted / "
-            "Unverified names the App flags to skip, e.g. a sub-65 composite) is "
-            "**excluded** — skipping those was the correct call, not a miss."
-        )
-        st.markdown(
-            f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
-            f"padding:12px 16px;margin:6px 0;color:#cbd5e1;font-size:0.92em;line-height:1.65'>"
-            f"Of <b>{_rh_ms['n_distinct']}</b> distinct name(s) surfaced as <b>New Positions "
-            f"to Initiate</b> that you <b>never acted on</b> (graded from first surfacing): "
-            f"<span style='color:#86efac'><b>{_rh_ms['n_winners']}</b> rose</span> "
-            f"(missed winners) · <span style='color:#fca5a5'><b>{_rh_ms['n_dodged']}</b> fell</span> "
-            f"(dodged). "
-            + (f"Biggest miss: <b>{_rh_bm['ticker']}</b> "
-               f"<span style='color:#86efac'>{_rh_bm['outcome_pct']:+.1f}%</span>. "
-               if _rh_bm else "")
-            + (f"Biggest dodge: <b>{_rh_bd['ticker']}</b> "
-               f"<span style='color:#fca5a5'>{_rh_bd['outcome_pct']:+.1f}%</span>. "
-               if _rh_bd else "")
-            + "<br>"
-            + (f"Per <b>$1k</b> deployed, the average skipped name would have moved "
-               f"<b>{('+' if _rh_p1k >= 0 else '')}${_rh_p1k:,.0f}</b> — a read on your "
-               f"<i>selection</i> among surfaced names, <u>not</u> a claim you could have "
-               f"bought all {_rh_ms['n_distinct']} (capital, concentration caps and the "
-               f"gates bind)." if _rh_p1k is not None else
-               "Per-$1k magnitudes are still maturing.")
-            + "</div>",
-            unsafe_allow_html=True,
+            f"Outcomes exclude **{_rh_stats.get('n_maturing', 0)}** rec(s) younger than "
+            f"{REC_SCORE_MIN_DAYS} days (still listed below, flagged ⏳ — one session of "
+            f"wiggle isn't an outcome). **vs SPY** = alpha (return minus SPY over the same "
+            f"window). Raw acted−missed gap: "
+            f"{('+' if (_rh_gap or 0) >= 0 else '')}{_rh_gap:.1f}pp." if _rh_gap is not None else
+            f"Outcomes exclude **{_rh_stats.get('n_maturing', 0)}** rec(s) younger than "
+            f"{REC_SCORE_MIN_DAYS} days (flagged ⏳ below). **vs SPY** = alpha (return minus "
+            f"SPY over the same window)."
         )
 
-        # Ranked visual — top missed winners (green) + dodged losers (red) by outcome%.
-        import plotly.graph_objects as go
-        _rh_by_out = sorted(_rh_missed, key=lambda r: r["outcome_pct"], reverse=True)
-        _rh_top = _rh_by_out[:10]
-        _rh_bot = [r for r in _rh_by_out[-10:] if id(r) not in {id(x) for x in _rh_top}]
-        _rh_chart = sorted(_rh_top + _rh_bot, key=lambda r: r["outcome_pct"])  # asc → biggest on top
-        if _rh_chart:
-            _rh_xc = [r["outcome_pct"] for r in _rh_chart]
-            _rh_yc = [r["ticker"] for r in _rh_chart]
-            _rh_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _rh_xc]
-            _rh_hover = [
-                (f"{r['ticker']}: {r['outcome_pct']:+.1f}%"
-                 + (f" · α {r['alpha_pct']:+.1f}pp vs SPY" if r.get("alpha_pct") is not None else "")
-                 + f" · surfaced {r['n_surfaced']}×")
-                for r in _rh_chart
-            ]
-            _rh_fig = go.Figure(go.Bar(
-                x=_rh_xc, y=_rh_yc, orientation="h", marker_color=_rh_cc,
-                text=[f"{v:+.1f}%" for v in _rh_xc], textposition="outside",
-                hovertext=_rh_hover, hoverinfo="text",
-            ))
-            _rh_fig.update_layout(
-                height=max(220, 40 + 26 * len(_rh_chart)),
-                margin=dict(l=8, r=24, t=28, b=8),
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                title=dict(text="Skipped names — return since first surfaced", font=dict(size=13)),
-                xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
-                yaxis=dict(title=None),
-                showlegend=False,
+        # Best / Worst banner
+        _best  = _rh_stats.get("best")
+        _worst = _rh_stats.get("worst")
+        if _best and _worst:
+            def _rh_alpha_str(bw):
+                a = bw.get("alpha_pct")
+                return f", {a:+.1f}pp vs SPY" if a is not None else ""
+            st.markdown(
+                f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
+                f"padding:10px 14px;margin:8px 0;color:#cbd5e1;font-size:0.92em'>"
+                f"🏆 <b>Best:</b> {_best['ticker']} on {_best['rec_date']} → "
+                f"<span style='color:#86efac'>{_best['outcome_pct']:+.2f}%</span> "
+                f"({'acted' if _best['acted_on'] else 'missed'}{_rh_alpha_str(_best)})"
+                f"  ·  💔 <b>Worst:</b> {_worst['ticker']} on {_worst['rec_date']} → "
+                f"<span style='color:#fca5a5'>{_worst['outcome_pct']:+.2f}%</span> "
+                f"({'acted' if _worst['acted_on'] else 'missed'}{_rh_alpha_str(_worst)})"
+                f"</div>",
+                unsafe_allow_html=True,
             )
-            st.plotly_chart(_rh_fig, use_container_width=True)
+
+        # ── Signal flow Sankey ────────────────────────────────────────────────────
+        # Scoped to New Positions to Initiate (new_pick), distinct by ticker, mature
+        # outcomes only — consistent with Missed Opportunity + F-4. Built from the
+        # pre-status-filter snapshot so both branches always show. Pure logic in
+        # recommendations_history.signal_flow().
+        _rh_flow = signal_flow(_rh_enriched_all, rec_types=("new_pick",))
+
+        if _rh_flow["n_total"] > 0:
+            _rh_sk_fig = _signal_flow_sankey(
+                _rh_flow,
+                "Signal flow — New Positions to Initiate → acted / missed → outcome",
+            )
+            if _rh_sk_fig is not None:
+                st.plotly_chart(_rh_sk_fig, use_container_width=True)
+                st.caption(
+                    f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
+                    f"a name recurring across days counts once. The awareness only More Buy "
+                    f"Candidates feed is excluded. Win/Loss count **matured** outcomes only "
+                    f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recs within ±0.5%, "
+                    f"fall into Flat / Open) — so this never disagrees with the metrics above. "
+                    f"Acted = mark-to-market (BUY) / realized (SELL); missed = surface-price → now."
+                )
+
+        # ── Missed Opportunity — what you skipped and what it cost ───────────────
+        # Distinct names surfaced but NEVER acted on, graded from their FIRST surfacing.
+        # Honest framing: per-$1k notional + named outliers — never a fabricated
+        # portfolio-% counterfactual (you can't buy every surfaced name; capital,
+        # concentration caps and the gates all bind).
+        _rh_missed = distinct_missed(_rh_enriched)
+        if _rh_missed:
+            _rh_ms  = missed_split(_rh_missed)
+            _rh_bm  = _rh_ms.get("biggest_miss")
+            _rh_bd  = _rh_ms.get("biggest_dodge")
+            _rh_p1k = _rh_ms.get("avg_per_1k")
+
+            st.markdown("### 🎯 Missed Opportunity — New Positions to Initiate you skipped")
             st.caption(
-                "Green = names that rose after the App surfaced them (process misses — "
-                "worth asking why you skipped); red = names that fell (your discretion "
-                "paid off). Hover for SPY-relative alpha. Shows up to the 10 biggest "
-                "each way; the full list is in the table below."
+                "Scoped to **New Positions to Initiate** (`new_pick` — names that cleared "
+                "all gates). The awareness only **More Buy Candidates** feed (Conflicted / "
+                "Unverified names the App flags to skip, e.g. a sub-65 composite) is "
+                "**excluded** — skipping those was the correct call, not a miss."
+            )
+            st.markdown(
+                f"<div style='background:#0f172a;border:1px solid #334155;border-radius:8px;"
+                f"padding:12px 16px;margin:6px 0;color:#cbd5e1;font-size:0.92em;line-height:1.65'>"
+                f"Of <b>{_rh_ms['n_distinct']}</b> distinct name(s) surfaced as <b>New Positions "
+                f"to Initiate</b> that you <b>never acted on</b> (graded from first surfacing): "
+                f"<span style='color:#86efac'><b>{_rh_ms['n_winners']}</b> rose</span> "
+                f"(missed winners) · <span style='color:#fca5a5'><b>{_rh_ms['n_dodged']}</b> fell</span> "
+                f"(dodged). "
+                + (f"Biggest miss: <b>{_rh_bm['ticker']}</b> "
+                   f"<span style='color:#86efac'>{_rh_bm['outcome_pct']:+.1f}%</span>. "
+                   if _rh_bm else "")
+                + (f"Biggest dodge: <b>{_rh_bd['ticker']}</b> "
+                   f"<span style='color:#fca5a5'>{_rh_bd['outcome_pct']:+.1f}%</span>. "
+                   if _rh_bd else "")
+                + "<br>"
+                + (f"Per <b>$1k</b> deployed, the average skipped name would have moved "
+                   f"<b>{('+' if _rh_p1k >= 0 else '')}${_rh_p1k:,.0f}</b> — a read on your "
+                   f"<i>selection</i> among surfaced names, <u>not</u> a claim you could have "
+                   f"bought all {_rh_ms['n_distinct']} (capital, concentration caps and the "
+                   f"gates bind)." if _rh_p1k is not None else
+                   "Per-$1k magnitudes are still maturing.")
+                + "</div>",
+                unsafe_allow_html=True,
             )
 
-        # Full distinct-missed table (sortable).
-        _rh_mt = _rh_pd.DataFrame([
-            {
-                "Ticker":        m["ticker"],
-                "First surfaced": m["first_rec_date"].isoformat() if m["first_rec_date"] else "—",
-                "Surfacings":    m["n_surfaced"],
-                "Verdict":       m["verdict"] or "—",
-                "Outcome":       f"{m['outcome_pct']:+.1f}%",
-                "α vs SPY":      f"{m['alpha_pct']:+.1f}pp" if m.get("alpha_pct") is not None else "—",
-                "Per $1k":       f"${m['outcome_dollars']:+,.0f}" if m.get("outcome_dollars") is not None else "—",
-            }
-            for m in _rh_missed
-        ])
-        with st.expander(f"📄 All {_rh_ms['n_distinct']} skipped names (table)", expanded=False):
+            # Ranked visual — top missed winners (green) + dodged losers (red) by outcome%.
+            import plotly.graph_objects as go
+            _rh_by_out = sorted(_rh_missed, key=lambda r: r["outcome_pct"], reverse=True)
+            _rh_top = _rh_by_out[:10]
+            _rh_bot = [r for r in _rh_by_out[-10:] if id(r) not in {id(x) for x in _rh_top}]
+            _rh_chart = sorted(_rh_top + _rh_bot, key=lambda r: r["outcome_pct"])  # asc → biggest on top
+            if _rh_chart:
+                _rh_xc = [r["outcome_pct"] for r in _rh_chart]
+                _rh_yc = [r["ticker"] for r in _rh_chart]
+                _rh_cc = ["#22c55e" if v >= 0 else "#ef4444" for v in _rh_xc]
+                _rh_hover = [
+                    (f"{r['ticker']}: {r['outcome_pct']:+.1f}%"
+                     + (f" · α {r['alpha_pct']:+.1f}pp vs SPY" if r.get("alpha_pct") is not None else "")
+                     + f" · surfaced {r['n_surfaced']}×")
+                    for r in _rh_chart
+                ]
+                _rh_fig = go.Figure(go.Bar(
+                    x=_rh_xc, y=_rh_yc, orientation="h", marker_color=_rh_cc,
+                    text=[f"{v:+.1f}%" for v in _rh_xc], textposition="outside",
+                    hovertext=_rh_hover, hoverinfo="text",
+                ))
+                _rh_fig.update_layout(
+                    height=max(220, 40 + 26 * len(_rh_chart)),
+                    margin=dict(l=8, r=24, t=28, b=8),
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    title=dict(text="Skipped names — return since first surfaced", font=dict(size=13)),
+                    xaxis=dict(title="Outcome %", zeroline=True, zerolinecolor="#475569"),
+                    yaxis=dict(title=None),
+                    showlegend=False,
+                )
+                st.plotly_chart(_rh_fig, use_container_width=True)
+                st.caption(
+                    "Green = names that rose after the App surfaced them (process misses — "
+                    "worth asking why you skipped); red = names that fell (your discretion "
+                    "paid off). Hover for SPY-relative alpha. Shows up to the 10 biggest "
+                    "each way; the full list is in the table below."
+                )
+
+            # Full distinct-missed table (sortable).
+            _rh_mt = _rh_pd.DataFrame([
+                {
+                    "Ticker":        m["ticker"],
+                    "First surfaced": m["first_rec_date"].isoformat() if m["first_rec_date"] else "—",
+                    "Surfacings":    m["n_surfaced"],
+                    "Verdict":       m["verdict"] or "—",
+                    "Outcome":       f"{m['outcome_pct']:+.1f}%",
+                    "α vs SPY":      f"{m['alpha_pct']:+.1f}pp" if m.get("alpha_pct") is not None else "—",
+                    "Per $1k":       f"${m['outcome_dollars']:+,.0f}" if m.get("outcome_dollars") is not None else "—",
+                }
+                for m in _rh_missed
+            ])
+            with st.expander(f"📄 All {_rh_ms['n_distinct']} skipped names (table)", expanded=False):
+                st.dataframe(
+                    _rh_mt, hide_index=True, width='stretch',
+                    height=min(480, 60 + 35 * len(_rh_mt)),
+                )
+
+    with _rh_tab_trends:
+        # ── Trends ──────────────────────────────────────────────────────────────
+        with st.expander("📈 Trends — recs over time & action discipline", expanded=True):
+            _rh_daily = daily_volume(_rh_enriched)
+            if _rh_daily:
+                _rh_dv_df = _rh_pd.DataFrame(_rh_daily)
+                _rh_dv_df["date"] = _rh_pd.to_datetime(_rh_dv_df["date"])
+                _rh_dv_df = _rh_dv_df.set_index("date")[["acted", "missed"]]
+                st.bar_chart(_rh_dv_df, height=240)
+                st.caption(
+                    "Daily recs surfaced — green slice = same-day acted, "
+                    "grey slice = missed. Use this to spot stretches where action "
+                    "discipline slipped (lots of grey) or the App got chatty (tall bars)."
+                )
+            else:
+                st.caption("Not enough data to draw the daily-volume chart yet.")
+
+        # ── By verdict (engine quality) ─────────────────────────────────────────
+        # The headline view: judge the App's actual recommendations (Confirmed)
+        # apart from the awareness feed it surfaces but steers you away from
+        # (Conflicted / Caution). Alpha columns make it regime-fair.
+        with st.expander("🔬 By verdict — engine quality (Confirmed vs the rest)", expanded=True):
+            _rh_verd = by_verdict(_rh_enriched)
+            if _rh_verd:
+                _rh_v_df = _rh_pd.DataFrame([
+                    {
+                        "Verdict":      v["verdict"],
+                        "Total":        v["n_total"],
+                        "Acted":        v["n_acted"],
+                        "Action rate":  f"{v['action_rate']:.0f}%" if v['action_rate'] is not None else "—",
+                        "Avg acted":    f"{v['avg_acted_pct']:+.1f}%" if v['avg_acted_pct'] is not None else "—",
+                        "Acted α":      f"{v['avg_acted_alpha']:+.1f}pp" if v['avg_acted_alpha'] is not None else "—",
+                        "Avg missed":   f"{v['avg_missed_pct']:+.1f}%" if v['avg_missed_pct'] is not None else "—",
+                        "Missed α":     f"{v['avg_missed_alpha']:+.1f}pp" if v['avg_missed_alpha'] is not None else "—",
+                    }
+                    for v in _rh_verd
+                ])
+                st.dataframe(_rh_v_df, hide_index=True, width='stretch')
+                st.caption(
+                    "This is the cleanest read on the engine: **Confirmed** is what the "
+                    "App actually recommends; **Conflicted / Caution** are surfaced for "
+                    "awareness with a badge telling you to skip. Judge the engine on the "
+                    "Confirmed row's **α** (return vs SPY) — and check that Confirmed "
+                    "outperforms Conflicted. The α columns strip out the market regime "
+                    "so a down-tape doesn't make a sound engine look broken."
+                )
+            else:
+                st.caption("No verdict-tagged data in this range yet.")
+
+        # ── By composite band ───────────────────────────────────────────────────
+        with st.expander("🎯 Action rate & outcome by composite band", expanded=False):
+            _rh_band = by_composite_band(_rh_enriched)
+            if _rh_band:
+                _rh_band_df = _rh_pd.DataFrame([
+                    {
+                        "Composite band":  b["band"],
+                        "Total":           b["n_total"],
+                        "Acted":           b["n_acted"],
+                        "Action rate":     f"{b['action_rate']:.0f}%" if b['action_rate'] is not None else "—",
+                        "Avg acted":       f"{b['avg_acted_pct']:+.1f}%" if b['avg_acted_pct'] is not None else "—",
+                        "Acted α":         f"{b['avg_acted_alpha']:+.1f}pp" if b['avg_acted_alpha'] is not None else "—",
+                        "Avg missed":      f"{b['avg_missed_pct']:+.1f}%" if b['avg_missed_pct'] is not None else "—",
+                        "Missed α":        f"{b['avg_missed_alpha']:+.1f}pp" if b['avg_missed_alpha'] is not None else "—",
+                    }
+                    for b in _rh_band
+                ])
+                st.dataframe(_rh_band_df, hide_index=True, width='stretch')
+                st.caption(
+                    "Higher-composite bands should ideally have higher action rate "
+                    "*and* better **α** — that confirms the composite gate is doing its "
+                    "job. Inverted ordering (e.g. Hold-zone α beating Buy α) is a signal "
+                    "to recalibrate. Read the α columns, not raw %, in a trending market."
+                )
+            else:
+                st.caption("No score-banded data in this range yet.")
+
+        # ── By rec type ─────────────────────────────────────────────────────────
+        with st.expander("🧭 Breakdown by rec type", expanded=False):
+            _rh_types = by_rec_type(_rh_enriched)
+            if _rh_types:
+                _rh_t_df = _rh_pd.DataFrame([
+                    {
+                        "Type":         _REC_TYPE_LABELS.get(rt, rt),
+                        "Total":        st_["n_total"],
+                        "Acted":        st_["n_acted"],
+                        "Action rate":  f"{st_['action_rate']:.0f}%" if st_["action_rate"] is not None else "—",
+                        "Avg acted":    f"{st_['avg_acted_pct']:+.1f}%" if st_['avg_acted_pct'] is not None else "—",
+                        "Acted α":      f"{st_['avg_acted_alpha']:+.1f}pp" if st_['avg_acted_alpha'] is not None else "—",
+                        "Avg missed":   f"{st_['avg_missed_pct']:+.1f}%" if st_['avg_missed_pct'] is not None else "—",
+                        "Missed α":     f"{st_['avg_missed_alpha']:+.1f}pp" if st_['avg_missed_alpha'] is not None else "—",
+                    }
+                    for rt, st_ in _rh_types.items()
+                ])
+                st.dataframe(_rh_t_df, hide_index=True, width='stretch')
+
+    with _rh_tab_full:
+        # ── Detailed table ──────────────────────────────────────────────────────
+        st.markdown("### 📋 All recommendations")
+        _rh_rows = []
+        for r in sorted(_rh_enriched, key=lambda x: (x["rec_date"] or _rh_date.min, x["ticker"]), reverse=True):
+            _outcome_disp = (
+                f"{r['outcome_pct']:+.2f}%" if r["outcome_pct"] is not None else "—"
+            )
+            _alpha_disp = (
+                f"{r['alpha_pct']:+.2f}pp" if r.get("alpha_pct") is not None else "—"
+            )
+            _status_disp = "✅ Acted" if r["acted_on"] else "⏭ Missed"
+            if r.get("outcome_maturing"):
+                # Too young to grade — outcome shown for transparency but not counted.
+                _label_disp = "⏳ Maturing"
+            else:
+                _label_disp = {
+                    "win":  "🟢 Win",
+                    "loss": "🔴 Loss",
+                    "flat": "⚪ Flat",
+                    "unknown": "—",
+                }.get(r["outcome_label"], "—")
+            _rh_rows.append({
+                "Date":      r["rec_date"].isoformat() if r["rec_date"] else "—",
+                "Ticker":    r["ticker"],
+                "Type":      _REC_TYPE_LABELS.get(r["rec_type"], r["rec_type"]),
+                "Sector":    r["sector"] or "—",
+                "Composite": (
+                    f"{r['composite_score']:.0f}" if r["composite_score"] is not None else "—"
+                ),
+                "Momentum":  (
+                    f"{r['momentum_score']:.0f}" if r["momentum_score"] is not None else "—"
+                ),
+                "Verdict":   r["verdict"] or "—",
+                "Status":    _status_disp,
+                "Outcome":   _outcome_disp,
+                "α vs SPY":  _alpha_disp,
+                "Result":    _label_disp,
+            })
+        if _rh_rows:
             st.dataframe(
-                _rh_mt, hide_index=True, width='stretch',
-                height=min(480, 60 + 35 * len(_rh_mt)),
+                _rh_pd.DataFrame(_rh_rows),
+                hide_index=True,
+                width='stretch',
+                height=min(560, 60 + 35 * len(_rh_rows)),
             )
+            _rh_tickers = sorted({r["Ticker"] for r in _rh_rows if r.get("Ticker") and r["Ticker"] != "—"})
+            if _rh_tickers:
+                st.caption("▶ Pick a ticker from the table to jump to its current Analysis:")
+                _rh_j1, _rh_j2 = st.columns([3, 1])
+                _rh_jump = _rh_j1.selectbox(
+                    "Jump to Analysis:", ["—"] + _rh_tickers,
+                    key="_rh_jump_sel", label_visibility="collapsed",
+                )
+                with _rh_j2:
+                    if st.button(f"▶ Analyze {_rh_jump}" if _rh_jump != "—" else "▶ Analyze",
+                                 key="_rh_jump_btn", use_container_width=True,
+                                 disabled=(_rh_jump == "—")):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _rh_jump
+                        st.rerun()
 
-    # ── Trends ──────────────────────────────────────────────────────────────
-    with st.expander("📈 Trends — recs over time & action discipline", expanded=True):
-        _rh_daily = daily_volume(_rh_enriched)
-        if _rh_daily:
-            _rh_dv_df = _rh_pd.DataFrame(_rh_daily)
-            _rh_dv_df["date"] = _rh_pd.to_datetime(_rh_dv_df["date"])
-            _rh_dv_df = _rh_dv_df.set_index("date")[["acted", "missed"]]
-            st.bar_chart(_rh_dv_df, height=240)
-            st.caption(
-                "Daily recs surfaced — green slice = same-day acted, "
-                "grey slice = missed. Use this to spot stretches where action "
-                "discipline slipped (lots of grey) or the App got chatty (tall bars)."
-            )
-        else:
-            st.caption("Not enough data to draw the daily-volume chart yet.")
-
-    # ── By verdict (engine quality) ─────────────────────────────────────────
-    # The headline view: judge the App's actual recommendations (Confirmed)
-    # apart from the awareness feed it surfaces but steers you away from
-    # (Conflicted / Caution). Alpha columns make it regime-fair.
-    with st.expander("🔬 By verdict — engine quality (Confirmed vs the rest)", expanded=True):
-        _rh_verd = by_verdict(_rh_enriched)
-        if _rh_verd:
-            _rh_v_df = _rh_pd.DataFrame([
-                {
-                    "Verdict":      v["verdict"],
-                    "Total":        v["n_total"],
-                    "Acted":        v["n_acted"],
-                    "Action rate":  f"{v['action_rate']:.0f}%" if v['action_rate'] is not None else "—",
-                    "Avg acted":    f"{v['avg_acted_pct']:+.1f}%" if v['avg_acted_pct'] is not None else "—",
-                    "Acted α":      f"{v['avg_acted_alpha']:+.1f}pp" if v['avg_acted_alpha'] is not None else "—",
-                    "Avg missed":   f"{v['avg_missed_pct']:+.1f}%" if v['avg_missed_pct'] is not None else "—",
-                    "Missed α":     f"{v['avg_missed_alpha']:+.1f}pp" if v['avg_missed_alpha'] is not None else "—",
-                }
-                for v in _rh_verd
-            ])
-            st.dataframe(_rh_v_df, hide_index=True, width='stretch')
-            st.caption(
-                "This is the cleanest read on the engine: **Confirmed** is what the "
-                "App actually recommends; **Conflicted / Caution** are surfaced for "
-                "awareness with a badge telling you to skip. Judge the engine on the "
-                "Confirmed row's **α** (return vs SPY) — and check that Confirmed "
-                "outperforms Conflicted. The α columns strip out the market regime "
-                "so a down-tape doesn't make a sound engine look broken."
-            )
-        else:
-            st.caption("No verdict-tagged data in this range yet.")
-
-    # ── By composite band ───────────────────────────────────────────────────
-    with st.expander("🎯 Action rate & outcome by composite band", expanded=False):
-        _rh_band = by_composite_band(_rh_enriched)
-        if _rh_band:
-            _rh_band_df = _rh_pd.DataFrame([
-                {
-                    "Composite band":  b["band"],
-                    "Total":           b["n_total"],
-                    "Acted":           b["n_acted"],
-                    "Action rate":     f"{b['action_rate']:.0f}%" if b['action_rate'] is not None else "—",
-                    "Avg acted":       f"{b['avg_acted_pct']:+.1f}%" if b['avg_acted_pct'] is not None else "—",
-                    "Acted α":         f"{b['avg_acted_alpha']:+.1f}pp" if b['avg_acted_alpha'] is not None else "—",
-                    "Avg missed":      f"{b['avg_missed_pct']:+.1f}%" if b['avg_missed_pct'] is not None else "—",
-                    "Missed α":        f"{b['avg_missed_alpha']:+.1f}pp" if b['avg_missed_alpha'] is not None else "—",
-                }
-                for b in _rh_band
-            ])
-            st.dataframe(_rh_band_df, hide_index=True, width='stretch')
-            st.caption(
-                "Higher-composite bands should ideally have higher action rate "
-                "*and* better **α** — that confirms the composite gate is doing its "
-                "job. Inverted ordering (e.g. Hold-zone α beating Buy α) is a signal "
-                "to recalibrate. Read the α columns, not raw %, in a trending market."
-            )
-        else:
-            st.caption("No score-banded data in this range yet.")
-
-    # ── By rec type ─────────────────────────────────────────────────────────
-    with st.expander("🧭 Breakdown by rec type", expanded=False):
-        _rh_types = by_rec_type(_rh_enriched)
-        if _rh_types:
-            _rh_t_df = _rh_pd.DataFrame([
-                {
-                    "Type":         _REC_TYPE_LABELS.get(rt, rt),
-                    "Total":        st_["n_total"],
-                    "Acted":        st_["n_acted"],
-                    "Action rate":  f"{st_['action_rate']:.0f}%" if st_["action_rate"] is not None else "—",
-                    "Avg acted":    f"{st_['avg_acted_pct']:+.1f}%" if st_['avg_acted_pct'] is not None else "—",
-                    "Acted α":      f"{st_['avg_acted_alpha']:+.1f}pp" if st_['avg_acted_alpha'] is not None else "—",
-                    "Avg missed":   f"{st_['avg_missed_pct']:+.1f}%" if st_['avg_missed_pct'] is not None else "—",
-                    "Missed α":     f"{st_['avg_missed_alpha']:+.1f}pp" if st_['avg_missed_alpha'] is not None else "—",
-                }
-                for rt, st_ in _rh_types.items()
-            ])
-            st.dataframe(_rh_t_df, hide_index=True, width='stretch')
-
-    # ── Detailed table ──────────────────────────────────────────────────────
-    st.markdown("### 📋 All recommendations")
-    _rh_rows = []
-    for r in sorted(_rh_enriched, key=lambda x: (x["rec_date"] or _rh_date.min, x["ticker"]), reverse=True):
-        _outcome_disp = (
-            f"{r['outcome_pct']:+.2f}%" if r["outcome_pct"] is not None else "—"
+        st.caption(
+            "_Outcome math — Acted BUY: mark-to-market vs entry price; Acted SELL: "
+            "realized P&L from the journal; Missed: % change from price-at-surface "
+            "(when stored) to current. **α vs SPY** = outcome minus SPY over the same "
+            "rec-date→today window (the regime-adjusted read; blank for SELLs, whose "
+            "realized P&L spans an unknown holding period). **⏳ Maturing** recs are "
+            f"younger than {REC_SCORE_MIN_DAYS} days — shown but excluded from the "
+            "aggregates above. Older recs surfaced before price_at_surface was captured "
+            "show '—'._"
         )
-        _alpha_disp = (
-            f"{r['alpha_pct']:+.2f}pp" if r.get("alpha_pct") is not None else "—"
-        )
-        _status_disp = "✅ Acted" if r["acted_on"] else "⏭ Missed"
-        if r.get("outcome_maturing"):
-            # Too young to grade — outcome shown for transparency but not counted.
-            _label_disp = "⏳ Maturing"
-        else:
-            _label_disp = {
-                "win":  "🟢 Win",
-                "loss": "🔴 Loss",
-                "flat": "⚪ Flat",
-                "unknown": "—",
-            }.get(r["outcome_label"], "—")
-        _rh_rows.append({
-            "Date":      r["rec_date"].isoformat() if r["rec_date"] else "—",
-            "Ticker":    r["ticker"],
-            "Type":      _REC_TYPE_LABELS.get(r["rec_type"], r["rec_type"]),
-            "Sector":    r["sector"] or "—",
-            "Composite": (
-                f"{r['composite_score']:.0f}" if r["composite_score"] is not None else "—"
-            ),
-            "Momentum":  (
-                f"{r['momentum_score']:.0f}" if r["momentum_score"] is not None else "—"
-            ),
-            "Verdict":   r["verdict"] or "—",
-            "Status":    _status_disp,
-            "Outcome":   _outcome_disp,
-            "α vs SPY":  _alpha_disp,
-            "Result":    _label_disp,
-        })
-    if _rh_rows:
-        st.dataframe(
-            _rh_pd.DataFrame(_rh_rows),
-            hide_index=True,
-            width='stretch',
-            height=min(560, 60 + 35 * len(_rh_rows)),
-        )
-        _rh_tickers = sorted({r["Ticker"] for r in _rh_rows if r.get("Ticker") and r["Ticker"] != "—"})
-        if _rh_tickers:
-            st.caption("▶ Pick a ticker from the table to jump to its current Analysis:")
-            _rh_j1, _rh_j2 = st.columns([3, 1])
-            _rh_jump = _rh_j1.selectbox(
-                "Jump to Analysis:", ["—"] + _rh_tickers,
-                key="_rh_jump_sel", label_visibility="collapsed",
-            )
-            with _rh_j2:
-                if st.button(f"▶ Analyze {_rh_jump}" if _rh_jump != "—" else "▶ Analyze",
-                             key="_rh_jump_btn", use_container_width=True,
-                             disabled=(_rh_jump == "—")):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _rh_jump
-                    st.rerun()
-
-    st.caption(
-        "_Outcome math — Acted BUY: mark-to-market vs entry price; Acted SELL: "
-        "realized P&L from the journal; Missed: % change from price-at-surface "
-        "(when stored) to current. **α vs SPY** = outcome minus SPY over the same "
-        "rec-date→today window (the regime-adjusted read; blank for SELLs, whose "
-        "realized P&L spans an unknown holding period). **⏳ Maturing** recs are "
-        f"younger than {REC_SCORE_MIN_DAYS} days — shown but excluded from the "
-        "aggregates above. Older recs surfaced before price_at_surface was captured "
-        "show '—'._"
-    )
-    with st.expander("ℹ️ How to read this table", expanded=False):
-        st.markdown(
-            f"""
+        with st.expander("ℹ️ How to read this table", expanded=False):
+            st.markdown(
+                f"""
 **Verdict** — the App's confidence at the moment the rec was first surfaced:
 - **✅ Confirmed** — composite cleared the Buy gate (≥ {COMPOSITE_BUY}) AND no conflicts. Highest signal weight; these are the "the App tells you to act" rows.
 - **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within {EARNINGS_IMMINENT_DAYS} days, etc.). The App surfaced the signal but flagged a watch-out.
@@ -19111,7 +19118,7 @@ elif page == "📜 Recommendations History":
 
 **Early rows** (before verdict logic matured) may have sparse composites and "Unverified" verdicts — this is expected and doesn't need action. New rows will have richer verdicts as the engine accumulates history.
 """
-        )
+            )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
