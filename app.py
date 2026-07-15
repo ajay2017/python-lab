@@ -1491,6 +1491,7 @@ with st.sidebar:
         ]),
         ("PORTFOLIO", [
             ("Portfolio Allocation", "🥧 Portfolio Allocation", ":material/pie_chart:"),
+            ("Portfolio Health",    "🏆 Portfolio Health",     ":material/analytics:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Alerts & Actions", "⚠️ Alerts & Actions",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
@@ -11402,6 +11403,236 @@ elif page == "🥧 Portfolio Allocation":
                         f"({_best_r['Percentile']:.0f}th percentile — {_best_r['Tier']}) — "
                         f"top-decile momentum score across the full universe. High-conviction hold."
                     )
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — PORTFOLIO HEALTH SCORE
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🏆 Portfolio Health":
+    from stock_analyzer.portfolio_health import compute_health_score, grade_colors, score_color
+
+    st.title("🏆 Portfolio Health Score")
+    st.caption(
+        "Synthesises five construction dimensions into a single grade. "
+        "Visit Home first to load your portfolio data."
+    )
+
+    _ph_pdf = st.session_state.get("_port_df_enriched")
+    _ph_hd  = st.session_state.get("_last_held_data")
+    if _ph_pdf is None or _ph_hd is None or (hasattr(_ph_pdf, "empty") and _ph_pdf.empty):
+        _render_portfolio_not_loaded(show_home_button=True, key_suffix="ph")
+        st.stop()
+
+    _ph_div_score = st.session_state.get("_div_score_cache")
+    _ph_avg_corr  = st.session_state.get("_avg_corr_cache")
+    _ph_hb_share  = st.session_state.get("_highbeta_share")
+    _ph_fragility = st.session_state.get("_fragility_cache")
+    _ph_port_risk = st.session_state.get("_port_risk_cache") or {}
+
+    _ph_result = compute_health_score(
+        port_df      = _ph_pdf,
+        div_score_val= _ph_div_score,
+        avg_corr     = _ph_avg_corr,
+        hb_share     = _ph_hb_share,
+        fragility    = _ph_fragility,
+        port_risk    = _ph_port_risk,
+    )
+
+    _ph_overall = _ph_result["overall"]
+    _ph_grade   = _ph_result["grade"]
+    _ph_label   = _ph_result["grade_label"]
+    _ph_subs    = _ph_result["sub_scores"]
+    _ph_improv  = _ph_result["improvements"]
+    _ph_icons   = _ph_result["dimension_icons"]
+    _ph_dlabels = _ph_result["dimension_labels"]
+
+    # ── Grade card ────────────────────────────────────────────────────────────
+    _ph_bg, _ph_border = grade_colors(_ph_grade)
+    _ph_score_str = f"{_ph_overall:.0f}/100" if _ph_overall is not None else "—"
+    st.markdown(
+        f"""
+        <div style="
+            background:{_ph_bg};border-left:5px solid {_ph_border};
+            border-radius:10px;padding:28px 32px;margin-bottom:24px;
+            display:flex;align-items:center;gap:36px;">
+          <div style="font-size:72px;font-weight:900;color:#fff;line-height:1;
+                      min-width:80px;text-align:center;">{_ph_grade}</div>
+          <div>
+            <div style="font-size:28px;font-weight:700;color:#fff;">{_ph_score_str}</div>
+            <div style="font-size:16px;color:rgba(255,255,255,0.85);margin-top:4px;">{_ph_label}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Sub-score dimension cards ─────────────────────────────────────────────
+    st.markdown("#### Construction dimensions")
+    _ph_cols = st.columns(5)
+    _ph_dim_order = [
+        "concentration", "sector_balance", "diversification",
+        "factor_exposure", "signal_integrity",
+    ]
+    for _ph_col, _ph_dim in zip(_ph_cols, _ph_dim_order):
+        _ph_sub   = _ph_subs[_ph_dim]
+        _ph_s     = _ph_sub["score"]
+        _ph_d     = _ph_sub["detail"]
+        _ph_color = score_color(_ph_s)
+        _ph_sval  = f"{_ph_s:.0f}" if _ph_s is not None else "—"
+
+        # One-line context string per dimension
+        if _ph_dim == "concentration":
+            _ph_ctx = (
+                f"Max name {_ph_d.get('max_name_wt', '—')}% "
+                f"/ sector {_ph_d.get('max_sector_wt', '—')}%"
+                if _ph_d else "No data"
+            )
+        elif _ph_dim == "sector_balance":
+            _ph_n = _ph_d.get("n_sectors", "—")
+            _ph_ent = _ph_d.get("normalized_entropy")
+            _ph_ctx = (
+                f"{_ph_n} sectors · {_ph_ent*100:.0f}% balanced"
+                if _ph_ent is not None else f"{_ph_n} sector(s)"
+            )
+        elif _ph_dim == "diversification":
+            _ph_ac = _ph_d.get("avg_corr")
+            _ph_ctx = f"Avg correlation {_ph_ac:.2f}" if _ph_ac is not None else "No data"
+        elif _ph_dim == "factor_exposure":
+            _ph_sev = _ph_d.get("severity") or "unknown"
+            _ph_hbs = _ph_d.get("hb_share")
+            _ph_ctx = (
+                f"{_ph_sev.capitalize()} · {_ph_hbs:.0f}% high-β"
+                if _ph_hbs is not None else _ph_sev.capitalize()
+            )
+        else:  # signal_integrity
+            _ph_pct = _ph_d.get("pct_buy_weight")
+            _ph_ctx = (
+                f"{_ph_pct:.0f}% of book in Buy zone"
+                if _ph_pct is not None else "No data"
+            )
+
+        with _ph_col:
+            st.markdown(
+                f"""
+                <div style="
+                    border:1px solid #374151;border-radius:8px;
+                    padding:14px 12px;text-align:center;height:130px;
+                    display:flex;flex-direction:column;justify-content:center;gap:6px;">
+                  <div style="font-size:20px;">{_ph_icons[_ph_dim]}</div>
+                  <div style="font-size:11px;color:#9ca3af;font-weight:600;
+                               text-transform:uppercase;letter-spacing:.5px;">
+                    {_ph_dlabels[_ph_dim]}
+                  </div>
+                  <div style="font-size:28px;font-weight:800;color:{_ph_color};">{_ph_sval}</div>
+                  <div style="font-size:10px;color:#6b7280;line-height:1.3;">{_ph_ctx}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("<div style='margin-top:8px;'></div>", unsafe_allow_html=True)
+
+    # ── Dimension detail expanders ────────────────────────────────────────────
+    with st.expander("📐 Dimension details", expanded=False):
+        _ph_d1, _ph_d2 = st.columns(2)
+
+        with _ph_d1:
+            # Concentration
+            _ph_cd = _ph_subs["concentration"]["detail"]
+            if _ph_cd:
+                st.markdown("**⚖️ Concentration**")
+                st.markdown(
+                    f"Largest holding: **{_ph_cd.get('worst_name','—')}** "
+                    f"at {_ph_cd.get('max_name_wt','—')}% "
+                    f"(cap: {_ph_cd.get('name_ceiling','—')}%)"
+                )
+                st.markdown(
+                    f"Largest sector: **{_ph_cd.get('worst_sector','—')}** "
+                    f"at {_ph_cd.get('max_sector_wt','—')}% "
+                    f"(cap: {_ph_cd.get('sector_ceiling','—')}%)"
+                )
+            # Sector balance
+            _ph_sd = _ph_subs["sector_balance"]["detail"]
+            if _ph_sd:
+                st.markdown("**🗂️ Sector Balance**")
+                _ph_sw = _ph_sd.get("sector_weights") or {}
+                for _ph_sec, _ph_wt in sorted(_ph_sw.items(), key=lambda x: -x[1]):
+                    st.markdown(f"- {_ph_sec}: {_ph_wt:.1f}%")
+
+        with _ph_d2:
+            # Factor exposure
+            _ph_fd = _ph_subs["factor_exposure"]["detail"]
+            if _ph_fd:
+                st.markdown("**📡 Beta / Fragility**")
+                _ph_sev_disp = (_ph_fd.get("severity") or "unknown").capitalize()
+                st.markdown(f"Fragility: **{_ph_sev_disp}**")
+                if _ph_fd.get("port_beta") is not None:
+                    st.markdown(
+                        f"Portfolio β: **{_ph_fd['port_beta']:.2f}** "
+                        f"(elevated ≥ {_ph_fd['beta_elevated']}, "
+                        f"ceiling ≥ {_ph_fd['beta_ceiling']})"
+                    )
+                if _ph_fd.get("hb_share") is not None:
+                    st.markdown(f"High-β share: **{_ph_fd['hb_share']:.1f}%** of book")
+            # Signal integrity
+            _ph_sid = _ph_subs["signal_integrity"]["detail"]
+            if _ph_sid:
+                st.markdown("**🎯 Signal Integrity**")
+                st.markdown(
+                    f"Book weight in Buy zone (≥{_ph_sid.get('buy_threshold','—')}): "
+                    f"**{_ph_sid.get('pct_buy_weight','—')}%**"
+                )
+                if _ph_sid.get("weighted_avg_composite") is not None:
+                    st.markdown(
+                        f"Weighted avg composite: **{_ph_sid['weighted_avg_composite']:.1f}**"
+                    )
+                if _ph_sid.get("n_below_hold", 0) > 0:
+                    st.markdown(
+                        f"Positions below Hold floor "
+                        f"(<{_ph_sid.get('hold_floor','—')}): "
+                        f"**{_ph_sid['n_below_hold']}**"
+                    )
+
+    # ── Priority improvements ─────────────────────────────────────────────────
+    st.markdown("#### Priority improvements")
+    if not _ph_improv:
+        st.success(
+            "No major structural concerns — all construction dimensions score above the "
+            "attention threshold. Keep monitoring as positions and regime evolve.",
+            icon="✅",
+        )
+    else:
+        for _ph_imp in _ph_improv:
+            _ph_imp_color = score_color(_ph_imp["score"])
+            st.markdown(
+                f"""
+                <div style="
+                    border-left:4px solid {_ph_imp_color};
+                    background:rgba(0,0,0,0.15);
+                    border-radius:0 6px 6px 0;
+                    padding:12px 16px;margin-bottom:10px;">
+                  <span style="font-weight:700;color:{_ph_imp_color};">
+                    {_ph_icons.get(_ph_imp['dimension'],'')} {_ph_imp['label']}
+                    &nbsp;·&nbsp;{_ph_imp['score']:.0f}/100
+                  </span><br>
+                  <span style="font-size:13px;color:#d1d5db;">{_ph_imp['action']}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    if _ph_result["n_available"] < 5:
+        _ph_missing = [
+            _ph_dlabels[k]
+            for k, v in _ph_subs.items()
+            if v["score"] is None
+        ]
+        st.info(
+            f"Some dimensions are unavailable until Home finishes loading: "
+            f"{', '.join(_ph_missing)}. The grade reflects only the dimensions with data.",
+            icon="ℹ️",
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
