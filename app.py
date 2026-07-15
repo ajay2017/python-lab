@@ -19200,28 +19200,60 @@ elif page == "📊 Predictive Analytics":
     _pac_n_total  = len(_pac_enriched)
     _pac_n_graded = total_graded(_pac_enriched)
     _pac_n_mature = sum(1 for r in _pac_enriched if not r.get("outcome_maturing"))
+    _pac_n_pending = _pac_n_total - _pac_n_mature
+
+    # Date range of scored recommendations (for the context strip)
+    _pac_all_dates    = [r["rec_date"] for r in _pac_enriched if r.get("rec_date")]
+    _pac_mature_dates = [r["rec_date"] for r in _pac_enriched
+                         if r.get("rec_date") and not r.get("outcome_maturing")]
+    def _pac_fmt_date(d) -> str:
+        try:
+            return d.strftime("%b %d, %Y") if hasattr(d, "strftime") else str(d)[:10]
+        except Exception:
+            return str(d)
+    _pac_date_from = _pac_fmt_date(min(_pac_all_dates))    if _pac_all_dates    else "—"
+    _pac_date_to   = _pac_fmt_date(max(_pac_mature_dates)) if _pac_mature_dates else "—"
 
     _pac_bm1, _pac_bm2, _pac_bm3 = st.columns(3)
     _pac_bm1.metric(
-        "Total recs (all time)", f"{_pac_n_total:,}",
-        help="Every recommendation surfaced since the table was created.",
+        "Recommendations tracked", f"{_pac_n_total:,}",
+        help="All entry signals the app has surfaced since your account started.",
     )
     _pac_bm2.metric(
-        "Mature recs", f"{_pac_n_mature:,}",
-        help=f"Aged ≥ {REC_SCORE_MIN_DAYS} days — old enough to grade.",
+        "Outcomes available", f"{_pac_n_mature:,}",
+        help=(
+            f"Recommendations {REC_SCORE_MIN_DAYS}+ days old — enough time for a "
+            f"price outcome to be meaningful. The remaining {_pac_n_pending} were posted "
+            f"in the last {REC_SCORE_MIN_DAYS} days and are excluded until their results window closes."
+        ),
     )
     _pac_bm3.metric(
-        "Calibration set", f"{_pac_n_graded:,}",
-        help="Mature recs with a live price AND SPY benchmark — the working set for all tabs.",
+        "Used in this analysis", f"{_pac_n_graded:,}",
+        help=(
+            "Recommendations with a complete outcome: price data and a market "
+            "comparison (SPY) both available. This is the working dataset for all tabs below."
+        ),
+    )
+
+    # Data context strip
+    _pac_pending_note = (
+        f"{_pac_n_pending} recommendation(s) posted in the last {REC_SCORE_MIN_DAYS} days "
+        f"are excluded — their results window is still open."
+        if _pac_n_pending > 0 else "All recommendations have results available."
+    )
+    st.caption(
+        f"ℹ️  Outcomes cover: **{_pac_date_from} → {_pac_date_to}**  ·  "
+        f"{_pac_pending_note}  ·  "
+        f"Data loaded at session start — use **Refresh** (top right) to pull the latest."
     )
 
     _pac_min_required = PREDICTIVE_MIN_BAND_N * 2
     if _pac_n_graded < _pac_min_required:
         st.info(
-            f"📅 Not enough outcome history yet — all models need at least "
-            f"**{_pac_min_required} graded recommendations** (you have {_pac_n_graded}). "
-            f"Keep the app running and return once more picks have matured "
-            f"(≥ {REC_SCORE_MIN_DAYS} days old with a live price and SPY benchmark)."
+            f"📅 Not enough outcome history yet — the analysis needs at least "
+            f"**{_pac_min_required} recommendations with tracked outcomes** (you have {_pac_n_graded}). "
+            f"As the app surfaces more picks and their results windows close "
+            f"({REC_SCORE_MIN_DAYS}+ days old, price data available), this page will fill in."
         )
         st.stop()
 
@@ -19347,35 +19379,43 @@ elif page == "📊 Predictive Analytics":
             )
             st.plotly_chart(_pac_calib_fig, use_container_width=True)
 
-        with st.expander("📋 Raw calibration dataset", expanded=False):
+        with st.expander("📋 Full outcome history", expanded=False):
+            st.caption(
+                f"Each row is one recommendation with a closed results window "
+                f"({REC_SCORE_MIN_DAYS}+ days old, price data available).  "
+                f"Recommendations from the last {REC_SCORE_MIN_DAYS} days are not shown here — "
+                f"their results are still pending and will appear automatically once enough "
+                f"time has passed.  Outcome % = price change since the recommendation date.  "
+                f"Alpha = your return minus the market (SPY) over the same period."
+            )
             _pac_raw_rows = [
                 {
-                    "Date":       r["rec_date"],
-                    "Ticker":     r["ticker"],
-                    "Sector":     r["sector"],
-                    "Score":      r["composite_score"],
-                    "Conviction": r["conviction"],
-                    "Acted":      "✓" if r["acted_on"] else "—",
-                    "Outcome %":  (f"{r['outcome_pct']:+.1f}%" if r.get("outcome_pct") is not None else "—"),
-                    "Alpha pp":   (f"{r['alpha_pct']:+.1f}" if r.get("alpha_pct") is not None else "—"),
-                    "Days":       r.get("days_since"),
+                    "Date":        r["rec_date"],
+                    "Ticker":      r["ticker"],
+                    "Sector":      r["sector"],
+                    "Score":       r["composite_score"],
+                    "Conviction":  r["conviction"],
+                    "Acted":       "✓" if r["acted_on"] else "—",
+                    "Outcome %":   (f"{r['outcome_pct']:+.1f}%" if r.get("outcome_pct") is not None else "—"),
+                    "Alpha pp":    (f"{r['alpha_pct']:+.1f}" if r.get("alpha_pct") is not None else "—"),
+                    "Days held":   r.get("days_since"),
                 }
                 for r in _pac_enriched
                 if not r.get("outcome_maturing") and r.get("alpha_pct") is not None
             ]
             if _pac_raw_rows:
                 st.dataframe(
-                    _pa_pd.DataFrame(_pac_raw_rows).sort_values("Score", ascending=False),
+                    _pa_pd.DataFrame(_pac_raw_rows).sort_values("Date", ascending=False),
                     use_container_width=True, hide_index=True,
                 )
             else:
-                st.info("No graded outcomes yet.")
+                st.info("No outcomes available yet.")
 
     # ── TAB 2 — Decision Quality ───────────────────────────────────────────────
     with _pa_tab2:
         st.caption(
             "When the engine surfaced a signal and you passed, did you make the right call? "
-            "Compares the alpha of recs you acted on vs recs you skipped."
+            "Compares the alpha of recommendations you acted on vs recommendations you passed."
         )
 
         _avm_acted  = _pac_avm["acted"]
