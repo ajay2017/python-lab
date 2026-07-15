@@ -202,7 +202,7 @@ _Note (2026-07-13): this section's F-IDs describe functionality that originated 
 
 ### 3.1a Portfolio Allocation
 
-Standalone page (PORTFOLIO nav group, positioned first) extracted from Home in the 2026-07-12/13 nav cleanup. Two internal tabs: **Portfolio Allocation** (allocation pie + P&L bar — F-06; Composition Sankey — F-06a; sector exposure — F-07; performance attribution — F-10) and **Analytics** (F-171–F-173 below, net-new — this content never had a dedicated F-ID before the split). Same "haven't visited Home this session" empty-state gate as every other extracted page (`_render_portfolio_not_loaded`).
+Standalone page (PORTFOLIO nav group, positioned first) extracted from Home in the 2026-07-12/13 nav cleanup. Five internal tabs (restructured 2026-07-15 per the I2 UX remediation): **📊 Overview**, **⚖️ Rebalancing**, **💰 Tax**, **📈 Performance** — distributing the functionality formerly in the single "Portfolio Allocation" tab (F-06, F-06a, F-07, F-10, and the F-22c rebalance plan) across four focused tabs — and **📈 Analytics** (F-171–F-173 below, unchanged from the original split). Same "haven't visited Home this session" empty-state gate as every other extracted page (`_render_portfolio_not_loaded`).
 
 | ID | Requirement |
 |----|-------------|
@@ -212,7 +212,7 @@ Standalone page (PORTFOLIO nav group, positioned first) extracted from Home in t
 
 ### 3.1b Risk Analysis
 
-Standalone page (PORTFOLIO nav group) extracted from Home in the 2026-07-12/13 nav cleanup — before that, briefly a merged "Risk & Alerts" Home tab; before that, a separate "Risk Analysis" Home tab (the current name/icon is a deliberate reuse of that original naming). Aggregates: portfolio risk metrics (F-09), fragility gauge (F-09a), Market-Risk Posture dial (F-09b), leverage/margin awareness (F-09d), Cross-Asset Pulse (F-09c), rate sensitivity (F-87a), stress testing (F-14/F-14a), and the historical scenario replay (F-168). No net-new F-IDs — all constituent functionality was already specified; only the page location changed. Same empty-state gate as Portfolio Allocation.
+Standalone page (PORTFOLIO nav group) extracted from Home in the 2026-07-12/13 nav cleanup — before that, briefly a merged "Risk & Alerts" Home tab; before that, a separate "Risk Analysis" Home tab (the current name/icon is a deliberate reuse of that original naming). Aggregates: portfolio risk metrics (F-09), fragility gauge (F-09a), Market-Risk Posture dial (F-09b), leverage/margin awareness (F-09d), Cross-Asset Pulse (F-09c), rate sensitivity (F-87a), stress testing (F-14/F-14a), and the historical scenario replay (F-168). No net-new F-IDs — all constituent functionality was already specified; only the page location changed. Same empty-state gate as Portfolio Allocation. (2026-07-15: restructured into three internal tabs — **📊 Dashboard**, **📋 Action Plan**, **🔥 Stress Testing** — for navigability; no content added or removed.)
 
 ### 3.1c Alerts & Actions
 
@@ -424,7 +424,7 @@ All LLM-generated output is consolidated on a single dedicated **🧠 AI Insight
 
 ### 3.13 Recommendations History (retrospective scorecard)
 
-The 📊 Recommendations History page is the **rule-based** retrospective over every pick Today's Brief has surfaced (no LLM): it cross-references the `recommendations` table with `trades` to grade acted vs. missed outcomes on **alpha** (return minus SPY over the same window). It is the data substrate the F-4 monthly report (F-153) narrates. Logic lives in `recommendations_history.py` (pure — no Streamlit / DB / API).
+The 📊 Recommendations History page is the **rule-based** retrospective over every pick Today's Brief has surfaced (no LLM): it cross-references the `recommendations` table with `trades` to grade acted vs. missed outcomes on **alpha** (return minus SPY over the same window). It is the data substrate the F-4 monthly report (F-153) narrates. Logic lives in `recommendations_history.py` (pure — no Streamlit / DB / API). (2026-07-15: restructured into three internal tabs — **📊 Summary**, **📈 Trends**, **📋 Full Table** — for navigability; no content added or removed.)
 
 | ID | Requirement |
 |----|-------------|

@@ -57,11 +57,43 @@ All 3 Tier 2 structural changes shipped and live-reviewed.
 
 ---
 
-### Tier 3 — Documentation only
+### ~~Tier 3 — Documentation only~~ Done — commit b6a5d52 (2026-07-15)
 
-**I6 — User Guide note on MONITOR item cadence** *(~15 min)*
-- Add one sentence to the 🔗 Risk Analysis User Guide section clarifying that MONITOR / Deteriorating ↓ cards are re-evaluated on every data refresh (not on a fixed date schedule) — intentional asymmetry vs. the Analysis Hold tab's explicit recheck date, which is specific to a dated entry signal.
-- Zero code change; pure User Guide copy.
+**I6** — Added MONITOR/Watch cadence note to 🔗 Risk Analysis "How it protects a position" User Guide expander: cards re-evaluated on every data refresh; auto-drop if position recovers; intentional asymmetry vs. the Analysis Hold tab recheck date (specific to a dated entry signal, not a general timeout).
+
+---
+
+### Catalyst Watch — 3-Tab Restructure (I11)
+
+**Rationale:** The Catalyst Watch page has three distinct audience questions with different cadences and data sets. Keeping them on a single scroll makes the page dense and buries the actionable tiers. Matches the tab-first UX pattern applied to Recommendations History (I7), Risk Analysis (I3), and Portfolio Allocation (I2) this session.
+
+**Proposed tabs:**
+
+| Tab | Icon | Content |
+|---|---|---|
+| Holdings | 📋 | Tier 1: Your Holdings — Earnings (per-position detail + Pre-Earnings Playbook) |
+| Radar | 📡 | Tier 2: On Your Radar — Watchlist & Universe upcoming earnings, grouped Today/Tomorrow/Next-7d |
+| Entry Candidates | 🎯 | Phase 3: Earnings Entry Candidates (composite-gated watchlist names near earnings) |
+
+**Section boundaries (verify line numbers before editing — file has grown since analysis):**
+- `elif page == "🔔 Catalyst Watch":` block is currently near line 20210 (pre-session analysis: 20196; add ~18 lines from I3/I2/I7 additions)
+- Tab 1 (Holdings): begins at the `st.subheader("Your Holdings — Earnings")` block (~20224)
+- Tab 2 (Radar): begins at the `st.subheader("On Your Radar")` block (~20254)
+- Tab 3 (Entry Candidates): begins at the Entry Candidates `st.expander` or section header (~20363)
+- Page ends at the closing `elif` boundary (~20436)
+
+**Approach:**
+- Same flat `with` block pattern as I7/I3/I2 (already proven)
+- Insert `_cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Holdings", "📡 Radar", "🎯 Entry Candidates"])` at the top of the `elif` block, after any page-level setup (page title, cache loads, etc.)
+- Wrap each section in its `with` block — content re-indented +4 spaces
+- No logic changes; no new cache keys; no new constants
+- Implementer must `py_compile` before committing
+
+**Invariants:**
+- Holdings tab still sources from `_last_held_data` / `_last_port_df` (same session-state reads, no change)
+- Radar tab still reads `_grow_composites` bundle (same source)
+- Entry Candidates tab still sources from `_grow_composites` and watchlist (same source)
+- No cross-tab coordination needed — tabs are purely display separation
 
 ---
 
