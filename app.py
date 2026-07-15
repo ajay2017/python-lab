@@ -9131,8 +9131,10 @@ elif page == "🥧 Portfolio Allocation":
     h_rets              = holding_returns(held_data)
     _risk_advisor_recs  = st.session_state.get("_risk_advisor_recs_cache") or []
 
-    _pa_tab1, _pa_tab2 = st.tabs(["🥧 Portfolio Allocation", "📈 Analytics"])
-    with _pa_tab1:
+    _pa_tab_ov, _pa_tab_rb, _pa_tab_tax, _pa_tab_perf, _pa_tab2 = st.tabs([
+        "📊 Overview", "⚖️ Rebalancing", "💰 Tax", "📈 Performance", "📈 Analytics"
+    ])
+    with _pa_tab_ov:
         # Charts row
         ch1, ch2 = st.columns([1, 1])
 
@@ -9580,6 +9582,7 @@ elif page == "🥧 Portfolio Allocation":
             )
             st.plotly_chart(mini, use_container_width=True)
 
+    with _pa_tab_rb:
         # ── News Intelligence ─────────────────────────────────────────────────
         st.divider()
         # Read the reduce-call set published by the Brief (CLAUDE.md coordination:
@@ -10277,6 +10280,7 @@ elif page == "🥧 Portfolio Allocation":
                                     unsafe_allow_html=True,
                                 )
 
+    with _pa_tab_tax:
         # ── Tax Efficiency Advisor ────────────────────────────────────────────
         st.divider()
         st.markdown("### 💰 Tax Efficiency Advisor")
@@ -10509,10 +10513,8 @@ elif page == "🥧 Portfolio Allocation":
                     "All gains are already LTCG-eligible, or positions have no unrealized gains."
                 )
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 2 — PERFORMANCE VS SPY
-    # ═══════════════════════════════════════════════════════════════════════════
-
+    # ── Performance vs SPY + Diagnostics + Waterfall ────────────────────────
+    with _pa_tab_perf:
         _pc1, _pc2 = st.columns([3, 1])
         _pc1.markdown("### Portfolio Performance vs S&P 500")
         _perf_period = _pc2.radio(
