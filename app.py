@@ -11410,7 +11410,10 @@ elif page == "🥧 Portfolio Allocation":
 # PAGE — PORTFOLIO HEALTH SCORE
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🏆 Portfolio Health":
-    from stock_analyzer.portfolio_health import compute_health_score, grade_colors, score_color, GRADE_SCALE
+    from stock_analyzer.portfolio_health import (
+        compute_health_score, compute_portfolio_dynamics,
+        grade_colors, score_color, GRADE_SCALE,
+    )
 
     st.title("🏆 Portfolio Health Score")
     st.caption(
@@ -11716,6 +11719,291 @@ elif page == "🏆 Portfolio Health":
             f"{', '.join(_ph_missing)}. The grade reflects only the dimensions with data.",
             icon="ℹ️",
         )
+
+    # ── Portfolio Dynamics ────────────────────────────────────────────────────
+    import plotly.graph_objects as go
+    from collections import defaultdict
+
+    st.markdown("---")
+    st.markdown("#### 📊 Portfolio Dynamics")
+    st.caption(
+        "Holding tenure, return efficiency, and engine alignment across your positions. "
+        "Dot size = portfolio weight. Trade history needed for tenure data."
+    )
+
+    _ph_trades = st.session_state.get("trades_df")
+    _ph_dyn = compute_portfolio_dynamics(_ph_pdf, _ph_trades)
+    _ph_positions = _ph_dyn["positions"]
+
+    # Controls
+    _ph_ctrl_c, _ph_ctrl_y = st.columns(2)
+    with _ph_ctrl_c:
+        _ph_color_by = st.selectbox(
+            "Color by",
+            ["Verdict", "Sector", "Age Cohort"],
+            key="_ph_color_by",
+        )
+    with _ph_ctrl_y:
+        _ph_y_metric = st.selectbox(
+            "Y axis",
+            ["Unrealized P&L %", "Annualized Return %"],
+            key="_ph_y_metric",
+        )
+
+    _ph_y_key   = "pnl_pct" if _ph_y_metric == "Unrealized P&L %" else "annualized_return"
+    _ph_y_label = "Unrealized P&L (%)" if _ph_y_metric == "Unrealized P&L %" else "Annualized Return %/yr"
+
+    _ph_verdict_colors = {
+        "BUY":   "#16a34a",
+        "HOLD":  "#2563eb",
+        "WATCH": "#d97706",
+        "EXIT":  "#dc2626",
+    }
+    _ph_sector_palette = [
+        "#60a5fa", "#34d399", "#f59e0b", "#f87171", "#a78bfa",
+        "#fb923c", "#38bdf8", "#4ade80", "#e879f9", "#facc15",
+    ]
+    _ph_cohort_colors = {
+        "Fresh": "#60a5fa", "Growing": "#34d399",
+        "Established": "#facc15", "Unknown": "#9ca3af",
+    }
+    _ph_all_sectors = sorted({p["sector"] for p in _ph_positions})
+    _ph_sector_cmap = {
+        s: _ph_sector_palette[i % len(_ph_sector_palette)]
+        for i, s in enumerate(_ph_all_sectors)
+    }
+
+    def _ph_dot_color(p: dict) -> str:
+        if _ph_color_by == "Verdict":
+            return _ph_verdict_colors.get(p["verdict"], "#9ca3af")
+        if _ph_color_by == "Sector":
+            return _ph_sector_cmap.get(p["sector"], "#9ca3af")
+        return _ph_cohort_colors.get(p["cohort"], "#9ca3af")
+
+    def _ph_dot_group(p: dict) -> str:
+        if _ph_color_by == "Verdict":   return p["verdict"]
+        if _ph_color_by == "Sector":    return p["sector"]
+        return p["cohort"]
+
+    # Group positions that have both x and y values
+    _ph_groups: dict[str, list] = defaultdict(list)
+    for _p in _ph_positions:
+        if _p["months_held"] is not None and _p[_ph_y_key] is not None:
+            _ph_groups[_ph_dot_group(_p)].append(_p)
+
+    # ── Scatter: Time-in-Position vs Return ──────────────────────────────────
+    _ph_fig_scatter = go.Figure()
+
+    for _grp_name, _grp_members in sorted(_ph_groups.items()):
+        _dot_color = _ph_dot_color(_grp_members[0])
+        _xs    = [p["months_held"] for p in _grp_members]
+        _ys    = [p[_ph_y_key] for p in _grp_members]
+        _sizes = [max(10, min(38, p["weight"] * 2.8)) for p in _grp_members]
+        _hover = []
+        for _p in _grp_members:
+            _ann = f"{_p['annualized_return']:+.1f}%/yr" if _p["annualized_return"] is not None else "N/A"
+            _hover.append(
+                f"<b>{_p['ticker']}</b><br>"
+                f"P&L: {_p['pnl_pct']:+.1f}%<br>"
+                f"Ann. return: {_ann}<br>"
+                f"Held: {_p['months_held']:.1f} mo<br>"
+                f"Weight: {_p['weight']:.1f}%<br>"
+                f"Composite: {_p['composite']:.0f}<br>"
+                f"Verdict: {_p['verdict']}<br>"
+                f"Sector: {_p['sector']}"
+            )
+        _ph_fig_scatter.add_trace(go.Scatter(
+            x=_xs, y=_ys,
+            mode="markers+text",
+            marker=dict(
+                color=_dot_color, size=_sizes, opacity=0.88,
+                line=dict(color="rgba(255,255,255,0.25)", width=1),
+            ),
+            text=[p["ticker"] for p in _grp_members],
+            textposition="top center",
+            textfont=dict(color="rgba(255,255,255,0.75)", size=9),
+            name=_grp_name,
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=_hover,
+        ))
+
+    # Reference lines and quadrant labels
+    _ph_all_x = [p["months_held"] for p in _ph_positions if p["months_held"] is not None]
+    _ph_all_y = [p[_ph_y_key] for p in _ph_positions if p[_ph_y_key] is not None]
+    _ph_max_x = max(_ph_all_x, default=12)
+    _ph_max_y = max(_ph_all_y, default=20)
+    _ph_min_y = min(_ph_all_y, default=-20)
+
+    _ph_fig_scatter.add_hline(y=0, line_dash="dot", line_color="#374151", line_width=1)
+    _ph_fig_scatter.add_vline(x=6, line_dash="dot", line_color="#374151", line_width=1)
+
+    _ph_qx = min(_ph_max_x * 0.88, _ph_max_x - 0.5)
+    _ph_fig_scatter.add_annotation(
+        x=_ph_qx, y=_ph_max_y * 0.90,
+        text="Winners Running ▲", showarrow=False,
+        font=dict(color="#4b5563", size=10), xanchor="right",
+    )
+    _ph_fig_scatter.add_annotation(
+        x=_ph_qx, y=_ph_min_y * 0.90 if _ph_min_y < 0 else -abs(_ph_max_y) * 0.15,
+        text="Sleeping Capital ▼", showarrow=False,
+        font=dict(color="#4b5563", size=10), xanchor="right",
+    )
+    _ph_fig_scatter.add_annotation(
+        x=0.5, y=_ph_max_y * 0.90,
+        text="Early Movers", showarrow=False,
+        font=dict(color="#4b5563", size=10), xanchor="left",
+    )
+
+    _ph_fig_scatter.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#d1d5db"),
+        xaxis=dict(
+            title="Months Held",
+            gridcolor="#1f2937", zerolinecolor="#374151",
+            tickfont=dict(size=10),
+        ),
+        yaxis=dict(
+            title=_ph_y_label,
+            gridcolor="#1f2937", zerolinecolor="#374151",
+            tickfont=dict(size=10),
+        ),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)", bordercolor="#374151", borderwidth=1,
+            font=dict(size=11),
+        ),
+        margin=dict(t=20, b=40, l=50, r=20),
+        height=400,
+        hoverlabel=dict(bgcolor="#1f2937", bordercolor="#374151", font=dict(color="#f3f4f6")),
+    )
+
+    if not _ph_groups:
+        st.info(
+            "No tenure data yet — trade history is needed to plot time-in-position. "
+            "Visit Trade Journal to log your trades.",
+            icon="📅",
+        )
+    else:
+        st.plotly_chart(_ph_fig_scatter, use_container_width=True)
+
+    # ── Cohort bar + Donut ────────────────────────────────────────────────────
+    _ph_col_bar, _ph_col_donut = st.columns([3, 2])
+
+    with _ph_col_bar:
+        st.markdown("**Tenure cohorts — average P&L by holding age**")
+        _ph_coh = _ph_dyn["cohort_data"]
+        if _ph_coh:
+            _ph_coh_names  = [c["cohort"] for c in _ph_coh]
+            _ph_coh_pnls   = [c["avg_pnl"] if c["avg_pnl"] is not None else 0.0 for c in _ph_coh]
+            _ph_coh_counts = [c["count"] for c in _ph_coh]
+            _ph_bar_colors = ["#16a34a" if v >= 0 else "#dc2626" for v in _ph_coh_pnls]
+
+            _ph_fig_bar = go.Figure(go.Bar(
+                x=_ph_coh_pnls,
+                y=_ph_coh_names,
+                orientation="h",
+                marker_color=_ph_bar_colors,
+                text=[
+                    f"{v:+.1f}%  (n={n})"
+                    for v, n in zip(_ph_coh_pnls, _ph_coh_counts)
+                ],
+                textposition="outside",
+                textfont=dict(color="#d1d5db", size=11),
+                hovertemplate="%{y}: %{x:+.1f}%<extra></extra>",
+            ))
+            _ph_fig_bar.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#d1d5db"),
+                xaxis=dict(
+                    title="Avg P&L (%)",
+                    gridcolor="#1f2937", zerolinecolor="#374151",
+                    tickfont=dict(size=10),
+                ),
+                yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(size=12)),
+                margin=dict(t=10, b=30, l=10, r=90),
+                height=230,
+                showlegend=False,
+            )
+            st.plotly_chart(_ph_fig_bar, use_container_width=True)
+        else:
+            st.caption("Cohort data unavailable — trade history needed.")
+
+    with _ph_col_donut:
+        st.markdown("**Engine alignment — today's verdict distribution**")
+        _ph_align = _ph_dyn["alignment"]
+        _ph_donut_labels = [k for k, v in _ph_align.items() if v > 0]
+        _ph_donut_values = [_ph_align[k] for k in _ph_donut_labels]
+        _ph_donut_colors_map = {
+            "BUY": "#16a34a", "HOLD": "#2563eb",
+            "WATCH": "#d97706", "EXIT": "#dc2626",
+        }
+        _ph_fig_donut = go.Figure(go.Pie(
+            labels=_ph_donut_labels,
+            values=_ph_donut_values,
+            hole=0.62,
+            marker=dict(colors=[_ph_donut_colors_map.get(l, "#6b7280") for l in _ph_donut_labels]),
+            textinfo="label+value",
+            textfont=dict(color="#f3f4f6", size=11),
+            hovertemplate="%{label}: %{value} position(s) (%{percent})<extra></extra>",
+        ))
+        _ph_fig_donut.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#d1d5db"),
+            annotations=[dict(
+                text=f"<b>{_ph_dyn['vitality_pct']}%</b><br>Vitality",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=17, color="#f3f4f6"),
+                align="center",
+            )],
+            margin=dict(t=10, b=10, l=10, r=10),
+            height=230,
+            showlegend=True,
+            legend=dict(bgcolor="rgba(0,0,0,0)", orientation="v", x=0.78, y=0.5),
+        )
+        st.plotly_chart(_ph_fig_donut, use_container_width=True)
+
+    # ── Return efficiency callouts ────────────────────────────────────────────
+    _ph_with_ann = [p for p in _ph_positions if p["annualized_return"] is not None]
+    if _ph_with_ann:
+        _ph_sorted_ann = sorted(_ph_with_ann, key=lambda p: p["annualized_return"])
+        _ph_sleepers = _ph_sorted_ann[: min(3, len(_ph_sorted_ann) // 2 + 1)]
+        _ph_stars    = list(reversed(_ph_sorted_ann[-min(3, len(_ph_sorted_ann) // 2 + 1):]))
+
+        def _ph_eff_row(p: dict, positive: bool) -> str:
+            _pnl_color = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
+            _pnl_str   = f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "—"
+            _ann_str   = f"{p['annualized_return']:+.0f}%/yr" if p["annualized_return"] is not None else "—"
+            return (
+                f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
+                f'padding:4px 0;border-bottom:1px solid #1f2937;">'
+                f'<span style="font-size:13px;font-weight:700;color:#f3f4f6;">{p["ticker"]}</span>'
+                f'<span style="font-size:11px;color:#9ca3af;">{p["months_held"]:.0f} mo</span>'
+                f'<span style="font-size:13px;color:{_pnl_color};">{_pnl_str}</span>'
+                f'<span style="font-size:10px;color:#6b7280;">{_ann_str} ann.</span>'
+                f'</div>'
+            )
+
+        _ph_eff_html = (
+            '<div style="display:flex;gap:12px;margin-top:8px;">'
+            '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
+            '<div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
+            'letter-spacing:.5px;margin-bottom:8px;">⏳ Sleeping Capital</div>'
+        )
+        for _p in _ph_sleepers:
+            _ph_eff_html += _ph_eff_row(_p, positive=False)
+        _ph_eff_html += (
+            '</div>'
+            '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
+            '<div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
+            'letter-spacing:.5px;margin-bottom:8px;">🚀 Working Hardest</div>'
+        )
+        for _p in _ph_stars:
+            _ph_eff_html += _ph_eff_row(_p, positive=True)
+        _ph_eff_html += '</div></div>'
+
+        st.markdown(_ph_eff_html, unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

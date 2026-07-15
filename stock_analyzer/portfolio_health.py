@@ -19,6 +19,7 @@ import pandas as pd
 from stock_analyzer.constants import (
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
+    COMPOSITE_SELL,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     SECTOR_CEILING,
@@ -464,4 +465,143 @@ def compute_health_score(
         "n_available": len(available),
         "dimension_labels": _DIMENSION_LABELS,
         "dimension_icons":  _DIMENSION_ICONS,
+    }
+
+
+# ── Portfolio Dynamics ────────────────────────────────────────────────────────
+
+def compute_portfolio_dynamics(
+    port_df: pd.DataFrame,
+    trades_df,  # pd.DataFrame | None  (columns: ticker, traded_at, action)
+) -> dict:
+    """
+    Per-position tenure, return efficiency, and engine alignment.
+    Pure computation — zero API calls, uses only session-state data.
+
+    Returns:
+        positions       list[dict]  — one entry per held position
+        cohort_data     list[dict]  — Fresh / Growing / Established aggregates
+        alignment       dict        — verdict → count
+        align_weight    dict        — verdict → total weight %
+        vitality_pct    int         — (BUY+HOLD) / total × 100
+        n_positions     int
+        has_tenure_data bool        — True if at least one first-buy date resolved
+    """
+    import datetime
+
+    today = datetime.date.today()
+
+    # Map ticker → first BUY date from trades history
+    first_buy: dict[str, datetime.date] = {}
+    if trades_df is not None and not getattr(trades_df, "empty", True):
+        try:
+            buys = trades_df[trades_df["action"].str.upper() == "BUY"]
+            for ticker, grp in buys.groupby("ticker"):
+                dates = pd.to_datetime(grp["traded_at"], utc=True, errors="coerce").dropna()
+                if not dates.empty:
+                    first_buy[str(ticker).upper()] = dates.min().date()
+        except Exception:
+            pass
+
+    wt_col = "Weight (%)" if "Weight (%)" in port_df.columns else "Gate Weight (%)"
+
+    positions: list[dict] = []
+    for _, row in port_df.iterrows():
+        ticker = str(row.get("Ticker", "")).upper()
+
+        try:
+            score = float(row.get("Score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+
+        try:
+            weight = float(row.get(wt_col, 0) or 0)
+        except (TypeError, ValueError):
+            weight = 0.0
+
+        sector = str(row.get("Sector", "Other") or "Other")
+        signal = str(row.get("Signal", "") or "")
+
+        try:
+            pnl_pct_raw = row.get("P&L (%)")
+            pnl_pct: float | None = float(pnl_pct_raw) if pnl_pct_raw is not None else None
+        except (TypeError, ValueError):
+            pnl_pct = None
+
+        fb = first_buy.get(ticker)
+        months_held: float | None = round((today - fb).days / 30.44, 2) if fb else None
+
+        annualized_return: float | None = None
+        if pnl_pct is not None and months_held is not None and months_held >= 0.5:
+            annualized_return = round(pnl_pct * (12.0 / months_held), 1)
+
+        # Cohort by holding duration
+        if months_held is None:
+            cohort = "Unknown"
+        elif months_held < 1.0:
+            cohort = "Fresh"          # < 30 days
+        elif months_held <= 6.0:
+            cohort = "Growing"        # 1–6 months
+        else:
+            cohort = "Established"    # > 6 months
+
+        # Verdict tier from composite score (mirrors app threshold ladder)
+        if score >= COMPOSITE_BUY:
+            verdict = "BUY"
+        elif score >= COMPOSITE_HOLD:
+            verdict = "HOLD"
+        elif score >= COMPOSITE_SELL:
+            verdict = "WATCH"
+        else:
+            verdict = "EXIT"
+
+        positions.append({
+            "ticker":            ticker,
+            "months_held":       months_held,
+            "pnl_pct":           pnl_pct,
+            "annualized_return": annualized_return,
+            "weight":            weight,
+            "composite":         score,
+            "signal":            signal,
+            "verdict":           verdict,
+            "sector":            sector,
+            "cohort":            cohort,
+        })
+
+    # Cohort aggregates (Fixed order: Fresh → Growing → Established → Unknown)
+    cohort_order = ["Fresh", "Growing", "Established", "Unknown"]
+    cohort_data: list[dict] = []
+    for cohort_name in cohort_order:
+        members = [p for p in positions if p["cohort"] == cohort_name]
+        if not members:
+            continue
+        pnl_vals = [p["pnl_pct"] for p in members if p["pnl_pct"] is not None]
+        cohort_data.append({
+            "cohort":   cohort_name,
+            "count":    len(members),
+            "avg_pnl":  round(sum(pnl_vals) / len(pnl_vals), 1) if pnl_vals else None,
+            "tickers":  [p["ticker"] for p in members],
+        })
+
+    # Engine alignment counts and weight share
+    alignment:    dict[str, int]   = {"BUY": 0, "HOLD": 0, "WATCH": 0, "EXIT": 0}
+    align_weight: dict[str, float] = {"BUY": 0.0, "HOLD": 0.0, "WATCH": 0.0, "EXIT": 0.0}
+    for p in positions:
+        alignment[p["verdict"]]    += 1
+        align_weight[p["verdict"]] += p["weight"]
+
+    total_count = len(positions)
+    vitality_pct = (
+        round((alignment["BUY"] + alignment["HOLD"]) / total_count * 100)
+        if total_count > 0 else 0
+    )
+
+    return {
+        "positions":       positions,
+        "cohort_data":     cohort_data,
+        "alignment":       alignment,
+        "align_weight":    align_weight,
+        "vitality_pct":    vitality_pct,
+        "n_positions":     total_count,
+        "has_tenure_data": bool(first_buy),
     }
