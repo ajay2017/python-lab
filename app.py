@@ -4944,12 +4944,14 @@ if page == "🏠 Home":
             if pd.isna(_dt):
                 return ""
             _et = _dt.tz_convert("America/New_York")
-            return _et.strftime("%-I:%M %p ET").lstrip("0") if hasattr(_et, "strftime") else ""
+            _fmt = "%-I:%M %p ET" if _et.date() == _today_et() else "%b %-d · %-I:%M %p ET"
+            return _et.strftime(_fmt).lstrip("0") if hasattr(_et, "strftime") else ""
         except Exception:
             try:
                 # Windows strftime doesn't support %-I; fall back to %I and strip
                 _et = pd.to_datetime(ts_val, utc=True).tz_convert("America/New_York")
-                return _et.strftime("%I:%M %p ET").lstrip("0")
+                _fmt = "%I:%M %p ET" if _et.date() == _today_et() else "%b %-d · %I:%M %p ET"
+                return _et.strftime(_fmt).lstrip("0")
             except Exception:
                 return ""
 
