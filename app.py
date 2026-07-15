@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import pytz as _pytz
 
 # All date comparisons use ET so the calendar never flips at midnight UTC.
@@ -3125,7 +3125,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 2  # bumped: mover one_liner text changed (Breakout today)
+    _SYNTH_SCHEMA_VER = 3  # bumped: composite_fetched_at added to Grow Today picks
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -3191,6 +3191,64 @@ if page == "🏠 Home":
         st.session_state["_grow_today_sectors_cache"] = _b["_grow_today_sectors_cache"]
         st.session_state["_leading_sectors_cache"]    = _b["_leading_sectors_cache"]
         st.session_state["_daily_brief_offline"]      = _b["_daily_brief_offline"]
+
+        # Composite freshness check: if any Grow Today bundle is stale (older than
+        # load_all's 30-min TTL), refresh via load_all() and rebuild the brief so
+        # the card and Analysis always agree.
+        _brief_locked = (
+            st.session_state.get("_brief_locked_for_date") == _today_et()
+        )
+        if not _brief_locked:
+            _now_utc = datetime.now(timezone.utc)
+            _refreshed_composites: dict = {}
+            _any_stale = False
+            for _tc, _snap_bundle in _grow_composites.items():
+                _fat = _snap_bundle.get("fetched_at")
+                if _fat and (_now_utc - datetime.fromisoformat(_fat)).total_seconds() > 1800:
+                    _live = load_all(_tc)
+                    _refreshed_composites[_tc] = _live if _live is not None else _snap_bundle
+                    if _live is not None:
+                        _any_stale = True
+                else:
+                    _refreshed_composites[_tc] = _snap_bundle
+
+            if _any_stale:
+                _grow_composites = _refreshed_composites
+                st.session_state["_grow_composites"] = _grow_composites
+                try:
+                    _daily_brief = build_daily_briefing(
+                        port_df         = port_df,
+                        alert_list      = alert_list,
+                        risk_recs       = _risk_advisor_recs,
+                        news_items      = st.session_state.get("_sidebar_news", []),
+                        macro_events    = _macro_events,
+                        held_data       = held_data,
+                        scanner_results = st.session_state.get("scanner_results"),
+                        portfolio_value = total_val,
+                        today           = _today_et(),
+                        market_context  = _market_context,
+                        grow_composites = _grow_composites,
+                        movers          = st.session_state.get("_movers_candidates", []),
+                        spy_df          = _cached_spy("6mo"),
+                        fragility       = st.session_state.get("_fragility_cache"),
+                        spy_trend_df    = _cached_spy("1y"),
+                        vix_level       = _cached_vix(),
+                    )
+                    # Update snapshot so next HIT reads fresh fetched_at values
+                    st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
+                    st.session_state["_home_synth_cache"]["bundle"]["_daily_brief"] = _daily_brief
+                    # Mirror MISS-path _grow_today_sectors_cache update
+                    _gt_today_fresh = (_daily_brief or {}).get("grow_today") or {}
+                    _grow_today_sectors_cache = sorted({
+                        str(p.get("sector", "")).strip()
+                        for p in (_gt_today_fresh.get("new_picks") or []) + (_gt_today_fresh.get("add_positions") or [])
+                        if str(p.get("sector", "")).strip()
+                    })
+                    st.session_state["_grow_today_sectors_cache"] = _grow_today_sectors_cache
+                    st.session_state["_home_synth_cache"]["bundle"]["_grow_today_sectors_cache"] = _grow_today_sectors_cache
+                except Exception as _e:
+                    import logging
+                    logging.warning("Composite freshness rebuild failed: %s", _e)
     else:
         alert_list = alerts(port_df, held_data)
         # Append signal-change alerts
@@ -5214,6 +5272,10 @@ if page == "🏠 Home":
                 _comp_part = f"Composite {_comp_sc:.0f}/100"
                 if _comp_lbl:
                     _comp_part += f" ({_comp_lbl})"
+                if _gp.get("composite_fetched_at"):
+                    _ts = datetime.fromisoformat(_gp["composite_fetched_at"])
+                    _ts_et = _ts.astimezone(_pytz.timezone("America/New_York"))
+                    _comp_part += f" · Score as of {_ts_et.strftime('%-I:%M %p ET')}"
                 _score_line = f"{_score_line} · {_comp_part}".lstrip(" · ")
 
             # Mover badge: this candidate entered via today's 1-day breakout

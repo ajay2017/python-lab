@@ -16,6 +16,8 @@ a Streamlit-cached helper).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from stock_analyzer.constants import (
     FUNDAMENTALS_GATE_MIN_METRICS,
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
@@ -43,7 +45,6 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
     if not fetched_at_iso:
         return None
     try:
-        from datetime import datetime, timezone
         dt = datetime.fromisoformat(str(fetched_at_iso).replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -235,4 +236,5 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "fund_source": _fund_source,
         "fund_cache_age_days": _fund_cache_age_days,
         "stale_as_of": _stale_as_of,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
     }

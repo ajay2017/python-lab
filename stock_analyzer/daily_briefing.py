@@ -840,9 +840,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             pick = {
                 "ticker":          ticker,
                 "score":           _f(row.get("Score", 0)),    # momentum / scanner score
-                "composite_score": _composite_score,           # full composite, or None
-                "composite_label": _composite_label,
-                "conviction":      conviction,
+                "composite_score":      _composite_score,           # full composite, or None
+                "composite_label":      _composite_label,
+                "composite_fetched_at": _comp_data.get("fetched_at"),
+                "conviction":           conviction,
                 "sector":          sector,
                 "price":           price,
                 "trend":           trend,
