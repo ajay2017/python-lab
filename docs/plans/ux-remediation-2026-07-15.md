@@ -45,34 +45,15 @@ All 4 Tier 1 items shipped in one batch.
 
 ---
 
-### Tier 2 — One per deploy + live review
+### ~~Tier 2 — One per deploy + live review~~ Done (2026-07-15)
 
-Per `feedback_phased_ux_rollout_cadence`: execute one structural tab change at a time, push to Streamlit Cloud, review the live app before starting the next. User catches real IA issues (nav-naming collisions) via hands-on QA, not code review.
+All 3 Tier 2 structural changes shipped and live-reviewed.
 
-**I7 — Recommendations History → 3 tabs** *(~1.5 hrs)*
-Proposed split at natural seams:
-- **Summary** — filters + 4 headline metrics + best/worst banner + Sankey chart + Missed Opportunity block (chart + table + expander)
-- **Trends** — 4 analytics expanders: By Verdict / By Composite Band / By Rec Type / Trend chart
-- **Full Table** — detail table + ticker-jump control
-
-Rationale for order: lowest-density restructure of the three; safe first structural change.
-
-**I3 — Risk Analysis → 3 tabs** *(~1.5 hrs)*
-Proposed split:
-- **Dashboard** — Portfolio Risk metrics (7) + Market-Risk Posture gauge + Cross-Asset Pulse + Rate Sensitivity table
-- **Action Plan** — Risk Action Plan (3 headline metrics + N recommendation cards)
-- **Stress Testing** — scenario selector + shock slider + results chart + 2 tables + 2 expanders
-
-Rationale: users navigate to Risk Analysis when something needs attention; tabs make the action plan immediately reachable without scrolling past metrics.
-
-**I2 — Portfolio Allocation Tab 1 → 4 sub-tabs** *(~2.5 hrs, highest complexity)*
-Proposed split:
-- **Overview** — Allocation pie + P&L bar + Sector Exposure chart + Composition Sankey + Position Detail table (full drill-down)
-- **Rebalancing** — Rebalancing Advisor (radio + editable table + chart + trim/add cards) + Sentiment Momentum + News Intelligence expander
-- **Tax** — Tax Efficiency Advisor (radio + 5 metrics + table + 3 card types)
-- **Performance** — Performance vs SPY + Performance Diagnostics + P&L Waterfall
-
-Rationale: densest page in the app; do last because any naming or IA issue is most likely to surface here.
+| Finding | Commit | What was split |
+|---|---|---|
+| I7 | ef39b4c | Recommendations History → 📊 Summary / 📈 Trends / 📋 Full Table |
+| I3 | 6b125ef | Risk Analysis → 📊 Dashboard / 📋 Action Plan / 🔥 Stress Testing |
+| I2 | ae04915 | Portfolio Allocation → 📊 Overview / ⚖️ Rebalancing / 💰 Tax / 📈 Performance / 📈 Analytics |
 
 ---
 
