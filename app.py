@@ -8068,1039 +8068,1049 @@ elif page == "🔗 Risk Analysis":
     risk_pairs          = st.session_state.get("_risk_pairs_cache") or []
     _div_label          = st.session_state.get("_div_label_cache")
 
-    # ── Leverage / margin AWARENESS (text-only — NEVER gates) ──────────────
-    # Concentration gates are equity-basis (2026-07-09 policy); leverage risk
-    # lives HERE as monitoring, not a suppression, so a transient margin
-    # balance can't force a trim. Renders only when the seeded cash shows a
-    # real, fresh margin debit (see _leverage_cache). "$" escaped as "\$" —
-    # Streamlit renders a $…$ pair as LaTeX.
-    _lev_c = st.session_state.get("_leverage_cache") or {}
-    if _lev_c.get("levered"):
-        _lv_ratio = _lev_c.get("ratio")
-        _lv_eq    = _f(_lev_c.get("equity"), 0.0)
-        _lv_nc    = _f(_lev_c.get("net_capital"), 0.0)
-        _lv_debit = _f(_lev_c.get("margin_debit"), 0.0)
-        _lv_line  = ""
-        try:
-            if port_df is not None and not port_df.empty and "Sector" in port_df.columns:
-                _lv_sec = (port_df.groupby("Sector")["Market Value"].sum()
-                           .sort_values(ascending=False))
-                if not _lv_sec.empty:
-                    _lv_pb  = abs(FRAGILITY_PULLBACK_PCT) / 100.0   # single-source the −10% yardstick
-                    _lv_hit = float(_lv_sec.iloc[0]) * _lv_pb
-                    _lv_eq_pct = (_lv_hit / _lv_eq * 100) if _lv_eq > 0 else None
-                    _lv_line = (
-                        f" A −{abs(FRAGILITY_PULLBACK_PCT):.0f}% move on your largest sector "
-                        f"({_lv_sec.index[0]}) ≈ −\\${_lv_hit:,.0f}"
-                        + (f" (−{_lv_eq_pct:.0f}% of your equity)" if _lv_eq_pct is not None else "")
-                        + "."
-                    )
-        except Exception:
-            _lv_line = ""
-        st.warning(
-            f"**Leverage — awareness only (not a gate).** You're carrying a "
-            f"**\\${_lv_debit:,.0f} margin debit**: \\${_lv_eq:,.0f} of stock on "
-            f"**\\${_lv_nc:,.0f} of your own capital**"
-            + (f" (**{_lv_ratio:.1f}× leverage**)" if isinstance(_lv_ratio, (int, float)) else "")
-            + f".{_lv_line} Margin amplifies a drawdown against the capital you actually own — "
-            "worth monitoring. Concentration gates are judged on equity, so this never forces a trim.",
-            icon="⚖️",
-        )
-    # ── Portfolio Risk Dashboard ──────────────────────────────────────────
-    if _port_risk:
-        st.subheader("Portfolio Risk Dashboard")
-        _rfr_display = _get_rfr()
-        st.caption(
-            "All metrics derived from 6-month weighted daily portfolio returns. "
-            f"Risk-free rate: {_rfr_display*100:.2f}% (live 13-week T-bill, ^IRX). "
-            "Weights are current allocation — not time-weighted."
-        )
+    _ra_tab_dash, _ra_tab_action, _ra_tab_stress = st.tabs([
+        "📊 Dashboard", "📋 Action Plan", "🔥 Stress Testing"
+    ])
 
-        _pr   = _port_risk
-        _beta = _pr.get("beta")
-        _vol  = _pr.get("ann_volatility")
-        _sh   = _pr.get("sharpe")
-        _so   = _pr.get("sortino")
-        _var  = _pr.get("var_95_pct")
-        _cvar = _pr.get("cvar_95_pct")
-        _mdd  = _pr.get("max_drawdown")
+    with _ra_tab_dash:
 
-        _rm1, _rm2, _rm3, _rm4, _rm5, _rm6, _rm7 = st.columns(7)
-
-        # Beta
-        if _beta is not None:
-            _beta_lbl = "High ↑" if _beta > 1.2 else ("Low ↓" if _beta < 0.8 else "Market-like")
-            _rm1.metric("Portfolio Beta", f"{_beta:.2f}", _beta_lbl,
-                        delta_color="inverse" if _beta > 1.4 else "off",
-                        help=_tip("Portfolio Beta"))
-        else:
-            _rm1.metric("Portfolio Beta", "—", help=_tip("Portfolio Beta"))
-
-        # Annualised Volatility
-        _vol_lbl = (
-            "Low"      if (_vol or 0) < 15 else
-            "Moderate" if (_vol or 0) < 20 else
-            "Elevated" if (_vol or 0) < 30 else "High"
-        )
-        _rm2.metric("Ann. Volatility", f"{_vol:.1f}%" if _vol is not None else "—",
-                    _vol_lbl, delta_color="off",
-                    help=_tip("Portfolio Volatility"))
-
-        # Sharpe
-        if _sh is not None:
-            _sh_lbl = (
-                "Excellent" if _sh >= 1.5 else
-                "Good"      if _sh >= 1.0 else
-                "Acceptable" if _sh >= 0.5 else "Weak"
+        # ── Leverage / margin AWARENESS (text-only — NEVER gates) ──────────────
+        # Concentration gates are equity-basis (2026-07-09 policy); leverage risk
+        # lives HERE as monitoring, not a suppression, so a transient margin
+        # balance can't force a trim. Renders only when the seeded cash shows a
+        # real, fresh margin debit (see _leverage_cache). "$" escaped as "\$" —
+        # Streamlit renders a $…$ pair as LaTeX.
+        _lev_c = st.session_state.get("_leverage_cache") or {}
+        if _lev_c.get("levered"):
+            _lv_ratio = _lev_c.get("ratio")
+            _lv_eq    = _f(_lev_c.get("equity"), 0.0)
+            _lv_nc    = _f(_lev_c.get("net_capital"), 0.0)
+            _lv_debit = _f(_lev_c.get("margin_debit"), 0.0)
+            _lv_line  = ""
+            try:
+                if port_df is not None and not port_df.empty and "Sector" in port_df.columns:
+                    _lv_sec = (port_df.groupby("Sector")["Market Value"].sum()
+                               .sort_values(ascending=False))
+                    if not _lv_sec.empty:
+                        _lv_pb  = abs(FRAGILITY_PULLBACK_PCT) / 100.0   # single-source the −10% yardstick
+                        _lv_hit = float(_lv_sec.iloc[0]) * _lv_pb
+                        _lv_eq_pct = (_lv_hit / _lv_eq * 100) if _lv_eq > 0 else None
+                        _lv_line = (
+                            f" A −{abs(FRAGILITY_PULLBACK_PCT):.0f}% move on your largest sector "
+                            f"({_lv_sec.index[0]}) ≈ −\\${_lv_hit:,.0f}"
+                            + (f" (−{_lv_eq_pct:.0f}% of your equity)" if _lv_eq_pct is not None else "")
+                            + "."
+                        )
+            except Exception:
+                _lv_line = ""
+            st.warning(
+                f"**Leverage — awareness only (not a gate).** You're carrying a "
+                f"**\\${_lv_debit:,.0f} margin debit**: \\${_lv_eq:,.0f} of stock on "
+                f"**\\${_lv_nc:,.0f} of your own capital**"
+                + (f" (**{_lv_ratio:.1f}× leverage**)" if isinstance(_lv_ratio, (int, float)) else "")
+                + f".{_lv_line} Margin amplifies a drawdown against the capital you actually own — "
+                "worth monitoring. Concentration gates are judged on equity, so this never forces a trim.",
+                icon="⚖️",
             )
-            _rm3.metric("Sharpe Ratio", f"{_sh:.2f}", _sh_lbl,
-                        delta_color="normal" if _sh >= 1.0 else "inverse",
-                        help=_tip("Sharpe Ratio"))
-        else:
-            _rm3.metric("Sharpe Ratio", "—", help=_tip("Sharpe Ratio"))
-
-        # Sortino
-        if _so is not None:
-            _so_lbl = (
-                "Excellent" if _so >= 2.0 else
-                "Good"      if _so >= 1.0 else "Weak"
-            )
-            _rm4.metric("Sortino Ratio", f"{_so:.2f}", _so_lbl,
-                        delta_color="normal" if _so >= 1.0 else "inverse",
-                        help=_tip("Sortino Ratio"))
-        else:
-            _rm4.metric("Sortino Ratio", "—", help=_tip("Sortino Ratio"))
-
-        # VaR 95% (daily)
-        if _var is not None:
-            _var_dollar = abs(_var / 100 * total_val)
-            _rm5.metric("Daily VaR 95%", f"{_var:.2f}%",
-                        f"≈ ${_var_dollar:,.0f} / day",
-                        delta_color="off", help=_tip("Portfolio VaR"))
-        else:
-            _rm5.metric("Daily VaR 95%", "—", help=_tip("Portfolio VaR"))
-
-        # CVaR / Expected Shortfall
-        if _cvar is not None:
-            _cvar_dollar = abs(_cvar / 100 * total_val)
-            _rm6.metric("CVaR (Tail Risk)", f"{_cvar:.2f}%",
-                        f"≈ ${_cvar_dollar:,.0f} avg bad day",
-                        delta_color="off", help=_tip("Portfolio CVaR"))
-        else:
-            _rm6.metric("CVaR (Tail Risk)", "—", help=_tip("Portfolio CVaR"))
-
-        # Max Drawdown
-        if _mdd is not None:
-            _mdd_lbl = (
-                "Modest"      if _mdd > -10 else
-                "Normal"      if _mdd > -20 else
-                "Significant" if _mdd > -30 else "Severe"
-            )
-            _rm7.metric("Max Drawdown", f"{_mdd:.1f}%", _mdd_lbl,
-                        delta_color="off", help=_tip("Portfolio Max Drawdown"))
-        else:
-            _rm7.metric("Max Drawdown", "—", help=_tip("Portfolio Max Drawdown"))
-
-        # Interpretation banner
-        _risk_flags = []
-        if _beta is not None and _beta > 1.4:
-            _risk_flags.append(f"Beta {_beta:.2f} — portfolio moves {_beta:.1f}× the market in both directions")
-        if _vol is not None and _vol > 25:
-            _risk_flags.append(f"Volatility {_vol:.0f}% annualised — expect ±{_vol/16:.1f}% daily swings on average")
-        if _sh is not None and _sh < 0.5:
-            _risk_flags.append(f"Sharpe {_sh:.2f} — poor risk-adjusted return; the risk taken is not being rewarded")
-        if _mdd is not None and _mdd < -20:
-            _risk_flags.append(f"Drawdown {_mdd:.0f}% — portfolio spent time significantly below its high-water mark")
-
-        if _risk_flags:
-            st.warning("⚠️ **Risk flags:** " + "  ·  ".join(_risk_flags))
-        else:
-            st.success(
-                "✅ Portfolio risk metrics are within acceptable parameters "
-                "for a growth-tilted equity portfolio."
-            )
-
-        # ── 🧭 Market-Risk Posture (pullback-awareness Phase 3) ───────────────────
-        # Read-only EXPOSURE posture = book fragility × current market regime. Composes
-        # two already-computed reads (no recomputation, no new threshold): fragility
-        # severity (_fragility_cache) and risk_off_regime (SPY<200DMA or VIX≥level).
-        # NOT a forecast, NOT a directive — when both legs are elevated it POINTS to the
-        # Daily Brief's risk-off de-risk cards (single-surface), never duplicates them.
-        from stock_analyzer.exit_advisor import risk_off_regime as _ro_regime, market_risk_posture as _mk_posture
-        from stock_analyzer.constants import RISK_OFF_TREND_MA as _RO_MA, RISK_OFF_VIX_LEVEL as _RO_VIX
-        try:
-            _ro_armed, _ro_reasons = _ro_regime(
-                _cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA, vix_threshold=_RO_VIX,
-            )
-        except Exception:
-            _ro_armed, _ro_reasons = False, []
-        _posture = _mk_posture(
-            st.session_state.get("_fragility_cache"), risk_off=_ro_armed, reasons=_ro_reasons,
-        )
-        st.markdown("#### 🧭 Market-Risk Posture")
-        if _posture is None:
+        # ── Portfolio Risk Dashboard ──────────────────────────────────────────
+        if _port_risk:
+            st.subheader("Portfolio Risk Dashboard")
+            _rfr_display = _get_rfr()
             st.caption(
-                "Posture unavailable — portfolio beta / fragility isn't computed yet (data "
-                "offline). No reading is shown rather than a falsely-calm one."
+                "All metrics derived from 6-month weighted daily portfolio returns. "
+                f"Risk-free rate: {_rfr_display*100:.2f}% (live 13-week T-bill, ^IRX). "
+                "Weights are current allocation — not time-weighted."
             )
-        else:
-            _pcolor = {0: "#22c55e", 1: "#22c55e", 2: "#f59e0b", 3: "#ef4444"}[_posture["score"]]
-            _pg1, _pg2 = st.columns([1, 2])
-            with _pg1:
-                _pfig = go.Figure(go.Indicator(
-                    mode="gauge",
-                    value=_posture["score"],
-                    gauge={
-                        "axis": {"range": [0, 3], "tickvals": [0, 1, 2, 3], "tickwidth": 1},
-                        "bar": {"color": _pcolor},
-                        "steps": [
-                            {"range": [0, 1], "color": "rgba(34,197,94,0.18)"},
-                            {"range": [1, 2], "color": "rgba(245,158,11,0.18)"},
-                            {"range": [2, 3], "color": "rgba(239,68,68,0.18)"},
-                        ],
-                    },
-                    domain={"x": [0, 1], "y": [0, 1]},
-                ))
-                _pfig.update_layout(
-                    height=180, margin=dict(l=10, r=10, t=10, b=10),
-                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+
+            _pr   = _port_risk
+            _beta = _pr.get("beta")
+            _vol  = _pr.get("ann_volatility")
+            _sh   = _pr.get("sharpe")
+            _so   = _pr.get("sortino")
+            _var  = _pr.get("var_95_pct")
+            _cvar = _pr.get("cvar_95_pct")
+            _mdd  = _pr.get("max_drawdown")
+
+            _rm1, _rm2, _rm3, _rm4, _rm5, _rm6, _rm7 = st.columns(7)
+
+            # Beta
+            if _beta is not None:
+                _beta_lbl = "High ↑" if _beta > 1.2 else ("Low ↓" if _beta < 0.8 else "Market-like")
+                _rm1.metric("Portfolio Beta", f"{_beta:.2f}", _beta_lbl,
+                            delta_color="inverse" if _beta > 1.4 else "off",
+                            help=_tip("Portfolio Beta"))
+            else:
+                _rm1.metric("Portfolio Beta", "—", help=_tip("Portfolio Beta"))
+
+            # Annualised Volatility
+            _vol_lbl = (
+                "Low"      if (_vol or 0) < 15 else
+                "Moderate" if (_vol or 0) < 20 else
+                "Elevated" if (_vol or 0) < 30 else "High"
+            )
+            _rm2.metric("Ann. Volatility", f"{_vol:.1f}%" if _vol is not None else "—",
+                        _vol_lbl, delta_color="off",
+                        help=_tip("Portfolio Volatility"))
+
+            # Sharpe
+            if _sh is not None:
+                _sh_lbl = (
+                    "Excellent" if _sh >= 1.5 else
+                    "Good"      if _sh >= 1.0 else
+                    "Acceptable" if _sh >= 0.5 else "Weak"
                 )
-                st.plotly_chart(_pfig, use_container_width=True)
-            with _pg2:
+                _rm3.metric("Sharpe Ratio", f"{_sh:.2f}", _sh_lbl,
+                            delta_color="normal" if _sh >= 1.0 else "inverse",
+                            help=_tip("Sharpe Ratio"))
+            else:
+                _rm3.metric("Sharpe Ratio", "—", help=_tip("Sharpe Ratio"))
+
+            # Sortino
+            if _so is not None:
+                _so_lbl = (
+                    "Excellent" if _so >= 2.0 else
+                    "Good"      if _so >= 1.0 else "Weak"
+                )
+                _rm4.metric("Sortino Ratio", f"{_so:.2f}", _so_lbl,
+                            delta_color="normal" if _so >= 1.0 else "inverse",
+                            help=_tip("Sortino Ratio"))
+            else:
+                _rm4.metric("Sortino Ratio", "—", help=_tip("Sortino Ratio"))
+
+            # VaR 95% (daily)
+            if _var is not None:
+                _var_dollar = abs(_var / 100 * total_val)
+                _rm5.metric("Daily VaR 95%", f"{_var:.2f}%",
+                            f"≈ ${_var_dollar:,.0f} / day",
+                            delta_color="off", help=_tip("Portfolio VaR"))
+            else:
+                _rm5.metric("Daily VaR 95%", "—", help=_tip("Portfolio VaR"))
+
+            # CVaR / Expected Shortfall
+            if _cvar is not None:
+                _cvar_dollar = abs(_cvar / 100 * total_val)
+                _rm6.metric("CVaR (Tail Risk)", f"{_cvar:.2f}%",
+                            f"≈ ${_cvar_dollar:,.0f} avg bad day",
+                            delta_color="off", help=_tip("Portfolio CVaR"))
+            else:
+                _rm6.metric("CVaR (Tail Risk)", "—", help=_tip("Portfolio CVaR"))
+
+            # Max Drawdown
+            if _mdd is not None:
+                _mdd_lbl = (
+                    "Modest"      if _mdd > -10 else
+                    "Normal"      if _mdd > -20 else
+                    "Significant" if _mdd > -30 else "Severe"
+                )
+                _rm7.metric("Max Drawdown", f"{_mdd:.1f}%", _mdd_lbl,
+                            delta_color="off", help=_tip("Portfolio Max Drawdown"))
+            else:
+                _rm7.metric("Max Drawdown", "—", help=_tip("Portfolio Max Drawdown"))
+
+            # Interpretation banner
+            _risk_flags = []
+            if _beta is not None and _beta > 1.4:
+                _risk_flags.append(f"Beta {_beta:.2f} — portfolio moves {_beta:.1f}× the market in both directions")
+            if _vol is not None and _vol > 25:
+                _risk_flags.append(f"Volatility {_vol:.0f}% annualised — expect ±{_vol/16:.1f}% daily swings on average")
+            if _sh is not None and _sh < 0.5:
+                _risk_flags.append(f"Sharpe {_sh:.2f} — poor risk-adjusted return; the risk taken is not being rewarded")
+            if _mdd is not None and _mdd < -20:
+                _risk_flags.append(f"Drawdown {_mdd:.0f}% — portfolio spent time significantly below its high-water mark")
+
+            if _risk_flags:
+                st.warning("⚠️ **Risk flags:** " + "  ·  ".join(_risk_flags))
+            else:
+                st.success(
+                    "✅ Portfolio risk metrics are within acceptable parameters "
+                    "for a growth-tilted equity portfolio."
+                )
+
+            # ── 🧭 Market-Risk Posture (pullback-awareness Phase 3) ───────────────────
+            # Read-only EXPOSURE posture = book fragility × current market regime. Composes
+            # two already-computed reads (no recomputation, no new threshold): fragility
+            # severity (_fragility_cache) and risk_off_regime (SPY<200DMA or VIX≥level).
+            # NOT a forecast, NOT a directive — when both legs are elevated it POINTS to the
+            # Daily Brief's risk-off de-risk cards (single-surface), never duplicates them.
+            from stock_analyzer.exit_advisor import risk_off_regime as _ro_regime, market_risk_posture as _mk_posture
+            from stock_analyzer.constants import RISK_OFF_TREND_MA as _RO_MA, RISK_OFF_VIX_LEVEL as _RO_VIX
+            try:
+                _ro_armed, _ro_reasons = _ro_regime(
+                    _cached_spy("1y"), _cached_vix(), trend_ma=_RO_MA, vix_threshold=_RO_VIX,
+                )
+            except Exception:
+                _ro_armed, _ro_reasons = False, []
+            _posture = _mk_posture(
+                st.session_state.get("_fragility_cache"), risk_off=_ro_armed, reasons=_ro_reasons,
+            )
+            st.markdown("#### 🧭 Market-Risk Posture")
+            if _posture is None:
+                st.caption(
+                    "Posture unavailable — portfolio beta / fragility isn't computed yet (data "
+                    "offline). No reading is shown rather than a falsely-calm one."
+                )
+            else:
+                _pcolor = {0: "#22c55e", 1: "#22c55e", 2: "#f59e0b", 3: "#ef4444"}[_posture["score"]]
+                _pg1, _pg2 = st.columns([1, 2])
+                with _pg1:
+                    _pfig = go.Figure(go.Indicator(
+                        mode="gauge",
+                        value=_posture["score"],
+                        gauge={
+                            "axis": {"range": [0, 3], "tickvals": [0, 1, 2, 3], "tickwidth": 1},
+                            "bar": {"color": _pcolor},
+                            "steps": [
+                                {"range": [0, 1], "color": "rgba(34,197,94,0.18)"},
+                                {"range": [1, 2], "color": "rgba(245,158,11,0.18)"},
+                                {"range": [2, 3], "color": "rgba(239,68,68,0.18)"},
+                            ],
+                        },
+                        domain={"x": [0, 1], "y": [0, 1]},
+                    ))
+                    _pfig.update_layout(
+                        height=180, margin=dict(l=10, r=10, t=10, b=10),
+                        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_pfig, use_container_width=True)
+                with _pg2:
+                    st.markdown(
+                        f"<div style='font-size:1.3em;font-weight:700;color:{_pcolor}'>"
+                        f"{_posture['emoji']} {_posture['label']}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(_posture["summary"])
+                    if _posture["reasons"]:
+                        st.caption("Regime legs: " + " · ".join(_posture["reasons"]))
+                    if _posture["armed"]:
+                        st.warning(
+                            "Both your book fragility and the market regime are elevated — the "
+                            "**Today's Brief** is surfacing risk-off de-risk suggestions for your "
+                            "highest-beta names. This dial only shows the posture; act from there."
+                        )
+                st.caption(
+                    "Posture = book fragility × current market regime. It reads where you stand "
+                    "**now** — it does not predict a pullback's timing, and it never changes a "
+                    "gate. The book half is the fragility gauge on the Home brief."
+                )
+            st.markdown("")
+
+            st.markdown("---")
+            st.markdown("#### 📡 Cross-Asset Pulse")
+            _ca = _cached_cross_asset()
+            _ca_rows = [
+                ("credit",   "Credit spreads (HYG)"),
+                ("vix_term", "VIX term structure"),
+                ("dollar",   "Dollar (DXY)"),
+                ("copper",   "Copper"),
+                ("curve",    "Yield curve (3m10y)"),
+            ]
+            for _ca_key, _ca_name in _ca_rows:
+                _ca_sig = _ca.get(_ca_key, {})
+                if not _ca_sig.get("available", False):
+                    _ca_emoji = "—"
+                elif _ca_sig["stressed"]:
+                    _ca_emoji = "🔴"
+                else:
+                    _ca_emoji = "✅"
+                _ca_c1, _ca_c2, _ca_c3 = st.columns([3, 5, 4])
+                _ca_c1.markdown(f"**{_ca_name}**")
+                _ca_c2.markdown(f"{_ca_emoji}" if not _ca_sig.get("available") else f"{_ca_emoji} {_ca_sig.get('label', '')}")
+                _ca_c3.caption(_ca_sig.get("detail", "") if _ca_sig.get("available") else "")
+            _ca_score = _ca.get("score", 0)
+            _ca_label = _ca.get("label", "—")
+            # Denominator = available signals (the module scores against
+            # availability, not a fixed 5); a hardcoded "of 5" overstates
+            # coverage when a feed is down.
+            _ca_avail = sum(1 for _k, _ in _ca_rows if _ca.get(_k, {}).get("available"))
+            if _ca_label == "—":
+                st.caption("Cross-asset signals unavailable — market data offline.")
+            else:
+                _ca_color = (
+                    "#22c55e" if _ca_label == "Calm" else
+                    "#f59e0b" if _ca_label == "Caution" else
+                    "#ef4444"
+                )
                 st.markdown(
-                    f"<div style='font-size:1.3em;font-weight:700;color:{_pcolor}'>"
-                    f"{_posture['emoji']} {_posture['label']}</div>",
+                    f"<div style='margin-top:8px;font-size:0.85em;color:{_ca_color};font-weight:600'>"
+                    f"Overall: {_ca_label} · {_ca_score} of {_ca_avail} signals stressed</div>"
+                    f"<div style='font-size:0.78em;color:#6b7280;margin-top:2px'>"
+                    f"Cross-asset signals update every 30 min. They are awareness only — "
+                    f"they never move a gate or change a recommendation.</div>",
                     unsafe_allow_html=True,
                 )
-                st.markdown(_posture["summary"])
-                if _posture["reasons"]:
-                    st.caption("Regime legs: " + " · ".join(_posture["reasons"]))
-                if _posture["armed"]:
-                    st.warning(
-                        "Both your book fragility and the market regime are elevated — the "
-                        "**Today's Brief** is surfacing risk-off de-risk suggestions for your "
-                        "highest-beta names. This dial only shows the posture; act from there."
-                    )
-            st.caption(
-                "Posture = book fragility × current market regime. It reads where you stand "
-                "**now** — it does not predict a pullback's timing, and it never changes a "
-                "gate. The book half is the fragility gauge on the Home brief."
-            )
-        st.markdown("")
+            st.markdown("")
 
-        st.markdown("---")
-        st.markdown("#### 📡 Cross-Asset Pulse")
-        _ca = _cached_cross_asset()
-        _ca_rows = [
-            ("credit",   "Credit spreads (HYG)"),
-            ("vix_term", "VIX term structure"),
-            ("dollar",   "Dollar (DXY)"),
-            ("copper",   "Copper"),
-            ("curve",    "Yield curve (3m10y)"),
-        ]
-        for _ca_key, _ca_name in _ca_rows:
-            _ca_sig = _ca.get(_ca_key, {})
-            if not _ca_sig.get("available", False):
-                _ca_emoji = "—"
-            elif _ca_sig["stressed"]:
-                _ca_emoji = "🔴"
-            else:
-                _ca_emoji = "✅"
-            _ca_c1, _ca_c2, _ca_c3 = st.columns([3, 5, 4])
-            _ca_c1.markdown(f"**{_ca_name}**")
-            _ca_c2.markdown(f"{_ca_emoji}" if not _ca_sig.get("available") else f"{_ca_emoji} {_ca_sig.get('label', '')}")
-            _ca_c3.caption(_ca_sig.get("detail", "") if _ca_sig.get("available") else "")
-        _ca_score = _ca.get("score", 0)
-        _ca_label = _ca.get("label", "—")
-        # Denominator = available signals (the module scores against
-        # availability, not a fixed 5); a hardcoded "of 5" overstates
-        # coverage when a feed is down.
-        _ca_avail = sum(1 for _k, _ in _ca_rows if _ca.get(_k, {}).get("available"))
-        if _ca_label == "—":
-            st.caption("Cross-asset signals unavailable — market data offline.")
-        else:
-            _ca_color = (
-                "#22c55e" if _ca_label == "Calm" else
-                "#f59e0b" if _ca_label == "Caution" else
-                "#ef4444"
-            )
-            st.markdown(
-                f"<div style='margin-top:8px;font-size:0.85em;color:{_ca_color};font-weight:600'>"
-                f"Overall: {_ca_label} · {_ca_score} of {_ca_avail} signals stressed</div>"
-                f"<div style='font-size:0.78em;color:#6b7280;margin-top:2px'>"
-                f"Cross-asset signals update every 30 min. They are awareness only — "
-                f"they never move a gate or change a recommendation.</div>",
-                unsafe_allow_html=True,
-            )
-        st.markdown("")
-
-        # Drawdown chart
-        _dd_series = _pr.get("drawdown_series")
-        if _dd_series is not None and len(_dd_series) > 1:
-            _current_dd = float(_dd_series.iloc[-1])
-            _dd_fig = go.Figure()
-            _dd_fig.add_trace(go.Scatter(
-                x=list(_dd_series.index),
-                y=list(_dd_series),
-                fill="tozeroy",
-                fillcolor="rgba(255,68,68,0.15)",
-                line=dict(color="#ff4444", width=1.5),
-                name="Drawdown",
-                hovertemplate="%{x|%b %d}: %{y:.2f}%<extra>Portfolio Drawdown</extra>",
-            ))
-            _dd_fig.add_hline(y=0,   line_color="#555", line_width=1)
-            _dd_fig.add_hline(y=-10, line_dash="dash", line_color="#ffbb33", line_width=1,
-                              annotation_text="−10%", annotation_position="right")
-            _dd_fig.add_hline(y=-20, line_dash="dash", line_color="#ff4444",  line_width=1,
-                              annotation_text="−20%", annotation_position="right")
-            _dd_fig.update_layout(
-                title="Portfolio Drawdown — 6 Months",
-                template="plotly_dark", height=280,
-                margin=dict(l=0, r=60, t=40, b=0),
-                yaxis=dict(ticksuffix="%", gridcolor="#1f2937", zeroline=False),
-                xaxis=dict(gridcolor="#1f2937"),
-                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
-                showlegend=False,
-            )
-            st.plotly_chart(_dd_fig, use_container_width=True)
-            st.caption(
-                "Drawdown = portfolio decline from its most recent peak (high-water mark). "
-                "Red fill = periods below prior high. "
-                f"Current drawdown from peak: **{_current_dd:.1f}%**"
-            )
-
-        # ── Beta contribution breakdown ────────────────────────────────
-        if _beta is not None and held_data:
-            _bc_rows = []
-            for _, _bcrow in port_df.iterrows():
-                _bct = _bcrow["Ticker"]
-                _bcb = ((held_data.get(_bct) or {})
-                        .get("risk_metrics", {})
-                        .get("beta"))
-                _bcw = float(_bcrow.get("Weight (%)", 0))
-                if _bcb is not None and _bcw > 0:
-                    _bcb = float(_bcb)
-                    _bc_rows.append({
-                        "ticker":       _bct,
-                        "beta":         round(_bcb, 2),
-                        "weight_pct":   round(_bcw, 1),
-                        "contribution": round(_bcb * _bcw / 100, 3),
-                    })
-            if _bc_rows:
-                _bc_rows.sort(key=lambda x: -x["contribution"])
-                _bc_tickers = [r["ticker"]       for r in _bc_rows]
-                _bc_contribs = [r["contribution"] for r in _bc_rows]
-                _bc_betas    = [r["beta"]          for r in _bc_rows]
-                _bc_weights  = [r["weight_pct"]    for r in _bc_rows]
-                _bc_colors   = [
-                    "#ff4444" if c > 0.15 else
-                    "#ffbb33" if c > 0.08 else
-                    "#00C851"
-                    for c in _bc_contribs
-                ]
-                _bc_fig = go.Figure(go.Bar(
-                    x=_bc_contribs,
-                    y=_bc_tickers,
-                    orientation="h",
-                    marker_color=_bc_colors,
-                    text=[
-                        f"β {b:.2f} · {w:.0f}% weight → {c:.3f} contrib"
-                        for b, w, c in zip(_bc_betas, _bc_weights, _bc_contribs)
-                    ],
-                    textposition="outside",
-                    hovertemplate=(
-                        "<b>%{y}</b><br>"
-                        "Beta contribution: %{x:.3f}<br>"
-                        "<extra></extra>"
-                    ),
+            # Drawdown chart
+            _dd_series = _pr.get("drawdown_series")
+            if _dd_series is not None and len(_dd_series) > 1:
+                _current_dd = float(_dd_series.iloc[-1])
+                _dd_fig = go.Figure()
+                _dd_fig.add_trace(go.Scatter(
+                    x=list(_dd_series.index),
+                    y=list(_dd_series),
+                    fill="tozeroy",
+                    fillcolor="rgba(255,68,68,0.15)",
+                    line=dict(color="#ff4444", width=1.5),
+                    name="Drawdown",
+                    hovertemplate="%{x|%b %d}: %{y:.2f}%<extra>Portfolio Drawdown</extra>",
                 ))
-                _bc_fig.add_vline(
-                    x=_beta / len(_bc_rows),
-                    line_dash="dot", line_color="#888",
-                    annotation_text="Equal contrib",
-                    annotation_position="top right",
-                )
-                _bc_fig.update_layout(
-                    title=f"Beta Contribution by Position  (Portfolio β = {_beta:.2f})",
-                    template="plotly_dark",
-                    height=max(220, 36 * len(_bc_rows)),
-                    margin=dict(l=0, r=160, t=40, b=0),
-                    xaxis=dict(title="Weighted beta contribution", gridcolor="#1f2937"),
-                    yaxis=dict(autorange="reversed", gridcolor="#1f2937"),
+                _dd_fig.add_hline(y=0,   line_color="#555", line_width=1)
+                _dd_fig.add_hline(y=-10, line_dash="dash", line_color="#ffbb33", line_width=1,
+                                  annotation_text="−10%", annotation_position="right")
+                _dd_fig.add_hline(y=-20, line_dash="dash", line_color="#ff4444",  line_width=1,
+                                  annotation_text="−20%", annotation_position="right")
+                _dd_fig.update_layout(
+                    title="Portfolio Drawdown — 6 Months",
+                    template="plotly_dark", height=280,
+                    margin=dict(l=0, r=60, t=40, b=0),
+                    yaxis=dict(ticksuffix="%", gridcolor="#1f2937", zeroline=False),
+                    xaxis=dict(gridcolor="#1f2937"),
                     plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
                     showlegend=False,
                 )
-                st.plotly_chart(_bc_fig, use_container_width=True)
+                st.plotly_chart(_dd_fig, use_container_width=True)
                 st.caption(
-                    "Contribution = position beta × portfolio weight. "
-                    "🔴 Red bars are the primary beta drivers — reducing these positions "
-                    "has the highest impact on lowering portfolio beta."
+                    "Drawdown = portfolio decline from its most recent peak (high-water mark). "
+                    "Red fill = periods below prior high. "
+                    f"Current drawdown from peak: **{_current_dd:.1f}%**"
                 )
 
-        st.divider()
+            # ── Beta contribution breakdown ────────────────────────────────
+            if _beta is not None and held_data:
+                _bc_rows = []
+                for _, _bcrow in port_df.iterrows():
+                    _bct = _bcrow["Ticker"]
+                    _bcb = ((held_data.get(_bct) or {})
+                            .get("risk_metrics", {})
+                            .get("beta"))
+                    _bcw = float(_bcrow.get("Weight (%)", 0))
+                    if _bcb is not None and _bcw > 0:
+                        _bcb = float(_bcb)
+                        _bc_rows.append({
+                            "ticker":       _bct,
+                            "beta":         round(_bcb, 2),
+                            "weight_pct":   round(_bcw, 1),
+                            "contribution": round(_bcb * _bcw / 100, 3),
+                        })
+                if _bc_rows:
+                    _bc_rows.sort(key=lambda x: -x["contribution"])
+                    _bc_tickers = [r["ticker"]       for r in _bc_rows]
+                    _bc_contribs = [r["contribution"] for r in _bc_rows]
+                    _bc_betas    = [r["beta"]          for r in _bc_rows]
+                    _bc_weights  = [r["weight_pct"]    for r in _bc_rows]
+                    _bc_colors   = [
+                        "#ff4444" if c > 0.15 else
+                        "#ffbb33" if c > 0.08 else
+                        "#00C851"
+                        for c in _bc_contribs
+                    ]
+                    _bc_fig = go.Figure(go.Bar(
+                        x=_bc_contribs,
+                        y=_bc_tickers,
+                        orientation="h",
+                        marker_color=_bc_colors,
+                        text=[
+                            f"β {b:.2f} · {w:.0f}% weight → {c:.3f} contrib"
+                            for b, w, c in zip(_bc_betas, _bc_weights, _bc_contribs)
+                        ],
+                        textposition="outside",
+                        hovertemplate=(
+                            "<b>%{y}</b><br>"
+                            "Beta contribution: %{x:.3f}<br>"
+                            "<extra></extra>"
+                        ),
+                    ))
+                    _bc_fig.add_vline(
+                        x=_beta / len(_bc_rows),
+                        line_dash="dot", line_color="#888",
+                        annotation_text="Equal contrib",
+                        annotation_position="top right",
+                    )
+                    _bc_fig.update_layout(
+                        title=f"Beta Contribution by Position  (Portfolio β = {_beta:.2f})",
+                        template="plotly_dark",
+                        height=max(220, 36 * len(_bc_rows)),
+                        margin=dict(l=0, r=160, t=40, b=0),
+                        xaxis=dict(title="Weighted beta contribution", gridcolor="#1f2937"),
+                        yaxis=dict(autorange="reversed", gridcolor="#1f2937"),
+                        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_bc_fig, use_container_width=True)
+                    st.caption(
+                        "Contribution = position beta × portfolio weight. "
+                        "🔴 Red bars are the primary beta drivers — reducing these positions "
+                        "has the highest impact on lowering portfolio beta."
+                    )
 
-    # ── Diversification & Correlation ─────────────────────────────────────
-    if corr_df.empty:
-        st.info("Need at least 2 holdings with price history to compute correlations.")
-    else:
-        dc1, dc2, dc3 = st.columns(3)
-        dc1.metric("Diversification Score", f"{div_score:.0f}/100",
-                   help=_tip("Diversification Score"))
-        dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
-                   help=_tip("Portfolio Correlation"))
-        dc3.metric("High-Correlation Pairs", len(risk_pairs),
-                   help=f"Pairs with correlation ≥ {CORR_HIGH_PAIRS_THRESHOLD}")
-        st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
+            st.divider()
 
-        if risk_pairs:
-            st.markdown("**Correlated pairs — reduce diversification benefit:**")
-            for rp in risk_pairs:
-                msg = (f"**{rp['t1']} × {rp['t2']}** — {rp['corr']:.2f} correlation. "
-                       "These positions move together.")
-                if rp["level"] == "danger":
-                    st.error(f"🔴 {msg}")
-                else:
-                    st.warning(f"🟡 {msg}")
+        # ── Diversification & Correlation ─────────────────────────────────────
+        if corr_df.empty:
+            st.info("Need at least 2 holdings with price history to compute correlations.")
         else:
-            st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
+            dc1, dc2, dc3 = st.columns(3)
+            dc1.metric("Diversification Score", f"{div_score:.0f}/100",
+                       help=_tip("Diversification Score"))
+            dc2.metric("Avg Portfolio Correlation", f"{avg_corr:.2f}",
+                       help=_tip("Portfolio Correlation"))
+            dc3.metric("High-Correlation Pairs", len(risk_pairs),
+                       help=f"Pairs with correlation ≥ {CORR_HIGH_PAIRS_THRESHOLD}")
+            st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
 
-        tickers_list = corr_df.index.tolist()
-        z_vals = corr_df.values.tolist()
-        z_text = [[f"{v:.2f}" for v in row] for row in corr_df.values]
-        hm = go.Figure(go.Heatmap(
-            z=z_vals, x=tickers_list, y=tickers_list,
-            text=z_text, texttemplate="%{text}", textfont=dict(size=11),
-            colorscale=[[0.0, "#00C851"], [0.5, "#1e1e2e"], [1.0, "#ff4444"]],
-            zmin=-1, zmax=1, showscale=True,
-            colorbar=dict(title="Corr", tickvals=[-1, -0.5, 0, 0.5, 1],
-                          ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"], len=0.8),
-        ))
-        hm.update_layout(
-            template="plotly_dark",
-            height=max(300, 65 * len(tickers_list)),
-            margin=dict(l=0, r=0, t=10, b=0),
-            xaxis=dict(side="bottom", tickangle=-30),
-        )
-        st.plotly_chart(hm, use_container_width=True)
-        st.caption(
-            "🟢 Green = low/negative correlation (genuine diversification)  |  "
-            "⬛ Dark = near-zero (independent)  |  "
-            "🔴 Red = high correlation (positions move together).  "
-            "Diagonal is always +1.0."
-        )
+            if risk_pairs:
+                st.markdown("**Correlated pairs — reduce diversification benefit:**")
+                for rp in risk_pairs:
+                    msg = (f"**{rp['t1']} × {rp['t2']}** — {rp['corr']:.2f} correlation. "
+                           "These positions move together.")
+                    if rp["level"] == "danger":
+                        st.error(f"🔴 {msg}")
+                    else:
+                        st.warning(f"🟡 {msg}")
+            else:
+                st.success("✅ No highly correlated pairs — your portfolio is well diversified.")
 
-    # ── Rate Sensitivity Table ────────────────────────────────────────────
-    st.divider()
-    st.subheader("📉 Rate Sensitivity — How Your Holdings React to Rate Moves")
-    st.caption(
-        "TLT (20-yr Treasury ETF) falls when long rates rise. A negative TLT correlation "
-        "means the position tends to DROP when rates rise (rate-sensitive, long-duration). "
-        "A positive correlation means it tends to RISE (rate beneficiary). "
-        "TLT Corr is computed from 3-month daily return data; Sector Score is a structural "
-        "sensitivity label (−1.0 = most rate-sensitive, +1.0 = most rate-resilient)."
-    )
-    _tlt_df = _cached_tlt("3mo")
-    _rs_rows = rate_sensitivity_per_ticker(port_df, held_data, _tlt_df if not _tlt_df.empty else None)
-    if _rs_rows:
-        import pandas as _rs_pd
-        _rs_df = _rs_pd.DataFrame(_rs_rows)
-
-        def _rs_color(val):
-            if val is None:
-                return ""
-            if val < -0.4:
-                return "color:#ff4444"
-            if val < -0.1:
-                return "color:#ffbb33"
-            if val < 0.1:
-                return "color:#9ca3af"
-            if val < 0.4:
-                return "color:#00C851"
-            return "color:#00C851;font-weight:bold"
-
-        _rs_display = _rs_df[["Ticker", "Sector", "Weight (%)", "TLT Corr", "Sector Score", "Implication"]].copy()
-        _rs_display["TLT Corr"] = _rs_display["TLT Corr"].apply(
-            lambda v: f"{v:+.3f}" if v is not None else "—"
-        )
-        _rs_display["Sector Score"] = _rs_display["Sector Score"].apply(lambda v: f"{v:+.2f}")
-        st.dataframe(
-            _rs_display,
-            width='stretch',
-            hide_index=True,
-            column_config={
-                "Ticker":       st.column_config.TextColumn("Ticker", width="small"),
-                "Sector":       st.column_config.TextColumn("Sector"),
-                "Weight (%)":   st.column_config.NumberColumn("Wt %", format="%.1f", width="small"),
-                "TLT Corr":     st.column_config.TextColumn("TLT Corr", help="Pearson corr vs TLT 3mo returns; — = insufficient data"),
-                "Sector Score": st.column_config.TextColumn("Sector Score", help="Structural macro.RATE_SENSITIVITY label"),
-                "Implication":  st.column_config.TextColumn("Implication"),
-            },
-        )
-        # Weighted portfolio exposure summary
-        _rs_has_corr = [r for r in _rs_rows if r["TLT Corr"] is not None]
-        if _rs_has_corr:
-            _total_w = sum(r["Weight (%)"] for r in _rs_has_corr)
-            if _total_w > 0:
-                _wtd_corr = sum(r["TLT Corr"] * r["Weight (%)"] for r in _rs_has_corr) / _total_w
-                _exp_label = (
-                    "rate-sensitive (net headwind when rates rise)"
-                    if _wtd_corr < -0.1 else
-                    "rate-neutral"
-                    if _wtd_corr < 0.1 else
-                    "rate-resilient (net tailwind when rates rise)"
-                )
-                st.caption(
-                    f"**Weighted portfolio TLT correlation: {_wtd_corr:+.3f}** — book is broadly **{_exp_label}**."
-                )
-    # Note: no `else` branch here — `_rs_rows` cannot be empty once this page's
-    # own load gate (above) has confirmed port_df is non-empty, since
-    # rate_sensitivity_per_ticker() emits exactly one row per port_df row.
-
-    # ── Risk Action Plan ──────────────────────────────────────────────────
-    if _risk_advisor_recs:
-        st.divider()
-        st.subheader("📋 Risk Action Plan")
-        st.caption(
-            "Synthesises your 7 portfolio risk metrics into ranked, evidence-backed actions. "
-            "Each card shows the problem with dollar impact, which specific tickers are driving it, "
-            "an exact recommendation, and the institutional perspective behind it."
-        )
-
-        with st.expander(
-            f"ℹ️ Why portfolio beta target is {PORTFOLIO_BETA_ELEVATED:.1f} (soft) / "
-            f"{PORTFOLIO_BETA_CEILING:.1f} (hard)?",
-            expanded=False,
-        ):
-            st.markdown(
-                f"""
-**Two thresholds, both static:**
-
-| Threshold | Value | Meaning |
-|---|---|---|
-| Soft warning | **{PORTFOLIO_BETA_ELEVATED:.1f}** | Risk Advisor recommends trimming |
-| Hard ceiling | **{PORTFOLIO_BETA_CEILING:.1f}** | Trim required — do not add high-beta names |
-
-**Why these specific numbers?**
-
-- **{PORTFOLIO_BETA_ELEVATED:.1f}** is the point at which the asymmetric-loss math starts to materially eat into risk-adjusted returns. A 10% market correction costs you proportionally more than the corresponding rally pays — Sharpe-adjusted, you stop being compensated for the extra volatility.
-- **{PORTFOLIO_BETA_CEILING:.1f}** is the conventional institutional cap for managed equity accounts. Above this, professional risk teams require active mitigation regardless of conviction in individual names. The PM's job is not to eliminate beta — it's to ensure you're being paid for it through Sharpe.
-
-**Why static, not regime-adjusted?**
-
-The app deliberately keeps target beta fixed across regimes. In risk-off conditions, the response is to **trim harder toward the same target**, not to lower the target itself. A moving target makes it impossible to evaluate whether trades improved the risk profile. Investment policy, not market-timing.
-"""
+            tickers_list = corr_df.index.tolist()
+            z_vals = corr_df.values.tolist()
+            z_text = [[f"{v:.2f}" for v in row] for row in corr_df.values]
+            hm = go.Figure(go.Heatmap(
+                z=z_vals, x=tickers_list, y=tickers_list,
+                text=z_text, texttemplate="%{text}", textfont=dict(size=11),
+                colorscale=[[0.0, "#00C851"], [0.5, "#1e1e2e"], [1.0, "#ff4444"]],
+                zmin=-1, zmax=1, showscale=True,
+                colorbar=dict(title="Corr", tickvals=[-1, -0.5, 0, 0.5, 1],
+                              ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"], len=0.8),
+            ))
+            hm.update_layout(
+                template="plotly_dark",
+                height=max(300, 65 * len(tickers_list)),
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(side="bottom", tickangle=-30),
+            )
+            st.plotly_chart(hm, use_container_width=True)
+            st.caption(
+                "🟢 Green = low/negative correlation (genuine diversification)  |  "
+                "⬛ Dark = near-zero (independent)  |  "
+                "🔴 Red = high correlation (positions move together).  "
+                "Diagonal is always +1.0."
             )
 
-        _n_high = sum(1 for r in _risk_advisor_recs if r["priority"] == "HIGH")
-        _n_med  = sum(1 for r in _risk_advisor_recs if r["priority"] == "MEDIUM")
-        _n_ok   = sum(1 for r in _risk_advisor_recs if r["priority"] == "OK")
-
-        _rac1, _rac2, _rac3 = st.columns(3)
-        _rac1.metric("🔴 Action Required", _n_high, help="Requires attention this week")
-        _rac2.metric("🟡 Monitor",          _n_med,  help="Review before next rebalance")
-        _rac3.metric("✅ Well Managed",      _n_ok,   help="No action needed — reinforce the discipline")
-
-        st.markdown("")
-
-        # Sort: HIGH → MEDIUM → OK
-        _priority_order = {"HIGH": 0, "MEDIUM": 1, "OK": 2}
-        _sorted_recs = sorted(
-            _risk_advisor_recs,
-            key=lambda x: _priority_order.get(x["priority"], 3),
+        # ── Rate Sensitivity Table ────────────────────────────────────────────
+        st.divider()
+        st.subheader("📉 Rate Sensitivity — How Your Holdings React to Rate Moves")
+        st.caption(
+            "TLT (20-yr Treasury ETF) falls when long rates rise. A negative TLT correlation "
+            "means the position tends to DROP when rates rise (rate-sensitive, long-duration). "
+            "A positive correlation means it tends to RISE (rate beneficiary). "
+            "TLT Corr is computed from 3-month daily return data; Sector Score is a structural "
+            "sensitivity label (−1.0 = most rate-sensitive, +1.0 = most rate-resilient)."
         )
+        _tlt_df = _cached_tlt("3mo")
+        _rs_rows = rate_sensitivity_per_ticker(port_df, held_data, _tlt_df if not _tlt_df.empty else None)
+        if _rs_rows:
+            import pandas as _rs_pd
+            _rs_df = _rs_pd.DataFrame(_rs_rows)
 
-        for _rec in _sorted_recs:
-            _pri   = _rec["priority"]
-            _rtype = _rec["type"]
+            def _rs_color(val):
+                if val is None:
+                    return ""
+                if val < -0.4:
+                    return "color:#ff4444"
+                if val < -0.1:
+                    return "color:#ffbb33"
+                if val < 0.1:
+                    return "color:#9ca3af"
+                if val < 0.4:
+                    return "color:#00C851"
+                return "color:#00C851;font-weight:bold"
 
-            # ── OK cards — compact, collapsed ────────────────────────────
-            if _pri == "OK":
-                with st.expander(f"✅  {_rec['title']}", expanded=False):
-                    st.caption(_rec["institutional_lens"])
-                continue
+            _rs_display = _rs_df[["Ticker", "Sector", "Weight (%)", "TLT Corr", "Sector Score", "Implication"]].copy()
+            _rs_display["TLT Corr"] = _rs_display["TLT Corr"].apply(
+                lambda v: f"{v:+.3f}" if v is not None else "—"
+            )
+            _rs_display["Sector Score"] = _rs_display["Sector Score"].apply(lambda v: f"{v:+.2f}")
+            st.dataframe(
+                _rs_display,
+                width='stretch',
+                hide_index=True,
+                column_config={
+                    "Ticker":       st.column_config.TextColumn("Ticker", width="small"),
+                    "Sector":       st.column_config.TextColumn("Sector"),
+                    "Weight (%)":   st.column_config.NumberColumn("Wt %", format="%.1f", width="small"),
+                    "TLT Corr":     st.column_config.TextColumn("TLT Corr", help="Pearson corr vs TLT 3mo returns; — = insufficient data"),
+                    "Sector Score": st.column_config.TextColumn("Sector Score", help="Structural macro.RATE_SENSITIVITY label"),
+                    "Implication":  st.column_config.TextColumn("Implication"),
+                },
+            )
+            # Weighted portfolio exposure summary
+            _rs_has_corr = [r for r in _rs_rows if r["TLT Corr"] is not None]
+            if _rs_has_corr:
+                _total_w = sum(r["Weight (%)"] for r in _rs_has_corr)
+                if _total_w > 0:
+                    _wtd_corr = sum(r["TLT Corr"] * r["Weight (%)"] for r in _rs_has_corr) / _total_w
+                    _exp_label = (
+                        "rate-sensitive (net headwind when rates rise)"
+                        if _wtd_corr < -0.1 else
+                        "rate-neutral"
+                        if _wtd_corr < 0.1 else
+                        "rate-resilient (net tailwind when rates rise)"
+                    )
+                    st.caption(
+                        f"**Weighted portfolio TLT correlation: {_wtd_corr:+.3f}** — book is broadly **{_exp_label}**."
+                    )
+        # Note: no `else` branch here — `_rs_rows` cannot be empty once this page's
+        # own load gate (above) has confirmed port_df is non-empty, since
+        # rate_sensitivity_per_ticker() emits exactly one row per port_df row.
 
-            # ── HIGH / MEDIUM action cards ────────────────────────────────
-            _icon        = "🔴" if _pri == "HIGH" else "🟡"
-            _border_clr  = "#ff4444" if _pri == "HIGH" else "#ffbb33"
-            _expand      = _pri == "HIGH"
+
+    with _ra_tab_action:
+        # ── Risk Action Plan ──────────────────────────────────────────────────
+        if _risk_advisor_recs:
+            st.divider()
+            st.subheader("📋 Risk Action Plan")
+            st.caption(
+                "Synthesises your 7 portfolio risk metrics into ranked, evidence-backed actions. "
+                "Each card shows the problem with dollar impact, which specific tickers are driving it, "
+                "an exact recommendation, and the institutional perspective behind it."
+            )
 
             with st.expander(
-                f"{_icon} **{_pri}** · {_rec['title']}",
-                expanded=_expand,
+                f"ℹ️ Why portfolio beta target is {PORTFOLIO_BETA_ELEVATED:.1f} (soft) / "
+                f"{PORTFOLIO_BETA_CEILING:.1f} (hard)?",
+                expanded=False,
             ):
-                # Problem banner
                 st.markdown(
-                    f"<div style='padding:10px 14px;background:#1a1a1a;border-radius:6px;"
-                    f"border-left:4px solid {_border_clr};margin-bottom:14px'>"
-                    f"<span style='font-size:0.72em;color:#888;font-weight:700;"
-                    f"letter-spacing:0.09em;text-transform:uppercase'>The Problem</span><br>"
-                    f"<span style='color:#eee'>{_rec['problem']}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
+                    f"""
+    **Two thresholds, both static:**
+
+    | Threshold | Value | Meaning |
+    |---|---|---|
+    | Soft warning | **{PORTFOLIO_BETA_ELEVATED:.1f}** | Risk Advisor recommends trimming |
+    | Hard ceiling | **{PORTFOLIO_BETA_CEILING:.1f}** | Trim required — do not add high-beta names |
+
+    **Why these specific numbers?**
+
+    - **{PORTFOLIO_BETA_ELEVATED:.1f}** is the point at which the asymmetric-loss math starts to materially eat into risk-adjusted returns. A 10% market correction costs you proportionally more than the corresponding rally pays — Sharpe-adjusted, you stop being compensated for the extra volatility.
+    - **{PORTFOLIO_BETA_CEILING:.1f}** is the conventional institutional cap for managed equity accounts. Above this, professional risk teams require active mitigation regardless of conviction in individual names. The PM's job is not to eliminate beta — it's to ensure you're being paid for it through Sharpe.
+
+    **Why static, not regime-adjusted?**
+
+    The app deliberately keeps target beta fixed across regimes. In risk-off conditions, the response is to **trim harder toward the same target**, not to lower the target itself. A moving target makes it impossible to evaluate whether trades improved the risk profile. Investment policy, not market-timing.
+    """
                 )
 
-                _left, _right = st.columns([1, 1])
+            _n_high = sum(1 for r in _risk_advisor_recs if r["priority"] == "HIGH")
+            _n_med  = sum(1 for r in _risk_advisor_recs if r["priority"] == "MEDIUM")
+            _n_ok   = sum(1 for r in _risk_advisor_recs if r["priority"] == "OK")
 
-                # Left — root cause + offending tickers
-                with _left:
-                    st.markdown("**Root Cause**")
-                    if _rec.get("root_cause"):
+            _rac1, _rac2, _rac3 = st.columns(3)
+            _rac1.metric("🔴 Action Required", _n_high, help="Requires attention this week")
+            _rac2.metric("🟡 Monitor",          _n_med,  help="Review before next rebalance")
+            _rac3.metric("✅ Well Managed",      _n_ok,   help="No action needed — reinforce the discipline")
+
+            st.markdown("")
+
+            # Sort: HIGH → MEDIUM → OK
+            _priority_order = {"HIGH": 0, "MEDIUM": 1, "OK": 2}
+            _sorted_recs = sorted(
+                _risk_advisor_recs,
+                key=lambda x: _priority_order.get(x["priority"], 3),
+            )
+
+            for _rec in _sorted_recs:
+                _pri   = _rec["priority"]
+                _rtype = _rec["type"]
+
+                # ── OK cards — compact, collapsed ────────────────────────────
+                if _pri == "OK":
+                    with st.expander(f"✅  {_rec['title']}", expanded=False):
+                        st.caption(_rec["institutional_lens"])
+                    continue
+
+                # ── HIGH / MEDIUM action cards ────────────────────────────────
+                _icon        = "🔴" if _pri == "HIGH" else "🟡"
+                _border_clr  = "#ff4444" if _pri == "HIGH" else "#ffbb33"
+                _expand      = _pri == "HIGH"
+
+                with st.expander(
+                    f"{_icon} **{_pri}** · {_rec['title']}",
+                    expanded=_expand,
+                ):
+                    # Problem banner
+                    st.markdown(
+                        f"<div style='padding:10px 14px;background:#1a1a1a;border-radius:6px;"
+                        f"border-left:4px solid {_border_clr};margin-bottom:14px'>"
+                        f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>The Problem</span><br>"
+                        f"<span style='color:#eee'>{_rec['problem']}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    _left, _right = st.columns([1, 1])
+
+                    # Left — root cause + offending tickers
+                    with _left:
+                        st.markdown("**Root Cause**")
+                        if _rec.get("root_cause"):
+                            st.markdown(
+                                f"<div style='color:#bbb;font-size:0.88em;margin-bottom:8px'>"
+                                f"{_rec['root_cause']}</div>",
+                                unsafe_allow_html=True,
+                            )
+                        if _rec.get("root_tickers"):
+                            for _rt in _rec["root_tickers"]:
+                                # Colour the value badge per metric type
+                                if _rtype == "beta":
+                                    _vc = "#ff4444" if _rt["value"] > 1.4 else "#ffbb33"
+                                elif _rtype == "sharpe":
+                                    _vc = "#ff4444" if _rt["value"] < 0.3 else "#ffbb33"
+                                elif _rtype in ("volatility", "drawdown"):
+                                    _vc = "#ff4444"
+                                else:
+                                    _vc = "#ffbb33"
+                                st.markdown(
+                                    f"<div style='background:#111;border-radius:4px;"
+                                    f"padding:6px 10px;margin-top:4px;font-size:0.82em'>"
+                                    f"<b style='color:#fff'>{_rt['ticker']}</b>&nbsp;&nbsp;"
+                                    f"<span style='color:{_vc}'>{_rt['label']}</span>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                    # Right — recommendation + expected outcome
+                    with _right:
                         st.markdown(
-                            f"<div style='color:#bbb;font-size:0.88em;margin-bottom:8px'>"
-                            f"{_rec['root_cause']}</div>",
+                            f"<div style='padding:10px 14px;background:#0d2137;border-radius:6px;"
+                            f"border-left:4px solid #4a9eff;margin-bottom:10px'>"
+                            f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                            f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
+                            f"<span style='color:#eee;font-size:0.9em'>{_rec['recommendation']}</span>"
+                            f"</div>",
                             unsafe_allow_html=True,
                         )
-                    if _rec.get("root_tickers"):
-                        for _rt in _rec["root_tickers"]:
-                            # Colour the value badge per metric type
-                            if _rtype == "beta":
-                                _vc = "#ff4444" if _rt["value"] > 1.4 else "#ffbb33"
-                            elif _rtype == "sharpe":
-                                _vc = "#ff4444" if _rt["value"] < 0.3 else "#ffbb33"
-                            elif _rtype in ("volatility", "drawdown"):
-                                _vc = "#ff4444"
-                            else:
-                                _vc = "#ffbb33"
+                        if _rec.get("expected_outcome"):
                             st.markdown(
-                                f"<div style='background:#111;border-radius:4px;"
-                                f"padding:6px 10px;margin-top:4px;font-size:0.82em'>"
-                                f"<b style='color:#fff'>{_rt['ticker']}</b>&nbsp;&nbsp;"
-                                f"<span style='color:{_vc}'>{_rt['label']}</span>"
+                                f"<div style='padding:10px 14px;background:#0d1a0d;border-radius:6px;"
+                                f"border-left:4px solid #00C851'>"
+                                f"<span style='font-size:0.72em;color:#00C851;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>Expected Outcome</span><br>"
+                                f"<span style='color:#ccc;font-size:0.88em'>{_rec['expected_outcome']}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True,
                             )
 
-                # Right — recommendation + expected outcome
-                with _right:
-                    st.markdown(
-                        f"<div style='padding:10px 14px;background:#0d2137;border-radius:6px;"
-                        f"border-left:4px solid #4a9eff;margin-bottom:10px'>"
-                        f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
-                        f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
-                        f"<span style='color:#eee;font-size:0.9em'>{_rec['recommendation']}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
+                    # Institutional Lens — full width
+                    if _rec.get("institutional_lens"):
+                        st.markdown("")
+                        st.info(f"**Institutional Lens** · {_rec['institutional_lens']}")
+
+                    # Defensive picks — shown inside volatility and beta cards
+                    if _rtype in ("volatility", "beta"):
+                        st.markdown("")
+                        with st.expander("🔍 Find Defensive Picks — Implement This Recommendation", expanded=False):
+                            _def_sectors = {"Healthcare & Biotech", "Consumer Staples & Retail"}
+                            _sr = st.session_state.get("scanner_results")
+                            if _sr is None or _sr.empty:
+                                st.info(
+                                    "Run the **Market Scanner** first to populate defensive sector picks here. "
+                                    "The scanner covers Healthcare & Biotech and Consumer Staples & Retail "
+                                    "tickers — results will appear here automatically once it has run."
+                                )
+                            else:
+                                _def_picks = (
+                                    _sr[
+                                        _sr["Sector"].isin(_def_sectors) &
+                                        ~_sr["Ticker"].isin(set(held_tickers))
+                                    ]
+                                    .sort_values("Score", ascending=False)
+                                    .head(5)
+                                    .reset_index(drop=True)
+                                )
+                                if _def_picks.empty:
+                                    st.info(
+                                        "No unowned defensive picks found. "
+                                        "You may already hold the top-rated tickers in these sectors."
+                                    )
+                                else:
+                                    # Composite scores for defensive picks — fetched on demand
+                                    _def_comp_key  = f"_def_composites_{_rtype}"
+                                    _def_comps     = st.session_state.get(_def_comp_key, {})
+                                    _comps_loaded  = bool(_def_comps)
+                                    _def_tickers   = _def_picks["Ticker"].tolist()
+
+                                    st.caption(
+                                        "Top-ranked Healthcare & Consumer Staples picks from the scanner — "
+                                        "not already in your portfolio. Momentum score shown; "
+                                        "load composite scores to validate before acting."
+                                    )
+
+                                    if not _comps_loaded:
+                                        if st.button(
+                                            "📊 Load Composite Scores",
+                                            key=f"_def_load_comp_{_rtype}",
+                                            help="Fetches full Technical + Fundamental + Sentiment scores for each candidate",
+                                        ):
+                                            with st.spinner("Fetching composite scores…"):
+                                                for _tc in _def_tickers:
+                                                    if _tc not in _def_comps:
+                                                        try:
+                                                            _def_comps[_tc] = load_all(_tc)
+                                                        except Exception:
+                                                            pass
+                                            st.session_state[_def_comp_key] = _def_comps
+                                            st.rerun()
+
+                                    for _, _dp in _def_picks.iterrows():
+                                        _dp_ticker  = str(_dp["Ticker"])
+                                        _dp_sector  = str(_dp.get("Sector", ""))
+                                        _dp_mom_sc  = float(_dp.get("Score", 0))
+                                        _dp_rsi     = _dp.get("RSI")
+                                        _dp_trend   = str(_dp.get("Trend", ""))
+                                        _dp_mom     = _dp.get("Momentum")
+
+                                        # Composite data (if loaded)
+                                        _dp_comp    = _def_comps.get(_dp_ticker, {})
+                                        _dp_cscore  = float(_dp_comp.get("total", 0)) if _dp_comp else None
+                                        _dp_clabel  = str((_dp_comp.get("rec") or {}).get("label", "")) if _dp_comp else ""
+
+                                        # Skip Sell-rated composites — not suitable for defensive addition
+                                        if _dp_cscore is not None and _dp_cscore < 45:
+                                            continue
+
+                                        _sig_clr = (
+                                            "#00C851" if "Buy" in _dp_clabel else
+                                            "#ff4444" if "Sell" in _dp_clabel else "#888"
+                                        ) if _dp_clabel else (
+                                            "#00C851" if _dp_mom_sc >= COMPOSITE_BUY else "#888"
+                                        )
+                                        _sc_clr = (
+                                            "#00C851" if _dp_mom_sc >= COMPOSITE_BUY else
+                                            "#ffbb33" if _dp_mom_sc >= 50 else "#888"
+                                        )
+                                        _rsi_str = f"RSI {_dp_rsi:.0f}" if _dp_rsi is not None else ""
+                                        _mom_str = (f"  ·  1M {_dp_mom:+.1f}%" if _dp_mom is not None else "")
+                                        _detail  = "  ·  ".join(filter(None, [_rsi_str, _dp_trend])) + _mom_str
+
+                                        # Score line: show composite if loaded, momentum always
+                                        if _dp_cscore is not None:
+                                            _comp_sc_clr = (
+                                                "#00C851" if _dp_cscore >= COMPOSITE_BUY else
+                                                "#ffbb33" if _dp_cscore >= 55 else "#888"
+                                            )
+                                            _score_line = (
+                                                f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
+                                                f"<span style='color:#555;margin:0 6px'>·</span>"
+                                                f"<span style='color:{_comp_sc_clr}'>Composite {_dp_cscore:.0f}/100</span>"
+                                                f"<span style='font-size:0.78em;color:{_sig_clr};margin-left:8px'>{_dp_clabel}</span>"
+                                            )
+                                        else:
+                                            _score_line = (
+                                                f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
+                                                f"<span style='font-size:0.73em;color:#6b7280;margin-left:8px'>"
+                                                f"composite not loaded</span>"
+                                            )
+
+                                        _dp_col1, _dp_col2 = st.columns([3, 1])
+                                        with _dp_col1:
+                                            st.markdown(
+                                                f"<div style='background:#111827;border-radius:6px;"
+                                                f"padding:10px 14px;margin-bottom:6px'>"
+                                                f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>"
+                                                f"{_dp_ticker}</span>"
+                                                f"<span style='font-size:0.75em;color:#6b7280;margin-left:8px'>"
+                                                f"{_dp_sector}</span><br>"
+                                                f"{_score_line}<br>"
+                                                f"<span style='font-size:0.73em;color:#6b7280'>{_detail}</span>"
+                                                f"</div>",
+                                                unsafe_allow_html=True,
+                                            )
+                                        with _dp_col2:
+                                            if st.button(
+                                                f"Analyze {_dp_ticker}",
+                                                key=f"_def_analyze_{_dp_ticker}_{_rtype}",
+                                                use_container_width=True,
+                                            ):
+                                                st.session_state["_analysis_ticker"] = _dp_ticker
+                                                st.session_state["_pending_page"]    = "📈 Analysis"
+                                                st.session_state["_nav_origin"]      = "🏠 Home"
+                                                st.rerun()
+
+
+    with _ra_tab_stress:
+        # ── Stress Testing ────────────────────────────────────────────────────
+        st.divider()
+        st.subheader("🔥 Stress Testing & Scenario Analysis")
+        st.caption(
+            "Estimates portfolio impact under market shock scenarios using each position's "
+            "individual beta vs SPY. Historical scenarios apply sector-specific drawdowns "
+            "from that event — more accurate than a flat beta adjustment."
+        )
+
+        _st_beta = _port_risk.get("beta") if _port_risk else None
+
+        # Scenario selector + custom shock slider side by side
+        _st_col1, _st_col2 = st.columns([2, 1])
+        with _st_col1:
+            _sc_labels = [s["label"] for s in SCENARIOS] + ["Custom Scenario"]
+            _sc_choice = st.selectbox("Select scenario", _sc_labels, key="_stress_scenario")
+        with _st_col2:
+            _custom_move = st.slider(
+                "Custom SPY move (%)", min_value=-50, max_value=20,
+                value=-15, step=1, key="_stress_custom",
+                help="Only used when 'Custom Scenario' is selected above",
+            )
+
+        # Resolve which scenario to run
+        if _sc_choice == "Custom Scenario":
+            _active_sc = {
+                "id": "custom", "label": f"Custom  (SPY {_custom_move:+.0f}%)",
+                "description": f"User-defined scenario: SPY {_custom_move:+.0f}%. "
+                               "Beta-adjusted impact per position, no sector overrides.",
+                "spy_move": float(_custom_move), "sector_key": None,
+            }
+            _sc_result = run_scenario(_active_sc, port_df, held_data, _st_beta,
+                                      custom_spy_move=float(_custom_move))
+        else:
+            _active_sc  = next(s for s in SCENARIOS if s["label"] == _sc_choice)
+            _sc_result  = run_scenario(_active_sc, port_df, held_data, _st_beta)
+
+        if _sc_result:
+            _est_pnl   = _sc_result["estimated_port_pnl"]
+            _est_move  = _sc_result["estimated_port_move"]
+            _post_val  = _sc_result["post_shock_value"]
+            _port_val  = _sc_result["portfolio_value"]
+            _pnl_clr   = "#ff4444" if _est_pnl < 0 else "#00C851"
+
+            # Summary banner
+            st.markdown(
+                f"<div style='padding:12px 18px;background:#1a1a1a;"
+                f"border-radius:8px;border-left:5px solid {_pnl_clr};margin:10px 0'>"
+                f"<span style='font-size:0.75em;color:#888;font-weight:700;"
+                f"letter-spacing:0.08em;text-transform:uppercase'>Scenario: {_active_sc['label']}</span><br>"
+                f"<span style='color:#bbb;font-size:0.88em'>{_active_sc['description']}</span><br><br>"
+                f"<span style='font-size:1.35em;font-weight:700;color:{_pnl_clr}'>"
+                f"Estimated Portfolio P&L: {_m(f'${_est_pnl:+,.0f}')}  ({_est_move:+.1f}%)</span><br>"
+                f"<span style='color:#aaa;font-size:0.9em'>"
+                f"Portfolio value: {_m(f'${_port_val:,.0f}')}  →  {_m(f'${_post_val:,.0f}')} after shock</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # KPI summary
+            _s1, _s2, _s3, _s4 = st.columns(4)
+            _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
+            _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%",
+                       delta_color="inverse" if _est_pnl < 0 else "normal")
+            _s3.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"),
+                       delta_color="inverse" if _est_pnl < 0 else "normal")
+            _s4.metric("Post-Shock Value", _m(f"${_post_val:,.0f}"))
+
+            # Position impact table
+            if _sc_result["rows"]:
+                import plotly.graph_objects as _go_st
+                _st_rows = _sc_result["rows"]
+                _st_tickers = [r["Ticker"] for r in _st_rows]
+                _st_pnls    = [r["Est. P&L ($)"] for r in _st_rows]
+                _st_moves   = [r["Est. Move (%)"] for r in _st_rows]
+                _st_clrs    = ["#00C851" if v >= 0 else "#ff4444" for v in _st_pnls]
+
+                _st_fig = _go_st.Figure(_go_st.Bar(
+                    x=_st_tickers,
+                    y=_st_pnls,
+                    marker_color=_st_clrs,
+                    text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _st_pnls],
+                    textposition="outside",
+                    customdata=list(zip(_st_moves, [r["Weight (%)"] for r in _st_rows])),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        + ("Est. P&L: ••••<br>" if st.session_state.get("_privacy") else "Est. P&L: $%{y:+,.0f}<br>")
+                        + "Est. Move: %{customdata[0]:+.1f}%<br>"
+                        "Weight: %{customdata[1]:.1f}%"
+                        "<extra></extra>"
+                    ),
+                ))
+                _st_fig.add_hline(y=0, line_color="#444", line_width=1)
+                _st_fig.update_layout(
+                    title="Position-Level Impact (sorted by loss)",
+                    template="plotly_dark",
+                    height=max(260, len(_st_rows) * 28 + 80),
+                    yaxis_title="Estimated P&L ($)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(_st_fig, use_container_width=True)
+
+                # Detail table
+                with st.expander("📋 Full position breakdown", expanded=False):
+                    _st_df = pd.DataFrame(_st_rows)
+                    def _st_row_style(row):
+                        v = row.get("Est. P&L ($)", 0)
+                        if v < -1000:
+                            return ["background-color:rgba(255,68,68,0.10)"] * len(row)
+                        if v > 0:
+                            return ["background-color:rgba(0,200,81,0.08)"] * len(row)
+                        return [""] * len(row)
+                    st.dataframe(
+                        _st_df.style.apply(_st_row_style, axis=1).format({
+                            "Weight (%)":       "{:.1f}%",
+                            "Market Value ($)": "${:,.0f}",
+                            "Est. Move (%)":    "{:+.1f}%",
+                            "Est. P&L ($)":     "${:+,.0f}",
+                        }),
+                        width='stretch', hide_index=True,
                     )
-                    if _rec.get("expected_outcome"):
+
+            # Most exposed + any gainers
+            _me_col, _ag_col = st.columns([1, 1])
+            with _me_col:
+                if _sc_result["most_exposed"]:
+                    st.markdown("**Most Exposed Positions**")
+                    for _me in _sc_result["most_exposed"]:
                         st.markdown(
-                            f"<div style='padding:10px 14px;background:#0d1a0d;border-radius:6px;"
-                            f"border-left:4px solid #00C851'>"
-                            f"<span style='font-size:0.72em;color:#00C851;font-weight:700;"
-                            f"letter-spacing:0.09em;text-transform:uppercase'>Expected Outcome</span><br>"
-                            f"<span style='color:#ccc;font-size:0.88em'>{_rec['expected_outcome']}</span>"
+                            f"<div style='padding:8px 12px;background:#1a0a0a;"
+                            f"border-radius:6px;border-left:3px solid #ff4444;margin:4px 0;"
+                            f"font-size:0.88em'>"
+                            f"<b style='color:#ff6666'>{_me['Ticker']}</b> · {_me['Sector']}<br>"
+                            f"<span style='color:#ccc'>{_me['Est. Move (%)']:+.1f}%  ·  "
+                            f"${_me['Est. P&L ($)']:+,.0f}  ·  {_me['Weight (%)']:.1f}% weight</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
-
-                # Institutional Lens — full width
-                if _rec.get("institutional_lens"):
-                    st.markdown("")
-                    st.info(f"**Institutional Lens** · {_rec['institutional_lens']}")
-
-                # Defensive picks — shown inside volatility and beta cards
-                if _rtype in ("volatility", "beta"):
-                    st.markdown("")
-                    with st.expander("🔍 Find Defensive Picks — Implement This Recommendation", expanded=False):
-                        _def_sectors = {"Healthcare & Biotech", "Consumer Staples & Retail"}
-                        _sr = st.session_state.get("scanner_results")
-                        if _sr is None or _sr.empty:
-                            st.info(
-                                "Run the **Market Scanner** first to populate defensive sector picks here. "
-                                "The scanner covers Healthcare & Biotech and Consumer Staples & Retail "
-                                "tickers — results will appear here automatically once it has run."
-                            )
-                        else:
-                            _def_picks = (
-                                _sr[
-                                    _sr["Sector"].isin(_def_sectors) &
-                                    ~_sr["Ticker"].isin(set(held_tickers))
-                                ]
-                                .sort_values("Score", ascending=False)
-                                .head(5)
-                                .reset_index(drop=True)
-                            )
-                            if _def_picks.empty:
-                                st.info(
-                                    "No unowned defensive picks found. "
-                                    "You may already hold the top-rated tickers in these sectors."
-                                )
-                            else:
-                                # Composite scores for defensive picks — fetched on demand
-                                _def_comp_key  = f"_def_composites_{_rtype}"
-                                _def_comps     = st.session_state.get(_def_comp_key, {})
-                                _comps_loaded  = bool(_def_comps)
-                                _def_tickers   = _def_picks["Ticker"].tolist()
-
-                                st.caption(
-                                    "Top-ranked Healthcare & Consumer Staples picks from the scanner — "
-                                    "not already in your portfolio. Momentum score shown; "
-                                    "load composite scores to validate before acting."
-                                )
-
-                                if not _comps_loaded:
-                                    if st.button(
-                                        "📊 Load Composite Scores",
-                                        key=f"_def_load_comp_{_rtype}",
-                                        help="Fetches full Technical + Fundamental + Sentiment scores for each candidate",
-                                    ):
-                                        with st.spinner("Fetching composite scores…"):
-                                            for _tc in _def_tickers:
-                                                if _tc not in _def_comps:
-                                                    try:
-                                                        _def_comps[_tc] = load_all(_tc)
-                                                    except Exception:
-                                                        pass
-                                        st.session_state[_def_comp_key] = _def_comps
-                                        st.rerun()
-
-                                for _, _dp in _def_picks.iterrows():
-                                    _dp_ticker  = str(_dp["Ticker"])
-                                    _dp_sector  = str(_dp.get("Sector", ""))
-                                    _dp_mom_sc  = float(_dp.get("Score", 0))
-                                    _dp_rsi     = _dp.get("RSI")
-                                    _dp_trend   = str(_dp.get("Trend", ""))
-                                    _dp_mom     = _dp.get("Momentum")
-
-                                    # Composite data (if loaded)
-                                    _dp_comp    = _def_comps.get(_dp_ticker, {})
-                                    _dp_cscore  = float(_dp_comp.get("total", 0)) if _dp_comp else None
-                                    _dp_clabel  = str((_dp_comp.get("rec") or {}).get("label", "")) if _dp_comp else ""
-
-                                    # Skip Sell-rated composites — not suitable for defensive addition
-                                    if _dp_cscore is not None and _dp_cscore < 45:
-                                        continue
-
-                                    _sig_clr = (
-                                        "#00C851" if "Buy" in _dp_clabel else
-                                        "#ff4444" if "Sell" in _dp_clabel else "#888"
-                                    ) if _dp_clabel else (
-                                        "#00C851" if _dp_mom_sc >= COMPOSITE_BUY else "#888"
-                                    )
-                                    _sc_clr = (
-                                        "#00C851" if _dp_mom_sc >= COMPOSITE_BUY else
-                                        "#ffbb33" if _dp_mom_sc >= 50 else "#888"
-                                    )
-                                    _rsi_str = f"RSI {_dp_rsi:.0f}" if _dp_rsi is not None else ""
-                                    _mom_str = (f"  ·  1M {_dp_mom:+.1f}%" if _dp_mom is not None else "")
-                                    _detail  = "  ·  ".join(filter(None, [_rsi_str, _dp_trend])) + _mom_str
-
-                                    # Score line: show composite if loaded, momentum always
-                                    if _dp_cscore is not None:
-                                        _comp_sc_clr = (
-                                            "#00C851" if _dp_cscore >= COMPOSITE_BUY else
-                                            "#ffbb33" if _dp_cscore >= 55 else "#888"
-                                        )
-                                        _score_line = (
-                                            f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
-                                            f"<span style='color:#555;margin:0 6px'>·</span>"
-                                            f"<span style='color:{_comp_sc_clr}'>Composite {_dp_cscore:.0f}/100</span>"
-                                            f"<span style='font-size:0.78em;color:{_sig_clr};margin-left:8px'>{_dp_clabel}</span>"
-                                        )
-                                    else:
-                                        _score_line = (
-                                            f"<span style='color:{_sc_clr}'>Momentum {_dp_mom_sc:.0f}/100</span>"
-                                            f"<span style='font-size:0.73em;color:#6b7280;margin-left:8px'>"
-                                            f"composite not loaded</span>"
-                                        )
-
-                                    _dp_col1, _dp_col2 = st.columns([3, 1])
-                                    with _dp_col1:
-                                        st.markdown(
-                                            f"<div style='background:#111827;border-radius:6px;"
-                                            f"padding:10px 14px;margin-bottom:6px'>"
-                                            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>"
-                                            f"{_dp_ticker}</span>"
-                                            f"<span style='font-size:0.75em;color:#6b7280;margin-left:8px'>"
-                                            f"{_dp_sector}</span><br>"
-                                            f"{_score_line}<br>"
-                                            f"<span style='font-size:0.73em;color:#6b7280'>{_detail}</span>"
-                                            f"</div>",
-                                            unsafe_allow_html=True,
-                                        )
-                                    with _dp_col2:
-                                        if st.button(
-                                            f"Analyze {_dp_ticker}",
-                                            key=f"_def_analyze_{_dp_ticker}_{_rtype}",
-                                            use_container_width=True,
-                                        ):
-                                            st.session_state["_analysis_ticker"] = _dp_ticker
-                                            st.session_state["_pending_page"]    = "📈 Analysis"
-                                            st.session_state["_nav_origin"]      = "🏠 Home"
-                                            st.rerun()
-
-    # ── Stress Testing ────────────────────────────────────────────────────
-    st.divider()
-    st.subheader("🔥 Stress Testing & Scenario Analysis")
-    st.caption(
-        "Estimates portfolio impact under market shock scenarios using each position's "
-        "individual beta vs SPY. Historical scenarios apply sector-specific drawdowns "
-        "from that event — more accurate than a flat beta adjustment."
-    )
-
-    _st_beta = _port_risk.get("beta") if _port_risk else None
-
-    # Scenario selector + custom shock slider side by side
-    _st_col1, _st_col2 = st.columns([2, 1])
-    with _st_col1:
-        _sc_labels = [s["label"] for s in SCENARIOS] + ["Custom Scenario"]
-        _sc_choice = st.selectbox("Select scenario", _sc_labels, key="_stress_scenario")
-    with _st_col2:
-        _custom_move = st.slider(
-            "Custom SPY move (%)", min_value=-50, max_value=20,
-            value=-15, step=1, key="_stress_custom",
-            help="Only used when 'Custom Scenario' is selected above",
-        )
-
-    # Resolve which scenario to run
-    if _sc_choice == "Custom Scenario":
-        _active_sc = {
-            "id": "custom", "label": f"Custom  (SPY {_custom_move:+.0f}%)",
-            "description": f"User-defined scenario: SPY {_custom_move:+.0f}%. "
-                           "Beta-adjusted impact per position, no sector overrides.",
-            "spy_move": float(_custom_move), "sector_key": None,
-        }
-        _sc_result = run_scenario(_active_sc, port_df, held_data, _st_beta,
-                                  custom_spy_move=float(_custom_move))
-    else:
-        _active_sc  = next(s for s in SCENARIOS if s["label"] == _sc_choice)
-        _sc_result  = run_scenario(_active_sc, port_df, held_data, _st_beta)
-
-    if _sc_result:
-        _est_pnl   = _sc_result["estimated_port_pnl"]
-        _est_move  = _sc_result["estimated_port_move"]
-        _post_val  = _sc_result["post_shock_value"]
-        _port_val  = _sc_result["portfolio_value"]
-        _pnl_clr   = "#ff4444" if _est_pnl < 0 else "#00C851"
-
-        # Summary banner
-        st.markdown(
-            f"<div style='padding:12px 18px;background:#1a1a1a;"
-            f"border-radius:8px;border-left:5px solid {_pnl_clr};margin:10px 0'>"
-            f"<span style='font-size:0.75em;color:#888;font-weight:700;"
-            f"letter-spacing:0.08em;text-transform:uppercase'>Scenario: {_active_sc['label']}</span><br>"
-            f"<span style='color:#bbb;font-size:0.88em'>{_active_sc['description']}</span><br><br>"
-            f"<span style='font-size:1.35em;font-weight:700;color:{_pnl_clr}'>"
-            f"Estimated Portfolio P&L: {_m(f'${_est_pnl:+,.0f}')}  ({_est_move:+.1f}%)</span><br>"
-            f"<span style='color:#aaa;font-size:0.9em'>"
-            f"Portfolio value: {_m(f'${_port_val:,.0f}')}  →  {_m(f'${_post_val:,.0f}')} after shock</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        # KPI summary
-        _s1, _s2, _s3, _s4 = st.columns(4)
-        _s1.metric("SPY Shock",        f"{_sc_result['spy_move']:+.0f}%")
-        _s2.metric("Est. Portfolio Δ", f"{_est_move:+.1f}%",
-                   delta_color="inverse" if _est_pnl < 0 else "normal")
-        _s3.metric("Est. $ Impact",    _m(f"${_est_pnl:+,.0f}"),
-                   delta_color="inverse" if _est_pnl < 0 else "normal")
-        _s4.metric("Post-Shock Value", _m(f"${_post_val:,.0f}"))
-
-        # Position impact table
-        if _sc_result["rows"]:
-            import plotly.graph_objects as _go_st
-            _st_rows = _sc_result["rows"]
-            _st_tickers = [r["Ticker"] for r in _st_rows]
-            _st_pnls    = [r["Est. P&L ($)"] for r in _st_rows]
-            _st_moves   = [r["Est. Move (%)"] for r in _st_rows]
-            _st_clrs    = ["#00C851" if v >= 0 else "#ff4444" for v in _st_pnls]
-
-            _st_fig = _go_st.Figure(_go_st.Bar(
-                x=_st_tickers,
-                y=_st_pnls,
-                marker_color=_st_clrs,
-                text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _st_pnls],
-                textposition="outside",
-                customdata=list(zip(_st_moves, [r["Weight (%)"] for r in _st_rows])),
-                hovertemplate=(
-                    "<b>%{x}</b><br>"
-                    + ("Est. P&L: ••••<br>" if st.session_state.get("_privacy") else "Est. P&L: $%{y:+,.0f}<br>")
-                    + "Est. Move: %{customdata[0]:+.1f}%<br>"
-                    "Weight: %{customdata[1]:.1f}%"
-                    "<extra></extra>"
-                ),
-            ))
-            _st_fig.add_hline(y=0, line_color="#444", line_width=1)
-            _st_fig.update_layout(
-                title="Position-Level Impact (sorted by loss)",
-                template="plotly_dark",
-                height=max(260, len(_st_rows) * 28 + 80),
-                yaxis_title="Estimated P&L ($)",
-                margin=dict(l=0, r=0, t=40, b=0),
-            )
-            st.plotly_chart(_st_fig, use_container_width=True)
-
-            # Detail table
-            with st.expander("📋 Full position breakdown", expanded=False):
-                _st_df = pd.DataFrame(_st_rows)
-                def _st_row_style(row):
-                    v = row.get("Est. P&L ($)", 0)
-                    if v < -1000:
-                        return ["background-color:rgba(255,68,68,0.10)"] * len(row)
-                    if v > 0:
-                        return ["background-color:rgba(0,200,81,0.08)"] * len(row)
-                    return [""] * len(row)
-                st.dataframe(
-                    _st_df.style.apply(_st_row_style, axis=1).format({
-                        "Weight (%)":       "{:.1f}%",
-                        "Market Value ($)": "${:,.0f}",
-                        "Est. Move (%)":    "{:+.1f}%",
-                        "Est. P&L ($)":     "${:+,.0f}",
-                    }),
-                    width='stretch', hide_index=True,
-                )
-
-        # Most exposed + any gainers
-        _me_col, _ag_col = st.columns([1, 1])
-        with _me_col:
-            if _sc_result["most_exposed"]:
-                st.markdown("**Most Exposed Positions**")
-                for _me in _sc_result["most_exposed"]:
-                    st.markdown(
-                        f"<div style='padding:8px 12px;background:#1a0a0a;"
-                        f"border-radius:6px;border-left:3px solid #ff4444;margin:4px 0;"
-                        f"font-size:0.88em'>"
-                        f"<b style='color:#ff6666'>{_me['Ticker']}</b> · {_me['Sector']}<br>"
-                        f"<span style='color:#ccc'>{_me['Est. Move (%)']:+.1f}%  ·  "
-                        f"${_me['Est. P&L ($)']:+,.0f}  ·  {_me['Weight (%)']:.1f}% weight</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-        with _ag_col:
-            if _sc_result["any_gainers"]:
-                st.markdown("**Positions That May Benefit**")
-                for _ag in _sc_result["any_gainers"]:
-                    st.markdown(
-                        f"<div style='padding:8px 12px;background:#0a1a0a;"
-                        f"border-radius:6px;border-left:3px solid #00C851;margin:4px 0;"
-                        f"font-size:0.88em'>"
-                        f"<b style='color:#00C851'>{_ag['Ticker']}</b> · {_ag['Sector']}<br>"
-                        f"<span style='color:#ccc'>{_ag['Est. Move (%)']:+.1f}%  ·  "
-                        f"${_ag['Est. P&L ($)']:+,.0f}  ·  {_ag['Weight (%)']:.1f}% weight</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-            else:
-                st.info("No positions estimated to benefit under this scenario — "
-                        "consider defensive names (Healthcare, Energy, Defense) for hedging.")
-
-        # Historical comparison — only for scenarios that have a real event window
-        _hist_window = HISTORICAL_WINDOWS.get((_active_sc or {}).get("id", ""))
-        if _hist_window:
-            st.markdown("")
-            with st.expander(
-                f"📅 How did your holdings actually perform? ({_hist_window[0]} → {_hist_window[1]})",
-                expanded=False,
-            ):
-                _hcache_key = f"_hist_stress_{_active_sc['id']}"
-                if _hcache_key not in st.session_state:
-                    st.info(
-                        f"Historical prices not yet loaded for this scenario.  "
-                        f"Window: **{_hist_window[0]}** → **{_hist_window[1]}**  "
-                        f"(fetches one ticker at a time via yfinance — takes ~5–15 s)."
-                    )
-                    if st.button("📥 Load historical data", key=f"_load_hist_{_active_sc['id']}"):
-                        _tickers_for_hist = [r["Ticker"] for r in (_sc_result.get("rows") or [])]
-                        with st.spinner("Fetching historical prices…"):
-                            st.session_state[_hcache_key] = fetch_historical_drawdowns(
-                                _active_sc["id"], _tickers_for_hist
-                            )
-                        st.rerun()
+            with _ag_col:
+                if _sc_result["any_gainers"]:
+                    st.markdown("**Positions That May Benefit**")
+                    for _ag in _sc_result["any_gainers"]:
+                        st.markdown(
+                            f"<div style='padding:8px 12px;background:#0a1a0a;"
+                            f"border-radius:6px;border-left:3px solid #00C851;margin:4px 0;"
+                            f"font-size:0.88em'>"
+                            f"<b style='color:#00C851'>{_ag['Ticker']}</b> · {_ag['Sector']}<br>"
+                            f"<span style='color:#ccc'>{_ag['Est. Move (%)']:+.1f}%  ·  "
+                            f"${_ag['Est. P&L ($)']:+,.0f}  ·  {_ag['Weight (%)']:.1f}% weight</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
                 else:
-                    _hist_data = st.session_state[_hcache_key]
-                    _hist_cmp_rows = []
-                    for _hr in (_sc_result.get("rows") or []):
-                        _tk     = _hr["Ticker"]
-                        _actual = _hist_data.get(_tk)
-                        _model  = _hr["Est. Move (%)"]
-                        _delta  = round(_actual - _model, 1) if _actual is not None else None
-                        _hist_cmp_rows.append({
-                            "Ticker":            _tk,
-                            "Model Est. (%)":    _model,
-                            "Actual (%)":        _actual,
-                            "Δ (Actual−Model)":  _delta,
-                        })
+                    st.info("No positions estimated to benefit under this scenario — "
+                            "consider defensive names (Healthcare, Energy, Defense) for hedging.")
 
-                    if _hist_cmp_rows:
-                        _hcmp_df = pd.DataFrame(_hist_cmp_rows)
+            # Historical comparison — only for scenarios that have a real event window
+            _hist_window = HISTORICAL_WINDOWS.get((_active_sc or {}).get("id", ""))
+            if _hist_window:
+                st.markdown("")
+                with st.expander(
+                    f"📅 How did your holdings actually perform? ({_hist_window[0]} → {_hist_window[1]})",
+                    expanded=False,
+                ):
+                    _hcache_key = f"_hist_stress_{_active_sc['id']}"
+                    if _hcache_key not in st.session_state:
+                        st.info(
+                            f"Historical prices not yet loaded for this scenario.  "
+                            f"Window: **{_hist_window[0]}** → **{_hist_window[1]}**  "
+                            f"(fetches one ticker at a time via yfinance — takes ~5–15 s)."
+                        )
+                        if st.button("📥 Load historical data", key=f"_load_hist_{_active_sc['id']}"):
+                            _tickers_for_hist = [r["Ticker"] for r in (_sc_result.get("rows") or [])]
+                            with st.spinner("Fetching historical prices…"):
+                                st.session_state[_hcache_key] = fetch_historical_drawdowns(
+                                    _active_sc["id"], _tickers_for_hist
+                                )
+                            st.rerun()
+                    else:
+                        _hist_data = st.session_state[_hcache_key]
+                        _hist_cmp_rows = []
+                        for _hr in (_sc_result.get("rows") or []):
+                            _tk     = _hr["Ticker"]
+                            _actual = _hist_data.get(_tk)
+                            _model  = _hr["Est. Move (%)"]
+                            _delta  = round(_actual - _model, 1) if _actual is not None else None
+                            _hist_cmp_rows.append({
+                                "Ticker":            _tk,
+                                "Model Est. (%)":    _model,
+                                "Actual (%)":        _actual,
+                                "Δ (Actual−Model)":  _delta,
+                            })
 
-                        def _hcmp_style(row):
-                            delta = row.get("Δ (Actual−Model)")
-                            if not pd.notna(delta):
+                        if _hist_cmp_rows:
+                            _hcmp_df = pd.DataFrame(_hist_cmp_rows)
+
+                            def _hcmp_style(row):
+                                delta = row.get("Δ (Actual−Model)")
+                                if not pd.notna(delta):
+                                    return [""] * len(row)
+                                if delta > 5:
+                                    return ["background-color:rgba(0,200,81,0.10)"] * len(row)
+                                if delta < -5:
+                                    return ["background-color:rgba(255,68,68,0.10)"] * len(row)
                                 return [""] * len(row)
-                            if delta > 5:
-                                return ["background-color:rgba(0,200,81,0.10)"] * len(row)
-                            if delta < -5:
-                                return ["background-color:rgba(255,68,68,0.10)"] * len(row)
-                            return [""] * len(row)
 
-                        st.dataframe(
-                            _hcmp_df.style.apply(_hcmp_style, axis=1).format({
-                                "Model Est. (%)":   lambda v: f"{v:+.1f}%" if pd.notna(v) else "—",
-                                "Actual (%)":       lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A",
-                                "Δ (Actual−Model)": lambda v: f"{v:+.1f}pp" if pd.notna(v) else "—",
-                            }),
-                            width='stretch', hide_index=True,
-                        )
-                        _n_avail = sum(1 for r in _hist_cmp_rows if r["Actual (%)"] is not None)
-                        _n_na    = len(_hist_cmp_rows) - _n_avail
-                        if _n_na:
-                            st.caption(
-                                f"{_n_na} ticker(s) show N/A — data unavailable for this window "
-                                f"(IPO after the event, delisted, or fewer than 5 trading days of data)."
+                            st.dataframe(
+                                _hcmp_df.style.apply(_hcmp_style, axis=1).format({
+                                    "Model Est. (%)":   lambda v: f"{v:+.1f}%" if pd.notna(v) else "—",
+                                    "Actual (%)":       lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A",
+                                    "Δ (Actual−Model)": lambda v: f"{v:+.1f}pp" if pd.notna(v) else "—",
+                                }),
+                                width='stretch', hide_index=True,
                             )
-                        st.caption(
-                            "Actual (%) = peak-to-trough during the event window (first-day close → minimum close).  "
-                            "Δ > 0 = model overestimated the loss (actual was better);  "
-                            "Δ < 0 = model underestimated (actual was worse)."
-                        )
-                    if st.button("🔄 Refresh data", key=f"_refresh_hist_{_active_sc['id']}"):
-                        del st.session_state[_hcache_key]
-                        st.rerun()
+                            _n_avail = sum(1 for r in _hist_cmp_rows if r["Actual (%)"] is not None)
+                            _n_na    = len(_hist_cmp_rows) - _n_avail
+                            if _n_na:
+                                st.caption(
+                                    f"{_n_na} ticker(s) show N/A — data unavailable for this window "
+                                    f"(IPO after the event, delisted, or fewer than 5 trading days of data)."
+                                )
+                            st.caption(
+                                "Actual (%) = peak-to-trough during the event window (first-day close → minimum close).  "
+                                "Δ > 0 = model overestimated the loss (actual was better);  "
+                                "Δ < 0 = model underestimated (actual was worse)."
+                            )
+                        if st.button("🔄 Refresh data", key=f"_refresh_hist_{_active_sc['id']}"):
+                            del st.session_state[_hcache_key]
+                            st.rerun()
 
-        # Scenario comparison summary — all scenarios, one row each
-        st.markdown("")
-        with st.expander("📊 Compare all scenarios at a glance", expanded=False):
-            _all_results = run_all_scenarios(port_df, held_data, _st_beta)
-            if _all_results:
-                _cmp_rows = []
-                for _ar in _all_results:
-                    _cmp_rows.append({
-                        "Scenario":      _ar["label"],
-                        "SPY Move":      f"{_ar['spy_move']:+.0f}%",
-                        "Portfolio Δ":   f"{_ar['estimated_port_move']:+.1f}%",
-                        "Est. P&L ($)":  _ar["estimated_port_pnl"],
-                        "Post Value ($)": _ar["post_shock_value"],
-                    })
-                _cmp_df = pd.DataFrame(_cmp_rows)
+            # Scenario comparison summary — all scenarios, one row each
+            st.markdown("")
+            with st.expander("📊 Compare all scenarios at a glance", expanded=False):
+                _all_results = run_all_scenarios(port_df, held_data, _st_beta)
+                if _all_results:
+                    _cmp_rows = []
+                    for _ar in _all_results:
+                        _cmp_rows.append({
+                            "Scenario":      _ar["label"],
+                            "SPY Move":      f"{_ar['spy_move']:+.0f}%",
+                            "Portfolio Δ":   f"{_ar['estimated_port_move']:+.1f}%",
+                            "Est. P&L ($)":  _ar["estimated_port_pnl"],
+                            "Post Value ($)": _ar["post_shock_value"],
+                        })
+                    _cmp_df = pd.DataFrame(_cmp_rows)
 
-                def _cmp_style(row):
-                    v = row.get("Est. P&L ($)", 0)
-                    if v < -_port_val * 0.20:
-                        return ["background-color:rgba(255,68,68,0.15)"] * len(row)
-                    if v < -_port_val * 0.10:
-                        return ["background-color:rgba(255,187,51,0.10)"] * len(row)
-                    return [""] * len(row)
+                    def _cmp_style(row):
+                        v = row.get("Est. P&L ($)", 0)
+                        if v < -_port_val * 0.20:
+                            return ["background-color:rgba(255,68,68,0.15)"] * len(row)
+                        if v < -_port_val * 0.10:
+                            return ["background-color:rgba(255,187,51,0.10)"] * len(row)
+                        return [""] * len(row)
 
-                st.dataframe(
-                    _cmp_df.style.apply(_cmp_style, axis=1).format({
-                        "Est. P&L ($)":   "${:+,.0f}",
-                        "Post Value ($)":  "${:,.0f}",
-                    }),
-                    width='stretch', hide_index=True,
-                )
-                st.caption(
-                    "🔴 Red = estimated loss > 20% of portfolio  ·  "
-                    "🟡 Amber = estimated loss 10–20%  ·  "
-                    "Beta-adjusted for market-wide scenarios; sector overrides for historical events."
-                )
+                    st.dataframe(
+                        _cmp_df.style.apply(_cmp_style, axis=1).format({
+                            "Est. P&L ($)":   "${:+,.0f}",
+                            "Post Value ($)":  "${:,.0f}",
+                        }),
+                        width='stretch', hide_index=True,
+                    )
+                    st.caption(
+                        "🔴 Red = estimated loss > 20% of portfolio  ·  "
+                        "🟡 Amber = estimated loss 10–20%  ·  "
+                        "Beta-adjusted for market-wide scenarios; sector overrides for historical events."
+                    )
 
-        st.info(
-            "**Methodology:** Market-wide scenarios multiply each position's individual beta × SPY shock. "
-            "Named historical scenarios (2022, 2020, AI Unwind) apply sector-specific drawdowns "
-            "observed during those events — more accurate for portfolios with sector concentration. "
-            "Estimates assume linear beta and do not model liquidity effects or margin calls."
-        )
+            st.info(
+                "**Methodology:** Market-wide scenarios multiply each position's individual beta × SPY shock. "
+                "Named historical scenarios (2022, 2020, AI Unwind) apply sector-specific drawdowns "
+                "observed during those events — more accurate for portfolios with sector concentration. "
+                "Estimates assume linear beta and do not model liquidity effects or margin calls."
+            )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
