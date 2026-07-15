@@ -298,7 +298,73 @@ _DIMENSION_ICONS: dict[str, str] = {
 }
 
 
-def _build_improvements(scored: list[tuple[str, float]]) -> list[dict]:
+def _build_specific(key: str, detail: dict) -> str | None:
+    """One named, specific callout line for the improvement card (HTML-safe)."""
+    if not detail:
+        return None
+    if key == "concentration":
+        max_name   = detail.get("max_name_wt", 0)
+        max_sector = detail.get("max_sector_wt", 0)
+        cap_name   = detail.get("name_ceiling", 15)
+        cap_sector = detail.get("sector_ceiling", 35)
+        name_ratio   = max_name   / cap_name   if cap_name   else 0
+        sector_ratio = max_sector / cap_sector if cap_sector else 0
+        parts = []
+        if name_ratio >= sector_ratio and detail.get("worst_name"):
+            parts.append(
+                f"<strong>{detail['worst_name']}</strong> at {max_name}% "
+                f"(single-name cap: {cap_name}%)"
+            )
+        if sector_ratio >= name_ratio and detail.get("worst_sector"):
+            parts.append(
+                f"<strong>{detail['worst_sector']}</strong> sector at {max_sector}% "
+                f"(sector cap: {cap_sector}%)"
+            )
+        # Show both when both are meaningfully elevated (ratio > 0.6)
+        if name_ratio > 0.6 and sector_ratio > 0.6 and len(parts) == 1:
+            if detail.get("worst_name") and "worst_name" not in parts[0]:
+                parts.append(
+                    f"<strong>{detail['worst_name']}</strong> at {max_name}%"
+                )
+            elif detail.get("worst_sector") and "worst_sector" not in parts[0]:
+                parts.append(
+                    f"<strong>{detail['worst_sector']}</strong> sector at {max_sector}%"
+                )
+        return " &nbsp;·&nbsp; ".join(parts) or None
+    if key == "sector_balance":
+        n = detail.get("n_sectors", "?")
+        weights = detail.get("sector_weights") or {}
+        if weights:
+            top = sorted(weights.items(), key=lambda x: -x[1])[:1]
+            top_str = ", ".join(f"<strong>{s}</strong> {w:.0f}%" for s, w in top)
+            return f"{n} sectors — largest: {top_str}"
+        return f"{n} sector(s) represented"
+    if key == "diversification":
+        ac = detail.get("avg_corr")
+        return f"Average pairwise correlation: <strong>{ac:.2f}</strong>" if ac is not None else None
+    if key == "factor_exposure":
+        sev  = detail.get("severity", "unknown").capitalize()
+        beta = detail.get("port_beta")
+        hbs  = detail.get("hb_share")
+        parts = [f"Fragility: <strong>{sev}</strong>"]
+        if beta is not None:
+            parts.append(f"portfolio β <strong>{beta:.2f}</strong>")
+        if hbs is not None:
+            parts.append(f"<strong>{hbs:.0f}%</strong> high-β share")
+        return " &nbsp;·&nbsp; ".join(parts)
+    if key == "signal_integrity":
+        pct     = detail.get("pct_buy_weight")
+        n_below = detail.get("n_below_hold", 0)
+        parts = []
+        if pct is not None:
+            parts.append(f"<strong>{pct:.0f}%</strong> of book weight in Buy zone (≥65)")
+        if n_below > 0:
+            parts.append(f"<strong>{n_below}</strong> position(s) below Hold floor (&lt;44)")
+        return " &nbsp;·&nbsp; ".join(parts) or None
+    return None
+
+
+def _build_improvements(scored: list[tuple[str, float]], sub_scores: dict) -> list[dict]:
     actions = []
     for key, score in scored[:2]:
         bucket = "low" if score < 40 else "mid"
@@ -309,8 +375,19 @@ def _build_improvements(scored: list[tuple[str, float]]) -> list[dict]:
                 "label": _DIMENSION_LABELS.get(key, key),
                 "score": score,
                 "action": text,
+                "specific": _build_specific(key, sub_scores[key].get("detail") or {}),
             })
     return actions
+
+
+# A–F scale definition (exported so app.py can render the scale bar)
+GRADE_SCALE: list[tuple[str, str, str, str]] = [
+    ("A", "80–100", "#15803d", "#4ade80"),
+    ("B", "65–79",  "#1d4ed8", "#60a5fa"),
+    ("C", "50–64",  "#b45309", "#fcd34d"),
+    ("D", "35–49",  "#c2410c", "#fb923c"),
+    ("F", "0–34",   "#b91c1c", "#f87171"),
+]
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -349,7 +426,7 @@ def compute_health_score(
     grade, label = _grade(overall) if overall is not None else ("?", "Insufficient data")
 
     scored_asc = sorted(available, key=lambda x: x[1])
-    improvements = _build_improvements(scored_asc)
+    improvements = _build_improvements(scored_asc, sub_scores)
 
     return {
         "overall": overall,

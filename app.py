@@ -11410,7 +11410,7 @@ elif page == "🥧 Portfolio Allocation":
 # PAGE — PORTFOLIO HEALTH SCORE
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🏆 Portfolio Health":
-    from stock_analyzer.portfolio_health import compute_health_score, grade_colors, score_color
+    from stock_analyzer.portfolio_health import compute_health_score, grade_colors, score_color, GRADE_SCALE
 
     st.title("🏆 Portfolio Health Score")
     st.caption(
@@ -11466,6 +11466,22 @@ elif page == "🏆 Portfolio Health":
         """,
         unsafe_allow_html=True,
     )
+
+    # ── A–F grade scale bar ───────────────────────────────────────────────────
+    _ph_scale_html = '<div style="display:flex;gap:6px;margin:12px 0 20px;">'
+    for _ph_sl, _ph_rng, _ph_sbg, _ph_sborder in GRADE_SCALE:
+        _ph_active = _ph_sl == _ph_grade
+        _ph_opacity = "1" if _ph_active else "0.28"
+        _ph_scale_html += (
+            f'<div style="flex:1;text-align:center;padding:10px 4px;'
+            f'background:{_ph_sbg};border:2px solid {_ph_sborder};'
+            f'border-radius:6px;opacity:{_ph_opacity};">'
+            f'<div style="font-size:18px;font-weight:900;color:#fff;">{_ph_sl}</div>'
+            f'<div style="font-size:9px;color:rgba(255,255,255,0.8);margin-top:2px;">{_ph_rng}</div>'
+            f'</div>'
+        )
+    _ph_scale_html += "</div>"
+    st.markdown(_ph_scale_html, unsafe_allow_html=True)
 
     # ── Sub-score dimension cards ─────────────────────────────────────────────
     st.markdown("#### Construction dimensions")
@@ -11605,6 +11621,14 @@ elif page == "🏆 Portfolio Health":
     else:
         for _ph_imp in _ph_improv:
             _ph_imp_color = score_color(_ph_imp["score"])
+            _ph_specific  = _ph_imp.get("specific") or ""
+            _ph_specific_html = (
+                f'<div style="font-size:12px;color:#e5e7eb;'
+                f'background:rgba(255,255,255,0.06);border-radius:4px;'
+                f'padding:5px 8px;margin:6px 0 8px;">'
+                f'{_ph_specific}</div>'
+                if _ph_specific else ""
+            )
             st.markdown(
                 f"""
                 <div style="
@@ -11615,7 +11639,8 @@ elif page == "🏆 Portfolio Health":
                   <span style="font-weight:700;color:{_ph_imp_color};">
                     {_ph_icons.get(_ph_imp['dimension'],'')} {_ph_imp['label']}
                     &nbsp;·&nbsp;{_ph_imp['score']:.0f}/100
-                  </span><br>
+                  </span>
+                  {_ph_specific_html}
                   <span style="font-size:13px;color:#d1d5db;">{_ph_imp['action']}</span>
                 </div>
                 """,
