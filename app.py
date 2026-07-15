@@ -5264,6 +5264,11 @@ if page == "🏠 Home":
             # that qualified them; for movers the scanner score is irrelevant
             # (movers bypass the momentum gate — they qualified via day change,
             # already shown in the mover badge) so start directly with composite.
+            _score_as_of_str = None
+            if _gp.get("composite_fetched_at"):
+                _ts = datetime.fromisoformat(_gp["composite_fetched_at"])
+                _ts_et = _ts.astimezone(_pytz.timezone("America/New_York"))
+                _score_as_of_str = _ts_et.strftime('%-I:%M %p ET')
             if _gp.get("is_mover"):
                 _score_line = ""
             else:
@@ -5272,10 +5277,6 @@ if page == "🏠 Home":
                 _comp_part = f"Composite {_comp_sc:.0f}/100"
                 if _comp_lbl:
                     _comp_part += f" ({_comp_lbl})"
-                if _gp.get("composite_fetched_at"):
-                    _ts = datetime.fromisoformat(_gp["composite_fetched_at"])
-                    _ts_et = _ts.astimezone(_pytz.timezone("America/New_York"))
-                    _comp_part += f" · Score as of {_ts_et.strftime('%-I:%M %p ET')}"
                 _score_line = f"{_score_line} · {_comp_part}".lstrip(" · ")
 
             # Mover badge: this candidate entered via today's 1-day breakout
@@ -5332,9 +5333,19 @@ if page == "🏠 Home":
                    f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
                    f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
                    f"</div>" if _sz else "")
-                + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
-                   f"⏱ First surfaced: {_fmt_first_seen(_gp.get('_first_seen_at'))}"
-                   f"</div>" if _gp.get("_first_seen_at") else "")
+                + (
+                    f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
+                    + (f"<div style='color:#cbd5e1;font-size:0.78em;font-weight:600;background:#0f172a;"
+                       f"border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                       f"⏱ First surfaced: {_fmt_first_seen(_gp.get('_first_seen_at'))}</div>"
+                       if _gp.get("_first_seen_at") else "")
+                    + (f"<div style='color:#7dd3fc;font-size:0.78em;font-weight:600;background:#0f172a;"
+                       f"border:1px solid #1d4ed8;border-radius:999px;padding:2px 10px;display:inline-block'>"
+                       f"🕐 Score as of {_score_as_of_str}</div>"
+                       if _score_as_of_str else "")
+                    + f"</div>"
+                    if (_gp.get("_first_seen_at") or _score_as_of_str) else ""
+                )
                 + f"</div>",
                 unsafe_allow_html=True,
             )
