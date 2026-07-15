@@ -5268,7 +5268,11 @@ if page == "🏠 Home":
             if _gp.get("composite_fetched_at"):
                 _ts = datetime.fromisoformat(_gp["composite_fetched_at"])
                 _ts_et = _ts.astimezone(_pytz.timezone("America/New_York"))
-                _score_as_of_str = _ts_et.strftime('%-I:%M %p ET')
+                _score_as_of_str = (
+                    _ts_et.strftime('%-I:%M %p ET')
+                    if _ts_et.date() == _today_et()
+                    else _ts_et.strftime('%b %-d · %-I:%M %p ET')
+                )
             if _gp.get("is_mover"):
                 _score_line = ""
             else:
