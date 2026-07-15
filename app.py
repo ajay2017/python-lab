@@ -11517,8 +11517,9 @@ elif page == "🏆 Portfolio Health":
     _ph_dim_notes = {
         "concentration": (
             "Too much weight in one name or sector amplifies the impact of a single "
-            "bad move on your whole book. Score falls linearly toward 0 as you approach "
-            "the hard caps (15% single-name, 35% sector)."
+            "bad move on your whole book. Score is 100 below the elevated threshold "
+            "(10% single-name, 25% sector), then falls to 0 at the hard cap "
+            "(15% / 35%) — only the elevated-to-cap band is penalised."
         ),
         "sector_balance": (
             "A spread across many sectors cushions sector-specific corrections. "
@@ -11527,8 +11528,9 @@ elif page == "🏆 Portfolio Health":
         ),
         "diversification": (
             "Measures how independently your holdings move day-to-day. "
-            "High correlation means most positions fall together in a selloff "
-            "even if their sector labels look different."
+            "Scored 0–100 on the equity correlation range: 0.0 avg correlation = 100, "
+            "0.5 = 50, 1.0 = 0. High correlation means positions fall together "
+            "in a selloff even if sector labels look different."
         ),
         "factor_exposure": (
             "A high-beta, fragile book amplifies market moves in both directions. "

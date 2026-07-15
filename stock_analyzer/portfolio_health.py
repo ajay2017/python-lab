@@ -95,9 +95,27 @@ def _concentration_score(port_df: pd.DataFrame) -> dict:
         else None
     )
 
-    # Linear: score = 100 at 0 weight, 0 at the hard ceiling — binding constraint wins
-    name_score = max(0.0, 100.0 * (1.0 - max_name_wt / SINGLE_NAME_CEILING))
-    sector_score = max(0.0, 100.0 * (1.0 - max_sector_wt / SECTOR_CEILING))
+    # Three-zone scoring so the score stays at 100 in the comfortable range and
+    # only degrades within the elevated→ceiling band — mirrors the app's own
+    # SECTOR_ELEVATED policy tier.  For single-name, 2/3 of the ceiling (10%)
+    # is the "comfortable" boundary (no analogous named constant exists).
+    _name_elevated = SINGLE_NAME_CEILING * (2.0 / 3.0)   # 10.0 %
+    if max_name_wt <= _name_elevated:
+        name_score = 100.0
+    elif max_name_wt >= SINGLE_NAME_CEILING:
+        name_score = 0.0
+    else:
+        name_score = 100.0 * (1.0 - (max_name_wt - _name_elevated)
+                              / (SINGLE_NAME_CEILING - _name_elevated))
+
+    if max_sector_wt <= SECTOR_ELEVATED:
+        sector_score = 100.0
+    elif max_sector_wt >= SECTOR_CEILING:
+        sector_score = 0.0
+    else:
+        sector_score = 100.0 * (1.0 - (max_sector_wt - SECTOR_ELEVATED)
+                                / (SECTOR_CEILING - SECTOR_ELEVATED))
+
     score = round(min(name_score, sector_score), 1)
 
     return {
@@ -149,10 +167,19 @@ def _sector_balance_score(port_df: pd.DataFrame) -> dict:
 
 
 def _diversification_score_sub(div_score_val: float | None, avg_corr: float | None) -> dict:
-    if div_score_val is None:
+    if avg_corr is None and div_score_val is None:
         return {"score": None, "detail": {}}
+    # The pre-computed div_score uses (1 − corr) / 2 × 100, calibrated for the
+    # full −1 to +1 correlation range. Equity pairwise correlations rarely go
+    # negative, so that formula compresses all realistic values into 0–50.
+    # Rescale to (1 − corr) × 100 so the score reflects the 0–1 equity range:
+    # avg_corr 0.0 → 100 (perfectly uncorrelated), 0.5 → 50, 1.0 → 0.
+    if avg_corr is not None:
+        score = round(max(0.0, min(100.0, (1.0 - float(avg_corr)) * 100.0)), 1)
+    else:
+        score = round(float(div_score_val), 1)
     return {
-        "score": round(float(div_score_val), 1),
+        "score": score,
         "detail": {
             "avg_corr": round(avg_corr, 3) if avg_corr is not None else None,
         },
