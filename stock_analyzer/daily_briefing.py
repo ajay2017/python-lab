@@ -1696,6 +1696,8 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if days is None or not (0 <= days <= EARNINGS_IMMINENT_DAYS):
             continue
         seen_earn.add(ticker)
+        if ticker in _act_tickers:
+            continue
         pm = port_df[port_df["Ticker"] == ticker]
         if pm.empty:
             continue
