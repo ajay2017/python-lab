@@ -11590,15 +11590,14 @@ elif page == "🏆 Portfolio Health":
         with _ph_col:
             st.markdown(
                 f'<div style="border:1px solid #374151;border-radius:8px;'
-                f'padding:10px 10px;text-align:center;'
-                f'display:flex;flex-direction:column;align-items:center;gap:3px;">'
-                f'<div style="font-size:16px;">{_ph_icons[_ph_dim]}</div>'
-                f'<div style="font-size:9px;color:#9ca3af;font-weight:700;'
-                f'text-transform:uppercase;letter-spacing:.6px;">{_ph_dlabels[_ph_dim]}</div>'
-                f'<div style="font-size:24px;font-weight:800;color:{_ph_color};">{_ph_sval}</div>'
-                f'<div style="font-size:9px;color:#9ca3af;line-height:1.3;">{_ph_ctx}</div>'
-                f'<div style="width:100%;border-top:1px solid #1f2937;margin:5px 0 3px;"></div>'
-                f'<div style="font-size:9px;color:#d1d5db;line-height:1.5;text-align:left;">'
+                f'padding:12px 12px 14px;">'
+                f'<div style="text-align:center;margin-bottom:2px;font-size:16px;">{_ph_icons[_ph_dim]}</div>'
+                f'<div style="text-align:center;font-size:9px;color:#9ca3af;font-weight:700;'
+                f'text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px;">{_ph_dlabels[_ph_dim]}</div>'
+                f'<div style="text-align:center;font-size:26px;font-weight:800;color:{_ph_color};line-height:1.1;">{_ph_sval}</div>'
+                f'<div style="text-align:center;font-size:10px;color:#9ca3af;margin-top:2px;">{_ph_ctx}</div>'
+                f'<div style="border-top:1px solid #1f2937;margin:8px 0 8px;"></div>'
+                f'<div style="font-size:11px;color:#d1d5db;line-height:1.55;">'
                 f'{_ph_note_txt}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
