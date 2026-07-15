@@ -344,7 +344,7 @@ def synthesize_directives(
             "type": "action",
             "text": (
                 f"Your alpha turns consistently positive at composite ≥ {thresh}. "
-                f"Treat sub-{thresh} recs as speculative — consider reducing size or skipping."
+                f"Treat signals below {thresh} as speculative — consider reducing size or skipping."
             ),
             "source_tab": "🎯 Score Calibration",
         })
@@ -417,8 +417,8 @@ def synthesize_directives(
                 "text": (
                     f"Your strongest sector is {best['sector']} "
                     f"({best['avg_alpha']:+.1f}pp avg alpha, n={best['n']}). "
-                    f"When composites are borderline, prioritize recs here — "
-                    f"this is where the engine's signal has worked best for you."
+                    f"When composites are borderline, prioritise signals here — "
+                    f"this is where the engine has worked best for you."
                 ),
                 "source_tab": "🌐 Sector Alpha",
             })
@@ -437,7 +437,7 @@ def synthesize_directives(
             directives.append({
                 "type": "caution",
                 "text": (
-                    f"Recs in {worst['sector']} have cost the most alpha "
+                    f"Signals in {worst['sector']} have cost the most alpha "
                     f"({worst['avg_alpha']:+.1f}pp avg, n={worst['n']}). "
                     f"Be more skeptical of engine signals here until the pattern reverses."
                 ),
@@ -452,7 +452,7 @@ def synthesize_directives(
             directives.append({
                 "type": "action",
                 "text": (
-                    f"{rt_best['label']} recs outperform {rt_worst['label']} "
+                    f"{rt_best['label']} signals outperform {rt_worst['label']} "
                     f"by {rt_best['avg_alpha'] - rt_worst['avg_alpha']:.1f}pp. "
                     f"Lean into {rt_best['label']} signals — that's where your alpha edge is strongest."
                 ),
