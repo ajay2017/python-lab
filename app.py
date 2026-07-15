@@ -1521,10 +1521,13 @@ with st.sidebar:
                 if _earnings_alerts > 0:
                     _cw_parts.append(f"⚡ {_earnings_alerts} earnings")
                 _btn_label = f"Catalyst Watch  {' · '.join(_cw_parts)}"
-            elif _dest == "⚠️ Alerts & Actions" and _n_danger_nav > 0:
-                _btn_label = f"Alerts & Actions  🔴 {_n_danger_nav}"
-            elif _dest == "⚠️ Alerts & Actions" and _n_warning_nav > 0:
-                _btn_label = f"Alerts & Actions  🟡 {_n_warning_nav}"
+            elif _dest == "⚠️ Alerts & Actions" and (_n_danger_nav > 0 or _n_warning_nav > 0):
+                _badge_parts = []
+                if _n_danger_nav > 0:
+                    _badge_parts.append(f"🔴 {_n_danger_nav}")
+                if _n_warning_nav > 0:
+                    _badge_parts.append(f"🟡 {_n_warning_nav}")
+                _btn_label = f"Alerts & Actions  {'  '.join(_badge_parts)}"
             else:
                 _btn_label = _disp
             # Active: disabled=True (CSS renders as selected highlight)
@@ -5436,17 +5439,6 @@ if page == "🏠 Home":
                 unsafe_allow_html=True,
             )
 
-        # When a margin debit tightened the gate (account-basis), say so — the
-        # suppression weights run higher than the equity-only view shown
-        # elsewhere, and the user should know WHY (CLAUDE.md: never silently).
-        _gate_margin_note = (
-            "<div style='color:#fcd34d;font-size:0.74em;margin-top:6px;font-style:italic'>"
-            "⚖️ Tightened by margin — gated on your net capital, not gross stock holdings."
-            "</div>"
-            if (st.session_state.get("_acct_gate_cache") or {}).get("basis")
-               in ("account", "over-levered") else ""
-        )
-
         # Single-name concentration ceiling suppressed an add — surface why
         # so the user understands the position is capped, not signal-weak.
         if conc_blocked:
@@ -5466,9 +5458,7 @@ if page == "🏠 Home":
                 "These winners qualify on signal but already exceed the institutional "
                 "single-name ceiling. Adding more would concentrate idiosyncratic risk. "
                 "Trim back to target before considering further adds."
-                "</div>"
-                + _gate_margin_note
-                + "</div>",
+                "</div></div>",
                 unsafe_allow_html=True,
             )
 
@@ -5492,9 +5482,7 @@ if page == "🏠 Home":
                 "These names qualify on signal, but their sector is already over the "
                 "institutional hard cap. Adding more would deepen a concentration the "
                 "Risk Advisor is recommending you trim. A Strong Buy here is a KEEP, not an add."
-                "</div>"
-                + _gate_margin_note
-                + "</div>",
+                "</div></div>",
                 unsafe_allow_html=True,
             )
 
@@ -5590,7 +5578,7 @@ if page == "🏠 Home":
                 + "<div style='color:#fecaca;font-size:0.76em;margin-top:6px;font-style:italic'>"
                 "Momentum (a single-factor breakout signal) caught these names, "
                 "but the full composite — Technical + Fundamental + Sentiment — "
-                "is below the Buy threshold (65). Decision: skip until composite "
+                f"is below the Buy threshold ({COMPOSITE_BUY:.0f}). Decision: skip until composite "
                 "recovers. Track on the Watchlist for a re-look."
                 "</div></div>",
                 unsafe_allow_html=True,
@@ -5890,11 +5878,12 @@ if page == "🏠 Home":
                             if _r1w is not None: _mom.append(f"1wk {_r1w:+.1f}%")
                             if _r1m is not None: _mom.append(f"1mo {_r1m:+.1f}%")
                             if _mom: _bits.append(" ".join(_mom))
+                            _PILLAR_LABELS = {"business_quality": "Business Quality", "valuation": "Valuation", "technicals": "Technical", "sentiment": "Sentiment"}
                             _pm = {"business_quality": _bqsc, "valuation": _vsc, "technicals": _tsc, "sentiment": _ssc}
                             _pv = {k: v for k, v in _pm.items() if isinstance(v, (int, float))}
                             if _pv:
                                 _wk = min(_pv, key=_pv.get)
-                                _bits.append(f"capped by {_wk} ({_pv[_wk]:.0f})")
+                                _bits.append(f"capped by {_PILLAR_LABELS[_wk]} ({_pv[_wk]:.0f})")
                             if _bits:
                                 st.caption("    ↳ " + "  ·  ".join(_bits))
 
@@ -10331,11 +10320,12 @@ elif page == "🥧 Portfolio Allocation":
             # Position table
             _tx_table_rows = []
             _TX_ACTION_LABELS = {
-                "HARVEST":       "Harvest",
-                "WAIT":          "Wait",
-                "HOLD_FOR_LTCG": "Hold for LTCG",
-                "LTCG_ELIGIBLE": "LTCG Eligible",
-                "MONITOR":       "Watch",
+                "HARVEST":        "Harvest",
+                "WAIT":           "Wait",
+                "HOLD_FOR_LTCG":  "Hold for LTCG",
+                "LTCG_ELIGIBLE":  "LTCG Eligible",
+                "MONITOR":        "Watch",
+                "HOLD_FOR_SIGNAL": "Hold — Signal Pending",
             }
             for _tr in _tax["rows"]:
                 _tx_table_rows.append({
@@ -12599,8 +12589,8 @@ elif page == "🔍 Market Scanner":
                             _comp_breakdown = (
                                 f"<span style='color:#6b7280;font-size:0.78em'>"
                                 f" (Technical {_t_sc:.0f}×25% + "
-                                f"BQ {_bq_sc:.0f}×35% + "
-                                f"Val {(_val_sc or 50):.0f}×30% + "
+                                f"Business Quality {_bq_sc:.0f}×35% + "
+                                f"Valuation {(_val_sc or 50):.0f}×30% + "
                                 f"Sentiment {_s_sc:.0f}×10%)</span>"
                             )
                         _comp_line = (
@@ -14983,9 +14973,12 @@ elif page == "📋 Watchlist":
             st.warning(
                 f"**{_ticker} — Already in Portfolio** · "
                 "This watchlist recommendation says ENTER NOW, but you already hold this position. "
-                "Check Portfolio → Today's Brief for the current add/hold/sell signal instead.",
+                "Check Today's Brief for the current add/hold/sell signal instead.",
                 icon="⚠️",
             )
+            if st.button("Go to Today's Brief →", key=f"_wl_goto_home_{_ticker}"):
+                st.session_state["_pending_page"] = "🏠 Home"
+                st.rerun()
             continue
 
         _a_icon   = {
@@ -15198,14 +15191,26 @@ elif page == "📋 Watchlist":
                         label=f"📒 Log buy for {_ticker}",
                     )
             with _qa_col2:
-                if _action == "REMOVE" and st.button(
-                    "🗑️ Remove from watchlist", key=f"_wl_del_{_ticker}"
-                ):
-                    if _ticker in st.session_state.watchlist:
-                        st.session_state.watchlist.remove(_ticker)
-                        db.save_watchlist(st.session_state.watchlist)
-                        st.success(f"{_ticker} removed.")
-                        st.rerun()
+                if _action == "REMOVE":
+                    _del_key = f"_wl_del_confirm_{_ticker}"
+                    if not st.session_state.get(_del_key):
+                        if st.button("🗑️ Remove from watchlist", key=f"_wl_del_{_ticker}"):
+                            st.session_state[_del_key] = True
+                            st.rerun()
+                    else:
+                        st.warning(f"Remove **{_ticker}** from watchlist?")
+                        _dc1, _dc2 = st.columns(2)
+                        with _dc1:
+                            if st.button("Yes, remove", key=f"_wl_del_yes_{_ticker}", type="primary"):
+                                st.session_state.pop(_del_key, None)
+                                if _ticker in st.session_state.watchlist:
+                                    st.session_state.watchlist.remove(_ticker)
+                                    db.save_watchlist(st.session_state.watchlist)
+                                st.rerun()
+                        with _dc2:
+                            if st.button("Cancel", key=f"_wl_del_no_{_ticker}"):
+                                st.session_state.pop(_del_key, None)
+                                st.rerun()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -15578,7 +15583,9 @@ elif page == "📒 Trade Journal":
                     )
                 st.session_state.pop("_tj_pending_sell", None)
                 st.session_state.pop("_tj_prefill", None)
-                st.session_state.pop("_tj_override_price_check", None)
+                st.session_state.pop("_tj_override_price", None)
+                st.session_state.pop("_tj_override_ticker", None)
+                st.session_state.pop("_tj_override_sell", None)
                 st.session_state.pop("_tj_drift_checked", None)
                 st.session_state.pop("_tj_drift_state", None)
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
@@ -15658,21 +15665,22 @@ elif page == "📒 Trade Journal":
 
         _market_price = _market_price_for(_live_ticker) if _live_ticker else None
 
-        # ── Sanity-check override (outside the form so it persists if the user
-        # has to re-submit after a validation block) ─────────────────────────
+        # ── Sanity-check overrides (outside the form so they persist across reruns) ──
+        st.caption("Sanity-check overrides — tick only when intentionally logging a backfill, historical, or unusual trade:")
         st.checkbox(
-            "⚠ Allow unusual price / unrecognized ticker / SELL without holding (skip sanity checks)",
-            key="_tj_override_price_check",
-            help=(
-                "By default the form blocks trades where: (1) the entered price "
-                "is more than ±50% off the current market price (catches typos "
-                "like $0.01 vs $565); (2) the ticker can't be resolved at all "
-                "(catches typos like NFLZ vs NFLX); or (3) you're selling a "
-                "ticker you don't currently hold (catches data-entry errors "
-                "that produce unmatched SELL rows). Tick this only if you're "
-                "recording a backfill, split-adjusted price, delisted symbol, "
-                "or other intentional unusual transaction."
-            ),
+            "Allow unusual price (±50% off market — historical/split-adjusted/delisted)",
+            key="_tj_override_price",
+            help="Skips the price-typo guard (e.g. $0.01 vs $565). Use for backfills or split-adjusted entries.",
+        )
+        st.checkbox(
+            "Allow unrecognized ticker (symbol can't be resolved — historical/delisted)",
+            key="_tj_override_ticker",
+            help="Skips the ticker-existence check. Use for delisted symbols or tickers not in the scanner universe.",
+        )
+        st.checkbox(
+            "Allow SELL without a matching holding (historical trade before app was used)",
+            key="_tj_override_sell",
+            help="Skips the check that blocks selling a ticker you don't currently hold. Use only for pre-app backfills.",
         )
 
         # ── Decision Context — outside form so followed_signal can gate fields ──
@@ -15831,6 +15839,7 @@ elif page == "📒 Trade Journal":
             f_col3, f_col4, f_col5 = st.columns(3)
             with f_col3:
                 _trigger_opts = ["MANUAL", "RECOMMENDATION", "STOP_HIT", "REBALANCE", "WATCHLIST_ENTRY"]
+                _trigger_labels = {"MANUAL": "Manual", "RECOMMENDATION": "Recommendation", "STOP_HIT": "Stop Hit", "REBALANCE": "Rebalance", "WATCHLIST_ENTRY": "Watchlist Entry"}
                 _prefill_trigger = prefill.get("trigger", "MANUAL")
                 # Defensive: any unknown trigger value falls back to MANUAL
                 # so a future caller doesn't crash this form with a ValueError.
@@ -15839,6 +15848,7 @@ elif page == "📒 Trade Journal":
                     "Reason",
                     _trigger_opts,
                     index=_trigger_idx,
+                    format_func=lambda v: _trigger_labels.get(v, v),
                 )
             with f_col4:
                 shares_val = st.number_input(
@@ -15981,16 +15991,18 @@ elif page == "📒 Trade Journal":
             #     the latest known market price, it's most likely a typo. The
             #     user can override by ticking the "Allow unusual price"
             #     checkbox outside the form (persists across reruns).
-            _override   = st.session_state.get("_tj_override_price_check", False)
+            _override_price  = st.session_state.get("_tj_override_price", False)
+            _override_ticker = st.session_state.get("_tj_override_ticker", False)
+            _override_sell   = st.session_state.get("_tj_override_sell", False)
             _mp_check   = _market_price_for(ticker_input) if ticker_input else None
             _price_block_reason: str | None = None
-            if price_val < 0.10 and not _override:
+            if price_val < 0.10 and not _override_price:
                 _price_block_reason = (
                     f"Entered price <b>${price_val:.2f}</b> is below $0.10 — almost "
                     "always a typo. Confirm the price, or tick "
                     "<b>'Allow unusual price'</b> above the form and resubmit."
                 )
-            elif _mp_check and _mp_check > 0 and not _override:
+            elif _mp_check and _mp_check > 0 and not _override_price:
                 _ratio = price_val / _mp_check
                 if _ratio < 0.5 or _ratio > 2.0:
                     _price_block_reason = (
@@ -16007,14 +16019,13 @@ elif page == "📒 Trade Journal":
             # ticker that's just not in the scanner universe, yfinance still
             # provides a fallback price; persistent None almost always means
             # the symbol is a typo (e.g. "NFLZ" vs "NFLX"). Block unless the
-            # user explicitly overrides — same override covers price sanity,
-            # since both checks reduce to "I know what I'm doing."
+            # user explicitly overrides the ticker check.
             _ticker_block_reason: str | None = None
-            if ticker_input and _mp_check is None and not _override:
+            if ticker_input and _mp_check is None and not _override_ticker:
                 _ticker_block_reason = (
                     f"Couldn't resolve a market price for <b>{ticker_input}</b> — "
                     "likely a typo or a delisted symbol. Verify the spelling, or "
-                    "tick <b>'Allow unusual price'</b> above the form if you're "
+                    "tick <b>'Allow unrecognized ticker'</b> above the form if you're "
                     "intentionally recording a historical / unlisted trade."
                 )
 
@@ -16026,10 +16037,9 @@ elif page == "📒 Trade Journal":
             # mode behind the May 2026 "SELL NET 5sh has no prior BUY" drift.
             #
             # Backfills of pre-app trades remain possible via the "Allow
-            # unusual price" override checkbox, which already gates the price/
-            # ticker sanity checks above.
+            # SELL without a matching holding" override checkbox.
             _shares_block_reason: str | None = None
-            if action == "SELL" and ticker_input and not _override:
+            if action == "SELL" and ticker_input and not _override_sell:
                 _h_match = st.session_state.holdings_df[
                     st.session_state.holdings_df["Ticker"] == ticker_input
                 ]
@@ -16065,7 +16075,7 @@ elif page == "📒 Trade Journal":
             # here against the same replay the drift detector uses closes that
             # gap at the source. Override (the same backfill checkbox) still
             # lets a genuine pre-app holding through.
-            if action == "SELL" and ticker_input and not _override and not _shares_block_reason:
+            if action == "SELL" and ticker_input and not _override_sell and not _shares_block_reason:
                 try:
                     _replay = db.recalculate_from_trades(st.session_state.get("trades_df"))
                     _rh     = _replay.get("holdings_df")
@@ -16080,8 +16090,9 @@ elif page == "📒 Trade Journal":
                             f"would exceed the <b>{_avail:g}</b> your trade history can account "
                             "for (logged BUYs minus prior SELLs). Recording it would create an "
                             "unmatched SELL and a drift warning — the exact issue we just fixed. "
-                            "If this is a pre-app holding, tick <b>'Allow unusual price'</b> to "
-                            "override; otherwise check for a duplicate row or a wrong share count."
+                            "If this is a pre-app holding, tick <b>'Allow SELL without a matching "
+                            "holding</b> to override; otherwise check for a duplicate row or a "
+                            "wrong share count."
                         )
                 except Exception:
                     pass
@@ -16363,9 +16374,11 @@ elif page == "📒 Trade Journal":
                     # Pop the widget-bound key rather than assigning to it;
                     # direct writes to a widget's key after the widget has
                     # been instantiated in the current run raise
-                    # StreamlitAPIException. Popping lets the checkbox
-                    # re-init to its default (unchecked) on the next render.
-                    st.session_state.pop("_tj_override_price_check", None)
+                    # StreamlitAPIException. Popping lets the checkboxes
+                    # re-init to their default (unchecked) on the next render.
+                    st.session_state.pop("_tj_override_price", None)
+                    st.session_state.pop("_tj_override_ticker", None)
+                    st.session_state.pop("_tj_override_sell", None)
                     # Force the page-load drift check to re-run on next
                     # render. Without this, any drift introduced by an
                     # override-permitted save (e.g. backfill SELL) would
@@ -16906,7 +16919,7 @@ elif page == "📒 Trade Journal":
 
     # ── Trade History table ───────────────────────────────────────────────────
     st.subheader("📋 Trade History")
-    st.caption("Check the **Delete?** box on any row then click 'Delete Selected' to remove duplicates or mistakes.")
+    st.caption("Check the **Delete?** box on any row then click **🗑️ Delete selected trade(s)** to remove duplicates or mistakes.")
     if trades_df.empty:
         st.info("No trades recorded yet. Use the form above to log your first trade.")
     else:
@@ -16962,54 +16975,72 @@ elif page == "📒 Trade Journal":
         rows_to_delete = edited_trades[edited_trades["Delete?"] == True]
         if not rows_to_delete.empty:
             n = len(rows_to_delete)
-            if st.button(
-                f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
-                type="secondary",
-                disabled=st.session_state.get("_readonly", False),
-                help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
-            ):
-                ids_to_delete = trades_df.iloc[rows_to_delete.index]["id"].tolist()
-                failed = 0
-                for tid in ids_to_delete:
-                    if not db.delete_trade(tid):
-                        failed += 1
-                if failed == 0:
-                    st.success(f"✅ Deleted {n} trade{'s' if n > 1 else ''}.")
-                else:
-                    st.warning(f"Deleted {n - failed} of {n}. {failed} failed — check logs.")
+            _del_ids = trades_df.iloc[rows_to_delete.index]["id"].tolist()
+            if not st.session_state.get("_tj_delete_confirm_pending"):
+                if st.button(
+                    f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
+                    type="secondary",
+                    disabled=st.session_state.get("_readonly", False),
+                    help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                ):
+                    st.session_state["_tj_delete_confirm_pending"] = _del_ids
+                    st.rerun()
+            else:
+                _pending_ids = st.session_state["_tj_delete_confirm_pending"]
+                _pn = len(_pending_ids)
+                st.warning(
+                    f"⚠️ **Permanently delete {_pn} trade{'s' if _pn > 1 else ''}?** "
+                    "This rewrites your P&L history and cannot be undone.",
+                )
+                _dc1, _dc2 = st.columns(2)
+                with _dc1:
+                    if st.button("Yes, delete", key="_tj_delete_confirm_yes", type="primary"):
+                        st.session_state.pop("_tj_delete_confirm_pending", None)
+                        failed = 0
+                        for tid in _pending_ids:
+                            if not db.delete_trade(tid):
+                                failed += 1
+                        if failed == 0:
+                            st.success(f"✅ Deleted {_pn} trade{'s' if _pn > 1 else ''}.")
+                        else:
+                            st.warning(f"Deleted {_pn - failed} of {_pn}. {failed} failed — check logs.")
 
-                # ── Auto-rebuild holdings from the remaining trade history ─────
-                # When a trade is deleted, holdings_df has already absorbed its
-                # incremental effect at save time but the deletion doesn't roll
-                # that back. Replaying all remaining trades gives the truthful
-                # state and corrects any realized_pnl that was computed from the
-                # corrupted basis (the NFLX +$177-when-it-should-have-been-
-                # negative class of bug).
-                fresh_trades = db.load_trades()
-                recalc = db.recalculate_from_trades(fresh_trades)
-                db.save_holdings(recalc["holdings_df"])
-                st.session_state.holdings_df = recalc["holdings_df"]
-                _n_corrected = 0
-                for _tid, _c in recalc["realized_pnl_corrections"].items():
-                    if db.update_trade_realized_pnl(
-                        _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
-                    ):
-                        _n_corrected += 1
-                if _n_corrected:
-                    st.info(
-                        f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
-                        f"Also corrected realized_pnl on **{_n_corrected}** SELL "
-                        "row(s) whose stored figures were computed from a stale "
-                        "cost basis."
-                    )
-                if recalc["warnings"]:
-                    for _w in recalc["warnings"][:3]:
-                        st.warning(f"⚠ {_w}")
-                st.session_state.trades_df = db.load_trades()
-                # Invalidate the page-load drift banner — we just resolved it.
-                st.session_state.pop("_tj_drift_checked", None)
-                st.session_state.pop("_tj_drift_state", None)
-                st.rerun()
+                        # ── Auto-rebuild holdings from the remaining trade history ─────
+                        # When a trade is deleted, holdings_df has already absorbed its
+                        # incremental effect at save time but the deletion doesn't roll
+                        # that back. Replaying all remaining trades gives the truthful
+                        # state and corrects any realized_pnl that was computed from the
+                        # corrupted basis (the NFLX +$177-when-it-should-have-been-
+                        # negative class of bug).
+                        fresh_trades = db.load_trades()
+                        recalc = db.recalculate_from_trades(fresh_trades)
+                        db.save_holdings(recalc["holdings_df"])
+                        st.session_state.holdings_df = recalc["holdings_df"]
+                        _n_corrected = 0
+                        for _tid, _c in recalc["realized_pnl_corrections"].items():
+                            if db.update_trade_realized_pnl(
+                                _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
+                            ):
+                                _n_corrected += 1
+                        if _n_corrected:
+                            st.info(
+                                f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
+                                f"Also corrected realized_pnl on **{_n_corrected}** SELL "
+                                "row(s) whose stored figures were computed from a stale "
+                                "cost basis."
+                            )
+                        if recalc["warnings"]:
+                            for _w in recalc["warnings"][:3]:
+                                st.warning(f"⚠ {_w}")
+                        st.session_state.trades_df = db.load_trades()
+                        # Invalidate the page-load drift banner — we just resolved it.
+                        st.session_state.pop("_tj_drift_checked", None)
+                        st.session_state.pop("_tj_drift_state", None)
+                        st.rerun()
+                with _dc2:
+                    if st.button("Cancel", key="_tj_delete_confirm_no"):
+                        st.session_state.pop("_tj_delete_confirm_pending", None)
+                        st.rerun()
 
         # ── 🔄 Manual rebuild — fixes any pre-existing corrupted state ─────
         # Auto-rebuild on delete protects new workflows, but trades already
@@ -18529,8 +18560,8 @@ elif page == "🪞 Trade Review":
 
         st.markdown("---")
         st.caption(
-            "**Categories:** *App-Followed* = `followed_signal=True` · *Deviated* = `followed_signal=False` "
-            "(external info / discretionary call) · *Discretionary* = neither recorded. "
+            "**Categories:** *App-Followed* — trade aligned with the app's recommendation · "
+            "*Deviated* — external info or discretionary call · *Discretionary* — neither recorded. "
             "**Panic-window** = trade made on a day S&P 500 closed ≤ -1.5%. "
             "**vs-SPY** = trade's % return minus SPY's % over the same holding period (closed trades only). "
             "Open positions are marked-to-market against current price. "
@@ -19078,13 +19109,7 @@ elif page == "📜 Recommendations History":
 
 **Outcome** — meaningful when the rec had a priced reference. NaN composite + Unverified verdict + low outcome usually means "the App showed it on momentum alone, you correctly skipped, market moved against the momentum signal anyway." That's a *good* skip even though the row looks unimpressive.
 
-**Pre-2026-05-27 rows** carry the old verdict logic (every non-held pick was forced to "Unverified" regardless of composite availability — fixed today). New rows going forward will have richer verdicts.
-
-To clear out the early sparse rows, run this in Supabase SQL Editor:
-
-```sql
-delete from recommendations where rec_date < '2026-05-27';
-```
+**Early rows** (before verdict logic matured) may have sparse composites and "Unverified" verdicts — this is expected and doesn't need action. New rows will have richer verdicts as the engine accumulates history.
 """
         )
 

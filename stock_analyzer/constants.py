@@ -30,6 +30,8 @@ FRAGILITY_PULLBACK_PCT = -10.0   # routine-correction yardstick (~1–2×/yr); m
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this
 SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
+SINGLE_NAME_TRIM_TRIGGER = 18.0  # soft trim trigger — position that grew past ceiling (price appreciation after entry)
+SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification reduce trigger — recommend reducing to SINGLE_NAME_CEILING
 # High-beta cluster share — the standing "correlated exposure" read under the
 # fragility gauge: when this fraction of the book sits in high-beta (β ≥
 # PORTFOLIO_BETA_ELEVATED) names, they tend to fall TOGETHER on risk-off days, so

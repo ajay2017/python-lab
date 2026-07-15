@@ -18,6 +18,9 @@ from stock_analyzer.constants import (
     EARNINGS_BEARISH_REACTION_COMPOSITE_GATE,
     EARNINGS_MIN_BEAT_RATE_ENTRY,
     COMPOSITE_BUY,
+    COMPOSITE_STRONG_BUY,
+    SINGLE_NAME_CEILING,
+    SINGLE_NAME_TRIM_TRIGGER,
 )
 
 _ET = _pytz.timezone("America/New_York")
@@ -178,8 +181,8 @@ def _recommend(
         )
 
     # ── REDUCE — oversized position ───────────────────────────────────────────
-    if weight > 18:
-        target_w  = 15.0
+    if weight > SINGLE_NAME_TRIM_TRIGGER:
+        target_w  = SINGLE_NAME_CEILING
         trim_frac = (weight - target_w) / weight
         trim_sh   = max(1, int(shares * trim_frac))
         trim_val  = round(trim_frac * market_value)
@@ -337,7 +340,7 @@ def _recommend(
         )
 
     # ── HOLD_OR_ADD — high conviction + positive revisions ───────────────────
-    if score >= 68 and net_rev >= 2:
+    if score >= COMPOSITE_STRONG_BUY and net_rev >= 2:
         _hoa_extras = []
         if beat_rate is not None and beat_rate >= EARNINGS_BEAT_RATE_STRONG_THRESHOLD:
             _hoa_extras.append(f"historical beat rate **{beat_rate:.0f}%**")

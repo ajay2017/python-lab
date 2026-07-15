@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SECTOR_CEILING, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -516,15 +516,15 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
         mval   = row["Market Value"]
         avg_cost = row["Avg Cost"]
 
-        if w > 18 and pnl > 20:
-            trim_val    = mval * (w - 15) / 100
+        if w > SINGLE_NAME_TRIM_TRIGGER and pnl > 20:
+            trim_val    = mval * (w - SINGLE_NAME_CEILING) / 100
             trim_shares = max(1, int(trim_val / price))
             actions.append({
                 "type":    "trim",
                 "urgency": "medium",
                 "ticker":  ticker,
                 "title":   "Oversized Position with Strong Gain",
-                "trigger": f"Weight {w:.0f}% exceeds 18% threshold with +{pnl:.0f}% profit",
+                "trigger": f"Weight {w:.0f}% exceeds {SINGLE_NAME_TRIM_TRIGGER:.0f}% threshold with +{pnl:.0f}% profit",
                 "trim_shares": trim_shares,
                 "trim_val":    trim_val,
                 "weight":  w,
@@ -1013,8 +1013,8 @@ def diversification_recommendations(
 
     # ── REDUCE: overweight sectors ────────────────────────────────────────────
     for sector, pct in sector_pcts.items():
-        if pct > 20:
-            target_pct = 15.0
+        if pct > SECTOR_REDUCE_TRIGGER:
+            target_pct = SINGLE_NAME_CEILING
             reduce_pct = round(pct - target_pct, 1)
             sector_rows = port_df[port_df["Sector"] == sector].sort_values("Score")
             weakest = [
