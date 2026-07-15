@@ -11464,91 +11464,54 @@ elif page == "🏆 Portfolio Health":
     }
     _ph_gauge_note = _ph_gauge_notes.get(_ph_grade, "")
 
-    st.markdown(
-        f"""
-        <div style="display:flex;gap:0;align-items:stretch;
-                    background:rgba(255,255,255,0.04);border:1px solid #374151;
-                    border-radius:12px;padding:20px 28px 16px;margin-bottom:20px;">
-
-          <!-- Gauge (left) -->
-          <div style="flex:2;min-width:0;padding-right:28px;">
-            <div style="position:relative;padding:26px 0 22px;">
-
-              <!-- Score bubble -->
-              <div style="position:absolute;top:0;left:{_ph_bubble_pct}%;
-                          transform:translateX(-50%);
-                          background:{_ph_bg};color:#fff;
-                          padding:2px 10px;border-radius:12px;
-                          font-weight:700;font-size:13px;white-space:nowrap;
-                          box-shadow:0 0 8px {_ph_border}88;">
-                {_ph_score_disp}
-              </div>
-
-              <!-- Connector line -->
-              <div style="position:absolute;top:22px;left:{_ph_score_num}%;
-                          transform:translateX(-50%);
-                          width:2px;height:10px;background:rgba(255,255,255,0.6);">
-              </div>
-
-              <!-- Gradient bar with zone labels -->
-              <div style="position:relative;height:22px;border-radius:11px;overflow:hidden;
-                          background:linear-gradient(to right,
-                            #b91c1c 0%,#b91c1c 34%,
-                            #c2410c 34%,#c2410c 49%,
-                            #b45309 49%,#b45309 64%,
-                            #1d4ed8 64%,#1d4ed8 79%,
-                            #15803d 79%,#15803d 100%);
-                          box-shadow:inset 0 1px 4px rgba(0,0,0,0.5);">
-                <span style="position:absolute;left:17%;top:50%;transform:translate(-50%,-50%);
-                             color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">F &nbsp;0–34</span>
-                <span style="position:absolute;left:41.5%;top:50%;transform:translate(-50%,-50%);
-                             color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">D &nbsp;35–49</span>
-                <span style="position:absolute;left:56.5%;top:50%;transform:translate(-50%,-50%);
-                             color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">C &nbsp;50–64</span>
-                <span style="position:absolute;left:71.5%;top:50%;transform:translate(-50%,-50%);
-                             color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">B &nbsp;65–79</span>
-                <span style="position:absolute;left:89.5%;top:50%;transform:translate(-50%,-50%);
-                             color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">A &nbsp;80+</span>
-              </div>
-
-              <!-- Marker dot -->
-              <div style="position:absolute;top:28px;left:{_ph_score_num}%;
-                          transform:translateX(-50%);
-                          width:14px;height:14px;background:#fff;border-radius:50%;
-                          box-shadow:0 0 0 3px rgba(255,255,255,0.25),
-                                     0 0 12px {_ph_border}cc;">
-              </div>
-
-              <!-- Scale ticks -->
-              <div style="position:relative;margin-top:14px;">
-                <span style="position:absolute;left:0%;transform:translateX(-50%);
-                             font-size:9px;color:#6b7280;">0</span>
-                <span style="position:absolute;left:34%;transform:translateX(-50%);
-                             font-size:9px;color:#6b7280;">35</span>
-                <span style="position:absolute;left:49%;transform:translateX(-50%);
-                             font-size:9px;color:#6b7280;">50</span>
-                <span style="position:absolute;left:64%;transform:translateX(-50%);
-                             font-size:9px;color:#6b7280;">65</span>
-                <span style="position:absolute;left:79%;transform:translateX(-50%);
-                             font-size:9px;color:#6b7280;">80</span>
-                <span style="position:absolute;left:100%;transform:translateX(-50%);
-                             font-size:9px;color:#6b7280;">100</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Info panel (right) -->
-          <div style="flex:1;border-left:1px solid #374151;padding-left:24px;
-                      display:flex;flex-direction:column;justify-content:center;min-width:170px;">
-            <div style="font-size:56px;font-weight:900;color:{_ph_bg};line-height:1;">{_ph_grade}</div>
-            <div style="font-size:20px;font-weight:700;color:#f3f4f6;margin-top:2px;">{_ph_score_disp}/100</div>
-            <div style="font-size:13px;color:#9ca3af;margin-top:1px;">{_ph_label}</div>
-            <div style="font-size:11px;color:#6b7280;margin-top:8px;line-height:1.55;">{_ph_gauge_note}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    _ph_gauge = (
+        f'<div style="display:flex;gap:0;align-items:stretch;background:rgba(255,255,255,0.04);'
+        f'border:1px solid #374151;border-radius:12px;padding:20px 28px 16px;margin-bottom:20px;">'
+        f'<div style="flex:2;min-width:0;padding-right:28px;">'
+        f'<div style="position:relative;padding:26px 0 22px;">'
+        f'<div style="position:absolute;top:0;left:{_ph_bubble_pct}%;transform:translateX(-50%);'
+        f'background:{_ph_bg};color:#fff;padding:2px 10px;border-radius:12px;'
+        f'font-weight:700;font-size:13px;white-space:nowrap;'
+        f'box-shadow:0 0 8px {_ph_border}88;">{_ph_score_disp}</div>'
+        f'<div style="position:absolute;top:22px;left:{_ph_score_num}%;transform:translateX(-50%);'
+        f'width:2px;height:10px;background:rgba(255,255,255,0.6);"></div>'
+        f'<div style="position:relative;height:22px;border-radius:11px;overflow:hidden;'
+        f'background:linear-gradient(to right,'
+        f'#b91c1c 0%,#b91c1c 34%,#c2410c 34%,#c2410c 49%,'
+        f'#b45309 49%,#b45309 64%,#1d4ed8 64%,#1d4ed8 79%,'
+        f'#15803d 79%,#15803d 100%);'
+        f'box-shadow:inset 0 1px 4px rgba(0,0,0,0.5);">'
+        f'<span style="position:absolute;left:17%;top:50%;transform:translate(-50%,-50%);'
+        f'color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">F&nbsp;0&#8211;34</span>'
+        f'<span style="position:absolute;left:41.5%;top:50%;transform:translate(-50%,-50%);'
+        f'color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">D&nbsp;35&#8211;49</span>'
+        f'<span style="position:absolute;left:56.5%;top:50%;transform:translate(-50%,-50%);'
+        f'color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">C&nbsp;50&#8211;64</span>'
+        f'<span style="position:absolute;left:71.5%;top:50%;transform:translate(-50%,-50%);'
+        f'color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">B&nbsp;65&#8211;79</span>'
+        f'<span style="position:absolute;left:89.5%;top:50%;transform:translate(-50%,-50%);'
+        f'color:rgba(255,255,255,0.9);font-size:9px;font-weight:800;letter-spacing:.5px;">A&nbsp;80+</span>'
+        f'</div>'
+        f'<div style="position:absolute;top:28px;left:{_ph_score_num}%;transform:translateX(-50%);'
+        f'width:14px;height:14px;background:#fff;border-radius:50%;'
+        f'box-shadow:0 0 0 3px rgba(255,255,255,0.25),0 0 12px {_ph_border}cc;"></div>'
+        f'<div style="position:relative;margin-top:14px;">'
+        f'<span style="position:absolute;left:0%;transform:translateX(-50%);font-size:9px;color:#6b7280;">0</span>'
+        f'<span style="position:absolute;left:34%;transform:translateX(-50%);font-size:9px;color:#6b7280;">35</span>'
+        f'<span style="position:absolute;left:49%;transform:translateX(-50%);font-size:9px;color:#6b7280;">50</span>'
+        f'<span style="position:absolute;left:64%;transform:translateX(-50%);font-size:9px;color:#6b7280;">65</span>'
+        f'<span style="position:absolute;left:79%;transform:translateX(-50%);font-size:9px;color:#6b7280;">80</span>'
+        f'<span style="position:absolute;left:100%;transform:translateX(-50%);font-size:9px;color:#6b7280;">100</span>'
+        f'</div></div></div>'
+        f'<div style="flex:1;border-left:1px solid #374151;padding-left:24px;'
+        f'display:flex;flex-direction:column;justify-content:center;min-width:170px;">'
+        f'<div style="font-size:56px;font-weight:900;color:{_ph_bg};line-height:1;">{_ph_grade}</div>'
+        f'<div style="font-size:20px;font-weight:700;color:#f3f4f6;margin-top:2px;">{_ph_score_disp}/100</div>'
+        f'<div style="font-size:13px;color:#9ca3af;margin-top:1px;">{_ph_label}</div>'
+        f'<div style="font-size:11px;color:#6b7280;margin-top:8px;line-height:1.55;">{_ph_gauge_note}</div>'
+        f'</div></div>'
     )
+    st.markdown(_ph_gauge, unsafe_allow_html=True)
 
     # ── Sub-score dimension cards ─────────────────────────────────────────────
     st.markdown("#### Construction dimensions")
