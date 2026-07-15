@@ -28,19 +28,46 @@ dashboard. Read the scope notes before trusting a number.
 > $15 / $75. Opus 4.8 list price is **$5 / $25**. That collapses the Opus↔Sonnet
 > gap: Sonnet is now **0.6×** Opus (not 0.2×), so delegated build saves ~40%, not
 > ~80%. Haiku is **0.2×** (saves ~80%). All figures below have been recomputed.
+>
+> **Updated 2026-07-15 — build tier moved Sonnet 4.6 → Sonnet 5.** Sonnet 5
+> list price is **$3 / $15**, the same 0.6× ratio Sonnet 4.6 had, so the ~40%
+> build-savings math below is unchanged at list price. But Sonnet 5 carries an
+> **introductory price of $2 / $10 through 2026-08-31** — during that window
+> it's **0.4×** Opus (saves ~60%), not 0.6×. Re-check this table after
+> 2026-08-31 when intro pricing lapses back to $3/$15. **Lead stays Opus 4.8**
+> (decided 2026-07-15, see note below) — Sonnet 5's marketed edge is coding/
+> agentic throughput, not the judgment-dense plan/threshold/review work Lead
+> does, so the cost delta here doesn't move that call.
 
 | Tier | Model | Input | Output | vs Opus 4.8 |
 |---|---|---|---|---|
 | Plan / Review / Lead | Opus 4.8 | $5 | $25 | 1× (baseline) |
-| Build | Sonnet 4.6 | $3 | $15 | **0.6× (60%)** |
+| Build | Sonnet 5 | $3 ($2 intro thru 2026-08-31) | $15 ($10 intro) | **0.6× list / 0.4× intro** |
 | Docs | Haiku 4.5 | $1 | $5 | **0.2× (20%)** |
 
-Sonnet is **0.6×** of Opus 4.8 on **both** input ($3 vs $5) and output ($15 vs
-$25), so delegated build work costs **exactly 60%** of the Opus price regardless
-of the input/output mix — i.e. it **saves 40%**. Haiku is **0.2×** (saves 80%).
+Sonnet 5 is **0.6×** of Opus 4.8 on **both** input ($3 vs $5) and output ($15 vs
+$25) at list price, so delegated build work costs **exactly 60%** of the Opus
+price regardless of the input/output mix — i.e. it **saves 40%** (or **60%**
+during the 2026-08-31 intro window, at $2/$10). Haiku is **0.2×** (saves 80%).
 The **ratio is mix-independent**; only the absolute-dollar columns below assume a
 mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 **ballpark**.
+
+**2026-07-15 — Lead model confirmed as Opus 4.8, not Sonnet 5.** A commit-
+trailer audit found the lead/orchestration model had drifted to Sonnet-tier
+(trailered "Sonnet 4.6") on most commits since 2026-07-12, without an explicit
+decision recorded anywhere — this ledger's own "Plan / Review / Lead" row still
+said Opus 4.8 the whole time, so the drift was undocumented, not intentional.
+Asked the user explicitly: **Opus 4.8 stays Lead.** Rationale: Sonnet 5 is
+marketed specifically as closing the gap on *coding and agentic* work, not on
+judgment-dense decisions (thresholds, gates, cross-feature coordination) — the
+exact work Lead does on this correctness-bound app. The cost delta (40–60%,
+not 5–10×) doesn't justify moving the safety-critical tier. Both action items
+this surfaced are now closed — see the two ledger rows below (retroactive
+review + gap-fill) — and [`CLAUDE.md`](../CLAUDE.md) hard rule #4 now makes the
+review-citation requirement explicit and binding regardless of which model
+runs the main session, so this class of drift shouldn't recur silently. See
+memory `project_model_routing_drift_2026_07` for the full audit.
 
 ## Conventions
 
@@ -140,6 +167,8 @@ mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
 | 2026-07-13 | Post-session SDLC doc audit — docs/plans/*.md staleness sweep | Sonnet (Explore) | — | — | — | n/a | Parallel with the row above. Checked all 10 plan docs; 9 clean or historically-fine, 1 genuinely stale (cross-asset-and-news-sentiment.md, 8 "Risk Analysis tab" mentions with no shipped-status marker, reads as a live spec). Confirmed house convention: docs/plans/*.md is for new-subsystem design, not UI-restructuring — no dedicated nav-cleanup plan doc was ever expected. Token usage not included in this agent's returned result. |
 | 2026-07-13 | Post-session SDLC doc audit — in-app User Guide staleness sweep | Sonnet (Explore) | — | — | — | n/a | Parallel with the two rows above. Read the entire User Guide page section-by-section (not just grep) against current code. Most content held up well; found 3 real issues (Stress Testing mis-attributed to Home instead of Risk Analysis, a self-contradicting bullet on Home's own "pages at a glance" entry, a missing 4th AI provider) plus 1 pre-existing minor numeric drift unrelated to this session. Token usage not included in this agent's returned result. |
 | 2026-07-13 | Post-session SDLC doc audit — fix mechanical batch (architecture.md tech-stack + 3 stale §10 rows + secrets-comment ×2, DEVELOPMENT.md shipped-log + queued-item correction, plans-doc shipped marker) | Sonnet (implementer) | 159,368 | ~$0.77 | ~$1.27 | ~$0.50 | Given precise, source-verified facts for each of 7 items. Independently caught and corrected one of the lead's assumptions (Phase 2 of cross-asset-and-news-sentiment.md was ALSO shipped, not just Phase 1 as the task brief assumed) rather than blindly following the brief — verified via git log before asserting. Also flagged one more stale reference (architecture.md's AI/LLM tech-stack row) it correctly left for the lead since it was outside its assigned 7 items. |
+| 2026-07-13 → 07-15 | **Ledger gap.** 64 commits shipped in this window (250449d → 97852d4) with no ledger rows — nobody logged it, per the "not auto-instrumented" caveat at the top of this doc. Includes Earnings Playbook Phase 3, Home auto-refresh timer, the news-noise gate + LLM rescorer, the Predictive Analytics page (Signal Calibration + 5-tab expansion + sentiment alignment), 3 UX remediation passes, sentiment→composite Phase 2b LLM wiring, the loading-overlay UX pass, composite freshness chips, and the Portfolio Construction Health Score page (F-182). | — | — | — | n/a | **Deliberately not reconstructed as per-task rows** — no real subagent token counts exist for this window to report, and inventing them would violate the doc-integrity zero-hallucination rule. CLAUDE.md's own "Recently shipped" changelog already narrates the substantive decisions/reviews for the major features here (several explicitly note Opus review, e.g. 6c055ec "Opus-reviewed ×2"); this row exists so the gap itself is visible in the ledger rather than silently missing. Surfaced by the 2026-07-15 model-routing-drift audit. |
+| 2026-07-15 | Retroactive Opus review — `b2e347c` (UX remediation: 2 new constants `SINGLE_NAME_TRIM_TRIGGER`/`SECTOR_REDUCE_TRIGGER`, `68`→`COMPOSITE_STRONG_BUY` in earnings_advisor HOLD_OR_ADD) + `042f4ba` (Portfolio Health concentration/diversification score recalibration) | — | — | — | n/a — lead (reviewer subagent, opus) | Both commits shipped without the mandatory review citation (house convention broken); done retroactively against the live diff rather than left unverified. **Review = Opus reviewer (MANDATORY, retroactive): SHIP, 0 blocking.** Verified: all C2 literal→constant swaps value-preserving (18/20/15 unchanged, no operator flips); C3's `68`→`COMPOSITE_STRONG_BUY`(75) is a real 7-pt policy tightening, not a pure rename — ratified as intentional, awareness-only (HOLD_OR_ADD never gates, isn't counted in `_earnings_posture_alerts_cache`), conservative-direction, and consistent with the codebase's own `COMPOSITE_HIGH_CONVICTION = COMPOSITE_STRONG_BUY`; 042f4ba's three-zone concentration score bounds correctly (0/100, no div-by-zero) and is confirmed display-only (feeds only the 🏆 Portfolio Health grade card, no gate consumes it); diversification rescale handles all 4 None/not-None branch combinations; Risk Analysis page confirmed on an independent codepath. 2 non-blocking hygiene suggestions (not applied — optional, flagged for the user): a dedicated `SECTOR_REDUCE_TARGET` constant (currently reuses `SINGLE_NAME_CEILING` for a sector target, coincidentally equal today but coupled to the wrong policy lever) and a `SINGLE_NAME_ELEVATED` constant (currently `SINGLE_NAME_CEILING * 2/3` inline). Closes the gap flagged in the 2026-07-15 Lead-decision note above. |
 
 ### Running totals (delegated work only)
 

@@ -22,6 +22,8 @@ Personal portfolio intelligence app for a single user. Streamlit Community Cloud
 
 3. **Never run the app locally to test changes.** Push to `main`, wait ~2 min for Streamlit Cloud auto-redeploy, hard-refresh the browser (Ctrl+F5).
 
+4. **Any commit touching `stock_analyzer/constants.py`, a gate, or a scoring/recommendation formula requires an Opus review before it ships, cited in the commit body** (`Review = Opus reviewer: SHIP/FIX-FIRST, N blocking; ...`). This applies **regardless of which model is running the main session** — invoke the `reviewer` subagent (pinned `model: opus` in [`.claude/agents/reviewer.md`](.claude/agents/reviewer.md)) explicitly; don't rely on the main session's own judgment as a substitute. A commit in this category with no review citation is itself a defect — flag it. (Two 2026-07-15 commits shipped without this citation and needed a retroactive review to close the gap — see `docs/cost-routing.md`.)
+
 ---
 
 ## Coordination pattern
