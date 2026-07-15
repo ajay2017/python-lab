@@ -9952,7 +9952,7 @@ elif page == "🥧 Portfolio Allocation":
                         f"<div style='padding:10px 14px;background:#0d2137;"
                         f"border-radius:6px;border-left:4px solid #4a9eff;margin:6px 0'>"
                         f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
-                        f"letter-spacing:0.09em;text-transform:uppercase'>Action</span><br>"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
                         f"<span style='color:#eee;font-size:0.9em'>{_tr['action_detail']}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -10049,7 +10049,7 @@ elif page == "🥧 Portfolio Allocation":
                         f"<div style='padding:10px 14px;background:#0d2137;"
                         f"border-radius:6px;border-left:4px solid #4a9eff;margin:6px 0'>"
                         f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
-                        f"letter-spacing:0.09em;text-transform:uppercase'>Action</span><br>"
+                        f"letter-spacing:0.09em;text-transform:uppercase'>Recommended Action</span><br>"
                         f"<span style='color:#eee;font-size:0.9em'>{_ad['action_detail']}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -15152,7 +15152,7 @@ elif page == "📋 Watchlist":
                 f"border-radius:6px;border-left:4px solid {_bclr};margin:10px 0'>"
                 f"<span style='font-size:0.72em;color:{_bclr};font-weight:700;"
                 f"letter-spacing:0.09em;text-transform:uppercase'>"
-                f"{_a_icon} Action: {_a_label}</span><br>"
+                f"{_a_icon} Recommended Action: {_a_label}</span><br>"
                 f"<span style='color:#eee;font-size:0.9em'>{_wr['detail']}</span>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -20021,22 +20021,42 @@ elif page == "💰 Account":
             )
             _cash_submit = st.form_submit_button("Save cash balance")
         if _cash_submit:
-            # Soft-sanity (warn, never block — both mostly-cash and on-margin are legit):
+            _cash_implausible = False
             if _have_pf and _new_cash > max(_equity * 10.0, 1_000_000.0):
                 st.warning(
                     f"⚠️ ${_new_cash:,.0f} is far larger than your ${_equity:,.0f} invested "
                     "equity — double-check this before relying on account figures."
                 )
+                _cash_implausible = True
             if _have_pf and _new_cash < 0 and abs(_new_cash) > _equity:
                 st.warning(
                     f"⚠️ A margin debit of ${abs(_new_cash):,.0f} exceeds your ${_equity:,.0f} "
                     "equity — that implies negative net worth. Double-check the sign/amount."
                 )
-            if db.save_account_cash(_new_cash, _new_note or None):
-                st.success("Saved.")
-                st.rerun()
+                _cash_implausible = True
+            if _cash_implausible:
+                st.session_state["_acct_implausible_pending"] = (_new_cash, _new_note or None)
             else:
-                st.error("Couldn't save — database offline or read-only.")
+                if db.save_account_cash(_new_cash, _new_note or None):
+                    st.success("Saved.")
+                    st.rerun()
+                else:
+                    st.error("Couldn't save — database offline or read-only.")
+
+        _pend_cash_data = st.session_state.get("_acct_implausible_pending")
+        if _pend_cash_data is not None:
+            _conf_col, _cancel_col = st.columns(2)
+            if _conf_col.button("Save anyway", type="primary", key="_acct_cash_confirm"):
+                _pc, _pn = _pend_cash_data
+                st.session_state.pop("_acct_implausible_pending", None)
+                if db.save_account_cash(_pc, _pn):
+                    st.success("Saved.")
+                    st.rerun()
+                else:
+                    st.error("Couldn't save — database offline or read-only.")
+            if _cancel_col.button("Cancel", key="_acct_cash_cancel"):
+                st.session_state.pop("_acct_implausible_pending", None)
+                st.rerun()
     else:
         st.caption("🔒 Read-only viewer — cash balance is view-only.")
 
@@ -20353,14 +20373,16 @@ elif page == "🔔 Catalyst Watch":
                     f"· {_rxn_emoji} {_cand['reaction'].capitalize()} reaction",
                     expanded=False,
                 ):
-                    _c1, _c2, _c3, _c4 = st.columns(4)
-                    _c1.metric("Historical Beat Rate", f"{_cand['beat_rate']:.0f}%")
-                    _c2.metric("Composite Score",      f"{_cand['score']:.0f}/100")
-                    _c3.metric("Days to Earnings",     str(_cand["days_until"]))
+                    _info_parts = [
+                        f"Beat rate **{_cand['beat_rate']:.0f}%**",
+                        f"Composite **{_cand['score']:.0f}/100**",
+                        f"**{_cand['days_until']}d** to earnings",
+                    ]
                     if _cand["consensus_growth_pct"] is not None:
-                        _c4.metric("Consensus Growth", f"{_cand['consensus_growth_pct']:+.0f}%")
+                        _info_parts.append(f"Consensus growth **{_cand['consensus_growth_pct']:+.0f}%**")
+                    st.caption("  ·  ".join(_info_parts))
                     if _cand["what_to_watch_cnbc"]:
-                        st.markdown(f"**What to watch (CNBC):** {_cand['what_to_watch_cnbc']}")
+                        st.caption(f"What to watch (CNBC): {_cand['what_to_watch_cnbc']}")
                     if st.button("▶ Analyse", key=f"_cw_cand_analyze_{_cand['ticker']}"):
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _cand["ticker"]
@@ -20810,7 +20832,7 @@ elif page == "📅 Economic Calendar":
                     with st.expander(
                         f"⚡ Pre-Event Actions — "
                         f"{_pb['protect_count']} PROTECT  ·  {_pb['watch_count']} Watch  ·  "
-                        f"{_pb['opp_count']} OPPORTUNITY  ·  "
+                        f"{_pb['opp_count']} Add  ·  "
                         f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} HOLD",
                         expanded=(_pb_urgent and _actions_needed > 0),
                     ):
@@ -20821,7 +20843,7 @@ elif page == "📅 Economic Calendar":
                             # Display-only label — standardize WATCH to "Watch"
                             # (Consistency #2); _ac keeps driving the color/icon
                             # lookups above and the comparison below.
-                            _ac_label = "Watch" if _ac == "WATCH" else _ac
+                            _ac_label = {"WATCH": "Watch", "OPPORTUNITY": "Add"}.get(_ac, _ac)
 
                             _bear_str = f"${_pos['bear_impact']:+,.0f}" if _pos["bear_impact"] != 0 else "—"
                             _bull_str = f"${_pos['bull_impact']:+,.0f}" if _pos["bull_impact"] != 0 else "—"
