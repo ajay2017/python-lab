@@ -24096,20 +24096,22 @@ elif page == "🎯 My Edge":
                 spy_prices=_me_prices if _me_prices else None,
             )
 
-            # Controls
-            _me_wf_view = st.segmented_control(
-                "View",
-                options=["📊 Tier Comparison", "🔵 Trade Scatter", "🔺 Coverage Funnel"],
-                default="📊 Tier Comparison",
-                key="_me_wf_view",
-                label_visibility="collapsed",
-            )
-            _me_metric_sel = st.selectbox(
-                "Metric",
-                options=["P&L %" , "Alpha vs SPY", "Hold Days"],
-                key="_me_wf_metric",
-                label_visibility="collapsed",
-            ) if _me_wf_view != "🔺 Coverage Funnel" else "P&L %"
+            # Controls — view selector + metric picker side by side
+            _me_wf_ctrl_l, _me_wf_ctrl_r = st.columns([3, 1])
+            with _me_wf_ctrl_l:
+                _me_wf_view = st.segmented_control(
+                    "View",
+                    options=["📊 Tier Comparison", "🔵 Trade Scatter", "🔺 Coverage Funnel"],
+                    default="📊 Tier Comparison",
+                    key="_me_wf_view",
+                    label_visibility="collapsed",
+                )
+            with _me_wf_ctrl_r:
+                _me_metric_sel = st.selectbox(
+                    "Metric",
+                    options=["P&L %", "Alpha vs SPY", "Hold Days"],
+                    key="_me_wf_metric",
+                ) if _me_wf_view != "🔺 Coverage Funnel" else "P&L %"
 
             st.divider()
 
@@ -24145,26 +24147,40 @@ elif page == "🎯 My Edge":
                         zip([_me_tc1, _me_tc2, _me_tc3, _me_tc4], _me_tier_stats)
                     ):
                         with _tc:
-                            _t_val_str = (
-                                f"{_t_avg:+.1f}%" if _t_avg is not None and _me_metric_sel != "Hold Days"
-                                else (f"{_t_avg:.0f}d" if _t_avg is not None else "—")
-                            )
-                            st.markdown(
-                                f'<div style="background:#111827;border:1px solid #1f2937;'
-                                f'border-left:3px solid {_t_col};border-radius:8px;'
-                                f'padding:12px 14px;margin-bottom:8px;">'
-                                f'<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;">{_t_lbl}</div>'
-                                f'<div style="font-size:22px;font-weight:700;color:#f3f4f6;">{_t_val_str}</div>'
-                                f'<div style="font-size:11px;color:#6b7280;">{_t_n} trades</div>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if _t_n == 0:
+                                # No-data state — greyed card, explicit placeholder
+                                st.markdown(
+                                    f'<div style="background:#0d1117;border:1px solid #1f2937;'
+                                    f'border-left:3px solid #374151;border-radius:8px;'
+                                    f'padding:12px 14px;margin-bottom:8px;opacity:0.5;">'
+                                    f'<div style="font-size:11px;color:#6b7280;margin-bottom:4px;">{_t_lbl}</div>'
+                                    f'<div style="font-size:14px;font-weight:500;color:#6b7280;">No data yet</div>'
+                                    f'<div style="font-size:11px;color:#4b5563;">0 closed trades</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                _t_val_str = (
+                                    f"{_t_avg:+.1f}%" if _t_avg is not None and _me_metric_sel != "Hold Days"
+                                    else (f"{_t_avg:.0f}d" if _t_avg is not None else "—")
+                                )
+                                st.markdown(
+                                    f'<div style="background:#111827;border:1px solid #1f2937;'
+                                    f'border-left:3px solid {_t_col};border-radius:8px;'
+                                    f'padding:12px 14px;margin-bottom:8px;">'
+                                    f'<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;">{_t_lbl}</div>'
+                                    f'<div style="font-size:22px;font-weight:700;color:#f3f4f6;">{_t_val_str}</div>'
+                                    f'<div style="font-size:11px;color:#6b7280;">{_t_n} trade{"s" if _t_n != 1 else ""}</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
 
-                    # Bar chart
-                    _me_bar_labels = [t[0] for t in _me_tier_stats]
-                    _me_bar_vals   = [t[2] if t[2] is not None else 0 for t in _me_tier_stats]
-                    _me_bar_ns     = [t[3] for t in _me_tier_stats]
-                    _me_bar_colors = [t[1] for t in _me_tier_stats]
+                    # Bar chart — only render tiers with actual data
+                    _me_bar_data   = [t for t in _me_tier_stats if t[3] > 0]
+                    _me_bar_labels = [t[0] for t in _me_bar_data]
+                    _me_bar_vals   = [t[2] if t[2] is not None else 0.0 for t in _me_bar_data]
+                    _me_bar_ns     = [t[3] for t in _me_bar_data]
+                    _me_bar_colors = [t[1] for t in _me_bar_data]
 
                     _me_fig_wf = _me_go.Figure(_me_go.Bar(
                         x=_me_bar_labels,
