@@ -23808,23 +23808,34 @@ elif page == "🎯 My Edge":
 
             _me_actual_ann  = (_me_actual_mwr or {}).get("annualized_pct")
             _me_shadow_ann  = (_me_shadow_mwr or {}).get("annualized_pct")
+            # Fall back to period return when tracking period < 30 days (too short to annualize)
+            _me_actual_per  = (_me_actual_mwr or {}).get("period_return_pct")
+            _me_shadow_per  = (_me_shadow_mwr or {}).get("period_return_pct")
+            _me_actual_disp = _me_actual_ann if _me_actual_ann is not None else _me_actual_per
+            _me_shadow_disp = _me_shadow_ann if _me_shadow_ann is not None else _me_shadow_per
+            _me_is_ann      = _me_actual_ann is not None  # True = annualized, False = total period
+            _me_ret_label   = "ann." if _me_is_ann else "total, < 30d"
             _me_alpha_ann   = (
-                round(_me_actual_ann - _me_shadow_ann, 2)
-                if _me_actual_ann is not None and _me_shadow_ann is not None
+                round(_me_actual_disp - _me_shadow_disp, 2)
+                if _me_actual_disp is not None and _me_shadow_disp is not None
                 else None
             )
             _me_dollar_gap  = round(_me_port_val - _me_shadow_val, 2) if _me_port_val > 0 else None
 
             with _me_kpi1:
                 st.metric(
-                    "Your Return (ann.)",
-                    f"{_me_actual_ann:+.1f}%" if _me_actual_ann is not None else "—",
-                    help="Annualised money-weighted return on your actual portfolio",
+                    f"Your Return ({_me_ret_label})",
+                    f"{_me_actual_disp:+.1f}%" if _me_actual_disp is not None else "—",
+                    help=(
+                        "Annualised money-weighted return on your actual portfolio"
+                        if _me_is_ann else
+                        "Total return since baseline — period too short to annualise (< 30 days)"
+                    ),
                 )
             with _me_kpi2:
                 st.metric(
-                    f"{_me_bench_ticker} Return (ann.)",
-                    f"{_me_shadow_ann:+.1f}%" if _me_shadow_ann is not None else "—",
+                    f"{_me_bench_ticker} Return ({_me_ret_label})",
+                    f"{_me_shadow_disp:+.1f}%" if _me_shadow_disp is not None else "—",
                     help=f"Same cash, same timing — invested in {_me_bench_ticker} instead",
                 )
             with _me_kpi3:
@@ -23918,7 +23929,9 @@ elif page == "🎯 My Edge":
                     st.plotly_chart(_me_fig, use_container_width=True)
                     st.caption(
                         f"🟡 Vertical dotted lines = cash deposits. "
-                        f"Shadow = same dollars invested in {_me_bench_ticker} on each deposit date. "
+                        f"Shadow = same dollars invested in {_me_bench_ticker} on each deposit date — "
+                        f"both lines track {_me_bench_ticker} prices so they nearly overlap with one cash flow; "
+                        "they diverge as more deposits are added at different price points. "
                         "Both lines start at 100."
                     )
 
