@@ -15616,7 +15616,12 @@ elif page == "📒 Trade Journal":
             st.session_state.pop("_tj_pending_sell", None)
             st.rerun()
 
-    with st.expander("➕ Log a Trade", expanded=bool(prefill)):
+    trades_df = st.session_state.get("trades_df", db.load_trades())
+    stats = performance_stats(trades_df)
+
+    _tj_tab_log, _tj_tab_perf, _tj_tab_hist = st.tabs(["📝 Log Trade", "📊 Performance", "📋 History"])
+
+    with _tj_tab_log:
         # ── Action + Ticker live OUTSIDE the form so changes trigger a rerun
         # and cost basis can be auto-looked-up before the form renders.
         _tx_c1, _tx_c2 = st.columns([1, 2])
@@ -16408,1273 +16413,1275 @@ elif page == "📒 Trade Journal":
                     st.session_state["_tj_last_submit_ts"]  = _tj_time.time()
                     st.rerun()
 
-    # ── Performance Dashboard ─────────────────────────────────────────────────
-    trades_df = st.session_state.get("trades_df", db.load_trades())
-    stats = performance_stats(trades_df)
 
-    if stats["total_trades"] > 0:
-        st.subheader("📊 Performance Dashboard")
-        pm1, pm2, pm3, pm4, pm5 = st.columns(5)
-        pnl_total = stats["total_realized_pnl"]
-        pm1.metric("Realized P&L",  f"${pnl_total:+,.2f}",
-                   help="Total profit/loss from all closed (SELL) trades.")
-        pm2.metric("Win Rate",      f"{stats['win_rate']:.0f}%",
-                   f"{stats['wins']}W / {stats['losses']}L",
-                   help="% of sell trades that were profitable.")
-        pm3.metric("Avg Winner",    f"${stats['avg_winner']:+,.0f}",
-                   help="Average profit on winning trades.")
-        pm4.metric("Avg Loser",     f"${stats['avg_loser']:+,.0f}",
-                   help="Average loss on losing trades.")
-        pm5.metric("Trades Logged", stats["total_trades"],
-                   f"{stats['sell_trades']} sells · {stats['buy_trades']} buys")
+    with _tj_tab_perf:
+        # ── Performance Dashboard ─────────────────────────────────────────────────
+        if stats["total_trades"] > 0:
+            st.subheader("📊 Performance Dashboard")
+            pm1, pm2, pm3, pm4, pm5 = st.columns(5)
+            pnl_total = stats["total_realized_pnl"]
+            pm1.metric("Realized P&L",  f"${pnl_total:+,.2f}",
+                       help="Total profit/loss from all closed (SELL) trades.")
+            pm2.metric("Win Rate",      f"{stats['win_rate']:.0f}%",
+                       f"{stats['wins']}W / {stats['losses']}L",
+                       help="% of sell trades that were profitable.")
+            pm3.metric("Avg Winner",    f"${stats['avg_winner']:+,.0f}",
+                       help="Average profit on winning trades.")
+            pm4.metric("Avg Loser",     f"${stats['avg_loser']:+,.0f}",
+                       help="Average loss on losing trades.")
+            pm5.metric("Trades Logged", stats["total_trades"],
+                       f"{stats['sell_trades']} sells · {stats['buy_trades']} buys")
 
-        # Expectancy — the pro metric
-        if stats["wins"] + stats["losses"] > 0:
-            expectancy = (
-                stats["win_rate"] / 100 * stats["avg_winner"]
-                + (1 - stats["win_rate"] / 100) * stats["avg_loser"]
-            )
-            exp_clr = "#00C851" if expectancy > 0 else "#ff4444"
-            st.markdown(
-                f"<div style='padding:8px 14px;background:#161616;border-radius:6px;"
-                f"border-left:4px solid {exp_clr};margin:8px 0'>"
-                f"<span style='font-size:0.8em;color:#888'>TRADE EXPECTANCY</span> "
-                f"<span style='color:{exp_clr};font-weight:bold;font-size:1.05em'>"
-                f"${expectancy:+,.2f} per trade</span>"
-                f"<span style='font-size:0.78em;color:#666'> · "
-                f"Positive = your strategy makes money on average across wins and losses</span></div>",
-                unsafe_allow_html=True,
-            )
-
-        # P&L by ticker chart
-        if stats["realized_by_ticker"]:
-            import plotly.graph_objects as _go
-            by_t = stats["realized_by_ticker"]
-            tickers_sorted = sorted(by_t.keys(), key=lambda x: by_t[x], reverse=True)
-            vals = [by_t[t] for t in tickers_sorted]
-            colors = ["#00C851" if v >= 0 else "#ff4444" for v in vals]
-            pnl_bar = _go.Figure(_go.Bar(
-                x=tickers_sorted, y=vals,
-                marker_color=colors,
-                text=[f"${v:+,.0f}" for v in vals],
-                textposition="outside",
-            ))
-            pnl_bar.update_layout(
-                title="Realized P&L by Ticker",
-                template="plotly_dark", height=260,
-                yaxis_title="Realized P&L ($)",
-                margin=dict(l=0, r=0, t=40, b=0),
-            )
-            st.plotly_chart(pnl_bar, use_container_width=True)
-
-        # Best / worst trades
-        if stats["best_trade"] or stats["worst_trade"]:
-            bw1, bw2 = st.columns(2)
-            if stats["best_trade"]:
-                bt = stats["best_trade"]
-                bw1.success(
-                    f"🏆 **Best trade**: {bt['ticker']} — "
-                    f"sold {bt['shares']:.0f} shares @ ${bt['price']:.2f} · "
-                    f"**+${bt['realized_pnl']:,.2f}**"
+            # Expectancy — the pro metric
+            if stats["wins"] + stats["losses"] > 0:
+                expectancy = (
+                    stats["win_rate"] / 100 * stats["avg_winner"]
+                    + (1 - stats["win_rate"] / 100) * stats["avg_loser"]
                 )
-            if stats["worst_trade"]:
-                wt = stats["worst_trade"]
-                bw2.error(
-                    f"📉 **Worst trade**: {wt['ticker']} — "
-                    f"sold {wt['shares']:.0f} shares @ ${wt['price']:.2f} · "
-                    f"**${wt['realized_pnl']:,.2f}**"
+                exp_clr = "#00C851" if expectancy > 0 else "#ff4444"
+                st.markdown(
+                    f"<div style='padding:8px 14px;background:#161616;border-radius:6px;"
+                    f"border-left:4px solid {exp_clr};margin:8px 0'>"
+                    f"<span style='font-size:0.8em;color:#888'>TRADE EXPECTANCY</span> "
+                    f"<span style='color:{exp_clr};font-weight:bold;font-size:1.05em'>"
+                    f"${expectancy:+,.2f} per trade</span>"
+                    f"<span style='font-size:0.78em;color:#666'> · "
+                    f"Positive = your strategy makes money on average across wins and losses</span></div>",
+                    unsafe_allow_html=True,
                 )
 
-    # ── Behavioral Analytics ──────────────────────────────────────────────────
-    if stats["total_trades"] >= 3:
-        try:
-            _ta = build_full_analytics(trades_df)
-        except Exception as _tae:
-            _ta = {}
-            st.warning(f"Analytics unavailable: {_tae}")
-
-        if _ta and not _ta["ext_df"].empty:
-            st.divider()
-            st.subheader("🧠 Behavioral Analytics")
-            st.caption(
-                "Deeper analysis of your trading patterns. "
-                "Institutional PMs review these metrics monthly to identify behavioral drift — "
-                "the subtle habits that silently erode performance."
-            )
-
-            # Extended KPI row
-            _ta_k = st.columns(5)
-            _pf = _ta["profit_factor"]
-            _pf_delta = "≥2.0 target" if _pf and _pf >= 2.0 else ("< 1.0 ⚠️" if _pf and _pf < 1.0 else None)
-            _pf_dclr  = "normal" if (_pf and _pf >= 2.0) else ("inverse" if (_pf and _pf < 1.0) else "off")
-            _ta_k[0].metric(
-                "Profit Factor",
-                f"{_pf:.2f}" if _pf else "—",
-                delta=_pf_delta, delta_color=_pf_dclr,
-                help="Gross wins / gross losses. Target ≥ 2.0",
-            )
-            _ta_k[1].metric(
-                "Avg Win (%)",
-                f"{_ta['avg_win_pct']:+.1f}%" if _ta["avg_win_pct"] else "—",
-                help="Average % return on profitable closed trades",
-            )
-            _ta_k[2].metric(
-                "Avg Loss (%)",
-                f"{_ta['avg_loss_pct']:.1f}%" if _ta["avg_loss_pct"] else "—",
-                help="Average % loss on unprofitable closed trades",
-            )
-            _hs = _ta["hold_stats"]
-            _ta_k[3].metric(
-                "Avg Hold (days)",
-                f"{_hs['avg_hold_days']:.0f}d" if _hs.get("avg_hold_days") else "—",
-                help="Estimated average hold time (days from matched BUY to SELL)",
-            )
-            _wl_ratio = (
-                round(abs(_ta["avg_win_pct"] / _ta["avg_loss_pct"]), 2)
-                if _ta["avg_win_pct"] and _ta["avg_loss_pct"] and _ta["avg_loss_pct"] != 0
-                else None
-            )
-            _wl_dclr = "normal" if (_wl_ratio and _wl_ratio >= 2.0) else ("inverse" if (_wl_ratio and _wl_ratio < 1.0) else "off")
-            _ta_k[4].metric(
-                "Win/Loss Ratio",
-                f"{_wl_ratio:.2f}:1" if _wl_ratio else "—",
-                delta="≥2:1 target" if _wl_ratio and _wl_ratio >= 2.0 else None,
-                delta_color=_wl_dclr,
-                help="Avg win % / avg loss % — target ≥ 2.0",
-            )
-
-            # ── Monthly P&L trend ─────────────────────────────────────────────
-            if not _ta["monthly_df"].empty and len(_ta["monthly_df"]) >= 2:
-                import plotly.graph_objects as _go2
-                _mon = _ta["monthly_df"]
-                _mon_colors = ["#00C851" if v >= 0 else "#ff4444" for v in _mon["pnl"]]
-                _mon_fig = _go2.Figure()
-                _mon_fig.add_trace(_go2.Bar(
-                    x=_mon["month_str"],
-                    y=_mon["pnl"],
-                    marker_color=_mon_colors,
-                    name="Monthly P&L",
-                    text=[f"${v:+,.0f}" for v in _mon["pnl"]],
+            # P&L by ticker chart
+            if stats["realized_by_ticker"]:
+                import plotly.graph_objects as _go
+                by_t = stats["realized_by_ticker"]
+                tickers_sorted = sorted(by_t.keys(), key=lambda x: by_t[x], reverse=True)
+                vals = [by_t[t] for t in tickers_sorted]
+                colors = ["#00C851" if v >= 0 else "#ff4444" for v in vals]
+                pnl_bar = _go.Figure(_go.Bar(
+                    x=tickers_sorted, y=vals,
+                    marker_color=colors,
+                    text=[f"${v:+,.0f}" for v in vals],
                     textposition="outside",
-                    customdata=list(zip(_mon["trade_count"], _mon["win_rate"])),
-                    hovertemplate=(
-                        "<b>%{x}</b><br>"
-                        "P&L: $%{y:+,.0f}<br>"
-                        "Trades: %{customdata[0]}<br>"
-                        "Win rate: %{customdata[1]:.0f}%"
-                        "<extra></extra>"
-                    ),
                 ))
-                _mon_fig.update_layout(
-                    title="Monthly Realized P&L Trend",
+                pnl_bar.update_layout(
+                    title="Realized P&L by Ticker",
                     template="plotly_dark", height=260,
                     yaxis_title="Realized P&L ($)",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
-                st.plotly_chart(_mon_fig, use_container_width=True)
+                st.plotly_chart(pnl_bar, use_container_width=True)
 
-            # ── Trigger performance breakdown ─────────────────────────────────
-            if not _ta["trigger_df"].empty:
-                st.markdown("#### Performance by Trade Trigger")
-                st.caption(
-                    "Which reason for entering a trade generates the best outcome? "
-                    "This is the single most actionable signal in the journal — "
-                    "do more of what works, less of what doesn't."
-                )
+            # Best / worst trades
+            if stats["best_trade"] or stats["worst_trade"]:
+                bw1, bw2 = st.columns(2)
+                if stats["best_trade"]:
+                    bt = stats["best_trade"]
+                    bw1.success(
+                        f"🏆 **Best trade**: {bt['ticker']} — "
+                        f"sold {bt['shares']:.0f} shares @ ${bt['price']:.2f} · "
+                        f"**+${bt['realized_pnl']:,.2f}**"
+                    )
+                if stats["worst_trade"]:
+                    wt = stats["worst_trade"]
+                    bw2.error(
+                        f"📉 **Worst trade**: {wt['ticker']} — "
+                        f"sold {wt['shares']:.0f} shares @ ${wt['price']:.2f} · "
+                        f"**${wt['realized_pnl']:,.2f}**"
+                    )
 
-                _trig_df = _ta["trigger_df"].copy()
+        # ── Behavioral Analytics ──────────────────────────────────────────────────
+        if stats["total_trades"] >= 3:
+            try:
+                _ta = build_full_analytics(trades_df)
+            except Exception as _tae:
+                _ta = {}
+                st.warning(f"Analytics unavailable: {_tae}")
 
-                def _trig_style(row):
-                    exp = row.get("Expectancy ($)", 0)
-                    if exp > 0:
-                        return ["color:#00C851" if i == 0 else "" for i in range(len(row))]
-                    elif exp < 0:
-                        return ["color:#ff4444" if i == 0 else "" for i in range(len(row))]
-                    return [""] * len(row)
-
-                _trig_display = _trig_df.copy()
-                for _tc in ["Avg Win ($)", "Avg Loss ($)", "Expectancy ($)"]:
-                    if _tc in _trig_display.columns:
-                        _trig_display[_tc] = _trig_display[_tc].apply(
-                            lambda v: f"${v:+,.0f}" if pd.notna(v) else "—"
-                        )
-                for _tc in ["Win Rate (%)"]:
-                    if _tc in _trig_display.columns:
-                        _trig_display[_tc] = _trig_display[_tc].apply(
-                            lambda v: f"{v:.0f}%" if pd.notna(v) else "—"
-                        )
-                for _tc in ["Avg Win (%)", "Avg Loss (%)"]:
-                    if _tc in _trig_display.columns:
-                        _trig_display[_tc] = _trig_display[_tc].apply(
-                            lambda v: f"{v:+.1f}%" if pd.notna(v) else "—"
-                        )
-                for _tc in ["Profit Factor"]:
-                    if _tc in _trig_display.columns:
-                        _trig_display[_tc] = _trig_display[_tc].apply(
-                            lambda v: f"{v:.2f}" if pd.notna(v) else "—"
-                        )
-                st.dataframe(_trig_display, width='stretch', hide_index=True)
-
-            # ── Hold time breakdown ───────────────────────────────────────────
-            _hs = _ta["hold_stats"]
-            if _hs.get("avg_hold_days") and _hs.get("winners_avg_days") and _hs.get("losers_avg_days"):
-                st.markdown("#### Hold Time Analysis")
-                _ht1, _ht2, _ht3 = st.columns(3)
-                _ht1.metric("Winners: avg hold", f"{_hs['winners_avg_days']:.0f} days")
-                _ht2.metric("Losers: avg hold",  f"{_hs['losers_avg_days']:.0f} days",
-                            delta=(
-                                "Holding losers too long ⚠️"
-                                if _hs["losers_avg_days"] > _hs["winners_avg_days"] * 1.3
-                                else "Cutting losers faster ✓"
-                            ),
-                            delta_color=(
-                                "inverse"
-                                if _hs["losers_avg_days"] > _hs["winners_avg_days"] * 1.3
-                                else "normal"
-                            ))
-                _ht3.metric("Sample size", f"{_hs['sample_size']} matched pairs",
-                            help="Trades where a BUY was found before the SELL for the same ticker")
-
-            # ── Behavioral insights cards ─────────────────────────────────────
-            if _ta["insights"]:
+            if _ta and not _ta["ext_df"].empty:
                 st.divider()
-                st.markdown("#### 🎯 Behavioral Coaching")
+                st.subheader("🧠 Behavioral Analytics")
                 st.caption(
-                    "Pattern-based feedback on your trading behavior — "
-                    "not individual trade quality, but systematic habits that affect long-run performance."
+                    "Deeper analysis of your trading patterns. "
+                    "Institutional PMs review these metrics monthly to identify behavioral drift — "
+                    "the subtle habits that silently erode performance."
                 )
 
-                for _ins in _ta["insights"]:
-                    _ins_pri  = _ins["priority"]
-                    _ins_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "OK": "✅"}.get(_ins_pri, "📌")
-                    _ins_bclr = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33", "OK": "#00C851"}.get(_ins_pri, "#888")
-                    _ins_exp  = _ins_pri in ("HIGH", "MEDIUM")
+                # Extended KPI row
+                _ta_k = st.columns(5)
+                _pf = _ta["profit_factor"]
+                _pf_delta = "≥2.0 target" if _pf and _pf >= 2.0 else ("< 1.0 ⚠️" if _pf and _pf < 1.0 else None)
+                _pf_dclr  = "normal" if (_pf and _pf >= 2.0) else ("inverse" if (_pf and _pf < 1.0) else "off")
+                _ta_k[0].metric(
+                    "Profit Factor",
+                    f"{_pf:.2f}" if _pf else "—",
+                    delta=_pf_delta, delta_color=_pf_dclr,
+                    help="Gross wins / gross losses. Target ≥ 2.0",
+                )
+                _ta_k[1].metric(
+                    "Avg Win (%)",
+                    f"{_ta['avg_win_pct']:+.1f}%" if _ta["avg_win_pct"] else "—",
+                    help="Average % return on profitable closed trades",
+                )
+                _ta_k[2].metric(
+                    "Avg Loss (%)",
+                    f"{_ta['avg_loss_pct']:.1f}%" if _ta["avg_loss_pct"] else "—",
+                    help="Average % loss on unprofitable closed trades",
+                )
+                _hs = _ta["hold_stats"]
+                _ta_k[3].metric(
+                    "Avg Hold (days)",
+                    f"{_hs['avg_hold_days']:.0f}d" if _hs.get("avg_hold_days") else "—",
+                    help="Estimated average hold time (days from matched BUY to SELL)",
+                )
+                _wl_ratio = (
+                    round(abs(_ta["avg_win_pct"] / _ta["avg_loss_pct"]), 2)
+                    if _ta["avg_win_pct"] and _ta["avg_loss_pct"] and _ta["avg_loss_pct"] != 0
+                    else None
+                )
+                _wl_dclr = "normal" if (_wl_ratio and _wl_ratio >= 2.0) else ("inverse" if (_wl_ratio and _wl_ratio < 1.0) else "off")
+                _ta_k[4].metric(
+                    "Win/Loss Ratio",
+                    f"{_wl_ratio:.2f}:1" if _wl_ratio else "—",
+                    delta="≥2:1 target" if _wl_ratio and _wl_ratio >= 2.0 else None,
+                    delta_color=_wl_dclr,
+                    help="Avg win % / avg loss % — target ≥ 2.0",
+                )
 
-                    with st.expander(
-                        f"{_ins_icon} **{_ins_pri}** · {_ins['title']}",
-                        expanded=_ins_exp,
-                    ):
-                        # Observation banner
-                        st.markdown(
-                            f"<div style='padding:10px 14px;background:#1a1a1a;"
-                            f"border-radius:6px;border-left:4px solid {_ins_bclr};margin:8px 0'>"
-                            f"<span style='font-size:0.72em;color:#888;font-weight:700;"
-                            f"letter-spacing:0.09em;text-transform:uppercase'>What the Data Shows</span><br>"
-                            f"<span style='color:#eee'>{_ins['observation']}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
+                # ── Monthly P&L trend ─────────────────────────────────────────────
+                if not _ta["monthly_df"].empty and len(_ta["monthly_df"]) >= 2:
+                    import plotly.graph_objects as _go2
+                    _mon = _ta["monthly_df"]
+                    _mon_colors = ["#00C851" if v >= 0 else "#ff4444" for v in _mon["pnl"]]
+                    _mon_fig = _go2.Figure()
+                    _mon_fig.add_trace(_go2.Bar(
+                        x=_mon["month_str"],
+                        y=_mon["pnl"],
+                        marker_color=_mon_colors,
+                        name="Monthly P&L",
+                        text=[f"${v:+,.0f}" for v in _mon["pnl"]],
+                        textposition="outside",
+                        customdata=list(zip(_mon["trade_count"], _mon["win_rate"])),
+                        hovertemplate=(
+                            "<b>%{x}</b><br>"
+                            "P&L: $%{y:+,.0f}<br>"
+                            "Trades: %{customdata[0]}<br>"
+                            "Win rate: %{customdata[1]:.0f}%"
+                            "<extra></extra>"
+                        ),
+                    ))
+                    _mon_fig.update_layout(
+                        title="Monthly Realized P&L Trend",
+                        template="plotly_dark", height=260,
+                        yaxis_title="Realized P&L ($)",
+                        margin=dict(l=0, r=0, t=40, b=0),
+                    )
+                    st.plotly_chart(_mon_fig, use_container_width=True)
 
-                        _ins_cl, _ins_cr = st.columns([1, 1])
-                        with _ins_cl:
-                            st.markdown("**Why It Matters**")
-                            st.markdown(
-                                f"<div style='color:#bbb;font-size:0.88em'>"
-                                f"{_ins['implication']}</div>",
-                                unsafe_allow_html=True,
+                # ── Trigger performance breakdown ─────────────────────────────────
+                if not _ta["trigger_df"].empty:
+                    st.markdown("#### Performance by Trade Trigger")
+                    st.caption(
+                        "Which reason for entering a trade generates the best outcome? "
+                        "This is the single most actionable signal in the journal — "
+                        "do more of what works, less of what doesn't."
+                    )
+
+                    _trig_df = _ta["trigger_df"].copy()
+
+                    def _trig_style(row):
+                        exp = row.get("Expectancy ($)", 0)
+                        if exp > 0:
+                            return ["color:#00C851" if i == 0 else "" for i in range(len(row))]
+                        elif exp < 0:
+                            return ["color:#ff4444" if i == 0 else "" for i in range(len(row))]
+                        return [""] * len(row)
+
+                    _trig_display = _trig_df.copy()
+                    for _tc in ["Avg Win ($)", "Avg Loss ($)", "Expectancy ($)"]:
+                        if _tc in _trig_display.columns:
+                            _trig_display[_tc] = _trig_display[_tc].apply(
+                                lambda v: f"${v:+,.0f}" if pd.notna(v) else "—"
                             )
-                        with _ins_cr:
+                    for _tc in ["Win Rate (%)"]:
+                        if _tc in _trig_display.columns:
+                            _trig_display[_tc] = _trig_display[_tc].apply(
+                                lambda v: f"{v:.0f}%" if pd.notna(v) else "—"
+                            )
+                    for _tc in ["Avg Win (%)", "Avg Loss (%)"]:
+                        if _tc in _trig_display.columns:
+                            _trig_display[_tc] = _trig_display[_tc].apply(
+                                lambda v: f"{v:+.1f}%" if pd.notna(v) else "—"
+                            )
+                    for _tc in ["Profit Factor"]:
+                        if _tc in _trig_display.columns:
+                            _trig_display[_tc] = _trig_display[_tc].apply(
+                                lambda v: f"{v:.2f}" if pd.notna(v) else "—"
+                            )
+                    st.dataframe(_trig_display, width='stretch', hide_index=True)
+
+                # ── Hold time breakdown ───────────────────────────────────────────
+                _hs = _ta["hold_stats"]
+                if _hs.get("avg_hold_days") and _hs.get("winners_avg_days") and _hs.get("losers_avg_days"):
+                    st.markdown("#### Hold Time Analysis")
+                    _ht1, _ht2, _ht3 = st.columns(3)
+                    _ht1.metric("Winners: avg hold", f"{_hs['winners_avg_days']:.0f} days")
+                    _ht2.metric("Losers: avg hold",  f"{_hs['losers_avg_days']:.0f} days",
+                                delta=(
+                                    "Holding losers too long ⚠️"
+                                    if _hs["losers_avg_days"] > _hs["winners_avg_days"] * 1.3
+                                    else "Cutting losers faster ✓"
+                                ),
+                                delta_color=(
+                                    "inverse"
+                                    if _hs["losers_avg_days"] > _hs["winners_avg_days"] * 1.3
+                                    else "normal"
+                                ))
+                    _ht3.metric("Sample size", f"{_hs['sample_size']} matched pairs",
+                                help="Trades where a BUY was found before the SELL for the same ticker")
+
+                # ── Behavioral insights cards ─────────────────────────────────────
+                if _ta["insights"]:
+                    st.divider()
+                    st.markdown("#### 🎯 Behavioral Coaching")
+                    st.caption(
+                        "Pattern-based feedback on your trading behavior — "
+                        "not individual trade quality, but systematic habits that affect long-run performance."
+                    )
+
+                    for _ins in _ta["insights"]:
+                        _ins_pri  = _ins["priority"]
+                        _ins_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "OK": "✅"}.get(_ins_pri, "📌")
+                        _ins_bclr = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33", "OK": "#00C851"}.get(_ins_pri, "#888")
+                        _ins_exp  = _ins_pri in ("HIGH", "MEDIUM")
+
+                        with st.expander(
+                            f"{_ins_icon} **{_ins_pri}** · {_ins['title']}",
+                            expanded=_ins_exp,
+                        ):
+                            # Observation banner
                             st.markdown(
-                                f"<div style='padding:10px 14px;background:#0d2137;"
-                                f"border-radius:6px;border-left:4px solid #4a9eff'>"
-                                f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
-                                f"letter-spacing:0.09em;text-transform:uppercase'>Corrective Action</span><br>"
-                                f"<span style='color:#eee;font-size:0.88em'>{_ins['action']}</span>"
+                                f"<div style='padding:10px 14px;background:#1a1a1a;"
+                                f"border-radius:6px;border-left:4px solid {_ins_bclr};margin:8px 0'>"
+                                f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                f"letter-spacing:0.09em;text-transform:uppercase'>What the Data Shows</span><br>"
+                                f"<span style='color:#eee'>{_ins['observation']}</span>"
                                 f"</div>",
                                 unsafe_allow_html=True,
                             )
 
-                        if _ins.get("institutional_lens"):
-                            st.markdown("")
-                            st.info(f"**Institutional Lens** · {_ins['institutional_lens']}")
+                            _ins_cl, _ins_cr = st.columns([1, 1])
+                            with _ins_cl:
+                                st.markdown("**Why It Matters**")
+                                st.markdown(
+                                    f"<div style='color:#bbb;font-size:0.88em'>"
+                                    f"{_ins['implication']}</div>",
+                                    unsafe_allow_html=True,
+                                )
+                            with _ins_cr:
+                                st.markdown(
+                                    f"<div style='padding:10px 14px;background:#0d2137;"
+                                    f"border-radius:6px;border-left:4px solid #4a9eff'>"
+                                    f"<span style='font-size:0.72em;color:#4a9eff;font-weight:700;"
+                                    f"letter-spacing:0.09em;text-transform:uppercase'>Corrective Action</span><br>"
+                                    f"<span style='color:#eee;font-size:0.88em'>{_ins['action']}</span>"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
 
-    # ── Opportunity Cost — what you passed on and what it cost ───────────────
-    with st.expander("💸 Opportunity Cost — Recommendations You Passed On", expanded=False):
-        st.caption(
-            "Compares each new_pick recommendation you didn't act on against what it returned. "
-            "Full chart is on the Recommendations History page; this is the 90-day summary."
-        )
-        try:
-            from stock_analyzer.recommendations_history import (
-                match_recs_to_trades as _oc_match,
-                compute_outcomes as _oc_outcomes,
-                distinct_missed as _oc_missed,
-                missed_split as _oc_split,
+                            if _ins.get("institutional_lens"):
+                                st.markdown("")
+                                st.info(f"**Institutional Lens** · {_ins['institutional_lens']}")
+
+        # ── Opportunity Cost — what you passed on and what it cost ───────────────
+        with st.expander("💸 Opportunity Cost — Recommendations You Passed On", expanded=False):
+            st.caption(
+                "Compares each new_pick recommendation you didn't act on against what it returned. "
+                "Full chart is on the Recommendations History page; this is the 90-day summary."
             )
-            from datetime import date as _oc_date, timedelta as _oc_td
-            _oc_recs_df = db.load_recommendations(
-                start_date=(_oc_date.today() - _oc_td(days=90)).isoformat(),
-            )
-            if _oc_recs_df.empty:
-                st.info("No recommendations in the last 90 days to evaluate.")
-            else:
-                _oc_prices = {
-                    str(t): float(p["price"])
-                    for t, p in (st.session_state.get("_live_prices") or {}).items()
-                    if isinstance(p, dict) and p.get("price") is not None
-                }
-                _oc_matched  = _oc_match(_oc_recs_df, trades_df)
-                _oc_enriched = _oc_outcomes(
-                    _oc_matched, _oc_prices or None, _oc_date.today(), min_days=5
+            try:
+                from stock_analyzer.recommendations_history import (
+                    match_recs_to_trades as _oc_match,
+                    compute_outcomes as _oc_outcomes,
+                    distinct_missed as _oc_missed,
+                    missed_split as _oc_split,
                 )
-                _oc_rows = _oc_missed(_oc_enriched, rec_types=("new_pick",))
-                _oc_spl  = _oc_split(_oc_rows)
-
-                n_missed  = _oc_spl.get("n_distinct", 0)
-                n_winners = _oc_spl.get("n_winners", 0)
-                n_dodged  = _oc_spl.get("n_dodged", 0)
-                avg_pct   = _oc_spl.get("avg_outcome_pct")
-                avg_alpha = _oc_spl.get("avg_alpha_pct")
-
-                if n_missed == 0:
-                    st.success("✅ No missed opportunities with outcomes in the last 90 days.")
+                from datetime import date as _oc_date, timedelta as _oc_td
+                _oc_recs_df = db.load_recommendations(
+                    start_date=(_oc_date.today() - _oc_td(days=90)).isoformat(),
+                )
+                if _oc_recs_df.empty:
+                    st.info("No recommendations in the last 90 days to evaluate.")
                 else:
-                    _oc_c1, _oc_c2, _oc_c3, _oc_c4 = st.columns(4)
-                    _oc_c1.metric("Recs Passed", n_missed, help="Distinct new_pick recs you didn't act on (90d)")
-                    _oc_c2.metric("Would've Won", n_winners, help="Passed recs that went up")
-                    _oc_c3.metric("Dodged Losers", n_dodged, help="Passed recs that fell — good pass")
-                    _oc_c4.metric(
-                        "Avg Missed Return",
-                        f"{avg_pct:+.1f}%" if avg_pct is not None else "—",
-                        f"α {avg_alpha:+.1f}pp vs SPY" if avg_alpha is not None else None,
-                        delta_color="inverse",
+                    _oc_prices = {
+                        str(t): float(p["price"])
+                        for t, p in (st.session_state.get("_live_prices") or {}).items()
+                        if isinstance(p, dict) and p.get("price") is not None
+                    }
+                    _oc_matched  = _oc_match(_oc_recs_df, trades_df)
+                    _oc_enriched = _oc_outcomes(
+                        _oc_matched, _oc_prices or None, _oc_date.today(), min_days=5
                     )
-                    if _oc_rows:
-                        st.markdown("**Top missed opportunities (last 90d, sorted by alpha):**")
-                        for _ocr in _oc_rows[:5]:
-                            _ocr_pct   = _ocr.get("outcome_pct")
-                            _ocr_alpha = _ocr.get("alpha_pct")
-                            _ocr_label = _ocr.get("outcome_label", "unknown")
-                            _ocr_color = "#22c55e" if _ocr_label == "win" else ("#ef4444" if _ocr_label == "loss" else "#9ca3af")
-                            st.markdown(
-                                f"<span style='color:#fbbf24;font-weight:600'>{_ocr['ticker']}</span> "
-                                f"<span style='color:{_ocr_color}'>"
-                                f"{f'{_ocr_pct:+.1f}%' if _ocr_pct is not None else '—'}</span>"
-                                + (f" <span style='color:#9ca3af;font-size:0.85em'>· α {_ocr_alpha:+.1f}pp vs SPY</span>" if _ocr_alpha is not None else "")
-                                + f" <span style='color:#9ca3af;font-size:0.82em'>· first rec {_ocr.get('first_rec_date', '')} · {_ocr.get('n_surfaced', 1)} surfacing(s)</span>",
-                                unsafe_allow_html=True,
-                            )
-                    st.caption("Full chart with all missed opportunities: 📊 Recommendations History page.")
-        except Exception as _oc_err:
-            st.warning(f"Opportunity cost data unavailable: {_oc_err}")
+                    _oc_rows = _oc_missed(_oc_enriched, rec_types=("new_pick",))
+                    _oc_spl  = _oc_split(_oc_rows)
 
-    # ── Decision Journal — My Patterns ───────────────────────────────────────
-    try:
-        _dj = compute_patterns(trades_df)
-    except Exception:
-        _dj = {"total_with_context": 0}
+                    n_missed  = _oc_spl.get("n_distinct", 0)
+                    n_winners = _oc_spl.get("n_winners", 0)
+                    n_dodged  = _oc_spl.get("n_dodged", 0)
+                    avg_pct   = _oc_spl.get("avg_outcome_pct")
+                    avg_alpha = _oc_spl.get("avg_alpha_pct")
 
-    if _dj.get("total_with_context", 0) > 0:
-        st.divider()
-        st.subheader("🧭 Decision Journal — My Patterns")
-        st.caption(
-            "Tracks how often you follow signals vs override them, and what the outcomes are. "
-            "This is your personal accountability layer — patterns you can't see cost money silently."
-        )
+                    if n_missed == 0:
+                        st.success("✅ No missed opportunities with outcomes in the last 90 days.")
+                    else:
+                        _oc_c1, _oc_c2, _oc_c3, _oc_c4 = st.columns(4)
+                        _oc_c1.metric("Recs Passed", n_missed, help="Distinct new_pick recs you didn't act on (90d)")
+                        _oc_c2.metric("Would've Won", n_winners, help="Passed recs that went up")
+                        _oc_c3.metric("Dodged Losers", n_dodged, help="Passed recs that fell — good pass")
+                        _oc_c4.metric(
+                            "Avg Missed Return",
+                            f"{avg_pct:+.1f}%" if avg_pct is not None else "—",
+                            f"α {avg_alpha:+.1f}pp vs SPY" if avg_alpha is not None else None,
+                            delta_color="inverse",
+                        )
+                        if _oc_rows:
+                            st.markdown("**Top missed opportunities (last 90d, sorted by alpha):**")
+                            for _ocr in _oc_rows[:5]:
+                                _ocr_pct   = _ocr.get("outcome_pct")
+                                _ocr_alpha = _ocr.get("alpha_pct")
+                                _ocr_label = _ocr.get("outcome_label", "unknown")
+                                _ocr_color = "#22c55e" if _ocr_label == "win" else ("#ef4444" if _ocr_label == "loss" else "#9ca3af")
+                                st.markdown(
+                                    f"<span style='color:#fbbf24;font-weight:600'>{_ocr['ticker']}</span> "
+                                    f"<span style='color:{_ocr_color}'>"
+                                    f"{f'{_ocr_pct:+.1f}%' if _ocr_pct is not None else '—'}</span>"
+                                    + (f" <span style='color:#9ca3af;font-size:0.85em'>· α {_ocr_alpha:+.1f}pp vs SPY</span>" if _ocr_alpha is not None else "")
+                                    + f" <span style='color:#9ca3af;font-size:0.82em'>· first rec {_ocr.get('first_rec_date', '')} · {_ocr.get('n_surfaced', 1)} surfacing(s)</span>",
+                                    unsafe_allow_html=True,
+                                )
+                        st.caption("Full chart with all missed opportunities: 📊 Recommendations History page.")
+            except Exception as _oc_err:
+                st.warning(f"Opportunity cost data unavailable: {_oc_err}")
 
-        # Behavioral insight banner
-        if _dj.get("behavioral_insight"):
-            _dj_clr = "#7f1d1d" if _dj["ignored_losses"] > _dj["ignored_wins"] else "#14532d"
-            _dj_bdr = "#ef4444" if _dj["ignored_losses"] > _dj["ignored_wins"] else "#22c55e"
-            st.markdown(
-                f"<div style='background:{_dj_clr};border-left:4px solid {_dj_bdr};"
-                f"border-radius:8px;padding:12px 16px;margin-bottom:12px'>"
-                f"<span style='font-size:0.78em;color:#9ca3af;font-weight:700;"
-                f"letter-spacing:0.08em;text-transform:uppercase'>Pattern Insight</span><br>"
-                f"<span style='color:#f9fafb'>{_dj['behavioral_insight']}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
+        # ── Decision Journal — My Patterns ───────────────────────────────────────
+        try:
+            _dj = compute_patterns(trades_df)
+        except Exception:
+            _dj = {"total_with_context": 0}
+
+        if _dj.get("total_with_context", 0) > 0:
+            st.divider()
+            st.subheader("🧭 Decision Journal — My Patterns")
+            st.caption(
+                "Tracks how often you follow signals vs override them, and what the outcomes are. "
+                "This is your personal accountability layer — patterns you can't see cost money silently."
             )
 
-        # KPI strip
-        _dj_k1, _dj_k2, _dj_k3, _dj_k4, _dj_k5 = st.columns(5)
-        _dj_k1.metric("Trades with context", _dj["total_with_context"])
-        _dj_k2.metric(
-            "Signal accuracy",
-            f"{_dj['signal_accuracy']:.0f}%" if _dj["signal_accuracy"] is not None else "—",
-            f"{_dj['followed_wins']}W / {_dj['followed_losses']}L",
-            help="Win rate when you followed the signal",
-        )
-        _dj_k3.metric(
-            "Override accuracy",
-            f"{_dj['override_accuracy']:.0f}%" if _dj["override_accuracy"] is not None else "—",
-            f"{_dj['ignored_wins']}W / {_dj['ignored_losses']}L",
-            help="Win rate when you ignored the signal",
-        )
-        _dj_k4.metric(
-            "P&L from following",
-            f"${_dj['followed_pnl']:+,.0f}",
-            delta_color="normal" if _dj["followed_pnl"] >= 0 else "inverse",
-            help="Total realized P&L on trades where you followed the signal",
-        )
-        _dj_k5.metric(
-            "P&L from overrides",
-            f"${_dj['ignored_pnl']:+,.0f}",
-            delta_color="normal" if _dj["ignored_pnl"] >= 0 else "inverse",
-            help="Total realized P&L on trades where you overrode the signal",
-        )
-
-        # Costly deviations
-        if _dj["costly_deviations"]:
-            st.markdown(f"##### 🚨 Costly Deviations ({len(_dj['costly_deviations'])})")
-            st.caption("Trades where you ignored a signal and lost money. The most important pattern to study.")
-            for _cd in _dj["costly_deviations"]:
+            # Behavioral insight banner
+            if _dj.get("behavioral_insight"):
+                _dj_clr = "#7f1d1d" if _dj["ignored_losses"] > _dj["ignored_wins"] else "#14532d"
+                _dj_bdr = "#ef4444" if _dj["ignored_losses"] > _dj["ignored_wins"] else "#22c55e"
                 st.markdown(
-                    f"<div style='background:#1c1917;border-left:3px solid #ef4444;"
-                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
-                    f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                    f"📉 <span style='color:#fbbf24'>{_cd['ticker']}</span> · "
-                    f"<span style='color:#ef4444'>${_cd['realized_pnl']:+,.0f}</span> · "
-                    f"<span style='color:#9ca3af;font-weight:400'>{_cd['traded_at']}</span></div>"
-                    + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
-                       f"Signal: {_cd['signal_seen']}</div>" if _cd["signal_seen"] else "")
-                    + (f"<div style='color:#d1d5db;font-size:0.82em;margin-top:2px'>"
-                       f"Override reason: {_cd['deviation_reason']}</div>" if _cd["deviation_reason"] else "")
-                    + (f"<div style='background:#292524;border-radius:4px;padding:6px 10px;margin-top:6px;"
-                       f"color:#fbbf24;font-size:0.82em'>💡 {_cd['lesson']}</div>" if _cd["lesson"] else "")
-                    + f"</div>",
+                    f"<div style='background:{_dj_clr};border-left:4px solid {_dj_bdr};"
+                    f"border-radius:8px;padding:12px 16px;margin-bottom:12px'>"
+                    f"<span style='font-size:0.78em;color:#9ca3af;font-weight:700;"
+                    f"letter-spacing:0.08em;text-transform:uppercase'>Pattern Insight</span><br>"
+                    f"<span style='color:#f9fafb'>{_dj['behavioral_insight']}</span>"
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
 
-        # Good overrides
-        if _dj["good_overrides"]:
-            with st.expander(f"✅ Good Overrides ({len(_dj['good_overrides'])}) — when ignoring the signal paid off"):
-                for _go_item in _dj["good_overrides"]:
+            # KPI strip
+            _dj_k1, _dj_k2, _dj_k3, _dj_k4, _dj_k5 = st.columns(5)
+            _dj_k1.metric("Trades with context", _dj["total_with_context"])
+            _dj_k2.metric(
+                "Signal accuracy",
+                f"{_dj['signal_accuracy']:.0f}%" if _dj["signal_accuracy"] is not None else "—",
+                f"{_dj['followed_wins']}W / {_dj['followed_losses']}L",
+                help="Win rate when you followed the signal",
+            )
+            _dj_k3.metric(
+                "Override accuracy",
+                f"{_dj['override_accuracy']:.0f}%" if _dj["override_accuracy"] is not None else "—",
+                f"{_dj['ignored_wins']}W / {_dj['ignored_losses']}L",
+                help="Win rate when you ignored the signal",
+            )
+            _dj_k4.metric(
+                "P&L from following",
+                f"${_dj['followed_pnl']:+,.0f}",
+                delta_color="normal" if _dj["followed_pnl"] >= 0 else "inverse",
+                help="Total realized P&L on trades where you followed the signal",
+            )
+            _dj_k5.metric(
+                "P&L from overrides",
+                f"${_dj['ignored_pnl']:+,.0f}",
+                delta_color="normal" if _dj["ignored_pnl"] >= 0 else "inverse",
+                help="Total realized P&L on trades where you overrode the signal",
+            )
+
+            # Costly deviations
+            if _dj["costly_deviations"]:
+                st.markdown(f"##### 🚨 Costly Deviations ({len(_dj['costly_deviations'])})")
+                st.caption("Trades where you ignored a signal and lost money. The most important pattern to study.")
+                for _cd in _dj["costly_deviations"]:
                     st.markdown(
-                        f"<div style='background:#1c1917;border-left:3px solid #22c55e;"
+                        f"<div style='background:#1c1917;border-left:3px solid #ef4444;"
                         f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
                         f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-                        f"✅ <span style='color:#4ade80'>{_go_item['ticker']}</span> · "
-                        f"<span style='color:#22c55e'>${_go_item['realized_pnl']:+,.0f}</span> · "
-                        f"<span style='color:#9ca3af;font-weight:400'>{_go_item['traded_at']}</span></div>"
+                        f"📉 <span style='color:#fbbf24'>{_cd['ticker']}</span> · "
+                        f"<span style='color:#ef4444'>${_cd['realized_pnl']:+,.0f}</span> · "
+                        f"<span style='color:#9ca3af;font-weight:400'>{_cd['traded_at']}</span></div>"
                         + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
-                           f"Signal: {_go_item['signal_seen']}</div>" if _go_item["signal_seen"] else "")
+                           f"Signal: {_cd['signal_seen']}</div>" if _cd["signal_seen"] else "")
                         + (f"<div style='color:#d1d5db;font-size:0.82em;margin-top:2px'>"
-                           f"Override reason: {_go_item['deviation_reason']}</div>" if _go_item["deviation_reason"] else "")
+                           f"Override reason: {_cd['deviation_reason']}</div>" if _cd["deviation_reason"] else "")
+                        + (f"<div style='background:#292524;border-radius:4px;padding:6px 10px;margin-top:6px;"
+                           f"color:#fbbf24;font-size:0.82em'>💡 {_cd['lesson']}</div>" if _cd["lesson"] else "")
                         + f"</div>",
                         unsafe_allow_html=True,
                     )
 
-        # Lessons library
-        if _dj["lessons"]:
-            with st.expander(f"📚 Lessons Library ({len(_dj['lessons'])})"):
-                st.caption("Every lesson you've logged, newest first. Your personal trading rulebook.")
-                for _les in _dj["lessons"]:
-                    _les_clr = "#22c55e" if _les["pnl"] >= 0 else "#ef4444"
-                    st.markdown(
-                        f"<div style='background:#1c1917;border-left:3px solid {_les_clr};"
-                        f"border-radius:6px;padding:8px 12px;margin-bottom:5px'>"
-                        f"<span style='color:#fbbf24;font-weight:600'>{_les['ticker']}</span> "
-                        f"<span style='color:#9ca3af;font-size:0.8em'>· {_les['date']} · "
-                        f"{'followed' if _les['followed'] == 'yes' else 'overrode'} signal</span><br>"
-                        f"<span style='color:#f9fafb'>💡 {_les['text']}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-    # ── Engine Trust by Composite Band ───────────────────────────────────────
-    with st.expander("🔬 Engine Trust by Composite Band", expanded=False):
-        st.caption(
-            "Did you trust the engine more when conviction was higher? And was the engine right? "
-            "Action rate answers the first question; alpha comparison answers the second."
-        )
-        try:
-            from stock_analyzer.recommendations_history import (
-                match_recs_to_trades as _etb_match,
-                compute_outcomes as _etb_outcomes,
-                engine_trust_by_band as _etb_fn,
-            )
-            from datetime import date as _etb_date
-            _etb_recs_df = db.load_recommendations()
-            if _etb_recs_df.empty:
-                st.info("No recommendation history found — run a scan to generate recommendations.")
-            else:
-                _etb_prices = {
-                    str(t): float(p["price"])
-                    for t, p in (st.session_state.get("_live_prices") or {}).items()
-                    if isinstance(p, dict) and p.get("price") is not None
-                }
-                _etb_matched  = _etb_match(_etb_recs_df, trades_df)
-                _etb_enriched = _etb_outcomes(
-                    _etb_matched, _etb_prices or None, _etb_date.today()
-                )
-                _etb_rows = _etb_fn(_etb_enriched)
-                if not _etb_rows:
-                    st.info("Insufficient data to compute band breakdown — need more recommendations with outcomes.")
-                else:
-                    for _etr in _etb_rows:
-                        _etr_acted = _etr["action_rate"]
-                        _etr_color = "#22c55e" if _etr_acted >= 60 else ("#f59e0b" if _etr_acted >= 30 else "#9ca3af")
-                        _etr_aa    = _etr["avg_alpha_acted"]
-                        _etr_ap    = _etr["avg_alpha_passed"]
-
-                        def _pp(v):
-                            return f"{v:+.1f}pp" if v is not None else "—"
-
+            # Good overrides
+            if _dj["good_overrides"]:
+                with st.expander(f"✅ Good Overrides ({len(_dj['good_overrides'])}) — when ignoring the signal paid off"):
+                    for _go_item in _dj["good_overrides"]:
                         st.markdown(
-                            f"<div style='background:#1c1917;border-left:3px solid {_etr_color};"
-                            f"border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
-                            f"<div style='color:#f9fafb;font-weight:600;font-size:0.9em'>"
-                            f"{_etr['band_label']}"
-                            f"<span style='color:#9ca3af;font-weight:400;font-size:0.85em'> · "
-                            f"{_etr['n_recs']} recs</span></div>"
-                            f"<div style='display:flex;gap:24px;margin-top:6px;font-size:0.82em'>"
-                            f"<span><span style='color:#9ca3af'>Acted</span> "
-                            f"<span style='color:{_etr_color};font-weight:600'>{_etr['n_acted']}/{_etr['n_recs']} ({_etr_acted:.0f}%)</span></span>"
-                            f"<span><span style='color:#9ca3af'>α when acted</span> "
-                            f"<span style='color:#d1d5db'>{_pp(_etr_aa)}</span></span>"
-                            f"<span><span style='color:#9ca3af'>α when passed</span> "
-                            f"<span style='color:#d1d5db'>{_pp(_etr_ap)}</span></span>"
-                            f"</div>"
-                            f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>{_etr['edge_comment']}</div>"
+                            f"<div style='background:#1c1917;border-left:3px solid #22c55e;"
+                            f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                            f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+                            f"✅ <span style='color:#4ade80'>{_go_item['ticker']}</span> · "
+                            f"<span style='color:#22c55e'>${_go_item['realized_pnl']:+,.0f}</span> · "
+                            f"<span style='color:#9ca3af;font-weight:400'>{_go_item['traded_at']}</span></div>"
+                            + (f"<div style='color:#9ca3af;font-size:0.8em;margin-top:2px'>"
+                               f"Signal: {_go_item['signal_seen']}</div>" if _go_item["signal_seen"] else "")
+                            + (f"<div style='color:#d1d5db;font-size:0.82em;margin-top:2px'>"
+                               f"Override reason: {_go_item['deviation_reason']}</div>" if _go_item["deviation_reason"] else "")
+                            + f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            # Lessons library
+            if _dj["lessons"]:
+                with st.expander(f"📚 Lessons Library ({len(_dj['lessons'])})"):
+                    st.caption("Every lesson you've logged, newest first. Your personal trading rulebook.")
+                    for _les in _dj["lessons"]:
+                        _les_clr = "#22c55e" if _les["pnl"] >= 0 else "#ef4444"
+                        st.markdown(
+                            f"<div style='background:#1c1917;border-left:3px solid {_les_clr};"
+                            f"border-radius:6px;padding:8px 12px;margin-bottom:5px'>"
+                            f"<span style='color:#fbbf24;font-weight:600'>{_les['ticker']}</span> "
+                            f"<span style='color:#9ca3af;font-size:0.8em'>· {_les['date']} · "
+                            f"{'followed' if _les['followed'] == 'yes' else 'overrode'} signal</span><br>"
+                            f"<span style='color:#f9fafb'>💡 {_les['text']}</span>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
-        except Exception as _etb_err:
-            st.warning(f"Engine trust data unavailable: {_etb_err}")
 
-    # ── Trade History table ───────────────────────────────────────────────────
-    st.subheader("📋 Trade History")
-    st.caption("Check the **Delete?** box on any row then click **🗑️ Delete selected trade(s)** to remove duplicates or mistakes.")
-    if trades_df.empty:
-        st.info("No trades recorded yet. Use the form above to log your first trade.")
-    else:
-        display_df = trades_df.copy()
-        for col in ["shares", "price", "cost_basis", "realized_pnl"]:
-            if col in display_df.columns:
-                display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
-        if "traded_at" in display_df.columns:
-            # format='ISO8601' tells pandas to accept any valid ISO 8601 input
-            # (with or without microseconds, '+00' or '+00:00' offset). Without
-            # this, pandas infers the format from the first row only — and
-            # rows that don't match (e.g. raw-SQL rebaseline BUYs lack the
-            # microsecond component that the Python-SDK inserts have) get
-            # silently coerced to NaT by errors='coerce', rendering as 'None'
-            # in the Date / Time column. utc=True normalises to UTC.
-            display_df["traded_at"] = pd.to_datetime(
-                display_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
-            ).dt.strftime("%Y-%m-%d %H:%M")
-
-        # Add delete checkbox column
-        display_df.insert(0, "Delete?", False)
-
-        show_cols = ["Delete?"] + [c for c in
-                     ["traded_at", "ticker", "action", "shares", "price",
-                      "cost_basis", "realized_pnl", "trigger_type", "notes"]
-                     if c in display_df.columns]
-
-        # Only the Delete? column is interactive — every other column is
-        # disabled so the table can't be silently edited. Streamlit's
-        # data_editor returns the edited DataFrame, but code only reads the
-        # Delete? column; making the rest editable used to look possible to
-        # the user but the edits never persisted. Mark them read-only to
-        # match actual behaviour.
-        edited_trades = st.data_editor(
-            display_df[show_cols],
-            column_config={
-                "Delete?":      st.column_config.CheckboxColumn("Delete?", default=False),
-                "traded_at":    st.column_config.TextColumn("Date / Time",     disabled=True),
-                "ticker":       st.column_config.TextColumn("Ticker",          disabled=True),
-                "action":       st.column_config.TextColumn("Action",          disabled=True),
-                "shares":       st.column_config.NumberColumn("Shares",            format="%.0f",    disabled=True),
-                "price":        st.column_config.NumberColumn("Price ($)",         format="$%.2f",   disabled=True),
-                "cost_basis":   st.column_config.NumberColumn("Cost Basis ($)",    format="$%.2f",   disabled=True),
-                "realized_pnl": st.column_config.NumberColumn("Realized P&L ($)",  format="$%+,.2f", disabled=True),
-                "trigger_type": st.column_config.TextColumn("Reason",           disabled=True),
-                "notes":        st.column_config.TextColumn("Notes",            disabled=True),
-            },
-            hide_index=True,
-            width='stretch',
-            key="trade_history_editor",
-        )
-
-        rows_to_delete = edited_trades[edited_trades["Delete?"] == True]
-        if not rows_to_delete.empty:
-            n = len(rows_to_delete)
-            _del_ids = trades_df.iloc[rows_to_delete.index]["id"].tolist()
-            if not st.session_state.get("_tj_delete_confirm_pending"):
-                if st.button(
-                    f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
-                    type="secondary",
-                    disabled=st.session_state.get("_readonly", False),
-                    help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
-                ):
-                    st.session_state["_tj_delete_confirm_pending"] = _del_ids
-                    st.rerun()
-            else:
-                _pending_ids = st.session_state["_tj_delete_confirm_pending"]
-                _pn = len(_pending_ids)
-                st.warning(
-                    f"⚠️ **Permanently delete {_pn} trade{'s' if _pn > 1 else ''}?** "
-                    "This rewrites your P&L history and cannot be undone.",
-                )
-                _dc1, _dc2 = st.columns(2)
-                with _dc1:
-                    if st.button("Yes, delete", key="_tj_delete_confirm_yes", type="primary"):
-                        st.session_state.pop("_tj_delete_confirm_pending", None)
-                        failed = 0
-                        for tid in _pending_ids:
-                            if not db.delete_trade(tid):
-                                failed += 1
-                        if failed == 0:
-                            st.success(f"✅ Deleted {_pn} trade{'s' if _pn > 1 else ''}.")
-                        else:
-                            st.warning(f"Deleted {_pn - failed} of {_pn}. {failed} failed — check logs.")
-
-                        # ── Auto-rebuild holdings from the remaining trade history ─────
-                        # When a trade is deleted, holdings_df has already absorbed its
-                        # incremental effect at save time but the deletion doesn't roll
-                        # that back. Replaying all remaining trades gives the truthful
-                        # state and corrects any realized_pnl that was computed from the
-                        # corrupted basis (the NFLX +$177-when-it-should-have-been-
-                        # negative class of bug).
-                        fresh_trades = db.load_trades()
-                        recalc = db.recalculate_from_trades(fresh_trades)
-                        db.save_holdings(recalc["holdings_df"])
-                        st.session_state.holdings_df = recalc["holdings_df"]
-                        _n_corrected = 0
-                        for _tid, _c in recalc["realized_pnl_corrections"].items():
-                            if db.update_trade_realized_pnl(
-                                _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
-                            ):
-                                _n_corrected += 1
-                        if _n_corrected:
-                            st.info(
-                                f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
-                                f"Also corrected realized_pnl on **{_n_corrected}** SELL "
-                                "row(s) whose stored figures were computed from a stale "
-                                "cost basis."
-                            )
-                        if recalc["warnings"]:
-                            for _w in recalc["warnings"][:3]:
-                                st.warning(f"⚠ {_w}")
-                        st.session_state.trades_df = db.load_trades()
-                        # Invalidate the page-load drift banner — we just resolved it.
-                        st.session_state.pop("_tj_drift_checked", None)
-                        st.session_state.pop("_tj_drift_state", None)
-                        st.rerun()
-                with _dc2:
-                    if st.button("Cancel", key="_tj_delete_confirm_no"):
-                        st.session_state.pop("_tj_delete_confirm_pending", None)
-                        st.rerun()
-
-        # ── 🔄 Manual rebuild — fixes any pre-existing corrupted state ─────
-        # Auto-rebuild on delete protects new workflows, but trades already
-        # saved with wrong realized_pnl (because holdings_df was stale at
-        # save-time) need a one-shot recalc against the full trade history.
-        with st.expander(
-            "⚠️ Fix drift between trades and holdings",
-            expanded=False,
-        ):
+        # ── Engine Trust by Composite Band ───────────────────────────────────────
+        with st.expander("🔬 Engine Trust by Composite Band", expanded=False):
             st.caption(
-                "Replays every trade chronologically to derive truthful holdings "
-                "(shares + weighted avg cost) and recompute the realized P&L on "
-                "every SELL. Use this once after fixing bad trade data — or any "
-                "time the holdings table looks out of sync with the trade log."
+                "Did you trust the engine more when conviction was higher? And was the engine right? "
+                "Action rate answers the first question; alpha comparison answers the second."
             )
-            if st.button("Run rebuild now", key="_tj_rebuild_holdings_btn",
-                         disabled=st.session_state.get("_readonly", False),
-                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
-                fresh = db.load_trades()
-                if fresh.empty:
-                    st.warning("No trades to replay.")
+            try:
+                from stock_analyzer.recommendations_history import (
+                    match_recs_to_trades as _etb_match,
+                    compute_outcomes as _etb_outcomes,
+                    engine_trust_by_band as _etb_fn,
+                )
+                from datetime import date as _etb_date
+                _etb_recs_df = db.load_recommendations()
+                if _etb_recs_df.empty:
+                    st.info("No recommendation history found — run a scan to generate recommendations.")
                 else:
-                    res = db.recalculate_from_trades(fresh)
-                    # Preview the corrections so the user knows what's about to change
-                    new_h     = res["holdings_df"]
-                    corrs     = res["realized_pnl_corrections"]
-                    warns     = res["warnings"]
-                    st.markdown("**Recomputed holdings**")
-                    st.dataframe(new_h, hide_index=True, width='stretch')
-                    if corrs:
-                        st.markdown(f"**Realized-P&L corrections to apply ({len(corrs)})**")
-                        _corr_rows = []
-                        for _tid, _c in corrs.items():
-                            _match = fresh[fresh["id"] == _tid]
-                            _ticker = str(_match.iloc[0]["ticker"]) if not _match.empty else "?"
-                            _corr_rows.append({
-                                "Trade ID":      _tid,
-                                "Ticker":        _ticker,
-                                "Stored P&L":    f"${(_c['stored_pnl'] or 0):+,.2f}",
-                                "Corrected P&L": f"${_c['realized_pnl']:+,.2f}",
-                                "Corrected basis": f"${_c['cost_basis']:.2f}",
-                            })
-                        st.dataframe(pd.DataFrame(_corr_rows), hide_index=True,
-                                     width='stretch')
-                    else:
-                        st.caption("No realized_pnl corrections needed — all SELL rows are accurate.")
-                    if warns:
-                        for _w in warns[:5]:
-                            st.warning(f"⚠ {_w}")
-                    # Apply
-                    if db.save_holdings(new_h):
-                        st.session_state.holdings_df = new_h
-                        _applied = 0
-                        for _tid, _c in corrs.items():
-                            if db.update_trade_realized_pnl(
-                                _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
-                            ):
-                                _applied += 1
-                        st.success(
-                            f"✅ Holdings saved · {_applied}/{len(corrs)} realized-P&L "
-                            "corrections applied. Refresh the Evening Debrief and "
-                            "Trade Review to see the corrected numbers."
-                        )
-                        st.session_state.trades_df = db.load_trades()
-                        # Invalidate the page-load drift banner — we just resolved it.
-                        st.session_state.pop("_tj_drift_checked", None)
-                        st.session_state.pop("_tj_drift_state", None)
-
-    # ── 📥 Import from broker statement ──────────────────────────────────────
-    with st.expander("📥 Import from broker statement (Robinhood)", expanded=False):
-        # Show last import result (stashed before rerun so it survives the rerun)
-        _bi_last = st.session_state.pop("_bi_last_result", None)
-        if _bi_last:
-            st.success(f"✅ Imported {_bi_last['n_imported']} trade(s).")
-            if _bi_last.get("n_corrected"):
-                st.info(
-                    f"🔄 Holdings rebuilt. Also corrected realized_pnl on "
-                    f"**{_bi_last['n_corrected']}** SELL row(s) whose stored "
-                    "figures were computed from a stale cost basis."
-                )
-            if _bi_last.get("warnings"):
-                for _bw in _bi_last["warnings"]:
-                    st.warning(f"⚠ {_bw}")
-            if _bi_last.get("holdings_df") is not None:
-                st.markdown("**Resulting holdings after import**")
-                st.dataframe(_bi_last["holdings_df"], hide_index=True,
-                             width='stretch')
-
-        # ── Tabs: CSV vs Screenshot ────────────────────────────────────────────
-        _bi_csv_tab, _bi_ss_tab = st.tabs(["📄 CSV", "📋 Paste history"])
-
-        # ══════════════════════════════════════════════════════════════════════
-        # TAB 1 — CSV import (unchanged)
-        # ══════════════════════════════════════════════════════════════════════
-        with _bi_csv_tab:
-            st.caption(
-                "Upload your Robinhood account-activity CSV (downloaded from Robinhood → "
-                "Account → History → Export). Only Buy and Sell trades are imported; "
-                "dividends, cash transfers, and fees are counted in the skipped summary "
-                "but not saved. You review every row before anything is written."
-            )
-            _bi_file = st.file_uploader(
-                "Robinhood activity CSV", type=["csv"], key="_bi_uploader"
-            )
-
-            if _bi_file is not None:
-                try:
-                    _bi_parsed = _bimp.parse_robinhood_csv(_bi_file)
-                except Exception as _bi_exc:
-                    _bi_parsed = {
-                        "trades": pd.DataFrame(), "skipped": {},
-                        "invalid": pd.DataFrame(),
-                        "error": f"Could not parse the file: {_bi_exc}",
+                    _etb_prices = {
+                        str(t): float(p["price"])
+                        for t, p in (st.session_state.get("_live_prices") or {}).items()
+                        if isinstance(p, dict) and p.get("price") is not None
                     }
-
-                if _bi_parsed["error"]:
-                    st.error(_bi_parsed["error"])
-                else:
-                    _bi_trades  = _bi_parsed["trades"]
-                    _bi_skipped = _bi_parsed["skipped"]
-                    _bi_invalid = _bi_parsed["invalid"]
-
-                    # ── Summary line ──────────────────────────────────────────
-                    _bi_n_buy  = int((_bi_trades["action"] == "BUY").sum())  if not _bi_trades.empty else 0
-                    _bi_n_sell = int((_bi_trades["action"] == "SELL").sum()) if not _bi_trades.empty else 0
-                    _bi_n_tot  = _bi_n_buy + _bi_n_sell
-                    _bi_skip_parts = [f"{v} {k}" for k, v in _bi_skipped.items()]
-                    _bi_skip_str   = ", ".join(_bi_skip_parts) if _bi_skip_parts else "none"
-                    st.markdown(
-                        f"**{_bi_n_tot} trade row{'s' if _bi_n_tot != 1 else ''}** "
-                        f"({_bi_n_buy} Buy / {_bi_n_sell} Sell)  ·  "
-                        f"**{sum(_bi_skipped.values())} non-trade rows skipped** ({_bi_skip_str})  ·  "
-                        f"**{len(_bi_invalid)} invalid** (shares or price ≤ 0)"
+                    _etb_matched  = _etb_match(_etb_recs_df, trades_df)
+                    _etb_enriched = _etb_outcomes(
+                        _etb_matched, _etb_prices or None, _etb_date.today()
                     )
-
-                    if not _bi_invalid.empty:
-                        with st.expander(
-                            f"⚠️ {len(_bi_invalid)} row(s) excluded — shares or price ≤ 0",
-                            expanded=False,
-                        ):
-                            st.caption(
-                                "These rows violate the trades table constraints "
-                                "(shares > 0, price > 0) and cannot be imported. "
-                                "Verify your CSV or add them manually via the Log a Trade form."
-                            )
-                            st.dataframe(_bi_invalid, hide_index=True,
-                                         width='stretch')
-
-                    if _bi_trades.empty:
-                        st.info("No Buy/Sell rows found to import.")
+                    _etb_rows = _etb_fn(_etb_enriched)
+                    if not _etb_rows:
+                        st.info("Insufficient data to compute band breakdown — need more recommendations with outcomes.")
                     else:
-                        _bi_class = _bimp.classify_against_existing(
-                            _bi_trades,
-                            st.session_state.get("trades_df"),
+                        for _etr in _etb_rows:
+                            _etr_acted = _etr["action_rate"]
+                            _etr_color = "#22c55e" if _etr_acted >= 60 else ("#f59e0b" if _etr_acted >= 30 else "#9ca3af")
+                            _etr_aa    = _etr["avg_alpha_acted"]
+                            _etr_ap    = _etr["avg_alpha_passed"]
+
+                            def _pp(v):
+                                return f"{v:+.1f}pp" if v is not None else "—"
+
+                            st.markdown(
+                                f"<div style='background:#1c1917;border-left:3px solid {_etr_color};"
+                                f"border-radius:8px;padding:10px 14px;margin-bottom:8px'>"
+                                f"<div style='color:#f9fafb;font-weight:600;font-size:0.9em'>"
+                                f"{_etr['band_label']}"
+                                f"<span style='color:#9ca3af;font-weight:400;font-size:0.85em'> · "
+                                f"{_etr['n_recs']} recs</span></div>"
+                                f"<div style='display:flex;gap:24px;margin-top:6px;font-size:0.82em'>"
+                                f"<span><span style='color:#9ca3af'>Acted</span> "
+                                f"<span style='color:{_etr_color};font-weight:600'>{_etr['n_acted']}/{_etr['n_recs']} ({_etr_acted:.0f}%)</span></span>"
+                                f"<span><span style='color:#9ca3af'>α when acted</span> "
+                                f"<span style='color:#d1d5db'>{_pp(_etr_aa)}</span></span>"
+                                f"<span><span style='color:#9ca3af'>α when passed</span> "
+                                f"<span style='color:#d1d5db'>{_pp(_etr_ap)}</span></span>"
+                                f"</div>"
+                                f"<div style='color:#9ca3af;font-size:0.78em;margin-top:4px'>{_etr['edge_comment']}</div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+            except Exception as _etb_err:
+                st.warning(f"Engine trust data unavailable: {_etb_err}")
+
+
+    with _tj_tab_hist:
+        # ── Trade History table ───────────────────────────────────────────────────
+        st.subheader("📋 Trade History")
+        st.caption("Check the **Delete?** box on any row then click **🗑️ Delete selected trade(s)** to remove duplicates or mistakes.")
+        if trades_df.empty:
+            st.info("No trades recorded yet. Use the form above to log your first trade.")
+        else:
+            display_df = trades_df.copy()
+            for col in ["shares", "price", "cost_basis", "realized_pnl"]:
+                if col in display_df.columns:
+                    display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
+            if "traded_at" in display_df.columns:
+                # format='ISO8601' tells pandas to accept any valid ISO 8601 input
+                # (with or without microseconds, '+00' or '+00:00' offset). Without
+                # this, pandas infers the format from the first row only — and
+                # rows that don't match (e.g. raw-SQL rebaseline BUYs lack the
+                # microsecond component that the Python-SDK inserts have) get
+                # silently coerced to NaT by errors='coerce', rendering as 'None'
+                # in the Date / Time column. utc=True normalises to UTC.
+                display_df["traded_at"] = pd.to_datetime(
+                    display_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
+                ).dt.strftime("%Y-%m-%d %H:%M")
+
+            # Add delete checkbox column
+            display_df.insert(0, "Delete?", False)
+
+            show_cols = ["Delete?"] + [c for c in
+                         ["traded_at", "ticker", "action", "shares", "price",
+                          "cost_basis", "realized_pnl", "trigger_type", "notes"]
+                         if c in display_df.columns]
+
+            # Only the Delete? column is interactive — every other column is
+            # disabled so the table can't be silently edited. Streamlit's
+            # data_editor returns the edited DataFrame, but code only reads the
+            # Delete? column; making the rest editable used to look possible to
+            # the user but the edits never persisted. Mark them read-only to
+            # match actual behaviour.
+            edited_trades = st.data_editor(
+                display_df[show_cols],
+                column_config={
+                    "Delete?":      st.column_config.CheckboxColumn("Delete?", default=False),
+                    "traded_at":    st.column_config.TextColumn("Date / Time",     disabled=True),
+                    "ticker":       st.column_config.TextColumn("Ticker",          disabled=True),
+                    "action":       st.column_config.TextColumn("Action",          disabled=True),
+                    "shares":       st.column_config.NumberColumn("Shares",            format="%.0f",    disabled=True),
+                    "price":        st.column_config.NumberColumn("Price ($)",         format="$%.2f",   disabled=True),
+                    "cost_basis":   st.column_config.NumberColumn("Cost Basis ($)",    format="$%.2f",   disabled=True),
+                    "realized_pnl": st.column_config.NumberColumn("Realized P&L ($)",  format="$%+,.2f", disabled=True),
+                    "trigger_type": st.column_config.TextColumn("Reason",           disabled=True),
+                    "notes":        st.column_config.TextColumn("Notes",            disabled=True),
+                },
+                hide_index=True,
+                width='stretch',
+                key="trade_history_editor",
+            )
+
+            rows_to_delete = edited_trades[edited_trades["Delete?"] == True]
+            if not rows_to_delete.empty:
+                n = len(rows_to_delete)
+                _del_ids = trades_df.iloc[rows_to_delete.index]["id"].tolist()
+                if not st.session_state.get("_tj_delete_confirm_pending"):
+                    if st.button(
+                        f"🗑️ Delete {n} selected trade{'s' if n > 1 else ''}",
+                        type="secondary",
+                        disabled=st.session_state.get("_readonly", False),
+                        help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                    ):
+                        st.session_state["_tj_delete_confirm_pending"] = _del_ids
+                        st.rerun()
+                else:
+                    _pending_ids = st.session_state["_tj_delete_confirm_pending"]
+                    _pn = len(_pending_ids)
+                    st.warning(
+                        f"⚠️ **Permanently delete {_pn} trade{'s' if _pn > 1 else ''}?** "
+                        "This rewrites your P&L history and cannot be undone.",
+                    )
+                    _dc1, _dc2 = st.columns(2)
+                    with _dc1:
+                        if st.button("Yes, delete", key="_tj_delete_confirm_yes", type="primary"):
+                            st.session_state.pop("_tj_delete_confirm_pending", None)
+                            failed = 0
+                            for tid in _pending_ids:
+                                if not db.delete_trade(tid):
+                                    failed += 1
+                            if failed == 0:
+                                st.success(f"✅ Deleted {_pn} trade{'s' if _pn > 1 else ''}.")
+                            else:
+                                st.warning(f"Deleted {_pn - failed} of {_pn}. {failed} failed — check logs.")
+
+                            # ── Auto-rebuild holdings from the remaining trade history ─────
+                            # When a trade is deleted, holdings_df has already absorbed its
+                            # incremental effect at save time but the deletion doesn't roll
+                            # that back. Replaying all remaining trades gives the truthful
+                            # state and corrects any realized_pnl that was computed from the
+                            # corrupted basis (the NFLX +$177-when-it-should-have-been-
+                            # negative class of bug).
+                            fresh_trades = db.load_trades()
+                            recalc = db.recalculate_from_trades(fresh_trades)
+                            db.save_holdings(recalc["holdings_df"])
+                            st.session_state.holdings_df = recalc["holdings_df"]
+                            _n_corrected = 0
+                            for _tid, _c in recalc["realized_pnl_corrections"].items():
+                                if db.update_trade_realized_pnl(
+                                    _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
+                                ):
+                                    _n_corrected += 1
+                            if _n_corrected:
+                                st.info(
+                                    f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
+                                    f"Also corrected realized_pnl on **{_n_corrected}** SELL "
+                                    "row(s) whose stored figures were computed from a stale "
+                                    "cost basis."
+                                )
+                            if recalc["warnings"]:
+                                for _w in recalc["warnings"][:3]:
+                                    st.warning(f"⚠ {_w}")
+                            st.session_state.trades_df = db.load_trades()
+                            # Invalidate the page-load drift banner — we just resolved it.
+                            st.session_state.pop("_tj_drift_checked", None)
+                            st.session_state.pop("_tj_drift_state", None)
+                            st.rerun()
+                    with _dc2:
+                        if st.button("Cancel", key="_tj_delete_confirm_no"):
+                            st.session_state.pop("_tj_delete_confirm_pending", None)
+                            st.rerun()
+
+            # ── 🔄 Manual rebuild — fixes any pre-existing corrupted state ─────
+            # Auto-rebuild on delete protects new workflows, but trades already
+            # saved with wrong realized_pnl (because holdings_df was stale at
+            # save-time) need a one-shot recalc against the full trade history.
+            with st.expander(
+                "⚠️ Fix drift between trades and holdings",
+                expanded=False,
+            ):
+                st.caption(
+                    "Replays every trade chronologically to derive truthful holdings "
+                    "(shares + weighted avg cost) and recompute the realized P&L on "
+                    "every SELL. Use this once after fixing bad trade data — or any "
+                    "time the holdings table looks out of sync with the trade log."
+                )
+                if st.button("Run rebuild now", key="_tj_rebuild_holdings_btn",
+                             disabled=st.session_state.get("_readonly", False),
+                             help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
+                    fresh = db.load_trades()
+                    if fresh.empty:
+                        st.warning("No trades to replay.")
+                    else:
+                        res = db.recalculate_from_trades(fresh)
+                        # Preview the corrections so the user knows what's about to change
+                        new_h     = res["holdings_df"]
+                        corrs     = res["realized_pnl_corrections"]
+                        warns     = res["warnings"]
+                        st.markdown("**Recomputed holdings**")
+                        st.dataframe(new_h, hide_index=True, width='stretch')
+                        if corrs:
+                            st.markdown(f"**Realized-P&L corrections to apply ({len(corrs)})**")
+                            _corr_rows = []
+                            for _tid, _c in corrs.items():
+                                _match = fresh[fresh["id"] == _tid]
+                                _ticker = str(_match.iloc[0]["ticker"]) if not _match.empty else "?"
+                                _corr_rows.append({
+                                    "Trade ID":      _tid,
+                                    "Ticker":        _ticker,
+                                    "Stored P&L":    f"${(_c['stored_pnl'] or 0):+,.2f}",
+                                    "Corrected P&L": f"${_c['realized_pnl']:+,.2f}",
+                                    "Corrected basis": f"${_c['cost_basis']:.2f}",
+                                })
+                            st.dataframe(pd.DataFrame(_corr_rows), hide_index=True,
+                                         width='stretch')
+                        else:
+                            st.caption("No realized_pnl corrections needed — all SELL rows are accurate.")
+                        if warns:
+                            for _w in warns[:5]:
+                                st.warning(f"⚠ {_w}")
+                        # Apply
+                        if db.save_holdings(new_h):
+                            st.session_state.holdings_df = new_h
+                            _applied = 0
+                            for _tid, _c in corrs.items():
+                                if db.update_trade_realized_pnl(
+                                    _tid, _c["realized_pnl"], cost_basis=_c["cost_basis"]
+                                ):
+                                    _applied += 1
+                            st.success(
+                                f"✅ Holdings saved · {_applied}/{len(corrs)} realized-P&L "
+                                "corrections applied. Refresh the Evening Debrief and "
+                                "Trade Review to see the corrected numbers."
+                            )
+                            st.session_state.trades_df = db.load_trades()
+                            # Invalidate the page-load drift banner — we just resolved it.
+                            st.session_state.pop("_tj_drift_checked", None)
+                            st.session_state.pop("_tj_drift_state", None)
+
+        # ── 📥 Import from broker statement ──────────────────────────────────────
+        with st.expander("📥 Import from broker statement (Robinhood)", expanded=False):
+            # Show last import result (stashed before rerun so it survives the rerun)
+            _bi_last = st.session_state.pop("_bi_last_result", None)
+            if _bi_last:
+                st.success(f"✅ Imported {_bi_last['n_imported']} trade(s).")
+                if _bi_last.get("n_corrected"):
+                    st.info(
+                        f"🔄 Holdings rebuilt. Also corrected realized_pnl on "
+                        f"**{_bi_last['n_corrected']}** SELL row(s) whose stored "
+                        "figures were computed from a stale cost basis."
+                    )
+                if _bi_last.get("warnings"):
+                    for _bw in _bi_last["warnings"]:
+                        st.warning(f"⚠ {_bw}")
+                if _bi_last.get("holdings_df") is not None:
+                    st.markdown("**Resulting holdings after import**")
+                    st.dataframe(_bi_last["holdings_df"], hide_index=True,
+                                 width='stretch')
+
+            # ── Tabs: CSV vs Screenshot ────────────────────────────────────────────
+            _bi_csv_tab, _bi_ss_tab = st.tabs(["📄 CSV", "📋 Paste history"])
+
+            # ══════════════════════════════════════════════════════════════════════
+            # TAB 1 — CSV import (unchanged)
+            # ══════════════════════════════════════════════════════════════════════
+            with _bi_csv_tab:
+                st.caption(
+                    "Upload your Robinhood account-activity CSV (downloaded from Robinhood → "
+                    "Account → History → Export). Only Buy and Sell trades are imported; "
+                    "dividends, cash transfers, and fees are counted in the skipped summary "
+                    "but not saved. You review every row before anything is written."
+                )
+                _bi_file = st.file_uploader(
+                    "Robinhood activity CSV", type=["csv"], key="_bi_uploader"
+                )
+
+                if _bi_file is not None:
+                    try:
+                        _bi_parsed = _bimp.parse_robinhood_csv(_bi_file)
+                    except Exception as _bi_exc:
+                        _bi_parsed = {
+                            "trades": pd.DataFrame(), "skipped": {},
+                            "invalid": pd.DataFrame(),
+                            "error": f"Could not parse the file: {_bi_exc}",
+                        }
+
+                    if _bi_parsed["error"]:
+                        st.error(_bi_parsed["error"])
+                    else:
+                        _bi_trades  = _bi_parsed["trades"]
+                        _bi_skipped = _bi_parsed["skipped"]
+                        _bi_invalid = _bi_parsed["invalid"]
+
+                        # ── Summary line ──────────────────────────────────────────
+                        _bi_n_buy  = int((_bi_trades["action"] == "BUY").sum())  if not _bi_trades.empty else 0
+                        _bi_n_sell = int((_bi_trades["action"] == "SELL").sum()) if not _bi_trades.empty else 0
+                        _bi_n_tot  = _bi_n_buy + _bi_n_sell
+                        _bi_skip_parts = [f"{v} {k}" for k, v in _bi_skipped.items()]
+                        _bi_skip_str   = ", ".join(_bi_skip_parts) if _bi_skip_parts else "none"
+                        st.markdown(
+                            f"**{_bi_n_tot} trade row{'s' if _bi_n_tot != 1 else ''}** "
+                            f"({_bi_n_buy} Buy / {_bi_n_sell} Sell)  ·  "
+                            f"**{sum(_bi_skipped.values())} non-trade rows skipped** ({_bi_skip_str})  ·  "
+                            f"**{len(_bi_invalid)} invalid** (shares or price ≤ 0)"
                         )
 
-                        _bi_n_new = int(_bi_class["is_new"].sum())
-                        _bi_n_dup = len(_bi_class) - _bi_n_new
-                        st.caption(
-                            f"**{_bi_n_new} new row{'s' if _bi_n_new != 1 else ''} pre-selected**  ·  "
-                            f"{_bi_n_dup} look already recorded (unchecked by default)"
-                        )
-                        if _bi_n_dup:
-                            st.caption(
-                                "ℹ️ Rows matching a trade already in your journal — including one "
-                                "you logged **by hand on a different date** — are marked *possible "
-                                "duplicate* and left unchecked. Read the **Status** column and "
-                                "re-tick only rows that are genuinely a separate fill."
+                        if not _bi_invalid.empty:
+                            with st.expander(
+                                f"⚠️ {len(_bi_invalid)} row(s) excluded — shares or price ≤ 0",
+                                expanded=False,
+                            ):
+                                st.caption(
+                                    "These rows violate the trades table constraints "
+                                    "(shares > 0, price > 0) and cannot be imported. "
+                                    "Verify your CSV or add them manually via the Log a Trade form."
+                                )
+                                st.dataframe(_bi_invalid, hide_index=True,
+                                             width='stretch')
+
+                        if _bi_trades.empty:
+                            st.info("No Buy/Sell rows found to import.")
+                        else:
+                            _bi_class = _bimp.classify_against_existing(
+                                _bi_trades,
+                                st.session_state.get("trades_df"),
                             )
 
-                        _bi_preview = pd.DataFrame({
-                            "Import?":  _bi_class["is_new"].tolist(),
-                            "Date":     _bi_class["activity_date"].astype(str),
-                            "Ticker":   _bi_class["ticker"].tolist(),
-                            "Action":   _bi_class["action"].tolist(),
-                            "Shares":   _bi_class["shares"].tolist(),
-                            "Price":    _bi_class["price"].tolist(),
-                            "Status":   _bi_class["match_reason"].tolist(),
-                        })
-
-                        _bi_edited = st.data_editor(
-                            _bi_preview,
-                            column_config={
-                                "Import?": st.column_config.CheckboxColumn(
-                                    "Import?", default=True
-                                ),
-                                "Date":   st.column_config.TextColumn(
-                                    "Date", disabled=True
-                                ),
-                                "Ticker": st.column_config.TextColumn(
-                                    "Ticker", disabled=True
-                                ),
-                                "Action": st.column_config.TextColumn(
-                                    "Action", disabled=True
-                                ),
-                                "Shares": st.column_config.NumberColumn(
-                                    "Shares", format="%.4g", disabled=True
-                                ),
-                                "Price":  st.column_config.NumberColumn(
-                                    "Price ($)", format="$%.2f", disabled=True
-                                ),
-                                "Status": st.column_config.TextColumn(
-                                    "Status", disabled=True
-                                ),
-                            },
-                            hide_index=True,
-                            width='stretch',
-                            key="_bi_editor",
-                        )
-
-                        if st.button(
-                            "📥 Import selected trades",
-                            key="_bi_import_btn",
-                            type="primary",
-                            disabled=st.session_state.get("_readonly", False),
-                            help=(
-                                "Read-only viewer — changes are disabled"
-                                if st.session_state.get("_readonly", False)
-                                else None
-                            ),
-                        ):
-                            _bi_selected = _bi_edited[_bi_edited["Import?"] == True]
-                            if _bi_selected.empty:
-                                st.warning("Nothing selected.")
-                            else:
-                                _bi_sel = _bi_selected.copy()
-                                _bi_sel["_sort_action"] = (
-                                    _bi_sel["Action"] == "SELL"
-                                ).astype(int)
-                                _bi_sel = _bi_sel.sort_values(
-                                    ["Date", "_sort_action"]
+                            _bi_n_new = int(_bi_class["is_new"].sum())
+                            _bi_n_dup = len(_bi_class) - _bi_n_new
+                            st.caption(
+                                f"**{_bi_n_new} new row{'s' if _bi_n_new != 1 else ''} pre-selected**  ·  "
+                                f"{_bi_n_dup} look already recorded (unchecked by default)"
+                            )
+                            if _bi_n_dup:
+                                st.caption(
+                                    "ℹ️ Rows matching a trade already in your journal — including one "
+                                    "you logged **by hand on a different date** — are marked *possible "
+                                    "duplicate* and left unchecked. Read the **Status** column and "
+                                    "re-tick only rows that are genuinely a separate fill."
                                 )
 
-                                _bi_today_str = _today_et().isoformat()
-                                _bi_n_ok   = 0
-                                _bi_n_fail = 0
-                                for _, _bi_row in _bi_sel.iterrows():
-                                    _bi_rec = {
-                                        "ticker":       str(_bi_row["Ticker"]),
-                                        "action":       str(_bi_row["Action"]),
-                                        "shares":       float(_bi_row["Shares"]),
-                                        "price":        float(_bi_row["Price"]),
-                                        "traded_at":    str(_bi_row["Date"]),
-                                        "trigger_type": "MANUAL",
-                                        "notes":        f"Robinhood import {_bi_today_str}",
-                                    }
-                                    if db.save_trade(_bi_rec):
-                                        _bi_n_ok += 1
-                                    else:
-                                        _bi_n_fail += 1
+                            _bi_preview = pd.DataFrame({
+                                "Import?":  _bi_class["is_new"].tolist(),
+                                "Date":     _bi_class["activity_date"].astype(str),
+                                "Ticker":   _bi_class["ticker"].tolist(),
+                                "Action":   _bi_class["action"].tolist(),
+                                "Shares":   _bi_class["shares"].tolist(),
+                                "Price":    _bi_class["price"].tolist(),
+                                "Status":   _bi_class["match_reason"].tolist(),
+                            })
 
-                                if _bi_n_ok > 0:
-                                    st.session_state["trades_df"] = db.load_trades()
-                                    _bi_recalc = db.recalculate_from_trades(
-                                        st.session_state["trades_df"]
-                                    )
-                                    db.save_holdings(_bi_recalc["holdings_df"])
-                                    st.session_state["holdings_df"] = (
-                                        _bi_recalc["holdings_df"]
-                                    )
-                                    _bi_n_corrected = 0
-                                    for _bi_tid, _bi_c in (
-                                        _bi_recalc["realized_pnl_corrections"].items()
-                                    ):
-                                        if db.update_trade_realized_pnl(
-                                            _bi_tid,
-                                            _bi_c["realized_pnl"],
-                                            cost_basis=_bi_c["cost_basis"],
-                                        ):
-                                            _bi_n_corrected += 1
+                            _bi_edited = st.data_editor(
+                                _bi_preview,
+                                column_config={
+                                    "Import?": st.column_config.CheckboxColumn(
+                                        "Import?", default=True
+                                    ),
+                                    "Date":   st.column_config.TextColumn(
+                                        "Date", disabled=True
+                                    ),
+                                    "Ticker": st.column_config.TextColumn(
+                                        "Ticker", disabled=True
+                                    ),
+                                    "Action": st.column_config.TextColumn(
+                                        "Action", disabled=True
+                                    ),
+                                    "Shares": st.column_config.NumberColumn(
+                                        "Shares", format="%.4g", disabled=True
+                                    ),
+                                    "Price":  st.column_config.NumberColumn(
+                                        "Price ($)", format="$%.2f", disabled=True
+                                    ),
+                                    "Status": st.column_config.TextColumn(
+                                        "Status", disabled=True
+                                    ),
+                                },
+                                hide_index=True,
+                                width='stretch',
+                                key="_bi_editor",
+                            )
 
-                                    st.session_state.pop("_tj_drift_checked", None)
-                                    st.session_state.pop("_tj_drift_state", None)
-
-                                    st.session_state["_bi_last_result"] = {
-                                        "n_imported":  _bi_n_ok,
-                                        "n_corrected": _bi_n_corrected,
-                                        "warnings":    list(
-                                            _bi_recalc.get("warnings", [])
-                                        )[:5],
-                                        "holdings_df": _bi_recalc["holdings_df"],
-                                    }
-                                    if _bi_n_fail:
-                                        st.warning(
-                                            f"{_bi_n_fail} row(s) failed to save — "
-                                            "see Data Health tab for details."
-                                        )
-                                    st.rerun()
-                                elif not db.has_db():
-                                    st.error(
-                                        "No database connected — can't import. "
-                                        "Check your Supabase secrets / the Data Health tab."
-                                    )
+                            if st.button(
+                                "📥 Import selected trades",
+                                key="_bi_import_btn",
+                                type="primary",
+                                disabled=st.session_state.get("_readonly", False),
+                                help=(
+                                    "Read-only viewer — changes are disabled"
+                                    if st.session_state.get("_readonly", False)
+                                    else None
+                                ),
+                            ):
+                                _bi_selected = _bi_edited[_bi_edited["Import?"] == True]
+                                if _bi_selected.empty:
+                                    st.warning("Nothing selected.")
                                 else:
-                                    st.error(
-                                        "Import failed — no trades were saved. "
-                                        "Check the Data Health tab for details."
+                                    _bi_sel = _bi_selected.copy()
+                                    _bi_sel["_sort_action"] = (
+                                        _bi_sel["Action"] == "SELL"
+                                    ).astype(int)
+                                    _bi_sel = _bi_sel.sort_values(
+                                        ["Date", "_sort_action"]
                                     )
 
-        # ══════════════════════════════════════════════════════════════════════
-        # TAB 2 — Screenshot import (Robinhood Account → History view)
-        # ══════════════════════════════════════════════════════════════════════
-        with _bi_ss_tab:
-            st.caption(
-                "Paste text copied from the Robinhood **Account → History** page. "
-                "The parser extracts executed Buy/Sell trades automatically; canceled "
-                "orders are skipped. Tickers are inferred from company names — "
-                "review and correct in the editable preview before importing."
-            )
+                                    _bi_today_str = _today_et().isoformat()
+                                    _bi_n_ok   = 0
+                                    _bi_n_fail = 0
+                                    for _, _bi_row in _bi_sel.iterrows():
+                                        _bi_rec = {
+                                            "ticker":       str(_bi_row["Ticker"]),
+                                            "action":       str(_bi_row["Action"]),
+                                            "shares":       float(_bi_row["Shares"]),
+                                            "price":        float(_bi_row["Price"]),
+                                            "traded_at":    str(_bi_row["Date"]),
+                                            "trigger_type": "MANUAL",
+                                            "notes":        f"Robinhood import {_bi_today_str}",
+                                        }
+                                        if db.save_trade(_bi_rec):
+                                            _bi_n_ok += 1
+                                        else:
+                                            _bi_n_fail += 1
 
-            # ── Sync watermark ─────────────────────────────────────────────────
-            _ss_watermark = _bscr.last_screenshot_sync_date(
-                st.session_state.get("trades_df")
-            )
-            if _ss_watermark:
-                st.info(
-                    f"📌 **Last import:** {_ss_watermark.strftime('%b %d, %Y')}  ·  "
-                    "Trades on or before this date are filtered out by default."
+                                    if _bi_n_ok > 0:
+                                        st.session_state["trades_df"] = db.load_trades()
+                                        _bi_recalc = db.recalculate_from_trades(
+                                            st.session_state["trades_df"]
+                                        )
+                                        db.save_holdings(_bi_recalc["holdings_df"])
+                                        st.session_state["holdings_df"] = (
+                                            _bi_recalc["holdings_df"]
+                                        )
+                                        _bi_n_corrected = 0
+                                        for _bi_tid, _bi_c in (
+                                            _bi_recalc["realized_pnl_corrections"].items()
+                                        ):
+                                            if db.update_trade_realized_pnl(
+                                                _bi_tid,
+                                                _bi_c["realized_pnl"],
+                                                cost_basis=_bi_c["cost_basis"],
+                                            ):
+                                                _bi_n_corrected += 1
+
+                                        st.session_state.pop("_tj_drift_checked", None)
+                                        st.session_state.pop("_tj_drift_state", None)
+
+                                        st.session_state["_bi_last_result"] = {
+                                            "n_imported":  _bi_n_ok,
+                                            "n_corrected": _bi_n_corrected,
+                                            "warnings":    list(
+                                                _bi_recalc.get("warnings", [])
+                                            )[:5],
+                                            "holdings_df": _bi_recalc["holdings_df"],
+                                        }
+                                        if _bi_n_fail:
+                                            st.warning(
+                                                f"{_bi_n_fail} row(s) failed to save — "
+                                                "see Data Health tab for details."
+                                            )
+                                        st.rerun()
+                                    elif not db.has_db():
+                                        st.error(
+                                            "No database connected — can't import. "
+                                            "Check your Supabase secrets / the Data Health tab."
+                                        )
+                                    else:
+                                        st.error(
+                                            "Import failed — no trades were saved. "
+                                            "Check the Data Health tab for details."
+                                        )
+
+            # ══════════════════════════════════════════════════════════════════════
+            # TAB 2 — Screenshot import (Robinhood Account → History view)
+            # ══════════════════════════════════════════════════════════════════════
+            with _bi_ss_tab:
+                st.caption(
+                    "Paste text copied from the Robinhood **Account → History** page. "
+                    "The parser extracts executed Buy/Sell trades automatically; canceled "
+                    "orders are skipped. Tickers are inferred from company names — "
+                    "review and correct in the editable preview before importing."
                 )
 
-            import datetime as _dt_mod
-            _ss_default_since = (
-                (_ss_watermark + _dt_mod.timedelta(days=1))
-                if _ss_watermark
-                else (_today_et() - _dt_mod.timedelta(days=180))
-            )
-            _ss_since = st.date_input(
-                "Sync since (filter out trades before this date)",
-                value=_ss_default_since,
-                key="_ss_since_date",
-                help=(
-                    "Only trades on or after this date will be shown for import. "
-                    "Set to the day after your last import to avoid re-importing history."
-                ),
-            )
-
-            # ── Text paste area ────────────────────────────────────────────────
-            _ss_text_input = st.text_area(
-                "Robinhood History text",
-                height=220,
-                key="_ss_text_input",
-                placeholder=(
-                    "Paste here. On Robinhood: Account → History, then select-all and copy.\n\n"
-                    "Each order has four lines, for example:\n"
-                    "  Palantir Technologies limit buy\n"
-                    "  Individual · Jul 9\n"
-                    "  $1,301.52\n"
-                    "  5 shares at $260.30"
-                ),
-            )
-
-            # Optional: Anthropic API key for resolving unknown company names
-            _ss_api_key = (
-                st.secrets.get("anthropic", {}).get("api_key")
-                or st.secrets.get("ANTHROPIC_API_KEY")
-                or os.environ.get("ANTHROPIC_API_KEY", "")
-            )
-
-            if _ss_text_input and _ss_text_input.strip():
-                if st.button(
-                    "🔍 Parse trades",
-                    key="_ss_extract_btn",
-                ):
-                    with st.spinner("Parsing trade history…"):
-                        _ss_parsed = _bscr.parse_robinhood_text(
-                            text=_ss_text_input,
-                            api_key=_ss_api_key or None,
-                            model="claude-opus-4-8",
-                            reference_date=_today_et(),
-                        )
-                    st.session_state["_ss_parsed"] = _ss_parsed
-
-            # ── Results (persist across re-renders until a new parse runs) ────
-            _ss_result = st.session_state.get("_ss_parsed")
-            if _ss_result:
-                if _ss_result.get("error") and _ss_result["trades"].empty:
-                    st.error(_ss_result["error"])
-                else:
-                    if _ss_result.get("parse_warnings"):
-                        for _sw in _ss_result["parse_warnings"]:
-                            st.warning(f"⚠ {_sw}")
-
-                    _ss_trades   = _ss_result["trades"]
-                    _ss_skipped  = _ss_result["skipped"]
-                    _ss_invalid  = _ss_result["invalid"]
-                    _ss_low_conf = _ss_result.get("low_confidence_tickers", [])
-
-                    # Apply sync-since filter
-                    if not _ss_trades.empty and _ss_since:
-                        _ss_trades = _ss_trades[
-                            _ss_trades["activity_date"].apply(
-                                lambda d: d is not None and d >= _ss_since
-                            )
-                        ].copy()
-
-                    _ss_n_buy  = int((_ss_trades["action"] == "BUY").sum())  if not _ss_trades.empty else 0
-                    _ss_n_sell = int((_ss_trades["action"] == "SELL").sum()) if not _ss_trades.empty else 0
-                    _ss_n_tot  = _ss_n_buy + _ss_n_sell
-                    _ss_canceled = _ss_skipped.get("Canceled", 0)
-                    st.markdown(
-                        f"**{_ss_n_tot} executed trade{'s' if _ss_n_tot != 1 else ''}** "
-                        f"({_ss_n_buy} Buy / {_ss_n_sell} Sell)  ·  "
-                        f"**{_ss_canceled} canceled orders skipped**  ·  "
-                        f"**{len(_ss_invalid)} invalid rows**"
+                # ── Sync watermark ─────────────────────────────────────────────────
+                _ss_watermark = _bscr.last_screenshot_sync_date(
+                    st.session_state.get("trades_df")
+                )
+                if _ss_watermark:
+                    st.info(
+                        f"📌 **Last import:** {_ss_watermark.strftime('%b %d, %Y')}  ·  "
+                        "Trades on or before this date are filtered out by default."
                     )
 
-                    if _ss_low_conf:
-                        st.warning(
-                            f"⚠️ **Low-confidence ticker{'s' if len(_ss_low_conf) > 1 else ''}:** "
-                            f"{', '.join(_ss_low_conf)}  —  the Ticker column is editable; "
-                            "correct any misidentified symbols before importing."
-                        )
+                import datetime as _dt_mod
+                _ss_default_since = (
+                    (_ss_watermark + _dt_mod.timedelta(days=1))
+                    if _ss_watermark
+                    else (_today_et() - _dt_mod.timedelta(days=180))
+                )
+                _ss_since = st.date_input(
+                    "Sync since (filter out trades before this date)",
+                    value=_ss_default_since,
+                    key="_ss_since_date",
+                    help=(
+                        "Only trades on or after this date will be shown for import. "
+                        "Set to the day after your last import to avoid re-importing history."
+                    ),
+                )
 
-                    if not _ss_invalid.empty:
-                        with st.expander(
-                            f"⚠️ {len(_ss_invalid)} row(s) excluded — could not parse",
-                            expanded=False,
-                        ):
-                            st.dataframe(_ss_invalid, hide_index=True,
-                                         width='stretch')
+                # ── Text paste area ────────────────────────────────────────────────
+                _ss_text_input = st.text_area(
+                    "Robinhood History text",
+                    height=220,
+                    key="_ss_text_input",
+                    placeholder=(
+                        "Paste here. On Robinhood: Account → History, then select-all and copy.\n\n"
+                        "Each order has four lines, for example:\n"
+                        "  Palantir Technologies limit buy\n"
+                        "  Individual · Jul 9\n"
+                        "  $1,301.52\n"
+                        "  5 shares at $260.30"
+                    ),
+                )
 
-                    if _ss_trades.empty:
-                        st.info(
-                            "No executable trades found after applying the sync-since filter. "
-                            "Try adjusting the date or pasting additional history."
-                        )
+                # Optional: Anthropic API key for resolving unknown company names
+                _ss_api_key = (
+                    st.secrets.get("anthropic", {}).get("api_key")
+                    or st.secrets.get("ANTHROPIC_API_KEY")
+                    or os.environ.get("ANTHROPIC_API_KEY", "")
+                )
+
+                if _ss_text_input and _ss_text_input.strip():
+                    if st.button(
+                        "🔍 Parse trades",
+                        key="_ss_extract_btn",
+                    ):
+                        with st.spinner("Parsing trade history…"):
+                            _ss_parsed = _bscr.parse_robinhood_text(
+                                text=_ss_text_input,
+                                api_key=_ss_api_key or None,
+                                model="claude-opus-4-8",
+                                reference_date=_today_et(),
+                            )
+                        st.session_state["_ss_parsed"] = _ss_parsed
+
+                # ── Results (persist across re-renders until a new parse runs) ────
+                _ss_result = st.session_state.get("_ss_parsed")
+                if _ss_result:
+                    if _ss_result.get("error") and _ss_result["trades"].empty:
+                        st.error(_ss_result["error"])
                     else:
-                        _ss_class = _bimp.classify_against_existing(
-                            _ss_trades,
-                            st.session_state.get("trades_df"),
+                        if _ss_result.get("parse_warnings"):
+                            for _sw in _ss_result["parse_warnings"]:
+                                st.warning(f"⚠ {_sw}")
+
+                        _ss_trades   = _ss_result["trades"]
+                        _ss_skipped  = _ss_result["skipped"]
+                        _ss_invalid  = _ss_result["invalid"]
+                        _ss_low_conf = _ss_result.get("low_confidence_tickers", [])
+
+                        # Apply sync-since filter
+                        if not _ss_trades.empty and _ss_since:
+                            _ss_trades = _ss_trades[
+                                _ss_trades["activity_date"].apply(
+                                    lambda d: d is not None and d >= _ss_since
+                                )
+                            ].copy()
+
+                        _ss_n_buy  = int((_ss_trades["action"] == "BUY").sum())  if not _ss_trades.empty else 0
+                        _ss_n_sell = int((_ss_trades["action"] == "SELL").sum()) if not _ss_trades.empty else 0
+                        _ss_n_tot  = _ss_n_buy + _ss_n_sell
+                        _ss_canceled = _ss_skipped.get("Canceled", 0)
+                        st.markdown(
+                            f"**{_ss_n_tot} executed trade{'s' if _ss_n_tot != 1 else ''}** "
+                            f"({_ss_n_buy} Buy / {_ss_n_sell} Sell)  ·  "
+                            f"**{_ss_canceled} canceled orders skipped**  ·  "
+                            f"**{len(_ss_invalid)} invalid rows**"
                         )
 
-                        _ss_n_new = int(_ss_class["is_new"].sum())
-                        _ss_n_dup = len(_ss_class) - _ss_n_new
-                        st.caption(
-                            f"**{_ss_n_new} new row{'s' if _ss_n_new != 1 else ''} pre-selected**  ·  "
-                            f"{_ss_n_dup} look already recorded (unchecked by default)"
-                        )
-                        if _ss_n_dup:
-                            st.caption(
-                                "ℹ️ Rows matching a trade already in your journal are marked "
-                                "*possible duplicate* and left unchecked. Re-tick only rows "
-                                "that are genuinely a separate fill."
+                        if _ss_low_conf:
+                            st.warning(
+                                f"⚠️ **Low-confidence ticker{'s' if len(_ss_low_conf) > 1 else ''}:** "
+                                f"{', '.join(_ss_low_conf)}  —  the Ticker column is editable; "
+                                "correct any misidentified symbols before importing."
                             )
 
-                        # Ticker and Date are editable — ticker is inferred from company
-                        # name and date has no year in the Robinhood text.
-                        _ss_preview = pd.DataFrame({
-                            "Import?": _ss_class["is_new"].tolist(),
-                            "Date":    _ss_class["activity_date"].astype(str),
-                            "Ticker":  _ss_class["ticker"].tolist(),
-                            "Company": _ss_class["company"].tolist(),
-                            "Action":  _ss_class["action"].tolist(),
-                            "Shares":  _ss_class["shares"].tolist(),
-                            "Price":   _ss_class["price"].tolist(),
-                            "Status":  _ss_class["match_reason"].tolist(),
-                        })
+                        if not _ss_invalid.empty:
+                            with st.expander(
+                                f"⚠️ {len(_ss_invalid)} row(s) excluded — could not parse",
+                                expanded=False,
+                            ):
+                                st.dataframe(_ss_invalid, hide_index=True,
+                                             width='stretch')
 
-                        _ss_edited = st.data_editor(
-                            _ss_preview,
-                            column_config={
-                                "Import?": st.column_config.CheckboxColumn(
-                                    "Import?", default=True
-                                ),
-                                "Date":    st.column_config.TextColumn(
-                                    "Date (YYYY-MM-DD)",
-                                    help="Edit if the inferred year is wrong.",
-                                ),
-                                "Ticker":  st.column_config.TextColumn(
-                                    "Ticker",
-                                    help="Inferred from company name — correct if wrong.",
-                                ),
-                                "Company": st.column_config.TextColumn(
-                                    "Company", disabled=True
-                                ),
-                                "Action":  st.column_config.TextColumn(
-                                    "Action", disabled=True
-                                ),
-                                "Shares":  st.column_config.NumberColumn(
-                                    "Shares", format="%.4g", disabled=True
-                                ),
-                                "Price":   st.column_config.NumberColumn(
-                                    "Price ($)", format="$%.2f", disabled=True
-                                ),
-                                "Status":  st.column_config.TextColumn(
-                                    "Status", disabled=True
-                                ),
-                            },
-                            hide_index=True,
-                            width='stretch',
-                            key="_ss_editor",
-                        )
-
-                        # In-app-not-in-pasted-history: trades in the app within the
-                        # date range that don't appear in the pasted text.
-                        _ss_dates = _ss_trades["activity_date"].dropna()
-                        if not _ss_dates.empty:
-                            _ss_range_from = _ss_dates.min()
-                            _ss_range_to   = _ss_dates.max()
-                            _ss_app_only = _bscr.find_app_only_in_range(
+                        if _ss_trades.empty:
+                            st.info(
+                                "No executable trades found after applying the sync-since filter. "
+                                "Try adjusting the date or pasting additional history."
+                            )
+                        else:
+                            _ss_class = _bimp.classify_against_existing(
                                 _ss_trades,
                                 st.session_state.get("trades_df"),
-                                date_from=_ss_range_from,
-                                date_to=_ss_range_to,
                             )
-                            if not _ss_app_only.empty:
-                                with st.expander(
-                                    f"🔍 {len(_ss_app_only)} trade(s) in app "
-                                    f"({_ss_range_from} → {_ss_range_to}) "
-                                    "not seen in pasted history — review",
-                                    expanded=False,
-                                ):
-                                    st.caption(
-                                        "These trades exist in your journal within the "
-                                        "pasted history's date range but don't appear in the "
-                                        "text. They may be legitimately absent (logged "
-                                        "manually, different account) or could indicate a "
-                                        "discrepancy. No action is taken automatically — "
-                                        "investigate and correct via the Log a Trade form."
-                                    )
-                                    st.dataframe(
-                                        _ss_app_only, hide_index=True,
-                                        width='stretch',
-                                    )
 
-                        if st.button(
-                            "📥 Import selected trades",
-                            key="_ss_import_btn",
-                            type="primary",
-                            disabled=st.session_state.get("_readonly", False),
-                            help=(
-                                "Read-only viewer — changes are disabled"
-                                if st.session_state.get("_readonly", False)
-                                else None
-                            ),
-                        ):
-                            _ss_selected = _ss_edited[_ss_edited["Import?"] == True]
-                            if _ss_selected.empty:
-                                st.warning("Nothing selected.")
-                            else:
-                                _ss_sel = _ss_selected.copy()
-                                _ss_sel["_sort_action"] = (
-                                    _ss_sel["Action"] == "SELL"
-                                ).astype(int)
-                                _ss_sel = _ss_sel.sort_values(
-                                    ["Date", "_sort_action"]
+                            _ss_n_new = int(_ss_class["is_new"].sum())
+                            _ss_n_dup = len(_ss_class) - _ss_n_new
+                            st.caption(
+                                f"**{_ss_n_new} new row{'s' if _ss_n_new != 1 else ''} pre-selected**  ·  "
+                                f"{_ss_n_dup} look already recorded (unchecked by default)"
+                            )
+                            if _ss_n_dup:
+                                st.caption(
+                                    "ℹ️ Rows matching a trade already in your journal are marked "
+                                    "*possible duplicate* and left unchecked. Re-tick only rows "
+                                    "that are genuinely a separate fill."
                                 )
 
-                                _ss_today_str = _today_et().isoformat()
-                                _ss_n_ok   = 0
-                                _ss_n_fail = 0
-                                for _, _ss_row in _ss_sel.iterrows():
-                                    try:
-                                        _ss_rec = {
-                                            "ticker":       str(_ss_row["Ticker"]).upper().strip(),
-                                            "action":       str(_ss_row["Action"]),
-                                            "shares":       float(_ss_row["Shares"]),
-                                            "price":        float(_ss_row["Price"]),
-                                            "traded_at":    str(_ss_row["Date"]),
-                                            "trigger_type": "MANUAL",
-                                            "notes":        f"RH text import {_ss_today_str}",
-                                        }
-                                    except (TypeError, ValueError):
-                                        _ss_n_fail += 1
-                                        continue
-                                    if db.save_trade(_ss_rec):
-                                        _ss_n_ok += 1
-                                    else:
-                                        _ss_n_fail += 1
+                            # Ticker and Date are editable — ticker is inferred from company
+                            # name and date has no year in the Robinhood text.
+                            _ss_preview = pd.DataFrame({
+                                "Import?": _ss_class["is_new"].tolist(),
+                                "Date":    _ss_class["activity_date"].astype(str),
+                                "Ticker":  _ss_class["ticker"].tolist(),
+                                "Company": _ss_class["company"].tolist(),
+                                "Action":  _ss_class["action"].tolist(),
+                                "Shares":  _ss_class["shares"].tolist(),
+                                "Price":   _ss_class["price"].tolist(),
+                                "Status":  _ss_class["match_reason"].tolist(),
+                            })
 
-                                if _ss_n_ok > 0:
-                                    st.session_state["trades_df"] = db.load_trades()
-                                    _ss_recalc = db.recalculate_from_trades(
-                                        st.session_state["trades_df"]
-                                    )
-                                    db.save_holdings(_ss_recalc["holdings_df"])
-                                    st.session_state["holdings_df"] = (
-                                        _ss_recalc["holdings_df"]
-                                    )
-                                    _ss_n_corrected = 0
-                                    for _ss_tid, _ss_c in (
-                                        _ss_recalc["realized_pnl_corrections"].items()
+                            _ss_edited = st.data_editor(
+                                _ss_preview,
+                                column_config={
+                                    "Import?": st.column_config.CheckboxColumn(
+                                        "Import?", default=True
+                                    ),
+                                    "Date":    st.column_config.TextColumn(
+                                        "Date (YYYY-MM-DD)",
+                                        help="Edit if the inferred year is wrong.",
+                                    ),
+                                    "Ticker":  st.column_config.TextColumn(
+                                        "Ticker",
+                                        help="Inferred from company name — correct if wrong.",
+                                    ),
+                                    "Company": st.column_config.TextColumn(
+                                        "Company", disabled=True
+                                    ),
+                                    "Action":  st.column_config.TextColumn(
+                                        "Action", disabled=True
+                                    ),
+                                    "Shares":  st.column_config.NumberColumn(
+                                        "Shares", format="%.4g", disabled=True
+                                    ),
+                                    "Price":   st.column_config.NumberColumn(
+                                        "Price ($)", format="$%.2f", disabled=True
+                                    ),
+                                    "Status":  st.column_config.TextColumn(
+                                        "Status", disabled=True
+                                    ),
+                                },
+                                hide_index=True,
+                                width='stretch',
+                                key="_ss_editor",
+                            )
+
+                            # In-app-not-in-pasted-history: trades in the app within the
+                            # date range that don't appear in the pasted text.
+                            _ss_dates = _ss_trades["activity_date"].dropna()
+                            if not _ss_dates.empty:
+                                _ss_range_from = _ss_dates.min()
+                                _ss_range_to   = _ss_dates.max()
+                                _ss_app_only = _bscr.find_app_only_in_range(
+                                    _ss_trades,
+                                    st.session_state.get("trades_df"),
+                                    date_from=_ss_range_from,
+                                    date_to=_ss_range_to,
+                                )
+                                if not _ss_app_only.empty:
+                                    with st.expander(
+                                        f"🔍 {len(_ss_app_only)} trade(s) in app "
+                                        f"({_ss_range_from} → {_ss_range_to}) "
+                                        "not seen in pasted history — review",
+                                        expanded=False,
                                     ):
-                                        if db.update_trade_realized_pnl(
-                                            _ss_tid,
-                                            _ss_c["realized_pnl"],
-                                            cost_basis=_ss_c["cost_basis"],
-                                        ):
-                                            _ss_n_corrected += 1
-
-                                    st.session_state.pop("_tj_drift_checked", None)
-                                    st.session_state.pop("_tj_drift_state", None)
-                                    st.session_state.pop("_ss_parsed", None)
-
-                                    st.session_state["_bi_last_result"] = {
-                                        "n_imported":  _ss_n_ok,
-                                        "n_corrected": _ss_n_corrected,
-                                        "warnings":    list(
-                                            _ss_recalc.get("warnings", [])
-                                        )[:5],
-                                        "holdings_df": _ss_recalc["holdings_df"],
-                                    }
-                                    if _ss_n_fail:
-                                        st.warning(
-                                            f"{_ss_n_fail} row(s) failed to save — "
-                                            "see Data Health tab for details."
+                                        st.caption(
+                                            "These trades exist in your journal within the "
+                                            "pasted history's date range but don't appear in the "
+                                            "text. They may be legitimately absent (logged "
+                                            "manually, different account) or could indicate a "
+                                            "discrepancy. No action is taken automatically — "
+                                            "investigate and correct via the Log a Trade form."
                                         )
-                                    st.rerun()
-                                elif not db.has_db():
-                                    st.error(
-                                        "No database connected — can't import. "
-                                        "Check your Supabase secrets / the Data Health tab."
-                                    )
+                                        st.dataframe(
+                                            _ss_app_only, hide_index=True,
+                                            width='stretch',
+                                        )
+
+                            if st.button(
+                                "📥 Import selected trades",
+                                key="_ss_import_btn",
+                                type="primary",
+                                disabled=st.session_state.get("_readonly", False),
+                                help=(
+                                    "Read-only viewer — changes are disabled"
+                                    if st.session_state.get("_readonly", False)
+                                    else None
+                                ),
+                            ):
+                                _ss_selected = _ss_edited[_ss_edited["Import?"] == True]
+                                if _ss_selected.empty:
+                                    st.warning("Nothing selected.")
                                 else:
-                                    st.error(
-                                        "Import failed — no trades were saved. "
-                                        "Check the Data Health tab for details."
+                                    _ss_sel = _ss_selected.copy()
+                                    _ss_sel["_sort_action"] = (
+                                        _ss_sel["Action"] == "SELL"
+                                    ).astype(int)
+                                    _ss_sel = _ss_sel.sort_values(
+                                        ["Date", "_sort_action"]
                                     )
+
+                                    _ss_today_str = _today_et().isoformat()
+                                    _ss_n_ok   = 0
+                                    _ss_n_fail = 0
+                                    for _, _ss_row in _ss_sel.iterrows():
+                                        try:
+                                            _ss_rec = {
+                                                "ticker":       str(_ss_row["Ticker"]).upper().strip(),
+                                                "action":       str(_ss_row["Action"]),
+                                                "shares":       float(_ss_row["Shares"]),
+                                                "price":        float(_ss_row["Price"]),
+                                                "traded_at":    str(_ss_row["Date"]),
+                                                "trigger_type": "MANUAL",
+                                                "notes":        f"RH text import {_ss_today_str}",
+                                            }
+                                        except (TypeError, ValueError):
+                                            _ss_n_fail += 1
+                                            continue
+                                        if db.save_trade(_ss_rec):
+                                            _ss_n_ok += 1
+                                        else:
+                                            _ss_n_fail += 1
+
+                                    if _ss_n_ok > 0:
+                                        st.session_state["trades_df"] = db.load_trades()
+                                        _ss_recalc = db.recalculate_from_trades(
+                                            st.session_state["trades_df"]
+                                        )
+                                        db.save_holdings(_ss_recalc["holdings_df"])
+                                        st.session_state["holdings_df"] = (
+                                            _ss_recalc["holdings_df"]
+                                        )
+                                        _ss_n_corrected = 0
+                                        for _ss_tid, _ss_c in (
+                                            _ss_recalc["realized_pnl_corrections"].items()
+                                        ):
+                                            if db.update_trade_realized_pnl(
+                                                _ss_tid,
+                                                _ss_c["realized_pnl"],
+                                                cost_basis=_ss_c["cost_basis"],
+                                            ):
+                                                _ss_n_corrected += 1
+
+                                        st.session_state.pop("_tj_drift_checked", None)
+                                        st.session_state.pop("_tj_drift_state", None)
+                                        st.session_state.pop("_ss_parsed", None)
+
+                                        st.session_state["_bi_last_result"] = {
+                                            "n_imported":  _ss_n_ok,
+                                            "n_corrected": _ss_n_corrected,
+                                            "warnings":    list(
+                                                _ss_recalc.get("warnings", [])
+                                            )[:5],
+                                            "holdings_df": _ss_recalc["holdings_df"],
+                                        }
+                                        if _ss_n_fail:
+                                            st.warning(
+                                                f"{_ss_n_fail} row(s) failed to save — "
+                                                "see Data Health tab for details."
+                                            )
+                                        st.rerun()
+                                    elif not db.has_db():
+                                        st.error(
+                                            "No database connected — can't import. "
+                                            "Check your Supabase secrets / the Data Health tab."
+                                        )
+                                    else:
+                                        st.error(
+                                            "Import failed — no trades were saved. "
+                                            "Check the Data Health tab for details."
+                                        )
+
     if not db.has_db():
         st.info(
             "💡 **Database not connected** — trades above are session-only and will be lost on refresh.  \n"
