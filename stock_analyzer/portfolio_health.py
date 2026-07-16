@@ -608,5 +608,5 @@ def compute_portfolio_dynamics(
         "align_weight":    align_weight,
         "vitality_pct":    vitality_pct,
         "n_positions":     total_count,
-        "has_tenure_data": bool(first_buy),
+        "has_tenure_data": bool(open_lot_days),
     }
