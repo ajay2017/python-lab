@@ -93,7 +93,6 @@ from stock_analyzer.constants import (
     REDEPLOY_CORR_CORRELATED_MIN,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
-    DEFENSIVE_ADD_MIN_COMPOSITE,
     PERF_ALPHA_BAND_PCT,
     MACRO_IMMINENT_DAYS,
     MOVER_MIN_DAY_GAIN_PCT,
@@ -8779,8 +8778,8 @@ elif page == "🔗 Risk Analysis":
                                         _dp_cscore  = float(_dp_comp.get("total", 0)) if _dp_comp else None
                                         _dp_clabel  = str((_dp_comp.get("rec") or {}).get("label", "")) if _dp_comp else ""
 
-                                        # Skip Sell-rated composites — not suitable for defensive addition
-                                        if _dp_cscore is not None and _dp_cscore < DEFENSIVE_ADD_MIN_COMPOSITE:
+                                        # Skip Sell-rated composites (below the Hold floor) — not suitable for defensive addition
+                                        if _dp_cscore is not None and _dp_cscore < COMPOSITE_HOLD:
                                             continue
 
                                         _sig_clr = (
