@@ -8207,11 +8207,14 @@ elif page == "🔗 Risk Analysis":
             else:
                 _rm7.metric("Max Drawdown", "—", help=_tip("Portfolio Max Drawdown"))
 
-            # Interpretation banner
+            # Interpretation banner. Each flag fires at its metric's worst label
+            # band edge (see the per-metric labels above) so the ⚠️ banner and the
+            # metric labels can never drift apart: beta at the red/inverse edge (1.4),
+            # vol at "High" (≥30), Sharpe at "Weak" (<0.5), drawdown at "Significant" (<-20).
             _risk_flags = []
             if _beta is not None and _beta > 1.4:
                 _risk_flags.append(f"Beta {_beta:.2f} — portfolio moves {_beta:.1f}× the market in both directions")
-            if _vol is not None and _vol > 25:
+            if _vol is not None and _vol >= 30:
                 _risk_flags.append(f"Volatility {_vol:.0f}% annualised — expect ±{_vol/16:.1f}% daily swings on average")
             if _sh is not None and _sh < 0.5:
                 _risk_flags.append(f"Sharpe {_sh:.2f} — poor risk-adjusted return; the risk taken is not being rewarded")

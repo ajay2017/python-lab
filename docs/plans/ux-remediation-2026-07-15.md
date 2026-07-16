@@ -97,12 +97,15 @@ All 3 Tier 2 structural changes shipped and live-reviewed.
 
 ---
 
+### ~~QW9~~ Done (2026-07-15)
+
+Risk Analysis "Risk flags" banner now fires each flag at its metric's worst label band edge (beta 1.4 = red/inverse edge, vol ≥30 = "High", Sharpe <0.5 = "Weak", drawdown <-20 = "Significant"), so the ⚠️ banner and the per-metric labels can no longer drift. Only the volatility cutoff changed (`>25` → `>=30`, aligned to the "High" band per user decision — keeps the ✅ "acceptable for a growth-tilted portfolio" message honest). Display-only awareness banner — not a gate/scoring formula, no constants.py touch, no Opus review required. `app.py:8210`.
+
 ### Deferred Quick Wins
 
-Three Quick Wins from the audit not yet addressed. Low priority; no functional impact.
+Two Quick Wins from the audit not yet addressed. Low priority; no functional impact.
 
 | Item | Location | What it is |
 |---|---|---|
 | QW8 | `app.py:10684, 10998-11007` | Single-source the ±5% outperform/underperform band (used 3 times) into one named constant |
-| QW9 | `app.py:8143-8165` vs `app.py:8217-8224` | Risk Analysis "Risk flags" banner uses different beta/vol/Sharpe/drawdown cutoffs than the per-metric labels a few lines above — align to one set |
 | QW10 | `app.py:8781, 8801-8802` | Inline `< 45` / `>= 55` composite literals sit next to an already-imported `COMPOSITE_BUY`; source from the same constant |
