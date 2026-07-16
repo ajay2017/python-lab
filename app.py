@@ -11974,8 +11974,10 @@ elif page == "🏆 Portfolio Health":
     _ph_with_ann = [p for p in _ph_positions if p["annualized_return"] is not None]
     if _ph_with_ann:
         _ph_sorted_ann = sorted(_ph_with_ann, key=lambda p: p["annualized_return"])
-        _ph_sleepers = _ph_sorted_ann[: min(3, len(_ph_sorted_ann) // 2 + 1)]
-        _ph_stars    = list(reversed(_ph_sorted_ann[-min(3, len(_ph_sorted_ann) // 2 + 1):]))
+        _ph_n = len(_ph_sorted_ann)
+        _ph_k = min(3, _ph_n // 2)   # strict halving — no +1 so panels never share a ticker
+        _ph_sleepers = _ph_sorted_ann[:_ph_k]
+        _ph_stars    = list(reversed(_ph_sorted_ann[_ph_n - _ph_k:]))
 
         def _ph_eff_row(p: dict, positive: bool) -> str:
             _pnl_color = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
