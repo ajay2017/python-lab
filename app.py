@@ -24435,22 +24435,50 @@ elif page == "🎯 My Edge":
                         )
 
                 _me_gk1, _me_gk2, _me_gk3 = st.columns(3)
-                with _me_gk1:
-                    st.metric(
-                        "Best Period",
-                        f"{_me_best.get(_me_period_field, '—')} — "
-                        f"Grade {_me_best['grade_letter']} ({_me_best['composite_score']:.0f}/100)",
-                    )
-                with _me_gk2:
-                    st.metric(
-                        "Latest Period",
-                        f"Grade {_me_latest['grade_letter']} ({_me_latest['composite_score']:.0f}/100)",
-                        help=f"{_me_latest.get(_me_period_field,'')}: "
-                             f"Win Rate {_me_latest.get('win_rate','—')}% · "
-                             f"PF {_me_latest.get('profit_factor','—')}",
-                    )
-                with _me_gk3:
-                    st.metric("Trend", _me_trend_str)
+                _me_best_letter  = _me_best["grade_letter"]
+                _me_best_col     = _me_best.get("grade_color", "#9ca3af")
+                _me_latest_letter = _me_latest["grade_letter"]
+                _me_latest_col    = _me_latest.get("grade_color", "#9ca3af")
+                _me_trend_col     = (
+                    "#16a34a" if "↑" in _me_trend_str
+                    else "#dc2626" if "↓" in _me_trend_str
+                    else "#9ca3af"
+                )
+                for _kpi_col, _kpi_label, _kpi_val, _kpi_sub, _kpi_val_col in [
+                    (
+                        _me_gk1, "BEST PERIOD",
+                        f"{_me_best.get(_me_period_field, '—')} — Grade {_me_best_letter} ({_me_best['composite_score']:.0f}/100)",
+                        "",
+                        _me_best_col,
+                    ),
+                    (
+                        _me_gk2, "LATEST PERIOD",
+                        f"Grade {_me_latest_letter} ({_me_latest['composite_score']:.0f}/100)",
+                        f"Win Rate {_me_latest.get('win_rate','—')}%  ·  PF {_me_latest.get('profit_factor','—')}",
+                        _me_latest_col,
+                    ),
+                    (
+                        _me_gk3, "TREND",
+                        _me_trend_str,
+                        "",
+                        _me_trend_col,
+                    ),
+                ]:
+                    with _kpi_col:
+                        st.markdown(
+                            f'<div style="background:#111827;border:1px solid #1f2937;'
+                            f'border-radius:8px;padding:14px 16px;margin-bottom:8px;">'
+                            f'<div style="font-size:11px;color:#6b7280;letter-spacing:0.05em;'
+                            f'margin-bottom:6px;">{_kpi_label}</div>'
+                            f'<div style="font-size:17px;font-weight:700;color:{_kpi_val_col};'
+                            f'line-height:1.3;">{_kpi_val}</div>'
+                            + (
+                                f'<div style="font-size:12px;color:#9ca3af;margin-top:4px;">{_kpi_sub}</div>'
+                                if _kpi_sub else ""
+                            ) +
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
 
                 if not _me_prices:
                     st.caption(
@@ -24624,6 +24652,7 @@ elif page == "🎯 My Edge":
                         y=_me_hm_metrics,
                         text=_me_hm_text,
                         texttemplate="%{text}",
+                        textfont=dict(size=16, color="white"),
                         colorscale="RdYlGn",
                         showscale=False,
                     ))
@@ -24631,14 +24660,39 @@ elif page == "🎯 My Edge":
                         template="plotly_dark",
                         paper_bgcolor="rgba(0,0,0,0)",
                         plot_bgcolor="rgba(14,17,23,0.3)",
-                        height=280,
-                        margin=dict(t=10, b=10, l=0, r=0),
+                        height=320,
+                        margin=dict(t=10, b=10, l=130, r=0),
+                        font=dict(size=14),
+                        xaxis=dict(tickfont=dict(size=13), side="bottom"),
+                        yaxis=dict(tickfont=dict(size=14)),
                     )
                     st.plotly_chart(_me_fig_hm, use_container_width=True)
-                    st.caption(
-                        "Green = stronger performance · Red = weaker. "
-                        "Overtrading row: green = low trade pace, red = elevated pace "
-                        "(scale inverted for that row). n/a = fewer than 2 closed trades."
+
+                    # Row definition key (mirrors Trade Scatter tier key pattern)
+                    st.markdown(
+                        '<div style="display:flex;flex-direction:column;gap:8px;'
+                        'background:#0d1117;border:1px solid #1f2937;border-radius:8px;'
+                        'padding:12px 16px;margin-bottom:8px;">'
+                        '<div style="font-size:12px;color:#6b7280;margin-bottom:2px;">'
+                        'Green = stronger &nbsp;·&nbsp; Red = weaker &nbsp;·&nbsp; '
+                        '<b style="color:#9ca3af;">n/a</b> = fewer than 2 closed trades in that period'
+                        '</div>'
+                        '<div style="display:flex;gap:24px;flex-wrap:wrap;">'
+                        '<div style="font-size:13px;color:#e5e7eb;">'
+                        '<b>Win Rate</b> <span style="color:#6b7280;">— % of closed trades that were profitable</span>'
+                        '</div>'
+                        '<div style="font-size:13px;color:#e5e7eb;">'
+                        '<b>Profit Factor</b> <span style="color:#6b7280;">— total gains ÷ total losses (>1 = net positive)</span>'
+                        '</div>'
+                        '<div style="font-size:13px;color:#e5e7eb;">'
+                        '<b>Alpha vs SPY</b> <span style="color:#6b7280;">— your return minus what SPY earned over the same hold period</span>'
+                        '</div>'
+                        '<div style="font-size:13px;color:#e5e7eb;">'
+                        '<b>Overtrading ×</b> <span style="color:#6b7280;">— trade pace vs your 12-month avg (green = calm, red = elevated)</span>'
+                        '</div>'
+                        '</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
                     )
 
                 else:  # Cohort Compare
