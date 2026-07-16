@@ -67,6 +67,20 @@ This is a decision-making app: a **wrong value in a doc erodes trust in the app 
 
 ---
 
+## Definition of Done — sync docs in the SAME session (don't defer to a periodic audit)
+
+A user-facing feature or a new/changed decision value is **not done** until its docs are synced in the same work session. Three shipped features (Phase 3 Catalyst Scanner, Phase 2b sentiment, the 44/45 gate) drifted undocumented for days before the 2026-07-16 sweep caught them — the fix is a per-feature checkpoint, not a rare cleanup. Run this every time:
+
+1. **New/changed constant in `stock_analyzer/constants.py`** → add/update its row in the `docs/architecture.md` constants table (or, if genuinely internal plumbing, add it to `scripts/constants_doc_allowlist.txt`). **Mechanically enforced:** `.github/workflows/docs-check.yml` runs `scripts/check_constants_documented.py` and fails when a constant is neither documented nor allowlisted. Run it locally before committing: `python scripts/check_constants_documented.py`.
+2. **New user-facing surface** (page, tab, card, gate, section) → add/update an F-ID in `docs/requirements.md`. *(Judgment item — CI can't detect "this is user-facing"; it's on the author.)*
+3. **Shipped a queued item** → move it out of "What's queued → Genuinely not yet done" into "Recently shipped" below, and fix any memory that still calls it parked. At the start of any doc-sync, grep the queue's named functions/features against the code to catch items that already shipped.
+4. **User-visible behaviour changed** → update the in-app User Guide (`app.py`, `elif page == "📖 User Guide":`).
+5. **Non-obvious decision or rationale** → capture it in a memory file.
+
+Only #1 is mechanically guarded; #2–#5 are the author's checklist. When wrapping up a feature or doing a "sync the docs" pass, run all five.
+
+---
+
 ## Pointers
 
 | Need | Where |

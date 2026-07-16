@@ -1,0 +1,37 @@
+name: Docs sync check
+
+# Doc-sync tripwire (CLAUDE.md "Definition of Done"). Fails loudly when a new
+# module-level constant in stock_analyzer/constants.py is neither documented in
+# docs/ nor listed in scripts/constants_doc_allowlist.txt. Catches the highest-
+# frequency doc-drift class — a decision threshold shipping without a docs entry
+# (the class that hid EARNINGS_MIN_BEAT_RATE_ENTRY / PERF_ALPHA_BAND_PCT for days
+# in July 2026). Pure stdlib; no install step.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "stock_analyzer/constants.py"
+      - "docs/architecture.md"
+      - "docs/requirements.md"
+      - "scripts/check_constants_documented.py"
+      - "scripts/constants_doc_allowlist.txt"
+  pull_request:
+    paths:
+      - "stock_analyzer/constants.py"
+      - "docs/architecture.md"
+      - "docs/requirements.md"
+      - "scripts/check_constants_documented.py"
+      - "scripts/constants_doc_allowlist.txt"
+  workflow_dispatch: {}
+
+jobs:
+  constants-documented:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Check every constant is documented or allowlisted
+        run: python scripts/check_constants_documented.py
