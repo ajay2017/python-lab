@@ -491,15 +491,20 @@ def compute_portfolio_dynamics(
 
     today = datetime.date.today()
 
-    # Map ticker → first BUY date from trades history
-    first_buy: dict[str, datetime.date] = {}
+    # Map ticker → days held for the oldest OPEN lot (FIFO-aware).
+    # Using dates.min() across all historical BUYs was wrong: a re-entered
+    # position (sold then re-bought) would inherit the prior position's buy
+    # date, inflating tenure. _build_open_lots replays BUY/SELL/SPLIT in
+    # order so closed lots are consumed and the clock resets on re-entry.
+    from stock_analyzer.tax_advisor import _build_open_lots  # local — avoids circular dep
+    open_lot_days: dict[str, int] = {}
     if trades_df is not None and not getattr(trades_df, "empty", True):
         try:
-            buys = trades_df[trades_df["action"].str.upper() == "BUY"]
-            for ticker, grp in buys.groupby("ticker"):
-                dates = pd.to_datetime(grp["traded_at"], utc=True, errors="coerce").dropna()
-                if not dates.empty:
-                    first_buy[str(ticker).upper()] = dates.min().date()
+            held_tickers = port_df["Ticker"].astype(str).str.upper().unique()
+            for t in held_tickers:
+                lots = _build_open_lots(t, trades_df, today)
+                if lots:
+                    open_lot_days[t] = max(l["days_held"] for l in lots)
         except Exception:
             pass
 
@@ -528,8 +533,8 @@ def compute_portfolio_dynamics(
         except (TypeError, ValueError):
             pnl_pct = None
 
-        fb = first_buy.get(ticker)
-        months_held: float | None = round((today - fb).days / 30.44, 2) if fb else None
+        days = open_lot_days.get(ticker)
+        months_held: float | None = round(days / 30.44, 2) if days is not None else None
 
         annualized_return: float | None = None
         if pnl_pct is not None and months_held is not None and months_held >= 0.5:
