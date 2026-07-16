@@ -14921,7 +14921,7 @@ elif page == "📋 Watchlist":
     if _wl_brief_offline:
         st.warning(
             "⚠ **Today's Brief offline** — sector-overlap and active-risk-alert gates "
-            "on ENTER_NOW recommendations cannot run. The Watchlist will still show "
+            "on Ready-to-Enter recommendations cannot run. The Watchlist will still show "
             "stock-level signals, but coordination with Grow Today / Risk Advisor is "
             "currently disabled. Visit the Portfolio page first to rebuild the briefing."
         )
@@ -16695,7 +16695,7 @@ elif page == "📒 Trade Journal":
         # ── Opportunity Cost — what you passed on and what it cost ───────────────
         with st.expander("💸 Opportunity Cost — Recommendations You Passed On", expanded=False):
             st.caption(
-                "Compares each new_pick recommendation you didn't act on against what it returned. "
+                "Compares each \"New Positions to Initiate\" recommendation you didn't act on against what it returned. "
                 "Full chart is on the Recommendations History page; this is the 90-day summary."
             )
             try:
@@ -16734,9 +16734,9 @@ elif page == "📒 Trade Journal":
                         st.success("✅ No missed opportunities with outcomes in the last 90 days.")
                     else:
                         _oc_c1, _oc_c2, _oc_c3, _oc_c4 = st.columns(4)
-                        _oc_c1.metric("Recs Passed", n_missed, help="Distinct new_pick recs you didn't act on (90d)")
-                        _oc_c2.metric("Would've Won", n_winners, help="Passed recs that went up")
-                        _oc_c3.metric("Dodged Losers", n_dodged, help="Passed recs that fell — good pass")
+                        _oc_c1.metric("Recommendations Passed", n_missed, help="Distinct \"New Positions to Initiate\" recommendations you didn't act on (90d)")
+                        _oc_c2.metric("Would've Won", n_winners, help="Passed recommendations that went up")
+                        _oc_c3.metric("Dodged Losers", n_dodged, help="Passed recommendations that fell — good pass")
                         _oc_c4.metric(
                             "Avg Missed Return",
                             f"{avg_pct:+.1f}%" if avg_pct is not None else "—",
@@ -17047,7 +17047,7 @@ elif page == "📒 Trade Journal":
                             if _n_corrected:
                                 st.info(
                                     f"🔄 Holdings rebuilt from {len(fresh_trades)} trades. "
-                                    f"Also corrected realized_pnl on **{_n_corrected}** SELL "
+                                    f"Also corrected realized P&L on **{_n_corrected}** SELL "
                                     "row(s) whose stored figures were computed from a stale "
                                     "cost basis."
                                 )
@@ -17108,7 +17108,7 @@ elif page == "📒 Trade Journal":
                             st.dataframe(pd.DataFrame(_corr_rows), hide_index=True,
                                          width='stretch')
                         else:
-                            st.caption("No realized_pnl corrections needed — all SELL rows are accurate.")
+                            st.caption("No realized P&L corrections needed — all SELL rows are accurate.")
                         if warns:
                             for _w in warns[:5]:
                                 st.warning(f"⚠ {_w}")
@@ -17139,7 +17139,7 @@ elif page == "📒 Trade Journal":
                 st.success(f"✅ Imported {_bi_last['n_imported']} trade(s).")
                 if _bi_last.get("n_corrected"):
                     st.info(
-                        f"🔄 Holdings rebuilt. Also corrected realized_pnl on "
+                        f"🔄 Holdings rebuilt. Also corrected realized P&L on "
                         f"**{_bi_last['n_corrected']}** SELL row(s) whose stored "
                         "figures were computed from a stale cost basis."
                     )
@@ -18663,7 +18663,7 @@ elif page == "📜 Recommendations History":
             _rh_start = _rh_end - _rh_td(days=30)
     with _rh_c2:
         _rh_type_filter = st.multiselect(
-            "Rec type",
+            "Recommendation type",
             ["new_pick", "add_winner", "buy_candidate"],
             default=["new_pick", "add_winner"],
             format_func=lambda v: _REC_TYPE_LABELS.get(v, v),
@@ -18774,7 +18774,7 @@ elif page == "📜 Recommendations History":
             "Action rate",
             f"{_rh_stats['action_rate']:.0f}%" if _rh_stats['action_rate'] is not None else "—",
             f"{_rh_stats['n_acted']:,} acted",
-            help="Acted = same-day trade with trigger_type='RECOMMENDATION'.",
+            help="Acted = a same-day trade you logged as following a recommendation.",
         )
         _rh_m3.metric(
             "Avg acted outcome",
@@ -18849,7 +18849,7 @@ elif page == "📜 Recommendations History":
             if _rh_sk_fig is not None:
                 st.plotly_chart(_rh_sk_fig, use_container_width=True)
                 st.caption(
-                    f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
+                    f"**Distinct tickers** surfaced as New Positions to Initiate — "
                     f"a name recurring across days counts once. The awareness only More Buy "
                     f"Candidates feed is excluded. Win/Loss count **matured** outcomes only "
                     f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recommendations within ±0.5%, "
@@ -18871,7 +18871,7 @@ elif page == "📜 Recommendations History":
 
             st.markdown("### 🎯 Missed Opportunity — New Positions to Initiate you skipped")
             st.caption(
-                "Scoped to **New Positions to Initiate** (`new_pick` — names that cleared "
+                "Scoped to **New Positions to Initiate** (names that cleared "
                 "all gates). The awareness only **More Buy Candidates** feed (Conflicted / "
                 "Unverified names the App flags to skip, e.g. a sub-65 composite) is "
                 "**excluded** — skipping those was the correct call, not a miss."
@@ -19036,7 +19036,7 @@ elif page == "📜 Recommendations History":
                 st.caption("No score-banded data in this range yet.")
 
         # ── By rec type ─────────────────────────────────────────────────────────
-        with st.expander("🧭 Breakdown by rec type", expanded=False):
+        with st.expander("🧭 Breakdown by recommendation type", expanded=False):
             _rh_types = by_rec_type(_rh_enriched)
             if _rh_types:
                 _rh_t_df = _rh_pd.DataFrame([
@@ -19118,26 +19118,26 @@ elif page == "📜 Recommendations History":
 
         st.caption(
             "_Outcome math — Acted BUY: mark-to-market vs entry price; Acted SELL: "
-            "realized P&L from the journal; Missed: % change from price-at-surface "
+            "realized P&L from the journal; Missed: % change from the price when first surfaced "
             "(when stored) to current. **α vs SPY** = outcome minus SPY over the same "
-            "rec-date→today window (the regime-adjusted read; blank for SELLs, whose "
+            "surfacing-date→today window (the regime-adjusted read; blank for SELLs, whose "
             "realized P&L spans an unknown holding period). **⏳ Maturing** recommendations are "
             f"younger than {REC_SCORE_MIN_DAYS} days — shown but excluded from the "
-            "aggregates above. Older recommendations surfaced before price_at_surface was captured "
+            "aggregates above. Older recommendations surfaced before that price was captured "
             "show '—'._"
         )
         with st.expander("ℹ️ How to read this table", expanded=False):
             st.markdown(
                 f"""
-**Verdict** — the App's confidence at the moment the rec was first surfaced:
+**Verdict** — the App's confidence at the moment the recommendation was first surfaced:
 - **✅ Confirmed** — composite cleared the Buy gate (≥ {COMPOSITE_BUY}) AND no conflicts. Highest signal weight; these are the "the App tells you to act" rows.
 - **⚠️ Mixed / Caution** — a soft conflict was present (negative news, earnings within {EARNINGS_IMMINENT_DAYS} days, etc.). The App surfaced the signal but flagged a watch-out.
 - **❌ Conflicted** — hard conflict (composite says Hold/Sell while momentum says Buy, or earnings + signal conflict). Don't act on these.
 - **🔍 Unverified** — composite wasn't loaded for the ticker at surface time, so the App couldn't verify the multi-factor signal. *Treat these as momentum-only suggestions* — they need an Analysis page check before acting.
 
-**Composite / Momentum** — Momentum is the scanner's technical-only score; Composite is the full multi-factor score (technical + fundamentals + sentiment). A Composite of NaN means it wasn't loaded at surface time — usually because it was a buy_candidate row from before we started populating composites for that surface (commit before today's fix), or because the pre-fetch failed for that ticker.
+**Composite / Momentum** — Momentum is the scanner's technical-only score; Composite is the full multi-factor score (technical + fundamentals + sentiment). A Composite of NaN means it wasn't loaded at surface time — usually because it was a lower-confidence *More Buy Candidates* row from before the app began loading composite scores for that view, or because the score fetch failed for that ticker.
 
-**Outcome** — meaningful when the rec had a priced reference. NaN composite + Unverified verdict + low outcome usually means "the App showed it on momentum alone, you correctly skipped, market moved against the momentum signal anyway." That's a *good* skip even though the row looks unimpressive.
+**Outcome** — meaningful when the recommendation had a priced reference. NaN composite + Unverified verdict + low outcome usually means "the App showed it on momentum alone, you correctly skipped, market moved against the momentum signal anyway." That's a *good* skip even though the row looks unimpressive.
 
 **Early rows** (before verdict logic matured) may have sparse composites and "Unverified" verdicts — this is expected and doesn't need action. New rows will have richer verdicts as the engine accumulates history.
 """
@@ -21606,7 +21606,7 @@ The app's intelligence is computed live in your browser — so it can only reach
             """
 DRISHTA uses AI across **ten touchpoints** organised into two tracks. A **fast extraction track** (Haiku) runs per-request and handles scoring and structured data extraction. A **deep reflection track** (Claude) generates narrative intelligence about your decisions over time. The diagram above shows every data path.
 
-**One guarantee, precisely stated:** Gate thresholds — BUY ≥ 65, sector caps, stop rules — live in `constants.py` and are set by rules only. The AI never moves them. The **Sentiment pillar** (10% of composite) is the one place LLM scoring feeds back into the engine: Haiku re-scores news headlines with financial domain context that VADER alone cannot provide. Every other AI output is pure awareness — the engine never reads it back, and if the AI layer is offline every page and protection works exactly the same.
+**One guarantee, precisely stated:** Gate thresholds — BUY ≥ 65, sector caps, stop rules — live in the app's rules-only configuration and are set by rules only. The AI never moves them. The **Sentiment pillar** (10% of composite) is the one place LLM scoring feeds back into the engine: Haiku re-scores news headlines with financial domain context that VADER alone cannot provide. Every other AI output is pure awareness — the engine never reads it back, and if the AI layer is offline every page and protection works exactly the same.
 
 ---
 
@@ -21693,7 +21693,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
-- **🔔 Catalyst Watch** — three tabs: **📋 Holdings** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy rec).
+- **🔔 Catalyst Watch** — three tabs: **📋 Holdings** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
@@ -21720,7 +21720,7 @@ The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report n
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
 
-The page has three tabs: **📋 Holdings** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy rec) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
+The page has three tabs: **📋 Holdings** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
 """
         )
 
@@ -22367,7 +22367,7 @@ elif page == "🧠 AI Insights":
             st.info(
                 "No weekly debriefs yet. Click **Generate Now** to create one on-demand, "
                 "or wait for the Sunday evening cron (runs automatically once "
-                "`daily_snapshots` has ≥5 trading days of data)."
+                "daily snapshots has ≥5 trading days of data)."
             )
         else:
             _wd = _wd_df.iloc[0]
@@ -22546,7 +22546,7 @@ elif page == "🧠 AI Insights":
         if _mr_df.empty:
             st.info(
                 "No monthly reports yet. Click **Generate Monthly Report** for an on-demand "
-                "run, or wait for the first-Sunday-of-month cron (needs the `monthly_reports` "
+                "run, or wait for the first-Sunday-of-month cron (needs the monthly reports "
                 "table — run the DDL in Supabase to activate)."
             )
         else:

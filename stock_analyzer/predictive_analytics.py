@@ -416,7 +416,7 @@ def synthesize_directives(
                 "type": "action",
                 "text": (
                     f"Your strongest sector is {best['sector']} "
-                    f"({best['avg_alpha']:+.1f}pp avg alpha, n={best['n']}). "
+                    f"({best['avg_alpha']:+.1f}pp avg alpha, {best['n']} outcomes). "
                     f"When composites are borderline, prioritise signals here — "
                     f"this is where the engine has worked best for you."
                 ),
@@ -438,7 +438,7 @@ def synthesize_directives(
                 "type": "caution",
                 "text": (
                     f"Signals in {worst['sector']} have cost the most alpha "
-                    f"({worst['avg_alpha']:+.1f}pp avg, n={worst['n']}). "
+                    f"({worst['avg_alpha']:+.1f}pp avg, {worst['n']} outcomes). "
                     f"Be more skeptical of engine signals here until the pattern reverses."
                 ),
                 "source_tab": "🌐 Sector Alpha",
