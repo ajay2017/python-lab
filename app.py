@@ -21690,10 +21690,10 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🥧 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing.
 - **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.
-- **📒 Trade Journal** — your logged trades (the source of truth for holdings, P&L, position age); log by hand or **📥 import a Robinhood statement**.
+- **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
 - **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
-- **🔔 Catalyst Watch** — upcoming earnings for held + watchlist + sector names (awareness, not a buy signal).
+- **🔔 Catalyst Watch** — three tabs: **📋 Holdings** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy rec).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
@@ -21719,6 +21719,8 @@ It's a **learning** surface, not a recommendation surface — it shows how the e
 The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report never blindsides you, across three tiers: **your holdings**, your **watchlist**, and the broader **sector universe** the scanner follows. A 🔥 flag marks a sector heating up with near-term reports.
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
+
+The page has three tabs: **📋 Holdings** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy rec) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
 """
         )
 
