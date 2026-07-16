@@ -20208,211 +20208,213 @@ elif page == "🔔 Catalyst Watch":
     # (stashed in session) — so this is the SAME rich content the old Home
     # 'Earnings' tab showed, now living here. If Home hasn't been opened this
     # session, prompt rather than re-deriving (avoids a heavy duplicate load).
-    st.markdown("## 📊 Your Holdings — Earnings")
-    _cw_pdf = st.session_state.get("_last_port_df")
-    _cw_hd  = st.session_state.get("_last_held_data")
-    if _cw_pdf is None or _cw_hd is None or (hasattr(_cw_pdf, "empty") and _cw_pdf.empty):
-        _render_portfolio_not_loaded(show_home_button=True, key_suffix="cw")
-    else:
-        _render_holdings_earnings(_cw_pdf, _cw_hd)
-        _cw_hold_tk = sorted({
-            str(r.get("Ticker", "")).strip().upper()
-            for _, r in _cw_pdf.iterrows() if str(r.get("Ticker", "")).strip()
-        })
-        if _cw_hold_tk:
-            st.markdown("**🔎 Jump to full Analysis →**")
-            _cw_ac1, _cw_ac2 = st.columns([3, 1])
-            with _cw_ac1:
-                _cw_an = st.selectbox("holding", _cw_hold_tk, key="_cw_hold_analyze_sel",
-                                      label_visibility="collapsed")
-            with _cw_ac2:
-                if st.button("▶ Open", key="_cw_hold_analyze_btn", use_container_width=True):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _cw_an
-                    st.rerun()
+    _cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Holdings", "📡 Radar", "🎯 Entry Candidates"])
 
-    st.divider()
-
-    # ── Tier 2: On Your Radar — watchlist + universe (awareness only) ───────
-    st.markdown("## 🔭 On Your Radar — Watchlist & Universe")
-    st.caption(
-        "Upcoming earnings for names you don't hold yet — your watchlist and the "
-        "curated sector universe. Pure awareness; research any name on the Analysis page."
-    )
-
-    from datetime import timedelta as _cw_td
-    _cw_today = _today_et()
-    _cw_from  = _cw_today.isoformat()
-    _cw_to    = (_cw_today + _cw_td(days=CATALYST_WATCH_WINDOW_DAYS)).isoformat()
-
-    # Tracked universe = held ∪ watchlist ∪ curated sector universe.
-    _cw_watch = {str(t).upper() for t in st.session_state.get("watchlist", [])}
-    _cw_held  = {
-        str(r.get("Ticker", "")).strip().upper()
-        for _, r in st.session_state.get("holdings_df", pd.DataFrame()).iterrows()
-        if str(r.get("Ticker", "")).strip()
-    }
-    _cw_secmap: dict = {}
-    for _sec, _tks in SECTOR_UNIVERSE.items():
-        for _tk in _tks:
-            _cw_secmap[_tk.upper()] = _sec
-    for _t in _cw_held:
-        _cw_secmap.setdefault(_t, TICKER_SECTORS.get(_t, ""))
-    _cw_tracked = set(_cw_secmap) | _cw_held | _cw_watch
-    _cw_lead = set(st.session_state.get("_leading_sectors_cache", []) or [])
-
-    _cw_rc1, _cw_rc2 = st.columns([5, 1])
-    with _cw_rc2:
-        if st.button("🔄 Refresh", key="_cw_refresh", use_container_width=True,
-                     help="Re-fetch today's earnings calendar (otherwise cached for the day)."):
-            _cached_catalyst_calendar.clear()
-            st.rerun()
-
-    with st.spinner("Loading earnings calendar…"):
-        _cw_cal  = _cached_catalyst_calendar(tuple(sorted(_cw_tracked)), _cw_from, _cw_to)
-        _cw_rows = build_catalyst_watch(
-            tracked=_cw_tracked, held_tickers=_cw_held, watchlist=_cw_watch,
-            sector_lookup=_cw_secmap, calendar_rows=_cw_cal, held_earnings={},
-            leading_sector_names=_cw_lead, today=_cw_today,
-            window_days=CATALYST_WATCH_WINDOW_DAYS,
-        )
-    # Holdings are covered in Tier 1 above — keep the radar to non-held names.
-    _cw_rows = [r for r in _cw_rows if r["ownership"] != "held"]
-
-    st.caption(
-        f"Watching {len(_cw_tracked - _cw_held)} watchlist/universe names · "
-        f"{len(_cw_rows)} reporting in the next {CATALYST_WATCH_WINDOW_DAYS} days · updated daily."
-    )
-
-    if not _cw_rows:
-        st.info(
-            f"No earnings in your tracked names in the next {CATALYST_WATCH_WINDOW_DAYS} days. "
-            "Check back — this refreshes daily."
-        )
-    else:
-        _cw_chip = {
-            "held":      ("#1e3a8a", "#bfdbfe", "held"),
-            "watchlist": ("#4c1d95", "#ddd6fe", "watchlist"),
-            "universe":  ("#374151", "#d1d5db", "universe"),
-        }
-        # Group by timeframe so the eye lands on the most imminent first.
-        _cw_buckets = [("📍 Today", 0, 0), ("🔜 Tomorrow", 1, 1),
-                       (f"🗓️ Next {CATALYST_WATCH_WINDOW_DAYS} days", 2, CATALYST_WATCH_WINDOW_DAYS)]
-        for _blabel, _lo, _hi in _cw_buckets:
-            _grp = [r for r in _cw_rows if _lo <= r["days"] <= _hi]
-            if not _grp:
-                continue
-            st.markdown(f"#### {_blabel}")
-            for _r in _grp:
-                _when = f" · {_r['when']}" if _r["when"] else ""
-                _hot  = " 🔥" if _r["sector_hot"] else ""
-                _bg, _fg, _lbl = _cw_chip.get(_r["ownership"], _cw_chip["universe"])
-                st.markdown(
-                    "<div style='background:#0b1220;border:1px solid #334155;"
-                    "border-radius:8px;padding:8px 14px;margin:4px 0;"
-                    "display:flex;justify-content:space-between;align-items:center'>"
-                    f"<span><b style='font-size:1.05em;color:#f9fafb'>{_r['ticker']}</b> "
-                    f"<span style='color:#9ca3af'>· {_r['sector']}{_hot}</span></span>"
-                    f"<span><span style='color:#fbbf24;font-size:0.85em'>{_r['date']}{_when}</span> "
-                    f"<span style='background:{_bg};color:{_fg};border-radius:8px;"
-                    f"padding:1px 7px;font-size:0.8em;margin-left:8px'>{_lbl}</span></span>"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-
-        # Analyze link for any radar name (the ticker→research jump).
-        _cw_radar_tk = sorted({r["ticker"] for r in _cw_rows})
-        if _cw_radar_tk:
-            st.markdown("**🔎 Jump to full Analysis →**")
-            _cw_rc3, _cw_rc4 = st.columns([3, 1])
-            with _cw_rc3:
-                _cw_ran = st.selectbox("radar", _cw_radar_tk, key="_cw_radar_analyze_sel",
-                                       label_visibility="collapsed")
-            with _cw_rc4:
-                if st.button("▶ Open", key="_cw_radar_analyze_btn", use_container_width=True):
-                    st.session_state["_pending_page"]    = "📈 Analysis"
-                    st.session_state["_analysis_ticker"] = _cw_ran
-                    st.rerun()
-
-    st.markdown(
-        "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
-        "🔥 = sector currently leading. Awareness only — the app does not recommend "
-        "initiating into earnings; the proximity gates still suppress that. Decide for "
-        "yourself, and let confirmed post-print moves surface via Movers.</div>",
-        unsafe_allow_html=True,
-    )
-
-    # ── Phase 3 — Catalyst Scanner: watchlist entry candidates ──────────────
-    st.divider()
-    st.markdown("## 🎯 Entry Candidates")
-    st.caption(
-        "Watchlist names near earnings with a strong historical beat rate, a positive or "
-        "mixed post-earnings reaction pattern, and a composite score above the entry threshold. "
-        "Awareness only — never a Buy recommendation. Research any name on the Analysis page."
-    )
-
-    _cw_watchlist_tickers = list(st.session_state.get("watchlist", []))
-    _cw_composites        = st.session_state.get("_grow_composites") or {}
-
-    if not _cw_watchlist_tickers:
-        st.info("No watchlist names configured. Add tickers to your watchlist to use the Catalyst Scanner.")
-    else:
-        from stock_analyzer.earnings_advisor import build_earnings_catalyst_candidates as _build_candidates
-        from stock_analyzer.db import load_earnings_context_batch as _load_ec_batch
-
-        _cw_ec_batch = _load_ec_batch(list(_cw_watchlist_tickers), max_age_days=90)
-        _cw_candidates = _build_candidates(
-            watchlist_tickers=_cw_watchlist_tickers,
-            held_tickers=_cw_held,
-            composites=_cw_composites,
-            earnings_context=_cw_ec_batch,
-            today=_cw_today,
-            lookahead_days=30,
-        )
-
-        if not _cw_candidates:
-            if not _cw_ec_batch:
-                st.info(
-                    "No CNBC earnings articles pasted for watchlist names yet. "
-                    "Use **🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings** to paste articles "
-                    "and the scanner will populate here."
-                )
-            else:
-                st.info(
-                    "No watchlist names currently pass all filters (beat rate ≥ 70%, "
-                    "composite ≥ 65, reaction not bearish, earnings within 30 days)."
-                )
+    with _cw_tab_hold:
+        st.markdown("## 📊 Your Holdings — Earnings")
+        _cw_pdf = st.session_state.get("_last_port_df")
+        _cw_hd  = st.session_state.get("_last_held_data")
+        if _cw_pdf is None or _cw_hd is None or (hasattr(_cw_pdf, "empty") and _cw_pdf.empty):
+            _render_portfolio_not_loaded(show_home_button=True, key_suffix="cw")
         else:
-            st.caption(f"{len(_cw_candidates)} candidate{'s' if len(_cw_candidates) != 1 else ''} · ranked by beat rate × composite × reaction")
-            for _cand in _cw_candidates:
-                _rxn_emoji = {"bullish": "🟢", "mixed": "🟡"}.get(_cand["reaction"], "🟡")
-                with st.expander(
-                    f"🎯 **{_cand['ticker']}** · Beat rate {_cand['beat_rate']:.0f}% · "
-                    f"Score {_cand['score']:.0f} · {_cand['earn_date']} ({_cand['days_until']}d) "
-                    f"· {_rxn_emoji} {_cand['reaction'].capitalize()} reaction",
-                    expanded=False,
-                ):
-                    _info_parts = [
-                        f"Beat rate **{_cand['beat_rate']:.0f}%**",
-                        f"Composite **{_cand['score']:.0f}/100**",
-                        f"**{_cand['days_until']}d** to earnings",
-                    ]
-                    if _cand["consensus_growth_pct"] is not None:
-                        _info_parts.append(f"Consensus growth **{_cand['consensus_growth_pct']:+.0f}%**")
-                    st.caption("  ·  ".join(_info_parts))
-                    if _cand["what_to_watch_cnbc"]:
-                        st.caption(f"What to watch (CNBC): {_cand['what_to_watch_cnbc']}")
-                    if st.button("▶ Analyse", key=f"_cw_cand_analyze_{_cand['ticker']}"):
+            _render_holdings_earnings(_cw_pdf, _cw_hd)
+            _cw_hold_tk = sorted({
+                str(r.get("Ticker", "")).strip().upper()
+                for _, r in _cw_pdf.iterrows() if str(r.get("Ticker", "")).strip()
+            })
+            if _cw_hold_tk:
+                st.markdown("**🔎 Jump to full Analysis →**")
+                _cw_ac1, _cw_ac2 = st.columns([3, 1])
+                with _cw_ac1:
+                    _cw_an = st.selectbox("holding", _cw_hold_tk, key="_cw_hold_analyze_sel",
+                                          label_visibility="collapsed")
+                with _cw_ac2:
+                    if st.button("▶ Open", key="_cw_hold_analyze_btn", use_container_width=True):
                         st.session_state["_pending_page"]    = "📈 Analysis"
-                        st.session_state["_analysis_ticker"] = _cand["ticker"]
+                        st.session_state["_analysis_ticker"] = _cw_an
                         st.rerun()
-    st.markdown(
-        "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
-        "Candidates shown only when CNBC Pre-Earnings articles have been pasted for these tickers "
-        "via AI Insights → Ideas Inbox. The engine does not recommend buying into earnings; "
-        "proximity gates remain active on Grow Today.</div>",
-        unsafe_allow_html=True,
-    )
+
+    with _cw_tab_radar:
+        # ── Tier 2: On Your Radar — watchlist + universe (awareness only) ───────
+        st.markdown("## 🔭 On Your Radar — Watchlist & Universe")
+        st.caption(
+            "Upcoming earnings for names you don't hold yet — your watchlist and the "
+            "curated sector universe. Pure awareness; research any name on the Analysis page."
+        )
+
+        from datetime import timedelta as _cw_td
+        _cw_today = _today_et()
+        _cw_from  = _cw_today.isoformat()
+        _cw_to    = (_cw_today + _cw_td(days=CATALYST_WATCH_WINDOW_DAYS)).isoformat()
+
+        # Tracked universe = held ∪ watchlist ∪ curated sector universe.
+        _cw_watch = {str(t).upper() for t in st.session_state.get("watchlist", [])}
+        _cw_held  = {
+            str(r.get("Ticker", "")).strip().upper()
+            for _, r in st.session_state.get("holdings_df", pd.DataFrame()).iterrows()
+            if str(r.get("Ticker", "")).strip()
+        }
+        _cw_secmap: dict = {}
+        for _sec, _tks in SECTOR_UNIVERSE.items():
+            for _tk in _tks:
+                _cw_secmap[_tk.upper()] = _sec
+        for _t in _cw_held:
+            _cw_secmap.setdefault(_t, TICKER_SECTORS.get(_t, ""))
+        _cw_tracked = set(_cw_secmap) | _cw_held | _cw_watch
+        _cw_lead = set(st.session_state.get("_leading_sectors_cache", []) or [])
+
+        _cw_rc1, _cw_rc2 = st.columns([5, 1])
+        with _cw_rc2:
+            if st.button("🔄 Refresh", key="_cw_refresh", use_container_width=True,
+                         help="Re-fetch today's earnings calendar (otherwise cached for the day)."):
+                _cached_catalyst_calendar.clear()
+                st.rerun()
+
+        with st.spinner("Loading earnings calendar…"):
+            _cw_cal  = _cached_catalyst_calendar(tuple(sorted(_cw_tracked)), _cw_from, _cw_to)
+            _cw_rows = build_catalyst_watch(
+                tracked=_cw_tracked, held_tickers=_cw_held, watchlist=_cw_watch,
+                sector_lookup=_cw_secmap, calendar_rows=_cw_cal, held_earnings={},
+                leading_sector_names=_cw_lead, today=_cw_today,
+                window_days=CATALYST_WATCH_WINDOW_DAYS,
+            )
+        # Holdings are covered in Tier 1 above — keep the radar to non-held names.
+        _cw_rows = [r for r in _cw_rows if r["ownership"] != "held"]
+
+        st.caption(
+            f"Watching {len(_cw_tracked - _cw_held)} watchlist/universe names · "
+            f"{len(_cw_rows)} reporting in the next {CATALYST_WATCH_WINDOW_DAYS} days · updated daily."
+        )
+
+        if not _cw_rows:
+            st.info(
+                f"No earnings in your tracked names in the next {CATALYST_WATCH_WINDOW_DAYS} days. "
+                "Check back — this refreshes daily."
+            )
+        else:
+            _cw_chip = {
+                "held":      ("#1e3a8a", "#bfdbfe", "held"),
+                "watchlist": ("#4c1d95", "#ddd6fe", "watchlist"),
+                "universe":  ("#374151", "#d1d5db", "universe"),
+            }
+            # Group by timeframe so the eye lands on the most imminent first.
+            _cw_buckets = [("📍 Today", 0, 0), ("🔜 Tomorrow", 1, 1),
+                           (f"🗓️ Next {CATALYST_WATCH_WINDOW_DAYS} days", 2, CATALYST_WATCH_WINDOW_DAYS)]
+            for _blabel, _lo, _hi in _cw_buckets:
+                _grp = [r for r in _cw_rows if _lo <= r["days"] <= _hi]
+                if not _grp:
+                    continue
+                st.markdown(f"#### {_blabel}")
+                for _r in _grp:
+                    _when = f" · {_r['when']}" if _r["when"] else ""
+                    _hot  = " 🔥" if _r["sector_hot"] else ""
+                    _bg, _fg, _lbl = _cw_chip.get(_r["ownership"], _cw_chip["universe"])
+                    st.markdown(
+                        "<div style='background:#0b1220;border:1px solid #334155;"
+                        "border-radius:8px;padding:8px 14px;margin:4px 0;"
+                        "display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span><b style='font-size:1.05em;color:#f9fafb'>{_r['ticker']}</b> "
+                        f"<span style='color:#9ca3af'>· {_r['sector']}{_hot}</span></span>"
+                        f"<span><span style='color:#fbbf24;font-size:0.85em'>{_r['date']}{_when}</span> "
+                        f"<span style='background:{_bg};color:{_fg};border-radius:8px;"
+                        f"padding:1px 7px;font-size:0.8em;margin-left:8px'>{_lbl}</span></span>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            # Analyze link for any radar name (the ticker→research jump).
+            _cw_radar_tk = sorted({r["ticker"] for r in _cw_rows})
+            if _cw_radar_tk:
+                st.markdown("**🔎 Jump to full Analysis →**")
+                _cw_rc3, _cw_rc4 = st.columns([3, 1])
+                with _cw_rc3:
+                    _cw_ran = st.selectbox("radar", _cw_radar_tk, key="_cw_radar_analyze_sel",
+                                           label_visibility="collapsed")
+                with _cw_rc4:
+                    if st.button("▶ Open", key="_cw_radar_analyze_btn", use_container_width=True):
+                        st.session_state["_pending_page"]    = "📈 Analysis"
+                        st.session_state["_analysis_ticker"] = _cw_ran
+                        st.rerun()
+
+        st.markdown(
+            "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
+            "🔥 = sector currently leading. Awareness only — the app does not recommend "
+            "initiating into earnings; the proximity gates still suppress that. Decide for "
+            "yourself, and let confirmed post-print moves surface via Movers.</div>",
+            unsafe_allow_html=True,
+        )
+
+    with _cw_tab_entry:
+        # ── Phase 3 — Catalyst Scanner: watchlist entry candidates ──────────────
+        st.markdown("## 🎯 Entry Candidates")
+        st.caption(
+            "Watchlist names near earnings with a strong historical beat rate, a positive or "
+            "mixed post-earnings reaction pattern, and a composite score above the entry threshold. "
+            "Awareness only — never a Buy recommendation. Research any name on the Analysis page."
+        )
+
+        _cw_watchlist_tickers = list(st.session_state.get("watchlist", []))
+        _cw_composites        = st.session_state.get("_grow_composites") or {}
+
+        if not _cw_watchlist_tickers:
+            st.info("No watchlist names configured. Add tickers to your watchlist to use the Catalyst Scanner.")
+        else:
+            from stock_analyzer.earnings_advisor import build_earnings_catalyst_candidates as _build_candidates
+            from stock_analyzer.db import load_earnings_context_batch as _load_ec_batch
+
+            _cw_ec_batch = _load_ec_batch(list(_cw_watchlist_tickers), max_age_days=90)
+            _cw_candidates = _build_candidates(
+                watchlist_tickers=_cw_watchlist_tickers,
+                held_tickers=_cw_held,
+                composites=_cw_composites,
+                earnings_context=_cw_ec_batch,
+                today=_cw_today,
+                lookahead_days=30,
+            )
+
+            if not _cw_candidates:
+                if not _cw_ec_batch:
+                    st.info(
+                        "No CNBC earnings articles pasted for watchlist names yet. "
+                        "Use **🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings** to paste articles "
+                        "and the scanner will populate here."
+                    )
+                else:
+                    st.info(
+                        "No watchlist names currently pass all filters (beat rate ≥ 70%, "
+                        "composite ≥ 65, reaction not bearish, earnings within 30 days)."
+                    )
+            else:
+                st.caption(f"{len(_cw_candidates)} candidate{'s' if len(_cw_candidates) != 1 else ''} · ranked by beat rate × composite × reaction")
+                for _cand in _cw_candidates:
+                    _rxn_emoji = {"bullish": "🟢", "mixed": "🟡"}.get(_cand["reaction"], "🟡")
+                    with st.expander(
+                        f"🎯 **{_cand['ticker']}** · Beat rate {_cand['beat_rate']:.0f}% · "
+                        f"Score {_cand['score']:.0f} · {_cand['earn_date']} ({_cand['days_until']}d) "
+                        f"· {_rxn_emoji} {_cand['reaction'].capitalize()} reaction",
+                        expanded=False,
+                    ):
+                        _info_parts = [
+                            f"Beat rate **{_cand['beat_rate']:.0f}%**",
+                            f"Composite **{_cand['score']:.0f}/100**",
+                            f"**{_cand['days_until']}d** to earnings",
+                        ]
+                        if _cand["consensus_growth_pct"] is not None:
+                            _info_parts.append(f"Consensus growth **{_cand['consensus_growth_pct']:+.0f}%**")
+                        st.caption("  ·  ".join(_info_parts))
+                        if _cand["what_to_watch_cnbc"]:
+                            st.caption(f"What to watch (CNBC): {_cand['what_to_watch_cnbc']}")
+                        if st.button("▶ Analyse", key=f"_cw_cand_analyze_{_cand['ticker']}"):
+                            st.session_state["_pending_page"]    = "📈 Analysis"
+                            st.session_state["_analysis_ticker"] = _cand["ticker"]
+                            st.rerun()
+        st.markdown(
+            "<div style='color:#94a3b8;font-size:0.78em;margin-top:12px;font-style:italic'>"
+            "Candidates shown only when CNBC Pre-Earnings articles have been pasted for these tickers "
+            "via AI Insights → Ideas Inbox. The engine does not recommend buying into earnings; "
+            "proximity gates remain active on Grow Today.</div>",
+            unsafe_allow_html=True,
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
