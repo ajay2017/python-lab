@@ -23993,38 +23993,95 @@ elif page == "🎯 My Edge":
                     _me_worst_dd = min(_me_dd_vals)
                     _me_worst_d  = _me_dd_dates[_me_dd_vals.index(_me_worst_dd)]
 
+                    # Portfolio daily drawdown from daily_snapshots
+                    _me_snap_df = _me_db.load_daily_snapshots(
+                        start_date=_me_range_start, end_date=_me_today
+                    )
+                    _me_port_dd_dates: list[str] = []
+                    _me_port_dd_vals:  list[float] = []
+                    if not _me_snap_df.empty and "snapshot_date" in _me_snap_df.columns:
+                        import pandas as _me_pd
+                        _me_snap_df["_val"] = (
+                            _me_pd.to_numeric(_me_snap_df["shares"], errors="coerce").fillna(0)
+                            * _me_pd.to_numeric(_me_snap_df["close_price"], errors="coerce").fillna(0)
+                        )
+                        _me_daily_val = (
+                            _me_snap_df.groupby("snapshot_date")["_val"].sum()
+                            .sort_index()
+                        )
+                        _me_port_peak = 0.0
+                        for _snap_d, _snap_v in _me_daily_val.items():
+                            if _snap_v > _me_port_peak:
+                                _me_port_peak = _snap_v
+                            _me_port_dd_dates.append(str(_snap_d)[:10])
+                            _me_port_dd_vals.append(
+                                round((_snap_v / _me_port_peak - 1) * 100, 2)
+                                if _me_port_peak > 0 else 0.0
+                            )
+
                     _me_fig3 = _me_go.Figure()
+
+                    # Portfolio drawdown (behind SPY so SPY line stays on top)
+                    if _me_port_dd_dates:
+                        _me_port_worst = min(_me_port_dd_vals)
+                        _me_port_worst_d = _me_port_dd_dates[_me_port_dd_vals.index(_me_port_worst)]
+                        _me_fig3.add_trace(_me_go.Scatter(
+                            x=_me_port_dd_dates, y=_me_port_dd_vals,
+                            name="Your portfolio",
+                            fill="tozeroy",
+                            fillcolor="rgba(34,211,238,0.10)",
+                            line=dict(color="#22d3ee", width=2),
+                            mode="lines",
+                        ))
+                        _me_fig3.add_annotation(
+                            x=_me_port_worst_d, y=_me_port_worst,
+                            text=f"Portfolio worst: {_me_port_worst:.1f}%",
+                            showarrow=True, arrowhead=2,
+                            font=dict(color="#22d3ee", size=11),
+                            arrowcolor="#22d3ee",
+                            ax=40, ay=-30,
+                        )
+
+                    # SPY drawdown
                     _me_fig3.add_trace(_me_go.Scatter(
                         x=_me_dd_dates, y=_me_dd_vals,
-                        name=f"{_me_bench_ticker} drawdown",
+                        name=f"{_me_bench_ticker}",
                         fill="tozeroy",
-                        fillcolor="rgba(239,68,68,0.15)",
+                        fillcolor="rgba(239,68,68,0.12)",
                         line=dict(color="#ef4444", width=1.5),
                         mode="lines",
                     ))
                     _me_fig3.add_annotation(
                         x=_me_worst_d, y=_me_worst_dd,
-                        text=f"Worst: {_me_worst_dd:.1f}%",
+                        text=f"{_me_bench_ticker} worst: {_me_worst_dd:.1f}%",
                         showarrow=True, arrowhead=2,
-                        font=dict(color="#f87171", size=12),
+                        font=dict(color="#f87171", size=11),
                         arrowcolor="#f87171",
+                        ax=-40, ay=-30,
                     )
                     _me_fig3.update_layout(
                         template="plotly_dark",
                         paper_bgcolor="rgba(0,0,0,0)",
                         plot_bgcolor="rgba(14,17,23,0.3)",
-                        height=320,
+                        height=360,
                         margin=dict(t=20, b=20, l=0, r=0),
                         xaxis=dict(title=None, gridcolor="#1f2937"),
                         yaxis=dict(title="Drawdown from peak (%)", gridcolor="#1f2937"),
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0
+                        ),
                         hovermode="x unified",
                     )
                     st.plotly_chart(_me_fig3, use_container_width=True)
-                    st.caption(
-                        f"How far {_me_bench_ticker} fell from its prior peak at each point. "
-                        "This is what passive investing would have felt like — "
-                        "a useful reminder that passive still has drawdowns."
+                    _me_dd_note = (
+                        "Teal = your portfolio drawdown from its own recent peak · "
+                        f"Red = {_me_bench_ticker} drawdown from its own recent peak. "
+                        "Shallower teal = your portfolio held up better than the index."
+                        if _me_port_dd_dates else
+                        f"Showing {_me_bench_ticker} drawdown only — portfolio drawdown "
+                        "appears once daily snapshots accumulate (captured automatically each market close)."
                     )
+                    st.caption(_me_dd_note)
 
     # ═════════════════════════════════════════════════════════════════════════
     # TAB C — Workflow ROI
