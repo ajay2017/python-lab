@@ -11981,17 +11981,29 @@ elif page == "🏆 Portfolio Health":
     )
 
     def _ph_period_return(p: dict, period: str) -> float | None:
-        """Normalise P&L to the chosen period.  Gate: ≥ 15 days held to avoid
-        wild extrapolation on brand-new positions."""
+        """Normalise P&L to the chosen period.
+
+        Losing positions (pnl < 0) always get a rate — surfacing a loss is
+        more important than avoiding extrapolation on a short hold.
+        Winning positions use a 15-day minimum to avoid inflating a 2-day
+        gain into a stratospheric annualised number.
+        """
         days = p.get("days_held")
         pnl  = p.get("pnl_pct")
-        if days is None or days < 15 or pnl is None:
+        if days is None or pnl is None:
             return None
+        is_loss = pnl < 0
+        if not is_loss and days < 15:
+            return None
+        safe_days = max(days, 1)  # guard against zero-day divide
         if period == "Weekly":
-            return round(pnl * 7 / days, 2)
+            return round(pnl * 7 / safe_days, 2)
         if period == "Monthly":
-            return round(pnl * 30.44 / days, 2)
-        return p.get("annualized_return")  # Yearly — already computed + gated
+            return round(pnl * 30.44 / safe_days, 2)
+        # Yearly — for losses recompute directly so we don't rely on the
+        # months_held >= 0.5 gate that already filtered them out
+        months = p.get("months_held") or round(safe_days / 30.44, 2)
+        return round(pnl * (12.0 / months), 1)
 
     _ph_period_label = {"Weekly": "%/wk", "Monthly": "%/mo", "Yearly": "%/yr"}[_ph_period]
 
