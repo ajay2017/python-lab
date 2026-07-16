@@ -18762,7 +18762,7 @@ elif page == "📜 Recommendations History":
         _rh_stats = summary_stats(_rh_enriched)
         _rh_m1, _rh_m2, _rh_m3, _rh_m4 = st.columns(4)
         _rh_m1.metric(
-            "Total recs",
+            "Total recommendations",
             f"{_rh_stats['n_total']:,}",
             help=(
                 "Recommendation *surfacings* in range — a name recurs each day it "
@@ -18782,7 +18782,7 @@ elif page == "📜 Recommendations History":
             f"{_rh_stats['avg_acted_alpha']:+.1f}pp vs SPY" if _rh_stats['avg_acted_alpha'] is not None else None,
             delta_color="normal",
             help=(
-                "Mean outcome across MATURE acted recs (BUY mark-to-market, SELL "
+                "Mean outcome across MATURE acted recommendations (BUY mark-to-market, SELL "
                 "realized). The 'vs SPY' delta is alpha — the same return minus SPY "
                 "over the same window. In a down tape the raw % misleads; alpha is "
                 "the regime-adjusted read of whether acting beat the market."
@@ -18794,7 +18794,7 @@ elif page == "📜 Recommendations History":
             f"{_rh_stats['avg_missed_alpha']:+.1f}pp vs SPY" if _rh_stats['avg_missed_alpha'] is not None else None,
             delta_color="normal",
             help=(
-                "Mean would-have-gained across MATURE missed recs (price-at-surface → "
+                "Mean would-have-gained across MATURE missed recommendations (price-at-surface → "
                 "now), with its SPY-relative alpha. Compare to acted: if missed alpha "
                 "≫ acted alpha, skipping cost you; if not, your discretion held up."
             ),
@@ -18852,7 +18852,7 @@ elif page == "📜 Recommendations History":
                     f"**Distinct tickers** surfaced as New Positions to Initiate (`new_pick`) — "
                     f"a name recurring across days counts once. The awareness only More Buy "
                     f"Candidates feed is excluded. Win/Loss count **matured** outcomes only "
-                    f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recs within ±0.5%, "
+                    f"(⏳ younger than {REC_SCORE_MIN_DAYS} days, and priced recommendations within ±0.5%, "
                     f"fall into Flat / Open) — so this never disagrees with the metrics above. "
                     f"Acted = mark-to-market (BUY) / realized (SELL); missed = surface-price → now."
                 )
@@ -18961,7 +18961,7 @@ elif page == "📜 Recommendations History":
 
     with _rh_tab_trends:
         # ── Trends ──────────────────────────────────────────────────────────────
-        with st.expander("📈 Trends — recs over time & action discipline", expanded=True):
+        with st.expander("📈 Trends — recommendations over time & action discipline", expanded=True):
             _rh_daily = daily_volume(_rh_enriched)
             if _rh_daily:
                 _rh_dv_df = _rh_pd.DataFrame(_rh_daily)
@@ -18969,7 +18969,7 @@ elif page == "📜 Recommendations History":
                 _rh_dv_df = _rh_dv_df.set_index("date")[["acted", "missed"]]
                 st.bar_chart(_rh_dv_df, height=240)
                 st.caption(
-                    "Daily recs surfaced — green slice = same-day acted, "
+                    "Daily recommendations surfaced — green slice = same-day acted, "
                     "grey slice = missed. Use this to spot stretches where action "
                     "discipline slipped (lots of grey) or the App got chatty (tall bars)."
                 )
@@ -19121,9 +19121,9 @@ elif page == "📜 Recommendations History":
             "realized P&L from the journal; Missed: % change from price-at-surface "
             "(when stored) to current. **α vs SPY** = outcome minus SPY over the same "
             "rec-date→today window (the regime-adjusted read; blank for SELLs, whose "
-            "realized P&L spans an unknown holding period). **⏳ Maturing** recs are "
+            "realized P&L spans an unknown holding period). **⏳ Maturing** recommendations are "
             f"younger than {REC_SCORE_MIN_DAYS} days — shown but excluded from the "
-            "aggregates above. Older recs surfaced before price_at_surface was captured "
+            "aggregates above. Older recommendations surfaced before price_at_surface was captured "
             "show '—'._"
         )
         with st.expander("ℹ️ How to read this table", expanded=False):
@@ -19370,7 +19370,7 @@ elif page == "📊 Predictive Analytics":
             st.success(
                 f"**Your personal alpha threshold: composite ≥ {_pac_thresh}**  \n"
                 f"Every score band from {_pac_thresh} upward has delivered positive "
-                f"alpha in your history (n={_pac_thresh_n} outcomes"
+                f"alpha in your history ({_pac_thresh_n} outcomes"
                 + (f"; avg alpha at this band: {_pac_thresh_alpha:+.1f}pp vs SPY"
                    if _pac_thresh_alpha is not None else "")
                 + ").  \nThis is where the engine's signal has actually worked for *you*."
@@ -19402,7 +19402,7 @@ elif page == "📊 Predictive Analytics":
                 x=[_b["band_label"] for _b in _pac_bands],
                 y=[_b["avg_alpha"] if _b["avg_alpha"] is not None else 0 for _b in _pac_bands],
                 marker_color=_pac_bar_colors,
-                text=[f"n={_b['n']}" for _b in _pac_bands],
+                text=[f"{_b['n']} outcomes" for _b in _pac_bands],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_b["p_positive_alpha"], _b["n_acted"], _b["n_missed"]]
@@ -19482,13 +19482,13 @@ elif page == "📊 Predictive Analytics":
         if _avm_edge == "acting":
             st.success(
                 f"**Your discretion is adding value (+{_avm_pp:.1f}pp).**  \n"
-                "The recs you chose to act on delivered higher alpha than the ones you passed. "
+                "The recommendations you chose to act on delivered higher alpha than the ones you passed. "
                 "Your judgment is filtering signal from noise."
             )
         elif _avm_edge == "passing":
             st.warning(
                 f"**Following every signal would have added {_avm_pp:.1f}pp more alpha.**  \n"
-                "The recs you skipped outperformed the ones you acted on. Consider whether "
+                "The recommendations you skipped outperformed the ones you acted on. Consider whether "
                 "your reasons for passing are costing you alpha."
             )
         elif _avm_edge == "neutral":
@@ -19512,7 +19512,7 @@ elif page == "📊 Predictive Analytics":
             _dq_a3.metric(
                 "Hit rate",
                 f"{_avm_acted['p_positive_alpha']:.0%}" if _avm_acted["p_positive_alpha"] is not None else "—",
-                help="% of acted recs that beat SPY",
+                help="% of acted recommendations that beat SPY",
             )
         with _dq_c2:
             st.markdown("#### — Passed on")
@@ -19525,7 +19525,7 @@ elif page == "📊 Predictive Analytics":
             _dq_m3.metric(
                 "Hit rate",
                 f"{_avm_missed['p_positive_alpha']:.0%}" if _avm_missed["p_positive_alpha"] is not None else "—",
-                help="% of missed recs that would have beaten SPY",
+                help="% of missed recommendations that would have beaten SPY",
             )
 
         # ── Acted vs Missed alpha by score band ────────────────────────────────
@@ -19579,7 +19579,7 @@ elif page == "📊 Predictive Analytics":
                     "#00C851" if (_c["avg_alpha"] or 0) >= 0 else "#ff4444"
                     for _c in _pac_conv
                 ],
-                text=[f"n={_c['n']}" for _c in _pac_conv],
+                text=[f"{_c['n']} outcomes" for _c in _pac_conv],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_c["p_positive_alpha"]] for _c in _pac_conv],
@@ -19604,8 +19604,8 @@ elif page == "📊 Predictive Analytics":
                 _cc.metric(
                     _cd["conviction"],
                     f"{_cd['avg_alpha']:+.1f}pp" if _cd["avg_alpha"] is not None else "—",
-                    f"n={_cd['n']} · {_cd['p_positive_alpha']:.0%} hit rate"
-                    if _cd["p_positive_alpha"] is not None else f"n={_cd['n']}",
+                    f"{_cd['n']} outcomes · {_cd['p_positive_alpha']:.0%} hit rate"
+                    if _cd["p_positive_alpha"] is not None else f"{_cd['n']} outcomes",
                     delta_color="normal",
                 )
         else:
@@ -19623,7 +19623,7 @@ elif page == "📊 Predictive Analytics":
                     "#00C851" if (_r["avg_alpha"] or 0) >= 0 else "#ff4444"
                     for _r in _pac_rtype
                 ],
-                text=[f"n={_r['n']}" for _r in _pac_rtype],
+                text=[f"{_r['n']} outcomes" for _r in _pac_rtype],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_r["p_positive_alpha"]] for _r in _pac_rtype],
@@ -19648,8 +19648,8 @@ elif page == "📊 Predictive Analytics":
                 _rtc.metric(
                     _rtd["label"],
                     f"{_rtd['avg_alpha']:+.1f}pp" if _rtd["avg_alpha"] is not None else "—",
-                    f"n={_rtd['n']} · {_rtd['p_positive_alpha']:.0%} hit rate"
-                    if _rtd["p_positive_alpha"] is not None else f"n={_rtd['n']}",
+                    f"{_rtd['n']} outcomes · {_rtd['p_positive_alpha']:.0%} hit rate"
+                    if _rtd["p_positive_alpha"] is not None else f"{_rtd['n']} outcomes",
                     delta_color="normal",
                 )
         else:
@@ -19673,7 +19673,7 @@ elif page == "📊 Predictive Analytics":
                 x=[_s["sector"] for _s in _pac_sec_alph],
                 y=[_s["avg_alpha"] if _s["avg_alpha"] is not None else 0 for _s in _pac_sec_alph],
                 marker_color=_sa_colors,
-                text=[f"n={_s['n']}" for _s in _pac_sec_alph],
+                text=[f"{_s['n']} outcomes" for _s in _pac_sec_alph],
                 textposition="inside",
                 insidetextanchor="middle",
                 customdata=[[_s["p_positive_alpha"], _s["avg_outcome_pct"]] for _s in _pac_sec_alph],
@@ -19703,14 +19703,14 @@ elif page == "📊 Predictive Analytics":
                     st.success(
                         f"**Strongest sector: {_sa_best['sector']}**  \n"
                         f"Avg alpha {_sa_best['avg_alpha']:+.1f}pp · "
-                        f"Hit rate {_sa_best['p_positive_alpha']:.0%} · n={_sa_best['n']}"
+                        f"Hit rate {_sa_best['p_positive_alpha']:.0%} · {_sa_best['n']} outcomes"
                     )
             with _sa_col2:
                 if (_sa_worst["avg_alpha"] or 0) < 0:
                     st.warning(
                         f"**Weakest sector: {_sa_worst['sector']}**  \n"
                         f"Avg alpha {_sa_worst['avg_alpha']:+.1f}pp · "
-                        f"Hit rate {_sa_worst['p_positive_alpha']:.0%} · n={_sa_worst['n']}"
+                        f"Hit rate {_sa_worst['p_positive_alpha']:.0%} · {_sa_worst['n']} outcomes"
                     )
         else:
             st.info("Not enough outcomes per sector yet (need ≥ 3 each).")
@@ -19728,7 +19728,7 @@ elif page == "📊 Predictive Analytics":
                 _row = {"Sector": _sec}
                 for _band in _pac_band_order:
                     cell = _pac_sectors.get(_sec, {}).get(_band)
-                    _row[_band] = f"{cell['avg_alpha']:+.1f}pp (n={cell['n']})" if cell else "—"
+                    _row[_band] = f"{cell['avg_alpha']:+.1f}pp ({cell['n']} outcomes)" if cell else "—"
                 _pac_hm_data.append(_row)
 
             _pac_hm_df = _pa_pd.DataFrame(_pac_hm_data).set_index("Sector")
@@ -19774,7 +19774,7 @@ elif page == "📊 Predictive Analytics":
 
         if _sa_conclusion == "confirmed_wins":
             st.success(
-                f"**Confirmed recs outperform non-Confirmed by {_sa_edge_pp:+.1f}pp** — "
+                f"**Confirmed recommendations outperform non-Confirmed by {_sa_edge_pp:+.1f}pp** — "
                 f"news sentiment alignment is adding real edge in your history.  \n"
                 f"When the cross-check agrees (technical + fundamentals + news all aligned), "
                 f"your outcomes have been measurably better."
@@ -19782,14 +19782,14 @@ elif page == "📊 Predictive Analytics":
         elif _sa_conclusion == "no_edge":
             st.info(
                 "**Sentiment alignment has not produced a measurable alpha edge yet.** "
-                "Confirmed and non-Confirmed recs are delivering similar alpha in your history.  \n"
+                "Confirmed and non-Confirmed recommendations are delivering similar alpha in your history.  \n"
                 "Continue tracking as the dataset grows — this may sharpen once more "
-                "Confirmed recs have had time to mature."
+                "Confirmed recommendations have had time to mature."
             )
         else:
             st.info(
                 f"📅 **Not enough data yet.** Both Confirmed and non-Confirmed groups need "
-                f"at least **{PREDICTIVE_MIN_BAND_N} graded recs** to compare "
+                f"at least **{PREDICTIVE_MIN_BAND_N} graded recommendations** to compare "
                 f"(Confirmed: {_sa_conf_n}, others: {_sa_other_n}).  \n"
                 "Return once more picks have matured past their minimum grading window."
             )
@@ -19797,7 +19797,7 @@ elif page == "📊 Predictive Analytics":
         # ── Side-by-side: Confirmed vs Non-Confirmed ──────────────────────────
         _sent_c1, _sent_c2 = st.columns(2)
         with _sent_c1:
-            st.markdown("#### ✅ Confirmed recs")
+            st.markdown("#### ✅ Confirmed recommendations")
             _sc_a1, _sc_a2, _sc_a3 = st.columns(3)
             _sc_a1.metric("Count", f"{_sa_conf_n:,}")
             _sc_a2.metric(
@@ -19811,10 +19811,10 @@ elif page == "📊 Predictive Analytics":
                 "Hit rate",
                 (f"{_conf_row['p_positive_alpha']:.0%}"
                  if _conf_row and _conf_row.get("p_positive_alpha") is not None else "—"),
-                help="% of Confirmed recs that beat SPY",
+                help="% of Confirmed recommendations that beat SPY",
             )
         with _sent_c2:
-            st.markdown("#### ⚠️ Non-Confirmed recs")
+            st.markdown("#### ⚠️ Non-Confirmed recommendations")
             _sc_b1, _sc_b2, _sc_b3 = st.columns(3)
             _sc_b1.metric("Count", f"{_sa_other_n:,}")
             _sc_b2.metric(
@@ -19833,19 +19833,19 @@ elif page == "📊 Predictive Analytics":
             _sc_b3.metric(
                 "Hit rate",
                 f"{_other_p_pos:.0%}" if _other_p_pos is not None else "—",
-                help="% of non-Confirmed recs that beat SPY",
+                help="% of non-Confirmed recommendations that beat SPY",
             )
 
         # ── Bar chart: Avg Alpha by Verdict ───────────────────────────────────
         st.subheader("Avg Alpha by Verdict")
         st.caption(
             "Each bar shows the average alpha (your return minus SPY over the same window) "
-            "for all graded recs with that verdict. Bars in grey have fewer than "
+            "for all graded recommendations with that verdict. Bars in grey have fewer than "
             f"{PREDICTIVE_MIN_BAND_N} outcomes — indicative only."
         )
         if _pac_by_verdict:
             _sv_labels = [
-                f"{b['verdict']} (n={b['n']})" for b in _pac_by_verdict
+                f"{b['verdict'].title()} · {b['n']} outcomes" for b in _pac_by_verdict
             ]
             _sv_alphas = [b["avg_alpha"] if b["avg_alpha"] is not None else 0 for b in _pac_by_verdict]
             _sv_colors = [
@@ -19882,8 +19882,8 @@ elif page == "📊 Predictive Analytics":
             if _pac_by_verdict:
                 _sv_rows = [
                     {
-                        "Verdict":        b["verdict"],
-                        "Recs":           b["n"],
+                        "Verdict":        b["verdict"].title(),
+                        "Recommendations": b["n"],
                         "Acted":          b["n_acted"],
                         "Avg Alpha (pp)": f"{b['avg_alpha']:+.1f}" if b["avg_alpha"] is not None else "—",
                         "Hit Rate":       f"{b['p_positive_alpha']:.0%}" if b["p_positive_alpha"] is not None else "—",
