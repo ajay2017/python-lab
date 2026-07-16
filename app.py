@@ -21753,6 +21753,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Five live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, and Sentiment Alignment — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
 - **🥧 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
+- **🏆 Portfolio Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing.
 - **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
@@ -21762,6 +21763,44 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
+"""
+        )
+
+    with st.expander("🏆 Portfolio Health & Portfolio Dynamics", expanded=False):
+        st.markdown(
+            """
+**Portfolio Health gives you a single A–F construction grade** — not a buy/sell signal, but a measure of how *well-built* your book is across five dimensions:
+
+| Dimension | What it measures |
+|---|---|
+| Concentration | How spread your capital is — decays from 100 toward 0 as single-name (>10%) or sector (>25%) weights approach their hard caps (15% / 35%) |
+| Sector Balance | Shannon entropy of sector weights — a single-sector book scores near 0; a well-spread book scores near 100 |
+| Diversification | How uncorrelated your holdings are — `(1 − avg_correlation) × 100`; high correlation drags this down |
+| Beta / Fragility | Lower beta + calmer fragility regime → higher score; a high-beta-heavy book in a fragile tape scores poorly |
+| Signal Integrity | Percentage of your book weight currently at or above the Buy threshold (composite ≥ 65) — tracks how many of your positions the engine still endorses |
+
+The overall grade is a straight average. A B or better means the portfolio is solidly constructed for the moment; a C or below highlights a structural issue worth acting on at your next rebalance.
+
+---
+
+**Portfolio Dynamics** (the section below the score cards) shows how each position is performing *relative to how long you've held it* — useful for spotting capital that's been sitting too long for too little return.
+
+**Sleeping Capital vs Working Hardest panels**
+
+- **⏳ Sleeping Capital** — the lowest period-return positions: your capital working *least* efficiently. Positions with a loss always appear here regardless of how recently they were entered.
+- **🚀 Working Hardest** — the highest period-return positions: your best-performing names relative to how long you've held them.
+- Both panels show **N of M holdings** in the subtitle so you always know whether you're seeing the full book or a ranked subset.
+
+**Period toggle — Weekly / Monthly / Yearly**
+
+The toggle above the panels recalculates and re-sorts by the chosen cadence:
+- **Yearly** (default) — annualised return; comparable across different hold lengths but inflates short holds.
+- **Monthly** — return per month; useful for medium-term positions (1–6 months).
+- **Weekly** — return per week; most granular; best for spotting a slow bleeder week-over-week.
+
+*Note: profitable positions held under 15 days are excluded from all views to avoid inflating a 2-day gain into a stratospheric rate. Losing positions always appear.*
+
+**The scatter chart** (above the panels) lets you see the full book at once — X = months held, Y = return, bubble size = portfolio weight, color = verdict/sector/cohort (toggle via the dropdowns). A cluster of large bubbles in the bottom-left (short hold, negative return) is the earliest warning that capital allocated to new positions isn't working yet.
 """
         )
 
