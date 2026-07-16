@@ -12022,26 +12022,34 @@ elif page == "🏆 Portfolio Health":
         _ph_sleepers = _ph_sorted[:_ph_sleep_k]
         _ph_stars    = list(reversed(_ph_sorted[_ph_sleep_k:][-3:]))
 
+        _ph_total = len(_ph_positions)
+
         def _ph_eff_row(p: dict) -> str:
             _pnl_color  = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
+            _rate_color = "#16a34a" if p["_period_rate"] and p["_period_rate"] >= 0 else "#dc2626"
             _pnl_str    = f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "—"
             _rate_str   = f"{p['_period_rate']:+.1f}{_ph_period_label}" if p["_period_rate"] is not None else "—"
-            _tenure_str = f"{p['months_held']:.0f} mo" if p["months_held"] is not None else "—"
+            _mo         = p["months_held"]
+            _tenure_str = "< 1 mo" if (_mo is not None and _mo < 1) else (f"{_mo:.0f} mo" if _mo is not None else "—")
             return (
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
                 f'padding:4px 0;border-bottom:1px solid #1f2937;">'
                 f'<span style="font-size:13px;font-weight:700;color:#f3f4f6;">{p["ticker"]}</span>'
                 f'<span style="font-size:11px;color:#9ca3af;">{_tenure_str}</span>'
                 f'<span style="font-size:13px;color:{_pnl_color};">{_pnl_str}</span>'
-                f'<span style="font-size:10px;color:#6b7280;">{_rate_str}</span>'
+                f'<span style="font-size:10px;color:{_rate_color};font-weight:600;">{_rate_str}</span>'
                 f'</div>'
             )
+
+        _ph_sleep_sub = f"Lowest {_ph_period.lower()} return · {len(_ph_sleepers)} of {_ph_total} holdings"
+        _ph_star_sub  = f"Highest {_ph_period.lower()} return · {len(_ph_stars)} of {_ph_total} holdings"
 
         _ph_eff_html = (
             '<div style="display:flex;gap:12px;margin-top:8px;">'
             '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
             '<div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
-            'letter-spacing:.5px;margin-bottom:8px;">⏳ Sleeping Capital</div>'
+            f'letter-spacing:.5px;">⏳ Sleeping Capital</div>'
+            f'<div style="font-size:10px;color:#6b7280;margin-bottom:8px;">{_ph_sleep_sub}</div>'
         )
         for _p in _ph_sleepers:
             _ph_eff_html += _ph_eff_row(_p)
@@ -12049,13 +12057,19 @@ elif page == "🏆 Portfolio Health":
             '</div>'
             '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
             '<div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
-            'letter-spacing:.5px;margin-bottom:8px;">🚀 Working Hardest</div>'
+            f'letter-spacing:.5px;">🚀 Working Hardest</div>'
+            f'<div style="font-size:10px;color:#6b7280;margin-bottom:8px;">{_ph_star_sub}</div>'
         )
         for _p in _ph_stars:
             _ph_eff_html += _ph_eff_row(_p)
         _ph_eff_html += '</div></div>'
 
         st.markdown(_ph_eff_html, unsafe_allow_html=True)
+        st.caption(
+            f"Ranked by {_ph_period.lower()} return. "
+            "Losing positions always appear. "
+            "Profitable positions held under 15 days are excluded to avoid short-hold extrapolation."
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
