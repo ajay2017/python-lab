@@ -12024,6 +12024,8 @@ elif page == "🏆 Portfolio Health":
 
         _ph_total = len(_ph_positions)
 
+        _ph_total = len(_ph_positions)
+
         def _ph_eff_row(p: dict) -> str:
             _pnl_color  = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
             _rate_color = "#16a34a" if p["_period_rate"] and p["_period_rate"] >= 0 else "#dc2626"
@@ -12033,11 +12035,11 @@ elif page == "🏆 Portfolio Health":
             _tenure_str = "< 1 mo" if (_mo is not None and _mo < 1) else (f"{_mo:.0f} mo" if _mo is not None else "—")
             return (
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-                f'padding:4px 0;border-bottom:1px solid #1f2937;">'
-                f'<span style="font-size:13px;font-weight:700;color:#f3f4f6;">{p["ticker"]}</span>'
-                f'<span style="font-size:11px;color:#9ca3af;">{_tenure_str}</span>'
-                f'<span style="font-size:13px;color:{_pnl_color};">{_pnl_str}</span>'
-                f'<span style="font-size:10px;color:{_rate_color};font-weight:600;">{_rate_str}</span>'
+                f'padding:6px 0;border-bottom:1px solid #1f2937;">'
+                f'<span style="font-size:14px;font-weight:700;color:#f3f4f6;min-width:60px;">{p["ticker"]}</span>'
+                f'<span style="font-size:13px;color:#9ca3af;">{_tenure_str}</span>'
+                f'<span style="font-size:14px;color:{_pnl_color};font-weight:600;">{_pnl_str}</span>'
+                f'<span style="font-size:13px;color:{_rate_color};font-weight:700;">{_rate_str}</span>'
                 f'</div>'
             )
 
@@ -12045,30 +12047,33 @@ elif page == "🏆 Portfolio Health":
         _ph_star_sub  = f"Highest {_ph_period.lower()} return · {len(_ph_stars)} of {_ph_total} holdings"
 
         _ph_eff_html = (
-            '<div style="display:flex;gap:12px;margin-top:8px;">'
-            '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
-            '<div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
+            '<div style="display:flex;gap:16px;margin-top:8px;">'
+            '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:12px 16px;">'
+            '<div style="font-size:13px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.5px;">⏳ Sleeping Capital</div>'
-            f'<div style="font-size:10px;color:#6b7280;margin-bottom:8px;">{_ph_sleep_sub}</div>'
+            f'<div style="font-size:12px;color:#6b7280;margin-bottom:10px;">{_ph_sleep_sub}</div>'
         )
         for _p in _ph_sleepers:
             _ph_eff_html += _ph_eff_row(_p)
         _ph_eff_html += (
             '</div>'
-            '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
-            '<div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
+            '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:12px 16px;">'
+            '<div style="font-size:13px;color:#9ca3af;font-weight:700;text-transform:uppercase;'
             f'letter-spacing:.5px;">🚀 Working Hardest</div>'
-            f'<div style="font-size:10px;color:#6b7280;margin-bottom:8px;">{_ph_star_sub}</div>'
+            f'<div style="font-size:12px;color:#6b7280;margin-bottom:10px;">{_ph_star_sub}</div>'
         )
         for _p in _ph_stars:
             _ph_eff_html += _ph_eff_row(_p)
         _ph_eff_html += '</div></div>'
 
         st.markdown(_ph_eff_html, unsafe_allow_html=True)
-        st.caption(
-            f"Ranked by {_ph_period.lower()} return. "
-            "Losing positions always appear. "
-            "Profitable positions held under 15 days are excluded to avoid short-hold extrapolation."
+        st.markdown(
+            '<p style="font-size:12px;color:#6b7280;margin-top:6px;">'
+            f'Ranked by {_ph_period.lower()} return. '
+            'Losing positions always appear. '
+            'Profitable positions held under 15 days are excluded to avoid short-hold extrapolation.'
+            '</p>',
+            unsafe_allow_html=True,
         )
 
 
