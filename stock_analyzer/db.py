@@ -1177,6 +1177,33 @@ def load_earnings_context(ticker: str, max_age_days: int = 30) -> dict | None:
         return None
 
 
+def load_all_earnings_context() -> dict[str, list[dict]]:
+    """Fetch ALL earnings_context rows with no date cutoff, grouped by ticker.
+    Returns {ticker_upper: [row, ...]} oldest-first per ticker. Used by the
+    Workflow ROI classifier which needs to match historical BUY trades against
+    research saved anywhere in the app's lifetime (not just the recent window).
+    Returns {} on any failure (graceful degradation)."""
+    if not has_db():
+        return {}
+    try:
+        rows = (
+            _client()
+            .table("earnings_context")
+            .select("*")
+            .order("article_date", desc=False)
+            .execute()
+            .data
+        ) or []
+        result: dict[str, list[dict]] = {}
+        for row in rows:
+            t = (row.get("ticker") or "").strip().upper()
+            if t:
+                result.setdefault(t, []).append(row)
+        return result
+    except Exception:
+        return {}
+
+
 def load_earnings_context_batch(tickers: list[str], max_age_days: int = 30) -> dict[str, dict]:
     """Fetch earnings_context rows for all tickers in one query.
     Returns {ticker: row} — missing tickers are absent from the dict.

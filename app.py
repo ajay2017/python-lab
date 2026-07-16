@@ -1493,6 +1493,7 @@ with st.sidebar:
         ("PORTFOLIO", [
             ("Portfolio Allocation", "🥧 Portfolio Allocation", ":material/pie_chart:"),
             ("Portfolio Health",    "🏆 Portfolio Health",     ":material/analytics:"),
+            ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Alerts & Actions", "⚠️ Alerts & Actions",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
@@ -23648,5 +23649,1049 @@ elif page == "🧠 AI Insights":
                         st.rerun()
 
                 st.divider()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality
+# Awareness-only: display and retrospective analysis, no gates, no recommendations.
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "🎯 My Edge":
+    import plotly.graph_objects as _me_go
+    from plotly.subplots import make_subplots as _me_subplots
+    from datetime import datetime as _me_datetime, timedelta as _me_td
+    import pytz as _me_pytz
+    from stock_analyzer import account as _me_acct
+    from stock_analyzer import db as _me_db
+    from stock_analyzer import benchmark_mirror as _bm
+    from stock_analyzer import decision_quality as _dq
+    from stock_analyzer.trade_analytics import compute_extended_stats as _me_ext
+
+    _me_ET    = _me_pytz.timezone("America/New_York")
+    _me_today = _me_datetime.now(_me_ET).date()
+
+    st.title("🎯 My Edge")
+    st.caption(
+        "Retrospective view only — no recommendations, no gates. "
+        "Answers three questions: Am I beating passive? Does my prep pay off? Am I improving?"
+    )
+
+    # ── Benchmark selector + load button ─────────────────────────────────────
+    _me_hdr_l, _me_hdr_r = st.columns([4, 1])
+    with _me_hdr_l:
+        _me_bench_label = st.selectbox(
+            "Benchmark",
+            options=["SPY — S&P 500 (recommended)", "QQQ — Nasdaq 100"],
+            key="_me_benchmark_select",
+            label_visibility="collapsed",
+        )
+    _me_bench_ticker = "QQQ" if "QQQ" in _me_bench_label else "SPY"
+    _me_cache_key    = f"_edge_benchmark_{_me_bench_ticker}"
+
+    _me_prices: dict = st.session_state.get(_me_cache_key, {})
+    _me_loaded       = bool(_me_prices)
+    with _me_hdr_r:
+        if not _me_loaded:
+            if st.button("📊 Load benchmark data", key="_me_load_btn"):
+                _me_flows_tmp = _me_db.load_account_flows()
+                _me_anchor    = _me_acct.baseline_anchor(_me_flows_tmp)
+                _me_start_tmp = _me_anchor["date"] if _me_anchor else str(_me_today - _me_td(days=365))
+                try:
+                    from datetime import date as _me_date_cls
+                    _me_start_d = _me_date_cls.fromisoformat(str(_me_start_tmp))
+                except Exception:
+                    _me_start_d = _me_today - _me_td(days=365)
+                with st.spinner(f"Fetching {_me_bench_ticker} prices…"):
+                    _me_fetched = _bm.fetch_benchmark_prices(_me_bench_ticker, _me_start_d, _me_today)
+                if _me_fetched:
+                    st.session_state[_me_cache_key] = _me_fetched
+                    st.session_state[f"_edge_loaded_at_{_me_bench_ticker}"] = _me_datetime.now(_me_ET).strftime("%H:%M")
+                    st.rerun()
+                else:
+                    st.error(f"Could not fetch {_me_bench_ticker} data — check connectivity.")
+        else:
+            _me_loaded_at = st.session_state.get(f"_edge_loaded_at_{_me_bench_ticker}", "")
+            if st.button(f"🔄 {_me_bench_ticker} loaded{' · ' + _me_loaded_at if _me_loaded_at else ''}", key="_me_reload_btn"):
+                st.session_state.pop(_me_cache_key, None)
+                st.rerun()
+
+    _me_prices = st.session_state.get(_me_cache_key, {})
+
+    # ── Load flows + account data (DB, cheap) ────────────────────────────────
+    _me_flows  = _me_db.load_account_flows()
+    _me_anchor = _me_acct.baseline_anchor(_me_flows)
+
+    # ── 3 tabs ────────────────────────────────────────────────────────────────
+    _me_tab_a, _me_tab_c, _me_tab_b = st.tabs([
+        "📐 Benchmark Mirror",
+        "🔬 Workflow ROI",
+        "📅 Decision Quality",
+    ])
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB A — Benchmark Mirror
+    # ═════════════════════════════════════════════════════════════════════════
+    with _me_tab_a:
+        st.subheader("📐 Benchmark Mirror")
+        st.caption(
+            f"What would your cash flows be worth today if every dollar had gone into "
+            f"{_me_bench_ticker} instead of your stock picks?"
+        )
+
+        if not _me_anchor:
+            st.info(
+                "📋 No account baseline found. Set a starting balance on the "
+                "💰 Account page to enable the Benchmark Mirror."
+            )
+        elif not _me_prices:
+            st.info(
+                f"Click **📊 Load benchmark data** above to fetch {_me_bench_ticker} "
+                "prices and compute the comparison."
+            )
+        else:
+            from datetime import date as _me_date_cls
+
+            # Date range
+            try:
+                _me_base_date = _me_date_cls.fromisoformat(str(_me_anchor["date"]))
+            except Exception:
+                _me_base_date = _me_today - _me_td(days=365)
+            _me_base_val = float(_me_anchor["value"])
+
+            # Time range selector
+            _me_range_opts = {
+                "Since baseline": _me_base_date,
+                "Last 12 months": _me_today - _me_td(days=365),
+                "Last 6 months":  _me_today - _me_td(days=182),
+                "Last 3 months":  _me_today - _me_td(days=91),
+            }
+            _me_range_col, _me_view_col = st.columns([2, 2])
+            with _me_range_col:
+                _me_range_label = st.selectbox(
+                    "Period", list(_me_range_opts.keys()), key="_me_range"
+                )
+            _me_range_start = _me_range_opts[_me_range_label]
+            # Clamp to baseline (can't start before we had money)
+            if _me_range_start < _me_base_date:
+                _me_range_start = _me_base_date
+
+            with _me_view_col:
+                _me_view = st.segmented_control(
+                    "View",
+                    options=["📈 Growth", "💧 Cash Flows", "📉 Drawdown"],
+                    default="📈 Growth",
+                    key="_me_view_select",
+                    label_visibility="collapsed",
+                )
+
+            # Compute shadow portfolio
+            _me_shadow = _bm.build_shadow_portfolio(_me_flows, _me_prices, _me_today)
+            _me_shadow_val = _me_shadow.get("shadow_ending_value") or 0.0
+
+            # Compute shadow MWR
+            _me_shadow_mwr = _bm.compute_shadow_mwr(
+                _me_base_val, _me_base_date,
+                _me_shadow_val, _me_today,
+                _me_flows,
+            )
+
+            # Actual portfolio value from session state
+            _me_port_val = float(st.session_state.get("_portfolio_value") or 0.0)
+
+            # Actual MWR (reuse account.money_weighted_return)
+            _me_actual_mwr = _me_acct.money_weighted_return(
+                _me_base_val, _me_base_date,
+                _me_port_val, _me_today,
+                _me_flows,
+            ) if _me_port_val > 0 else None
+
+            # ── KPI strip ────────────────────────────────────────────────────
+            _me_kpi1, _me_kpi2, _me_kpi3, _me_kpi4 = st.columns(4)
+
+            _me_actual_ann  = (_me_actual_mwr or {}).get("annualized_pct")
+            _me_shadow_ann  = (_me_shadow_mwr or {}).get("annualized_pct")
+            _me_alpha_ann   = (
+                round(_me_actual_ann - _me_shadow_ann, 2)
+                if _me_actual_ann is not None and _me_shadow_ann is not None
+                else None
+            )
+            _me_dollar_gap  = round(_me_port_val - _me_shadow_val, 2) if _me_port_val > 0 else None
+
+            with _me_kpi1:
+                st.metric(
+                    "Your Return (ann.)",
+                    f"{_me_actual_ann:+.1f}%" if _me_actual_ann is not None else "—",
+                    help="Annualised money-weighted return on your actual portfolio",
+                )
+            with _me_kpi2:
+                st.metric(
+                    f"{_me_bench_ticker} Return (ann.)",
+                    f"{_me_shadow_ann:+.1f}%" if _me_shadow_ann is not None else "—",
+                    help=f"Same cash, same timing — invested in {_me_bench_ticker} instead",
+                )
+            with _me_kpi3:
+                _me_alpha_str = f"{_me_alpha_ann:+.1f}pp" if _me_alpha_ann is not None else "—"
+                st.metric(
+                    "Your Alpha",
+                    _me_alpha_str,
+                    delta=_me_alpha_str if _me_alpha_ann is not None else None,
+                    delta_color="normal",
+                    help="Your return minus benchmark return (percentage points)",
+                )
+            with _me_kpi4:
+                st.metric(
+                    "Portfolio vs Shadow ($)",
+                    f"${abs(_me_dollar_gap):,.0f} {'ahead' if (_me_dollar_gap or 0) >= 0 else 'behind'}"
+                    if _me_dollar_gap is not None else "—",
+                    delta=f"${_me_dollar_gap:+,.0f}" if _me_dollar_gap is not None else None,
+                    delta_color="normal",
+                    help=f"Your actual portfolio value vs what {_me_bench_ticker} shadow would be worth today",
+                )
+
+            st.divider()
+
+            # ── Chart area ───────────────────────────────────────────────────
+            _me_curve = _bm.build_benchmark_curve(
+                _me_prices, _me_flows, _me_range_start, _me_today
+            )
+
+            if _me_view == "📈 Growth":
+                if not _me_curve:
+                    st.info("Not enough price history for the selected period.")
+                else:
+                    _me_dates  = sorted(_me_curve.keys())
+                    _me_b_vals = [_me_curve[d]["benchmark_idx"] for d in _me_dates]
+
+                    # Shadow curve indexed to 100 at range_start
+                    _me_s_raw  = [_me_curve[d]["shadow_value"] for d in _me_dates]
+                    _me_s_base = _me_s_raw[0] if _me_s_raw[0] > 0 else 1.0
+                    _me_s_idx  = [round(v / _me_s_base * 100, 2) for v in _me_s_raw]
+
+                    _me_fig = _me_go.Figure()
+
+                    # Filled area between curves
+                    _me_ahead = [s >= b for s, b in zip(_me_s_idx, _me_b_vals)]
+                    _me_fill_color = "rgba(34,197,94,0.10)" if _me_ahead[-1] else "rgba(239,68,68,0.10)"
+
+                    _me_fig.add_trace(_me_go.Scatter(
+                        x=_me_dates, y=_me_b_vals,
+                        name=_me_bench_ticker,
+                        line=dict(color="#94a3b8", width=1.5),
+                        mode="lines",
+                    ))
+                    _me_fig.add_trace(_me_go.Scatter(
+                        x=_me_dates, y=_me_s_idx,
+                        name="Shadow portfolio",
+                        fill="tonexty",
+                        fillcolor=_me_fill_color,
+                        line=dict(color="#22d3ee", width=2.5),
+                        mode="lines",
+                    ))
+
+                    # Mark each flow date with a vertical dashed line
+                    _me_flow_shapes = []
+                    for _mf in _me_flows:
+                        _mf_type = str(_mf.get("flow_type") or "").lower()
+                        if _mf_type not in ("baseline", "deposit"):
+                            continue
+                        _mf_d = str(_mf.get("flow_date") or "")
+                        if _mf_d and _me_range_start <= _me_date_cls.fromisoformat(_mf_d) <= _me_today:
+                            _me_flow_shapes.append(dict(
+                                type="line", x0=_mf_d, x1=_mf_d,
+                                y0=0, y1=1, yref="paper",
+                                line=dict(color="#f59e0b", width=1, dash="dot"),
+                            ))
+
+                    _me_fig.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=360,
+                        margin=dict(t=20, b=20, l=0, r=0),
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.01,
+                            xanchor="left", x=0,
+                        ),
+                        xaxis=dict(title=None, gridcolor="#1f2937"),
+                        yaxis=dict(title="Indexed (100 = start)", gridcolor="#1f2937"),
+                        shapes=_me_flow_shapes,
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(_me_fig, use_container_width=True)
+                    st.caption(
+                        f"🟡 Vertical dotted lines = cash deposits. "
+                        f"Shadow = same dollars invested in {_me_bench_ticker} on each deposit date. "
+                        "Both lines start at 100."
+                    )
+
+            elif _me_view == "💧 Cash Flows":
+                _me_attr = _me_shadow.get("flow_attribution", [])
+                if not _me_attr:
+                    st.info("No cash flows found — add a baseline or deposits on the 💰 Account page.")
+                else:
+                    _me_labels  = []
+                    _me_values  = []
+                    _me_colors  = []
+                    _me_hover   = []
+                    for _mf in _me_attr:
+                        _mf_lbl = f"{_mf['flow_type'].title()} · {str(_mf['date'])}"
+                        _mf_gl  = _mf.get("gain_loss", 0)
+                        _mf_ret = _mf.get("return_pct")
+                        _me_labels.append(_mf_lbl)
+                        _me_values.append(_mf_gl)
+                        _me_colors.append("#16a34a" if _mf_gl >= 0 else "#dc2626")
+                        _me_hover.append(
+                            f"Invested: ${_mf['amount']:,.0f}<br>"
+                            f"Worth today: ${_mf['current_value']:,.0f}<br>"
+                            f"Gain/Loss: ${_mf_gl:+,.0f}<br>"
+                            f"Return: {_mf_ret:+.1f}%" if _mf_ret is not None else ""
+                        )
+
+                    _me_fig2 = _me_go.Figure(_me_go.Bar(
+                        x=_me_values,
+                        y=_me_labels,
+                        orientation="h",
+                        marker_color=_me_colors,
+                        text=[f"${v:+,.0f}" for v in _me_values],
+                        textposition="outside",
+                        hovertext=_me_hover,
+                        hoverinfo="text",
+                    ))
+                    _me_fig2.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=max(280, len(_me_attr) * 60),
+                        margin=dict(t=10, b=20, l=0, r=80),
+                        xaxis=dict(title=f"Gain / Loss if invested in {_me_bench_ticker} ($)", gridcolor="#1f2937"),
+                        yaxis=dict(title=None, gridcolor="#1f2937"),
+                    )
+                    st.plotly_chart(_me_fig2, use_container_width=True)
+                    st.caption(
+                        f"Each bar = what that cash deployment is worth today if it had gone into "
+                        f"{_me_bench_ticker}. Green = the benchmark grew it; red = it would have lost value."
+                    )
+
+            else:  # 📉 Drawdown
+                _me_dd = _bm.build_drawdown_series(_me_prices, _me_range_start, _me_today)
+                if not _me_dd:
+                    st.info("Not enough price history for the selected period.")
+                else:
+                    _me_dd_dates = sorted(_me_dd.keys())
+                    _me_dd_vals  = [_me_dd[d] for d in _me_dd_dates]
+                    _me_worst_dd = min(_me_dd_vals)
+                    _me_worst_d  = _me_dd_dates[_me_dd_vals.index(_me_worst_dd)]
+
+                    _me_fig3 = _me_go.Figure()
+                    _me_fig3.add_trace(_me_go.Scatter(
+                        x=_me_dd_dates, y=_me_dd_vals,
+                        name=f"{_me_bench_ticker} drawdown",
+                        fill="tozeroy",
+                        fillcolor="rgba(239,68,68,0.15)",
+                        line=dict(color="#ef4444", width=1.5),
+                        mode="lines",
+                    ))
+                    _me_fig3.add_annotation(
+                        x=_me_worst_d, y=_me_worst_dd,
+                        text=f"Worst: {_me_worst_dd:.1f}%",
+                        showarrow=True, arrowhead=2,
+                        font=dict(color="#f87171", size=12),
+                        arrowcolor="#f87171",
+                    )
+                    _me_fig3.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=320,
+                        margin=dict(t=20, b=20, l=0, r=0),
+                        xaxis=dict(title=None, gridcolor="#1f2937"),
+                        yaxis=dict(title="Drawdown from peak (%)", gridcolor="#1f2937"),
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(_me_fig3, use_container_width=True)
+                    st.caption(
+                        f"How far {_me_bench_ticker} fell from its prior peak at each point. "
+                        "This is what passive investing would have felt like — "
+                        "a useful reminder that passive still has drawdowns."
+                    )
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB C — Workflow ROI
+    # ═════════════════════════════════════════════════════════════════════════
+    with _me_tab_c:
+        st.subheader("🔬 Workflow ROI")
+        st.caption(
+            "When you do the in-app research (thesis + analyst notes + earnings context), "
+            "do those trades actually perform better? Closed trades only."
+        )
+
+        _me_trades_df = st.session_state.get("trades_df")
+        if _me_trades_df is None or (hasattr(_me_trades_df, "empty") and _me_trades_df.empty):
+            st.info("No trade history loaded. Visit 🏠 Home first to load your portfolio.")
+        else:
+            # Load prep-signal data (DB, cheap)
+            _me_analyst_df     = _me_db.load_analyst_coverage()
+            _me_earnings_ctx   = _me_db.load_all_earnings_context()
+            _me_classified     = _dq.classify_all_buys(
+                _me_trades_df, _me_analyst_df, _me_earnings_ctx
+            )
+
+            # Coverage summary
+            _me_buy_count    = len(_me_trades_df[_me_trades_df["action"] == "BUY"])
+            _me_thesis_count = 0
+            _me_analyst_cnt  = 0
+            _me_earnings_cnt = 0
+            if not _me_classified.empty:
+                _me_thesis_count  = int(_me_classified["thesis_flag"].sum())
+                _me_analyst_cnt   = int(_me_classified["analyst_flag"].sum())
+                _me_earnings_cnt  = int(_me_classified["earnings_flag"].sum())
+
+            # Tracking started dates
+            _TRACKING_STARTED = "2026-06-28"
+            _me_buys_since    = _me_trades_df[
+                (_me_trades_df["action"] == "BUY") &
+                (_me_trades_df["traded_at"].astype(str) >= _TRACKING_STARTED)
+            ] if "traded_at" in _me_trades_df.columns else _me_trades_df[_me_trades_df["action"] == "BUY"]
+            _me_since_count = len(_me_buys_since)
+
+            st.markdown(
+                f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">'
+                f'<span style="font-size:13px;color:#9ca3af;">Total BUY trades: '
+                f'<b style="color:#f3f4f6;">{_me_buy_count}</b></span>'
+                f'<span style="font-size:13px;color:#9ca3af;">Since prep tracking: '
+                f'<b style="color:#f3f4f6;">{_me_since_count}</b></span>'
+                f'<span style="font-size:13px;color:#9ca3af;">Has thesis: '
+                f'<b style="color:#22d3ee;">{_me_thesis_count}</b></span>'
+                f'<span style="font-size:13px;color:#9ca3af;">Analyst research: '
+                f'<b style="color:#a78bfa;">{_me_analyst_cnt}</b></span>'
+                f'<span style="font-size:13px;color:#9ca3af;">Earnings context: '
+                f'<b style="color:#34d399;">{_me_earnings_cnt}</b></span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if _me_buy_count > 0 and _me_since_count / _me_buy_count < 0.5:
+                st.warning(
+                    f"⚠️ Most trades ({_me_buy_count - _me_since_count} of {_me_buy_count}) "
+                    f"predate in-app prep tracking (started {_TRACKING_STARTED}). "
+                    "Those land in **Cold Entry** by definition — not because prep wasn't done. "
+                    "Results are most meaningful for trades since that date."
+                )
+
+            # Compute Workflow ROI
+            _me_roi_df = _dq.build_workflow_roi(
+                _me_classified, _me_trades_df,
+                spy_prices=_me_prices if _me_prices else None,
+            )
+
+            # Controls
+            _me_wf_view = st.segmented_control(
+                "View",
+                options=["📊 Tier Comparison", "🔵 Trade Scatter", "🔺 Coverage Funnel"],
+                default="📊 Tier Comparison",
+                key="_me_wf_view",
+                label_visibility="collapsed",
+            )
+            _me_metric_sel = st.selectbox(
+                "Metric",
+                options=["P&L %" , "Alpha vs SPY", "Hold Days"],
+                key="_me_wf_metric",
+                label_visibility="collapsed",
+            ) if _me_wf_view != "🔺 Coverage Funnel" else "P&L %"
+
+            st.divider()
+
+            if _me_wf_view == "📊 Tier Comparison":
+                if _me_roi_df is None or _me_roi_df.empty:
+                    st.info("No closed trades yet — results appear once you have sold positions.")
+                else:
+                    # Build per-tier stats
+                    _me_tier_order = [
+                        (3, "Full Prep",   "#22d3ee"),
+                        (2, "Thorough",    "#a78bfa"),
+                        (1, "Basic",       "#94a3b8"),
+                        (0, "Cold Entry",  "#f59e0b"),
+                    ]
+                    _me_tier_stats = []
+                    for _t_int, _t_lbl, _t_col in _me_tier_order:
+                        _t_grp = _me_roi_df[_me_roi_df["tier_int"] == _t_int]
+                        if _t_grp.empty:
+                            _me_tier_stats.append((_t_lbl, _t_col, None, 0))
+                            continue
+                        if _me_metric_sel == "P&L %":
+                            _t_vals = _t_grp["pnl_pct"].dropna()
+                        elif _me_metric_sel == "Alpha vs SPY":
+                            _t_vals = _t_grp["alpha_vs_spy"].dropna()
+                        else:
+                            _t_vals = _t_grp["hold_days"].dropna()
+                        _t_avg = round(float(_t_vals.mean()), 2) if not _t_vals.empty else None
+                        _me_tier_stats.append((_t_lbl, _t_col, _t_avg, len(_t_grp)))
+
+                    # KPI cards
+                    _me_tc1, _me_tc2, _me_tc3, _me_tc4 = st.columns(4)
+                    for _ti, (_tc, (_t_lbl, _t_col, _t_avg, _t_n)) in enumerate(
+                        zip([_me_tc1, _me_tc2, _me_tc3, _me_tc4], _me_tier_stats)
+                    ):
+                        with _tc:
+                            _t_val_str = (
+                                f"{_t_avg:+.1f}%" if _t_avg is not None and _me_metric_sel != "Hold Days"
+                                else (f"{_t_avg:.0f}d" if _t_avg is not None else "—")
+                            )
+                            st.markdown(
+                                f'<div style="background:#111827;border:1px solid #1f2937;'
+                                f'border-left:3px solid {_t_col};border-radius:8px;'
+                                f'padding:12px 14px;margin-bottom:8px;">'
+                                f'<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;">{_t_lbl}</div>'
+                                f'<div style="font-size:22px;font-weight:700;color:#f3f4f6;">{_t_val_str}</div>'
+                                f'<div style="font-size:11px;color:#6b7280;">{_t_n} trades</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                    # Bar chart
+                    _me_bar_labels = [t[0] for t in _me_tier_stats]
+                    _me_bar_vals   = [t[2] if t[2] is not None else 0 for t in _me_tier_stats]
+                    _me_bar_ns     = [t[3] for t in _me_tier_stats]
+                    _me_bar_colors = [t[1] for t in _me_tier_stats]
+
+                    _me_fig_wf = _me_go.Figure(_me_go.Bar(
+                        x=_me_bar_labels,
+                        y=_me_bar_vals,
+                        marker_color=_me_bar_colors,
+                        text=[
+                            f"{v:+.1f}% ({n})" if _me_metric_sel != "Hold Days"
+                            else (f"{v:.0f}d ({n})" if v else f"— ({n})")
+                            for v, n in zip(_me_bar_vals, _me_bar_ns)
+                        ],
+                        textposition="outside",
+                        hovertemplate="%{x}: %{y:.2f}<extra></extra>",
+                    ))
+                    _me_fig_wf.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=320,
+                        margin=dict(t=30, b=10, l=0, r=0),
+                        yaxis=dict(
+                            title=_me_metric_sel,
+                            gridcolor="#1f2937",
+                            zeroline=True,
+                            zerolinecolor="#374151",
+                        ),
+                        xaxis=dict(title=None),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_me_fig_wf, use_container_width=True)
+                    st.caption(
+                        "Tiers: **Full Prep** = thesis + analyst research + earnings context · "
+                        "**Thorough** = thesis + one of analyst/earnings · "
+                        "**Basic** = thesis only · **Cold Entry** = no recorded prep. "
+                        "Bars below 3 trades show data but are statistically weak."
+                    )
+
+            elif _me_wf_view == "🔵 Trade Scatter":
+                if _me_roi_df is None or _me_roi_df.empty:
+                    st.info("No closed trades yet — scatter appears once you have sold positions.")
+                else:
+                    _me_scat_x = "hold_days"
+                    _me_scat_y = (
+                        "pnl_pct"       if _me_metric_sel == "P&L %"
+                        else "alpha_vs_spy" if _me_metric_sel == "Alpha vs SPY"
+                        else "pnl_pct"
+                    )
+                    _me_scat_df = _me_roi_df.dropna(subset=[_me_scat_x, _me_scat_y])
+
+                    if _me_scat_df.empty:
+                        st.info("Not enough data with both hold days and the selected metric.")
+                    else:
+                        _me_fig_s = _me_go.Figure()
+                        for _st_int, _st_lbl, _st_col in [
+                            (3, "Full Prep", "#22d3ee"),
+                            (2, "Thorough",  "#a78bfa"),
+                            (1, "Basic",     "#94a3b8"),
+                            (0, "Cold Entry","#f59e0b"),
+                        ]:
+                            _sg = _me_scat_df[_me_scat_df["tier_int"] == _st_int]
+                            if _sg.empty:
+                                continue
+                            _me_fig_s.add_trace(_me_go.Scatter(
+                                x=_sg[_me_scat_x],
+                                y=_sg[_me_scat_y],
+                                mode="markers",
+                                name=_st_lbl,
+                                marker=dict(color=_st_col, size=10, opacity=0.75),
+                                text=_sg["ticker"],
+                                hovertemplate=(
+                                    "<b>%{text}</b><br>"
+                                    f"Hold: %{{x}}d<br>{_me_metric_sel}: %{{y:.1f}}%<extra></extra>"
+                                ),
+                            ))
+                        _me_fig_s.add_hline(
+                            y=0, line_color="#374151", line_dash="dot", line_width=1
+                        )
+                        _me_fig_s.update_layout(
+                            template="plotly_dark",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(14,17,23,0.3)",
+                            height=380,
+                            margin=dict(t=10, b=20, l=0, r=0),
+                            xaxis=dict(title="Hold Days", gridcolor="#1f2937"),
+                            yaxis=dict(title=_me_metric_sel, gridcolor="#1f2937"),
+                            legend=dict(
+                                orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0
+                            ),
+                            hovermode="closest",
+                        )
+                        st.plotly_chart(_me_fig_s, use_container_width=True)
+                        st.caption(
+                            "Each dot = one closed trade. Color = prep tier. "
+                            "Dots above 0 = profitable; below = loss. "
+                            "Do higher-prep dots cluster above the line?"
+                        )
+
+            else:  # Coverage Funnel
+                if _me_classified.empty:
+                    st.info("No BUY trades found to classify.")
+                else:
+                    _me_fn_total    = len(_me_classified)
+                    _me_fn_thesis   = int(_me_classified["thesis_flag"].sum())
+                    _me_fn_analyst  = int(_me_classified["analyst_flag"].sum())
+                    _me_fn_earnings = int(_me_classified["earnings_flag"].sum())
+                    _me_fn_full     = int(
+                        (_me_classified["tier_int"] == 3).sum()
+                    )
+
+                    _me_fig_fn = _me_go.Figure(_me_go.Funnel(
+                        y=["All BUY trades", "Has thesis", "Has analyst research",
+                           "Has earnings context", "Full Prep (all three)"],
+                        x=[_me_fn_total, _me_fn_thesis, _me_fn_analyst,
+                           _me_fn_earnings, _me_fn_full],
+                        textinfo="value+percent initial",
+                        marker=dict(color=["#374151", "#22d3ee", "#a78bfa", "#34d399", "#f59e0b"]),
+                    ))
+                    _me_fig_fn.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=320,
+                        margin=dict(t=10, b=10, l=0, r=0),
+                    )
+                    st.plotly_chart(_me_fig_fn, use_container_width=True)
+
+                    with st.expander("Why so many Cold Entry trades?"):
+                        st.markdown(
+                            "In-app prep tracking was added progressively:\n\n"
+                            "- **Thesis authoring** started: 2026-06-28\n"
+                            "- **Analyst coverage** started: 2026-07-04\n"
+                            "- **Earnings context** started: 2026-07-13\n\n"
+                            "Trades before those dates can't have those signals recorded "
+                            "— they land in Cold Entry by system limitation, not because "
+                            "the research wasn't done. Use the 📊 Tier Comparison view "
+                            "to focus on what the data can actually tell you."
+                        )
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB B — Decision Quality Timeline
+    # ═════════════════════════════════════════════════════════════════════════
+    with _me_tab_b:
+        st.subheader("📅 Decision Quality")
+        st.caption(
+            "Are you becoming a better investor month over month? "
+            "Each period earns a grade from win rate, profit factor, and (when benchmark "
+            "data is loaded) realized alpha vs the benchmark. Closed trades only."
+        )
+
+        _me_tdf_b = st.session_state.get("trades_df")
+        if _me_tdf_b is None or (hasattr(_me_tdf_b, "empty") and _me_tdf_b.empty):
+            st.info("No trade history loaded. Visit 🏠 Home first to load your portfolio.")
+        else:
+            # Build SPY monthly returns if benchmark loaded
+            _me_spy_monthly = (
+                _dq.build_spy_monthly_returns(_me_prices)
+                if _me_prices else None
+            )
+
+            _me_monthly_grades = _dq.build_monthly_grades(_me_tdf_b, _me_spy_monthly)
+
+            # Controls
+            _me_gran_col, _me_grade_metric_col, _me_grade_view_col = st.columns(3)
+            with _me_gran_col:
+                _me_gran = st.segmented_control(
+                    "Granularity",
+                    options=["Monthly", "Quarterly"],
+                    default="Monthly",
+                    key="_me_gran",
+                    label_visibility="collapsed",
+                )
+            with _me_grade_metric_col:
+                _me_grade_metric = st.selectbox(
+                    "Metric",
+                    options=["Composite Grade", "Win Rate", "Profit Factor", "Alpha vs SPY"],
+                    key="_me_grade_metric",
+                    label_visibility="collapsed",
+                )
+            with _me_grade_view_col:
+                _me_grade_view = st.segmented_control(
+                    "Chart view",
+                    options=["📊 Timeline", "🔲 Heatmap", "🔍 Cohort Compare"],
+                    default="📊 Timeline",
+                    key="_me_grade_view",
+                    label_visibility="collapsed",
+                )
+
+            # Build the grade list for selected granularity
+            if _me_gran == "Quarterly":
+                _me_grades = _dq.build_quarterly_grades(_me_monthly_grades)
+                _me_period_field = "period_str"
+            else:
+                _me_grades = _me_monthly_grades
+                _me_period_field = "month_str"
+
+            if not _me_grades:
+                st.info(
+                    f"Not enough closed trades yet to compute grades "
+                    f"(need at least {2} closed trades per period). "
+                    "Grades appear as you accumulate trade history."
+                )
+            else:
+                # ── KPI strip ────────────────────────────────────────────────
+                _me_latest = _me_grades[-1]
+                _me_best   = max(_me_grades, key=lambda g: g["composite_score"])
+
+                # Trend: 3-period rolling average change
+                _me_trend_str = "—"
+                if len(_me_grades) >= 3:
+                    _me_last3_avg  = sum(g["composite_score"] for g in _me_grades[-3:]) / 3
+                    _me_prior3_avg = sum(g["composite_score"] for g in _me_grades[-6:-3]) / 3 if len(_me_grades) >= 6 else None
+                    if _me_prior3_avg is not None:
+                        _me_delta3 = round(_me_last3_avg - _me_prior3_avg, 1)
+                        _me_trend_str = (
+                            f"↑ Improving ({_me_delta3:+.0f} pts, last 3 periods)"
+                            if _me_delta3 > 2 else
+                            f"↓ Declining ({_me_delta3:+.0f} pts, last 3 periods)"
+                            if _me_delta3 < -2 else
+                            "→ Stable (last 3 periods)"
+                        )
+
+                _me_gk1, _me_gk2, _me_gk3 = st.columns(3)
+                with _me_gk1:
+                    st.metric(
+                        "Best Period",
+                        f"{_me_best.get(_me_period_field, '—')} — "
+                        f"Grade {_me_best['grade_letter']} ({_me_best['composite_score']:.0f}/100)",
+                    )
+                with _me_gk2:
+                    st.metric(
+                        "Latest Period",
+                        f"Grade {_me_latest['grade_letter']} ({_me_latest['composite_score']:.0f}/100)",
+                        help=f"{_me_latest.get(_me_period_field,'')}: "
+                             f"Win Rate {_me_latest.get('win_rate','—')}% · "
+                             f"PF {_me_latest.get('profit_factor','—')}",
+                    )
+                with _me_gk3:
+                    st.metric("Trend", _me_trend_str)
+
+                if not _me_prices:
+                    st.caption(
+                        "⚠️ Load benchmark data above to add the alpha component to grades. "
+                        "Current grades use win rate + profit factor only."
+                    )
+
+                st.divider()
+
+                # ── Chart area ───────────────────────────────────────────────
+                _me_periods = [g.get(_me_period_field, "") for g in _me_grades]
+
+                if _me_grade_view == "📊 Timeline":
+                    # Metric to plot
+                    if _me_grade_metric == "Composite Grade":
+                        _me_y_vals  = [g["composite_score"] for g in _me_grades]
+                        _me_y_title = "Composite Score (0–100)"
+                        _me_bar_cols = [g["grade_color"] for g in _me_grades]
+                    elif _me_grade_metric == "Win Rate":
+                        _me_y_vals  = [g.get("win_rate") or 0 for g in _me_grades]
+                        _me_y_title = "Win Rate (%)"
+                        _me_bar_cols = ["#22d3ee"] * len(_me_grades)
+                    elif _me_grade_metric == "Profit Factor":
+                        _me_y_vals  = [g.get("profit_factor") or 0 for g in _me_grades]
+                        _me_y_title = "Profit Factor"
+                        _me_bar_cols = ["#a78bfa"] * len(_me_grades)
+                    else:  # Alpha
+                        _me_y_vals  = [g.get("alpha_vs_spy") or 0 for g in _me_grades]
+                        _me_y_title = "Alpha vs SPY (%)"
+                        _me_bar_cols = [
+                            "#16a34a" if v >= 0 else "#dc2626" for v in _me_y_vals
+                        ]
+
+                    _me_trade_counts = [g.get("trade_count", 0) for g in _me_grades]
+
+                    _me_fig_g = _me_subplots(
+                        rows=2, cols=1, shared_xaxes=True,
+                        row_heights=[0.72, 0.28], vertical_spacing=0.04,
+                    )
+                    # Upper: grade/metric bars + rolling avg line
+                    _me_fig_g.add_trace(_me_go.Bar(
+                        x=_me_periods, y=_me_y_vals,
+                        marker_color=_me_bar_cols,
+                        name=_me_grade_metric,
+                        text=[
+                            f"{g['grade_letter']}" if _me_grade_metric == "Composite Grade" else ""
+                            for g in _me_grades
+                        ],
+                        textposition="outside",
+                        hovertemplate=(
+                            "%{x}<br>"
+                            + _me_grade_metric + ": %{y:.1f}<extra></extra>"
+                        ),
+                    ), row=1, col=1)
+
+                    if _me_grade_metric == "Composite Grade" and len(_me_grades) >= 3:
+                        import statistics as _me_stat
+                        _me_rolling = []
+                        for _ri in range(len(_me_grades)):
+                            _window = _me_y_vals[max(0, _ri - 2):_ri + 1]
+                            _me_rolling.append(round(_me_stat.mean(_window), 1))
+                        _me_fig_g.add_trace(_me_go.Scatter(
+                            x=_me_periods, y=_me_rolling,
+                            mode="lines",
+                            name="3-period avg",
+                            line=dict(color="#22d3ee", width=2),
+                        ), row=1, col=1)
+
+                    # Lower: trade count stacked bar
+                    _me_winners = []
+                    _me_losers  = []
+                    for g in _me_grades:
+                        _tc  = g.get("trade_count", 0)
+                        _wr  = g.get("win_rate") or 0
+                        _w   = round(_tc * _wr / 100)
+                        _me_winners.append(_w)
+                        _me_losers.append(_tc - _w)
+
+                    _me_fig_g.add_trace(_me_go.Bar(
+                        x=_me_periods, y=_me_winners,
+                        name="Winners", marker_color="#16a34a",
+                        hovertemplate="%{x}: %{y} wins<extra></extra>",
+                    ), row=2, col=1)
+                    _me_fig_g.add_trace(_me_go.Bar(
+                        x=_me_periods, y=_me_losers,
+                        name="Losers", marker_color="#dc2626",
+                        hovertemplate="%{x}: %{y} losses<extra></extra>",
+                    ), row=2, col=1)
+
+                    _me_fig_g.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=400,
+                        margin=dict(t=10, b=20, l=0, r=0),
+                        barmode="stack",
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0
+                        ),
+                        yaxis=dict(title=_me_y_title, gridcolor="#1f2937"),
+                        yaxis2=dict(title="Trades", gridcolor="#1f2937"),
+                        hovermode="x unified",
+                    )
+
+                    # Grade bands (composite view only)
+                    if _me_grade_metric == "Composite Grade":
+                        from stock_analyzer.constants import (
+                            DECISION_QUALITY_GRADE_A as _DGA,
+                            DECISION_QUALITY_GRADE_B as _DGB,
+                            DECISION_QUALITY_GRADE_C as _DGC,
+                            DECISION_QUALITY_GRADE_D as _DGD,
+                        )
+                        for _band_y0, _band_y1, _band_col in [
+                            (_DGA, 100, "rgba(22,163,74,0.06)"),
+                            (_DGB, _DGA, "rgba(37,99,235,0.06)"),
+                            (_DGC, _DGB, "rgba(180,83,9,0.06)"),
+                            (_DGD, _DGC, "rgba(194,65,12,0.06)"),
+                            (0,    _DGD, "rgba(185,28,28,0.06)"),
+                        ]:
+                            _me_fig_g.add_hrect(
+                                y0=_band_y0, y1=_band_y1,
+                                fillcolor=_band_col, line_width=0,
+                                row=1, col=1,
+                            )
+
+                    st.plotly_chart(_me_fig_g, use_container_width=True)
+                    if _me_grade_metric == "Composite Grade":
+                        st.caption(
+                            "Grade bands: 🟢 A ≥80 (Elite) · 🔵 B ≥65 (Disciplined) · "
+                            "🟡 C ≥50 (Learning) · 🟠 D ≥35 (Struggling) · 🔴 F <35. "
+                            "Lower panel shows winner/loser count per period."
+                        )
+
+                elif _me_grade_view == "🔲 Heatmap":
+                    # Metrics × periods grid
+                    _me_hm_metrics = ["Win Rate", "Profit Factor", "Alpha vs SPY", "Overtrading ×"]
+                    _me_hm_rows    = []
+                    for _hm_m in _me_hm_metrics:
+                        _hm_row = []
+                        for g in _me_grades:
+                            if _hm_m == "Win Rate":
+                                _hm_row.append(g.get("win_rate"))
+                            elif _hm_m == "Profit Factor":
+                                _hm_row.append(g.get("profit_factor"))
+                            elif _hm_m == "Alpha vs SPY":
+                                _hm_row.append(g.get("alpha_vs_spy"))
+                            else:
+                                _hm_row.append(g.get("overtrading_mult"))
+                        _me_hm_rows.append(_hm_row)
+
+                    # Text annotations
+                    _me_hm_text = []
+                    for _rm, _hm_row in zip(_me_hm_metrics, _me_hm_rows):
+                        _hm_text_row = []
+                        for v in _hm_row:
+                            if v is None:
+                                _hm_text_row.append("n/a")
+                            elif _rm == "Win Rate":
+                                _hm_text_row.append(f"{v:.0f}%")
+                            elif _rm == "Profit Factor":
+                                _hm_text_row.append(f"{v:.1f}" if v is not None else "∞")
+                            elif _rm == "Overtrading ×":
+                                _hm_text_row.append(f"{v:.1f}×")
+                            else:
+                                _hm_text_row.append(f"{v:+.1f}%")
+                        _me_hm_text.append(_hm_text_row)
+
+                    _me_fig_hm = _me_go.Figure(_me_go.Heatmap(
+                        z=_me_hm_rows,
+                        x=_me_periods,
+                        y=_me_hm_metrics,
+                        text=_me_hm_text,
+                        texttemplate="%{text}",
+                        colorscale="RdYlGn",
+                        showscale=False,
+                    ))
+                    _me_fig_hm.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(14,17,23,0.3)",
+                        height=280,
+                        margin=dict(t=10, b=10, l=0, r=0),
+                    )
+                    st.plotly_chart(_me_fig_hm, use_container_width=True)
+                    st.caption(
+                        "Green = stronger performance · Red = weaker. "
+                        "Overtrading row: green = low trade pace, red = elevated pace "
+                        "(scale inverted for that row). n/a = fewer than 2 closed trades."
+                    )
+
+                else:  # Cohort Compare
+                    if len(_me_grades) < 2:
+                        st.info("Need at least 2 graded periods for a cohort comparison.")
+                    else:
+                        _me_cc_periods = [g.get(_me_period_field, "") for g in _me_grades]
+                        _me_cc1, _me_cc2 = st.columns(2)
+                        with _me_cc1:
+                            _me_per_a = st.selectbox(
+                                "Period A (earlier)",
+                                options=_me_cc_periods,
+                                index=0,
+                                key="_me_period_a",
+                            )
+                        with _me_cc2:
+                            _me_per_b = st.selectbox(
+                                "Period B (later)",
+                                options=_me_cc_periods,
+                                index=len(_me_cc_periods) - 1,
+                                key="_me_period_b",
+                            )
+
+                        _me_ga = next((g for g in _me_grades if g.get(_me_period_field) == _me_per_a), None)
+                        _me_gb = next((g for g in _me_grades if g.get(_me_period_field) == _me_per_b), None)
+
+                        if _me_ga and _me_gb:
+                            _me_cc_metrics = ["Win Rate (%)", "Profit Factor", "Composite Score"]
+                            if _me_ga.get("alpha_vs_spy") is not None or _me_gb.get("alpha_vs_spy") is not None:
+                                _me_cc_metrics.append("Alpha vs SPY (%)")
+
+                            _me_vals_a = []
+                            _me_vals_b = []
+                            for _ccm in _me_cc_metrics:
+                                if _ccm == "Win Rate (%)":
+                                    _me_vals_a.append(_me_ga.get("win_rate") or 0)
+                                    _me_vals_b.append(_me_gb.get("win_rate") or 0)
+                                elif _ccm == "Profit Factor":
+                                    _me_vals_a.append(_me_ga.get("profit_factor") or 0)
+                                    _me_vals_b.append(_me_gb.get("profit_factor") or 0)
+                                elif _ccm == "Composite Score":
+                                    _me_vals_a.append(_me_ga.get("composite_score") or 0)
+                                    _me_vals_b.append(_me_gb.get("composite_score") or 0)
+                                else:
+                                    _me_vals_a.append(_me_ga.get("alpha_vs_spy") or 0)
+                                    _me_vals_b.append(_me_gb.get("alpha_vs_spy") or 0)
+
+                            _me_fig_cc = _me_go.Figure()
+                            _me_fig_cc.add_trace(_me_go.Bar(
+                                x=_me_vals_a, y=_me_cc_metrics,
+                                orientation="h", name=_me_per_a,
+                                marker_color="#94a3b8",
+                            ))
+                            _me_fig_cc.add_trace(_me_go.Bar(
+                                x=_me_vals_b, y=_me_cc_metrics,
+                                orientation="h", name=_me_per_b,
+                                marker_color="#22d3ee",
+                            ))
+
+                            # Delta annotations
+                            for _ci, (_ccm, _va, _vb) in enumerate(
+                                zip(_me_cc_metrics, _me_vals_a, _me_vals_b)
+                            ):
+                                _delta = round(_vb - _va, 2)
+                                _delta_str = (
+                                    f"+{_delta:.1f} ↑" if _delta > 0.1
+                                    else f"{_delta:.1f} ↓" if _delta < -0.1
+                                    else "→ flat"
+                                )
+                                _color = "#16a34a" if _delta > 0.1 else "#dc2626" if _delta < -0.1 else "#9ca3af"
+                                _me_fig_cc.add_annotation(
+                                    x=max(_va, _vb) + 1,
+                                    y=_ccm,
+                                    text=f'<span style="color:{_color}">{_delta_str}</span>',
+                                    showarrow=False,
+                                    xanchor="left",
+                                    font=dict(size=12),
+                                )
+
+                            _me_fig_cc.update_layout(
+                                template="plotly_dark",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                plot_bgcolor="rgba(14,17,23,0.3)",
+                                height=320,
+                                margin=dict(t=10, b=10, l=0, r=80),
+                                barmode="group",
+                                xaxis=dict(title=None, gridcolor="#1f2937"),
+                                yaxis=dict(title=None),
+                                legend=dict(
+                                    orientation="h", yanchor="bottom",
+                                    y=1.01, xanchor="left", x=0,
+                                ),
+                            )
+                            st.plotly_chart(_me_fig_cc, use_container_width=True)
+
+                            # Plain-English summary
+                            _me_wr_a = _me_ga.get("win_rate") or 0
+                            _me_wr_b = _me_gb.get("win_rate") or 0
+                            _me_pf_a = _me_ga.get("profit_factor")
+                            _me_pf_b = _me_gb.get("profit_factor")
+                            _me_summ = (
+                                f"In **{_me_per_b}**, your win rate was **{_me_wr_b:.0f}%** — "
+                                f"{'up' if _me_wr_b >= _me_wr_a else 'down'} from **{_me_wr_a:.0f}%** in **{_me_per_a}**. "
+                            )
+                            if _me_pf_a is not None and _me_pf_b is not None:
+                                _me_summ += (
+                                    f"Profit factor {'improved' if _me_pf_b >= _me_pf_a else 'declined'} "
+                                    f"from **{_me_pf_a:.2f}** to **{_me_pf_b:.2f}**. "
+                                )
+                            _me_alpha_a = _me_ga.get("alpha_vs_spy")
+                            _me_alpha_b = _me_gb.get("alpha_vs_spy")
+                            if _me_alpha_a is not None and _me_alpha_b is not None:
+                                _me_summ += (
+                                    f"Realized alpha vs {_me_bench_ticker}: "
+                                    f"**{_me_alpha_b:+.1f}%** in {_me_per_b} vs "
+                                    f"**{_me_alpha_a:+.1f}%** in {_me_per_a}."
+                                )
+                            st.markdown(_me_summ)
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

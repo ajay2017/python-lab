@@ -716,3 +716,24 @@ PREDICTIVE_MIN_BAND_N = 5
 # enough granularity to reveal where personal edge starts without producing
 # too many empty bands on a small history). Safe to tune from observation.
 PREDICTIVE_SCORE_BAND_SIZE = 5
+
+# ── My Edge — Decision Quality grading (measurement policy, NOT investment gates) ─
+# Grade thresholds define how the retrospective decision-quality grades are
+# assigned per calendar month. Aligned with Portfolio Health grade bands so
+# that "A" means the same thing across both scoring surfaces. Safe to tune
+# from observation. These are measurement floors only — they never affect
+# what the engine recommends or what gates fire.
+DECISION_QUALITY_GRADE_A = 80        # composite ≥ 80 → A (Elite)
+DECISION_QUALITY_GRADE_B = 65        # composite ≥ 65 → B (Disciplined)
+DECISION_QUALITY_GRADE_C = 50        # composite ≥ 50 → C (Learning)
+DECISION_QUALITY_GRADE_D = 35        # composite ≥ 35 → D (Struggling); below = F
+DECISION_QUALITY_MIN_TRADES = 2      # min closed trades to compute a period grade
+DECISION_QUALITY_ALPHA_SCALE = 5.0   # ±X% realized alpha maps to 100/0 on alpha subscore
+
+# ── My Edge — Workflow ROI prep-tier classification windows ──────────────────
+# Lookback/proximity windows used to classify each BUY trade by how much
+# in-app research was done before entry. Measurement only — never alters
+# what the engine recommends. Safe to tune from observation.
+WORKFLOW_ANALYST_LOOKBACK_DAYS = 90  # analyst research saved within N days BEFORE trade counts
+WORKFLOW_EARNINGS_WINDOW_DAYS  = 30  # earnings context saved within N days BEFORE trade counts (before-only; post-trade research is not pre-entry prep)
+WORKFLOW_MIN_THESIS_LENGTH     = 10  # min chars in user_thesis to count as a prep signal
