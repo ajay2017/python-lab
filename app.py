@@ -21892,6 +21892,57 @@ These power the **Portfolio Tune-up** lane:
 """
         )
 
+    with st.expander("🎯 My Edge — am I beating passive? does prep pay off? am I improving?", expanded=False):
+        st.markdown(
+            """
+**My Edge** is a retrospective-only page — it has no recommendations, no gates, no scores that affect anything else. It answers three questions that can't be answered anywhere else in the app:
+
+---
+
+**📐 Benchmark Mirror — "Am I beating passive investing?"**
+
+Takes the same cash flows you've deposited (from your 💰 Account page) and asks: *what if every dollar had gone into SPY (or QQQ) instead?* It runs the same Modified Dietz money-weighted return calculation on both your real portfolio and the shadow portfolio so timing effects are factored out — a deposit made at market lows counts for more than one made at highs.
+
+Three chart views:
+- **Cumulative Growth** — both portfolios indexed to 100 at your baseline date, showing long-run compounding divergence.
+- **Cash Flow Attribution** — how each individual deposit would have performed in SPY, so you can see which tranches drove the gap.
+- **Benchmark Drawdown** — how far SPY fell from peak at each date, for passive-investing context (your portfolio drawdown isn't shown because sold positions drop the equity figure even though cash was received — it would make normal selling look like a market crash).
+
+*Requires the 💰 Account baseline to be set. The KPI strip shows annualised return when the period is ≥ 30 days; otherwise it shows the total period return with a "(total, < 30d)" note.*
+
+---
+
+**🔬 Workflow ROI — "Does in-app prep lead to better trades?"**
+
+Classifies every BUY trade by how much in-app research was done **before** the trade date:
+
+| Tier | What it requires |
+|---|---|
+| **Full Prep** | Thesis + analyst notes + earnings context — all saved within their look-back windows |
+| **Thorough** | Thesis + analyst notes or earnings context |
+| **Basic** | Thesis only (≥ 10 characters, not a placeholder) |
+| **Cold Entry** | No in-app prep recorded before the trade |
+
+Three chart views: tier comparison bars (avg P&L / alpha / hold days per tier), trade scatter (one dot per closed trade colored by tier), and a coverage funnel (how many trades had each type of prep). Note: most early trades predate when prep tracking started — they land in Cold Entry by definition, not because prep wasn't done. Results become more meaningful as the tracked dataset grows.
+
+---
+
+**📅 Decision Quality Timeline — "Am I improving month over month?"**
+
+Each calendar period earns an **A–F grade** from three components: win rate, profit factor, and realised alpha vs SPY (when benchmark is loaded). An overtrading penalty is applied when your trade pace is elevated vs your 12-month average.
+
+| Grade | Score |
+|---|---|
+| A — Elite | ≥ 80 |
+| B — Disciplined | ≥ 65 |
+| C — Learning | ≥ 50 |
+| D — Struggling | ≥ 35 |
+| F | < 35 |
+
+Three chart views: timeline bars with grade-band zones, a metric heatmap showing all four components across every period at once, and a cohort comparison picker for any two periods side-by-side. A period needs at least 2 closed trades to be graded; fewer shows n/a.
+"""
+        )
+
     with st.expander("📚 Glossary & external references", expanded=False):
         st.markdown(
             """
