@@ -562,6 +562,7 @@ def compute_portfolio_dynamics(
 
         positions.append({
             "ticker":            ticker,
+            "days_held":         days,         # exact open-lot days; None if no trade history
             "months_held":       months_held,
             "pnl_pct":           pnl_pct,
             "annualized_return": annualized_return,

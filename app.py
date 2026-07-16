@@ -11971,27 +11971,57 @@ elif page == "🏆 Portfolio Health":
         st.plotly_chart(_ph_fig_donut, use_container_width=True)
 
     # ── Return efficiency callouts ────────────────────────────────────────────
-    _ph_with_ann = [p for p in _ph_positions if p["annualized_return"] is not None]
-    if _ph_with_ann:
-        _ph_sorted_ann = sorted(_ph_with_ann, key=lambda p: p["annualized_return"])
-        _ph_n = len(_ph_sorted_ann)
+    # Period toggle — drives both sort order and displayed rate
+    _ph_period = st.segmented_control(
+        "Return view",
+        options=["Weekly", "Monthly", "Yearly"],
+        default="Yearly",
+        key="ph_return_period",
+        label_visibility="collapsed",
+    )
+
+    def _ph_period_return(p: dict, period: str) -> float | None:
+        """Normalise P&L to the chosen period.  Gate: ≥ 15 days held to avoid
+        wild extrapolation on brand-new positions."""
+        days = p.get("days_held")
+        pnl  = p.get("pnl_pct")
+        if days is None or days < 15 or pnl is None:
+            return None
+        if period == "Weekly":
+            return round(pnl * 7 / days, 2)
+        if period == "Monthly":
+            return round(pnl * 30.44 / days, 2)
+        return p.get("annualized_return")  # Yearly — already computed + gated
+
+    _ph_period_label = {"Weekly": "%/wk", "Monthly": "%/mo", "Yearly": "%/yr"}[_ph_period]
+
+    _ph_with_rate = [
+        {**p, "_period_rate": _ph_period_return(p, _ph_period)}
+        for p in _ph_positions
+    ]
+    _ph_with_rate = [p for p in _ph_with_rate if p["_period_rate"] is not None]
+
+    if _ph_with_rate:
+        _ph_sorted = sorted(_ph_with_rate, key=lambda p: p["_period_rate"])
+        _ph_n = len(_ph_sorted)
         # ceil(n/2) for sleepers so the median goes to the bottom group on odd n;
         # stars take whatever remains after sleepers, capped at 3 — no overlap, no gaps.
         _ph_sleep_k = min(3, (_ph_n + 1) // 2)
-        _ph_sleepers = _ph_sorted_ann[:_ph_sleep_k]
-        _ph_stars    = list(reversed(_ph_sorted_ann[_ph_sleep_k:][-3:]))
+        _ph_sleepers = _ph_sorted[:_ph_sleep_k]
+        _ph_stars    = list(reversed(_ph_sorted[_ph_sleep_k:][-3:]))
 
-        def _ph_eff_row(p: dict, positive: bool) -> str:
-            _pnl_color = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
-            _pnl_str   = f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "—"
-            _ann_str   = f"{p['annualized_return']:+.0f}%/yr" if p["annualized_return"] is not None else "—"
+        def _ph_eff_row(p: dict) -> str:
+            _pnl_color  = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
+            _pnl_str    = f"{p['pnl_pct']:+.1f}%" if p["pnl_pct"] is not None else "—"
+            _rate_str   = f"{p['_period_rate']:+.1f}{_ph_period_label}" if p["_period_rate"] is not None else "—"
+            _tenure_str = f"{p['months_held']:.0f} mo" if p["months_held"] is not None else "—"
             return (
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
                 f'padding:4px 0;border-bottom:1px solid #1f2937;">'
                 f'<span style="font-size:13px;font-weight:700;color:#f3f4f6;">{p["ticker"]}</span>'
-                f'<span style="font-size:11px;color:#9ca3af;">{p["months_held"]:.0f} mo</span>'
+                f'<span style="font-size:11px;color:#9ca3af;">{_tenure_str}</span>'
                 f'<span style="font-size:13px;color:{_pnl_color};">{_pnl_str}</span>'
-                f'<span style="font-size:10px;color:#6b7280;">{_ann_str} ann.</span>'
+                f'<span style="font-size:10px;color:#6b7280;">{_rate_str}</span>'
                 f'</div>'
             )
 
@@ -12002,7 +12032,7 @@ elif page == "🏆 Portfolio Health":
             'letter-spacing:.5px;margin-bottom:8px;">⏳ Sleeping Capital</div>'
         )
         for _p in _ph_sleepers:
-            _ph_eff_html += _ph_eff_row(_p, positive=False)
+            _ph_eff_html += _ph_eff_row(_p)
         _ph_eff_html += (
             '</div>'
             '<div style="flex:1;border:1px solid #374151;border-radius:8px;padding:10px 14px;">'
@@ -12010,7 +12040,7 @@ elif page == "🏆 Portfolio Health":
             'letter-spacing:.5px;margin-bottom:8px;">🚀 Working Hardest</div>'
         )
         for _p in _ph_stars:
-            _ph_eff_html += _ph_eff_row(_p, positive=True)
+            _ph_eff_html += _ph_eff_row(_p)
         _ph_eff_html += '</div></div>'
 
         st.markdown(_ph_eff_html, unsafe_allow_html=True)
