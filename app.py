@@ -93,6 +93,8 @@ from stock_analyzer.constants import (
     REDEPLOY_CORR_CORRELATED_MIN,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
+    DEFENSIVE_ADD_MIN_COMPOSITE,
+    PERF_ALPHA_BAND_PCT,
     MACRO_IMMINENT_DAYS,
     MOVER_MIN_DAY_GAIN_PCT,
     MOVER_SHORTLIST_SIZE,
@@ -8778,7 +8780,7 @@ elif page == "🔗 Risk Analysis":
                                         _dp_clabel  = str((_dp_comp.get("rec") or {}).get("label", "")) if _dp_comp else ""
 
                                         # Skip Sell-rated composites — not suitable for defensive addition
-                                        if _dp_cscore is not None and _dp_cscore < 45:
+                                        if _dp_cscore is not None and _dp_cscore < DEFENSIVE_ADD_MIN_COMPOSITE:
                                             continue
 
                                         _sig_clr = (
@@ -10686,7 +10688,7 @@ elif page == "🥧 Portfolio Allocation":
                 # ── Alpha attribution chart ───────────────────────────────────
                 _asc = _attr_df.sort_values("Alpha vs SPY (%)", ascending=True)
                 _bar_clrs = [
-                    "#00C851" if v >= 5 else "#ff4444" if v <= -5 else "#888888"
+                    "#00C851" if v >= PERF_ALPHA_BAND_PCT else "#ff4444" if v <= -PERF_ALPHA_BAND_PCT else "#888888"
                     for v in _asc["Alpha vs SPY (%)"]
                 ]
                 _hover = [
@@ -10997,19 +10999,19 @@ elif page == "🥧 Portfolio Allocation":
                 etf_rets_cached = st.session_state["_rs_etf_rets"]
                 rs_df = relative_strength_table(port_df, h_rets, etf_rets_cached)
                 if not rs_df.empty and rs_df["Alpha (%)"].notna().any():
-                    n_out   = int((rs_df["Alpha (%)"] >= 5).sum())
-                    n_under = int((rs_df["Alpha (%)"] <= -5).sum())
-                    n_line  = int(((rs_df["Alpha (%)"] > -5) & (rs_df["Alpha (%)"] < 5)).sum())
+                    n_out   = int((rs_df["Alpha (%)"] >= PERF_ALPHA_BAND_PCT).sum())
+                    n_under = int((rs_df["Alpha (%)"] <= -PERF_ALPHA_BAND_PCT).sum())
+                    n_line  = int(((rs_df["Alpha (%)"] > -PERF_ALPHA_BAND_PCT) & (rs_df["Alpha (%)"] < PERF_ALPHA_BAND_PCT)).sum())
 
                     _rm1, _rm2, _rm3 = st.columns(3)
-                    _rm1.metric("Outperforming", n_out,   help="Alpha ≥ +5% vs sector ETF")
-                    _rm2.metric("In Line",        n_line,  help="Alpha between -5% and +5%")
-                    _rm3.metric("Underperforming", n_under, help="Alpha ≤ -5% vs sector ETF")
+                    _rm1.metric("Outperforming", n_out,   help=f"Alpha ≥ +{PERF_ALPHA_BAND_PCT:.0f}% vs sector ETF")
+                    _rm2.metric("In Line",        n_line,  help=f"Alpha between -{PERF_ALPHA_BAND_PCT:.0f}% and +{PERF_ALPHA_BAND_PCT:.0f}%")
+                    _rm3.metric("Underperforming", n_under, help=f"Alpha ≤ -{PERF_ALPHA_BAND_PCT:.0f}% vs sector ETF")
 
                     # Alpha bar chart
                     _rs_sorted = rs_df.dropna(subset=["Alpha (%)"]).sort_values("Alpha (%)", ascending=False)
                     _alpha_colors = [
-                        "#00C851" if a >= 5 else "#ff4444" if a <= -5 else "#888888"
+                        "#00C851" if a >= PERF_ALPHA_BAND_PCT else "#ff4444" if a <= -PERF_ALPHA_BAND_PCT else "#888888"
                         for a in _rs_sorted["Alpha (%)"]
                     ]
                     alpha_fig = go.Figure(go.Bar(
@@ -11048,8 +11050,8 @@ elif page == "🥧 Portfolio Allocation":
                     # Styled table
                     def _alpha_col(val):
                         if isinstance(val, float):
-                            if val >= 5:  return "color:#00C851;font-weight:bold"
-                            if val <= -5: return "color:#ff4444"
+                            if val >= PERF_ALPHA_BAND_PCT:  return "color:#00C851;font-weight:bold"
+                            if val <= -PERF_ALPHA_BAND_PCT: return "color:#ff4444"
                         return ""
 
                     def _status_col(val):

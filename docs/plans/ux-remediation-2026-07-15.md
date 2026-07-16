@@ -101,11 +101,13 @@ All 3 Tier 2 structural changes shipped and live-reviewed.
 
 Risk Analysis "Risk flags" banner now fires each flag at its metric's worst label band edge (beta 1.4 = red/inverse edge, vol ≥30 = "High", Sharpe <0.5 = "Weak", drawdown <-20 = "Significant"), so the ⚠️ banner and the per-metric labels can no longer drift. Only the volatility cutoff changed (`>25` → `>=30`, aligned to the "High" band per user decision — keeps the ✅ "acceptable for a growth-tilted portfolio" message honest). Display-only awareness banner — not a gate/scoring formula, no constants.py touch, no Opus review required. `app.py:8210`.
 
-### Deferred Quick Wins
+### ~~QW8 & QW10~~ Done (2026-07-15)
 
-Two Quick Wins from the audit not yet addressed. Low priority; no functional impact.
+Both value-preserving single-sourcing cleanups. Opus-reviewed (SHIP, 0 blocking, 1 non-blocking that was then folded in).
 
-| Item | Location | What it is |
-|---|---|---|
-| QW8 | `app.py:10684, 10998-11007` | Single-source the ±5% outperform/underperform band (used 3 times) into one named constant |
-| QW10 | `app.py:8781, 8801-8802` | Inline `< 45` / `>= 55` composite literals sit next to an already-imported `COMPOSITE_BUY`; source from the same constant |
+- **QW8** — added `PERF_ALPHA_BAND_PCT = 5.0` to `constants.py` (awareness/display classification band, not a gate). Wired all four ±5% sites on the Performance / Relative-Strength views: alpha-attribution bar colors, the Outperforming / In Line / Underperforming counts **and their help-text captions** (now interpolate the constant so prose can't drift from logic), the relative-strength bar colors, and the styled-table `_alpha_col` cell colors (the site the review caught).
+- **QW10** — the real decision literal (`_dp_cscore < 45`, the defensive-addition candidate skip on 🔗 Risk Analysis) extracted to `DEFENSIVE_ADD_MIN_COMPOSITE = 45.0`. The adjacent `>= 50` / `>= 55` were **deliberately left inline** — they only pick green/yellow/gray text color on a score line (cosmetic midbands, no matching semantic constant), consistent with how QW9 handled display-only band edges.
+
+**Open observation (not a bug):** `DEFENSIVE_ADD_MIN_COMPOSITE` (45) sits 1 pt above `COMPOSITE_HOLD` (44). The extraction preserved the pre-existing `45` verbatim; reconciling the two would be a (tiny) behavior change and thus a policy decision — left for the user to raise if they want them unified.
+
+*(No Quick Wins remain from the 2026-07-15 audit — all resolved.)*

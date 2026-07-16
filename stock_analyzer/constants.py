@@ -110,6 +110,13 @@ COMPOSITE_BUY        = 65        # Buy boundary — entry + add-to-winner gates
 COMPOSITE_HOLD       = 44        # Hold floor — below this = Sell zone
 COMPOSITE_SELL       = 30        # Sell floor — below this = Strong Sell
 
+# Minimum composite for a name to appear as a defensive-addition candidate
+# (Analysis "add to a down position" list) — filters out Sell-zone composites.
+# Awareness/display filter, not a Brief/Grow-Today gate. Value-preserving
+# extraction of a former inline `45` literal (note: sits 1 pt above
+# COMPOSITE_HOLD=44 — intentionally not reconciled without a policy decision).
+DEFENSIVE_ADD_MIN_COMPOSITE = 45.0
+
 # Conviction tiers (Grow Today new-pick label only — not a hard gate).
 # A pick that clears COMPOSITE_BUY but doesn't yet reach STRONG_BUY is
 # "moderate" conviction; STRONG_BUY+ is "high."
@@ -118,6 +125,11 @@ COMPOSITE_HIGH_CONVICTION = COMPOSITE_STRONG_BUY
 # Stricter Grow Today bar on flat market days — only the highest-quality
 # setups clear when the index isn't providing tailwind.
 COMPOSITE_BUY_FLAT_DAY = 78
+
+# ± alpha band (percentage points vs benchmark) for classifying a position's
+# relative performance as Outperforming / In Line / Underperforming on the
+# Performance + Relative Strength views. Awareness/display only — never a gate.
+PERF_ALPHA_BAND_PCT = 5.0
 
 # Minimum reward:risk for an entry to be considered favourable. The composite
 # score answers "is this a good STOCK to own?"; R:R answers "is THIS price a
