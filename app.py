@@ -24271,8 +24271,41 @@ elif page == "🎯 My Edge":
                             hovermode="closest",
                         )
                         st.plotly_chart(_me_fig_s, use_container_width=True)
+
+                        # Tier definition key
+                        st.markdown(
+                            '<div style="display:flex;gap:24px;flex-wrap:wrap;'
+                            'background:#0d1117;border:1px solid #1f2937;border-radius:8px;'
+                            'padding:10px 16px;margin-bottom:8px;">'
+                            '<div style="display:flex;align-items:center;gap:8px;">'
+                            '<span style="width:12px;height:12px;border-radius:50%;'
+                            'background:#22d3ee;display:inline-block;flex-shrink:0;"></span>'
+                            '<span style="font-size:12px;color:#e5e7eb;">'
+                            '<b>Full Prep</b> &nbsp;<span style="color:#6b7280;">— thesis + analyst notes + earnings context</span>'
+                            '</span></div>'
+                            '<div style="display:flex;align-items:center;gap:8px;">'
+                            '<span style="width:12px;height:12px;border-radius:50%;'
+                            'background:#a78bfa;display:inline-block;flex-shrink:0;"></span>'
+                            '<span style="font-size:12px;color:#e5e7eb;">'
+                            '<b>Thorough</b> &nbsp;<span style="color:#6b7280;">— thesis + analyst notes or earnings context</span>'
+                            '</span></div>'
+                            '<div style="display:flex;align-items:center;gap:8px;">'
+                            '<span style="width:12px;height:12px;border-radius:50%;'
+                            'background:#94a3b8;display:inline-block;flex-shrink:0;"></span>'
+                            '<span style="font-size:12px;color:#e5e7eb;">'
+                            '<b>Basic</b> &nbsp;<span style="color:#6b7280;">— thesis only (no analyst or earnings data saved)</span>'
+                            '</span></div>'
+                            '<div style="display:flex;align-items:center;gap:8px;">'
+                            '<span style="width:12px;height:12px;border-radius:50%;'
+                            'background:#f59e0b;display:inline-block;flex-shrink:0;"></span>'
+                            '<span style="font-size:12px;color:#e5e7eb;">'
+                            '<b>Cold Entry</b> &nbsp;<span style="color:#6b7280;">— no in-app prep recorded before trade</span>'
+                            '</span></div>'
+                            '</div>',
+                            unsafe_allow_html=True,
+                        )
                         st.caption(
-                            "Each dot = one closed trade. Color = prep tier. "
+                            "Each dot = one closed trade. "
                             "Dots above 0 = profitable; below = loss. "
                             "Do higher-prep dots cluster above the line?"
                         )
