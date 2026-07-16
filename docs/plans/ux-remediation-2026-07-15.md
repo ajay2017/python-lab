@@ -63,7 +63,9 @@ All 3 Tier 2 structural changes shipped and live-reviewed.
 
 ---
 
-### Catalyst Watch — 3-Tab Restructure (I11)
+### ~~Catalyst Watch — 3-Tab Restructure (I11)~~ Done — commit ff38ab3 (2026-07-16)
+
+Shipped as specified below: tabs 📋 Holdings / 📡 Radar / 🎯 Entry Candidates, flat with-block split, no logic change. Plan detail retained for history.
 
 **Rationale:** The Catalyst Watch page has three distinct audience questions with different cadences and data sets. Keeping them on a single scroll makes the page dense and buries the actionable tiers. Matches the tab-first UX pattern applied to Recommendations History (I7), Risk Analysis (I3), and Portfolio Allocation (I2) this session.
 
@@ -94,6 +96,41 @@ All 3 Tier 2 structural changes shipped and live-reviewed.
 - Radar tab still reads `_grow_composites` bundle (same source)
 - Entry Candidates tab still sources from `_grow_composites` and watchlist (same source)
 - No cross-tab coordination needed — tabs are purely display separation
+
+---
+
+### Trade Journal — 3-Tab Restructure (I12)
+
+**Rationale:** The 📒 Trade Journal is a ~2,240-line single scroll with three distinct jobs — record a trade, review your performance/patterns, browse history. Same tab-first pattern as I7/I3/I2/I11.
+
+**Proposed tabs (middle tab named 📊 Performance per user decision):**
+
+| Tab | Icon | Content |
+|---|---|---|
+| Log Trade | 📝 | The "➕ Log a Trade" form |
+| Performance | 📊 | Performance Dashboard + Behavioral Analytics + Opportunity Cost + Decision Journal + Engine Trust |
+| History | 📋 | Trade History table + broker-statement import |
+
+**Section boundaries (verify before editing — HEAD line numbers):**
+- `elif page == "📒 Trade Journal":` at line 15449; block ends ~17691.
+- **Preamble stays ABOVE the tabs (~15451–15618):** title/caption, no-DB warning, drift-check banner, recommendation-prefill + `_pending` consumption, and the SELL confirmation card (`_pending_sell`).
+- Tab 1 (Log Trade): the `with st.expander("➕ Log a Trade", ...)` block, ~15619–16410.
+- Tab 2 (Performance): ~16411–16935 (Performance Dashboard `if stats[...]`, Behavioral Analytics, Opportunity Cost expander, Decision Journal, Engine Trust expander).
+- Tab 3 (History): ~16936–17677 (Trade History table + broker-import expander).
+- **Footer stays BELOW the tabs (~17678–17691):** the DB-connection note.
+
+**Approach:**
+- Insert `_tj_tab_log, _tj_tab_perf, _tj_tab_hist = st.tabs(["📝 Log Trade", "📊 Performance", "📋 History"])` after the preamble (after the SELL-confirmation card, before line 15619).
+- Wrap each section in its `with` block, content re-indented +4 (same as I7/I3).
+- **Log MUST be tab 1** — Streamlit can't programmatically select a tab and `st.tabs` defaults to the first, so a recommendation prefill (Analysis → Trade Journal) lands on the Log tab for free (preserves F-106).
+- **Hoist `trades_df = ...` and `stats = performance_stats(trades_df)` (currently ~16412–16413) into the preamble** so all three tabs are self-contained and don't depend on sibling-tab execution order.
+- **Drop the `➕ Log a Trade` `st.expander` wrapper** inside the Log tab — the tab is the container now (form always visible on its tab; minor UX improvement).
+- No logic/threshold/cache changes; no new constants. Pure structural → no Opus review (like I7/I3/I2/I11). `py_compile` is the gate.
+
+**Invariants:**
+- SELL confirmation card renders in the preamble (above the tab strip) so it's always visible regardless of active tab — F-81c updated to match.
+- `trades_df` mutations (form submit, rebuild, import) still write `st.session_state.trades_df`; tabs read it fresh on the next rerun (unchanged model).
+- Opportunity Cost / Engine Trust already execute on every load (expander bodies aren't lazy) — tabs add no compute.
 
 ---
 
