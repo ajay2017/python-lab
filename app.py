@@ -163,6 +163,7 @@ from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternative
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 from stock_analyzer import decision_context as _dctx
+from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return,
@@ -1256,6 +1257,91 @@ def _render_trade_button(
             )
         st.session_state["_pending_page"] = "📒 Trade Journal"
         st.rerun()
+
+
+def _build_premortem_case(ticker: str) -> dict | None:
+    """
+    Concept C (Pre-Mortem Protocol): assemble the composite-pillar / portfolio-
+    concentration / macro / earnings evidence and call the LLM ONCE for the
+    case against buying `ticker`. Called only from the explicit "Run
+    Pre-Mortem" button click — never on every rerun, so typing in the
+    pre-commitment box afterward can't re-trigger the LLM call.
+
+    Returns None on any failure (no API key, API error, malformed/short/
+    generic response). This is the aid, not the gate: the required
+    pre-commitment text box is enforced independently in the submit handler,
+    so a missing/failed case-against never blocks a legitimate Buy.
+    """
+    _pm_bundle = (st.session_state.get("_grow_composites") or {}).get(ticker)
+    if _pm_bundle is None:
+        try:
+            _pm_bundle = load_all(ticker, period="6mo")
+        except Exception:
+            _pm_bundle = None
+    _pm_bundle = _pm_bundle or {}
+
+    _pm_pillar = _pm_advisor.driving_pillar_from_bundle(_pm_bundle)
+    _pm_engine = {
+        "composite":       _pm_bundle.get("total"),
+        "band":            (_pm_bundle.get("rec") or {}).get("label"),
+        "driving_pillar":  _pm_pillar["driving_pillar"],
+        "driving_signals": _pm_pillar["driving_signals"],
+    }
+
+    _pm_portfolio: dict = {}
+    try:
+        _pm_pdf = st.session_state.get("_port_df_enriched")
+        if _pm_pdf is not None and not _pm_pdf.empty:
+            _pm_portfolio["n_positions"] = int(len(_pm_pdf))
+            if {"Sector", "Market Value"}.issubset(_pm_pdf.columns):
+                _pm_by_sec = _pm_pdf.groupby("Sector")["Market Value"].sum()
+                _pm_total  = float(_pm_pdf["Market Value"].sum())
+                if _pm_total > 0 and not _pm_by_sec.empty:
+                    _pm_portfolio["top_sector"]            = str(_pm_by_sec.idxmax())
+                    _pm_portfolio["top_sector_weight_pct"] = float(_pm_by_sec.max() / _pm_total * 100.0)
+        if _pm_bundle.get("sector"):
+            _pm_portfolio["this_sector"] = _pm_bundle.get("sector")
+    except Exception:
+        pass
+
+    _pm_macro: dict = {}
+    try:
+        for _pm_k, _pm_v in st.session_state.items():
+            if isinstance(_pm_k, str) and _pm_k.startswith("_macro_regime_") and _pm_v:
+                _pm_macro = {"label": _pm_v.get("label"), "confidence": _pm_v.get("confidence")}
+                break
+    except Exception:
+        pass
+
+    _pm_earnings: dict = {}
+    try:
+        _pm_ec = db.load_earnings_context(ticker)
+        if _pm_ec:
+            _pm_parts = []
+            if _pm_ec.get("beat_rate_pct") is not None:
+                _pm_parts.append(f"historical beat rate {_pm_ec['beat_rate_pct']:.0f}%")
+            if _pm_ec.get("recent_reaction_direction"):
+                _pm_parts.append(f"recent reaction pattern: {_pm_ec['recent_reaction_direction']}")
+            if _pm_ec.get("what_to_watch_cnbc"):
+                _pm_parts.append(str(_pm_ec["what_to_watch_cnbc"]))
+            _pm_earnings = {
+                "next_earnings_date": _pm_ec.get("earnings_date"),
+                "note": "; ".join(_pm_parts) if _pm_parts else None,
+            }
+    except Exception:
+        pass
+
+    _pm_api_key = (
+        st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
+    )
+    if not _pm_api_key:
+        return None
+
+    _pm_inputs = _pm_advisor.build_premortem_inputs(
+        ticker, engine=_pm_engine, portfolio=_pm_portfolio,
+        macro=_pm_macro, earnings=_pm_earnings,
+    )
+    return _pm_advisor.generate_case_against(ticker, _pm_inputs, _pm_api_key)
 
 
 def _tax_exit_note_html(ticker: str | None) -> str:
@@ -16004,6 +16090,89 @@ elif page == "📒 Trade Journal":
                         "rate-limited. Write your thesis below."
                     )
 
+            # ── Concept C: Pre-Mortem Protocol ("case against this buy") ─────
+            # Lives OUTSIDE the form (mirrors the thesis-draft section directly
+            # above it — a form may contain only its own submit button). The
+            # LLM-generated case-against is an AID, generated once per explicit
+            # click; the REQUIRED pre-commitment text box below it is the HARD
+            # gate, enforced independently in the submit handler so a missing/
+            # failed LLM call can never block a legitimate Buy. Scoped to this
+            # prospective-live-Buy form only — never wired to broker/screenshot/
+            # split imports or the recalculate_from_trades replay, which have no
+            # live decision to stress-test.
+            st.markdown("###### 🔍 Pre-Mortem — before you buy")
+            _pm_tk         = _tj_tk_draft  # same ticker already resolved above
+            _pm_case_for   = st.session_state.get("_tj_premortem_case_for")
+            _pm_case_stale = bool(_pm_case_for) and _pm_case_for != _pm_tk
+            _pmc1, _pmc2 = st.columns([1, 3])
+            with _pmc1:
+                _pm_run_clicked = st.button(
+                    "🔍 Run Pre-Mortem",
+                    key="_tj_premortem_btn",
+                    disabled=(
+                        not _pm_tk or not _ai_key_draft
+                        or st.session_state.get("_readonly", False)
+                    ),
+                    help=(
+                        "Generates a position-specific case AGAINST this buy, "
+                        "using the engine's own composite/portfolio/macro evidence."
+                    ),
+                )
+            with _pmc2:
+                if not _ai_key_draft:
+                    st.caption(
+                        "AI case-against unavailable (no Anthropic key) — write your "
+                        "own risk case below; it's still required."
+                    )
+                elif not _pm_tk:
+                    st.caption("Enter a ticker above to enable the AI case-against.")
+                elif _pm_case_stale:
+                    st.caption(
+                        f"Pre-mortem shown was for a different ticker — click "
+                        f"Run Pre-Mortem again for {_pm_tk}."
+                    )
+            if _pm_run_clicked and _pm_tk:
+                with st.spinner(f"Building the case against buying {_pm_tk}…"):
+                    _pm_result = _build_premortem_case(_pm_tk)
+                st.session_state["_tj_premortem_case"]     = _pm_result
+                st.session_state["_tj_premortem_case_for"] = _pm_tk
+                st.rerun()
+
+            _pm_case_show = st.session_state.get("_tj_premortem_case") if not _pm_case_stale else None
+            if _pm_case_show:
+                _pm_angle_label = {
+                    "pillar":    "📊 Pillar concern",
+                    "portfolio": "📦 Portfolio impact",
+                    "macro":     "🌐 Macro / earnings",
+                }
+                for _pm_item in _pm_case_show.get("case_against", []):
+                    st.markdown(
+                        f"<div style='background:#1c1917;border-left:3px solid #f59e0b;"
+                        f"border-radius:6px;padding:8px 12px;margin-bottom:4px;font-size:0.85em'>"
+                        f"<b>{_pm_angle_label.get(_pm_item['angle'], _pm_item['angle'].title())}:</b> "
+                        f"<span style='color:#e7e5e4'>{_html.escape(_pm_item['argument'])}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+            elif _pm_case_for == _pm_tk and not _pm_case_stale:
+                st.caption(
+                    "Couldn't generate an AI case-against (offline/rate-limited) — "
+                    "write your own risk case below."
+                )
+
+            st.text_area(
+                "🖊️ What would make me wrong about this? (required before this Buy can be recorded)",
+                key="_tj_premortem_commitment",
+                placeholder=(
+                    "e.g. If Q3 guidance disappoints, or if this sector rotates out "
+                    "of favor within 60 days…"
+                ),
+                help=(
+                    "A falsifiable condition you're committing to watch for. "
+                    "Required for every live Buy — the discipline comes from "
+                    "writing this, not from the AI's case above."
+                ),
+            )
+
         # st.form prevents double-submission on rerun (shares / price / notes only)
         with st.form("log_trade_form", clear_on_submit=True):
             f_col3, f_col4, f_col5 = st.columns(3)
@@ -16331,6 +16500,24 @@ elif page == "📒 Trade Journal":
                 if action == "BUY":  # F-5: restore the thesis field on a failed resubmit too
                     st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
                     st.session_state["_tj_thesis_seed_pending"] = True
+            elif action == "BUY" and not (st.session_state.get("_tj_premortem_commitment") or "").strip():
+                # Concept C: the pre-commitment is the HARD gate (never the LLM
+                # case-against, which may be unavailable) — mirrors the other
+                # validation gates in this chain. Entry friction only; SELL and
+                # every retroactive/batch write path are untouched.
+                st.markdown(
+                    f"<div style='background:#1a1200;border:1px solid #f59e0b;"
+                    f"border-radius:8px;padding:12px 16px;margin:8px 0;color:#fcd34d'>"
+                    f"🔍 <b>Trade not recorded — Pre-Mortem required before this Buy.</b><br>"
+                    f"<span style='font-size:0.92em'>Write what would make you wrong about "
+                    f"this trade in the box above ('What would make me wrong about this?'), "
+                    f"then resubmit.</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+                st.session_state["_tj_prefill"] = _stash_failed_entry
+                st.session_state["_tj_thesis_seed"]         = _stash_failed_entry.get("user_thesis") or ""
+                st.session_state["_tj_thesis_seed_pending"] = True
             else:
                 realized_pnl = (
                     compute_realized_pnl(shares_val, price_val, cost_basis_val)
@@ -16381,6 +16568,12 @@ elif page == "📒 Trade Journal":
                     )
                 except Exception:
                     _dc_snapshot = None
+                # Concept C: only attach a case-against generated for THIS
+                # exact ticker — a stale one from a previously-typed ticker
+                # must never be recorded against a different trade.
+                _pm_case_final = None
+                if action == "BUY" and st.session_state.get("_tj_premortem_case_for") == ticker_input:
+                    _pm_case_final = st.session_state.get("_tj_premortem_case")
                 record = {
                     "ticker":           ticker_input,
                     "action":           action,
@@ -16397,6 +16590,12 @@ elif page == "📒 Trade Journal":
                     "user_thesis":      (_final_thesis or None) if action == "BUY" else None,
                     "thesis_source":    _thesis_source,
                     "decision_context": _dc_snapshot,
+                    "premortem_case_against": (
+                        (_pm_case_final or {}).get("case_against") if _pm_case_final else None
+                    ),
+                    "premortem_commitment": (
+                        (st.session_state.get("_tj_premortem_commitment") or "").strip() or None
+                    ) if action == "BUY" else None,
                 }
                 # ── SELL: hold for confirmation — don't write to DB yet ──────
                 if action == "SELL":
@@ -16412,6 +16611,14 @@ elif page == "📒 Trade Journal":
                     st.session_state.pop("_tj_thesis_draft_text", None)
                     st.session_state.pop("_tj_thesis_draft_for", None)
                     st.session_state.pop("_tj_thesis_seed", None)
+                    # Concept C: clear the pre-mortem state so the next BUY
+                    # (a different ticker) doesn't inherit a stale case-against
+                    # or a leftover commitment text. Popping (not assigning) the
+                    # widget-bound key is required post-render — same pattern
+                    # as the override checkboxes below.
+                    st.session_state.pop("_tj_premortem_case", None)
+                    st.session_state.pop("_tj_premortem_case_for", None)
+                    st.session_state.pop("_tj_premortem_commitment", None)
                     if not db.has_db():
                         new_row = pd.DataFrame([{**record, "id": None, "traded_at": datetime.now().isoformat()}])
                         st.session_state.trades_df = pd.concat(
@@ -21524,7 +21731,7 @@ elif page == "📖 User Guide":
 
 **The order of operations:**
 
-1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
+1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. A live BUY also asks you to **🔍 Run Pre-Mortem** — an optional AI-built case *against* the trade — and requires one required line: *what would make you wrong about this*. This is friction by design (never on SELL, never on an imported/backfilled trade) — the point is to have engaged with the downside before capital moves, not to add a hoop before recording history. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
 2. **Reconcile against your broker.** Confirm share counts and average cost match your brokerage *exactly*. The Trade Journal runs a **drift check** and flags mismatches (a SELL with no prior BUY, or a stored P&L that disagrees with the replayed history); use **🔄 Rebuild holdings & realized P&L** to preview and apply the correction. Wrong basis → wrong P&L → wrong trim/stop advice.
 3. **(Optional) Add Watchlist names** — **📋 Watchlist** — anything you're tracking but don't yet hold, so the scanner and brief include them.
 4. **Refresh signals** — **🏠 Home → Refresh Signals** — let live prices, composite scores, and risk metrics populate for your names.

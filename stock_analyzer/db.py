@@ -102,6 +102,22 @@ decision context.
 
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_context jsonb;
 
+Pre-Mortem Protocol (Concept C, Phase 1 — added 2026-07-17). Before a
+prospective LIVE Buy writes, the investor is shown an app-generated case
+against the trade (composite pillar concern, portfolio-concentration impact,
+macro/earnings context) and must write a falsifiable pre-commitment before the
+trade is recorded. premortem_case_against stores the 3 generated
+counterarguments (jsonb; None if the LLM call failed — the pre-commitment
+field, not the LLM output, is the hard requirement). premortem_commitment
+stores the investor's own required text. Optional: until these columns exist,
+save_trade drops them and retries, so trade logging runs exactly as before
+(inert until DDL is applied). Never written by broker/screenshot/split imports,
+the recalculate_from_trades replay, or any SELL — scoped to prospective LIVE
+Buy decisions only (exit friction is bad; entry friction is the point).
+
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_case_against jsonb;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_commitment   text;
+
 Recommendations log (added 2026-05-26 — first-seen capture of every pick
 surfaced by Today's Brief so you can audit the App's recommendation
 history over time):
@@ -804,7 +820,8 @@ def load_watchlist() -> list[str]:
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "cost_basis", "realized_pnl", "notes", "trigger_type",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
-               "traded_at", "user_thesis", "thesis_source", "decision_context"]
+               "traded_at", "user_thesis", "thesis_source", "decision_context",
+               "premortem_case_against", "premortem_commitment"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -822,7 +839,8 @@ def load_trades() -> pd.DataFrame:
                 # Backfill columns for rows pre-dating each feature addition
                 for col in ("signal_seen", "followed_signal", "deviation_reason",
                             "lesson", "user_thesis", "thesis_source",
-                            "decision_context"):
+                            "decision_context", "premortem_case_against",
+                            "premortem_commitment"):
                     if col not in df.columns:
                         df[col] = None
                 return df
@@ -849,10 +867,12 @@ def save_trade(record: dict) -> bool:
         return True
     except Exception as e:
         # Graceful degradation: additive optional columns (thesis_source, F-5;
-        # decision_context, Concept E) may not exist yet in Supabase (DDL not
-        # applied). Drop whichever the error names and retry once so trade
-        # logging never breaks while the columns ship inert until DDL.
-        _optional = ("thesis_source", "decision_context")
+        # decision_context, Concept E; premortem_case_against/premortem_commitment,
+        # Concept C) may not exist yet in Supabase (DDL not applied). Drop
+        # whichever the error names and retry once so trade logging never
+        # breaks while the columns ship inert until DDL.
+        _optional = ("thesis_source", "decision_context",
+                     "premortem_case_against", "premortem_commitment")
         _missing = [c for c in _optional if c in str(e) and c in record]
         if _missing:
             try:
