@@ -1,8 +1,11 @@
 # Plan: Rate-Limit Resilience
 
-**Status:** approved 2026-06-05. Phase 1 SHIPPED (REFRESH_COOLDOWN_SEC).
-Phase 2 SHIPPED 2026-06-19 (d400e7a — provider circuit-breaker + SPY dedup).
-Phase 3 (FMP daily-budget guard) remaining.
+**Status: FULLY SHIPPED — all 3 phases.**
+- Phase 1 SHIPPED (REFRESH_COOLDOWN_SEC).
+- Phase 2 SHIPPED 2026-06-19 (d400e7a — provider circuit-breaker + SPY dedup).
+- Phase 3 SHIPPED 2026-07-10 (commits `2b8a778`→`587fe3d`): `db.increment_daily_quota("fmp")` + `api_health.get_fmp_daily_quota()` + `FMP_DAILY_SOFT_CAP = 220`. DDL applied.
+
+Approved 2026-06-05.
 
 ## Problem (from the 2026-06-05 pre-market incident)
 A transient provider hiccup escalated to near-exhaustion of all three data
@@ -47,24 +50,18 @@ window. Guard: if ALL providers are in cooldown, fall through and try anyway
 - Touches: `api_health.py` (add `in_cooldown(provider)` helper),
   `orchestrator.py:201-219` + `:115-171`, `constants.py`.
 
-### Phase 3 — FMP daily-budget guard · DEFERRED as a safety-net (not building now)
-**Decision 2026-06-24 (measured, not built):** the FMP dashboard showed the
-free-tier cap is no longer a problem — **88/250 today, ~108 the prior weekday**,
-after Phase 2 (circuit-breaker + SPY dedup, `d400e7a`) cut usage ~6× from the
-pre-fix runaway (**~650–660/day on Jun 18–19**, which was the actual exhaustion /
-"Could not load" cause). With ~3× headroom and no withheld-verdict symptoms, the
-free plan is confirmed **adequate** — no paid upgrade, no hard cap needed. Phase 2
-already prevents the runaway organically, so a hard soft-cap would solve a problem
-that no longer occurs. **Revisit ONLY if a weekday creeps back toward ~200** (watch
-the FMP dashboard, or add the optional persistent "FMP: N/250" Data-Health gauge).
-The design below stays on the shelf for that trigger.
+### Phase 3 — FMP daily-budget guard · **SHIPPED 2026-07-10** (commits `2b8a778`→`587fe3d`)
 
-Track FMP calls per ET day; stop calling FMP at `FMP_DAILY_SOFT_CAP` to
-preserve last-resort headroom.
-- Touches: `fmp_provider.py` (ET-day counter + soft-cap), `constants.py`.
-- Known limitation: process-local counter resets on Streamlit reboot — bounds
-  in-session hammering (the actual incident), not a hard cross-reboot ceiling.
-  Persistent counter (Supabase) is a future upgrade.
+Track FMP calls per ET day; stop calling FMP at `FMP_DAILY_SOFT_CAP` (220) to
+preserve last-resort headroom. `db.increment_daily_quota("fmp")` fires after each
+successful FMP call; `api_health.get_fmp_daily_quota()` caches the Supabase read
+(5-min TTL); when ≥ `FMP_DAILY_SOFT_CAP`, orchestrator drops FMP from capable list.
+Data Health chip shows "today: N/250" FMP quota line.
+- Touches: `fmp_provider.py`, `db.py`, `api_health.py`, `constants.py`.
+- Known limitation: the persistent counter lives in Supabase (cross-reboot) — original
+  concern about a process-local counter was addressed by using the DB row.
+- DEFERRED (still not built): selective cache-clear, request coalescing,
+  persistent cross-reboot FMP counter in-process (already covered by Supabase now).
 
 ## Policy values (operational infra knobs — reversible one-line changes, tune from observation; NOT investment-decision thresholds)
 | Constant | Default | Controls |

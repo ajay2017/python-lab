@@ -5,7 +5,12 @@
 pasted from CNBC Pro articles; (2) after the print, paste results to trigger an F-1 thesis
 checkpoint; (3) scanner for watchlist candidates (parked — ship after Phase 1+2 prove value).
 
-**Status:** Design locked, pre-build. Verified 2026-07-13 against current code — every constant, function signature, table schema, and existing-pattern claim checked out except two corrected above (playbook location, `COMPOSITE_BUY` naming).
+**Status: FULLY SHIPPED 2026-07-13 — all 3 phases.**
+- Phase 1 (CNBC extractor + playbook enrichment): SHIPPED commits `7d09857`→`cf6cc19`. `earnings_intel.py`, db functions, 3 new constants, enriched `build_earnings_playbook()`, paste UI on Ideas Inbox, Catalyst Watch CNBC badge/expander. DDL for `earnings_context` applied.
+- Phase 2 (post-earnings Finnhub fetch + F-1 thesis checkpoint): SHIPPED same session. `fetch_recent_results()` (Finnhub-native, no LLM), `save_earnings_results()`, thesis checkpoint CTA on AI Insights. DDL for `earnings_results` applied.
+- Phase 3 (Catalyst Scanner): SHIPPED 2026-07-13 (commit `0cac9ee`). `earnings_advisor.build_earnings_catalyst_candidates()`, 🎯 Entry Candidates tab on 🔔 Catalyst Watch (reqs F-37b; docs backfilled 2026-07-16).
+
+Verified 2026-07-13 against current code — every constant, function signature, table schema, and existing-pattern claim checked out except two corrected above (playbook location, `COMPOSITE_BUY` naming).
 
 ---
 
@@ -358,22 +363,21 @@ reaches Home naturally via the existing Brief pathway once the review row is wri
 
 ---
 
-## Phase 3 — Catalyst Scanner (PARKED)
+## Phase 3 — Catalyst Scanner (SHIPPED 2026-07-13, commit `0cac9ee`)
 
-**Condition to build:** After at least one full earnings season with Phase 1+2 live, the user
-observes the gap: "I can see my held positions' playbooks, but I want to know which watchlist
-items near earnings have the best setup." If that gap is felt, build Phase 3.
+Shipped earlier than originally planned — the gap was observed before a full earnings season.
 
-**When built, scope:**
+**Shipped scope:**
 
-- New function `build_earnings_catalyst_candidates()` in `earnings_advisor.py`
+- `build_earnings_catalyst_candidates()` in `earnings_advisor.py`
 - Universe: **watchlist only** (composite scores already loaded; no new bundle loads triggered)
 - Filter: not held + `earnings_context` row exists + `beat_rate_pct ≥ EARNINGS_MIN_BEAT_RATE_ENTRY`
   (70.0) + composite ≥ `COMPOSITE_BUY` + `recent_reaction_direction ≠ 'bearish'`
 - Ranking: `beat_rate × composite × reaction_multiplier` (1.2 bullish / 1.0 mixed)
-- Render: "🎯 Entry Candidates" section on Catalyst Watch page, below the existing earnings table;
-  framed as awareness only, never a Buy recommendation; "Analyse →" button routes to Analysis page
-- New constant: `EARNINGS_MIN_BEAT_RATE_ENTRY = 70.0`
+- Render: 🎯 Entry Candidates tab on 🔔 Catalyst Watch; awareness only, never a Buy recommendation; "Analyse →" button routes to Analysis page
+- `EARNINGS_MIN_BEAT_RATE_ENTRY = 70.0` added to `constants.py`
+- Requires CNBC earnings context pasted via Ideas Inbox → Pre-Earnings to populate
+- Reqs F-37b; docs backfilled 2026-07-16
 
 ---
 
@@ -425,17 +429,18 @@ action is pending. EXIT/REDUCE earnings signals do NOT surface on Home Act Today
 
 ---
 
-## Build sequence
+## Build sequence (COMPLETE — all steps shipped 2026-07-13)
 
-1. `constants.py` — add the three Phase 1 constants
-2. `stock_analyzer/earnings_intel.py` — `extract_playbook()` + `_playbook_system_prompt()`
-3. `db.py` — `save_earnings_context()` + `load_earnings_context_batch()`
-4. Supabase DDL — `earnings_context` table
-5. `earnings_advisor.py` — enrich `build_earnings_playbook()` with `earnings_context` param
-6. `app.py` — mode toggle UI + Phase 1 paste flow + `load_earnings_context_batch` caller
-7. *(Phase 2 starts here)*
-8. `earnings_intel.py` — add `extract_results()` + second system prompt
-9. `db.py` — `save_earnings_results()` + `load_earnings_result()`
-10. Supabase DDL — `earnings_results` table
-11. `thesis_advisor.py` — `generate_earnings_thesis_update()`
-12. `app.py` — Post-Earnings mode on paste tab + thesis checkpoint CTA on AI Insights
+1. ✅ `constants.py` — add the three Phase 1 constants
+2. ✅ `stock_analyzer/earnings_intel.py` — `extract_playbook()` + `_playbook_system_prompt()`
+3. ✅ `db.py` — `save_earnings_context()` + `load_earnings_context_batch()`
+4. ✅ Supabase DDL — `earnings_context` table (applied 2026-07-13)
+5. ✅ `earnings_advisor.py` — enrich `build_earnings_playbook()` with `earnings_context` param
+6. ✅ `app.py` — mode toggle UI + Phase 1 paste flow + `load_earnings_context_batch` caller
+7. *(Phase 2)*
+8. ✅ `earnings_intel.py` — `fetch_recent_results()` (Finnhub-native; `extract_results()` also added but not wired to UI — replaced by Finnhub fetch)
+9. ✅ `db.py` — `save_earnings_results()` + `load_earnings_result()`
+10. ✅ Supabase DDL — `earnings_results` table (applied 2026-07-13)
+11. ✅ `thesis_advisor.py` — `generate_earnings_thesis_update()`
+12. ✅ `app.py` — Post-Earnings mode on paste tab + thesis checkpoint CTA on AI Insights
+13. ✅ Phase 3 — `earnings_advisor.build_earnings_catalyst_candidates()` + 🎯 Entry Candidates tab on Catalyst Watch (commit `0cac9ee`)

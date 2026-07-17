@@ -1,6 +1,6 @@
 # Plan: Thesis Authoring & Entry Analyst Desk (F-5)
 
-**Status:** **Phase 1 BUILT + Opus-reviewed 2026-06-28** (`py_compile` OK; 2 should-fix items fixed). Phases 2–3 deferred. **Pending:** the one-time `ALTER TABLE trades ADD COLUMN thesis_source TEXT;` DDL in Supabase + push-to-deploy. The code **ships safe before the DDL** (`save_trade` retries without the column).
+**Status: Phase 1 SHIPPED 2026-06-28 (commits `a7f22da`→`955b071`).** DDL (`thesis_source` column) applied. LLM drafts editable thesis at BUY form; saves to `trades.user_thesis` + `trades.thesis_source`; feeds F-1 reviewer. Opus-reviewed (2 should-fix items fixed before ship). Phases 2–3 DEFERRED.
 **Sibling plan:** [ai-intelligence-layer.md](ai-intelligence-layer.md) (F-1…F-4). This is the **generative complement to F-1**: F-1 *reviews* a thesis; F-5 *authors* one and red-teams the entry.
 **Decision authority (locked by user 2026-06-28):** **Analyst desk — advisory only.** The LLM authors and red-teams; the deterministic 5-gate / `COMPOSITE_BUY` engine remains the *sole* decision authority. No LLM output moves a gate, score, or stop. The "LLM narrates, engine gates" invariant is **preserved unchanged** — not amended.
 **Scope (recommended sequencing):** **Entries first** (Phase 1–2), exits as a clean follow-on (Phase 3).
@@ -202,12 +202,12 @@ Phase 1 — Thesis Authoring  [the core ask; build first]
   → trades.thesis_source column (backward-compatible)  [one-time additive DDL]
   → F-1: pass entry date so review weights post-entry evidence (invariant 7)
 
-Phase 2 — Entry pre-mortem  [advisory red-team]
+Phase 2 — Entry pre-mortem  [DEFERRED — revisit after real theses accumulate]
   → entry_analyses table (additive, inert until DDL)
   → bull / bear / watch-signal builder + LLM call
   → AI Insights surface (+ optional non-gating "analyst note →" link)
 
-Phase 3 — Exit narration  [symmetric close of the lifecycle]
+Phase 3 — Exit narration  [DEFERRED]
   → exit rationale + "what keeps you in" on TRIM/EXIT
   → pairs with the existing BROKEN-thesis + EXIT combined card
 ```
@@ -296,4 +296,5 @@ Ships **inert** until the DDL runs and the Anthropic key is set (already true fo
 - [x] **Built** (`thesis_advisor.draft_thesis`/`build_authoring_inputs`; BUY-form wiring; `trades.thesis_source` + resilient `save_trade`) — `py_compile` OK.
 - [x] **Opus-reviewed** — no blockers; 2 should-fix items fixed (thesis survives a validation-failure resubmit; regime reads the real `_market_tone_cache` key). 1 pre-existing F-1 bug flagged (empty technicals/fundamentals fed to the on-demand reviewer — out of scope).
 - [x] **Docs synced** — requirements F-150a, architecture module line + `trades` schema (`user_thesis` + `thesis_source`).
-- [ ] **Run DDL + deploy** ← the boxes left: `ALTER TABLE trades ADD COLUMN thesis_source TEXT;` in Supabase, then commit + push to `main` (auto-deploys).
+- [x] **DDL applied** — `ALTER TABLE trades ADD COLUMN thesis_source TEXT;` applied in Supabase.
+- [x] **Deployed** — committed + pushed to `main`; auto-deployed on Streamlit Cloud.

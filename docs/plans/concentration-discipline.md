@@ -1,8 +1,8 @@
 # Plan: Concentration / Position-Sizing Discipline
 
-**Status:** approved 2026-06-23 (scope: Part 1 + standing read). Sequenced BEFORE
-exit-discipline Phase 2 — concentration/sizing is the higher-leverage risk lever
-for this portfolio's actual loss pattern (see below). Build in progress.
+**Status: SHIPPED 2026-07-09** (commits `4b89680`→`ff5b1ac` concentration.py + Hard-Cap-Breach
+rebalance plan; `a3fe9c1` gate-basis reversal to equity). Opus-reviewed ×2. Approved
+2026-06-23 (scope: Part 1 + standing read). Sequenced before exit-discipline Phase 2.
 
 ## Why this first (from the trade-log review)
 The realized losses were amplified by **concentration**: SPCX reached **23% of
@@ -68,7 +68,7 @@ The single-name overweight rec must dedup vs weak-large + sector-concentration
 root tickers (same dimension). The entry-time warning is its own surface (the
 form) and doesn't collide. Reuses the established risk-flag merge.
 
-## Out of scope (deferred)
+## Out of scope (DEFERRED — do not re-chase without explicit discussion)
 Full correlation-matrix cluster analytics / true diversification score; auto-trim
 execution; hard-blocking manual entries; cash / buying-power tracking; sizing the
 entry suggestion from the risk-budget (we show the ceiling trim-back, not a full

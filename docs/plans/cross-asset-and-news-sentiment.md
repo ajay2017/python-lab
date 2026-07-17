@@ -1,18 +1,13 @@
 # Plan: Cross-Asset Regime Signals + News Sentiment
 
-**Status:** design approved 2026-06-29. Two additive intelligence features; no existing
-gate or threshold is modified. Build in two independent phases (Phase 1 = cross-asset,
-Phase 2 = news sentiment) so each ships and can be reviewed before the next starts.
+**Status: FULLY SHIPPED — all phases including 2b.**
+- Phase 1 (Cross-Asset Pulse): ✅ SHIPPED 2026-06-29 (commit `184df33`). Now lives on the standalone 🔗 Risk Analysis page.
+- Phase 2 (News Sentiment via Finnhub): ✅ SHIPPED 2026-06-29 (commit `cd820e7`; reqs F-74).
+- Phase 2b (LLM composite rescore): ✅ SHIPPED 2026-07-14 (commits `10edd8f`→`9b371fd`). Shipped as a **bidirectional Haiku rescore** of the existing 10% sentiment pillar — NOT the additive `NEWS_SENTIMENT_WEIGHT = 0.05` design (that approach was superseded). `SENTIMENT_LLM_MAX_SWING = 0.5`, day-cached in `sentiment_llm_cache` Supabase table.
 
-**Phase 1 (Cross-Asset Pulse): ✅ SHIPPED 2026-06-29 (commit `184df33`).** Now lives on
-the standalone 🔗 Risk Analysis page (moved from a Home tab in the 2026-07-13 nav
-cleanup — see `docs/architecture.md` §10 "Nav follow-up Phase C"). **Phase 2 (News
-Sentiment via Finnhub) also ✅ SHIPPED, same day (commit `cd820e7`; reqs F-74)** — live
-as a News Sentiment row on the Home Position Drill-Down and a News Sentiment Shift card
-in Today's Brief (`stock_analyzer/news_sentiment.py`). Only **Phase 2b** (below —
-folding sentiment into the composite score) remains unshipped, per its own explicit
-"policy decision" framing. The "Risk Analysis tab"/"Risk tab" references throughout
-this doc predate the page move; read as "page."
+Design approved 2026-06-29. Two additive intelligence features; no existing gate or
+threshold is modified. The "Risk Analysis tab"/"Risk tab" references throughout this doc
+predate the 2026-07-13 nav cleanup page move; read as "page."
 
 ---
 
@@ -292,16 +287,19 @@ Label: "Sentiment Shift" (awareness tone, not action).
 Visible banner, never silent.  
 Does NOT trigger a sell or tighten a stop — awareness only.
 
-### Composite score — deferred to Phase 2b (policy decision)
+### Composite score — Phase 2b SHIPPED 2026-07-14 (commits `10edd8f`→`9b371fd`)
 
-Adding news sentiment to the composite score is an investment-policy decision (changes
-what the engine recommends). Deferred. When ready to discuss:
+The additive-weight design (`NEWS_SENTIMENT_WEIGHT = 0.05`) was **superseded**. Instead,
+the existing 10% sentiment pillar had its VADER scoring replaced by a bidirectional,
+ticker-aware Haiku rescore (`rescore_headlines_llm()` in `news_intelligence.py`).
+`SENTIMENT_LLM_MAX_SWING = 0.5` bounds per-headline swing. Day-cached in
+`sentiment_llm_cache` Supabase table (PK `(ticker, score_date)`). Fail-open: returns
+`None` on failure → VADER preserved. **Do NOT re-propose the 5% additive-weight design.**
 
-- Weight candidate: `NEWS_SENTIMENT_WEIGHT = 0.05` (5%)
-- Application: only when `buzz_score > NEWS_SENTIMENT_SHIFT_BUZZ_MIN` (thin coverage
-  shouldn't penalise a score)
-- When unavailable: remaining weights re-normalise (no phantom 50-neutral fill)
-- Requires: Opus review of the full composite formula impact before shipping
+DEFERRED (still not built from original Phase 2b scope):
+- Sentiment history trend chart over time
+- Multi-source sentiment (Alpha Vantage, FMP news scoring)
+- Cron email for sentiment shifts
 
 ### Files touched
 
@@ -336,9 +334,8 @@ Phase 2 — News Sentiment
   Step 3  news_sentiment.py — helpers module
   Step 4  app.py — session load fetch + Analysis scorecard row + brief awareness card
 
-Phase 2b (later, policy discussion required)
-  — Composite score integration (NEWS_SENTIMENT_WEIGHT)
-  — Requires user approval of weight + Opus review of scoring impact
+Phase 2b — SHIPPED 2026-07-14 (bidirectional Haiku rescore of existing sentiment pillar)
+  — NOT the additive NEWS_SENTIMENT_WEIGHT approach (superseded)
 ```
 
 Each step is independently reviewable. Phase 1 ships before Phase 2 starts.

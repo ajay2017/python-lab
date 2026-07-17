@@ -16,7 +16,7 @@ The three opportunities are:
 | # | Capability | What closes | Status |
 |---|---|---|---|
 | F-1 | Thesis Tracking | The gap between "why I bought" and "does that reason still hold" | **Shipped 2026-06-27** |
-| F-2 | Earnings Call Intelligence | The gap between knowing *when* earnings is and knowing *what management said* | **Deferred — transcript API budget pending** |
+| F-2 | Earnings Call Intelligence | The gap between knowing *when* earnings is and knowing *what management said* | **DEFERRED — transcript API budget not approved** |
 | F-3 | Portfolio Debrief (weekly) | The gap between the app's forward decisions and retrospective pattern recognition | **Shipped 2026-06-27** |
 | F-4 | Portfolio Intelligence Report (monthly) | The gap between *one week* of retrospection and the slower questions — is the engine picking well, do I act on what it surfaces, am I repeating a bias | **Proposed 2026-06-27** |
 
@@ -563,7 +563,7 @@ F-3 Portfolio Debrief                                    [shipped 2026-06-27]
   → AI Insights page: "Weekly Debrief" section + "Generate Now" button
   → light-mode-first email template (render_debrief_email; **bold** → HTML)
 
-F-4 Portfolio Intelligence Report (monthly)              [proposed 2026-06-27]
+F-4 Portfolio Intelligence Report (monthly)              [shipped 2026-06-27; Q2/Q3 DEFERRED until data matures]
   → reuses recommendations_history scorecard (match → compute_outcomes → rollups)
   → new monthly_reports table (unique on period_end → upsert-safe; RLS service_role)
   → first-Sunday-of-month gate in the existing Sunday cron lane
@@ -593,7 +593,7 @@ To guard against scope creep as build progresses:
 - [x] On-demand "Re-evaluate thesis" button per position: **yes, in v1**
 - [x] BROKEN thesis + active TRIM/EXIT from engine: **combined elevated card** (highest-conviction exit signal; deserves distinct treatment)
 
-**F-2 — Deferred. Decisions pending until budget approved:**
+**F-2 — DEFERRED. Transcript API budget not approved. Do not build until budget is explicitly approved:**
 - [ ] Transcript API selected and budget approved?
 - [ ] Held-only or include watchlist in v1?
 - [ ] Does overall_tone feed any gate in v1?

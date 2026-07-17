@@ -2,7 +2,10 @@
 
 **Feature:** Capture professional analyst research (CNBC Pro, JPMorgan/Goldman/BofA/Morgan Stanley notes) into structured, queryable intelligence that (a) surfaces **new tickers** as watchlist candidates and (b) **enriches** tickers already in the held/watchlist universe.
 
-**Status:** Phase 1 (Foundation) — spec locked, pre-build.
+**Status: FULLY SHIPPED 2026-07-04/05 (commits `19620b3`→`cacc0ab`).** All 3 phases
+shipped: `stock_analyzer/analyst_intel.py`, db functions, `analyst_coverage` Supabase
+table (DDL applied), Ideas Inbox UI on 🧠 AI Insights (Phase 1), Analysis tab panel
+(Phase 2), Grow Today annotation (Phase 3). See deferred items below.
 
 ---
 
@@ -101,10 +104,11 @@ Matches house style: `st.divider()` → `st.subheader("📋 Analyst Coverage —
 
 ---
 
-## Out of scope for Phase 1 (later phases)
+## Out of scope / DEFERRED BY CHOICE — do not re-propose
 
-- **Phase 2 (enrichment):** Analyst Coverage panel on the 📈 Analysis drill-down; inject consensus into F-1 Thesis Advisor evidence; Brief awareness chip for held tickers with ≥ `ANALYST_MIN_UPSIDE_PCT` upside + fresh coverage.
-- **Phase 3 (Grow Today):** annotate new-position cards with analyst consensus; optional soft tie-breaker (never a gate).
+- **Brief awareness chip** (calm-advisor/anti-noise persona, §2B) — DEFERRED BY CHOICE.
+- **Analyst-conviction soft tie-breaker** — DEFERRED BY CHOICE (would let analyst data influence recommendation ORDER — violates awareness-only).
+- **PDF/file upload** — DEFERRED BY CHOICE (input is paste-only).
 
 ## Docs to sync at build commit
 - `docs/requirements.md` — new F-row under §3.12 (AI layer) or §3.5 (News Intelligence).

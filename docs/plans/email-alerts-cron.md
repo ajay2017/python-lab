@@ -1,9 +1,15 @@
 # Plan: Email Alerts Cron — Exit-discipline Phase 3
 
-**Status:** planned 2026-06-23 (decisions locked with the user). Builds the
-out-of-app reach for the loss-protection signals so they land *without* opening
-the app. Also the foundation the pullback-awareness Phase 2 alert and the
-Today's-P&L EOD job will reuse (one headless engine, one workflow).
+**Status: SHIPPED 2026-06-24 (commits `9add28f`→`cb37862`)**
+
+All code shipped: `cron_runner.py`, `headless_alert_engine.py`, `notify.py`,
+`.github/workflows/alerts.yml`, `alert_state` Supabase DDL applied, Resend wired.
+Sunday thesis lane chains F-3 debrief + F-4 monthly (`monthly` dispatch mode).
+
+Planned 2026-06-23 (decisions locked with the user). Builds the out-of-app reach
+for the loss-protection signals so they land *without* opening the app. Also the
+foundation the pullback-awareness Phase 2 alert and the Today's-P&L EOD job reuse
+(one headless engine, one workflow).
 
 ## Decisions (locked)
 - **Delivery:** Resend HTTP API (single `RESEND_API_KEY` secret; no SMTP).
@@ -98,7 +104,7 @@ The build ships inert; these flip it on:
 - Service-role key in GitHub secrets = same key class as Streamlit; RLS stays on.
 - `requirements.txt` install on Actions ~1–2 min; fine for a daily job.
 
-## Out of scope (deferred to later phases)
+## Out of scope (DEFERRED)
 - Pullback-awareness Phase 2 reactive alert + Today's-P&L EOD snapshot — will
   reuse this engine/workflow once it's proven (add jobs, not a new pipeline).
-- Intraday / twice-daily cadence; richer HTML; per-signal mute controls.
+- Intraday / twice-daily cadence; richer HTML templates; per-signal mute controls.

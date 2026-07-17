@@ -2,7 +2,13 @@
 
 **Goal:** Manually keep the app's `trades` in sync with Robinhood by uploading the broker's activity-CSV (downloaded daily/weekly/monthly). Bridge until Robinhood ships a mature integration (the automated MCP path is deferred — memory `project_today_pnl_scope`).
 
-**Status:** v1 spec locked, pre-build. **Scope v1 = Buy/Sell trades only.** Cash events (dividends / ACH / interest / fees) deferred to v2 (→ 💰 Account `account_flows` ledger).
+**Status: v1 SHIPPED 2026-07-10 (commit `4e4f46c`).** v2 DEFERRED.
+
+v1 shipped: `stock_analyzer/broker_screenshot.py` (`parse_robinhood_text()` regex
+parser — replaced Vision/Opus with pure-Python regex; no Vision API), Trade Journal
+"📋 Paste history" tab, three-bucket reconciliation, editable preview,
+`recalculate_from_trades` write path. **Scope v1 = Buy/Sell trades only.** Cash events
+(dividends / ACH / interest / fees) deferred to v2 (→ 💰 Account `account_flows` ledger).
 
 ---
 
@@ -42,8 +48,8 @@ The CSV has **no unique row id**, and `trades` has **no external-id / dedup colu
 ## Honest limitation (v1)
 The CSV is a transaction log, not a positions snapshot → v1 reconciles by *showing* the resulting holdings + inconsistencies for the user to eyeball against Robinhood. A SELL whose BUY predates the app's history will surface as a recalc warning (expected; user adds the missing BUY or accepts).
 
-## Deferred
-- v2: cash events → `account_flows` (deposits/withdrawals) + dividend handling → 💰 Account.
+## DEFERRED
+- **v2:** cash events → `account_flows` (deposits/withdrawals) + dividend handling → 💰 Account.
 - Optional RH **positions** CSV to auto-verify the reconciliation.
 - Hard `import_fingerprint` DB idempotency column (only if content-match proves insufficient).
 

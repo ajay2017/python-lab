@@ -1,7 +1,13 @@
 # Plan: Exit Discipline — Held-Position Deterioration Exit
 
-**Status:** approved 2026-06-22 (Phase 1 scope, user-chosen). Trigger = drawdown-
-from-peak + trend break, 3-tier WATCH/TRIM/EXIT. Build in progress.
+**Status: FULLY SHIPPED — all 3 phases.**
+- Phase 1 (3-tier WATCH/TRIM/EXIT deterioration): SHIPPED.
+- Phase 2 (risk-off de-risk): SHIPPED 2026-06-23.
+- Phase 3 (email cron protective alerts): SHIPPED 2026-06-24 (commits `9add28f`→`cb37862`; own plan `email-alerts-cron.md`).
+- **PARKED:** deterioration-card hysteresis — needs a new policy constant + day-over-day state; revisit only if a flicker is actually observed (see body note below).
+- **DEFERRED:** Action Log Phase B (log the trim/exit UI).
+
+Approved 2026-06-22 (Phase 1 scope, user-chosen). Trigger = drawdown-from-peak + trend break, 3-tier WATCH/TRIM/EXIT.
 
 ## Problem (from the trade-log review)
 A trade-history analysis of ~3 weeks showed the realized bleed lives almost
@@ -181,14 +187,16 @@ already-reduced tickers → single-surface guaranteed (no double-reduce).
 and the evidence that aggressive tactical de-risking underperforms after
 whipsaw/taxes. Most risk stays managed at entry (sizing + concentration caps).
 
-## Out of scope (deferred)
+## Out of scope / remaining open items
+
 - Full **volatility-targeting** leverage scaling / **beta-target optimizer** /
-  sector-overlay selection (names in the leading-down sectors) — Phase 2.x.
-- **Phase 3** — out-of-app email alerts (GitHub Actions cron) so the above reach
-  the user without opening the app.
+  sector-overlay selection (names in the leading-down sectors) — **DEFERRED**.
+- ~~**Phase 3** — out-of-app email alerts (GitHub Actions cron)~~ — **SHIPPED 2026-06-24** (see `email-alerts-cron.md`).
 - No auto-execution — directives only; the user decides.
-- **Hysteresis** on deterioration cards (suppress an unchanged tier) — deferred;
-  revisit if the rebuilt-snapshot cards feel repetitive.
+- **Hysteresis** on deterioration cards — **PARKED** until a flicker is actually
+  observed. NOT a simple UX polish: requires a new policy constant (asymmetric
+  clear-band buffer → `constants.py`, a policy decision to set with the user) and
+  per-ticker day-over-day tier state (none today — cards recompute each run). Do
+  not build without triggering observation + explicit user discussion.
 - ~~**Material-add re-anchor wiring** (Phase 1.1)~~ — SHIPPED (see above).
-- Action Log Phase B (log the trim/exit, stop re-nagging) threads in alongside
-  but the full trim/exit logging UI is its own task.
+- Action Log Phase B (log the trim/exit, stop re-nagging) — **DEFERRED**.
