@@ -166,6 +166,7 @@ from stock_analyzer import db
 from stock_analyzer import decision_context as _dctx
 from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
+from stock_analyzer import portfolio_intelligence
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return,
@@ -1663,6 +1664,7 @@ with st.sidebar:
             ("Portfolio Health",    "🏆 Portfolio Health",     ":material/analytics:"),
             ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
+            ("Portfolio Intelligence", "🧩 Portfolio Intelligence", ":material/hub:"),
             ("Alerts & Actions", "⚠️ Alerts & Actions",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
             ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
@@ -9482,6 +9484,77 @@ elif page == "🔗 Risk Analysis":
                 "observed during those events — more accurate for portfolios with sector concentration. "
                 "Estimates assume linear beta and do not model liquidity effects or margin calls."
             )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — PORTFOLIO INTELLIGENCE
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🧩 Portfolio Intelligence":
+    st.title("🧩 Portfolio Intelligence")
+    st.caption(
+        "What your ownership MEANS in aggregate — not what you own position by "
+        "position, but the risk and structure of the book as a whole. "
+        "Diagnostic only; never gates, resizes, or reorders anything."
+    )
+    _pi_pdf = st.session_state.get("_port_df_enriched")
+    _pi_hd  = st.session_state.get("_last_held_data")
+    if _pi_pdf is None or _pi_hd is None or (hasattr(_pi_pdf, "empty") and _pi_pdf.empty):
+        _render_portfolio_not_loaded(show_home_button=True, key_suffix="pi")
+        st.stop()
+    _render_portfolio_stale_banner(key_suffix="pi")
+
+    _pi_tab_clusters, _pi_tab_risk, _pi_tab_factor = st.tabs([
+        "🕸️ Correlation Clusters", "⚖️ Risk Budget", "📐 Factor Tilt"
+    ])
+
+    with _pi_tab_clusters:
+        st.caption(
+            "Groups positions that tend to move together, even through an "
+            "indirect chain (A correlates with B, B correlates with C → shown "
+            "as one 3-name cluster). For the full pairwise heatmap, see "
+            "🔗 Risk Analysis."
+        )
+        _pi_corr_df = st.session_state.get("_corr_df_cache")
+        if _pi_corr_df is None or (hasattr(_pi_corr_df, "empty") and _pi_corr_df.empty):
+            st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+        else:
+            _pi_weights_map = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
+            _pi_clusters = portfolio_intelligence.correlation_clusters(_pi_corr_df, _pi_weights_map)
+
+            if not _pi_clusters:
+                st.success("No correlated clusters detected — your positions move fairly independently of each other.")
+            else:
+                for _pi_c in _pi_clusters:
+                    _pi_names   = ", ".join(_pi_c["tickers"])
+                    _pi_wt_str  = f", **{_pi_c['combined_weight_pct']:.1f}%** combined weight" if _pi_c["combined_weight_pct"] else ""
+                    _pi_msg = (
+                        f"🕸️ **{_pi_c['size']} positions move together:** {_pi_names} — "
+                        f"avg internal correlation **{_pi_c['avg_internal_corr']:.2f}**{_pi_wt_str}"
+                    )
+                    if _pi_c["tier"] == "danger":
+                        st.warning(_pi_msg)
+                    else:
+                        st.info(_pi_msg)
+
+                st.caption(
+                    "If you want to reduce clustered co-movement risk, the highest-leverage "
+                    "move is usually trimming within your biggest cluster — but composite "
+                    "score (🔗 Risk Analysis / 📈 Analysis) should still decide **which** "
+                    "name, not correlation alone."
+                )
+
+    with _pi_tab_risk:
+        st.info(
+            "📋 Planned — not yet built. Will show which positions consume the "
+            "most portfolio VOLATILITY (not just capital)."
+        )
+
+    with _pi_tab_factor:
+        st.info(
+            "📋 Planned — not yet built. Will show directional exposure to "
+            "momentum/value/quality/growth via returns-based regression against "
+            "factor ETFs (MTUM/VLUE/QUAL/USMV/VUG)."
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
