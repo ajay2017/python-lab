@@ -224,6 +224,7 @@ def generate_case_against(
     api_key: str,
     model: str = "claude-haiku-4-5-20251001",
     max_tokens: int = 700,
+    _debug: dict | None = None,
 ) -> dict | None:
     """
     Generate the app-side case against buying `ticker`, from the engine's own
@@ -236,8 +237,15 @@ def generate_case_against(
     response) — the caller must fall back to a plain manual prompt. This is
     the aid, not the gate: the pre-commitment text field is the hard
     requirement, and it is enforced independently of this call succeeding.
+
+    `_debug`, if passed, is mutated in place with the raw response text and/or
+    the exception on failure — a TEMPORARY diagnostic hook for the initial
+    rollout; not part of the return contract and safe to remove once the
+    fail-open path is understood to be working as intended in production.
     """
     if not api_key:
+        if _debug is not None:
+            _debug["error"] = "no api_key"
         return None
     try:
         import anthropic
@@ -252,13 +260,20 @@ def generate_case_against(
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text = response.content[0].text.strip() if response.content else ""
+        if _debug is not None:
+            _debug["raw_response"] = text
+            _debug["stop_reason"]  = getattr(response, "stop_reason", None)
         case_against = _parse_case_against(text)
         if not case_against:
+            if _debug is not None:
+                _debug["error"] = "response failed JSON/shape validation"
             return None
         return {
             "case_against": case_against,
             "model":        model,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
-    except Exception:
+    except Exception as e:
+        if _debug is not None:
+            _debug["error"] = f"{type(e).__name__}: {e}"
         return None

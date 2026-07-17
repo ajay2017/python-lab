@@ -1334,14 +1334,21 @@ def _build_premortem_case(ticker: str) -> dict | None:
     _pm_api_key = (
         st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
     )
+    # TEMPORARY diagnostic (rollout only — remove once the fail-open path is
+    # confirmed healthy in production): capture the raw Haiku response/error
+    # so a "couldn't generate" fallback is debuggable from the UI instead of
+    # a silently-swallowed exception. See _debug in generate_case_against.
+    _pm_debug: dict = {}
+    st.session_state["_tj_premortem_debug"] = _pm_debug
     if not _pm_api_key:
+        _pm_debug["error"] = "no api_key (unexpected — the button should be disabled)"
         return None
 
     _pm_inputs = _pm_advisor.build_premortem_inputs(
         ticker, engine=_pm_engine, portfolio=_pm_portfolio,
         macro=_pm_macro, earnings=_pm_earnings,
     )
-    return _pm_advisor.generate_case_against(ticker, _pm_inputs, _pm_api_key)
+    return _pm_advisor.generate_case_against(ticker, _pm_inputs, _pm_api_key, _debug=_pm_debug)
 
 
 def _tax_exit_note_html(ticker: str | None) -> str:
@@ -16158,6 +16165,13 @@ elif page == "📒 Trade Journal":
                     "Couldn't generate an AI case-against (offline/rate-limited) — "
                     "write your own risk case below."
                 )
+                # TEMPORARY diagnostic (rollout only) — surfaces the raw Haiku
+                # response/error so a fallback is debuggable from the UI. Safe
+                # to remove once the fail-open path is confirmed healthy.
+                _pm_dbg = st.session_state.get("_tj_premortem_debug")
+                if _pm_dbg:
+                    with st.expander("🔧 Pre-Mortem debug (temporary)", expanded=False):
+                        st.json(_pm_dbg)
 
             st.text_area(
                 "🖊️ What would make me wrong about this? (required before this Buy can be recorded)",
