@@ -140,3 +140,106 @@ def correlation_clusters(
         return clusters
     except Exception:
         return []
+
+
+def risk_budget(
+    held_data: dict,
+    weights: dict,
+    trading_days: int = 252,
+) -> dict:
+    """
+    Decompose realized portfolio volatility into each position's risk
+    contribution (Euler / marginal-contribution-to-risk decomposition).
+
+    Capital weight tells you how much money is in a position; it does not
+    tell you how much of the portfolio's actual volatility that position is
+    responsible for — a small, volatile position correlated with the rest of
+    the book can dominate risk while looking harmless by dollar weight. This
+    builds the covariance matrix from vol (per-ticker annualized std) and
+    corr (pairwise correlation) computed off the SAME jointly-aligned returns
+    frame, then applies w @ Sigma @ w / port_vol so `sum(risk_pct) ≈ 100` by
+    construction (Euler's theorem; tiny drift possible from rounding).
+
+    This is realized/historical — a look backward at how positions have
+    actually moved together, not a forecast of future risk.
+
+    held_data: {ticker: {"df" or "history": DataFrame with "Close", ...}}
+    weights:   {ticker: weight_pct} — capital weight, NOT renormalized to
+               the subset actually included in this calculation.
+
+    Returns:
+        {
+            "positions": [
+                {"ticker", "weight_pct", "risk_pct", "vol_annualized_pct",
+                 "risk_to_weight_ratio" (or None when weight is 0)},
+                ...
+            ],  # sorted by risk_pct descending
+            "portfolio_vol_annualized_pct": float or None,
+            "n_included": int,
+        }
+    Never raises — returns the empty shape on any unusable input/exception.
+    """
+    _empty = {"positions": [], "portfolio_vol_annualized_pct": None, "n_included": 0}
+    try:
+        if not held_data:
+            return _empty
+
+        # ── Build aligned returns (mirrors portfolio.correlation_matrix) ────
+        series = {}
+        for ticker, data in held_data.items():
+            hist = data.get("df") if data.get("df") is not None else data.get("history")
+            if hist is not None and not hist.empty and "Close" in hist.columns:
+                series[ticker] = hist["Close"]
+        if len(series) < 2:
+            return _empty
+
+        prices = pd.DataFrame(series).dropna()
+        returns = prices.pct_change().dropna()
+        if returns.empty or returns.shape[1] < 2:
+            return _empty
+
+        vol = returns.std() * (trading_days ** 0.5)
+        corr = returns.corr()
+
+        all_tickers = returns.columns.tolist()
+        tickers = [t for t in all_tickers if float(weights.get(t, 0.0) or 0.0) >= 0]
+        if not tickers or not any(t in (weights or {}) for t in tickers):
+            return _empty
+
+        w = np.array([float(weights.get(t, 0.0) or 0.0) / 100.0 for t in tickers])
+        vol_arr = vol[tickers].values
+        corr_arr = corr.loc[tickers, tickers].values
+
+        Sigma = np.outer(vol_arr, vol_arr) * corr_arr
+        port_var = float(w @ Sigma @ w)
+        port_vol = port_var ** 0.5 if port_var > 0 else 0.0
+
+        if port_vol > 0:
+            mcr = (Sigma @ w) / port_vol
+            rc = w * mcr
+            rc_pct = rc / port_vol * 100
+        else:
+            rc_pct = np.zeros(len(tickers))
+
+        positions = []
+        for i, t in enumerate(tickers):
+            w_pct = round(float(weights.get(t, 0.0) or 0.0), 1)
+            positions.append({
+                "ticker": t,
+                "weight_pct": w_pct,
+                "risk_pct": round(float(rc_pct[i]), 1),
+                "vol_annualized_pct": round(float(vol_arr[i] * 100), 1),
+                "risk_to_weight_ratio": (
+                    round(float(rc_pct[i]) / w_pct, 2) if w_pct > 0 else None
+                ),
+            })
+
+        positions.sort(key=lambda p: -p["risk_pct"])
+
+        return {
+            "positions": positions,
+            "portfolio_vol_annualized_pct": round(port_vol * 100, 1) if port_vol > 0 else None,
+            "n_included": len(tickers),
+        }
+    except Exception:
+        return _empty

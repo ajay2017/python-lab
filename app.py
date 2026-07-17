@@ -9544,10 +9544,78 @@ elif page == "🧩 Portfolio Intelligence":
                 )
 
     with _pi_tab_risk:
-        st.info(
-            "📋 Planned — not yet built. Will show which positions consume the "
-            "most portfolio VOLATILITY (not just capital)."
+        st.caption(
+            "Which positions consume the most portfolio VOLATILITY — not just "
+            "capital. A small, volatile position that's correlated with the "
+            "rest of your book can quietly dominate your risk even at a "
+            "modest capital weight."
         )
+        _pi_rb_weights = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
+        _pi_rb = portfolio_intelligence.risk_budget(_pi_hd, _pi_rb_weights)
+
+        if not _pi_rb["positions"]:
+            st.info("Not enough price history across your positions to compute a risk budget this session.")
+        else:
+            _pi_rb_port_vol = _pi_rb["portfolio_vol_annualized_pct"]
+            st.metric(
+                "Portfolio Annualized Volatility",
+                f"{_pi_rb_port_vol:.1f}%" if _pi_rb_port_vol is not None else "—",
+            )
+
+            _pi_rb_tickers = [p["ticker"] for p in _pi_rb["positions"]]
+            _pi_rb_weight_vals = [p["weight_pct"] for p in _pi_rb["positions"]]
+            _pi_rb_risk_vals = [p["risk_pct"] for p in _pi_rb["positions"]]
+
+            _pi_rb_fig = go.Figure()
+            _pi_rb_fig.add_trace(go.Bar(
+                x=_pi_rb_tickers, y=_pi_rb_weight_vals,
+                name="Capital Weight %",
+                marker_color="#4a9eff",
+                text=[f"{v:.1f}%" for v in _pi_rb_weight_vals],
+                textposition="outside",
+            ))
+            _pi_rb_fig.add_trace(go.Bar(
+                x=_pi_rb_tickers, y=_pi_rb_risk_vals,
+                name="Risk Contribution %",
+                marker_color="#f59e0b",
+                text=[f"{v:.1f}%" for v in _pi_rb_risk_vals],
+                textposition="outside",
+            ))
+            _pi_rb_fig.update_layout(
+                template="plotly_dark",
+                barmode="group",
+                height=340,
+                yaxis_title="% of Portfolio",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="right", x=1),
+                margin=dict(l=0, r=0, t=10, b=0),
+            )
+            st.plotly_chart(_pi_rb_fig, use_container_width=True)
+
+            _pi_rb_table = pd.DataFrame([
+                {
+                    "Ticker": p["ticker"],
+                    "Capital Weight %": p["weight_pct"],
+                    "Risk Contribution %": p["risk_pct"],
+                    "Ann. Volatility %": p["vol_annualized_pct"],
+                    "Risk ÷ Weight": p["risk_to_weight_ratio"] if p["risk_to_weight_ratio"] is not None else "—",
+                }
+                for p in _pi_rb["positions"]
+            ])
+            st.dataframe(_pi_rb_table, hide_index=True, width='stretch')
+
+            _pi_rb_total = len(_pi_rb_weights)
+            if _pi_rb["n_included"] < _pi_rb_total:
+                st.caption(
+                    f"{_pi_rb['n_included']} of {_pi_rb_total} positions included — "
+                    f"others lack sufficient price history this session."
+                )
+
+            st.caption(
+                "This identifies WHERE risk concentrates — it does not tell you "
+                "what to do about it. Composite score (🔗 Risk Analysis / 📈 Analysis) "
+                "and your own judgment still decide any action."
+            )
 
     with _pi_tab_factor:
         st.info(
