@@ -99,7 +99,7 @@ Shipped as specified below: tabs 📋 Holdings / 📡 Radar / 🎯 Entry Candida
 
 ---
 
-### Trade Journal — 3-Tab Restructure (I12)
+### ~~Trade Journal — 3-Tab Restructure (I12)~~ Done — commit af61955 (docs synced d6e1d1f)
 
 **Rationale:** The 📒 Trade Journal is a ~2,240-line single scroll with three distinct jobs — record a trade, review your performance/patterns, browse history. Same tab-first pattern as I7/I3/I2/I11.
 

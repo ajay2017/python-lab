@@ -4014,7 +4014,7 @@ if page == "🏠 Home":
     else:
         _c3.metric("Today's P&L (held)", "Updating…", help="Loads with the live price strip")
     _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
-               help=f"{n_danger} danger · {n_warning} warning — check ⚠️ Alerts & Actions")
+               help=f"{n_danger} danger · {n_warning} Watch — check ⚠️ Alerts & Actions")
     _c5.metric("Avg Score",        f"{avg_score:.0f}/100")
     _c6.metric("Diversification",  f"{div_score:.0f}/100" if div_score is not None else "—",
                _div_label, delta_color="off")
@@ -4551,11 +4551,11 @@ if page == "🏠 Home":
                             elif "RISK" in _act_action:
                                 _act_badge = ("<span style='background:#422006;color:#fcd34d;"
                                               "padding:0 5px;border-radius:4px;font-size:0.7em;"
-                                              "font-weight:700'>⚠ RISK ALERT</span> ")
+                                              "font-weight:700'>⚠ Act Today</span> ")
                             else:
                                 _act_badge = ("<span style='background:#1c1917;color:#f59e0b;"
                                               "padding:0 5px;border-radius:4px;font-size:0.7em;"
-                                              "font-weight:700'>⚠ ACT TODAY</span> ")
+                                              "font-weight:700'>⚠ Act Today</span> ")
                         st.markdown(
                             f"<div style='display:flex;justify-content:space-between;"
                             f"align-items:center;padding:3px 0;font-size:0.82em'>"
@@ -6732,7 +6732,7 @@ if page == "🏠 Home":
 
     if _ed_data is None or _ed_baseline_brief is None:
         st.info(
-            "No AM Brief available — open Today's Brief first to seed the debrief. "
+            "Today's Brief not yet loaded — visit Home first to seed the debrief. "
             "The Evening Debrief reconciles your AM plan against the day's outcomes."
         )
     else:
@@ -7335,7 +7335,7 @@ elif page == "⚠️ Alerts & Actions":
 
         _al1, _al2, _al3 = st.columns(3)
         _al1.metric("🔴 Danger",  len(_danger_alerts),  help="Require immediate attention")
-        _al2.metric("🟡 Warning", len(_warning_alerts), help="Monitor closely")
+        _al2.metric("🟡 Watch", len(_warning_alerts), help="Monitor closely")
         _al3.metric("ℹ️ Info",    len(_info_alerts),    help="Noteworthy changes")
         st.markdown("")
 
@@ -8609,8 +8609,8 @@ elif page == "🔗 Risk Analysis":
             _n_ok   = sum(1 for r in _risk_advisor_recs if r["priority"] == "OK")
 
             _rac1, _rac2, _rac3 = st.columns(3)
-            _rac1.metric("🔴 Action Required", _n_high, help="Requires attention this week")
-            _rac2.metric("🟡 Monitor",          _n_med,  help="Review before next rebalance")
+            _rac1.metric("🔴 Act Today",        _n_high, help="Requires attention this week")
+            _rac2.metric("🟡 Watch",             _n_med,  help="Review before next rebalance")
             _rac3.metric("✅ Well Managed",      _n_ok,   help="No action needed — reinforce the discipline")
 
             st.markdown("")
@@ -8713,7 +8713,7 @@ elif page == "🔗 Risk Analysis":
                     # Defensive picks — shown inside volatility and beta cards
                     if _rtype in ("volatility", "beta"):
                         st.markdown("")
-                        with st.expander("🔍 Find Defensive Picks — Implement This Recommendation", expanded=False):
+                        with st.expander("🔍 Find Defensive Recommendations — Implement This Recommendation", expanded=False):
                             _def_sectors = {"Healthcare & Biotech", "Consumer Staples & Retail"}
                             _sr = st.session_state.get("scanner_results")
                             if _sr is None or _sr.empty:
@@ -9642,7 +9642,7 @@ elif page == "🥧 Portfolio Allocation":
                 for _ni_ai, _al in enumerate(_ni_alts):
                     _al_border = "#ef4444" if _al["alert_level"] == "critical" else "#f59e0b"
                     _al_bg     = "#1a0000" if _al["alert_level"] == "critical" else "#1a1000"
-                    _al_tag    = "🔴 CRITICAL" if _al["alert_level"] == "critical" else "🟡 Watch"
+                    _al_tag    = "🔴 Act Today" if _al["alert_level"] == "critical" else "🟡 Watch"
                     _al_link   = _safe_link(_al.get("url", ""), _al.get("title", ""), max_len=90)
                     st.markdown(
                         f"<div style='background:{_al_bg};border-left:4px solid {_al_border};"
@@ -10953,7 +10953,7 @@ elif page == "🥧 Portfolio Allocation":
         )
     with _pa_tab2:
         if not h_rets:
-            st.info("Need at least 1 holding with price history to compute relative strength.")
+            st.info("Need at least 1 position with price history to compute relative strength.")
         else:
             st.caption(
                 "Each holding's 6-month return vs its sector ETF benchmark. "
@@ -11225,7 +11225,7 @@ elif page == "🥧 Portfolio Allocation":
                     lambda r: (
                         "✅ In momentum"   if r["My Exposure"] >= 5 and r["3M %"] > 2 else
                         "⚠️ Heavy in laggard" if r["My Exposure"] >= 10 and r["3M %"] < 0 else
-                        "🟡 Monitor"       if r["3M %"] < 0 else
+                        "🟡 Watch"         if r["3M %"] < 0 else
                         "🟢 Aligned"
                     ), axis=1,
                 )
@@ -18446,7 +18446,7 @@ elif page == "🪞 Trade Review":
                 )
             else:
                 _sev_styles = {
-                    "critical": ("🔴", "#ef4444", "#3f1d1d", "Fix Now"),
+                    "critical": ("🔴", "#ef4444", "#3f1d1d", "Act Today"),
                     "watch":    ("🟡", "#f59e0b", "#3b2a0a", "Watch"),
                     "good":     ("🟢", "#22c55e", "#052e16", "Doing Well"),
                 }
@@ -20065,7 +20065,7 @@ elif page == "💰 Account":
                 .sort_values("Account Wt (%)", ascending=False)
             )
             st.caption(
-                "True concentration — each holding as % of your **whole account** "
+                "True concentration — each position as % of your **whole account** "
                 "(equity + net cash) vs % of invested equity. The concentration **gates "
                 "use equity-basis** (% of invested equity), so they stay stable across a "
                 "transient margin balance; leverage/margin risk is surfaced separately as "
@@ -20285,7 +20285,7 @@ elif page == "🔔 Catalyst Watch":
     # (stashed in session) — so this is the SAME rich content the old Home
     # 'Earnings' tab showed, now living here. If Home hasn't been opened this
     # session, prompt rather than re-deriving (avoids a heavy duplicate load).
-    _cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Holdings", "📡 Radar", "🎯 Entry Candidates"])
+    _cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Positions", "📡 Radar", "🎯 Entry Candidates"])
 
     with _cw_tab_hold:
         st.markdown("## 📊 Your Holdings — Earnings")
@@ -21522,7 +21522,7 @@ It reads two things together: how far a name has fallen **from its highest point
 
 **Deliberately calm:** it stays quiet on small wobbles (a normal 3–5% dip won't fire anything) — this is a medium-term guard, not a day-trading stop. The drawdown threshold also scales with each stock's own volatility, so a jumpy name gets more room than a steady one.
 
-**👁️ Watch / MONITOR cards have no fixed recheck date** — they are re-evaluated fresh on every data refresh. If a position recovers (trend restored, gap closed), the call drops automatically without any intervention. This differs from the *"Recheck"* date shown on the Analysis Hold tab, which is tied to when a specific dated entry signal was recorded — not a general timeout.
+**👁️ Watch cards have no fixed recheck date** — they are re-evaluated fresh on every data refresh. If a position recovers (trend restored, gap closed), the call drops automatically without any intervention. This differs from the *"Recheck"* date shown on the Analysis Hold tab, which is tied to when a specific dated entry signal was recorded — not a general timeout.
 
 **If you averaged down:** when you add materially to a position, it re-measures the decline **from your add**, not from an old pre-add high — so doubling down won't trigger a false exit signal.
 
@@ -21759,8 +21759,8 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
-- **📜 Recommendations History** — every pick the app surfaced over time (the audit trail).
-- **🔔 Catalyst Watch** — three tabs: **📋 Holdings** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
+- **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
+- **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
@@ -21825,7 +21825,7 @@ The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report n
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
 
-The page has three tabs: **📋 Holdings** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
+The page has three tabs: **📋 Positions** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
 """
         )
 
@@ -22192,7 +22192,7 @@ elif page == "🧠 AI Insights":
         )
 
         if not _open_tickers:
-            st.info("No open positions found — add holdings via the Trade Journal.")
+            st.info("No open positions found — add positions via the Trade Journal.")
         else:
             _status_colour = {"INTACT": "#22c55e", "WEAKENING": "#f59e0b", "BROKEN": "#ef4444"}
             _status_icon   = {"INTACT": "✅", "WEAKENING": "⚠️", "BROKEN": "🔴"}
