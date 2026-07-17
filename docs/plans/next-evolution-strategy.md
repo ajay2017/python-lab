@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar  
 **Analysis model:** Claude Sonnet 4.6 (first pass)  
 **Review:** Claude Opus 4.8 (second pass, completed 2026-07-17) — REVISE-FIRST verdict; 30 findings; all incorporated in this version  
-**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B) underway — Correlation Clusters (panel 1 of 3) SHIPPED 2026-07-17; Risk Budget Gauge and Factor Tilt Heatmap not yet started. Concept A (Phase 3) not started.
+**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B) underway — Correlation Clusters + Risk Budget Gauge (panels 1-2 of 3) SHIPPED 2026-07-17; Factor Tilt Heatmap not yet started. Concept A (Phase 3) not started.
 
 > **Scope:** This is a product strategy document, not an implementation spec. Nothing here should be built until concepts are reviewed together and approved. It is the starting point for a structured product discovery conversation.
 
@@ -30,7 +30,7 @@ Build order chosen with the user after live scoping: **E-capture + F (Wave 1) �
 | 2 | C — Pre-Mortem Protocol | **SHIPPED** 2026-07-17, Opus SHIP 0 blocking; post-ship bug found+fixed same day | `c467c92` → `f6a9d44` | F-187 | `project_premortem_protocol` |
 | 3 | D — Regime-Conditional Targets | **SHIPPED** 2026-07-17, Opus SHIP 0 blocking; post-ship bug found+fixed same day (`09be8bd`) | `0c6df7a` | F-188 | `project_regime_conditional_targets` |
 | 4 (Phase 2) | B — Correlation Clusters (panel 1 of 3) | **SHIPPED** 2026-07-17 | `5c980b3` | F-189 | `project_portfolio_intelligence` |
-| — | B — Risk Budget Gauge (panel 2 of 3) | Not started — next sub-wave | — | — | — |
+| 5 (Phase 2) | B — Risk Budget Gauge (panel 2 of 3) | **SHIPPED** 2026-07-17 | `698fcd5` | F-190 | `project_portfolio_intelligence` |
 | — | B — Factor Tilt Heatmap (panel 3 of 3) | Not started — needs new ETF return fetches (MTUM/VLUE/QUAL/USMV/VUG) | — | — | — |
 | — | A (Phase 3) | Not started, per plan's own phasing | — | — | — |
 

@@ -1002,7 +1002,10 @@ Pure-logic module for the 🧩 Portfolio Intelligence page (Concept B, "Portfoli
 **`correlation_clusters(corr_df, weights=None, threshold=CORR_HIGH_PAIRS_THRESHOLD, danger_threshold=CORR_DANGER_PAIRS_THRESHOLD)`**  
 Groups tickers into transitive correlation clusters via plain-Python connected-components over the existing pairwise correlation matrix (`portfolio.correlation_matrix()`, published to `_corr_df_cache`) — no scipy/sklearn/networkx dependency, no new constants (reuses the two existing thresholds). A-B and B-C both flagged (≥ `threshold`) implies A, B, C are one cluster even when A-C isn't itself flagged. Singletons excluded — only clusters of 2+ members returned. Each cluster: `tickers`, `size`, `avg_internal_corr` (mean of every pair INSIDE the cluster, not just the edges that formed it), `combined_weight_pct`, `tier` (`"danger"` if any internal pair ≥ `danger_threshold`, else `"warning"`). Sorted by combined weight descending (or size descending when `weights` is `None`). Never raises.
 
-**Session state consumed (read-only):** `_corr_df_cache`, `_port_df_enriched` (for the ticker→weight map).
+**`risk_budget(held_data, weights, trading_days=252)`**  
+Euler / marginal-contribution-to-risk decomposition of REALIZED portfolio volatility. Rebuilds its own jointly-aligned returns frame from `held_data` price history (does NOT accept the cached `_corr_df_cache` — the volatility calc and the correlation calc must come from the exact same date alignment, or the covariance model would be internally inconsistent). `vol = returns.std() * sqrt(trading_days)` (annualized) per ticker; `Sigma = np.outer(vol, vol) * corr`; portfolio variance = `w @ Sigma @ w`; each position's risk contribution = `w_i * (Sigma @ w)_i / portfolio_vol`, so `Σ risk_pct ≈ 100` by construction. Returns `{"positions": [{"ticker", "weight_pct" (original capital weight, not renormalized), "risk_pct", "vol_annualized_pct", "risk_to_weight_ratio"}], "portfolio_vol_annualized_pct", "n_included"}`, sorted by `risk_pct` descending. No new constant — deliberately no "outsize risk" flagging threshold, just the plain numbers. Never raises.
+
+**Session state consumed (read-only):** `_corr_df_cache` (clusters only), `_last_held_data`, `_port_df_enriched` (for the ticker→weight map).
 
 ---
 
