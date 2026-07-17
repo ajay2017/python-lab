@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar  
 **Analysis model:** Claude Sonnet 4.6 (first pass)  
 **Review:** Claude Opus 4.8 (second pass, completed 2026-07-17) — REVISE-FIRST verdict; 30 findings; all incorporated in this version  
-**Status:** Revised — ready for discussion and approval before any implementation begins
+**Status:** Wave 1 + Wave 2 SHIPPED 2026-07-17 (build order below); Wave 3 (Concept D) awaiting a policy-setting conversation before any code
 
 > **Scope:** This is a product strategy document, not an implementation spec. Nothing here should be built until concepts are reviewed together and approved. It is the starting point for a structured product discovery conversation.
 
@@ -16,6 +16,22 @@
 |---|---|---|---|
 | First draft | Claude Sonnet 4.6 | — | Original analysis |
 | Second pass | Claude Opus 4.8 | REVISE-FIRST (30 findings) | Pre-mortem scope bug (C), Behavioral Fingerprint statistical self-contradiction (A), Decision Reconstruction sequencing error (E must capture in Phase 1), forward-return internal contradiction (§1.1 vs §5.8), tax-awareness gap (largest missing concept), factor method rewrite (B), Concept D governance flag, posture critique narrowed (§1.5), What Not to Build additions, 90-day plan corrections |
+
+---
+
+## Build Log (post-approval — actual execution, tracked here rather than retrofitting Part 6)
+
+Build order chosen with the user after live scoping: **E-capture + F (Wave 1) → C (Wave 2) → D (Wave 3, blocked on policy conversation)** — differs from Part 4's literal priority order (C → F → D → E-capture → B → A) once verification showed F was ~80% already built on the existing `tax_advisor.py`, making it a cheap pull-forward alongside E-capture.
+
+| Wave | Concept | Status | Commits | Reqs | Memory |
+|---|---|---|---|---|---|
+| 1a | E — Decision Reconstruction (capture only) | **SHIPPED** 2026-07-17 | `8c9c97a` | — (invisible/no UI; not a user-facing surface) | `project_decision_context_capture` |
+| 1b | F — Tax-Aware Exit/Harvest Lens | **SHIPPED** 2026-07-17, Opus SHIP 0 blocking | `e97658b` | F-186 | `project_tax_aware_lens` |
+| 2 | C — Pre-Mortem Protocol | **SHIPPED** 2026-07-17, Opus SHIP 0 blocking; post-ship bug found+fixed same day | `c467c92` → `f6a9d44` | F-187 | `project_premortem_protocol` |
+| 3 | D — Regime-Conditional Targets | **NOT STARTED** — blocked on a policy-setting conversation (regime target constants map to the real `rate_cut`/`inflation_fight`/`recession_fear`/`stagflation_risk`/`neutral` taxonomy in `macro_calendar.py`, not this doc's illustrative Risk-On/Risk-Off labels) | — | — | — |
+| — | B, A (Phase 2/3) | Not started, per plan's own phasing | — | — | — |
+
+**UI design pivot from Part 2's Concept C spec (worth noting for anyone re-reading §"UX" under Concept C):** the plan called for an `st.dialog` modal. Shipped instead as an outside-the-form pre-condition section (mirrors F-5's "Draft thesis" button placement) with the required commitment enforced as one more validation gate — functionally equivalent friction, zero `st.dialog` risk (it would have been the first in the codebase), and avoided forcing a duplicate of the ~120-line holdings-sync/concentration-nudge block that intercepting the write would have required. See `project_premortem_protocol` memory for the full reasoning.
 
 ---
 
