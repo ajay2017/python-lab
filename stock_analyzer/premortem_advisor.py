@@ -223,7 +223,7 @@ def generate_case_against(
     inputs: dict,
     api_key: str,
     model: str = "claude-haiku-4-5-20251001",
-    max_tokens: int = 500,
+    max_tokens: int = 700,
 ) -> dict | None:
     """
     Generate the app-side case against buying `ticker`, from the engine's own
@@ -246,6 +246,7 @@ def generate_case_against(
         response    = client.messages.create(
             model=model,
             max_tokens=max_tokens,
+            temperature=0,  # structured JSON output — deterministic, not prose
             system=_CASE_AGAINST_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
