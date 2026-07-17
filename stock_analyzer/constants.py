@@ -13,6 +13,30 @@ PORTFOLIO_BETA_TARGET   = 1.0    # baseline equity-portfolio target
 PORTFOLIO_BETA_ELEVATED = 1.3    # soft warning above this
 PORTFOLIO_BETA_CEILING  = 1.4    # hard breach above this — institutional ceiling
 
+# Concept D — regime-conditional position targets (Wave 3, 2026-07-17 policy
+# conversation with user). Anchored to the existing regime-agnostic
+# PORTFOLIO_BETA_TARGET/_ELEVATED/_CEILING baseline above: tightens in
+# defensive regimes, loosens slightly in rate-cut optimism. Diagnostic only —
+# see stock_analyzer/regime_targets.py — never gates/resizes/suppresses.
+REGIME_BETA_CEILING = {
+    "rate_cut":         1.25,
+    "neutral":          1.10,
+    "inflation_fight":  1.00,
+    "recession_fear":   0.90,
+    "stagflation_risk": 0.85,
+}
+REGIME_CASH_FLOOR_PCT = {
+    "rate_cut":         5.0,
+    "neutral":          5.0,
+    "inflation_fight":  10.0,
+    "recession_fear":   15.0,
+    "stagflation_risk": 20.0,
+}
+# Below this detection confidence, the Regime Fit diagnostic flags the read as
+# low-confidence/estimated rather than presenting it as certain. Display-only —
+# never gates.
+REGIME_CONFIDENCE_MIN_DISPLAY = 40
+
 # ── Ticker beta (combined with portfolio beta for gating) ────────────────────
 TICKER_BETA_HIGH     = 1.5       # "high beta" — soft warn when added to elevated port
 TICKER_BETA_CRITICAL = 1.8       # "very high beta" — hard breach when added to breached port

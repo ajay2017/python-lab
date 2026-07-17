@@ -80,6 +80,7 @@ from stock_analyzer.rebalancer import (
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
+    REGIME_CONFIDENCE_MIN_DISPLAY,
     TICKER_BETA_HIGH,
     TICKER_BETA_CRITICAL,
     SECTOR_CEILING,
@@ -164,6 +165,7 @@ from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
 from stock_analyzer import decision_context as _dctx
 from stock_analyzer import premortem_advisor as _pm_advisor
+from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return,
@@ -9042,6 +9044,126 @@ elif page == "🔗 Risk Analysis":
                                                 st.session_state["_nav_origin"]      = "🏠 Home"
                                                 st.rerun()
 
+        # ── Regime Fit — Concept D regime-conditional position targets ────────
+        # Diagnostic only: never gates/resizes/suppresses anything. Read-only
+        # comparison of current beta/cash to a regime-conditional target; the
+        # user decides whether/how fast to move toward it.
+        st.markdown("---")
+        st.subheader("🧭 Regime Fit — are you positioned for the current regime?")
+        st.caption(
+            "Diagnostic only — this never gates, resizes, or suppresses anything. "
+            "It compares your current beta and cash cushion to a target that shifts "
+            "with the macro regime; you decide whether and how fast to move toward it."
+        )
+
+        _rgt_fred_key = (
+            st.secrets.get("fred", {}).get("api_key")
+            or os.environ.get("FRED_API_KEY", "")
+            or st.session_state.get("_ec_fred_key", "")
+        )
+        _rgt_regime_cache_key = f"_macro_regime_{_today_et()}_{bool(_rgt_fred_key)}"
+        if _rgt_regime_cache_key not in st.session_state:
+            with st.spinner("Detecting macro regime…"):
+                try:
+                    _rgt_det_regime = detect_macro_regime_fred(
+                        str(_rgt_fred_key).strip() if _rgt_fred_key else None
+                    )
+                except Exception:
+                    _rgt_det_regime = {
+                        "regime": "neutral", "label": "Data-Dependent",
+                        "icon": "📊", "color": "#6b7280", "bg": "#111827",
+                        "fed_trend": "unknown", "cpi_yoy": None,
+                        "rationale": "Regime detection unavailable — using textbook scenario interpretation.",
+                        "source": "fallback",
+                        "confidence": 0, "scores": {}, "signals": [],
+                    }
+                st.session_state[_rgt_regime_cache_key] = _rgt_det_regime
+        _rgt_regime = st.session_state[_rgt_regime_cache_key]
+
+        st.markdown(
+            f"<div style='background:{_rgt_regime['bg']};border-left:4px solid "
+            f"{_rgt_regime['color']};border-radius:8px;padding:12px 16px;margin-bottom:12px'>"
+            f"<div style='font-size:0.72em;color:{_rgt_regime['color']};font-weight:700;"
+            f"letter-spacing:0.08em'>CURRENT MACRO REGIME — AUTO-DETECTED"
+            f"  ·  {_rgt_regime.get('confidence', 0)}% confidence</div>"
+            f"<div style='font-size:1.05em;font-weight:700;color:#eee;margin-top:4px'>"
+            f"{_rgt_regime['icon']}  {_rgt_regime['label']}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if _rgt_regime.get("confidence", 0) < REGIME_CONFIDENCE_MIN_DISPLAY or _rgt_regime.get("source") != "fred+market":
+            st.caption(
+                "⚠️ Low-confidence / estimated regime read — treat the target below as "
+                "directional, not precise."
+            )
+
+        _rgt_port_beta = _port_risk.get("beta")
+
+        _rgt_cash_pct = None
+        try:
+            _rgt_acct = db.load_account_cash()
+            if _rgt_acct and _rgt_acct.get("cash_balance") is not None and total_val:
+                _rgt_cash_bal = float(_rgt_acct["cash_balance"])
+                _rgt_total = total_val + _rgt_cash_bal
+                if _rgt_total > 0:
+                    _rgt_cash_pct = _rgt_cash_bal / _rgt_total * 100
+        except Exception:
+            _rgt_cash_pct = None
+
+        _rgt_gap = _rgt_mod.regime_position_gap(
+            regime_id=_rgt_regime["regime"],
+            port_beta=_rgt_port_beta,
+            cash_pct=_rgt_cash_pct,
+            port_df=port_df,
+            held_data=held_data,
+        )
+
+        _rgt_c1, _rgt_c2 = st.columns(2)
+        with _rgt_c1:
+            if _rgt_gap["port_beta"] is not None:
+                st.metric(
+                    "Portfolio Beta vs Regime Ceiling",
+                    f"{_rgt_gap['port_beta']:.2f}",
+                    f"{_rgt_gap['beta_gap']:+.2f} vs {_rgt_gap['beta_ceiling']:.2f} ceiling",
+                    delta_color="inverse",
+                )
+            else:
+                st.metric("Portfolio Beta vs Regime Ceiling", "—")
+                st.caption("Portfolio beta unavailable this session")
+        with _rgt_c2:
+            if _rgt_gap["cash_pct"] is not None:
+                st.metric(
+                    "Cash % vs Regime Floor",
+                    f"{_rgt_gap['cash_pct']:.1f}%",
+                    f"{-_rgt_gap['cash_gap']:+.1f}pp vs {_rgt_gap['cash_floor_pct']:.1f}% floor",
+                )
+            else:
+                st.metric("Cash % vs Regime Floor", "—")
+                st.caption("Set your cash balance on 💰 Account to see the cash-floor read")
+
+        if _rgt_gap["beta_breach"]:
+            _rgt_contrib_str = ""
+            if _rgt_gap["top_contributors"]:
+                _rgt_contrib_str = " Largest contributors: " + ", ".join(
+                    f"{c['ticker']} (β {c['beta']:.2f}, {c['weight']:.1f}% weight)"
+                    for c in _rgt_gap["top_contributors"]
+                )
+            st.info(
+                f"Running beta **{_rgt_gap['port_beta']:.2f}** against a "
+                f"**{_rgt_regime['label']}** target of ≤ **{_rgt_gap['beta_ceiling']:.2f}**."
+                f"{_rgt_contrib_str}",
+                icon="🧭",
+            )
+        if _rgt_gap["cash_breach"]:
+            st.info(
+                f"Cash cushion **{_rgt_gap['cash_pct']:.1f}%** is below the "
+                f"**{_rgt_regime['label']}** floor of **{_rgt_gap['cash_floor_pct']:.1f}%** "
+                f"— a shortfall of **{_rgt_gap['cash_gap']:.1f}pp**.",
+                icon="🧭",
+            )
+        if (not _rgt_gap["beta_breach"] and not _rgt_gap["cash_breach"]
+                and (_rgt_gap["port_beta"] is not None or _rgt_gap["cash_pct"] is not None)):
+            st.success("Positioning is within the regime-aligned targets.")
 
     with _ra_tab_stress:
         # ── Stress Testing ────────────────────────────────────────────────────
