@@ -17,6 +17,12 @@ import pandas as pd
 import pytz as _pytz
 from datetime import date as _date, datetime as _dt
 
+from stock_analyzer.constants import (
+    TAX_RATE_SHORT_TERM, TAX_RATE_LONG_TERM, TAX_STCG_THRESHOLD_DAYS,
+    TAX_HARVEST_MIN_LOSS, TAX_LTCG_WAIT_WINDOW_DAYS, TAX_LONGTERM_WINDOW_DAYS,
+    TAX_WASH_SALE_DAYS,
+)
+
 _ET = _pytz.timezone("America/New_York")
 
 
@@ -27,7 +33,9 @@ def _today_et() -> _date:
     return _dt.now(_ET).date()
 
 
-_STCG_THRESHOLD_DAYS = 366   # IRS: > 1 year = long-term
+# Single-sourced from constants.py (display-only tax policy). Kept as a module
+# alias so the existing internal references read unchanged.
+_STCG_THRESHOLD_DAYS = TAX_STCG_THRESHOLD_DAYS   # IRS: ≥ 366 days = long-term
 
 
 def _f(val, default=0.0):
@@ -132,8 +140,8 @@ def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list
 def build_tax_analysis(
     port_df: pd.DataFrame,
     trades_df: pd.DataFrame,
-    stcg_rate: float = 0.37,
-    ltcg_rate: float = 0.20,
+    stcg_rate: float = TAX_RATE_SHORT_TERM,
+    ltcg_rate: float = TAX_RATE_LONG_TERM,
     today: _date | None = None,
 ) -> dict:
     """
@@ -274,15 +282,15 @@ def build_tax_analysis(
         _sig            = str(row.get("Signal", ""))
         _is_conviction  = any(w in _sig for w in ("Strong Buy", "Buy"))
         harvest_blocked = False
-        if pnl < 0 and abs(pnl) > 500:
+        if pnl < 0 and abs(pnl) > TAX_HARVEST_MIN_LOSS:
             if _is_conviction:
                 action          = "HOLD_FOR_SIGNAL"
                 harvest_blocked = True
             else:
                 action = "HARVEST"
-        elif gain_type in ("STCG", "MIXED") and pnl > 0 and days_to_ltcg is not None and days_to_ltcg <= 60:
+        elif gain_type in ("STCG", "MIXED") and pnl > 0 and days_to_ltcg is not None and days_to_ltcg <= TAX_LTCG_WAIT_WINDOW_DAYS:
             action = "WAIT"
-        elif gain_type in ("STCG", "MIXED") and pnl > 0 and days_to_ltcg is not None and days_to_ltcg > 60:
+        elif gain_type in ("STCG", "MIXED") and pnl > 0 and days_to_ltcg is not None and days_to_ltcg > TAX_LTCG_WAIT_WINDOW_DAYS:
             action = "HOLD_FOR_LTCG"
         elif gain_type == "LTCG" and pnl > 0:
             action = "LTCG_ELIGIBLE"
@@ -327,3 +335,103 @@ def build_tax_analysis(
         "stcg_rate":         stcg_rate,
         "ltcg_rate":         ltcg_rate,
     }
+
+
+def holding_period_status(
+    ticker: str,
+    trades_df: pd.DataFrame,
+    today: _date | None = None,
+    lt_window_days: int = TAX_LONGTERM_WINDOW_DAYS,
+) -> dict | None:
+    """Lightweight per-ticker holding-period read for the EXIT-signal tax lens.
+
+    Reuses the same tax-lot reconstruction as build_tax_analysis but needs no
+    price/PnL, so an exit card can cheaply annotate a position with its
+    holding-period status without running the full portfolio tax analysis.
+
+    Returns None when there are no open lots (nothing to annotate). Otherwise:
+      {"gain_type": "LTCG"|"STCG"|"MIXED",
+       "days_held": int,            # share-weighted average across open lots
+       "days_to_ltcg": int,         # 0 if already fully long-term
+       "acq_date": "YYYY-MM-DD",
+       "near_ltcg": bool,           # STCG/MIXED and 0 < days_to_ltcg <= lt_window_days
+       "lt_window_days": int}
+
+    Awareness-only — the caller must NEVER gate, suppress, or reorder a
+    recommendation on this. It is a visible context note layered on the
+    unchanged investment signal.
+    """
+    if today is None:
+        today = _today_et()
+    lots = _build_open_lots(ticker, trades_df, today)
+    total = sum(l["shares"] for l in lots)
+    if not lots or total <= 1e-6:
+        return None
+
+    ltcg_shares = sum(l["shares"] for l in lots if l["days_held"] >= _STCG_THRESHOLD_DAYS)
+    stcg_shares = total - ltcg_shares
+    acq_date    = min(l["buy_date"] for l in lots)
+    days_held   = int(round(sum(l["days_held"] * l["shares"] for l in lots) / total))
+
+    if stcg_shares <= 1e-6:
+        gain_type, days_to_ltcg = "LTCG", 0
+    else:
+        days_to_ltcg = max(0, min(
+            _STCG_THRESHOLD_DAYS - l["days_held"]
+            for l in lots if l["days_held"] < _STCG_THRESHOLD_DAYS
+        ))
+        gain_type = "STCG" if ltcg_shares <= 1e-6 else "MIXED"
+
+    near_ltcg = gain_type in ("STCG", "MIXED") and 0 < days_to_ltcg <= lt_window_days
+    return {
+        "gain_type":      gain_type,
+        "days_held":      days_held,
+        "days_to_ltcg":   days_to_ltcg,
+        "acq_date":       str(acq_date),
+        "near_ltcg":      near_ltcg,
+        "lt_window_days": lt_window_days,
+    }
+
+
+def wash_sale_risk(
+    ticker: str,
+    trades_df: pd.DataFrame,
+    today: _date | None = None,
+    window_days: int = TAX_WASH_SALE_DAYS,
+) -> dict | None:
+    """Wash-sale awareness for a prospective SELL of ``ticker``.
+
+    IRS wash-sale rule: a LOSS is disallowed if you bought (or added to) the
+    same security within 30 days before OR after the sale. This checks the
+    BEFORE side — a recent same-ticker BUY within ``window_days`` — which is the
+    only side the app can see at SELL time. Awareness-only; NEVER blocks a sale.
+
+    The caller should surface this only when the sale is at a loss (the rule
+    does not apply to gains). Returns None when there is no recent same-ticker
+    BUY. Otherwise: {"recent_buy_date": "YYYY-MM-DD", "days_ago": int,
+    "window_days": int}.
+    """
+    if trades_df is None or trades_df.empty:
+        return None
+    if today is None:
+        today = _today_et()
+    buys = trades_df[
+        (trades_df["ticker"].astype(str).str.upper() == ticker.upper()) &
+        (trades_df["action"].astype(str).str.upper().str.contains("BUY"))
+    ]
+    if buys.empty:
+        return None
+    dates = pd.to_datetime(
+        buys["traded_at"], errors="coerce", utc=True, format="ISO8601"
+    ).dropna()
+    if dates.empty:
+        return None
+    most_recent = dates.max().date()
+    days_ago = (today - most_recent).days
+    if 0 <= days_ago <= window_days:
+        return {
+            "recent_buy_date": str(most_recent),
+            "days_ago":        days_ago,
+            "window_days":     window_days,
+        }
+    return None

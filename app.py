@@ -122,7 +122,9 @@ from stock_analyzer.constants import (
     RISK_ON_VIX_LEVEL,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
-from stock_analyzer.tax_advisor import build_tax_analysis, _build_open_lots
+from stock_analyzer.tax_advisor import (
+    build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
+)
 from stock_analyzer import exit_advisor
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
@@ -1254,6 +1256,38 @@ def _render_trade_button(
             )
         st.session_state["_pending_page"] = "📒 Trade Journal"
         st.rerun()
+
+
+def _tax_exit_note_html(ticker: str | None) -> str:
+    """Concept F: amber holding-period note for an EXIT/TRIM card when the
+    position is within TAX_LONGTERM_WINDOW_DAYS of long-term-gains eligibility.
+
+    Awareness-only — this NEVER gates, suppresses, sizes, or reorders a
+    recommendation; the investment signal on the card is unchanged. Returns ""
+    when not applicable (no ticker, no open lots, already long-term, or beyond
+    the window) so a caller can concatenate it unconditionally. Reads only the
+    trade journal already in session state — no API calls.
+    """
+    if not ticker:
+        return ""
+    try:
+        from stock_analyzer.constants import TAX_RATE_SHORT_TERM as _TRS, TAX_RATE_LONG_TERM as _TRL
+        _hp = holding_period_status(ticker, st.session_state.get("trades_df"))
+        if not _hp or not _hp.get("near_ltcg"):
+            return ""
+        _n  = int(_hp["days_to_ltcg"])
+        _pp = int(round((_TRS - _TRL) * 100))
+        return (
+            f"<div style='color:#fbbf24;font-size:0.78em;margin-top:6px;"
+            f"border-left:2px solid #f59e0b;padding-left:8px'>"
+            f"🧾 <b>Tax note:</b> becomes long-term-gains eligible in "
+            f"{_n} day{'s' if _n != 1 else ''}. If you'd be selling at a gain, "
+            f"waiting until then can cut the tax rate on this position "
+            f"(≈{_pp}pp). Context only — the recommendation above is unchanged."
+            f"</div>"
+        )
+    except Exception:
+        return ""
 
 
 def _render_portfolio_not_loaded(show_home_button: bool = True, key_suffix: str = "") -> None:
@@ -5780,6 +5814,15 @@ if page == "🏠 Home":
                     f"{_db_item['reason']}</div>"
                 )
 
+            # Concept F: tax holding-period note on exit-direction cards only
+            # (a sale is contemplated). Awareness-only, never gates.
+            _db_exit_dir = any(
+                _k in (str(_db_item.get("action", "")) + " " + str(_db_directive)).upper()
+                for _k in ("EXIT", "TRIM", "REDUCE")
+            )
+            if _db_ticker and _db_exit_dir:
+                _body += _tax_exit_note_html(_db_ticker)
+
             st.markdown(
                 f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
                 f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -6201,6 +6244,18 @@ if page == "🏠 Home":
                     + "</span>"
                 )
 
+            # Concept F subject: a PROTECTIVE_TRIM card carries ticker=None with
+            # its real subject (the weakest sector holding) in action.trim_ticker,
+            # so the tax note must resolve that, not the None headline ticker.
+            _tax_subject = _db_ticker
+            try:
+                if not _tax_subject and str(_action.get("type")) in (
+                    "TRIM_TO_TARGET", "TRIM_AND_TIGHTEN", "PROTECTIVE_TRIM"
+                ):
+                    _tax_subject = str(_action.get("trim_ticker") or "").upper() or None
+            except Exception:
+                _tax_subject = _db_ticker
+
             st.markdown(
                 f"<div style='background:{_db_bg};border-left:3px solid {_db_border};"
                 f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -6215,6 +6270,11 @@ if page == "🏠 Home":
                    f"<b>Why:</b> {_why}</div>" if _why else "")
                 + (f"<div style='color:#a8a29e;font-size:0.78em;margin-top:2px'>"
                    f"<b>Trigger:</b> {_trigger}</div>" if _trigger else "")
+                # Concept F: tax holding-period note (Review Before Close is an
+                # exit-direction card). Awareness-only, never gates. Resolve the
+                # subject via _tax_subject so PROTECTIVE_TRIM cards (ticker=None,
+                # real subject in action.trim_ticker) still get the note.
+                + _tax_exit_note_html(_tax_subject)
                 + f"</div>",
                 unsafe_allow_html=True,
             )
@@ -15625,6 +15685,28 @@ elif page == "📒 Trade Journal":
             f"{_ps_pnl_line}\n\n"
             f"This will update your holdings and P&L — the record cannot be undone without a manual correction."
         )
+        # Concept F: wash-sale awareness — only when selling at a loss (the rule
+        # applies to disallowed losses). Awareness-only; never blocks the sale.
+        if _ps_pnl is not None and _ps_pnl < 0:
+            try:
+                _ws = wash_sale_risk(_ps_ticker, st.session_state.get("trades_df"))
+            except Exception:
+                _ws = None
+            if _ws:
+                _ws_days = int(_ws["days_ago"])
+                _ws_win  = int(_ws["window_days"])
+                st.markdown(
+                    f"<div style='background:#1a1200;border-left:3px solid #f59e0b;"
+                    f"border-radius:6px;padding:8px 12px;margin-bottom:6px;"
+                    f"color:#fcd34d;font-size:0.82em'>"
+                    f"🧾 <b>Wash-sale watch:</b> you bought {_ps_ticker} "
+                    f"{_ws_days} day{'s' if _ws_days != 1 else ''} ago "
+                    f"({_ws['recent_buy_date']}). Selling at a loss within "
+                    f"{_ws_win} days of a purchase — or buying again "
+                    f"within {_ws_win} days after — can disallow the loss deduction. "
+                    f"Awareness only; the sale is not blocked.</div>",
+                    unsafe_allow_html=True,
+                )
         _ps_c1, _ps_c2 = st.columns([1, 1])
         if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", use_container_width=True):
             _ps_saved = db.save_trade(_pending_sell)
@@ -16791,6 +16873,16 @@ elif page == "📒 Trade Journal":
             st.caption(
                 "Compares each \"New Positions to Initiate\" recommendation you didn't act on against what it returned. "
                 "Full chart is on the Recommendations History page; this is the 90-day summary."
+            )
+            # Concept F: returns are gross. Robinhood equity trades are
+            # commission-free, so transaction cost ≈ $0 — the material omitted
+            # cost is tax, which is not estimated here (it depends on holding
+            # period, full-year income, and other realized gains/losses; see the
+            # Tax Advisor page for a per-position estimate).
+            st.caption(
+                "ℹ️ Returns shown are **gross**. Robinhood equity trades are commission-free "
+                "(transaction cost ≈ $0); the material omitted cost is **tax**, which isn't "
+                "netted here — see the Tax Advisor page for holding-period-aware estimates."
             )
             try:
                 from stock_analyzer.recommendations_history import (
@@ -21455,6 +21547,8 @@ The Home brief is split into **offense** (left) and **defense** (right).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
+
+**🧾 Tax note on exit cards:** when an Act Today **EXIT** or Review Before Close **TRIM** lands on a position that's within ~30 days of long-term-capital-gains eligibility, the card shows an amber note flagging how soon it turns long-term and that waiting can cut the tax rate *if* you'd be selling at a gain. It's **context only — the recommendation itself doesn't change**. Separately, logging a **SELL at a loss** within 30 days of a recent buy on the same ticker surfaces a **wash-sale** heads-up on the confirm step (the sale isn't blocked). For the full per-position picture, see the 💰 Tax Efficiency Advisor.
 
 **Freshness:** the "📌 Built at HH:MM ET" chip auto-refreshes the Brief roughly every 30 minutes on its own during market hours — you don't need to click "Refresh Signals" just to keep it current. It re-checks whatever's already scanned rather than running a brand-new scan, so it won't pick up a stock that was never scanned in the first place (see *how the app finds candidates* below). Click **🔒 Lock Setup** to freeze the Brief for the day if you don't want it changing under you after you've decided what to do.
 """

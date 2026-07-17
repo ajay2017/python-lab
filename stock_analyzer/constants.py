@@ -737,3 +737,21 @@ DECISION_QUALITY_ALPHA_SCALE = 5.0   # ±X% realized alpha maps to 100/0 on alph
 WORKFLOW_ANALYST_LOOKBACK_DAYS = 90  # analyst research saved within N days BEFORE trade counts
 WORKFLOW_EARNINGS_WINDOW_DAYS  = 30  # earnings context saved within N days BEFORE trade counts (before-only; post-trade research is not pre-entry prep)
 WORKFLOW_MIN_THESIS_LENGTH     = 10  # min chars in user_thesis to count as a prep signal
+
+# ── Tax-awareness lens (Concept F — DISPLAY-ONLY policy, NEVER gates) ─────────
+# Holding-period / harvest / wash-sale context layered onto EXIT signals and the
+# opportunity-cost read. These NEVER suppress, reorder, or size a recommendation
+# — the investment signal is unchanged; tax context is a visible annotation only
+# (the G-08 HARVEST gate on the Buy side is the one place tax interacts with a
+# recommendation, and it lives in tax_advisor, not here). Rates are US
+# high-bracket defaults and are estimates — actual tax depends on full-year
+# income, state tax, other realized losses, and lot accounting method, so every
+# surface frames these as directional, never a precise liability. Single-sourced
+# here so the tax_advisor module and the exit-card lens agree.
+TAX_RATE_SHORT_TERM       = 0.37   # STCG estimate (top federal bracket default)
+TAX_RATE_LONG_TERM        = 0.20   # LTCG estimate (top federal bracket default)
+TAX_STCG_THRESHOLD_DAYS   = 366    # IRS: held > 1 year (i.e. ≥ 366 days) = long-term
+TAX_HARVEST_MIN_LOSS      = 500    # min unrealized loss ($) before a HARVEST is surfaced
+TAX_LTCG_WAIT_WINDOW_DAYS = 60     # STCG gain within N days of LT eligibility → "WAIT" (Tax Advisor page)
+TAX_LONGTERM_WINDOW_DAYS  = 30     # EXIT/TRIM within N days of LT eligibility → amber "waiting cuts tax drag" note
+TAX_WASH_SALE_DAYS        = 30     # IRS wash-sale window (fixed by law) — SELL within N days of a same-ticker add flags the disallowed-loss risk
