@@ -1397,6 +1397,51 @@ def _render_portfolio_not_loaded(show_home_button: bool = True, key_suffix: str 
             st.rerun()
 
 
+def _portfolio_snapshot_stale() -> bool:
+    """
+    True when st.session_state.holdings_df — the live source of truth,
+    updated in-session by every Trade Journal buy/sell — no longer matches
+    the snapshot _port_df_enriched / _last_port_df were built from.
+
+    That snapshot is only rebuilt when the Home page itself runs (the
+    build_portfolio_df call). If a trade is logged from another page (e.g.
+    Trade Journal) without a Home revisit in between, every downstream
+    consumer of _port_df_enriched would otherwise silently keep showing the
+    pre-trade share counts/values.
+    """
+    _hdf = st.session_state.get("holdings_df")
+    if _hdf is None or _hdf.empty:
+        return False
+    _built_sig = st.session_state.get("_holdings_sig_at_home_build")
+    if _built_sig is None:
+        return False
+    _live_sig = frozenset(
+        (str(r.get("Ticker") or "").upper(), float(r.get("Shares") or 0))
+        for r in _hdf.to_dict("records")
+    )
+    return _live_sig != _built_sig
+
+
+def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
+    """
+    Non-blocking companion to _render_portfolio_not_loaded: holdings HAVE
+    been loaded this session, but have since changed (a trade logged
+    elsewhere) without a Home revisit to rebuild _port_df_enriched. Warns
+    rather than silently showing outdated shares/values — the page still
+    renders below with whatever is cached.
+    """
+    if not _portfolio_snapshot_stale():
+        return
+    st.warning(
+        "⚠️ Your holdings changed since this was last loaded (a trade was "
+        "logged elsewhere this session) — the figures below may be out of "
+        "date. Revisit 🏠 Home to refresh."
+    )
+    if st.button("🔄 Refresh from Home", key=f"_pnl_stale_refresh_{key_suffix or 'default'}"):
+        st.session_state["_pending_page"] = "🏠 Home"
+        st.rerun()
+
+
 def _fill_news_slot(slot, items: list) -> None:
     """Render curated news items into a sidebar container slot."""
     with slot:
@@ -2891,6 +2936,13 @@ if page == "🏠 Home":
     port_df = build_portfolio_df(holdings, held_data, manual_stops=_manual_stops)
     st.session_state["_last_port_df"] = port_df          # used by Trade Journal decision context
     st.session_state["_last_held_data"] = held_data      # Catalyst Watch renders holdings earnings from this
+    # Snapshot of what holdings this build reflects — lets downstream pages
+    # detect a trade logged elsewhere this session without a Home revisit.
+    # See _portfolio_snapshot_stale.
+    st.session_state["_holdings_sig_at_home_build"] = frozenset(
+        (str(_h.get("Ticker") or "").upper(), float(_h.get("Shares") or 0))
+        for _h in holdings
+    )
     st.session_state["_signals_computed_at"] = datetime.now().strftime("%I:%M %p")  # for staleness warning
 
     if port_df.empty:
@@ -7455,6 +7507,7 @@ elif page == "⚠️ Alerts & Actions":
     if _aa_pdf is None or _aa_hd is None or (hasattr(_aa_pdf, "empty") and _aa_pdf.empty):
         _render_portfolio_not_loaded(show_home_button=True, key_suffix="aa")
         st.stop()
+    _render_portfolio_stale_banner(key_suffix="aa")
 
     port_df    = _aa_pdf
     held_data  = _aa_hd
@@ -8204,6 +8257,7 @@ elif page == "🔗 Risk Analysis":
     if _ra_pdf is None or _ra_hd is None or (hasattr(_ra_pdf, "empty") and _ra_pdf.empty):
         _render_portfolio_not_loaded(show_home_button=True, key_suffix="ra")
         st.stop()
+    _render_portfolio_stale_banner(key_suffix="ra")
 
     port_df            = _ra_pdf
     held_data           = _ra_hd
@@ -9275,6 +9329,7 @@ elif page == "🥧 Portfolio Allocation":
     if _pa_pdf is None or _pa_hd is None or (hasattr(_pa_pdf, "empty") and _pa_pdf.empty):
         _render_portfolio_not_loaded(show_home_button=True, key_suffix="pa")
         st.stop()
+    _render_portfolio_stale_banner(key_suffix="pa")
 
     port_df            = _pa_pdf
     held_data           = _pa_hd
@@ -11580,6 +11635,7 @@ elif page == "🏆 Portfolio Health":
     if _ph_pdf is None or _ph_hd is None or (hasattr(_ph_pdf, "empty") and _ph_pdf.empty):
         _render_portfolio_not_loaded(show_home_button=True, key_suffix="ph")
         st.stop()
+    _render_portfolio_stale_banner(key_suffix="ph")
 
     _ph_div_score = st.session_state.get("_div_score_cache")
     _ph_avg_corr  = st.session_state.get("_avg_corr_cache")
@@ -12240,6 +12296,7 @@ elif page == "🌐 Macro":
     if port_df.empty:
         _render_portfolio_not_loaded(show_home_button=True, key_suffix="macro")
     else:
+        _render_portfolio_stale_banner(key_suffix="macro")
         if st.button("📡 Load macro signals (TLT · SPY · VIX)", key="_macro_load_btn"):
             _macro_raw = {}
             for _sym, _period in [("TLT", "3mo"), ("SPY", "3mo"), ("^VIX", "5d")]:
@@ -20361,6 +20418,7 @@ elif page == "💰 Account":
     _equity = float(_acc_pdf["Market Value"].sum()) if _have_pf else None
 
     if _cash is not None and _have_pf:
+        _render_portfolio_stale_banner(key_suffix="acct")
         _total_acct = _equity + _cash
         _cash_pct = (_cash / _total_acct * 100) if _total_acct > 0 else 0.0
         _levered = _cash < 0   # negative net cash = a margin debit (borrowed)
@@ -20621,6 +20679,7 @@ elif page == "🔔 Catalyst Watch":
         if _cw_pdf is None or _cw_hd is None or (hasattr(_cw_pdf, "empty") and _cw_pdf.empty):
             _render_portfolio_not_loaded(show_home_button=True, key_suffix="cw")
         else:
+            _render_portfolio_stale_banner(key_suffix="cw")
             _render_holdings_earnings(_cw_pdf, _cw_hd)
             _cw_hold_tk = sorted({
                 str(r.get("Ticker", "")).strip().upper()
