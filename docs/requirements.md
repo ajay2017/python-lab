@@ -229,6 +229,14 @@ Standalone page (PORTFOLIO nav group) extracted from Home in the 2026-07-12/13 n
 | F-169 | **Active Alerts.** Portfolio-condition-triggered alerts (not calendar/event-triggered — contrast with 🔔 Catalyst Watch, F-11) grouped by category: stop-proximity, signal, concentration, earnings, analyst revisions, and signal-change (a holding's signal degrading/improving/unchanged since the last check). Shown as danger/warning/info counts; "no active alerts" renders a plain success state. |
 | F-170 | **Custom Price Alerts.** Per-ticker user-set take-profit and floor price triggers; checked against the live price strip each run. Distinct from the mechanical stop-loss system (F-17/F-18) — these are user-defined watch levels, not the engine's protective stop. Config form (input fields + save button) rendered in a collapsed `st.expander`; fired alerts (triggers that have tripped) render **above** the expander so they remain visible without opening the config form. |
 
+### 3.1d Portfolio Intelligence
+
+New standalone page (PORTFOLIO nav group, between Risk Analysis and Alerts & Actions) — Concept B ("Portfolio-as-One Positioning Intelligence") from `docs/plans/next-evolution-strategy.md`, Phase 2 of the next-evolution roadmap. Answers what the portfolio's ownership MEANS in aggregate, not position-by-position. Three tabs; built incrementally (cheapest/most decision-relevant first, per the user's chosen build order).
+
+| ID | Requirement |
+|----|-------------|
+| F-189 | **Correlation Clusters (Concept B panel 1) — SHIPPED 2026-07-17, commit `5c980b3`.** 🕸️ Correlation Clusters tab. The app already flags correlated PAIRS above `CORR_HIGH_PAIRS_THRESHOLD` (0.65) / `CORR_DANGER_PAIRS_THRESHOLD` (0.80) (`portfolio.diversification_score`), but never grouped them transitively — A-B and B-C flagged as two separate pairs, never surfaced as "these 3 names move together." `stock_analyzer/portfolio_intelligence.py::correlation_clusters()` closes that gap with plain-Python connected-components over the existing pairwise correlation matrix (`_corr_df_cache`, already computed at Home — no new API/compute cost, no new constants, no new library dependency). Each returned cluster carries its tickers, size, average INTERNAL correlation (mean of every pair inside the cluster, not just the edges that formed it), combined portfolio weight, and a danger/warning tier (danger if any internal pair ≥ `CORR_DANGER_PAIRS_THRESHOLD`). Singletons (no correlated pair) are excluded. Sorted by combined weight (biggest real exposure first). **Diagnostic only** — the closing caption explicitly defers to composite score (🔗 Risk Analysis / 📈 Analysis) for which name to act on; correlation never re-ranks or gates. **⚖️ Risk Budget and 📐 Factor Tilt tabs are placeholder "planned, not yet built"** — separate follow-up work, not yet scoped into an F-ID. |
+
 ### 3.2 Today's Brief (Daily Briefing)
 
 | ID | Requirement |

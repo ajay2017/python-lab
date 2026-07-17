@@ -995,6 +995,15 @@ Returns per-position tenure, return efficiency, cohort aggregates, engine alignm
 
 **Session state consumed (read-only):** `_port_df_enriched`, `_div_score_cache`, `_avg_corr_cache`, `_highbeta_share`, `_fragility_cache`, `_port_risk_cache`, `trades_df`.
 
+### `stock_analyzer/portfolio_intelligence.py`
+
+Pure-logic module for the 🧩 Portfolio Intelligence page (Concept B, "Portfolio-as-One Positioning Intelligence" — next-evolution roadmap Phase 2). No I/O, no Streamlit imports. Grows one panel per sub-wave; only one panel exists as of this writing.
+
+**`correlation_clusters(corr_df, weights=None, threshold=CORR_HIGH_PAIRS_THRESHOLD, danger_threshold=CORR_DANGER_PAIRS_THRESHOLD)`**  
+Groups tickers into transitive correlation clusters via plain-Python connected-components over the existing pairwise correlation matrix (`portfolio.correlation_matrix()`, published to `_corr_df_cache`) — no scipy/sklearn/networkx dependency, no new constants (reuses the two existing thresholds). A-B and B-C both flagged (≥ `threshold`) implies A, B, C are one cluster even when A-C isn't itself flagged. Singletons excluded — only clusters of 2+ members returned. Each cluster: `tickers`, `size`, `avg_internal_corr` (mean of every pair INSIDE the cluster, not just the edges that formed it), `combined_weight_pct`, `tier` (`"danger"` if any internal pair ≥ `danger_threshold`, else `"warning"`). Sorted by combined weight descending (or size descending when `weights` is `None`). Never raises.
+
+**Session state consumed (read-only):** `_corr_df_cache`, `_port_df_enriched` (for the ticker→weight map).
+
 ---
 
 ## 7. Navigation and State Management
