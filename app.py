@@ -9099,16 +9099,43 @@ elif page == "🔗 Risk Analysis":
 
         _rgt_port_beta = _port_risk.get("beta")
 
+        # Cash-floor read. Deliberately NOT the same net-capital-basis formula the
+        # 💰 Account page's own "Cash % of Account" metric uses (cash / (equity+cash))
+        # — under real leverage that denominator (net capital) shrinks fast and the
+        # ratio can swing to any magnitude (e.g. -178%), which breaks the 0–100%
+        # mental model a "cash floor" needs. Same instability class that motivated
+        # the 2026-07-09 concentration-gate EQUITY-basis reversal. Here: skip the
+        # percentage entirely when carrying a margin debit and show a plain dollar
+        # message instead; positive-cash case keeps the existing percentage. Also
+        # respects ACCOUNT_CASH_STALE_DAYS (mirrors the _leverage_cache check just
+        # above on this same page) so a stale manually-entered balance can't drive
+        # a confident-looking read.
         _rgt_cash_pct = None
+        _rgt_cash_debit_msg = None
+        _rgt_cash_stale = False
         try:
             _rgt_acct = db.load_account_cash()
             if _rgt_acct and _rgt_acct.get("cash_balance") is not None and total_val:
-                _rgt_cash_bal = float(_rgt_acct["cash_balance"])
-                _rgt_total = total_val + _rgt_cash_bal
-                if _rgt_total > 0:
-                    _rgt_cash_pct = _rgt_cash_bal / _rgt_total * 100
+                if _rgt_acct.get("updated_at"):
+                    _rgt_cash_age_days = (
+                        pd.Timestamp.now(tz="UTC")
+                        - pd.to_datetime(_rgt_acct["updated_at"], utc=True)
+                    ).days
+                    _rgt_cash_stale = _rgt_cash_age_days > ACCOUNT_CASH_STALE_DAYS
+                if not _rgt_cash_stale:
+                    _rgt_cash_bal = float(_rgt_acct["cash_balance"])
+                    if _rgt_cash_bal < 0:
+                        _rgt_cash_debit_msg = (
+                            f"Carrying a margin debit of \\${abs(_rgt_cash_bal):,.0f} "
+                            f"— no cash cushion, below any regime's floor."
+                        )
+                    else:
+                        _rgt_total = total_val + _rgt_cash_bal
+                        if _rgt_total > 0:
+                            _rgt_cash_pct = _rgt_cash_bal / _rgt_total * 100
         except Exception:
             _rgt_cash_pct = None
+            _rgt_cash_debit_msg = None
 
         _rgt_gap = _rgt_mod.regime_position_gap(
             regime_id=_rgt_regime["regime"],
@@ -9131,11 +9158,20 @@ elif page == "🔗 Risk Analysis":
                 st.metric("Portfolio Beta vs Regime Ceiling", "—")
                 st.caption("Portfolio beta unavailable this session")
         with _rgt_c2:
-            if _rgt_gap["cash_pct"] is not None:
+            if _rgt_cash_debit_msg:
+                st.metric("Cash % vs Regime Floor", "—")
+                st.caption(f"⚠️ {_rgt_cash_debit_msg}")
+            elif _rgt_gap["cash_pct"] is not None:
                 st.metric(
                     "Cash % vs Regime Floor",
                     f"{_rgt_gap['cash_pct']:.1f}%",
                     f"{-_rgt_gap['cash_gap']:+.1f}pp vs {_rgt_gap['cash_floor_pct']:.1f}% floor",
+                )
+            elif _rgt_cash_stale:
+                st.metric("Cash % vs Regime Floor", "—")
+                st.caption(
+                    f"Cash balance on 💰 Account is stale (> {ACCOUNT_CASH_STALE_DAYS}d old) "
+                    "— update it to see the cash-floor read"
                 )
             else:
                 st.metric("Cash % vs Regime Floor", "—")
@@ -9154,7 +9190,13 @@ elif page == "🔗 Risk Analysis":
                 f"{_rgt_contrib_str}",
                 icon="🧭",
             )
-        if _rgt_gap["cash_breach"]:
+        if _rgt_cash_debit_msg:
+            st.info(
+                f"{_rgt_cash_debit_msg} The **{_rgt_regime['label']}** target is "
+                f"≥ **{_rgt_gap['cash_floor_pct']:.1f}%** cash.",
+                icon="🧭",
+            )
+        elif _rgt_gap["cash_breach"]:
             st.info(
                 f"Cash cushion **{_rgt_gap['cash_pct']:.1f}%** is below the "
                 f"**{_rgt_regime['label']}** floor of **{_rgt_gap['cash_floor_pct']:.1f}%** "
@@ -9162,6 +9204,7 @@ elif page == "🔗 Risk Analysis":
                 icon="🧭",
             )
         if (not _rgt_gap["beta_breach"] and not _rgt_gap["cash_breach"]
+                and not _rgt_cash_debit_msg
                 and (_rgt_gap["port_beta"] is not None or _rgt_gap["cash_pct"] is not None)):
             st.success("Positioning is within the regime-aligned targets.")
 
