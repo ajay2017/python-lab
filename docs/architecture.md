@@ -634,11 +634,14 @@ CREATE TABLE trades (
     lesson           TEXT,                       -- lesson learned (post-trade)
     user_thesis      TEXT,                       -- F-1: investor's conviction at entry (reviewed weekly by AI Insights)
     thesis_source    TEXT,                       -- F-5: 'manual' | 'ai_draft' | 'ai_edited' (thesis-draft provenance)
+    decision_context JSONB,                      -- Concept E Phase 1: frozen state-of-the-world snapshot at interactive write (schema-versioned)
     traded_at        TIMESTAMPTZ DEFAULT now()
 );
 ```
 
-The `signal_seen`, `followed_signal`, `deviation_reason`, `lesson`, `user_thesis` (F-1), and `thesis_source` (F-5) columns were added after initial deployment. `db.load_trades()` backfills `None` for these columns in older rows to maintain backward compatibility. `save_trade` additionally retries the insert without `thesis_source` if that column does not yet exist, so trade logging never breaks before the one-time additive `ALTER TABLE trades ADD COLUMN thesis_source TEXT;` DDL is applied.
+The `signal_seen`, `followed_signal`, `deviation_reason`, `lesson`, `user_thesis` (F-1), `thesis_source` (F-5), and `decision_context` (Concept E) columns were added after initial deployment. `db.load_trades()` backfills `None` for these columns in older rows to maintain backward compatibility. `save_trade` additionally retries the insert without `thesis_source`/`decision_context` if those columns do not yet exist, so trade logging never breaks before the one-time additive `ALTER TABLE trades ADD COLUMN ...` DDL is applied.
+
+**`decision_context` (Concept E, Phase 1 — passive capture).** A schema-versioned, JSON-safe snapshot frozen at each *interactive* Trade Journal write (live Buy, or Sell on confirm), built by the pure `stock_analyzer/decision_context.py::build_snapshot()`. Captures the composite verdict seen, macro regime, portfolio beta / high-beta share / top-sector concentration / position count, and active-recommendation load — none of which can be reconstructed after the fact. None-safe and I/O-free (reads only session state). Scoped to interactive writes ONLY: broker/screenshot/split imports and the `recalculate_from_trades` replay assemble their own record dicts and never carry a snapshot (a retroactive/batch write has no live decision context). The retrospective "View context" viewer is deferred to Phase 3, once history has accrued.
 
 ### 6.4 `manual_stops` table
 

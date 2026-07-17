@@ -160,6 +160,7 @@ from stock_analyzer.macro import (
 from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternatives, tier_label
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
 from stock_analyzer import db
+from stock_analyzer import decision_context as _dctx
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return,
@@ -16272,6 +16273,32 @@ elif page == "📒 Trade Journal":
                         _thesis_source = "ai_draft" if _final_thesis == _dft else "ai_edited"
                     else:
                         _thesis_source = "manual"
+                # Concept E (Phase 1): freeze the decision context at this
+                # interactive write. Passive, None-safe, no API calls. Flows
+                # into _tj_pending_sell too, so it captures on SELL confirm as
+                # well. Broker/screenshot/split imports assemble their own
+                # record dicts elsewhere and never reach this block.
+                _dc_snapshot = None
+                try:
+                    _dc_pr = st.session_state.get("_port_risk_cache") or {}
+                    _dc_regime = None
+                    for _dc_k, _dc_v in st.session_state.items():
+                        if isinstance(_dc_k, str) and _dc_k.startswith("_macro_regime_") and _dc_v:
+                            _dc_regime = _dc_v
+                            break
+                    _dc_snapshot = _dctx.build_snapshot(
+                        ticker=ticker_input,
+                        action=action,
+                        signal_seen=(st.session_state.get("_tj_signal_seen") or "").strip() or None,
+                        portfolio_value=st.session_state.get("_portfolio_value"),
+                        portfolio_beta=_dc_pr.get("beta"),
+                        highbeta_share=st.session_state.get("_highbeta_share"),
+                        port_df=st.session_state.get("_port_df_enriched"),
+                        macro_regime=_dc_regime,
+                        actions=st.session_state.get("_actions_cache"),
+                    )
+                except Exception:
+                    _dc_snapshot = None
                 record = {
                     "ticker":           ticker_input,
                     "action":           action,
@@ -16287,6 +16314,7 @@ elif page == "📒 Trade Journal":
                     "lesson":           (st.session_state.get("_tj_lesson") or "").strip() or None,
                     "user_thesis":      (_final_thesis or None) if action == "BUY" else None,
                     "thesis_source":    _thesis_source,
+                    "decision_context": _dc_snapshot,
                 }
                 # ── SELL: hold for confirmation — don't write to DB yet ──────
                 if action == "SELL":

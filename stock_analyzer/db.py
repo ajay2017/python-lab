@@ -91,6 +91,17 @@ If trades table already exists, run this once to add the decision-journal column
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS deviation_reason text;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS lesson           text;
 
+Decision-context capture (Concept E, Phase 1 — added 2026-07-17). A frozen,
+schema-versioned snapshot of the state of the world at each interactive Buy/Sell
+write (composite verdict seen, macro regime, portfolio beta/concentration,
+active-recommendation load). Optional: until the column exists, save_trade drops
+it and retries, so trade logging runs exactly as before (the snapshot ships
+inert until DDL is applied). Never written by broker/screenshot/split imports or
+the recalculate_from_trades replay — retroactive/batch writes carry no live
+decision context.
+
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_context jsonb;
+
 Recommendations log (added 2026-05-26 — first-seen capture of every pick
 surfaced by Today's Brief so you can audit the App's recommendation
 history over time):
@@ -793,7 +804,7 @@ def load_watchlist() -> list[str]:
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "cost_basis", "realized_pnl", "notes", "trigger_type",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
-               "traded_at", "user_thesis", "thesis_source"]
+               "traded_at", "user_thesis", "thesis_source", "decision_context"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -810,7 +821,8 @@ def load_trades() -> pd.DataFrame:
                 df = pd.DataFrame(rows)
                 # Backfill columns for rows pre-dating each feature addition
                 for col in ("signal_seen", "followed_signal", "deviation_reason",
-                            "lesson", "user_thesis", "thesis_source"):
+                            "lesson", "user_thesis", "thesis_source",
+                            "decision_context"):
                     if col not in df.columns:
                         df[col] = None
                 return df
@@ -836,13 +848,16 @@ def save_trade(record: dict) -> bool:
         _client().table("trades").insert(record).execute()
         return True
     except Exception as e:
-        # Graceful degradation: an additive optional column (thesis_source, F-5)
-        # may not exist yet in Supabase (DDL not applied). Drop it and retry once
-        # so trade logging never breaks while the column ships inert until DDL.
-        if "thesis_source" in str(e) and "thesis_source" in record:
+        # Graceful degradation: additive optional columns (thesis_source, F-5;
+        # decision_context, Concept E) may not exist yet in Supabase (DDL not
+        # applied). Drop whichever the error names and retry once so trade
+        # logging never breaks while the columns ship inert until DDL.
+        _optional = ("thesis_source", "decision_context")
+        _missing = [c for c in _optional if c in str(e) and c in record]
+        if _missing:
             try:
                 _client().table("trades").insert(
-                    {k: v for k, v in record.items() if k != "thesis_source"}
+                    {k: v for k, v in record.items() if k not in _missing}
                 ).execute()
                 return True
             except Exception as e2:
