@@ -163,6 +163,9 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `PORTFOLIO_BETA_TARGET` | 1.0 | Baseline equity-portfolio target |
 | `PORTFOLIO_BETA_ELEVATED` | 1.3 | Soft warn above this |
 | `PORTFOLIO_BETA_CEILING` | 1.4 | Hard breach — institutional managed-equity ceiling |
+| `REGIME_BETA_CEILING` | dict: rate_cut=1.25, neutral=1.10, inflation_fight=1.00, recession_fear=0.90, stagflation_risk=0.85 | **Concept D (Wave 3).** Regime-conditional beta target shown on the 🔗 Risk Analysis "Regime Fit" diagnostic. Keyed by the 5 real regime ids from `macro_calendar.detect_macro_regime`. Anchored to (tighter/looser than) the regime-agnostic `PORTFOLIO_BETA_*` baseline above. Diagnostic only — never gates/resizes. |
+| `REGIME_CASH_FLOOR_PCT` | dict: rate_cut=5.0, neutral=5.0, inflation_fight=10.0, recession_fear=15.0, stagflation_risk=20.0 | **Concept D (Wave 3).** Regime-conditional cash-cushion floor shown alongside the beta read on the same diagnostic. Same regime keys as `REGIME_BETA_CEILING`. Diagnostic only. |
+| `REGIME_CONFIDENCE_MIN_DISPLAY` | 40 | Below this regime-detection confidence, the Regime Fit diagnostic flags the read as low-confidence/estimated. Display-only — never gates. |
 | `FRAGILITY_PULLBACK_PCT` | -10.0 | Routine-correction yardstick (~1–2× per year) for the Fragility gauge; mirrors the stress-test 'Mild Correction' scenario. The gauge's severity bands reuse the existing `PORTFOLIO_BETA_ELEVATED` (1.3) / `PORTFOLIO_BETA_CEILING` (1.4) constants rather than new thresholds. |
 | `TICKER_BETA_HIGH` | 1.5 | Soft warn when added to elevated portfolio |
 | `TICKER_BETA_CRITICAL` | 1.8 | Hard breach when added to breached portfolio |
