@@ -50,6 +50,19 @@ Respond with ONLY a JSON array of exactly 3 objects, no other text before or aft
 [{"angle": "pillar", "argument": "..."}, {"angle": "portfolio", "argument": "..."}, {"angle": "macro", "argument": "..."}]"""
 
 
+def _signals_dict_to_strings(signals) -> list[str]:
+    """
+    technical_score/business_quality_score/valuation_score all return
+    (score, signals) where signals is a dict of {factor_name: "value —
+    description"} (e.g. {"RSI": "62.3 — Above midrange (mildly bearish)"}) —
+    NOT a list. Formats each entry as "Factor: description" for the prompt.
+    None-safe: any non-dict/non-mapping input degrades to [].
+    """
+    if not isinstance(signals, dict):
+        return []
+    return [f"{k}: {v}" for k, v in signals.items()]
+
+
 def driving_pillar_from_bundle(bundle: dict) -> dict:
     """
     Identify which composite pillar is driving the score from a load_all()-
@@ -59,7 +72,10 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
     Pure; None-safe. Bundle keys per bundle_loader.load_all(): t_score/
     t_signals (momentum), bq_score/bq_signals (fundamentals, aliased f_score/
     f_signals), val_score/val_signals (valuation), s_score (sentiment — no
-    signals list; the top headlines stand in for it).
+    signals dict; the top headlines stand in for it). t_signals/bq_signals/
+    val_signals are each a {factor_name: description} DICT (per technicals.py/
+    fundamentals.py/valuation.py's `tuple[float, dict]` return type), not a
+    list — converted to strings via _signals_dict_to_strings before return.
 
     Returns {"driving_pillar": str|None, "driving_signals": list[str]} —
     degrades to (None, []) if no pillar scores are present in the bundle.
@@ -71,12 +87,12 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
         if isinstance(h, dict) and h.get("headline")
     ][:3]
     _pillars = {
-        "momentum":     (bundle.get("t_score"), bundle.get("t_signals") or []),
+        "momentum":     (bundle.get("t_score"), _signals_dict_to_strings(bundle.get("t_signals"))),
         "fundamentals": (
             bundle.get("bq_score") if bundle.get("bq_score") is not None else bundle.get("f_score"),
-            bundle.get("bq_signals") or bundle.get("f_signals") or [],
+            _signals_dict_to_strings(bundle.get("bq_signals") or bundle.get("f_signals")),
         ),
-        "valuation":    (bundle.get("val_score"), bundle.get("val_signals") or []),
+        "valuation":    (bundle.get("val_score"), _signals_dict_to_strings(bundle.get("val_signals"))),
         "sentiment":    (bundle.get("s_score"), _headline_signals),
     }
     scored = {k: v for k, (v, _sig) in _pillars.items() if v is not None}
