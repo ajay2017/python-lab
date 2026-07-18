@@ -173,11 +173,14 @@ memory `project_model_routing_drift_2026_07` for the full audit.
 | 2026-07-18 | Exit signal capture Phase 1 design — Explore agent code-archaeology (exit_advisor.py signal flow, db.py patterns, app.py MISS path, behavioral_fingerprint.py substrate) to produce the Phase 1 implementation spec | Sonnet (Explore) | — | — | — | n/a | Architecture research for `docs/plans/exit-signal-capture.md`. Token count not captured (previous session). |
 | 2026-07-18 | Exit signal capture Phase 1 build — `db.py` (`save_exit_signals_batch` + `load_exit_signals`) + `app.py` MISS-path capture block (commit `f86147d`) | Sonnet (implementer) | 100,525 | ~$0.78 | ~$1.30 | ~$0.52 | Two file touches, fully-pinned spec. Implementer made two factual corrections vs spec: `_today_ny` → `_today_et()` (function call, not a variable), and `"Composite"` → `"Score"` (actual port_df column name per portfolio.py:349) — both necessary, caught via code-reading rather than guessing. |
 
+| 2026-07-18 | Behavioral Fingerprint Phase 2 build — 3 exit-side pattern functions in behavioral_fingerprint.py + display section in app.py + EXIT_SIGNAL_ACT_WINDOW_DAYS in constants.py (commit `bb4ca8a`) | Sonnet (implementer) | 64,624 | ~$0.50 | ~$0.84 | ~$0.34 | FIX-FIRST (1 blocking): missing architecture.md constants-table row tripped CI docs-check gate — fixed by lead (Opus reviewer explicitly flagged this must not go to Haiku doc-writer). Non-blocking: pair-counting comment applied, redundant pandas import cleaned up. All 3 pattern functions verified logically correct by Opus. |
+| 2026-07-18 | Behavioral Fingerprint Phase 2 — Opus review (constants.py touch, mandatory per CLAUDE.md hard rule #4) | Opus (reviewer) | 61,711 | n/a — lead | n/a — lead | n/a — lead | Caught 1 blocking (undocumented constant → CI gate failure). Logic of all 3 pattern functions verified: off-by-one, date type safety, None-safety path, scope isolation. |
+
 ### Running totals (delegated work only)
 
 | | Tokens | Est. cost | Opus-equiv | Saved |
 |---|---|---|---|---|
-| **To date** | 1,531,965 | ~$5.98 | ~$12.16 | **~$6.19 (≈52% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
+| **To date** | 1,596,589 | ~$6.48 | ~$13.00 | **~$6.53 (≈50% blended — Sonnet builds ~40%, Haiku docs ~80%)** |
 
 ---
 
