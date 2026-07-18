@@ -24686,7 +24686,7 @@ elif page == "🎯 My Edge":
             ) if _me_port_val > 0 else None
 
             # ── KPI strip ────────────────────────────────────────────────────
-            _me_kpi1, _me_kpi2, _me_kpi3, _me_kpi4 = st.columns(4)
+            _me_kpi1, _me_kpi2, _me_kpi3, _me_kpi4, _me_kpi5 = st.columns(5)
 
             _me_actual_ann  = (_me_actual_mwr or {}).get("annualized_pct")
             _me_shadow_ann  = (_me_shadow_mwr or {}).get("annualized_pct")
@@ -24703,6 +24703,8 @@ elif page == "🎯 My Edge":
                 else None
             )
             _me_dollar_gap  = round(_me_port_val - _me_shadow_val, 2) if _me_port_val > 0 else None
+            _me_port_beta   = (st.session_state.get("_port_risk_cache") or {}).get("beta")
+            _me_beta_adj_alpha = _bm.beta_adjusted_alpha(_me_actual_disp, _me_shadow_disp, _me_port_beta)
 
             with _me_kpi1:
                 st.metric(
@@ -24738,6 +24740,32 @@ elif page == "🎯 My Edge":
                     delta_color="normal",
                     help=f"Your actual portfolio value vs what {_me_bench_ticker} shadow would be worth today",
                 )
+            with _me_kpi5:
+                if _me_beta_adj_alpha is not None:
+                    st.metric(
+                        "Beta-Adj. Alpha",
+                        f"{_me_beta_adj_alpha:+.1f}pp",
+                        delta=f"{_me_beta_adj_alpha:+.1f}pp",
+                        delta_color="normal",
+                        help=(
+                            f"Your return minus what portfolio beta ({_me_port_beta:.2f}) alone would predict "
+                            f"from the benchmark's move. Isolates stock-selection skill from beta exposure — "
+                            f"if this is much lower than 'Your Alpha' above, some of your outperformance is "
+                            f"just running higher risk, not better picks."
+                        ),
+                    )
+                else:
+                    st.metric(
+                        "Beta-Adj. Alpha",
+                        "—",
+                        help="Portfolio beta not available this session — visit 🏠 Home first to compute it.",
+                    )
+
+            st.caption(
+                "Your Alpha is raw outperformance. Beta-Adj. Alpha asks whether you were paid for the "
+                "extra risk you took to get it — a portfolio running high beta in a rally can show strong "
+                "raw alpha and near-zero beta-adjusted alpha."
+            )
 
             st.divider()
 

@@ -268,3 +268,24 @@ def compute_shadow_mwr(
         "period_return_pct": round(period_return * 100, 2),
         "annualized_pct":    round(annualized * 100, 2) if annualized is not None else None,
     }
+
+
+def beta_adjusted_alpha(
+    actual_return_pct: Optional[float],
+    benchmark_return_pct: Optional[float],
+    portfolio_beta: Optional[float],
+) -> Optional[float]:
+    """
+    Alpha after removing the return explained by beta exposure alone.
+
+    expected_from_beta = portfolio_beta * benchmark_return_pct
+    beta_adjusted_alpha = actual_return_pct - expected_from_beta
+
+    A raw alpha that collapses toward zero (or goes negative) once beta-adjusted
+    means the outperformance was leveraged beta exposure, not stock selection.
+    None-safe — any missing input returns None (never fabricates a beta of 1.0).
+    """
+    if actual_return_pct is None or benchmark_return_pct is None or portfolio_beta is None:
+        return None
+    expected_from_beta = portfolio_beta * benchmark_return_pct
+    return round(actual_return_pct - expected_from_beta, 2)
