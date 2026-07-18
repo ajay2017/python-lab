@@ -1551,18 +1551,6 @@ if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = datetime.now()
 if "nav_page" not in st.session_state:
     st.session_state.nav_page = "🏠 Home"
-# Daily Digest tile navigation — HTML <a href="?_dd_nav=KEY"> sets _pending_page
-# so clicking a tile count navigates to the relevant page without JS.
-if "_dd_nav" in st.query_params:
-    _DD_NAV_MAP = {
-        "alerts":   "⚠️ Alerts & Actions",
-        "catalyst": "🔔 Catalyst Watch",
-        "risk":     "🔗 Risk Analysis",
-    }
-    _dd_qp_dest = _DD_NAV_MAP.get(st.query_params.get("_dd_nav", ""))
-    if _dd_qp_dest:
-        st.session_state["_pending_page"] = _dd_qp_dest
-    del st.query_params["_dd_nav"]
 # Apply any pending navigation set by mid-page buttons (must run before
 # the sidebar radio widget renders so the widget picks up the new value).
 if "_pending_page" in st.session_state:
@@ -4388,15 +4376,9 @@ if page == "🏠 Home":
     else:
         _dd_signal    = "✅ Nothing urgent today — Today's Brief is your only required stop"
         _dd_sig_color = "#22c55e"
-    # Link wrappers for navigable tiles (color:inherit picks up the parent div's color).
-    # ACT TODAY and NEW PICKS are already visible below on Home — no link needed.
-    _dd_wlink_o = "<a href='?_dd_nav=alerts' style='color:inherit;text-decoration:none;cursor:pointer'>" if n_warning > 0 else ""
-    _dd_wlink_c = "</a>" if n_warning > 0 else ""
-    _dd_elink_o = "<a href='?_dd_nav=catalyst' style='color:inherit;text-decoration:none;cursor:pointer'>" if _dd_earnings_alerts > 0 else ""
-    _dd_elink_c = "</a>" if _dd_earnings_alerts > 0 else ""
     st.markdown(
         f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
-        f"padding:14px 20px;margin-bottom:8px'>"
+        f"padding:14px 20px;margin-bottom:4px'>"
         f"<div style='display:flex;align-items:center'>"
         f"<span style='font-size:1.05em;font-weight:700;color:#f9fafb'>Daily Digest</span>"
         f"<span style='color:#6b7280;font-size:0.75em;margin-left:auto'>Am I done for today?</span>"
@@ -4408,7 +4390,7 @@ if page == "🏠 Home":
         f"</div>"
         f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
         f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>WATCH</div>"
-        f"<div style='color:{_dd_watch_color};font-size:1.4em;font-weight:700;margin-top:2px'>{_dd_wlink_o}{n_warning}{_dd_wlink_c}</div>"
+        f"<div style='color:{_dd_watch_color};font-size:1.4em;font-weight:700;margin-top:2px'>{n_warning}</div>"
         f"</div>"
         f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
         f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>NEW PICKS</div>"
@@ -4416,13 +4398,11 @@ if page == "🏠 Home":
         f"</div>"
         f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
         f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>EARNINGS RISK</div>"
-        f"<div style='color:{_dd_earn_color};font-size:1.4em;font-weight:700;margin-top:2px'>{_dd_elink_o}{_dd_earnings_alerts}{_dd_elink_c}</div>"
+        f"<div style='color:{_dd_earn_color};font-size:1.4em;font-weight:700;margin-top:2px'>{_dd_earnings_alerts}</div>"
         f"</div>"
         f"<div style='flex:1;text-align:center'>"
         f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>POSTURE</div>"
-        f"<div style='color:{_rag_color};font-size:0.9em;font-weight:700;margin-top:2px'>"
-        f"<a href='?_dd_nav=risk' style='color:inherit;text-decoration:none;cursor:pointer'>{_rag_label}</a>"
-        f"</div>"
+        f"<div style='color:{_rag_color};font-size:0.9em;font-weight:700;margin-top:2px'>{_rag_label}</div>"
         f"</div>"
         f"</div>"
         f"<div style='margin-top:8px;padding-top:8px;border-top:1px solid #374151;"
@@ -4430,6 +4410,25 @@ if page == "🏠 Home":
         f"</div>",
         unsafe_allow_html=True,
     )
+    # Navigation row — st.button() uses _pending_page so session state is preserved.
+    # <a href> causes a full browser reload (new Streamlit session → login screen).
+    # Columns align under the 5 tiles; ACT TODAY and NEW PICKS have no button
+    # (both already visible directly below on Home's Today's Brief).
+    _dd_nc = st.columns(5)
+    with _dd_nc[1]:
+        if n_warning > 0:
+            if st.button("→ Alerts & Actions", key="_dd_nav_watch", use_container_width=True):
+                st.session_state["_pending_page"] = "⚠️ Alerts & Actions"
+                st.rerun()
+    with _dd_nc[3]:
+        if _dd_earnings_alerts > 0:
+            if st.button("→ Catalyst Watch", key="_dd_nav_earn", use_container_width=True):
+                st.session_state["_pending_page"] = "🔔 Catalyst Watch"
+                st.rerun()
+    with _dd_nc[4]:
+        if st.button("→ Risk Analysis", key="_dd_nav_posture", use_container_width=True):
+            st.session_state["_pending_page"] = "🔗 Risk Analysis"
+            st.rerun()
     # ═══════════════════════════════════════════════════════════════════════════
     # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
     # docs/reviews/2026-07-12-UX-review.md finding I1. The "decides, not
