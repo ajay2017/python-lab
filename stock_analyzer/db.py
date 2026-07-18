@@ -1678,6 +1678,57 @@ def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
         return empty
 
 
+def save_exit_signals_batch(signals: list[dict]) -> None:
+    """Persist exit signals emitted by the Daily Brief for Behavioral Fingerprint
+    exit-side analysis.
+
+    Idempotent: upserts on (ticker, signal_date, signal_type) — repeated same-day
+    Brief builds are no-ops.  Never raises — a capture failure must never break
+    the Brief itself.
+
+    Each dict in `signals` must have at minimum: ticker, signal_date, signal_type.
+    All other columns (composite_score, price_at_signal, dd_from_peak_pct,
+    pnl_pct, below_ma_count, rel_strength) are nullable and may be omitted.
+    """
+    if _READONLY:
+        return
+    if not signals:
+        return
+    if not has_db():
+        return
+    try:
+        _client().table("exit_signals").upsert(
+            signals,
+            on_conflict="ticker,signal_date,signal_type",
+        ).execute()
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_exit_signals_batch: {e}")
+
+
+def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
+    """Read persisted exit signals going back days_back calendar days.
+
+    Returns a DataFrame (column names match the exit_signals table, snake_case)
+    on success, or an empty DataFrame on any exception.
+    Uses the same date-filter pattern as load_recommendations().
+    """
+    try:
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("exit_signals")
+            .select("*")
+            .gte("signal_date", cutoff)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 def save_watchlist(tickers: list[str]) -> bool:
     """Atomic-ish replace via upsert + sweep — same pattern as save_holdings.
 

@@ -4036,6 +4036,70 @@ if page == "🏠 Home":
                     "error":      _rec_load_error,
                 }
 
+            # ── Exit signal capture (Behavioral Fingerprint exit-side, Phase 1) ──
+            # Persist WATCH/TRIM/EXIT/RISK_OFF signals from today's Brief so the
+            # exit-side Behavioral Fingerprint can analyse disposition patterns
+            # forward from this point.  Background write — never raises.
+            _exit_signals_to_save = []
+            _port_df_for_exit = st.session_state.get("_port_df_enriched")
+            _composite_map = (
+                _port_df_for_exit.set_index("Ticker")["Score"].to_dict()
+                if _port_df_for_exit is not None
+                and "Ticker" in _port_df_for_exit.columns
+                and "Score" in _port_df_for_exit.columns
+                else {}
+            )
+            _es_today = _today_et()  # ET date for this Brief build
+
+            for _es_item in _daily_brief.get("act_today", []):
+                _kind = _es_item.get("kind", "")
+                if _kind == "deterioration_trim":
+                    _sig_type = "TRIM"
+                elif _kind == "deterioration_exit":
+                    _sig_type = "EXIT"
+                elif _kind == "risk_off_derisk":
+                    _sig_type = "RISK_OFF"
+                else:
+                    continue
+                _ticker_es = _es_item.get("ticker")
+                if not _ticker_es:
+                    continue
+                _exit_signals_to_save.append({
+                    "ticker":          _ticker_es,
+                    "signal_date":     str(_es_today),
+                    "signal_type":     _sig_type,
+                    "composite_score": _composite_map.get(_ticker_es),
+                    "price_at_signal": _es_item.get("price"),
+                    "dd_from_peak_pct": _es_item.get("dd_from_peak_pct"),
+                    "pnl_pct":         _es_item.get("pnl_pct"),
+                    "below_ma_count":  _es_item.get("below_ma_count"),
+                    "rel_strength":    _es_item.get("rel_strength"),
+                })
+
+            for _es_item in _daily_brief.get("review_list", []):
+                _action = _es_item.get("action", {})
+                if not isinstance(_action, dict):
+                    continue
+                if _action.get("type") != "DETERIORATION_WATCH":
+                    continue
+                _ticker_es = _es_item.get("ticker")
+                if not _ticker_es:
+                    continue
+                _exit_signals_to_save.append({
+                    "ticker":          _ticker_es,
+                    "signal_date":     str(_es_today),
+                    "signal_type":     "WATCH",
+                    "composite_score": _composite_map.get(_ticker_es),
+                    "price_at_signal": _es_item.get("price"),
+                    "dd_from_peak_pct": _es_item.get("dd_from_peak_pct"),
+                    "pnl_pct":         _es_item.get("pnl_pct"),
+                    "below_ma_count":  _es_item.get("below_ma_count"),
+                    "rel_strength":    _es_item.get("rel_strength"),
+                })
+
+            if _exit_signals_to_save:
+                db.save_exit_signals_batch(_exit_signals_to_save)
+
             # ── Signal hysteresis (calm advisor 2C) ──────────────────────────────
             # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
             # a persistent pick as continuity, not a fresh daily call to re-litigate
