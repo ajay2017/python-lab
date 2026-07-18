@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar  
 **Analysis model:** Claude Sonnet 4.6 (first pass)  
 **Review:** Claude Opus 4.8 (second pass, completed 2026-07-17) — REVISE-FIRST verdict; 30 findings; all incorporated in this version  
-**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B — all 3 panels: Correlation Clusters, Risk Budget Gauge, Factor Tilt Heatmap) SHIPPED 2026-07-17. Concept A (Phase 3) not started. Concept A (Phase 3) not started.
+**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B — all 3 panels: Correlation Clusters, Risk Budget Gauge, Factor Tilt Heatmap; plus risk-adjusted Benchmark Mirror alpha) SHIPPED 2026-07-17 — Phase 2 fully complete. Concept A (Phase 3) not started.
 
 > **Scope:** This is a product strategy document, not an implementation spec. Nothing here should be built until concepts are reviewed together and approved. It is the starting point for a structured product discovery conversation.
 
@@ -32,6 +32,7 @@ Build order chosen with the user after live scoping: **E-capture + F (Wave 1) �
 | 4 (Phase 2) | B — Correlation Clusters (panel 1 of 3) | **SHIPPED** 2026-07-17 | `5c980b3` | F-189 | `project_portfolio_intelligence` |
 | 5 (Phase 2) | B — Risk Budget Gauge (panel 2 of 3) | **SHIPPED** 2026-07-17 | `698fcd5` | F-190 | `project_portfolio_intelligence` |
 | 6 (Phase 2) | B — Factor Tilt Heatmap (panel 3 of 3, final) | **SHIPPED** 2026-07-17, Opus FIX-FIRST→SHIP (2 blocking fixed on re-review) | `a4c95cb` | F-191 | `project_portfolio_intelligence` |
+| 7 (Phase 2) | Benchmark comparison — risk-adjusted (line 546) | **SHIPPED** 2026-07-17, no Opus review required (no constants/gate touch) | `7148890` | F-183 update | `project_my_edge` |
 | — | A (Phase 3) | Not started, per plan's own phasing | — | — | — |
 
 **UI design pivot from Part 2's Concept C spec (worth noting for anyone re-reading §"UX" under Concept C):** the plan called for an `st.dialog` modal. Shipped instead as an outside-the-form pre-condition section (mirrors F-5's "Draft thesis" button placement) with the required commitment enforced as one more validation gate — functionally equivalent friction, zero `st.dialog` risk (it would have been the first in the codebase), and avoided forcing a duplicate of the ~120-line holdings-sync/concentration-nudge block that intercepting the write would have required. See `project_premortem_protocol` memory for the full reasoning.
@@ -540,11 +541,11 @@ The single-user architecture (single Supabase RLS policy, single secret key, sin
 **Intended outcome:** Investor can understand portfolio as a unified entity. Tax-aware context is routine. Regime fit is a standing diagnostic.
 
 **Capabilities:**
-- **Portfolio-as-One (Concept B — correlation clusters first):** Build the correlation cluster map independently before the full factor tilt view. Cheaper, faster, and immediately decision-relevant.
-- **Portfolio-as-One (Concept B — factor tilt map):** Returns-based style analysis against factor ETFs (MTUM/VLUE/QUAL/USMV/VUG). Do NOT use FMP `.info` style tags.
-- **Risk budget tracking:** Volatility contribution per position alongside capital contribution.
-- **Benchmark comparison — risk-adjusted:** My Edge Benchmark Mirror adds Sharpe-equivalent or beta-adjusted comparison alongside raw return.
-- **Regime-Conditional Targets (Concept D) — gap analysis UI:** Only buildable after Phase 1 policy-setting and constants commit.
+- **Portfolio-as-One (Concept B — correlation clusters first):** Build the correlation cluster map independently before the full factor tilt view. Cheaper, faster, and immediately decision-relevant. **SHIPPED** `5c980b3`.
+- **Portfolio-as-One (Concept B — factor tilt map):** Returns-based style analysis against factor ETFs (MTUM/VLUE/QUAL/USMV/VUG). Do NOT use FMP `.info` style tags. **SHIPPED** `a4c95cb`.
+- **Risk budget tracking:** Volatility contribution per position alongside capital contribution. **SHIPPED** `698fcd5`.
+- **Benchmark comparison — risk-adjusted:** My Edge Benchmark Mirror adds Sharpe-equivalent or beta-adjusted comparison alongside raw return. **SHIPPED** `7148890` (beta-adjusted, not Sharpe — no daily portfolio volatility series was readily available; beta was already cached).
+- **Regime-Conditional Targets (Concept D) — gap analysis UI:** Only buildable after Phase 1 policy-setting and constants commit. **SHIPPED** `0c6df7a` (built in Wave 3, ahead of the plan's own Phase 2 slotting, since the policy conversation was already resolved).
 
 **Dependencies:** Phase 1 (context snapshot accumulating, behavioral log running, D constants set and reviewed).
 
