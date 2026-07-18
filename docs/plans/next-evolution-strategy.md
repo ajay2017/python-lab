@@ -33,7 +33,8 @@ Build order chosen with the user after live scoping: **E-capture + F (Wave 1) �
 | 5 (Phase 2) | B — Risk Budget Gauge (panel 2 of 3) | **SHIPPED** 2026-07-17 | `698fcd5` | F-190 | `project_portfolio_intelligence` |
 | 6 (Phase 2) | B — Factor Tilt Heatmap (panel 3 of 3, final) | **SHIPPED** 2026-07-17, Opus FIX-FIRST→SHIP (2 blocking fixed on re-review) | `a4c95cb` | F-191 | `project_portfolio_intelligence` |
 | 7 (Phase 2) | Benchmark comparison — risk-adjusted (line 546) | **SHIPPED** 2026-07-17, no Opus review required (no constants/gate touch) | `7148890` | F-183 update | `project_my_edge` |
-| — | A (Phase 3) | Not started, per plan's own phasing | — | — | — |
+| 8 | A — Week-1 data-readiness audit | **RUN** 2026-07-17 — result: build forward-only, do not mine history (see Concept A section above) | `253f6ac`→`a57eddd` | F-192 | `project_behavioral_fingerprint_audit` |
+| — | A — Behavioral Fingerprint (the feature itself) | Not started; audited and confirmed calendar/sample-gated, not engineering-gated | — | — | — |
 
 **UI design pivot from Part 2's Concept C spec (worth noting for anyone re-reading §"UX" under Concept C):** the plan called for an `st.dialog` modal. Shipped instead as an outside-the-form pre-condition section (mirrors F-5's "Draft thesis" button placement) with the required commitment enforced as one more validation gate — functionally equivalent friction, zero `st.dialog` risk (it would have been the first in the codebase), and avoided forcing a duplicate of the ~120-line holdings-sync/concentration-nudge block that intercepting the write would have required. See `project_premortem_protocol` memory for the full reasoning.
 
@@ -165,7 +166,9 @@ No retail platform shows investors which specific biases they personally have, o
 
 **Status:** New. No retail platform does this at the individual-decision level.
 
-**Data required:** Recommendation log (partially exists; must audit completeness), user action timestamps, portfolio state at decision time (session state + DB), 30/60/90-day price outcomes.
+**Week-1 data-readiness audit — RUN 2026-07-17 (F-192, commits `253f6ac`→`a57eddd`; memory `project_behavioral_fingerprint_audit`).** Result: **build forward-only; do not attempt a historical-data build.** Buy-side completeness (scoped to actionable `new_pick`/`add_winner`, excluding the awareness-only `buy_candidate` feed) is 12% all-time and last-90-days (94 signals, 11 acted) — far below the 80% go/no-go threshold below. Only 39% of BUY trades (27/70) carry a logged `RECOMMENDATION` trigger. **Exit-side (TRIM/EXIT/risk_advisor) signals have zero historical record at all, structurally** — they're computed live each session and never persisted, so the disposition-effect/loss-aversion-timing patterns in this concept's own illustrative list cannot be built from history under any circumstance, independent of Buy-side completeness. Concept E's `decision_context` Phase 1 capture (already shipped) only records a count of active Act-Today items, not per-ticker signal identity, so it does not yet close this gap either — a dedicated exit-side signal-identity capture would need to be built before ANY exit-side bias data starts accumulating. This reinforces the "calendar-gated by trade volume" framing below over "historical data already exists."
+
+**Data required:** Recommendation log (partially exists; must audit completeness — **audited 2026-07-17, see above**), user action timestamps, portfolio state at decision time (session state + DB), 30/60/90-day price outcomes.
 
 **AI methods:** Pattern detection over sparse decision sequences; statistical tests with strict sample-size gates; behavioral finance taxonomy (Kahneman/Thaler); no LLM needed.
 
@@ -681,7 +684,7 @@ Directional probability of a portfolio drawdown exceeding 15% over 3 months, giv
 - Pre-mortem completion rate > 70% after 15+ prospective entries → proceed to Behavioral Fingerprint design
 - Correlation cluster map surfaces at least one non-obvious position grouping → proceed to full Concept B
 - Regime target gap analysis produces ≥ 1 actionable adjustment suggestion in first month → D is delivering value; continue
-- Historical recommendation log is ≥ 80% complete → Behavioral Fingerprint can use historical data; otherwise build forward-only from Phase 1 capture
+- Historical recommendation log is ≥ 80% complete → Behavioral Fingerprint can use historical data; otherwise build forward-only from Phase 1 capture. **RESOLVED 2026-07-17: 12% complete (F-192 audit) — gate says build forward-only.**
 
 ---
 
