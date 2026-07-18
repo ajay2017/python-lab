@@ -4340,6 +4340,76 @@ if page == "🏠 Home":
     _db_act_n   = len(_split_def["act"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
+    # ── Daily Digest — cross-page closure signal ─────────────────────────────
+    # Compact status aggregator that answers "am I done for today?" in one
+    # glance. Display-only: zero new fetches, zero gate/scoring touches.
+    # All data already computed in the synthesis above (F-194).
+    _dd_earnings_alerts = int(st.session_state.get("_earnings_posture_alerts_cache") or 0)
+    _dd_b_locked        = bool(st.session_state.get("_brief_locked", False))
+    _dd_act_color   = "#ef4444" if _db_act_n          > 0 else "#22c55e"
+    _dd_watch_color = "#f59e0b" if n_warning           > 0 else "#22c55e"
+    _dd_picks_color = "#22d3ee" if _db_buy_n           > 0 else "#9ca3af"
+    _dd_earn_color  = "#ef4444" if _dd_earnings_alerts > 0 else "#22c55e"
+    _dd_earn_sfx = (
+        f" · ⚡ {_dd_earnings_alerts} earnings posture alert"
+        f"{'s' if _dd_earnings_alerts != 1 else ''} — check Catalyst Watch"
+        if _dd_earnings_alerts > 0 else ""
+    )
+    if _db_act_n > 0:
+        _dd_signal    = (
+            f"🔴 {_db_act_n} action{'s' if _db_act_n != 1 else ''} in Today's Brief"
+            f" require same-day response{_dd_earn_sfx}"
+        )
+        _dd_sig_color = "#ef4444"
+    elif _dd_b_locked:
+        _dd_signal    = f"🛡️ Protect Mode active — new positions suppressed today{_dd_earn_sfx}"
+        _dd_sig_color = "#f59e0b"
+    elif _dd_earnings_alerts > 0:
+        _dd_signal    = (
+            f"⚡ {_dd_earnings_alerts} earnings posture alert"
+            f"{'s' if _dd_earnings_alerts != 1 else ''} — check Catalyst Watch"
+        )
+        _dd_sig_color = "#f59e0b"
+    elif n_warning > 0:
+        _dd_signal    = "🟡 Watch items noted — no same-day action required"
+        _dd_sig_color = "#f59e0b"
+    else:
+        _dd_signal    = "✅ Nothing urgent today — Today's Brief is your only required stop"
+        _dd_sig_color = "#22c55e"
+    st.markdown(
+        f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
+        f"padding:14px 20px;margin-bottom:8px'>"
+        f"<div style='display:flex;align-items:center'>"
+        f"<span style='font-size:1.05em;font-weight:700;color:#f9fafb'>Daily Digest</span>"
+        f"<span style='color:#6b7280;font-size:0.75em;margin-left:auto'>Am I done for today?</span>"
+        f"</div>"
+        f"<div style='display:flex;margin-top:10px;padding-top:10px;border-top:1px solid #374151'>"
+        f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
+        f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>ACT TODAY</div>"
+        f"<div style='color:{_dd_act_color};font-size:1.4em;font-weight:700;margin-top:2px'>{_db_act_n}</div>"
+        f"</div>"
+        f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
+        f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>WATCH</div>"
+        f"<div style='color:{_dd_watch_color};font-size:1.4em;font-weight:700;margin-top:2px'>{n_warning}</div>"
+        f"</div>"
+        f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
+        f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>NEW PICKS</div>"
+        f"<div style='color:{_dd_picks_color};font-size:1.4em;font-weight:700;margin-top:2px'>{_db_buy_n}</div>"
+        f"</div>"
+        f"<div style='flex:1;text-align:center;border-right:1px solid #374151'>"
+        f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>EARNINGS RISK</div>"
+        f"<div style='color:{_dd_earn_color};font-size:1.4em;font-weight:700;margin-top:2px'>{_dd_earnings_alerts}</div>"
+        f"</div>"
+        f"<div style='flex:1;text-align:center'>"
+        f"<div style='color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em'>POSTURE</div>"
+        f"<div style='color:{_rag_color};font-size:0.9em;font-weight:700;margin-top:2px'>{_rag_label}</div>"
+        f"</div>"
+        f"</div>"
+        f"<div style='margin-top:8px;padding-top:8px;border-top:1px solid #374151;"
+        f"font-size:0.82em;color:{_dd_sig_color}'>{_dd_signal}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
     # ═══════════════════════════════════════════════════════════════════════════
     # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
     # docs/reviews/2026-07-12-UX-review.md finding I1. The "decides, not
@@ -22490,6 +22560,8 @@ elif page == "📖 User Guide":
     with st.expander("🏠 Reading Today's Brief", expanded=False):
         st.markdown(
             """
+**Daily Digest card:** the compact strip just above Today's Brief shows five cross-page KPIs — ACT TODAY / WATCH / NEW PICKS / EARNINGS RISK / POSTURE — aggregated from data already computed in the Home synthesis. A one-line closure signal below the tiles answers "am I done for today?": green ✅ means Today's Brief is your only required stop; red 🔴 or amber items name exactly what needs attention elsewhere. You do not need to visit Risk Analysis, Alerts & Actions, Portfolio Intelligence, or My Edge unless this card flags something — or you want to dig deeper.
+
 The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
