@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
+from stock_analyzer.portfolio import _to_tz_naive
 
 
 def correlation_clusters(
@@ -293,13 +294,26 @@ def factor_tilt(
             return _empty
 
         factor_labels = list(factor_returns.keys())
+        # Factor ETF returns come from a raw yf.download() call (app.py) — a
+        # DIFFERENT source than held_data's price history (the app's regular
+        # provider/orchestrator pipeline), and the two commonly disagree on
+        # tz-awareness (same class of bug portfolio.py's own _to_tz_naive
+        # exists to fix for exactly this "two series, different providers"
+        # situation — see perf_advisor.py's SPY-vs-holdings alignment for the
+        # same pattern). Without stripping tz on both sides, the inner join
+        # below finds ZERO overlapping timestamps and every correlation comes
+        # back None. Normalize once here rather than per-ticker-per-factor.
+        factor_returns = {
+            label: _to_tz_naive(s) for label, s in factor_returns.items()
+            if s is not None
+        }
 
         # ── Per-ticker return series (mirrors risk_budget's extraction) ─────
         ticker_rets: dict[str, pd.Series] = {}
         for ticker, data in held_data.items():
             hist = data.get("df") if data.get("df") is not None else data.get("history")
             if hist is not None and not hist.empty and "Close" in hist.columns:
-                rets = hist["Close"].pct_change().dropna()
+                rets = _to_tz_naive(hist["Close"].pct_change().dropna())
                 if len(rets) >= 2:
                     ticker_rets[ticker] = rets
 
