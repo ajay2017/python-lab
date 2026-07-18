@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar  
 **Analysis model:** Claude Sonnet 4.6 (first pass)  
 **Review:** Claude Opus 4.8 (second pass, completed 2026-07-17) — REVISE-FIRST verdict; 30 findings; all incorporated in this version  
-**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B) underway — Correlation Clusters + Risk Budget Gauge (panels 1-2 of 3) SHIPPED 2026-07-17; Factor Tilt Heatmap not yet started. Concept A (Phase 3) not started.
+**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B — all 3 panels: Correlation Clusters, Risk Budget Gauge, Factor Tilt Heatmap) SHIPPED 2026-07-17. Concept A (Phase 3) not started. Concept A (Phase 3) not started.
 
 > **Scope:** This is a product strategy document, not an implementation spec. Nothing here should be built until concepts are reviewed together and approved. It is the starting point for a structured product discovery conversation.
 
@@ -31,7 +31,7 @@ Build order chosen with the user after live scoping: **E-capture + F (Wave 1) �
 | 3 | D — Regime-Conditional Targets | **SHIPPED** 2026-07-17, Opus SHIP 0 blocking; post-ship bug found+fixed same day (`09be8bd`) | `0c6df7a` | F-188 | `project_regime_conditional_targets` |
 | 4 (Phase 2) | B — Correlation Clusters (panel 1 of 3) | **SHIPPED** 2026-07-17 | `5c980b3` | F-189 | `project_portfolio_intelligence` |
 | 5 (Phase 2) | B — Risk Budget Gauge (panel 2 of 3) | **SHIPPED** 2026-07-17 | `698fcd5` | F-190 | `project_portfolio_intelligence` |
-| — | B — Factor Tilt Heatmap (panel 3 of 3) | Not started — needs new ETF return fetches (MTUM/VLUE/QUAL/USMV/VUG) | — | — | — |
+| 6 (Phase 2) | B — Factor Tilt Heatmap (panel 3 of 3, final) | **SHIPPED** 2026-07-17, Opus FIX-FIRST→SHIP (2 blocking fixed on re-review) | `a4c95cb` | F-191 | `project_portfolio_intelligence` |
 | — | A (Phase 3) | Not started, per plan's own phasing | — | — | — |
 
 **UI design pivot from Part 2's Concept C spec (worth noting for anyone re-reading §"UX" under Concept C):** the plan called for an `st.dialog` modal. Shipped instead as an outside-the-form pre-condition section (mirrors F-5's "Draft thesis" button placement) with the required commitment enforced as one more validation gate — functionally equivalent friction, zero `st.dialog` risk (it would have been the first in the codebase), and avoided forcing a duplicate of the ~120-line holdings-sync/concentration-nudge block that intercepting the write would have required. See `project_premortem_protocol` memory for the full reasoning.
