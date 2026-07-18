@@ -123,6 +123,10 @@ from stock_analyzer.constants import (
     RISK_ON_VIX_LEVEL,
     FACTOR_ETF_TICKERS,
     FACTOR_TILT_WINDOW_DAYS,
+    BEHAVIORAL_MIN_SAMPLE_N,
+    BEHAVIORAL_OPENING_WINDOW_MIN,
+    BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
+    BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -24721,6 +24725,8 @@ elif page == "🎯 My Edge":
     from stock_analyzer import db as _me_db
     from stock_analyzer import benchmark_mirror as _bm
     from stock_analyzer import decision_quality as _dq
+    from stock_analyzer import behavioral_fingerprint as _bf
+    from stock_analyzer.recommendations_history import match_recs_to_trades as _bf_match
     from stock_analyzer.trade_analytics import compute_extended_stats as _me_ext
 
     _me_ET    = _me_pytz.timezone("America/New_York")
@@ -24777,11 +24783,12 @@ elif page == "🎯 My Edge":
     _me_flows  = _me_db.load_account_flows()
     _me_anchor = _me_acct.baseline_anchor(_me_flows)
 
-    # ── 3 tabs ────────────────────────────────────────────────────────────────
-    _me_tab_a, _me_tab_c, _me_tab_b = st.tabs([
+    # ── 4 tabs ────────────────────────────────────────────────────────────────
+    _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d = st.tabs([
         "📐 Benchmark Mirror",
         "🔬 Workflow ROI",
         "📅 Decision Quality",
+        "🧬 Behavioral Fingerprint",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -25897,5 +25904,172 @@ elif page == "🎯 My Edge":
                                     f"**{_me_alpha_a:+.1f}%** in {_me_per_a}."
                                 )
                             st.markdown(_me_summ)
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB D — Behavioral Fingerprint
+    # ═════════════════════════════════════════════════════════════════════════
+    with _me_tab_d:
+        st.subheader("🧬 Behavioral Fingerprint")
+        st.caption(
+            "Directional, sample-gated observations over your own actionable Buy-side "
+            "decisions (new_pick / add_winner recs only — the awareness-only "
+            "'More Buy Candidates' feed is excluded). Exit-side TRIM/EXIT patterns need a "
+            "separate forward-capture mechanism that doesn't exist yet, so this is Buy-side "
+            "only for v1 (see docs/plans/next-evolution-strategy.md, Concept A). "
+            "**These are observed correlations in your own past decisions — not verdicts, "
+            "not biases you're being accused of, and never something the engine acts on.**"
+        )
+
+        _bf_recs_df   = db.load_recommendations()
+        _bf_trades_df = st.session_state.get("trades_df")
+        if _bf_trades_df is None:
+            _bf_trades_df = db.load_trades()
+
+        _bf_matched_all = _bf_match(_bf_recs_df, _bf_trades_df)
+        _bf_matched_actionable = [
+            r for r in _bf_matched_all if r.get("rec_type") in ("new_pick", "add_winner")
+        ]
+
+        # ── Pattern 1 — momentum / recency-chasing ──────────────────────────
+        with st.container(border=True):
+            st.markdown("**📊 Momentum-chasing check**")
+            _bf_mom_scored_n = sum(
+                1 for r in _bf_matched_actionable if r.get("momentum_score") is not None
+            )
+            _bf_p1 = _bf.momentum_recency_pattern(
+                _bf_matched_actionable, BEHAVIORAL_MIN_SAMPLE_N,
+                meaningful_delta_pp=BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
+            )
+            if _bf_p1 is None:
+                st.caption(
+                    f"Insufficient data — need ≥{BEHAVIORAL_MIN_SAMPLE_N} decisions in each "
+                    f"comparison group (you have {_bf_mom_scored_n} actionable signals with a "
+                    "momentum score so far)."
+                )
+            else:
+                _bf_high, _bf_low = _bf_p1["high"], _bf_p1["low"]
+                _bf_dir_line = {
+                    "chases": "You tend to act more readily once a stock is already moving.",
+                    "fades":  "You tend to act more readily on names that AREN'T already hot — a contrarian-entry lean.",
+                    "flat":   "No meaningful difference either way.",
+                }[_bf_p1["direction"]]
+                st.markdown(
+                    f"When momentum was already running hot at signal time, you acted "
+                    f"**{_bf_high['action_rate']:.0f}%** of the time (n={_bf_high['n']}) — vs "
+                    f"**{_bf_low['action_rate']:.0f}%** (n={_bf_low['n']}) when momentum was low "
+                    f"(same actionable pool, split at the median). {_bf_dir_line}"
+                )
+                st.caption("An observed correlation in your own decisions, not a verdict on it.")
+
+        # ── Pattern 2 — conviction-tier follow-through ──────────────────────
+        with st.container(border=True):
+            st.markdown("**🎯 Conviction-tier follow-through**")
+            _bf_conv_scored_n = sum(
+                1 for r in _bf_matched_actionable if r.get("composite_score") is not None
+            )
+            _bf_p2 = _bf.conviction_tier_pattern(
+                _bf_matched_actionable, COMPOSITE_STRONG_BUY, BEHAVIORAL_MIN_SAMPLE_N
+            )
+            if _bf_p2 is None:
+                st.caption(
+                    f"Insufficient data — need ≥{BEHAVIORAL_MIN_SAMPLE_N} decisions in each "
+                    f"comparison group (you have {_bf_conv_scored_n} actionable signals with a "
+                    "composite score so far)."
+                )
+            else:
+                _bf_sb, _bf_b = _bf_p2["strong_buy"], _bf_p2["buy"]
+                _bf_delta2 = _bf_p2["delta_pp"]
+                if _bf_delta2 > BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP:
+                    _bf_conv_line = (
+                        "You act on higher-conviction Strong Buy calls more readily than "
+                        "plain Buys — as you'd rationally expect."
+                    )
+                elif _bf_delta2 < -BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP:
+                    _bf_conv_line = (
+                        "You act LESS on Strong Buy calls than plain Buys — an inverted "
+                        "pattern worth a second look."
+                    )
+                else:
+                    _bf_conv_line = (
+                        "Little difference between how readily you act on Strong Buy vs "
+                        "plain Buy calls."
+                    )
+                st.markdown(
+                    f"Strong Buy (≥{COMPOSITE_STRONG_BUY}) calls were acted on "
+                    f"**{_bf_sb['action_rate']:.0f}%** of the time (n={_bf_sb['n']}) — vs "
+                    f"**{_bf_b['action_rate']:.0f}%** (n={_bf_b['n']}) for plain Buy calls. "
+                    f"{_bf_conv_line}"
+                )
+                st.caption("An observed correlation in your own decisions, not a verdict on it.")
+
+        # ── Pattern 3 — opening-window entry timing ─────────────────────────
+        with st.container(border=True):
+            st.markdown("**🕤 Opening-window entry timing**")
+            _bf_pac_enriched = st.session_state.get("_pac_enriched")
+            if not _bf_pac_enriched:
+                st.info(
+                    "Visit 📊 Predictive Analytics first to unlock this pattern — it needs "
+                    "graded outcome data already computed there."
+                )
+            else:
+                _bf_grade_rows = []
+                for r in _bf_pac_enriched:
+                    if r.get("rec_type") not in ("new_pick", "add_winner"):
+                        continue
+                    if not (
+                        r.get("acted_on")
+                        and r.get("outcome_pct") is not None
+                        and not r.get("outcome_maturing")
+                        and r.get("acted_trade")
+                        and r["acted_trade"].get("traded_at")
+                    ):
+                        continue
+                    try:
+                        _bf_et = pd.to_datetime(
+                            r["acted_trade"]["traded_at"], utc=True
+                        ).tz_convert("America/New_York").time()
+                    except Exception:
+                        continue
+                    _bf_row = dict(r)
+                    _bf_row["et_time"] = _bf_et
+                    _bf_grade_rows.append(_bf_row)
+
+                _bf_p3 = _bf.opening_window_pattern(
+                    _bf_grade_rows, BEHAVIORAL_OPENING_WINDOW_MIN, BEHAVIORAL_MIN_SAMPLE_N
+                )
+                if _bf_p3 is None:
+                    st.caption(
+                        f"Insufficient data — need ≥{BEHAVIORAL_MIN_SAMPLE_N} graded, acted "
+                        f"trades in each comparison group (you have {len(_bf_grade_rows)} "
+                        "acted + graded trades with a resolvable entry time so far)."
+                    )
+                else:
+                    _bf_open, _bf_later = _bf_p3["opening"], _bf_p3["later"]
+                    _bf_delta3 = _bf_p3["delta_pp"]
+                    if _bf_delta3 is not None and _bf_delta3 < -BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP:
+                        _bf_open_line = (
+                            "Trades entered right at the open have a directionally worse "
+                            "track record than ones entered later in the day."
+                        )
+                    elif _bf_delta3 is not None and _bf_delta3 > BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP:
+                        _bf_open_line = (
+                            "Trades entered right at the open have a directionally better "
+                            "track record than ones entered later in the day."
+                        )
+                    else:
+                        _bf_open_line = "No meaningful difference by time of entry."
+                    st.markdown(
+                        f"Trades entered within the first {BEHAVIORAL_OPENING_WINDOW_MIN} "
+                        f"minutes of the open averaged **{_bf_open['avg_alpha_pct']:+.1f}%** "
+                        f"alpha vs SPY (n={_bf_open['n']}) — vs "
+                        f"**{_bf_later['avg_alpha_pct']:+.1f}%** (n={_bf_later['n']}) for trades "
+                        f"entered later. {_bf_open_line}"
+                    )
+                    st.caption("An observed correlation in your own decisions, not a verdict on it.")
+
+        st.caption(
+            "🧬 Every card above is an observation, not a verdict — the engine never reads "
+            "these patterns, and nothing here re-ranks, re-scores, or gates a recommendation."
+        )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

@@ -778,6 +778,22 @@ WORKFLOW_ANALYST_LOOKBACK_DAYS = 90  # analyst research saved within N days BEFO
 WORKFLOW_EARNINGS_WINDOW_DAYS  = 30  # earnings context saved within N days BEFORE trade counts (before-only; post-trade research is not pre-entry prep)
 WORKFLOW_MIN_THESIS_LENGTH     = 10  # min chars in user_thesis to count as a prep signal
 
+# ── My Edge — Behavioral Fingerprint (Concept A, F-193 — DISPLAY-ONLY, NEVER gates) ─
+# Sample-size floor + a directly-cited window from the plan's own illustrative
+# example. Buy-side only for v1 (exit-side TRIM/EXIT signals have no historical
+# capture — see docs/plans/next-evolution-strategy.md Concept A). Every pattern
+# card is suppressed below BEHAVIORAL_MIN_SAMPLE_N in EITHER compared bucket —
+# never present a directional finding at small N. Measurement only; the engine
+# never reads these values, and they never re-rank/re-score/gate a recommendation.
+BEHAVIORAL_MIN_SAMPLE_N       = 8    # min N per compared bucket before a pattern renders
+BEHAVIORAL_OPENING_WINDOW_MIN = 30   # minutes after 9:30 ET considered "the opening window"
+# Below these, two buckets render as "little/no difference" rather than a directional
+# claim — display-copy wording only, never a threshold that suppresses/gates a card
+# (that's BEHAVIORAL_MIN_SAMPLE_N's job). Two separate constants because the two
+# patterns compare different units (action-rate pp vs. SPY-adjusted alpha pp).
+BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP = 5.0  # momentum-chasing / conviction-tier patterns
+BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP       = 1.0  # opening-window pattern
+
 # ── Tax-awareness lens (Concept F — DISPLAY-ONLY policy, NEVER gates) ─────────
 # Holding-period / harvest / wash-sale context layered onto EXIT signals and the
 # opportunity-cost read. These NEVER suppress, reorder, or size a recommendation
