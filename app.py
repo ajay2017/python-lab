@@ -22906,7 +22906,7 @@ These power the **Portfolio Tune-up** lane:
     with st.expander("🎯 My Edge — am I beating passive? does prep pay off? am I improving?", expanded=False):
         st.markdown(
             """
-**My Edge** is a retrospective-only page — it has no recommendations, no gates, no scores that affect anything else. It answers three questions that can't be answered anywhere else in the app:
+**My Edge** is a retrospective-only page — it has no recommendations, no gates, no scores that affect anything else. It answers four questions that can't be answered anywhere else in the app:
 
 ---
 
@@ -22951,6 +22951,18 @@ Each calendar period earns an **A–F grade** from three components: win rate, p
 | F | < 35 |
 
 Three chart views: timeline bars with grade-band zones, a metric heatmap showing all four components across every period at once, and a cohort comparison picker for any two periods side-by-side. A period needs at least 2 closed trades to be graded; fewer shows n/a.
+
+---
+
+**🧬 Behavioral Fingerprint — "What patterns show up in how I actually act on signals?"**
+
+Directional, sample-gated observations over your own Buy-side decisions (new_pick / add_winner recommendations only — the awareness-only "More Buy Candidates" feed is excluded). Three cards:
+
+- **Momentum-chasing check** — do you act more readily on signals for stocks already running hot, or ones that scored well without already being hot?
+- **Conviction-tier follow-through** — do you actually act more on Strong Buy calls than plain Buy calls, as you'd rationally expect?
+- **Opening-window entry timing** — do trades entered right at the market open have a different track record than ones entered later in the day? (Needs graded outcome data from 📊 Predictive Analytics — visit that page first to unlock this card.)
+
+Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Exit-side patterns (how you react to TRIM/EXIT signals) aren't covered yet — the app doesn't keep a historical record of those signals to learn from.
 """
         )
 

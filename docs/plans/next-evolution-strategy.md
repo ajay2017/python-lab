@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar  
 **Analysis model:** Claude Sonnet 4.6 (first pass)  
 **Review:** Claude Opus 4.8 (second pass, completed 2026-07-17) — REVISE-FIRST verdict; 30 findings; all incorporated in this version  
-**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B — all 3 panels: Correlation Clusters, Risk Budget Gauge, Factor Tilt Heatmap; plus risk-adjusted Benchmark Mirror alpha) SHIPPED 2026-07-17 — Phase 2 fully complete. Concept A (Phase 3) not started.
+**Status:** Phase 1 (Waves 1-3: E-capture, F, C, D) SHIPPED 2026-07-17. Phase 2 (Concept B — all 3 panels: Correlation Clusters, Risk Budget Gauge, Factor Tilt Heatmap; plus risk-adjusted Benchmark Mirror alpha) SHIPPED 2026-07-17 — Phase 2 fully complete. Concept A v1 (Buy-side only, F-193) also SHIPPED 2026-07-17, ahead of its own Phase 3 slotting — built forward-only per the user's explicit choice, despite the Week-1 audit (F-192) finding only 12% historical Buy-side completeness.
 
 > **Scope:** This is a product strategy document, not an implementation spec. Nothing here should be built until concepts are reviewed together and approved. It is the starting point for a structured product discovery conversation.
 
@@ -34,7 +34,7 @@ Build order chosen with the user after live scoping: **E-capture + F (Wave 1) �
 | 6 (Phase 2) | B — Factor Tilt Heatmap (panel 3 of 3, final) | **SHIPPED** 2026-07-17, Opus FIX-FIRST→SHIP (2 blocking fixed on re-review) | `a4c95cb` | F-191 | `project_portfolio_intelligence` |
 | 7 (Phase 2) | Benchmark comparison — risk-adjusted (line 546) | **SHIPPED** 2026-07-17, no Opus review required (no constants/gate touch) | `7148890` | F-183 update | `project_my_edge` |
 | 8 | A — Week-1 data-readiness audit | **RUN** 2026-07-17 — result: build forward-only, do not mine history (see Concept A section above) | `253f6ac`→`a57eddd` | F-192 | `project_behavioral_fingerprint_audit` |
-| — | A — Behavioral Fingerprint (the feature itself) | Not started; audited and confirmed calendar/sample-gated, not engineering-gated | — | — | — |
+| 9 | A — Behavioral Fingerprint v1 (Buy-side only) | **SHIPPED** 2026-07-17, Opus FIX-FIRST (1 blocking) → SHIP after fix — user chose to build forward-only despite the 12% audit result, rather than wait | `da59b00` | F-193 | `project_behavioral_fingerprint` |
 
 **UI design pivot from Part 2's Concept C spec (worth noting for anyone re-reading §"UX" under Concept C):** the plan called for an `st.dialog` modal. Shipped instead as an outside-the-form pre-condition section (mirrors F-5's "Draft thesis" button placement) with the required commitment enforced as one more validation gate — functionally equivalent friction, zero `st.dialog` risk (it would have been the first in the codebase), and avoided forcing a duplicate of the ~120-line holdings-sync/concentration-nudge block that intercepting the write would have required. See `project_premortem_protocol` memory for the full reasoning.
 
@@ -164,7 +164,7 @@ Every time the investor overrides, ignores, or delays an app recommendation, the
 **Why meaningfully different:**  
 No retail platform shows investors which specific biases they personally have, observed in their actual decisions, with trend direction. This is what institutional investors pay behavioral finance consultants for.
 
-**Status:** New. No retail platform does this at the individual-decision level.
+**Status:** v1 SHIPPED 2026-07-17 (F-193, commit `da59b00`; memory `project_behavioral_fingerprint`) — Buy-side only, per the user's explicit choice to build forward-only despite the audit's 12% completeness result rather than wait for more history. Exit-side patterns remain unbuilt (no capture mechanism exists).
 
 **Week-1 data-readiness audit — RUN 2026-07-17 (F-192, commits `253f6ac`→`a57eddd`; memory `project_behavioral_fingerprint_audit`).** Result: **build forward-only; do not attempt a historical-data build.** Buy-side completeness (scoped to actionable `new_pick`/`add_winner`, excluding the awareness-only `buy_candidate` feed) is 12% all-time and last-90-days (94 signals, 11 acted) — far below the 80% go/no-go threshold below. Only 39% of BUY trades (27/70) carry a logged `RECOMMENDATION` trigger. **Exit-side (TRIM/EXIT/risk_advisor) signals have zero historical record at all, structurally** — they're computed live each session and never persisted, so the disposition-effect/loss-aversion-timing patterns in this concept's own illustrative list cannot be built from history under any circumstance, independent of Buy-side completeness. Concept E's `decision_context` Phase 1 capture (already shipped) only records a count of active Act-Today items, not per-ticker signal identity, so it does not yet close this gap either — a dedicated exit-side signal-identity capture would need to be built before ANY exit-side bias data starts accumulating. This reinforces the "calendar-gated by trade volume" framing below over "historical data already exists."
 
