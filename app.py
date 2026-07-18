@@ -4340,115 +4340,6 @@ if page == "🏠 Home":
     _db_act_n   = len(_split_def["act"])
     _db_buy_n   = len(_daily_brief["buy_candidates"])
     _db_icon    = " 🔴" if _db_act_n else ""
-    # ── Daily Digest — cross-page closure signal ─────────────────────────────
-    # st.container(border=True) + CSS injection: keeps st.button() navigation
-    # inside the dark card without a separate external row (F-194).
-    _dd_earnings_alerts = int(st.session_state.get("_earnings_posture_alerts_cache") or 0)
-    _dd_b_locked        = bool(st.session_state.get("_brief_locked", False))
-    _dd_alerts_total = n_danger + n_warning   # full A&A page count
-    _dd_act_color   = "#ef4444" if _db_act_n          > 0 else "#22c55e"
-    _dd_alrt_color  = ("#ef4444" if n_danger > 0 else
-                       "#f59e0b" if n_warning > 0 else "#22c55e")
-    _dd_picks_color = "#22d3ee" if _db_buy_n           > 0 else "#9ca3af"
-    _dd_earn_color  = "#ef4444" if _dd_earnings_alerts > 0 else "#22c55e"
-    _dd_earn_sfx = (
-        f" · ⚡ {_dd_earnings_alerts} earnings posture alert"
-        f"{'s' if _dd_earnings_alerts != 1 else ''} — check Catalyst Watch"
-        if _dd_earnings_alerts > 0 else ""
-    )
-    if _db_act_n > 0:
-        _dd_signal    = (
-            f"🔴 {_db_act_n} action{'s' if _db_act_n != 1 else ''} in Today's Brief"
-            f" require same-day response{_dd_earn_sfx}"
-        )
-        _dd_sig_color = "#ef4444"
-    elif n_danger > 0:
-        _dd_signal    = (
-            f"🔴 {n_danger} danger alert{'s' if n_danger != 1 else ''} in"
-            f" Alerts & Actions — review needed{_dd_earn_sfx}"
-        )
-        _dd_sig_color = "#ef4444"
-    elif _dd_b_locked:
-        _dd_signal    = f"🛡️ Protect Mode active — new positions suppressed today{_dd_earn_sfx}"
-        _dd_sig_color = "#f59e0b"
-    elif _dd_earnings_alerts > 0:
-        _dd_signal    = (
-            f"⚡ {_dd_earnings_alerts} earnings posture alert"
-            f"{'s' if _dd_earnings_alerts != 1 else ''} — check Catalyst Watch"
-        )
-        _dd_sig_color = "#f59e0b"
-    elif n_warning > 0:
-        _dd_signal    = "🟡 Watch alerts noted — no same-day action required"
-        _dd_sig_color = "#f59e0b"
-    else:
-        _dd_signal    = "✅ Nothing urgent today — Today's Brief is your only required stop"
-        _dd_sig_color = "#22c55e"
-    # CSS scoped via :has(.dd-card) so rules apply only to this container.
-    # Overrides Streamlit's default border/bg; shrinks nav buttons to chip size.
-    st.markdown("""<style>
-div[data-testid="stVerticalBlockBorderWrapper"]:has(.dd-card){
-    background:#111827!important;border:1px solid #1f2937!important;
-    border-radius:12px!important;margin-bottom:8px!important}
-div[data-testid="stVerticalBlockBorderWrapper"]:has(.dd-card)>div{
-    background:transparent!important;padding:14px 20px 10px!important;gap:2px!important}
-div[data-testid="stVerticalBlockBorderWrapper"]:has(.dd-card) button{
-    height:24px!important;font-size:0.7em!important;padding:0 8px!important;
-    min-height:unset!important;line-height:1!important;background:transparent!important;
-    border:1px solid #374151!important;color:#6b7280!important;margin-top:4px!important}
-div[data-testid="stVerticalBlockBorderWrapper"]:has(.dd-card) button:hover{
-    border-color:#6b7280!important;color:#d1d5db!important;background:transparent!important}
-</style>""", unsafe_allow_html=True)
-    with st.container(border=True):
-        # Class marker used by CSS :has(.dd-card) to scope the card styles above.
-        st.markdown('<span class="dd-card" style="display:none"></span>', unsafe_allow_html=True)
-        # Header
-        _dd_hc = st.columns([5, 2])
-        with _dd_hc[0]:
-            st.markdown("<span style='font-size:1.05em;font-weight:700;color:#f9fafb'>Daily Digest</span>",
-                        unsafe_allow_html=True)
-        with _dd_hc[1]:
-            st.markdown("<div style='text-align:right;color:#6b7280;font-size:0.75em;padding-top:3px'>"
-                        "Am I done for today?</div>", unsafe_allow_html=True)
-        st.markdown("<hr style='margin:4px 0 6px;border:none;border-top:1px solid #374151'>",
-                    unsafe_allow_html=True)
-        # Tile row — navigable tiles show a small chip button below the count.
-        # ACT TODAY / NEW PICKS have no button: both visible below on Today's Brief.
-        _dd_t = st.columns(5)
-        _TLBL = "color:#9ca3af;font-size:0.7em;font-weight:600;letter-spacing:0.05em"
-        with _dd_t[0]:
-            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>ACT TODAY</div>"
-                        f"<div style='color:{_dd_act_color};font-size:1.4em;font-weight:700;"
-                        f"margin-top:2px'>{_db_act_n}</div></div>", unsafe_allow_html=True)
-        with _dd_t[1]:
-            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>ALERTS</div>"
-                        f"<div style='color:{_dd_alrt_color};font-size:1.4em;font-weight:700;"
-                        f"margin-top:2px'>{_dd_alerts_total}</div></div>", unsafe_allow_html=True)
-            if _dd_alerts_total > 0:
-                if st.button("→ Alerts & Actions", key="_dd_nav_watch", use_container_width=True):
-                    st.session_state["_pending_page"] = "⚠️ Alerts & Actions"
-                    st.rerun()
-        with _dd_t[2]:
-            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>NEW PICKS</div>"
-                        f"<div style='color:{_dd_picks_color};font-size:1.4em;font-weight:700;"
-                        f"margin-top:2px'>{_db_buy_n}</div></div>", unsafe_allow_html=True)
-        with _dd_t[3]:
-            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>EARNINGS RISK</div>"
-                        f"<div style='color:{_dd_earn_color};font-size:1.4em;font-weight:700;"
-                        f"margin-top:2px'>{_dd_earnings_alerts}</div></div>", unsafe_allow_html=True)
-            if _dd_earnings_alerts > 0:
-                if st.button("→ Catalyst Watch", key="_dd_nav_earn", use_container_width=True):
-                    st.session_state["_pending_page"] = "🔔 Catalyst Watch"
-                    st.rerun()
-        with _dd_t[4]:
-            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>POSTURE</div>"
-                        f"<div style='color:{_rag_color};font-size:0.9em;font-weight:700;"
-                        f"margin-top:2px'>{_rag_label}</div></div>", unsafe_allow_html=True)
-            if st.button("→ Risk Analysis", key="_dd_nav_posture", use_container_width=True):
-                st.session_state["_pending_page"] = "🔗 Risk Analysis"
-                st.rerun()
-        st.markdown(f"<hr style='margin:6px 0 2px;border:none;border-top:1px solid #374151'>"
-                    f"<div style='font-size:0.82em;color:{_dd_sig_color};padding-bottom:2px'>"
-                    f"{_dd_signal}</div>", unsafe_allow_html=True)
     # ═══════════════════════════════════════════════════════════════════════════
     # TODAY'S BRIEF — promoted to a full-width top section (not a tab); see
     # docs/reviews/2026-07-12-UX-review.md finding I1. The "decides, not
@@ -22599,8 +22490,6 @@ elif page == "📖 User Guide":
     with st.expander("🏠 Reading Today's Brief", expanded=False):
         st.markdown(
             """
-**Daily Digest card:** the compact strip just above Today's Brief shows five cross-page KPIs — ACT TODAY / WATCH / NEW PICKS / EARNINGS RISK / POSTURE — aggregated from data already computed in the Home synthesis. A one-line closure signal below the tiles answers "am I done for today?": green ✅ means Today's Brief is your only required stop; red 🔴 or amber items name exactly what needs attention elsewhere. You do not need to visit Risk Analysis, Alerts & Actions, Portfolio Intelligence, or My Edge unless this card flags something — or you want to dig deeper.
-
 The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
