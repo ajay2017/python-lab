@@ -5620,6 +5620,9 @@ if page == "🏠 Home":
                 + f"</div>"
                 f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                 f"💡 <em>{_ga['thesis']}</em></div>"
+                + (f"<div style='color:#fca5a5;font-size:0.8em;margin-top:4px'>"
+                   f"⚠ {_ga['deterioration_watch_note']}</div>"
+                   if _ga.get("deterioration_watch_note") else "")
                 + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
                    f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
                    f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")

@@ -468,7 +468,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 risk_recs: list | None = None,
                 earnings_lookup: dict | None = None,
                 macro_events: list | None = None,
-                movers: list | None = None) -> dict:
+                movers: list | None = None,
+                deterioration: list | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -481,6 +482,10 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     risk_recs  : Risk Advisor recommendations — tickers flagged for trim (beta
                  or sharpe root_tickers) are suppressed from add-to-winner so
                  the briefing never tells the user to trim X and add to X.
+    deterioration : output of deterioration_signals() — a held ticker carrying
+                 an active WATCH tier is annotated (not suppressed; WATCH is
+                 explicitly "no action yet") on its add-to-winner card so it
+                 doesn't read as contradicting the Review lane's tripwire.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -901,6 +906,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     concentration_blocked_adds: list[dict] = []
     sector_blocked_adds: list[dict] = []   # adds suppressed — sector over hard cap
     cooldown_adds:     list[dict] = []     # adds suppressed — recently added (post-act cooldown)
+    # Deterioration WATCH — annotate (never suppress) add-to-winner; see
+    # docstring. Same map shape/intent as _buy_candidates's own copy.
+    _watch_by_ticker: dict = {
+        str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
+    }
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
             sig = str(row.get("Signal", ""))
@@ -996,6 +1006,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 price   = _f(row.get("Price", 0))
                 is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
                 sizing  = _suggest_size(price, "Strong Uptrend", portfolio_value) if price > 0 else {}
+                _dw = _watch_by_ticker.get(ticker.upper())
                 add_positions.append({
                     "ticker":    ticker,
                     "score":     scr,
@@ -1010,6 +1021,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         + (" Sector leading today." if is_lead else "")
                     ),
                     "sizing":    sizing,
+                    "deterioration_watch_note": (
+                        f"Also flagged in Review Before Close: down {_dw['dd_from_peak_pct']:.1f}% "
+                        f"from its ${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — early "
+                        "deterioration Watch (not yet a TRIM trigger)."
+                    ) if _dw else None,
                 })
         add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
 
@@ -1428,12 +1444,17 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     act_today: list | None = None,
                     risk_recs: list | None = None,
                     earnings_lookup: dict | None = None,
-                    composites: dict | None = None) -> list[dict]:
+                    composites: dict | None = None,
+                    deterioration: list | None = None) -> list[dict]:
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
     risk_recs: Risk Advisor recs — tickers flagged for trim are suppressed from
                the add-to-winner block to avoid same-ticker capital conflicts.
+    deterioration: output of deterioration_signals() — a held ticker carrying an
+               active WATCH tier is annotated (not suppressed; WATCH is
+               explicitly "no action yet") so an add-to-winner card doesn't read
+               as contradicting the Review lane's early-deterioration tripwire.
     """
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
@@ -1457,6 +1478,15 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             for _, _row in port_df.iterrows():
                 if _f(_row.get("Weight (%)"), 0) > _trim_floor:
                     _drift_trim_set.add(str(_row["Ticker"]).upper())
+
+    # Deterioration WATCH — annotate (never suppress) add-to-winner: a held
+    # name can legitimately score Strong Buy on the composite while its own
+    # price structure shows early strain (down from peak, below trend) that
+    # hasn't confirmed into a TRIM. Surfacing this on the card itself avoids
+    # the "Go" verdict reading as contradicting a WATCH shown elsewhere.
+    _watch_by_ticker: dict = {
+        str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
+    }
 
     # 1 — Scanner picks not in portfolio (Score ≥ COMPOSITE_BUY)
     if scanner_results is not None and not scanner_results.empty:
@@ -1515,6 +1545,13 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             }
             xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today,
                                     earnings_lookup=earnings_lookup, composites=composites)
+            _dw = _watch_by_ticker.get(ticker.upper())
+            if _dw:
+                xref["conflicts"] = list(xref.get("conflicts") or []) + [
+                    f"Also flagged in Review Before Close: down {_dw['dd_from_peak_pct']:.1f}% "
+                    f"from its ${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — early "
+                    "deterioration Watch (not yet a TRIM trigger)."
+                ]
             items.append({
                 "type":           "add_winner",
                 "icon":           "➕",
@@ -2076,10 +2113,12 @@ def build_daily_briefing(
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                              act_today=act, risk_recs=risk_recs,
                              earnings_lookup=earnings_lookup,
-                             composites=grow_composites or {})
+                             composites=grow_composites or {},
+                             deterioration=deterioration)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
                          act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
+                         deterioration=deterioration,
                          movers=movers)
     tuneup = _portfolio_tuneup(risk_recs)
     return {"act_today": act, "buy_candidates": buys, "review_list": review,
