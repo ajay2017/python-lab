@@ -322,47 +322,55 @@ st.markdown("""
 }
 
 /* ── Sidebar grouped nav ──────────────────────────────────────────────── */
-/* Section header labels */
-.nav-group-header {
-    font-size: 0.80rem !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.1em !important;
-    text-transform: uppercase !important;
-    color: #4b5563 !important;
-    padding: 10px 4px 2px !important;
-    margin: 0 !important;
-    line-height: 1.2 !important;
+/* Nav group headers — typography */
+[data-testid="stSidebar"] .nav-group-header {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0 4px 4px;
+    margin-top: 18px;
+    margin-bottom: 6px;
+    /* color is set per-group via inline style — no static color here */
 }
-/* All sidebar nav buttons — flat, left-aligned, full-width */
+
+/* First group: tighter top margin */
+[data-testid="stSidebar"] .nav-group-header:first-of-type {
+    margin-top: 8px;
+}
+
+/* Nav item buttons — base */
 [data-testid="stSidebar"] [data-testid="stButton"] > button {
-    width: 100% !important;
-    text-align: left !important;
-    justify-content: flex-start !important;
-    background: transparent !important;
-    border: none !important;
-    border-radius: 6px !important;
-    padding: 5px 10px !important;
-    color: #9ca3af !important;
-    font-size: 0.86rem !important;
-    font-weight: 400 !important;
-    transition: background 0.1s, color 0.1s !important;
-    box-shadow: none !important;
+    width: 100%;
+    text-align: left;
+    padding: 5px 10px;
+    color: #9ca3af;
+    font-size: 0.86rem;
+    font-weight: 400;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 0;
 }
+
 [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
-    background: rgba(255,255,255,0.07) !important;
-    color: #f0f2f5 !important;
-    border: none !important;
+    color: #f0f2f5;
+    background: rgba(255,255,255,0.05);
 }
-/* Selected state: disabled=True on the active page button.
-   Override Streamlit's default disabled (gray/faded) to look highlighted. */
+
+/* Active-state: placeholder — overridden by per-group dynamic <style> block emitted in sidebar render */
 [data-testid="stSidebar"] [data-testid="stButton"] > button:disabled {
-    background: rgba(59,130,246,0.18) !important;
-    border-left: 3px solid #3b82f6 !important;
-    color: #f0f2f5 !important;
-    font-weight: 600 !important;
-    opacity: 1 !important;
-    cursor: default !important;
-    box-shadow: none !important;
+    color: #f0f2f5;
+    font-weight: 600;
+    cursor: default;
+    opacity: 1;
+}
+
+/* PORTFOLIO divider sentinel */
+[data-testid="stSidebar"] .nav-divider {
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    margin: 8px 4px;
 }
 
 /* ── Bordered containers — match dark chip style ─────────────────────── */
@@ -1652,6 +1660,21 @@ with st.sidebar:
     _n_danger_nav     = st.session_state.get("_n_danger_cache") or 0
     _n_warning_nav    = st.session_state.get("_n_warning_cache") or 0
 
+    _NAV_ACCENT = {
+        "MAIN":      "#3b82f6",
+        "RESEARCH":  "#22d3ee",
+        "PORTFOLIO": "#22c55e",
+        "ALERTS":    "#f59e0b",
+        "AI":        "#a78bfa",
+    }
+    _NAV_ICON = {
+        "MAIN":      "🏠",
+        "RESEARCH":  "📈",
+        "PORTFOLIO": "🧩",
+        "ALERTS":    "🔔",
+        "AI":        "🧠",
+    }
+
     _NAV_GROUPS = [
         ("MAIN", [
             ("Home",    "🏠 Home",                    ":material/home:"),
@@ -1672,6 +1695,7 @@ with st.sidebar:
             ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Portfolio Intelligence", "🧩 Portfolio Intelligence", ":material/hub:"),
+            ("__divider__", None, None),
             ("Alerts & Actions", "⚠️ Alerts & Actions",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
             ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
@@ -1686,27 +1710,55 @@ with st.sidebar:
         ]),
     ]
 
+    # Determine which group the current page belongs to, for accent-colored active state
+    _active_accent = "#3b82f6"  # fallback to MAIN blue
     for _grp_label, _grp_items in _NAV_GROUPS:
+        _grp_key = _grp_label.split()[0]  # first word = the key in _NAV_ACCENT
+        for _item_display, _item_dest, _item_icon in _grp_items:
+            if _item_dest is None:
+                continue
+            if _item_dest == _cur_page:
+                _active_accent = _NAV_ACCENT.get(_grp_key, "#3b82f6")
+                break
+
+    _active_tint = f"{_active_accent}2e"  # ~18% opacity hex suffix
+    st.markdown(
+        f"""<style>
+    [data-testid="stSidebar"] [data-testid="stButton"] > button:disabled {{
+        border-left: 3px solid {_active_accent};
+        background: {_active_tint};
+    }}
+    </style>""",
+        unsafe_allow_html=True,
+    )
+
+    for _grp_label, _grp_items in _NAV_GROUPS:
+        _grp_key = _grp_label.split()[0]
+        _accent = _NAV_ACCENT.get(_grp_key, "#4b5563")
+        _icon = _NAV_ICON.get(_grp_key, "")
         st.markdown(
-            f"<div class='nav-group-header'>{_grp_label}</div>",
+            f'<div class="nav-group-header" style="color:{_accent};">{_icon} {_grp_label}</div>',
             unsafe_allow_html=True,
         )
         for _disp, _dest, _icon in _grp_items:
+            if _dest is None:  # sentinel
+                st.markdown('<hr class="nav-divider">', unsafe_allow_html=True)
+                continue
             # Catalyst Watch / Alerts & Actions get a live alert badge on their label
             if _dest == "🔔 Catalyst Watch" and (_cw_alerts > 0 or _earnings_alerts > 0):
                 _cw_parts = []
                 if _cw_alerts > 0:
-                    _cw_parts.append(f"🔴 {_cw_alerts} risk")
+                    _cw_parts.append(f":red-background[● {_cw_alerts}]")
                 if _earnings_alerts > 0:
-                    _cw_parts.append(f"⚡ {_earnings_alerts} earnings")
-                _btn_label = f"Catalyst Watch  {' · '.join(_cw_parts)}"
+                    _cw_parts.append(f":orange-background[● {_earnings_alerts}]")
+                _btn_label = f"Catalyst Watch  {' '.join(_cw_parts)}"
             elif _dest == "⚠️ Alerts & Actions" and (_n_danger_nav > 0 or _n_warning_nav > 0):
                 _badge_parts = []
                 if _n_danger_nav > 0:
-                    _badge_parts.append(f"🔴 {_n_danger_nav}")
+                    _badge_parts.append(f":red-background[● {_n_danger_nav}]")
                 if _n_warning_nav > 0:
-                    _badge_parts.append(f"🟡 {_n_warning_nav}")
-                _btn_label = f"Alerts & Actions  {'  '.join(_badge_parts)}"
+                    _badge_parts.append(f":orange-background[● {_n_warning_nav}]")
+                _btn_label = f"Alerts & Actions  {' '.join(_badge_parts)}"
             else:
                 _btn_label = _disp
             # Active: disabled=True (CSS renders as selected highlight)
