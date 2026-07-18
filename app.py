@@ -1690,7 +1690,7 @@ with st.sidebar:
             ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
         ]),
         ("PORTFOLIO", [
-            ("Portfolio Allocation", "🥧 Portfolio Allocation", ":material/pie_chart:"),
+            ("Overview", "🥧 Portfolio Overview", ":material/pie_chart:"),
             ("Portfolio Health",    "🏆 Portfolio Health",     ":material/analytics:"),
             ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
@@ -2786,7 +2786,7 @@ if page == "🏠 Home":
         for _, r in st.session_state.holdings_df.iterrows()
         if str(r.get("Ticker", "")).strip()
     ]
-    # Published for the standalone Portfolio Allocation page — this is the full
+    # Published for the standalone Portfolio Overview page — this is the full
     # holdings-ticker list (includes any ticker that later fails to load into
     # held_data), NOT derivable from _last_held_data.keys() alone, which would
     # silently drop failed-load tickers and diverge from the cache key this
@@ -9886,10 +9886,10 @@ elif page == "🧩 Portfolio Intelligence":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PAGE — PORTFOLIO ALLOCATION
+# PAGE — PORTFOLIO OVERVIEW
 # ═════════════════════════════════════════════════════════════════════════════
-elif page == "🥧 Portfolio Allocation":
-    st.title("🥧 Portfolio Allocation")
+elif page == "🥧 Portfolio Overview":
+    st.title("🥧 Portfolio Overview")
     _pa_pdf = st.session_state.get("_port_df_enriched")
     _pa_hd  = st.session_state.get("_last_held_data")
     if _pa_pdf is None or _pa_hd is None or (hasattr(_pa_pdf, "empty") and _pa_pdf.empty):
@@ -9923,7 +9923,7 @@ elif page == "🥧 Portfolio Allocation":
                 ),
             ))
             pie.update_layout(
-                title="Portfolio Allocation", template="plotly_dark",
+                title="Portfolio Overview", template="plotly_dark",
                 height=320, margin=dict(l=0, r=0, t=40, b=0),
                 showlegend=False,
             )
@@ -22880,7 +22880,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📋 Watchlist** — names you're tracking, with enter-now flags.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Five live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, and Sentiment Alignment — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
-- **🥧 Portfolio Allocation** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
+- **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🏆 Portfolio Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing, and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Diagnostic only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
 - **🧩 Portfolio Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
