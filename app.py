@@ -1696,7 +1696,7 @@ with st.sidebar:
         ]),
         ("PORTFOLIO", [
             ("Overview", "🥧 Portfolio Overview", ":material/pie_chart:"),
-            ("Portfolio Health",    "🏆 Portfolio Health",     ":material/analytics:"),
+            ("Health",    "🏆 Health",     ":material/analytics:"),
             ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Intelligence", "🧩 Intelligence", ":material/hub:"),
@@ -12189,13 +12189,13 @@ elif page == "🥧 Portfolio Overview":
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — PORTFOLIO HEALTH SCORE
 # ═════════════════════════════════════════════════════════════════════════════
-elif page == "🏆 Portfolio Health":
+elif page == "🏆 Health":
     from stock_analyzer.portfolio_health import (
         compute_health_score, compute_portfolio_dynamics,
         grade_colors, score_color, GRADE_SCALE,
     )
 
-    st.title("🏆 Portfolio Health Score")
+    st.title("🏆 Health Score")
     st.caption(
         "Synthesises five construction dimensions into a single grade. "
         "Visit Home first to load your portfolio data."
@@ -22886,7 +22886,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Five live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, and Sentiment Alignment — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
-- **🏆 Portfolio Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
+- **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing, and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Diagnostic only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
 - **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.
@@ -22900,10 +22900,10 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 """
         )
 
-    with st.expander("🏆 Portfolio Health & Portfolio Dynamics", expanded=False):
+    with st.expander("🏆 Health & Portfolio Dynamics", expanded=False):
         st.markdown(
             """
-**Portfolio Health gives you a single A–F construction grade** — not a buy/sell signal, but a measure of how *well-built* your book is across five dimensions:
+**Health gives you a single A–F construction grade** — not a buy/sell signal, but a measure of how *well-built* your book is across five dimensions:
 
 | Dimension | What it measures |
 |---|---|
