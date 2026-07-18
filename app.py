@@ -20059,6 +20059,8 @@ elif page == "📊 Predictive Analytics":
     from stock_analyzer.recommendations_history import (
         match_recs_to_trades,
         compute_outcomes,
+        summary_stats,
+        by_rec_type,
     )
     from stock_analyzer.predictive_analytics import (
         calibration_by_score_band,
@@ -20829,6 +20831,148 @@ elif page == "📊 Predictive Analytics":
                 st.caption("No daily snapshots recorded yet.")
         except Exception:
             st.caption("Could not load snapshot coverage.")
+
+    # ── Behavioral Fingerprint — data-readiness audit (Concept A Week-1 audit) ─
+    with st.expander("🧬 Behavioral Fingerprint — Data Readiness Audit", expanded=False):
+        st.caption(
+            "One-time, informational audit — not a live feature. It answers a single "
+            "question: is there enough historical signal-to-action data to build the "
+            "Behavioral Fingerprint (Concept A, `docs/plans/next-evolution-strategy.md`) "
+            "from history, or does it need to start capturing forward-only? Awareness "
+            "only — no gate, no recommendation, no new threshold."
+        )
+
+        _bfa_all     = summary_stats(_pac_enriched)
+        _bfa_n_total = _bfa_all["n_total"]
+
+        if _bfa_n_total == 0:
+            st.info("No recommendations logged yet — nothing to audit.")
+        else:
+            _bfa_90cut  = _today_et() - timedelta(days=90)
+            _bfa_recent = [
+                r for r in _pac_enriched
+                if r.get("rec_date") is not None and r["rec_date"] >= _bfa_90cut
+            ]
+            _bfa_90 = summary_stats(_bfa_recent)
+
+            st.markdown("**Buy-side signal completeness** — recommendations logged vs. acted on")
+            _bfa_c1, _bfa_c2, _bfa_c3 = st.columns(3)
+            _bfa_c1.metric(
+                "All-Time Completeness",
+                f"{_bfa_all['action_rate']:.0f}%" if _bfa_all["action_rate"] is not None else "—",
+            )
+            _bfa_c2.metric(
+                "Last 90 Days",
+                f"{_bfa_90['action_rate']:.0f}%" if _bfa_90["action_rate"] is not None else "—",
+            )
+            _bfa_c3.metric("Total Signals Logged", f"{_bfa_n_total:,}")
+
+            _bfa_by_type = by_rec_type(_pac_enriched)
+            _bfa_type_rows = [
+                {
+                    "rec_type":    rt,
+                    "n_total":     s["n_total"],
+                    "n_acted":     s["n_acted"],
+                    "action_rate": f"{s['action_rate']:.0f}%" if s["action_rate"] is not None else "—",
+                }
+                for rt, s in sorted(_bfa_by_type.items())
+            ]
+            st.dataframe(
+                _pa_pd.DataFrame(_bfa_type_rows),
+                width='stretch', hide_index=True,
+            )
+
+            st.markdown(
+                "**Trade-side signal provenance** — were your actual BUY trades "
+                "preceded by an app signal at all?"
+            )
+            if _pac_trades_df is not None and not _pac_trades_df.empty \
+                    and "action" in _pac_trades_df.columns:
+                _bfa_buys = _pac_trades_df[_pac_trades_df["action"] == "BUY"].copy()
+            else:
+                _bfa_buys = _pa_pd.DataFrame()
+
+            if _bfa_buys.empty:
+                st.info("No BUY trades logged yet.")
+            else:
+                _bfa_n_buys = len(_bfa_buys)
+                if "trigger_type" in _bfa_buys.columns:
+                    _bfa_trig = _bfa_buys["trigger_type"].apply(
+                        lambda v: str(v).strip()
+                        if (v is not None and not (isinstance(v, float) and _pa_pd.isna(v)) and str(v).strip())
+                        else "Not logged"
+                    )
+                else:
+                    _bfa_trig = _pa_pd.Series(["Not logged"] * _bfa_n_buys)
+
+                _bfa_signal_n   = int((_bfa_trig == "RECOMMENDATION").sum())
+                _bfa_noscore_n  = _bfa_n_buys - _bfa_signal_n
+
+                _bfa_prov_rows = [
+                    {
+                        "Category":          "Preceded by app signal",
+                        "Count":             _bfa_signal_n,
+                        "% of BUY trades":   f"{_bfa_signal_n / _bfa_n_buys * 100:.0f}%",
+                    },
+                    {
+                        "Category":          "No logged signal",
+                        "Count":             _bfa_noscore_n,
+                        "% of BUY trades":   f"{_bfa_noscore_n / _bfa_n_buys * 100:.0f}%",
+                    },
+                ]
+                st.dataframe(
+                    _pa_pd.DataFrame(_bfa_prov_rows),
+                    width='stretch', hide_index=True,
+                )
+                with st.expander("Breakdown by trigger type", expanded=False):
+                    _bfa_trig_counts = _bfa_trig.value_counts()
+                    _bfa_trig_rows = [
+                        {
+                            "trigger_type":    tt,
+                            "count":           int(cnt),
+                            "% of BUY trades": f"{cnt / _bfa_n_buys * 100:.0f}%",
+                        }
+                        for tt, cnt in _bfa_trig_counts.items()
+                    ]
+                    st.dataframe(
+                        _pa_pd.DataFrame(_bfa_trig_rows),
+                        width='stretch', hide_index=True,
+                    )
+
+            st.warning(
+                "**Exit-side signals (TRIM / EXIT / risk_advisor recommendations) have "
+                "no historical record at all.** Buy-side recommendations persist to the "
+                "`recommendations` table, but TRIM/EXIT/risk_advisor signals are computed "
+                "live each session and are never written to a persistent table — there is "
+                "no record of which TRIM/EXIT signal fired on which date for which ticker, "
+                "or whether or how fast you acted on it. That means Behavioral Fingerprint "
+                "bias patterns tied to exit-signal reaction (disposition effect, "
+                "loss-aversion timing) cannot be built from history at all, regardless of "
+                "Buy-side completeness — they would need a brand-new forward-only capture "
+                "mechanism, mirroring how Concept E's `decision_context.py` started "
+                "capturing forward-only in Phase 1 (2026-07-17), before any exit-side bias "
+                "data starts accumulating. Note that Concept E's existing capture "
+                "(`decision_context.build_snapshot()`) only records a COUNT of active "
+                "Act-Today items at decision time (`active_recs.act_today_n`), not which "
+                "specific ticker/signal-type was issued — so even that capture does not "
+                "yet close this gap."
+            )
+
+            _bfa_rate = _bfa_all["action_rate"] or 0.0
+            if _bfa_rate >= 80:
+                st.success(
+                    "✅ Historical recommendation log is ≥80% complete — Behavioral "
+                    "Fingerprint COULD use historical Buy-side data for its Buy-related "
+                    "patterns (e.g. recency-bias-on-entry). Exit-side patterns still "
+                    "require new forward capture per the finding above."
+                )
+            else:
+                st.info(
+                    f"📋 Historical Buy-side completeness is {_bfa_rate:.0f}% (< 80% "
+                    "threshold) — per the plan's own go/no-go gate, Behavioral "
+                    "Fingerprint should build forward-only from Concept E's Phase 1 "
+                    "capture rather than relying on historical Buy-side data."
+                )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
