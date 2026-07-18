@@ -1694,7 +1694,7 @@ with st.sidebar:
             ("Portfolio Health",    "🏆 Portfolio Health",     ":material/analytics:"),
             ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
-            ("Portfolio Intelligence", "🧩 Portfolio Intelligence", ":material/hub:"),
+            ("Intelligence", "🧩 Intelligence", ":material/hub:"),
             ("__divider__", None, None),
             ("Alerts & Actions", "⚠️ Alerts & Actions",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
@@ -9652,8 +9652,8 @@ elif page == "🔗 Risk Analysis":
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — PORTFOLIO INTELLIGENCE
 # ═════════════════════════════════════════════════════════════════════════════
-elif page == "🧩 Portfolio Intelligence":
-    st.title("🧩 Portfolio Intelligence")
+elif page == "🧩 Intelligence":
+    st.title("🧩 Intelligence")
     st.caption(
         "What your ownership MEANS in aggregate — not what you own position by "
         "position, but the risk and structure of the book as a whole. "
@@ -22883,7 +22883,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🏆 Portfolio Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing, and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Diagnostic only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
-- **🧩 Portfolio Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
+- **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
 - **⚠️ Alerts & Actions** — active alerts (stops, signals, concentration, earnings, revisions); rebalancing recommendations; Diversification Advisor. Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander — fired alerts surface above it.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
