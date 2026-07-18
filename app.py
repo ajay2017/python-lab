@@ -20842,20 +20842,34 @@ elif page == "📊 Predictive Analytics":
             "only — no gate, no recommendation, no new threshold."
         )
 
-        _bfa_all     = summary_stats(_pac_enriched)
-        _bfa_n_total = _bfa_all["n_total"]
+        # Scoped to ACTIONABLE rec_types only (new_pick, add_winner) — buy_candidate
+        # is the awareness-only "More Buy Candidates" feed, never a gated rec, and
+        # its near-zero action rate is by design, not abandonment. Blending it into
+        # the headline would deflate the number the same way it once inflated
+        # Recommendations History's "Missed" count (see feedback_analytics_integrity
+        # memory) — this audit must not repeat that mistake.
+        _bfa_actionable = [r for r in _pac_enriched if r.get("rec_type") in ("new_pick", "add_winner")]
+        _bfa_all        = summary_stats(_bfa_actionable)
+        _bfa_n_total    = _bfa_all["n_total"]
+        _bfa_n_raw      = len(_pac_enriched)
 
         if _bfa_n_total == 0:
-            st.info("No recommendations logged yet — nothing to audit.")
+            st.info("No actionable (new_pick / add_winner) recommendations logged yet — nothing to audit.")
         else:
             _bfa_90cut  = _today_et() - timedelta(days=90)
             _bfa_recent = [
-                r for r in _pac_enriched
+                r for r in _bfa_actionable
                 if r.get("rec_date") is not None and r["rec_date"] >= _bfa_90cut
             ]
             _bfa_90 = summary_stats(_bfa_recent)
 
-            st.markdown("**Buy-side signal completeness** — recommendations logged vs. acted on")
+            st.markdown(
+                "**Buy-side signal completeness** — actionable recommendations "
+                "(`new_pick` / `add_winner`) logged vs. acted on. Scoped to exclude "
+                "`buy_candidate` (the awareness-only 'More Buy Candidates' feed, never "
+                "a gated rec) — including it would deflate this rate with signals that "
+                "were never meant to be acted on directly."
+            )
             _bfa_c1, _bfa_c2, _bfa_c3 = st.columns(3)
             _bfa_c1.metric(
                 "All-Time Completeness",
@@ -20865,7 +20879,12 @@ elif page == "📊 Predictive Analytics":
                 "Last 90 Days",
                 f"{_bfa_90['action_rate']:.0f}%" if _bfa_90["action_rate"] is not None else "—",
             )
-            _bfa_c3.metric("Total Signals Logged", f"{_bfa_n_total:,}")
+            _bfa_c3.metric(
+                "Actionable Signals Logged",
+                f"{_bfa_n_total:,}",
+                help=f"{_bfa_n_raw:,} total recommendation rows logged across all rec_types "
+                     f"(incl. buy_candidate); {_bfa_n_total:,} are actionable.",
+            )
 
             _bfa_by_type = by_rec_type(_pac_enriched)
             _bfa_type_rows = [
@@ -20880,6 +20899,10 @@ elif page == "📊 Predictive Analytics":
             st.dataframe(
                 _pa_pd.DataFrame(_bfa_type_rows),
                 width='stretch', hide_index=True,
+            )
+            st.caption(
+                "`buy_candidate`'s low action rate is expected — it's an awareness-only "
+                "feed, not a call to act. Shown here for completeness, not as a red flag."
             )
 
             st.markdown(
