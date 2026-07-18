@@ -127,6 +127,7 @@ from stock_analyzer.constants import (
     BEHAVIORAL_OPENING_WINDOW_MIN,
     BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
     BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP,
+    EXIT_SIGNAL_ACT_WINDOW_DAYS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -26147,5 +26148,95 @@ elif page == "🎯 My Edge":
             "🧬 Every card above is an observation, not a verdict — the engine never reads "
             "these patterns, and nothing here re-ranks, re-scores, or gates a recommendation."
         )
+
+        # ── Exit Signal Response ─────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Exit Signal Response")
+        st.caption(
+            "How you respond to the app's exit signals — an observed pattern in your "
+            "decisions, not a directive."
+        )
+
+        # Load exit signals (lazy, cached for this session).
+        if "_exit_signals_cache" not in st.session_state:
+            st.session_state["_exit_signals_cache"] = db.load_exit_signals()
+        _bf_exit_df = st.session_state.get("_exit_signals_cache")
+        if _bf_exit_df is None:
+            _bf_exit_df = pd.DataFrame()
+
+        # Trades are already loaded above; fall back to a fresh load if missing.
+        _bf_exit_trades_df = st.session_state.get("trades_df")
+        if _bf_exit_trades_df is None:
+            _bf_exit_trades_df = db.load_trades()
+
+        # ── Exit card 1 — Signal Response Rate ──────────────────────────────
+        with st.container(border=True):
+            st.markdown("**📈 Exit Signal Response Rate**")
+            _bf_ep1 = _bf.signal_response_rate_pattern(
+                _bf_exit_df,
+                _bf_exit_trades_df,
+                act_window_days=EXIT_SIGNAL_ACT_WINDOW_DAYS,
+                min_n=BEHAVIORAL_MIN_SAMPLE_N,
+            )
+            if _bf_ep1 is None:
+                st.caption(
+                    "Insufficient data — cards fill in as exit signals and SELL trades "
+                    "accumulate."
+                )
+            else:
+                for _sig_type, _stats in _bf_ep1.items():
+                    st.markdown(
+                        f"**{_sig_type}:** {_stats['action_rate']:.0%} action rate "
+                        f"({_stats['n_acted']}/{_stats['n_signals']} signals acted on)"
+                    )
+                st.caption("An observed pattern in your exit decisions, not a directive.")
+
+        # ── Exit card 2 — Response Lag ───────────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**⏱️ Time to Act on Exit Signals**")
+            _bf_ep2 = _bf.signal_lag_pattern(
+                _bf_exit_df,
+                _bf_exit_trades_df,
+                act_window_days=EXIT_SIGNAL_ACT_WINDOW_DAYS,
+                min_n=BEHAVIORAL_MIN_SAMPLE_N,
+            )
+            if _bf_ep2 is None:
+                st.caption("Insufficient data.")
+            else:
+                for _sig_type, _lag_stats in _bf_ep2.items():
+                    st.markdown(
+                        f"**{_sig_type}:** Median {_lag_stats['median_lag_days']:.1f} days "
+                        f"to first SELL after signal "
+                        f"({_lag_stats['pct_acted_day1']:.0f}% same/next-day)"
+                    )
+                st.caption(
+                    f"Based on signals you did respond to within "
+                    f"{EXIT_SIGNAL_ACT_WINDOW_DAYS} days."
+                )
+
+        # ── Exit card 3 — Escalation Ignored ────────────────────────────────
+        with st.container(border=True):
+            st.markdown("**⚠️ Signal Escalations Without Action**")
+            _bf_ep3 = _bf.escalation_ignored_pattern(
+                _bf_exit_df,
+                _bf_exit_trades_df,
+                act_window_days=EXIT_SIGNAL_ACT_WINDOW_DAYS,
+                min_n=BEHAVIORAL_MIN_SAMPLE_N,
+            )
+            if _bf_ep3 is None:
+                st.caption(
+                    f"Insufficient data — needs ≥{BEHAVIORAL_MIN_SAMPLE_N} escalation "
+                    "sequences (WATCH→TRIM, WATCH→EXIT, or TRIM→EXIT on same ticker)."
+                )
+            else:
+                st.markdown(
+                    f"{_bf_ep3['n_ignored']} of {_bf_ep3['n_escalations']} escalation "
+                    f"sequences ({_bf_ep3['ignored_rate']:.0%}) had no SELL between "
+                    "first and second signal."
+                )
+                st.caption(
+                    "Holding through an escalating signal is the most direct "
+                    "loss-aversion signal this app can surface."
+                )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

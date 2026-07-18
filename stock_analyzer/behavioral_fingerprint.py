@@ -20,6 +20,7 @@ than raising — a single bad row must not crash the tab.
 """
 
 from typing import Optional
+import pandas as pd
 
 
 def _safe_float(v) -> Optional[float]:
@@ -236,6 +237,235 @@ def opening_window_pattern(
             "opening": opening_stats,
             "later": later_stats,
             "delta_pp": delta_pp,
+        }
+    except Exception:
+        return None
+
+
+# ── Exit-side Pattern 1 — signal response rate by signal_type ────────────────
+
+def signal_response_rate_pattern(
+    exit_signals_df, trades_df, act_window_days: int, min_n: int
+) -> Optional[dict]:
+    """
+    For each signal_type (WATCH/TRIM/EXIT/RISK_OFF), compute what fraction of
+    signals were followed by a SELL trade on the same ticker within
+    `act_window_days` calendar days of the signal date.
+
+    Returns None when exit_signals_df is empty, trades_df has no SELL rows, or
+    no signal_type reaches `min_n` signals.  Otherwise a dict keyed by
+    signal_type, each value:
+        {"n_signals": int, "n_acted": int, "action_rate": float}
+    """
+    try:
+        if exit_signals_df is None or (hasattr(exit_signals_df, "empty") and exit_signals_df.empty):
+            return None
+        if trades_df is None or trades_df.empty:
+            return None
+
+        sells = trades_df[trades_df["action"] == "SELL"].copy()
+        if sells.empty:
+            return None
+
+        # Build a set of (ticker, sell_date) pairs for fast lookup.
+        sells["_sell_date"] = pd.to_datetime(sells["traded_at"], utc=True, errors="coerce").dt.date
+        sells = sells.dropna(subset=["_sell_date"])
+        sell_pairs = set(zip(sells["ticker"].str.upper(), sells["_sell_date"]))
+
+        window = pd.Timedelta(days=act_window_days)
+        result = {}
+
+        for sig_type, group in exit_signals_df.groupby("signal_type"):
+            n_signals = len(group)
+            n_acted = 0
+            for _, row in group.iterrows():
+                try:
+                    sig_date = pd.to_datetime(row["signal_date"]).date()
+                except Exception:
+                    continue
+                ticker = str(row.get("ticker", "")).upper()
+                if not ticker:
+                    continue
+                # Check every calendar day in [sig_date, sig_date + act_window_days]
+                acted = False
+                for offset in range(act_window_days + 1):
+                    check_date = (
+                        pd.Timestamp(sig_date) + pd.Timedelta(days=offset)
+                    ).date()
+                    if (ticker, check_date) in sell_pairs:
+                        acted = True
+                        break
+                if acted:
+                    n_acted += 1
+
+            if n_signals >= min_n:
+                result[str(sig_type)] = {
+                    "n_signals": n_signals,
+                    "n_acted": n_acted,
+                    "action_rate": round(n_acted / n_signals, 4) if n_signals else 0.0,
+                }
+
+        return result if result else None
+    except Exception:
+        return None
+
+
+# ── Exit-side Pattern 2 — response lag for acted signals ─────────────────────
+
+def signal_lag_pattern(
+    exit_signals_df, trades_df, act_window_days: int, min_n: int
+) -> Optional[dict]:
+    """
+    Among signals that WERE acted on (a SELL within `act_window_days` calendar
+    days), how many days did it take?
+
+    Returns None when there are no matching pairs or no signal_type reaches
+    `min_n` acted signals.  Otherwise a dict keyed by signal_type, each value:
+        {"n_acted": int, "median_lag_days": float, "pct_acted_day1": float}
+    where `pct_acted_day1` is the percentage acted same-day or next-day (lag ≤ 1).
+    """
+    try:
+        if exit_signals_df is None or (hasattr(exit_signals_df, "empty") and exit_signals_df.empty):
+            return None
+        if trades_df is None or trades_df.empty:
+            return None
+
+        sells = trades_df[trades_df["action"] == "SELL"].copy()
+        if sells.empty:
+            return None
+
+        sells["_sell_date"] = pd.to_datetime(sells["traded_at"], utc=True, errors="coerce").dt.date
+        sells = sells.dropna(subset=["_sell_date"])
+        # Build a mapping ticker -> sorted list of sell dates for fast lookup.
+        from collections import defaultdict
+        sell_dates_by_ticker: dict = defaultdict(list)
+        for _, row in sells.iterrows():
+            sell_dates_by_ticker[str(row["ticker"]).upper()].append(row["_sell_date"])
+        for t in sell_dates_by_ticker:
+            sell_dates_by_ticker[t] = sorted(sell_dates_by_ticker[t])
+
+        lags_by_type: dict = defaultdict(list)
+
+        for _, row in exit_signals_df.iterrows():
+            try:
+                sig_date = pd.to_datetime(row["signal_date"]).date()
+            except Exception:
+                continue
+            sig_type = str(row.get("signal_type", ""))
+            ticker = str(row.get("ticker", "")).upper()
+            if not ticker or not sig_type:
+                continue
+            window_end = (pd.Timestamp(sig_date) + pd.Timedelta(days=act_window_days)).date()
+            # Find the earliest SELL on or after sig_date within the window.
+            for sd in sell_dates_by_ticker.get(ticker, []):
+                if sd < sig_date:
+                    continue
+                if sd > window_end:
+                    break
+                lag = (sd - sig_date).days
+                lags_by_type[sig_type].append(lag)
+                break  # earliest only
+
+        result = {}
+        for sig_type, lags in lags_by_type.items():
+            n = len(lags)
+            if n < min_n:
+                continue
+            import statistics
+            median_lag = round(statistics.median(lags), 1)
+            pct_day1 = round(sum(1 for l in lags if l <= 1) / n * 100.0, 1)
+            result[sig_type] = {
+                "n_acted": n,
+                "median_lag_days": median_lag,
+                "pct_acted_day1": pct_day1,
+            }
+
+        return result if result else None
+    except Exception:
+        return None
+
+
+# ── Exit-side Pattern 3 — escalation sequences ignored ───────────────────────
+
+def escalation_ignored_pattern(
+    exit_signals_df, trades_df, act_window_days: int, min_n: int
+) -> Optional[dict]:
+    """
+    How often does the user hold through a signal escalation (WATCH→TRIM,
+    WATCH→EXIT, or TRIM→EXIT on the same ticker) without selling between the
+    first and second signal?
+
+    Returns None when fewer than 2 signal rows exist, or when the total
+    escalation-event count is below `min_n`.  Otherwise:
+        {"n_escalations": int, "n_ignored": int, "ignored_rate": float}
+    """
+    try:
+        if exit_signals_df is None or (hasattr(exit_signals_df, "empty") and exit_signals_df.empty):
+            return None
+        if len(exit_signals_df) < 2:
+            return None
+
+        # Escalation pairs: (lower-severity, higher-severity)
+        escalation_pairs = {("WATCH", "TRIM"), ("WATCH", "EXIT"), ("TRIM", "EXIT")}
+
+        sells_df = None
+        sell_dates_by_ticker: dict = {}
+        if trades_df is not None and not trades_df.empty:
+            sells_df = trades_df[trades_df["action"] == "SELL"].copy()
+            if not sells_df.empty:
+                sells_df["_sell_date"] = pd.to_datetime(
+                    sells_df["traded_at"], utc=True, errors="coerce"
+                ).dt.date
+                sells_df = sells_df.dropna(subset=["_sell_date"])
+                from collections import defaultdict
+                _sell_sets: dict = defaultdict(set)
+                for _, row in sells_df.iterrows():
+                    _sell_sets[str(row["ticker"]).upper()].add(row["_sell_date"])
+                sell_dates_by_ticker = dict(_sell_sets)
+
+        n_escalations = 0
+        n_ignored = 0
+
+        for ticker, grp in exit_signals_df.groupby("ticker"):
+            ticker_str = str(ticker).upper()
+            # Parse dates and sort.
+            rows = []
+            for _, row in grp.iterrows():
+                try:
+                    sd = pd.to_datetime(row["signal_date"]).date()
+                except Exception:
+                    continue
+                sig_type = str(row.get("signal_type", ""))
+                rows.append((sd, sig_type))
+            rows.sort(key=lambda x: x[0])
+
+            # Check every (earlier, later) pair that forms an escalation.
+            # Counts are pair-weighted: WATCH→TRIM→EXIT on one ticker = 3 pairs.
+            # ignored_rate reflects pair frequency, not distinct episodes.
+            for i in range(len(rows)):
+                for j in range(i + 1, len(rows)):
+                    earlier_date, earlier_type = rows[i]
+                    later_date, later_type = rows[j]
+                    if later_date <= earlier_date:
+                        continue
+                    if (earlier_type, later_type) not in escalation_pairs:
+                        continue
+                    # Check for any SELL between the two signal dates (inclusive).
+                    ticker_sells = sell_dates_by_ticker.get(ticker_str, set())
+                    sold_between = any(
+                        earlier_date <= sd <= later_date for sd in ticker_sells
+                    )
+                    n_escalations += 1
+                    if not sold_between:
+                        n_ignored += 1
+
+        if n_escalations < min_n:
+            return None
+
+        return {
+            "n_escalations": n_escalations,
+            "n_ignored": n_ignored,
+            "ignored_rate": round(n_ignored / n_escalations, 4) if n_escalations else 0.0,
         }
     except Exception:
         return None

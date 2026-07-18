@@ -793,6 +793,8 @@ BEHAVIORAL_OPENING_WINDOW_MIN = 30   # minutes after 9:30 ET considered "the ope
 # patterns compare different units (action-rate pp vs. SPY-adjusted alpha pp).
 BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP = 5.0  # momentum-chasing / conviction-tier patterns
 BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP       = 1.0  # opening-window pattern
+# Exit-side: how many calendar days after a signal a SELL counts as "acted on"
+EXIT_SIGNAL_ACT_WINDOW_DAYS                = 7
 
 # ── Tax-awareness lens (Concept F — DISPLAY-ONLY policy, NEVER gates) ─────────
 # Holding-period / harvest / wash-sale context layered onto EXIT signals and the
