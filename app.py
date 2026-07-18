@@ -20909,9 +20909,15 @@ elif page == "📊 Predictive Analytics":
                 "**Trade-side signal provenance** — were your actual BUY trades "
                 "preceded by an app signal at all?"
             )
-            if _pac_trades_df is not None and not _pac_trades_df.empty \
-                    and "action" in _pac_trades_df.columns:
-                _bfa_buys = _pac_trades_df[_pac_trades_df["action"] == "BUY"].copy()
+            # `_pac_trades_df` is only bound on the cache-MISS branch above (fresh
+            # load); on a cache-HIT this expander can run without it ever having
+            # been assigned this rerun. Re-derive independently of that branch.
+            _bfa_trades_df = st.session_state.get("trades_df")
+            if _bfa_trades_df is None:
+                _bfa_trades_df = db.load_trades()
+            if _bfa_trades_df is not None and not _bfa_trades_df.empty \
+                    and "action" in _bfa_trades_df.columns:
+                _bfa_buys = _bfa_trades_df[_bfa_trades_df["action"] == "BUY"].copy()
             else:
                 _bfa_buys = _pa_pd.DataFrame()
 
