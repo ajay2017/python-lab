@@ -1,6 +1,6 @@
 # Plan: Exit Signal Forward Capture + Behavioral Fingerprint v2 (Concept A Exit-Side)
 
-**Status: DESIGN — not yet built.**
+**Status: Phase 1 SHIPPED 2026-07-18 (commit `f86147d`). Phase 2 pending ≥30 days data accumulation.**
 **Author:** Ajay Kumar
 **Date:** 2026-07-18
 
