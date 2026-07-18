@@ -107,6 +107,22 @@ REDEPLOY_CORR_CORRELATED_MIN  = 0.70   # corr at/above this → "limited benefit
 CORR_HIGH_PAIRS_THRESHOLD   = 0.65   # "warning" tier — pair flagged as meaningfully correlated
 CORR_DANGER_PAIRS_THRESHOLD = 0.80   # "danger" tier — pair flagged as near-duplicate exposure
 
+# ── Factor Tilt Heatmap (Concept B panel 3 — next-evolution roadmap Phase 2, ─
+# sub-wave 3). Returns-based style analysis proxies (Pearson correlation of
+# held-position returns against these factor ETFs) — NOT FMP .info style
+# tags summed across positions, which the plan explicitly warns produces
+# garbage. 6-month window chosen with the user over a 3-month alternative
+# for statistical stability (factor tilt is noisy at small portfolio sizes).
+# Diagnostic only — stock_analyzer/portfolio_intelligence.py never gates.
+FACTOR_ETF_TICKERS = {
+    "Momentum":       "MTUM",
+    "Value":          "VLUE",
+    "Quality":        "QUAL",
+    "Low Volatility": "USMV",
+    "Growth":         "VUG",
+}
+FACTOR_TILT_WINDOW_DAYS = 126   # ~6 trading months
+
 # ── Grow Today candidate funnel ──────────────────────────────────────────────
 # max_picks: how many NEW positions the daily brief will recommend. Lower on
 # flat/bear days (capital-preservation posture). Investment-policy values —

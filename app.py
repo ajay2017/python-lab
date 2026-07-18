@@ -121,6 +121,8 @@ from stock_analyzer.constants import (
     CORR_HIGH_PAIRS_THRESHOLD,
     RISK_OFF_VIX_LEVEL,
     RISK_ON_VIX_LEVEL,
+    FACTOR_ETF_TICKERS,
+    FACTOR_TILT_WINDOW_DAYS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -2250,6 +2252,43 @@ def _fetch_sector_returns() -> pd.DataFrame:
         return pd.DataFrame(rows)
     except Exception:
         return pd.DataFrame()
+
+
+# ── Factor-proxy ETF daily returns (for Portfolio Intelligence Factor Tilt) ──
+@st.cache_data(ttl=3600)
+def _fetch_factor_etf_returns() -> dict:
+    """Batch-download factor-proxy ETFs (FACTOR_ETF_TICKERS); return daily
+    pct-change Close series per factor label, trimmed to the trailing
+    FACTOR_TILT_WINDOW_DAYS. Mirrors _fetch_sector_returns's single-batch-
+    download pattern (one yf.download call for all 5 tickers). period="9mo"
+    is just the download buffer, sized with real headroom above the ~126
+    trading days a straight "6mo" fetch would yield (a holiday-heavy window
+    could otherwise leave the .tail() call short); FACTOR_TILT_WINDOW_DAYS is
+    what actually bounds the analysis window fed to factor_tilt() — the
+    single source of truth for the negotiated 6-month lookback, so changing
+    that constant genuinely changes the window rather than being inert."""
+    import yfinance as yf
+    from stock_analyzer.data import _retry
+    tickers = list(FACTOR_ETF_TICKERS.values())
+    try:
+        raw = _retry(
+            yf.download, tickers,
+            period="9mo", auto_adjust=True, progress=False, threads=True,
+        )
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+        close = close.dropna(how="all")
+        out = {}
+        for label, etf in FACTOR_ETF_TICKERS.items():
+            try:
+                col = (close[etf] if etf in close.columns else close.iloc[:, 0]).dropna()
+                if len(col) < 2:
+                    continue
+                out[label] = col.pct_change().dropna().tail(FACTOR_TILT_WINDOW_DAYS)
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return {}
 
 
 # ── Market index strip — shown on every page ─────────────────────────────────
@@ -9618,11 +9657,108 @@ elif page == "🧩 Portfolio Intelligence":
             )
 
     with _pi_tab_factor:
-        st.info(
-            "📋 Planned — not yet built. Will show directional exposure to "
-            "momentum/value/quality/growth via returns-based regression against "
-            "factor ETFs (MTUM/VLUE/QUAL/USMV/VUG)."
+        st.caption(
+            "Directional exposure to 5 major style factors (Momentum, Value, "
+            "Quality, Low Volatility, Growth), via correlation to factor-proxy "
+            "ETFs over a trailing 6-month window. A portfolio can look "
+            "sector-diversified while still being deeply exposed to ONE factor "
+            "— e.g. several 'different' growth-tech names that would all fall "
+            "together in a momentum unwind. **Directional, not precise** — "
+            "factor estimates are noisy for a 10-20 position book over any "
+            "single window; treat this as a rough lean, not a measurement."
         )
+
+        _pi_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
+
+        _pi_factor_load_clicked = st.button(
+            "📡 Load factor exposure (MTUM/VLUE/QUAL/USMV/VUG)"
+            if _pi_factor_cache is None else "🔄 Refresh factor exposure",
+            key="_pi_factor_load_btn",
+        )
+        if _pi_factor_load_clicked:
+            _pi_factor_returns = _fetch_factor_etf_returns()
+            _pi_factor_weights = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
+            _pi_factor_cache = portfolio_intelligence.factor_tilt(
+                _pi_hd, _pi_factor_weights, _pi_factor_returns,
+            )
+            st.session_state["_pi_factor_tilt_cache"] = _pi_factor_cache
+
+        if _pi_factor_cache is None:
+            st.caption("Not loaded this session yet — click the button above.")
+        elif not _pi_factor_cache["positions"]:
+            st.info("Not enough price history / factor data to compute exposure this session.")
+        else:
+            _pi_factor_labels = list(FACTOR_ETF_TICKERS.keys())
+            _pi_factor_tickers = [p["ticker"] for p in _pi_factor_cache["positions"]]
+            _pi_factor_z = [
+                [p["correlations"].get(lbl) for lbl in _pi_factor_labels]
+                for p in _pi_factor_cache["positions"]
+            ]
+            _pi_factor_z_num = [
+                [v if v is not None else float("nan") for v in row]
+                for row in _pi_factor_z
+            ]
+            _pi_factor_text = [
+                ["" if v is None else f"{v:+.2f}" for v in row]
+                for row in _pi_factor_z
+            ]
+
+            _pi_factor_fig = go.Figure(go.Heatmap(
+                z=_pi_factor_z_num,
+                x=_pi_factor_labels,
+                y=_pi_factor_tickers,
+                text=_pi_factor_text,
+                texttemplate="%{text}",
+                colorscale="RdBu",
+                zmid=0, zmin=-1, zmax=1,
+                colorbar=dict(title="Corr"),
+            ))
+            _pi_factor_fig.update_layout(
+                template="plotly_dark",
+                height=max(300, 40 * len(_pi_factor_tickers) + 100),
+                margin=dict(l=0, r=0, t=10, b=0),
+                yaxis=dict(autorange="reversed"),
+            )
+            st.plotly_chart(_pi_factor_fig, use_container_width=True)
+
+            _pi_port_tilt = _pi_factor_cache["portfolio_tilt"]
+            _pi_tilt_valid = {k: v for k, v in _pi_port_tilt.items() if v is not None}
+            if _pi_tilt_valid:
+                _pi_tilt_fig = go.Figure(go.Bar(
+                    x=list(_pi_tilt_valid.values()),
+                    y=list(_pi_tilt_valid.keys()),
+                    orientation="h",
+                    marker_color=["#dc2626" if v < 0 else "#16a34a" for v in _pi_tilt_valid.values()],
+                    text=[f"{v:+.2f}" for v in _pi_tilt_valid.values()],
+                    textposition="outside",
+                ))
+                _pi_tilt_fig.update_layout(
+                    template="plotly_dark",
+                    height=220,
+                    xaxis=dict(range=[-1, 1], title="Weighted Correlation"),
+                    margin=dict(l=0, r=0, t=10, b=0),
+                )
+                st.plotly_chart(_pi_tilt_fig, use_container_width=True)
+
+                _pi_dom_factor = max(_pi_tilt_valid, key=lambda k: abs(_pi_tilt_valid[k]))
+                _pi_dom_val = _pi_tilt_valid[_pi_dom_factor]
+                st.markdown(
+                    f"Your portfolio leans **{_pi_dom_factor}**-tilted "
+                    f"(weighted correlation **{_pi_dom_val:+.2f}**)."
+                )
+
+            _pi_factor_total = len(_pi_pdf)
+            if _pi_factor_cache["n_included"] < _pi_factor_total:
+                st.caption(
+                    f"{_pi_factor_cache['n_included']} of {_pi_factor_total} positions included — "
+                    f"others lack sufficient overlapping price history this session."
+                )
+
+            st.caption(
+                "This shows a directional lean, not an instruction — composite "
+                "score (🔗 Risk Analysis / 📈 Analysis) and your own judgment "
+                "still decide any action."
+            )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

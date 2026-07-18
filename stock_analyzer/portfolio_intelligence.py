@@ -243,3 +243,135 @@ def risk_budget(
         }
     except Exception:
         return _empty
+
+
+def factor_tilt(
+    held_data: dict,
+    weights: dict,
+    factor_returns: dict,
+    min_overlap_days: int = 20,
+) -> dict:
+    """
+    Directional style-factor exposure via returns-based correlation — NOT a
+    regression/beta model. For each held position, Pearson-correlate its
+    daily returns against each factor-proxy ETF's daily returns (already
+    fetched and passed in as `factor_returns`; this module stays pure/no-I/O
+    like correlation_clusters/risk_budget above).
+
+    This is directional and noisy at small portfolio sizes — a 10-20
+    position book over a single trailing window will not cleanly separate
+    5 factors; treat results as a rough lean, not a precise measurement.
+    Realized/historical only — a look backward at how positions have
+    actually co-moved with each factor, not a forecast.
+
+    held_data:      {ticker: {"df" or "history": DataFrame with "Close", ...}}
+    factor_returns: {factor_label: daily pct-change Close Series}, already
+                    computed by the caller (app.py) — no network I/O here.
+    weights:        {ticker: weight_pct} — capital weight.
+    min_overlap_days: minimum overlapping trading days required before a
+                    (ticker, factor) correlation is computed; mirrors the
+                    "≥20 overlapping trading days" empirical-correlation
+                    minimum already used in risk.py's rate-sensitivity
+                    feature. Below this, the cell is None — never a
+                    correlation fabricated off too little data.
+
+    Returns:
+        {
+            "positions": [
+                {"ticker", "weight_pct", "correlations": {factor: float|None},
+                 "dominant_factor": str|None, "dominant_corr": float|None},
+                ...
+            ],  # sorted by weight_pct descending
+            "portfolio_tilt": {factor_label: float|None, ...},
+            "n_included": int,
+        }
+    Never raises — returns the empty shape on any unusable input/exception.
+    """
+    _empty = {"positions": [], "portfolio_tilt": {}, "n_included": 0}
+    try:
+        if not held_data or not factor_returns:
+            return _empty
+
+        factor_labels = list(factor_returns.keys())
+
+        # ── Per-ticker return series (mirrors risk_budget's extraction) ─────
+        ticker_rets: dict[str, pd.Series] = {}
+        for ticker, data in held_data.items():
+            hist = data.get("df") if data.get("df") is not None else data.get("history")
+            if hist is not None and not hist.empty and "Close" in hist.columns:
+                rets = hist["Close"].pct_change().dropna()
+                if len(rets) >= 2:
+                    ticker_rets[ticker] = rets
+
+        if len(ticker_rets) < 2:
+            return _empty
+
+        positions = []
+        for ticker, rets in ticker_rets.items():
+            correlations: dict = {}
+            for label in factor_labels:
+                frets = factor_returns.get(label)
+                if frets is None or frets.empty:
+                    correlations[label] = None
+                    continue
+                joined = pd.concat([rets, frets], axis=1, join="inner").dropna()
+                if len(joined) < min_overlap_days:
+                    correlations[label] = None
+                    continue
+                c = joined.iloc[:, 0].corr(joined.iloc[:, 1])
+                correlations[label] = round(float(c), 2) if c == c else None  # NaN guard
+
+            valid = {k: v for k, v in correlations.items() if v is not None}
+            if valid:
+                dominant_factor = max(valid, key=lambda k: abs(valid[k]))
+                dominant_corr = valid[dominant_factor]
+            else:
+                dominant_factor = None
+                dominant_corr = None
+
+            positions.append({
+                "ticker": ticker,
+                "weight_pct": round(float(weights.get(ticker, 0.0) or 0.0), 1),
+                "correlations": correlations,
+                "dominant_factor": dominant_factor,
+                "dominant_corr": dominant_corr,
+            })
+
+        # Drop tickers with zero usable correlations entirely — a row that's
+        # blank across every factor isn't a position "included" in this
+        # panel, and leaving it in would render an all-blank heatmap row
+        # that contradicts the "N of M positions included" caption.
+        positions = [
+            p for p in positions
+            if any(v is not None for v in p["correlations"].values())
+        ]
+        n_included = len(positions)
+        if n_included == 0:
+            return _empty
+
+        # ── Portfolio-level tilt per factor — renormalize weights among only ─
+        # the tickers with a valid correlation for THAT factor, so a ticker
+        # missing one factor's column doesn't silently zero-drag it.
+        portfolio_tilt: dict = {}
+        for label in factor_labels:
+            contributing = [
+                (p["weight_pct"], p["correlations"][label])
+                for p in positions
+                if p["correlations"].get(label) is not None
+            ]
+            total_w = sum(w for w, _ in contributing)
+            if not contributing or total_w <= 0:
+                portfolio_tilt[label] = None
+                continue
+            weighted = sum(w * c for w, c in contributing) / total_w
+            portfolio_tilt[label] = round(float(weighted), 2)
+
+        positions.sort(key=lambda p: -p["weight_pct"])
+
+        return {
+            "positions": positions,
+            "portfolio_tilt": portfolio_tilt,
+            "n_included": n_included,
+        }
+    except Exception:
+        return _empty
