@@ -4345,8 +4345,10 @@ if page == "🏠 Home":
     # inside the dark card without a separate external row (F-194).
     _dd_earnings_alerts = int(st.session_state.get("_earnings_posture_alerts_cache") or 0)
     _dd_b_locked        = bool(st.session_state.get("_brief_locked", False))
+    _dd_alerts_total = n_danger + n_warning   # full A&A page count
     _dd_act_color   = "#ef4444" if _db_act_n          > 0 else "#22c55e"
-    _dd_watch_color = "#f59e0b" if n_warning           > 0 else "#22c55e"
+    _dd_alrt_color  = ("#ef4444" if n_danger > 0 else
+                       "#f59e0b" if n_warning > 0 else "#22c55e")
     _dd_picks_color = "#22d3ee" if _db_buy_n           > 0 else "#9ca3af"
     _dd_earn_color  = "#ef4444" if _dd_earnings_alerts > 0 else "#22c55e"
     _dd_earn_sfx = (
@@ -4360,6 +4362,12 @@ if page == "🏠 Home":
             f" require same-day response{_dd_earn_sfx}"
         )
         _dd_sig_color = "#ef4444"
+    elif n_danger > 0:
+        _dd_signal    = (
+            f"🔴 {n_danger} danger alert{'s' if n_danger != 1 else ''} in"
+            f" Alerts & Actions — review needed{_dd_earn_sfx}"
+        )
+        _dd_sig_color = "#ef4444"
     elif _dd_b_locked:
         _dd_signal    = f"🛡️ Protect Mode active — new positions suppressed today{_dd_earn_sfx}"
         _dd_sig_color = "#f59e0b"
@@ -4370,7 +4378,7 @@ if page == "🏠 Home":
         )
         _dd_sig_color = "#f59e0b"
     elif n_warning > 0:
-        _dd_signal    = "🟡 Watch items noted — no same-day action required"
+        _dd_signal    = "🟡 Watch alerts noted — no same-day action required"
         _dd_sig_color = "#f59e0b"
     else:
         _dd_signal    = "✅ Nothing urgent today — Today's Brief is your only required stop"
@@ -4412,10 +4420,10 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(.dd-card) button:hover{
                         f"<div style='color:{_dd_act_color};font-size:1.4em;font-weight:700;"
                         f"margin-top:2px'>{_db_act_n}</div></div>", unsafe_allow_html=True)
         with _dd_t[1]:
-            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>WATCH</div>"
-                        f"<div style='color:{_dd_watch_color};font-size:1.4em;font-weight:700;"
-                        f"margin-top:2px'>{n_warning}</div></div>", unsafe_allow_html=True)
-            if n_warning > 0:
+            st.markdown(f"<div style='text-align:center'><div style='{_TLBL}'>ALERTS</div>"
+                        f"<div style='color:{_dd_alrt_color};font-size:1.4em;font-weight:700;"
+                        f"margin-top:2px'>{_dd_alerts_total}</div></div>", unsafe_allow_html=True)
+            if _dd_alerts_total > 0:
                 if st.button("→ Alerts & Actions", key="_dd_nav_watch", use_container_width=True):
                     st.session_state["_pending_page"] = "⚠️ Alerts & Actions"
                     st.rerun()
