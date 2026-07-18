@@ -353,6 +353,11 @@ st.markdown("""
     border-radius: 0;
 }
 
+/* Center icon vertically when label wraps to two lines */
+[data-testid="stSidebar"] [data-testid="stButton"] > button > div {
+    align-items: center;
+}
+
 [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
     color: #f0f2f5;
     background: rgba(255,255,255,0.05);
