@@ -22544,6 +22544,25 @@ elif page == "📖 User Guide":
 """
         )
 
+    with st.expander("📅 Daily workflow — what to do each morning", expanded=False):
+        st.markdown(
+            """
+Once your trades are logged and reconciled (see *First run* above), your daily routine is short:
+
+1. **Open 🏠 Home — read Today's Brief.** This is your starting point every session. The Brief computes fresh signals on everything you hold and everything the scanner found, then sorts it into offense (left) and defense (right). You don't need to visit any other page unless the Brief points you there.
+
+2. **Act on the 🔴 Act Today lane first.** These are the only genuine trade decisions for today — a stop breached, a sell/trim signal, a deterioration exit. If the lane reads *"✅ Nothing to act on — you're set for today"*, you're done with decisions. Everything else is monitoring or standing quality work.
+
+3. **Check the 👁️ Monitoring lane** for early-warning items (a deterioration Watch, a macro event approaching, mild news). No action required — just awareness so you're not surprised later.
+
+4. **Optionally check ⚠️ Alerts & Actions and 🔗 Risk Analysis** if Home flagged anything in those directions, or if you want a deeper read on portfolio risk.
+
+5. **Log any trades you make.** If you acted on a Brief call — or made any trade independently — record it in 📒 Trade Journal before your next session. Stale holdings data is the one thing that makes the Brief confidently wrong.
+
+*On most days, steps 1–2 take under five minutes. The app is designed to be quiet when there's nothing real to do.*
+"""
+        )
+
     with st.expander("🏠 Reading Today's Brief", expanded=False):
         st.markdown(
             """
