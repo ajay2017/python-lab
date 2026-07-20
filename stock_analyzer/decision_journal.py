@@ -6,9 +6,25 @@ Analyses the decision context attached to trades to surface:
   - Override accuracy: when you ignored signals, how did outcomes compare?
   - Costly deviations: ignored signals that led to losses (most important pattern)
   - Good overrides   : times ignoring the signal paid off
-  - Lessons library  : all free-text lessons logged by the user
+  - Lessons library  : all free-text lessons + structured category counts
   - Behavioral insight: one-line summary of the dominant pattern
 """
+
+# Fixed vocabulary for structured lesson taxonomy (F-195).
+# Order matches the UI dropdown. Do not reorder — existing DB values are
+# matched by string equality, so renaming a label here would orphan old rows.
+LESSON_CATEGORIES = [
+    "Followed the signal — disciplined exit",
+    "Thesis broke — cut correctly",
+    "Held too long — should have taken profit earlier",
+    "Cut too early — recovered after I sold",
+    "Ignored the exit signal — delayed action cost me",
+    "Position sized beyond conviction — rebalancing",
+    "Macro/sector headwind — not company-specific",
+    "Earnings surprise — unexpected event",
+    "Panic/fear sell — emotional, not analytical",
+    "Pre-mortem call was right",
+]
 
 import pandas as pd
 
@@ -36,11 +52,13 @@ def compute_patterns(trades_df: pd.DataFrame) -> dict:
         "total_with_context": 0,
         "followed_wins": 0, "followed_losses": 0, "followed_pnl": 0.0,
         "ignored_wins":  0, "ignored_losses":  0, "ignored_pnl":  0.0,
-        "signal_accuracy":    None,
-        "override_accuracy":  None,
-        "costly_deviations":  [],
-        "good_overrides":     [],
-        "lessons":            [],
+        "signal_accuracy":        None,
+        "override_accuracy":      None,
+        "costly_deviations":      [],
+        "good_overrides":         [],
+        "lessons":                [],
+        "lesson_category_counts": {},
+        "lesson_category_by_outcome": {},
         "behavioral_insight": None,
     }
 
@@ -106,16 +124,41 @@ def compute_patterns(trades_df: pd.DataFrame) -> dict:
     # ── Lessons library: all non-empty lesson strings ─────────────────────────
     lessons = [
         {
-            "ticker":    str(row.get("ticker", "")),
-            "text":      str(row.get("lesson", "")),
-            "pnl":       _f(row.get("realized_pnl")),
-            "date":      str(row.get("traded_at", ""))[:10],
-            "followed":  row.get("_followed", ""),
+            "ticker":          str(row.get("ticker", "")),
+            "text":            str(row.get("lesson", "")),
+            "lesson_category": str(row.get("lesson_category", "") or ""),
+            "pnl":             _f(row.get("realized_pnl")),
+            "date":            str(row.get("traded_at", ""))[:10],
+            "followed":        row.get("_followed", ""),
         }
         for _, row in with_context.iterrows()
-        if str(row.get("lesson", "")).strip()
+        if str(row.get("lesson", "")).strip() or str(row.get("lesson_category", "") or "").strip()
     ]
     lessons.sort(key=lambda x: x["date"], reverse=True)
+
+    # ── Lesson category analytics ─────────────────────────────────────────────
+    # Count frequency and cross-tab with P&L outcome for every trade that has
+    # a structured lesson_category, regardless of whether free-text was also set.
+    cat_col = "lesson_category"
+    all_trades_sell = df.copy()
+    all_trades_sell["_cat"] = all_trades_sell[cat_col].fillna("").str.strip() if cat_col in all_trades_sell.columns else ""
+    cat_rows = all_trades_sell[all_trades_sell["_cat"] != ""]
+
+    lesson_category_counts: dict = {}
+    lesson_category_by_outcome: dict = {}
+
+    for cat, grp in cat_rows.groupby("_cat"):
+        lesson_category_counts[cat] = len(grp)
+        pnls = grp["_pnl"].dropna()
+        wins   = int((pnls > 0).sum())
+        losses = int((pnls < 0).sum())
+        avg_pnl = float(pnls.mean()) if not pnls.empty else 0.0
+        lesson_category_by_outcome[cat] = {
+            "wins":    wins,
+            "losses":  losses,
+            "avg_pnl": round(avg_pnl, 2),
+            "n":       len(grp),
+        }
 
     # ── Behavioral insight ────────────────────────────────────────────────────
     insight = None
@@ -151,10 +194,12 @@ def compute_patterns(trades_df: pd.DataFrame) -> dict:
         "ignored_wins":    i_wins,
         "ignored_losses":  i_losses,
         "ignored_pnl":     i_pnl,
-        "signal_accuracy":   f_acc,
-        "override_accuracy": i_acc,
-        "costly_deviations": costly_list,
-        "good_overrides":    good_list,
-        "lessons":           lessons,
+        "signal_accuracy":        f_acc,
+        "override_accuracy":      i_acc,
+        "costly_deviations":      costly_list,
+        "good_overrides":         good_list,
+        "lessons":                lessons,
+        "lesson_category_counts":     lesson_category_counts,
+        "lesson_category_by_outcome": lesson_category_by_outcome,
         "behavioral_insight": insight,
     }

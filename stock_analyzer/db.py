@@ -81,6 +81,7 @@ the atomic upsert + sweep pattern degrades to delete-then-insert):
         followed_signal  text,
         deviation_reason text,
         lesson           text,
+        lesson_category  text,
         traded_at        timestamptz default now()
     );
 
@@ -90,6 +91,7 @@ If trades table already exists, run this once to add the decision-journal column
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS followed_signal  text;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS deviation_reason text;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS lesson           text;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS lesson_category  text;
 
 Decision-context capture (Concept E, Phase 1 — added 2026-07-17). A frozen,
 schema-versioned snapshot of the state of the world at each interactive Buy/Sell
@@ -820,8 +822,8 @@ def load_watchlist() -> list[str]:
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "cost_basis", "realized_pnl", "notes", "trigger_type",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
-               "traded_at", "user_thesis", "thesis_source", "decision_context",
-               "premortem_case_against", "premortem_commitment"]
+               "lesson_category", "traded_at", "user_thesis", "thesis_source",
+               "decision_context", "premortem_case_against", "premortem_commitment"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -838,7 +840,7 @@ def load_trades() -> pd.DataFrame:
                 df = pd.DataFrame(rows)
                 # Backfill columns for rows pre-dating each feature addition
                 for col in ("signal_seen", "followed_signal", "deviation_reason",
-                            "lesson", "user_thesis", "thesis_source",
+                            "lesson", "lesson_category", "user_thesis", "thesis_source",
                             "decision_context", "premortem_case_against",
                             "premortem_commitment"):
                     if col not in df.columns:
@@ -873,7 +875,8 @@ def save_trade(record: dict) -> bool:
         # drop ALL optional columns and retry once — a single retry handles the
         # case where multiple columns are missing simultaneously.
         _optional = ("thesis_source", "decision_context",
-                     "premortem_case_against", "premortem_commitment")
+                     "premortem_case_against", "premortem_commitment",
+                     "lesson_category")
         _err_str = str(e)
         _any_optional = any(c in _err_str for c in _optional)
         if _any_optional:

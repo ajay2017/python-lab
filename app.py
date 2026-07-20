@@ -16695,10 +16695,17 @@ elif page == "📒 Trade Journal":
                 )
             else:
                 st.session_state["_tj_deviation_reason"] = ""
+            from stock_analyzer.decision_journal import LESSON_CATEGORIES as _LESSON_CATS
+            st.selectbox(
+                "Lesson category (optional)",
+                ["— (skip)"] + _LESSON_CATS,
+                key="_tj_lesson_category",
+                help="Pick the pattern that best describes this exit. Powers your Pattern Library over time.",
+            )
             st.text_input(
-                "Lesson learned (optional)",
+                "Details (optional)",
                 key="_tj_lesson",
-                placeholder="e.g. Always follow pre-earnings sell signals on small-caps",
+                placeholder="e.g. Held past earnings because I expected a beat — didn't pan out",
             )
         _cost_basis_hint = 0.01
         _cost_hint_label = "Cost Basis / share ($)"
@@ -17293,6 +17300,11 @@ elif page == "📒 Trade Journal":
                     "followed_signal":  _dc_followed,
                     "deviation_reason": (st.session_state.get("_tj_deviation_reason") or "").strip() or None,
                     "lesson":           (st.session_state.get("_tj_lesson") or "").strip() or None,
+                    "lesson_category":  (
+                        (st.session_state.get("_tj_lesson_category") or "").strip()
+                        if (st.session_state.get("_tj_lesson_category") or "") not in ("", "— (skip)")
+                        else None
+                    ),
                     "user_thesis":      (_final_thesis or None) if action == "BUY" else None,
                     "thesis_source":    _thesis_source,
                     "decision_context": _dc_snapshot,
@@ -18043,22 +18055,71 @@ elif page == "📒 Trade Journal":
                             unsafe_allow_html=True,
                         )
 
-            # Lessons library
-            if _dj["lessons"]:
-                with st.expander(f"📚 Lessons Library ({len(_dj['lessons'])})"):
-                    st.caption("Every lesson you've logged, newest first. Your personal trading rulebook.")
-                    for _les in _dj["lessons"]:
-                        _les_clr = "#22c55e" if _les["pnl"] >= 0 else "#ef4444"
-                        st.markdown(
-                            f"<div style='background:#1c1917;border-left:3px solid {_les_clr};"
-                            f"border-radius:6px;padding:8px 12px;margin-bottom:5px'>"
-                            f"<span style='color:#fbbf24;font-weight:600'>{_les['ticker']}</span> "
-                            f"<span style='color:#9ca3af;font-size:0.8em'>· {_les['date']} · "
-                            f"{'followed' if _les['followed'] == 'yes' else 'overrode'} signal</span><br>"
-                            f"<span style='color:#f9fafb'>💡 {_les['text']}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
+            # Pattern Library — structured categories + detail log
+            _dj_cat_counts = _dj.get("lesson_category_counts", {})
+            _dj_cat_outcomes = _dj.get("lesson_category_by_outcome", {})
+            _dj_has_cats = bool(_dj_cat_counts)
+            _dj_has_lessons = bool(_dj["lessons"])
+
+            if _dj_has_cats or _dj_has_lessons:
+                _pl_label = f"📚 Pattern Library ({len(_dj_cat_counts)} categories, {len(_dj['lessons'])} entries)"
+                with st.expander(_pl_label):
+                    if _dj_has_cats:
+                        st.caption("How often each exit pattern appears — and whether it paid off.")
+                        # Sort by frequency descending
+                        _sorted_cats = sorted(_dj_cat_counts.items(), key=lambda x: x[1], reverse=True)
+                        for _cat_name, _cat_n in _sorted_cats:
+                            _cat_out = _dj_cat_outcomes.get(_cat_name, {})
+                            _cat_wins   = _cat_out.get("wins", 0)
+                            _cat_losses = _cat_out.get("losses", 0)
+                            _cat_avg    = _cat_out.get("avg_pnl", 0.0)
+                            _cat_clr    = "#22c55e" if _cat_avg >= 0 else "#ef4444"
+                            _cat_wl     = (
+                                f"<span style='color:#9ca3af;font-size:0.78em'> · "
+                                f"{_cat_wins}W/{_cat_losses}L · avg ${_cat_avg:+,.0f}</span>"
+                                if (_cat_wins + _cat_losses) > 0 else ""
+                            )
+                            st.markdown(
+                                f"<div style='background:#1c1917;border-left:3px solid {_cat_clr};"
+                                f"border-radius:6px;padding:8px 14px;margin-bottom:5px;"
+                                f"display:flex;align-items:center;gap:10px'>"
+                                f"<span style='color:#f9fafb;font-size:0.88em'>{_cat_name}</span>"
+                                f"<span style='margin-left:auto;background:#292524;border-radius:12px;"
+                                f"padding:2px 10px;color:#fbbf24;font-weight:700;font-size:0.82em'>"
+                                f"×{_cat_n}</span>"
+                                f"{_cat_wl}"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    if _dj_has_lessons:
+                        if _dj_has_cats:
+                            st.divider()
+                        st.caption("Full log — newest first.")
+                        for _les in _dj["lessons"]:
+                            _les_clr = "#22c55e" if _les["pnl"] >= 0 else "#ef4444"
+                            _les_cat_chip = (
+                                f"<span style='background:#292524;border-radius:10px;"
+                                f"padding:1px 8px;color:#a78bfa;font-size:0.75em;"
+                                f"margin-left:6px'>{_les['lesson_category']}</span>"
+                                if _les.get("lesson_category") else ""
+                            )
+                            _les_detail = (
+                                f"<div style='color:#d1d5db;font-size:0.82em;margin-top:3px'>"
+                                f"📝 {_les['text']}</div>"
+                                if _les.get("text") else ""
+                            )
+                            st.markdown(
+                                f"<div style='background:#1c1917;border-left:3px solid {_les_clr};"
+                                f"border-radius:6px;padding:8px 12px;margin-bottom:5px'>"
+                                f"<span style='color:#fbbf24;font-weight:600'>{_les['ticker']}</span>"
+                                f"{_les_cat_chip} "
+                                f"<span style='color:#9ca3af;font-size:0.8em'>· {_les['date']} · "
+                                f"{'followed' if _les['followed'] == 'yes' else 'overrode'} signal</span>"
+                                f"{_les_detail}"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
 
         # ── Engine Trust by Composite Band ───────────────────────────────────────
         with st.expander("🔬 Engine Trust by Composite Band", expanded=False):
@@ -23463,6 +23524,30 @@ Two diagnostic lenses — not recommendations, not gates.
 - **Breakeven Anchoring** — do positions linger unusually long in the −2 to 0% P&L zone? A spike in that bracket means you may be anchoring to the purchase price ("waiting to get back to even") rather than the thesis.
 
 Each card suppresses to "insufficient data" until enough closed trades accumulate. **None of these observations change a score, a rank, or a recommendation — the engine never reads them.** The methodology note at the bottom of each section explains caveats (today's composite scores only; some patterns reflect deliberate risk management, not psychology).
+"""
+        )
+
+    with st.expander("📚 Lessons Learned Library — capture patterns in how exits play out", expanded=False):
+        st.markdown(
+            """
+When you log a SELL or TRIM in the **📒 Trade Journal**, the Decision Context expander includes a **lesson category dropdown** — a structured way to tag *why* the exit happened. Pick the one that best describes the exit pattern:
+
+1. **Followed the signal** — disciplined exit, acted on the app's recommendation
+2. **Thesis broke** — cut correctly, something fundamental changed
+3. **Held too long** — should have taken profit earlier
+4. **Cut too early** — recovered after I sold
+5. **Ignored the exit signal** — delayed action cost me
+6. **Position sized beyond conviction** — rebalancing
+7. **Macro/sector headwind** — not company-specific
+8. **Earnings surprise** — unexpected event
+9. **Panic/fear sell** — emotional, not analytical
+10. **Pre-mortem call was right** — your own downside scenario proved correct
+
+The existing free-text **Details (optional)** field is for your own context — you don't need to fill both. Over time, the **Pattern Library** in the Decision Journal section shows how often each pattern appears and **whether it paid off** (W/L count + avg P&L per category).
+
+Example: if you've cited "Held too long" 6 times and the average trade cost $−340, the Pattern Library will show that explicitly — so you can say "this pattern costs me real money, I should act faster next time."
+
+The taxonomy is fixed so patterns stay comparable across months and years — it's a way to spot repeating exits and learn from their outcomes.
 """
         )
 
