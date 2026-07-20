@@ -26763,6 +26763,15 @@ elif page == "🎯 My Edge":
                         f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
                         f"high conviction, undersized position.\n\n{_mi_orphan_body}"
                     )
+                    for _p in _mi_orphans:
+                        if st.button(
+                            f"📈 Analyse {_p['Ticker']}",
+                            key=f"_mi_nav_orphan_{_p['Ticker']}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_analysis_ticker"] = _p["Ticker"]
+                            st.session_state["_pending_page"] = "📈 Analysis"
+                            st.rerun()
 
                 with _mi_c2:
                     if _mi_overexp:
@@ -26780,6 +26789,15 @@ elif page == "🎯 My Edge":
                         f"Score < {CONVICTION_WEAK_SCORE}, weight above median — "
                         f"carrying significant weight on weak conviction.\n\n{_mi_overexp_body}"
                     )
+                    for _p in _mi_overexp:
+                        if st.button(
+                            f"📈 Analyse {_p['Ticker']}",
+                            key=f"_mi_nav_overexp_{_p['Ticker']}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_analysis_ticker"] = _p["Ticker"]
+                            st.session_state["_pending_page"] = "📈 Analysis"
+                            st.rerun()
 
                 with _mi_c3:
                     if _mi_overhangs:
@@ -26798,6 +26816,15 @@ elif page == "🎯 My Edge":
                         f"Top-{CONVICTION_LEGACY_TOP_N} by weight, score < {CONVICTION_FADED_SCORE} — "
                         f"large position whose conviction has faded.\n\n{_mi_overhang_body}"
                     )
+                    for _p in _mi_overhangs:
+                        if st.button(
+                            f"📈 Analyse {_p['Ticker']}",
+                            key=f"_mi_nav_overhang_{_p['Ticker']}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_analysis_ticker"] = _p["Ticker"]
+                            st.session_state["_pending_page"] = "📈 Analysis"
+                            st.rerun()
 
         # ── Section 2 — Behavioral Biases ────────────────────────────────────
         st.markdown("---")
