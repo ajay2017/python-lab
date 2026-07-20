@@ -868,16 +868,19 @@ def save_trade(record: dict) -> bool:
     except Exception as e:
         # Graceful degradation: additive optional columns (thesis_source, F-5;
         # decision_context, Concept E; premortem_case_against/premortem_commitment,
-        # Concept C) may not exist yet in Supabase (DDL not applied). Drop
-        # whichever the error names and retry once so trade logging never
-        # breaks while the columns ship inert until DDL.
+        # Concept C) may not exist yet in Supabase (DDL not applied). If the
+        # error names ANY optional column (or is a PGRST204 schema-cache miss),
+        # drop ALL optional columns and retry once — a single retry handles the
+        # case where multiple columns are missing simultaneously.
         _optional = ("thesis_source", "decision_context",
                      "premortem_case_against", "premortem_commitment")
-        _missing = [c for c in _optional if c in str(e) and c in record]
-        if _missing:
+        _err_str = str(e)
+        _any_optional = any(c in _err_str for c in _optional)
+        if _any_optional:
+            _to_drop = {c for c in _optional if c in record}
             try:
                 _client().table("trades").insert(
-                    {k: v for k, v in record.items() if k not in _missing}
+                    {k: v for k, v in record.items() if k not in _to_drop}
                 ).execute()
                 return True
             except Exception as e2:
