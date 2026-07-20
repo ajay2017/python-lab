@@ -884,7 +884,7 @@ def save_trade(record: dict) -> bool:
                 e = e2
         from stock_analyzer import api_health as _ah
         _ah.record("supabase", "error", msg=str(e)[:120])
-        st.error("⛔ Failed to save trade — see Data Health tab for details.")
+        st.error(f"⛔ Failed to save trade: {str(e)[:300]}")
         return False
 
 

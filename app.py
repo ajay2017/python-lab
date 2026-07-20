@@ -16546,7 +16546,7 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_drift_checked", None)
                 st.session_state.pop("_tj_drift_state", None)
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
-            st.rerun()
+                st.rerun()
         if _ps_c2.button("✗ Cancel", key="_tj_cancel_sell", use_container_width=True):
             st.session_state["_tj_prefill"] = {
                 "ticker": _ps_ticker,
