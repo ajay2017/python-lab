@@ -21525,16 +21525,20 @@ elif page == "💰 Account":
         _t_peak_eq   = float(_tdf["equity"].max())
         _t_peak_dt   = _tdf["equity"].idxmax().strftime("%b %d")
 
-        # Narration — avoid $-inside-** to prevent Streamlit KaTeX interference.
-        # Bold dates and direction words only; dollar amounts stay unformatted.
+        # Narration — use \$ to escape dollar signs from Streamlit's KaTeX parser.
+        # Bare $ in markdown triggers inline LaTeX mode, consuming the sign and
+        # mangling adjacent text. \$ renders as a literal dollar sign.
+        def _d(v: float) -> str:
+            return f"\\${v:,.0f}"
+
         _t_narr = (
             f"Since **{_t_first_dt}**, equity positions moved from "
-            f"${_t_first_eq:,.0f} to ${_t_full_eq:,.0f} ({_t_n_days} days) — "
-            f"**{_t_sign}{_t_gap_pct:.1f}%** ({_t_sign}${abs(_t_gap):,.0f}) "
-            f"**{_t_direction}** the ${_t_full_ncc:,.0f} contributed."
+            f"{_d(_t_first_eq)} to {_d(_t_full_eq)} ({_t_n_days} days) — "
+            f"**{_t_sign}{_t_gap_pct:.1f}%** ({_t_sign}{_d(abs(_t_gap))}) "
+            f"**{_t_direction}** the {_d(_t_full_ncc)} contributed."
         )
         if _t_peak_eq > _t_full_eq * 1.05:
-            _t_narr += f" Peaked at ${_t_peak_eq:,.0f} around {_t_peak_dt}."
+            _t_narr += f" Peaked at {_d(_t_peak_eq)} around {_t_peak_dt}."
 
         # Bridge to the net account value / return story
         if _total_value is not None and _cash is not None:
@@ -21544,19 +21548,19 @@ elif page == "💰 Account":
             _t_net_dir  = "above" if _t_net_gap >= 0 else "below"
             if _cash < 0:
                 _t_narr += (
-                    f"\n\n**Net account value: ${_total_value:,.0f}** "
-                    f"(equity ${_t_full_eq:,.0f} minus ${abs(_cash):,.0f} margin balance). "
-                    f"Against ${_t_full_ncc:,.0f} contributed, net is "
-                    f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}${abs(_t_net_gap):,.0f}) "
+                    f"\n\n**Net account value: {_d(_total_value)}** "
+                    f"(equity {_d(_t_full_eq)} minus {_d(abs(_cash))} margin balance). "
+                    f"Against {_d(_t_full_ncc)} contributed, net is "
+                    f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}{_d(abs(_t_net_gap))}) "
                     f"**{_t_net_dir}** baseline — this is the return in Growth & Contributions above. "
                     f"The gap between the equity line and the diamond marker is your current leverage."
                 )
             else:
                 _t_narr += (
-                    f"\n\n**Net account value: ${_total_value:,.0f}** "
-                    f"(equity ${_t_full_eq:,.0f} plus ${_cash:,.0f} cash). "
-                    f"Against ${_t_full_ncc:,.0f} contributed, net is "
-                    f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}${abs(_t_net_gap):,.0f}) "
+                    f"\n\n**Net account value: {_d(_total_value)}** "
+                    f"(equity {_d(_t_full_eq)} plus {_d(_cash)} cash). "
+                    f"Against {_d(_t_full_ncc)} contributed, net is "
+                    f"**{_t_net_sign}{_t_net_pct:.1f}%** ({_t_net_sign}{_d(abs(_t_net_gap))}) "
                     f"**{_t_net_dir}** baseline."
                 )
         st.markdown(_t_narr)
