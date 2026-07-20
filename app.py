@@ -26664,13 +26664,28 @@ elif page == "🎯 My Edge":
                 _mi_overexp  = _mi_align["accidental_overexposures"]
                 _mi_overhangs = _mi_align["legacy_overhangs"]
 
+                # P&L lookup so each pattern line can show current return
+                _mi_pnl_map: dict = {}
+                if "Ticker" in _mi_port.columns and "P&L (%)" in _mi_port.columns:
+                    for _, _r in _mi_port[["Ticker", "P&L (%)"]].iterrows():
+                        try:
+                            _mi_pnl_map[str(_r["Ticker"]).upper()] = float(_r["P&L (%)"])
+                        except (TypeError, ValueError):
+                            pass
+
+                def _mi_ticker_line(p: dict) -> str:
+                    pnl = _mi_pnl_map.get(str(p["Ticker"]).upper())
+                    pnl_str = f", return {pnl:+.1f}%" if pnl is not None else ""
+                    return (
+                        f"• **{p['Ticker']}** — score {p['Score']:.0f}, "
+                        f"weight {p['Weight (%)']:.1f}%{pnl_str}"
+                    )
+
                 _mi_c1, _mi_c2, _mi_c3 = st.columns(3)
                 with _mi_c1:
                     _mi_orphan_body = (
-                        "\n".join(
-                            f"• **{_p['Ticker']}** — score {_p['Score']:.0f}, weight {_p['Weight (%)']:.1f}%"
-                            for _p in _mi_orphans
-                        ) if _mi_orphans else "None — high-conviction names are well-sized."
+                        "\n".join(_mi_ticker_line(_p) for _p in _mi_orphans)
+                        if _mi_orphans else "None — high-conviction names are well-sized."
                     )
                     st.info(
                         f"**🌱 Orphan Conviction ({len(_mi_orphans)})**\n\n"
@@ -26680,10 +26695,8 @@ elif page == "🎯 My Edge":
 
                 with _mi_c2:
                     _mi_overexp_body = (
-                        "\n".join(
-                            f"• **{_p['Ticker']}** — score {_p['Score']:.0f}, weight {_p['Weight (%)']:.1f}%"
-                            for _p in _mi_overexp
-                        ) if _mi_overexp else "None — no overweight positions with weak scores."
+                        "\n".join(_mi_ticker_line(_p) for _p in _mi_overexp)
+                        if _mi_overexp else "None — no overweight positions with weak scores."
                     )
                     st.warning(
                         f"**⚠️ Accidental Overexposure ({len(_mi_overexp)})**\n\n"
@@ -26693,10 +26706,8 @@ elif page == "🎯 My Edge":
 
                 with _mi_c3:
                     _mi_overhang_body = (
-                        "\n".join(
-                            f"• **{_p['Ticker']}** — score {_p['Score']:.0f}, weight {_p['Weight (%)']:.1f}%"
-                            for _p in _mi_overhangs
-                        ) if _mi_overhangs else "None — largest positions still carry strong scores."
+                        "\n".join(_mi_ticker_line(_p) for _p in _mi_overhangs)
+                        if _mi_overhangs else "None — largest positions still carry strong scores."
                     )
                     st.error(
                         f"**🕰️ Legacy Overhang ({len(_mi_overhangs)})**\n\n"
