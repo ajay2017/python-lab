@@ -21406,8 +21406,9 @@ elif page == "💰 Account":
     st.markdown("---")
     st.markdown("### 📈 Capital Trend")
     st.caption(
-        "Equity position value vs net contributed capital over time — "
-        "the visual story behind the Growth & Contributions metrics above."
+        "Equity position value vs net contributed capital over time. "
+        "**Equity positions only** — cash balance and margin are excluded from the line. "
+        "Net account value (equity + cash) is shown as a separate marker."
     )
 
     _trend_snap = None
@@ -21471,13 +21472,30 @@ elif page == "💰 Account":
         # Equity filled area — fills to the NCC trace above/below it
         _t_fig.add_trace(_pgo_trend.Scatter(
             x=_plot_tdf.index, y=_plot_tdf["equity"],
-            name="Portfolio equity",
+            name="Portfolio equity (positions only)",
             fill="tonexty",
             fillcolor=_t_fill,
             line=dict(color=_t_eq_color, width=2),
-            hovertemplate="Equity: $%{y:,.0f}<extra></extra>",
+            hovertemplate="Equity positions: $%{y:,.0f}<extra></extra>",
             mode="lines",
         ))
+        # Net account value marker — equity + cash (may be negative = margin debit).
+        # A single point at the latest date so the -7.4% return story is visible
+        # in the same frame as the equity line.
+        if _total_value is not None:
+            _t_net_color = "#22c55e" if _total_value >= _t_last_ncc else "#f59e0b"
+            _t_fig.add_trace(_pgo_trend.Scatter(
+                x=[_tdf.index[-1]],
+                y=[_total_value],
+                name="Net account value (equity + cash)",
+                mode="markers+text",
+                marker=dict(size=12, color=_t_net_color, symbol="diamond",
+                            line=dict(color="white", width=1.5)),
+                text=[f"  Net: ${_total_value:,.0f}"],
+                textposition="middle right",
+                textfont=dict(size=11, color=_t_net_color),
+                hovertemplate="Net account value: $%{y:,.0f}<extra></extra>",
+            ))
         _t_fig.update_layout(
             margin=dict(l=0, r=0, t=28, b=0),
             height=300,
@@ -21507,18 +21525,39 @@ elif page == "💰 Account":
         _t_peak_eq   = float(_tdf["equity"].max())
         _t_peak_dt   = _tdf["equity"].idxmax().strftime("%b %d")
 
+        # Narration — equity story first, then net-account bridge, then peak note
         _t_narr = (
             f"Since **{_t_first_dt}**, equity positions moved from "
-            f"**${_t_first_eq:,.0f}** to **${_t_full_eq:,.0f}** ({_t_n_days} days). "
-            f"Against **${_t_full_ncc:,.0f}** net contributed, you are "
+            f"**${_t_first_eq:,.0f}** to **${_t_full_eq:,.0f}** ({_t_n_days} days) — "
             f"**{_t_sign}${abs(_t_gap):,.0f}** ({_t_gap_pct:.1f}%) "
-            f"{_t_direction} your contributions."
+            f"{_t_direction} **${_t_full_ncc:,.0f}** contributed."
         )
         if _t_peak_eq > _t_full_eq * 1.05:
             _t_narr += (
-                f" Equity peaked at **${_t_peak_eq:,.0f}** around {_t_peak_dt} "
-                f"— currently **${_t_peak_eq - _t_full_eq:,.0f}** below that high."
+                f" Peaked at **${_t_peak_eq:,.0f}** around {_t_peak_dt}."
             )
+        # Bridge to the net account value / return story
+        if _total_value is not None and _cash is not None:
+            _t_net_gap  = _total_value - _t_full_ncc
+            _t_net_sign = "+" if _t_net_gap >= 0 else "−"
+            _t_net_pct  = abs(_t_net_gap) / _t_full_ncc * 100 if _t_full_ncc > 0 else 0
+            _t_net_dir  = "above" if _t_net_gap >= 0 else "below"
+            if _cash < 0:
+                _t_narr += (
+                    f"\n\n**Net account value: ${_total_value:,.0f}** "
+                    f"(equity ${_t_full_eq:,.0f} minus ${abs(_cash):,.0f} margin balance). "
+                    f"Against **${_t_full_ncc:,.0f}** contributed, net is "
+                    f"**{_t_net_sign}${abs(_t_net_gap):,.0f}** ({_t_net_pct:.1f}%) {_t_net_dir} baseline "
+                    f"— this is the return shown in Growth & Contributions above. "
+                    f"The gap between the equity line and the diamond marker is your current leverage."
+                )
+            else:
+                _t_narr += (
+                    f"\n\n**Net account value: ${_total_value:,.0f}** "
+                    f"(equity ${_t_full_eq:,.0f} plus ${_cash:,.0f} cash). "
+                    f"Against **${_t_full_ncc:,.0f}** contributed, net is "
+                    f"**{_t_net_sign}${abs(_t_net_gap):,.0f}** ({_t_net_pct:.1f}%) {_t_net_dir} baseline."
+                )
         st.markdown(_t_narr)
 
 elif page == "🔔 Catalyst Watch":
