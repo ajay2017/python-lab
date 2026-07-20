@@ -353,7 +353,9 @@ def conviction_alignment(
     if len(df) < min_positions:
         return None
 
-    rho = float(df["Score"].corr(df["Weight (%)"], method="spearman"))
+    # Spearman = Pearson on ranks. Avoid method="spearman" — pandas delegates
+    # that to scipy.stats.spearmanr which is not installed on Streamlit Cloud.
+    rho = float(df["Score"].rank().corr(df["Weight (%)"].rank(), method="pearson"))
 
     median_w  = float(df["Weight (%)"].median())
     top3      = set(df.nlargest(CONVICTION_LEGACY_TOP_N, "Weight (%)")["Ticker"].tolist())
