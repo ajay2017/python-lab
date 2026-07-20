@@ -3204,6 +3204,13 @@ if page == "🏠 Home":
     total_pnl_pct = total_pnl / total_cost * 100 if total_cost else 0
     avg_score   = port_df["Score"].mean()
 
+    # Realized P&L from closed trades — zero extra DB cost, trades_df is already
+    # in session state (loaded at app startup). Only counts SELLs with a known
+    # cost_basis (realized_pnl column populated); omits legacy rows without it.
+    _home_realized_pnl: float = performance_stats(
+        st.session_state.get("trades_df", pd.DataFrame())
+    ).get("total_realized_pnl", 0.0)
+
     # ── Concentration-gate basis: EQUITY (invested equity) ─────────────────────
     # 2026-07-09 POLICY (reverses the 2026-06-26 net-capital "tighter-of-both"):
     # the 15%/35% ceilings + the risk-advisor trim/nudge recs gate on plain equity
@@ -4318,7 +4325,24 @@ if page == "🏠 Home":
 
     _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8 = st.columns(8)
     _c1.metric("Portfolio Value",  _m(f"${total_val:,.0f}"))
-    _c2.metric("Total P&L",        _m(f"${total_pnl:,.0f}"), f"{total_pnl_pct:+.1f}%", delta_color="normal")
+    _c2.metric(
+        "Unrealized P&L",
+        _m(f"${total_pnl:,.0f}"),
+        f"{total_pnl_pct:+.1f}%",
+        delta_color="normal",
+        help=(
+            f"Gain/loss on currently-held positions vs their average cost — "
+            f"(current price − avg cost) × shares across all {len(port_df)} holdings. "
+            f"% shown vs total cost basis of current positions.\n\n"
+            f"**Does not include** realized P&L from trades you've already exited"
+            + (
+                f" (your closed trades total **{'+' if _home_realized_pnl >= 0 else ''}${_home_realized_pnl:,.0f}** realized)."
+                if _home_realized_pnl != 0.0
+                else " (no realized P&L on record yet)."
+            )
+            + "\n\nFor net return vs the capital you've contributed, see 💰 Account."
+        ),
+    )
     if _dpnl is not None:
         _dp_val = _dpnl["day_pnl"]
         _dp_pct = _dpnl["day_pnl_pct"]
