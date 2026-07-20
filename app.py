@@ -23071,7 +23071,17 @@ Once set, the page shows **Total Account Value** (equity + net cash), **Cash %**
 Under **Growth & Contributions**, set a **baseline** (your contributed capital — default = today's total, which tracks growth from today; or enter your lifetime net deposits for all-time gain). Then log **deposits** and **withdrawals** as they happen. The app computes:
 - **Net Contributed Capital** = baseline + deposits − withdrawals (what you put in).
 - **Growth $** = total value − contributed capital (what the *market* made you — a deposit never counts as growth).
-- **Return (money-weighted)** and **Annualized** — a proper return that accounts for *when* you added money (annualized once you've tracked ≥ 30 days).
+- **Return since [date]** and **Annualized** — a proper money-weighted return (Modified Dietz) that accounts for *when* you added money (annualized once you've tracked ≥ 30 days). The label shows the baseline date so you always know the time-scope.
+
+**3. Read the Capital Trend chart — the visual behind the numbers.**
+Below Growth & Contributions, the **📈 Capital Trend** chart shows three layers at once:
+- **Green equity line** — what your held positions are worth each day (shares × close price, accumulated by the EOD cron into `daily_snapshots`).
+- **Dotted NCC line** — your contributed-capital floor. When equity is above the dotted line, the gap is market-made growth. When it's below, you're underwater relative to what you put in.
+- **Diamond marker** — your net account value (equity + signed cash). If you carry a margin balance the diamond sits *below* the equity line; its distance below the NCC dotted line is the exact source of the negative "Return since…" figure in Growth & Contributions.
+
+Use the granularity toggle (Weekly / Monthly / All) to zoom in or out. The narration below the chart states the equity move in dollars and %, flags whether you're above or below contributed capital, and — when leveraged — explains the net account value explicitly so the −X.X% return in Growth & Contributions is traceable at a glance. **The gap between the equity line and the diamond marker is your current leverage cost made visible.**
+
+*Note: the equity line in Capital Trend is the same metric as the weekly ± figure in the Sunday email (equity positions only, not a full account return). The "Return since [date]" figure above it is the all-time money-weighted return — different metric, different time-scope. Both are correct; they measure different things.*
 
 **3. Keeping it in sync with your broker (it's manual for now).**
 The app doesn't auto-connect to your brokerage yet, so you keep it current with two light habits — and they map to the app's only two inputs:
@@ -23087,7 +23097,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
         st.markdown(
             """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections.
-- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return (see the section above).
+- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
