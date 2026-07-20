@@ -176,7 +176,7 @@ from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
-    baseline_anchor, money_weighted_return,
+    baseline_anchor, money_weighted_return, build_equity_timeseries,
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
@@ -21401,6 +21401,125 @@ elif page == "💰 Account":
                     "resulting buy/sell in the Trade Journal, so total account value stays current. "
                     "(A deposit raises contributed capital, so it never shows up as growth.)"
                 )
+
+    # ── Capital Trend ──────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📈 Capital Trend")
+    st.caption(
+        "Equity position value vs net contributed capital over time — "
+        "the visual story behind the Growth & Contributions metrics above."
+    )
+
+    _trend_snap = None
+    try:
+        _trend_snap = db.load_daily_snapshots()
+    except Exception:
+        pass
+
+    _trend_ts = build_equity_timeseries(_trend_snap, _flows) if _trend_snap is not None else None
+
+    if _trend_ts is None or len(_trend_ts["dates"]) < 3:
+        st.info(
+            "Not enough snapshot data yet — revisit once a few weeks of daily "
+            "snapshots have accumulated (Home must be visited each trading day)."
+        )
+    else:
+        import plotly.graph_objects as _pgo_trend
+
+        _trend_view = st.radio(
+            "Granularity",
+            ["Weekly", "Monthly", "All data"],
+            horizontal=True,
+            key="_cap_trend_view",
+        )
+
+        import pandas as _pd_trend
+        _tdf = _pd_trend.DataFrame({
+            "date":   _pd_trend.to_datetime(_trend_ts["dates"]),
+            "equity": _trend_ts["equity_values"],
+            "ncc":    _trend_ts["ncc_values"],
+        }).set_index("date").sort_index()
+
+        try:
+            if _trend_view == "Weekly":
+                _plot_tdf = _tdf.resample("W-FRI").last().dropna()
+            elif _trend_view == "Monthly":
+                _plot_tdf = _tdf.resample("ME").last().dropna()
+            else:
+                _plot_tdf = _tdf.copy()
+        except Exception:
+            _plot_tdf = _tdf.copy()
+
+        if _plot_tdf.empty:
+            _plot_tdf = _tdf.copy()
+
+        _t_last_eq  = float(_plot_tdf["equity"].iloc[-1])
+        _t_last_ncc = float(_plot_tdf["ncc"].iloc[-1])
+        _t_above    = _t_last_eq >= _t_last_ncc
+        _t_eq_color = "#22c55e" if _t_above else "#ef4444"
+        _t_fill     = "rgba(34,197,94,0.12)" if _t_above else "rgba(239,68,68,0.12)"
+
+        _t_fig = _pgo_trend.Figure()
+        # NCC reference line (dotted grey — the "what you put in" floor)
+        _t_fig.add_trace(_pgo_trend.Scatter(
+            x=_plot_tdf.index, y=_plot_tdf["ncc"],
+            name="Contributed capital",
+            line=dict(color="#9ca3af", width=1.5, dash="dot"),
+            hovertemplate="Contributed: $%{y:,.0f}<extra></extra>",
+            mode="lines",
+        ))
+        # Equity filled area — fills to the NCC trace above/below it
+        _t_fig.add_trace(_pgo_trend.Scatter(
+            x=_plot_tdf.index, y=_plot_tdf["equity"],
+            name="Portfolio equity",
+            fill="tonexty",
+            fillcolor=_t_fill,
+            line=dict(color=_t_eq_color, width=2),
+            hovertemplate="Equity: $%{y:,.0f}<extra></extra>",
+            mode="lines",
+        ))
+        _t_fig.update_layout(
+            margin=dict(l=0, r=0, t=28, b=0),
+            height=300,
+            legend=dict(orientation="h", y=1.12, x=0),
+            xaxis=dict(showgrid=False),
+            yaxis=dict(
+                tickprefix="$", tickformat=",.0f",
+                gridcolor="rgba(128,128,128,0.15)",
+            ),
+            hovermode="x unified",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(_t_fig, use_container_width=True)
+
+        # Auto-narration — computed, no LLM call
+        _t_first_eq  = float(_tdf["equity"].iloc[0])
+        _t_full_eq   = float(_tdf["equity"].iloc[-1])
+        _t_full_ncc  = float(_tdf["ncc"].iloc[-1])
+        _t_gap       = _t_full_eq - _t_full_ncc
+        _t_gap_pct   = abs(_t_gap) / _t_full_ncc * 100 if _t_full_ncc > 0 else 0
+        _t_direction = "above" if _t_gap >= 0 else "below"
+        _t_sign      = "+" if _t_gap >= 0 else "−"
+        _t_first_dt  = _tdf.index[0].strftime("%b %d, %Y")
+        _t_last_dt   = _tdf.index[-1].strftime("%b %d, %Y")
+        _t_n_days    = (_tdf.index[-1] - _tdf.index[0]).days
+        _t_peak_eq   = float(_tdf["equity"].max())
+        _t_peak_dt   = _tdf["equity"].idxmax().strftime("%b %d")
+
+        _t_narr = (
+            f"Since **{_t_first_dt}**, equity positions moved from "
+            f"**${_t_first_eq:,.0f}** to **${_t_full_eq:,.0f}** ({_t_n_days} days). "
+            f"Against **${_t_full_ncc:,.0f}** net contributed, you are "
+            f"**{_t_sign}${abs(_t_gap):,.0f}** ({_t_gap_pct:.1f}%) "
+            f"{_t_direction} your contributions."
+        )
+        if _t_peak_eq > _t_full_eq * 1.05:
+            _t_narr += (
+                f" Equity peaked at **${_t_peak_eq:,.0f}** around {_t_peak_dt} "
+                f"— currently **${_t_peak_eq - _t_full_eq:,.0f}** below that high."
+            )
+        st.markdown(_t_narr)
 
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))

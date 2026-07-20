@@ -146,3 +146,67 @@ def money_weighted_return(baseline_value, baseline_date, ending_value, ending_da
         "period_return_pct": round(period_return * 100, 2),
         "annualized_pct":    (round(annualized * 100, 2) if annualized is not None else None),
     }
+
+
+def build_equity_timeseries(snapshots_df, flows: list[dict]) -> dict | None:
+    """Pair daily equity totals (from daily_snapshots) with a forward-filled NCC
+    step function (from account_flows) for a capital-trend chart.
+
+    Returns {"dates": [...], "equity_values": [...], "ncc_values": [...]} with
+    all three lists aligned by ISO date string, sorted ascending, starting on or
+    after the earliest baseline/flow event. Returns None when data is too thin.
+    """
+    if snapshots_df is None or getattr(snapshots_df, "empty", True):
+        return None
+    if not has_baseline(flows):
+        return None
+
+    snap = snapshots_df.copy()
+    snap["snapshot_date"] = snap["snapshot_date"].astype(str).str[:10]
+    snap["_mv"] = snap["shares"].astype(float) * snap["close_price"].astype(float)
+    eq_series = snap.groupby("snapshot_date")["_mv"].sum().sort_index()
+
+    # Sorted list of (date, signed_delta) for every contribution/withdrawal event.
+    events: list[dict] = sorted(
+        [
+            {
+                "date":  str(f.get("flow_date") or "")[:10],
+                "delta": float(f.get("amount") or 0.0)
+                         * (1.0 if str(f.get("flow_type") or "").strip().lower()
+                            in _CONTRIB_TYPES else -1.0),
+            }
+            for f in (flows or [])
+            if str(f.get("flow_type") or "").strip().lower()
+               in (*_CONTRIB_TYPES, *_WITHDRAW_TYPES)
+            and str(f.get("flow_date") or "")[:10]
+        ],
+        key=lambda x: x["date"],
+    )
+    if not events:
+        return None
+
+    # Forward-fill NCC: for each snapshot date, accumulate all events ≤ that date.
+    running_ncc = 0.0
+    ei = 0
+    ncc_by_date: dict[str, float] = {}
+    for d in eq_series.index:
+        while ei < len(events) and events[ei]["date"] <= d:
+            running_ncc += events[ei]["delta"]
+            ei += 1
+        ncc_by_date[d] = running_ncc
+
+    baseline_date = events[0]["date"]
+    rows = [
+        (d, float(v), ncc_by_date[d])
+        for d, v in eq_series.items()
+        if d >= baseline_date
+    ]
+    if len(rows) < 2:
+        return None
+
+    dates, equity_values, ncc_values = zip(*rows)
+    return {
+        "dates":         list(dates),
+        "equity_values": list(equity_values),
+        "ncc_values":    list(ncc_values),
+    }
