@@ -128,6 +128,16 @@ from stock_analyzer.constants import (
     BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
     BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP,
     EXIT_SIGNAL_ACT_WINDOW_DAYS,
+    INVESTOR_MIRROR_MIN_CLOSED_LOTS,
+    INVESTOR_MIRROR_MIN_POSITIONS,
+    CONVICTION_ALIGNMENT_LOW,
+    CONVICTION_ALIGNMENT_HIGH,
+    DISPOSITION_CONCERN_RATIO,
+    WINLOSS_CONCERN_RATIO,
+    CONVICTION_WEAK_SCORE,
+    CONVICTION_FADED_SCORE,
+    CONVICTION_LEGACY_TOP_N,
+    BREAKEVEN_ANCHOR_DWELL_RATIO,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -23304,6 +23314,26 @@ Directional, sample-gated observations over your own Buy-side decisions (new_pic
 - **Opening-window entry timing** — do trades entered right at the market open have a different track record than ones entered later in the day? (Needs graded outcome data from 📊 Predictive Analytics — visit that page first to unlock this card.)
 
 Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Exit-side patterns (how you react to TRIM/EXIT signals) aren't covered yet — the app doesn't keep a historical record of those signals to learn from.
+
+---
+
+**🪞 Investor Mirror — "Does my allocation match my conviction? Do I sell rationally?"**
+
+Two diagnostic lenses — not recommendations, not gates.
+
+**⚖️ Conviction Alignment** measures whether your portfolio weight actually tracks your composite conviction. The Spearman rank correlation (ρ) between each position's composite score and its weight tells you: are your largest bets your strongest convictions? A score near +1.0 is disciplined; near 0 is random. Three specific misalignment patterns are named:
+
+- **Orphan Conviction** — high composite score, below-median weight (you believe in it but haven't backed it)
+- **Accidental Overexposure** — low composite score, above-median weight (significant allocation on a weak conviction — often a legacy position whose composite has deteriorated)
+- **Legacy Overhang** — one of your three largest positions by weight with a score below 60 (conviction has faded, but the position grew through price appreciation rather than a deliberate sizing decision)
+
+**🧠 Behavioral Biases** analyses your closed trade history (FIFO-matched buy/sell pairs, partial trims handled correctly) for three patterns:
+
+- **Disposition Effect** — are you holding losing positions longer than winners? A ratio above 1.5× is the published retail-investor benchmark for this bias.
+- **Win/Loss Closure Ratio** — how many gain-realising sells per loss-realising sell? Above 2× can signal loss aversion — taking gains readily while holding through losses.
+- **Breakeven Anchoring** — do positions linger unusually long in the −2 to 0% P&L zone? A spike in that bracket means you may be anchoring to the purchase price ("waiting to get back to even") rather than the thesis.
+
+Each card suppresses to "insufficient data" until enough closed trades accumulate. **None of these observations change a score, a rank, or a recommendation — the engine never reads them.** The methodology note at the bottom of each section explains caveats (today's composite scores only; some patterns reflect deliberate risk management, not psychology).
 """
         )
 
@@ -25136,12 +25166,13 @@ elif page == "🎯 My Edge":
     _me_flows  = _me_db.load_account_flows()
     _me_anchor = _me_acct.baseline_anchor(_me_flows)
 
-    # ── 4 tabs ────────────────────────────────────────────────────────────────
-    _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d = st.tabs([
+    # ── 5 tabs ────────────────────────────────────────────────────────────────
+    _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d, _me_tab_e = st.tabs([
         "📐 Benchmark Mirror",
         "🔬 Workflow ROI",
         "📅 Decision Quality",
         "🧬 Behavioral Fingerprint",
+        "🪞 Investor Mirror",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -26514,5 +26545,344 @@ elif page == "🎯 My Edge":
                     "Holding through an escalating signal is the most direct "
                     "loss-aversion signal this app can surface."
                 )
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB E — Investor Mirror
+    # ═════════════════════════════════════════════════════════════════════════
+    with _me_tab_e:
+        from stock_analyzer import investor_mirror as _im
+
+        st.subheader("🪞 Investor Mirror")
+        st.caption(
+            "Two diagnostic lenses: does your allocation reflect your conviction, "
+            "and does your sell behaviour reflect rational action? "
+            "Awareness only — no recommendations, no gates."
+        )
+
+        # ── Section 1 — Conviction Alignment ─────────────────────────────────
+        st.markdown("---")
+        st.markdown("### ⚖️ Conviction Alignment")
+        st.caption(
+            "Spearman rank correlation between each position's composite score "
+            "and its portfolio weight. A score near +1 means your largest bets "
+            "are your strongest convictions. Based on today's composite scores."
+        )
+
+        _mi_port = st.session_state.get("_port_df_enriched")
+        if _mi_port is None or _mi_port.empty:
+            st.info(
+                "📋 Visit 🏠 Home first to load your portfolio, "
+                "then return here for the Conviction Alignment view."
+            )
+        else:
+            _mi_align = _im.conviction_alignment(
+                _mi_port, min_positions=INVESTOR_MIRROR_MIN_POSITIONS
+            )
+            if _mi_align is None:
+                st.caption(
+                    f"Need ≥ {INVESTOR_MIRROR_MIN_POSITIONS} held positions with a "
+                    "composite score to compute alignment."
+                )
+            else:
+                _mi_rho = _mi_align["spearman_rho"]
+                if _mi_rho >= CONVICTION_ALIGNMENT_HIGH:
+                    _mi_align_label = "Disciplined"
+                    _mi_align_color = "#22c55e"
+                elif _mi_rho >= CONVICTION_ALIGNMENT_LOW:
+                    _mi_align_label = "Partial"
+                    _mi_align_color = "#f59e0b"
+                else:
+                    _mi_align_label = "Random"
+                    _mi_align_color = "#ef4444"
+
+                _mi_col_kpi, _mi_col_chart = st.columns([1, 3])
+
+                with _mi_col_kpi:
+                    st.metric(
+                        "Alignment Score (ρ)",
+                        f"{_mi_rho:+.2f}",
+                        help=(
+                            "Spearman rank correlation between composite score rank "
+                            "and portfolio weight rank. +1.0 = perfectly aligned; "
+                            "0 = random; −1.0 = inverse."
+                        ),
+                    )
+                    st.markdown(
+                        f"<span style='font-size:1.1em;font-weight:600;"
+                        f"color:{_mi_align_color}'>{_mi_align_label}</span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        f"Based on {_mi_align['n_positions']} positions.\n\n"
+                        f"**{CONVICTION_ALIGNMENT_HIGH:.0%}+** = Disciplined · "
+                        f"**{CONVICTION_ALIGNMENT_LOW:.0%}–{CONVICTION_ALIGNMENT_HIGH:.0%}** = Partial · "
+                        f"**< {CONVICTION_ALIGNMENT_LOW:.0%}** = Random"
+                    )
+
+                with _mi_col_chart:
+                    import plotly.graph_objects as _mi_go
+                    _mi_valid = _mi_port[
+                        _mi_port["Score"].notna() & _mi_port["Weight (%)"].notna()
+                    ].copy()
+                    _mi_valid["Score"]      = pd.to_numeric(_mi_valid["Score"],      errors="coerce")
+                    _mi_valid["Weight (%)"] = pd.to_numeric(_mi_valid["Weight (%)"], errors="coerce")
+                    _mi_valid = _mi_valid.dropna(subset=["Score", "Weight (%)"])
+
+                    _mi_fig = _mi_go.Figure()
+                    _mi_fig.add_trace(_mi_go.Scatter(
+                        x=_mi_valid["Score"],
+                        y=_mi_valid["Weight (%)"],
+                        mode="markers+text",
+                        text=_mi_valid["Ticker"],
+                        textposition="top center",
+                        marker=dict(size=10, color="#3b82f6"),
+                        name="Position",
+                    ))
+                    if not _mi_valid.empty:
+                        _mi_w_max = float(_mi_valid["Weight (%)"].max()) * 1.1
+                        _mi_fig.add_trace(_mi_go.Scatter(
+                            x=[0, 100],
+                            y=[0, _mi_w_max],
+                            mode="lines",
+                            line=dict(dash="dot", color="rgba(150,150,150,0.5)", width=1),
+                            name="Ideal alignment",
+                            hoverinfo="skip",
+                        ))
+                    _mi_fig.update_layout(
+                        height=300,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        xaxis_title="Composite Score",
+                        yaxis_title="Weight (%)",
+                        showlegend=False,
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_mi_fig, use_container_width=True)
+
+                # Misalignment callout columns
+                _mi_orphans  = _mi_align["orphan_convictions"]
+                _mi_overexp  = _mi_align["accidental_overexposures"]
+                _mi_overhangs = _mi_align["legacy_overhangs"]
+
+                _mi_c1, _mi_c2, _mi_c3 = st.columns(3)
+                with _mi_c1:
+                    with st.container(border=True):
+                        st.markdown(f"**🌱 Orphan Conviction** ({len(_mi_orphans)})")
+                        st.caption(
+                            f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
+                            "high conviction, undersized position."
+                        )
+                        if _mi_orphans:
+                            for _p in _mi_orphans:
+                                st.markdown(
+                                    f"**{_p['Ticker']}** — score {_p['Score']:.0f}, "
+                                    f"weight {_p['Weight (%)']:.1f}%"
+                                )
+                        else:
+                            st.caption("None — high-conviction names are well-sized.")
+
+                with _mi_c2:
+                    with st.container(border=True):
+                        st.markdown(f"**⚠️ Accidental Overexposure** ({len(_mi_overexp)})")
+                        st.caption(
+                            f"Score < {CONVICTION_WEAK_SCORE}, weight above median — "
+                            "carrying significant weight on weak conviction."
+                        )
+                        if _mi_overexp:
+                            for _p in _mi_overexp:
+                                st.markdown(
+                                    f"**{_p['Ticker']}** — score {_p['Score']:.0f}, "
+                                    f"weight {_p['Weight (%)']:.1f}%"
+                                )
+                        else:
+                            st.caption("None — no overweight positions with weak scores.")
+
+                with _mi_c3:
+                    with st.container(border=True):
+                        st.markdown(f"**🕰️ Legacy Overhang** ({len(_mi_overhangs)})")
+                        st.caption(
+                            f"Top-{CONVICTION_LEGACY_TOP_N} by weight, score < {CONVICTION_FADED_SCORE} — "
+                            "large position whose conviction has faded."
+                        )
+                        if _mi_overhangs:
+                            for _p in _mi_overhangs:
+                                st.markdown(
+                                    f"**{_p['Ticker']}** — score {_p['Score']:.0f}, "
+                                    f"weight {_p['Weight (%)']:.1f}%"
+                                )
+                        else:
+                            st.caption("None — largest positions still carry strong scores.")
+
+        # ── Section 2 — Behavioral Biases ────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🧠 Behavioral Biases")
+        st.caption(
+            "Derived from FIFO-matched buy/sell pairs in your trade journal. "
+            "Partial trims are handled correctly. These are observed patterns — "
+            "not verdicts. Some reflect deliberate discipline, not psychology."
+        )
+
+        _mi_trades = st.session_state.get("trades_df")
+        if _mi_trades is None:
+            from stock_analyzer import db as _mi_db
+            _mi_trades = _mi_db.load_trades()
+
+        # Cache keyed by trade count — auto-refreshes when trades change
+        _mi_lots_key = f"_mirror_closed_lots_{len(_mi_trades) if _mi_trades is not None else 0}"
+        if _mi_lots_key not in st.session_state:
+            st.session_state[_mi_lots_key] = _im.build_closed_lots(_mi_trades)
+        _mi_lots = st.session_state[_mi_lots_key]
+
+        _mi_n_lots   = len(_mi_lots) if (_mi_lots is not None and not _mi_lots.empty) else 0
+        _mi_n_trades = len(_mi_trades) if _mi_trades is not None else 0
+        st.caption(f"{_mi_n_lots} matched sell-lot records from {_mi_n_trades} trade journal entries.")
+
+        _mi_bc1, _mi_bc2 = st.columns(2)
+
+        with _mi_bc1:
+            # Card A — Disposition Effect
+            with st.container(border=True):
+                st.markdown("**⏳ Disposition Effect**")
+                _mi_de = _im.disposition_effect(
+                    _mi_lots, min_n=INVESTOR_MIRROR_MIN_CLOSED_LOTS
+                )
+                if _mi_de is None:
+                    st.caption(
+                        f"Insufficient data — need ≥ {INVESTOR_MIRROR_MIN_CLOSED_LOTS} "
+                        "matched lots in each of the winner and loser groups."
+                    )
+                else:
+                    st.metric(
+                        "Loser hold time vs winner hold time",
+                        f"{_mi_de['ratio']:.1f}×" if _mi_de["ratio"] else "—",
+                        help=(
+                            f"Winners avg {_mi_de['winner_avg_days']:.0f} days · "
+                            f"Losers avg {_mi_de['loser_avg_days']:.0f} days. "
+                            "Industry average for retail: 1.5–2.0×."
+                        ),
+                    )
+                    if _mi_de["ratio"] and _mi_de["ratio"] >= DISPOSITION_CONCERN_RATIO:
+                        st.warning(
+                            f"You hold losing positions **{_mi_de['ratio']:.1f}×** longer "
+                            f"than winners ({_mi_de['loser_avg_days']:.0f} vs "
+                            f"{_mi_de['winner_avg_days']:.0f} days avg). "
+                            "Above the typical retail range — a potential disposition "
+                            "effect signal.",
+                            icon="⏳",
+                        )
+                    else:
+                        st.caption(
+                            f"Winners: {_mi_de['winner_avg_days']:.0f} days avg · "
+                            f"Losers: {_mi_de['loser_avg_days']:.0f} days avg. "
+                            "No strong disposition effect at this ratio."
+                        )
+                    st.caption(
+                        f"n = {_mi_de['n_winners']} gain-lots · {_mi_de['n_losers']} "
+                        "loss-lots. Some difference is natural — this is context, not a verdict."
+                    )
+
+            # Card B — Win/Loss Closure Ratio
+            with st.container(border=True):
+                st.markdown("**🔄 Win/Loss Closure Ratio**")
+                _mi_wl = _im.win_loss_closure_ratio(
+                    _mi_lots, min_n=INVESTOR_MIRROR_MIN_CLOSED_LOTS
+                )
+                if _mi_wl is None:
+                    st.caption(
+                        f"Insufficient data — need ≥ {INVESTOR_MIRROR_MIN_CLOSED_LOTS} "
+                        "loss-realizing sell transactions."
+                    )
+                else:
+                    st.metric(
+                        "Gain-sells per loss-sell",
+                        f"{_mi_wl['ratio']:.1f}×" if _mi_wl["ratio"] else "—",
+                        help=(
+                            f"{_mi_wl['n_gain_tx']} gain-realizing sells · "
+                            f"{_mi_wl['n_loss_tx']} loss-realizing sells."
+                        ),
+                    )
+                    if _mi_wl["ratio"] and _mi_wl["ratio"] >= WINLOSS_CONCERN_RATIO:
+                        st.warning(
+                            f"You close **{_mi_wl['ratio']:.1f} winners** for every "
+                            "loss accepted. High ratios can reflect loss aversion — "
+                            "taking gains readily while holding through losses.",
+                            icon="🔄",
+                        )
+                    else:
+                        st.caption(
+                            f"{_mi_wl['n_gain_tx']} gain-sells · {_mi_wl['n_loss_tx']} "
+                            "loss-sells. Ratio within a range that may reflect "
+                            "deliberate discipline."
+                        )
+
+        with _mi_bc2:
+            # Card C — Breakeven Anchoring
+            with st.container(border=True):
+                st.markdown("**⚓ Breakeven Anchoring**")
+                _mi_ba = _im.breakeven_anchoring(
+                    _mi_lots, min_n=INVESTOR_MIRROR_MIN_CLOSED_LOTS
+                )
+                if _mi_ba is None:
+                    st.caption(
+                        f"Insufficient data — need ≥ {INVESTOR_MIRROR_MIN_CLOSED_LOTS} "
+                        "matched lots with valid P&L and holding period."
+                    )
+                else:
+                    if _mi_ba["anchoring_flagged"]:
+                        st.warning(
+                            "The −2 to 0% bracket shows unusually long dwell time "
+                            "vs adjacent loss brackets — a breakeven anchoring signal.",
+                            icon="⚓",
+                        )
+                    else:
+                        st.caption("No breakeven anchoring spike detected.")
+
+                    _mi_ba_rows = [
+                        r for r in _mi_ba["brackets"]
+                        if r["n_lots"] > 0 and r["avg_days"] is not None
+                    ]
+                    if _mi_ba_rows:
+                        import plotly.graph_objects as _ba_go
+                        _mi_ba_df = pd.DataFrame(_mi_ba_rows)
+                        _mi_ba_colors = [
+                            "#ef4444" if (lbl.startswith("-") or lbl.startswith("<"))
+                            else "#22c55e"
+                            for lbl in _mi_ba_df["bracket_label"]
+                        ]
+                        _mi_ba_fig = _ba_go.Figure(_ba_go.Bar(
+                            y=_mi_ba_df["bracket_label"],
+                            x=_mi_ba_df["avg_days"],
+                            orientation="h",
+                            marker_color=_mi_ba_colors,
+                            text=[
+                                f"{d:.0f}d (n={n})"
+                                for d, n in zip(
+                                    _mi_ba_df["avg_days"], _mi_ba_df["n_lots"]
+                                )
+                            ],
+                            textposition="outside",
+                        ))
+                        _mi_ba_fig.update_layout(
+                            height=340,
+                            margin=dict(l=0, r=70, t=10, b=0),
+                            xaxis_title="Avg days held at exit",
+                            yaxis_title=None,
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_mi_ba_fig, use_container_width=True)
+                    st.caption(
+                        "A spike in the −2 to 0% bracket means positions lingered "
+                        "unusually long when close to breakeven — anchoring to the "
+                        "purchase price rather than the thesis."
+                    )
+
+        st.caption(
+            "**Methodology:** Conviction Alignment uses today's composite scores "
+            "(historical scores are not stored). Behavioral bias cards use "
+            "FIFO-matched buy/sell lots; partial trims are handled via lot depletion. "
+            f"Anchoring flag threshold: {BREAKEVEN_ANCHOR_DWELL_RATIO:.0%} above adjacent "
+            "loss-bracket mean."
+        )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

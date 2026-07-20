@@ -813,3 +813,22 @@ TAX_HARVEST_MIN_LOSS      = 500    # min unrealized loss ($) before a HARVEST is
 TAX_LTCG_WAIT_WINDOW_DAYS = 60     # STCG gain within N days of LT eligibility → "WAIT" (Tax Advisor page)
 TAX_LONGTERM_WINDOW_DAYS  = 30     # EXIT/TRIM within N days of LT eligibility → amber "waiting cuts tax drag" note
 TAX_WASH_SALE_DAYS        = 30     # IRS wash-sale window (fixed by law) — SELL within N days of a same-ticker add flags the disallowed-loss risk
+
+# ── Investor Mirror (F-194 — DISPLAY-ONLY policy, NEVER gates) ───────────────
+# Conviction Alignment + Behavioral Bias analytics on 🎯 My Edge → 🪞 Investor
+# Mirror tab. All ten constants are display-copy thresholds only — they control
+# which descriptive sentence renders in a card (same class as
+# BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP). None suppress, reorder, or gate
+# any recommendation.
+INVESTOR_MIRROR_MIN_CLOSED_LOTS = 10    # min matched sell-lots per comparison group (winners AND losers each need ≥ this in disposition_effect; total ≥ this in anchoring/ratio)
+INVESTOR_MIRROR_MIN_POSITIONS   = 5     # min held positions with a valid Score for alignment score
+CONVICTION_ALIGNMENT_LOW        = 0.30  # Spearman ρ below this → "random" label
+CONVICTION_ALIGNMENT_HIGH       = 0.60  # Spearman ρ above this → "disciplined" label
+DISPOSITION_CONCERN_RATIO       = 1.5   # holding losers ≥ this × longer than winners → concern note
+WINLOSS_CONCERN_RATIO           = 2.0   # closing ≥ this × more winners than losers → loss-aversion note
+# Conviction alignment pattern boundaries — mirrors the existing composite-tier
+# vocabulary but tuned to the alignment patterns (not entry/exit gates)
+CONVICTION_WEAK_SCORE           = 50    # Accidental Overexposure: Score below this + overweight → mis-aligned
+CONVICTION_FADED_SCORE          = 60    # Legacy Overhang: top-N position with Score below this → fading conviction
+CONVICTION_LEGACY_TOP_N         = 3     # how many largest-weight positions to inspect for legacy overhang
+BREAKEVEN_ANCHOR_DWELL_RATIO    = 1.3   # anchoring flag if -2–0% bracket avg_days ≥ this × adjacent-loss-brackets mean
