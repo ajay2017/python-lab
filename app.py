@@ -26666,52 +26666,43 @@ elif page == "🎯 My Edge":
 
                 _mi_c1, _mi_c2, _mi_c3 = st.columns(3)
                 with _mi_c1:
-                    with st.container(border=True):
-                        st.markdown(f"**🌱 Orphan Conviction** ({len(_mi_orphans)})")
-                        st.caption(
-                            f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
-                            "high conviction, undersized position."
-                        )
-                        if _mi_orphans:
-                            for _p in _mi_orphans:
-                                st.markdown(
-                                    f"**{_p['Ticker']}** — score {_p['Score']:.0f}, "
-                                    f"weight {_p['Weight (%)']:.1f}%"
-                                )
-                        else:
-                            st.caption("None — high-conviction names are well-sized.")
+                    _mi_orphan_body = (
+                        "\n".join(
+                            f"• **{_p['Ticker']}** — score {_p['Score']:.0f}, weight {_p['Weight (%)']:.1f}%"
+                            for _p in _mi_orphans
+                        ) if _mi_orphans else "None — high-conviction names are well-sized."
+                    )
+                    st.info(
+                        f"**🌱 Orphan Conviction ({len(_mi_orphans)})**\n\n"
+                        f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
+                        f"high conviction, undersized position.\n\n{_mi_orphan_body}"
+                    )
 
                 with _mi_c2:
-                    with st.container(border=True):
-                        st.markdown(f"**⚠️ Accidental Overexposure** ({len(_mi_overexp)})")
-                        st.caption(
-                            f"Score < {CONVICTION_WEAK_SCORE}, weight above median — "
-                            "carrying significant weight on weak conviction."
-                        )
-                        if _mi_overexp:
-                            for _p in _mi_overexp:
-                                st.markdown(
-                                    f"**{_p['Ticker']}** — score {_p['Score']:.0f}, "
-                                    f"weight {_p['Weight (%)']:.1f}%"
-                                )
-                        else:
-                            st.caption("None — no overweight positions with weak scores.")
+                    _mi_overexp_body = (
+                        "\n".join(
+                            f"• **{_p['Ticker']}** — score {_p['Score']:.0f}, weight {_p['Weight (%)']:.1f}%"
+                            for _p in _mi_overexp
+                        ) if _mi_overexp else "None — no overweight positions with weak scores."
+                    )
+                    st.warning(
+                        f"**⚠️ Accidental Overexposure ({len(_mi_overexp)})**\n\n"
+                        f"Score < {CONVICTION_WEAK_SCORE}, weight above median — "
+                        f"carrying significant weight on weak conviction.\n\n{_mi_overexp_body}"
+                    )
 
                 with _mi_c3:
-                    with st.container(border=True):
-                        st.markdown(f"**🕰️ Legacy Overhang** ({len(_mi_overhangs)})")
-                        st.caption(
-                            f"Top-{CONVICTION_LEGACY_TOP_N} by weight, score < {CONVICTION_FADED_SCORE} — "
-                            "large position whose conviction has faded."
-                        )
-                        if _mi_overhangs:
-                            for _p in _mi_overhangs:
-                                st.markdown(
-                                    f"**{_p['Ticker']}** — score {_p['Score']:.0f}, "
-                                    f"weight {_p['Weight (%)']:.1f}%"
-                                )
-                        else:
-                            st.caption("None — largest positions still carry strong scores.")
+                    _mi_overhang_body = (
+                        "\n".join(
+                            f"• **{_p['Ticker']}** — score {_p['Score']:.0f}, weight {_p['Weight (%)']:.1f}%"
+                            for _p in _mi_overhangs
+                        ) if _mi_overhangs else "None — largest positions still carry strong scores."
+                    )
+                    st.error(
+                        f"**🕰️ Legacy Overhang ({len(_mi_overhangs)})**\n\n"
+                        f"Top-{CONVICTION_LEGACY_TOP_N} by weight, score < {CONVICTION_FADED_SCORE} — "
+                        f"large position whose conviction has faded.\n\n{_mi_overhang_body}"
+                    )
 
         # ── Section 2 — Behavioral Biases ────────────────────────────────────
         st.markdown("---")
