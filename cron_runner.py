@@ -469,8 +469,12 @@ def _run_debrief(now_et, force: bool) -> int:
         import yfinance as yf
         spy = yf.download("SPY", start=str(week_start), end=str(week_ending), progress=False, auto_adjust=True)
         if not spy.empty and len(spy) >= 2:
-            spy_pct = float((spy["Close"].iloc[-1] - spy["Close"].iloc[0]) / spy["Close"].iloc[0] * 100)
-            spy_week_pct = round(spy_pct, 2)
+            _close = spy["Close"]
+            if hasattr(_close, "columns"):   # multi-ticker download yields a DataFrame
+                _close = _close.iloc[:, 0]
+            _c0 = float(_close.iloc[0])
+            _c1 = float(_close.iloc[-1])
+            spy_week_pct = round((_c1 - _c0) / _c0 * 100, 2)
     except Exception:
         pass
 
