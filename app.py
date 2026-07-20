@@ -26683,10 +26683,16 @@ elif page == "🎯 My Edge":
 
                 _mi_c1, _mi_c2, _mi_c3 = st.columns(3)
                 with _mi_c1:
-                    _mi_orphan_body = (
-                        "\n".join(_mi_ticker_line(_p) for _p in _mi_orphans)
-                        if _mi_orphans else "None — high-conviction names are well-sized."
-                    )
+                    if _mi_orphans:
+                        _tickers_str = ", ".join(p["Ticker"] for p in _mi_orphans)
+                        _mi_orphan_body = (
+                            "\n".join(_mi_ticker_line(_p) for _p in _mi_orphans)
+                            + f"\n\n**→ Next step:** Open Analysis for {_tickers_str}. "
+                            "If gate checks pass and timing is right (no imminent earnings), "
+                            "this is a sizing opportunity — add shares to align weight with your conviction."
+                        )
+                    else:
+                        _mi_orphan_body = "None — high-conviction names are well-sized."
                     st.info(
                         f"**🌱 Orphan Conviction ({len(_mi_orphans)})**\n\n"
                         f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
@@ -26694,10 +26700,16 @@ elif page == "🎯 My Edge":
                     )
 
                 with _mi_c2:
-                    _mi_overexp_body = (
-                        "\n".join(_mi_ticker_line(_p) for _p in _mi_overexp)
-                        if _mi_overexp else "None — no overweight positions with weak scores."
-                    )
+                    if _mi_overexp:
+                        _tickers_str = ", ".join(p["Ticker"] for p in _mi_overexp)
+                        _mi_overexp_body = (
+                            "\n".join(_mi_ticker_line(_p) for _p in _mi_overexp)
+                            + f"\n\n**→ Next step:** Open Analysis for {_tickers_str}. "
+                            "Weak composite with above-median weight is a trim signal — "
+                            "reduce position size to match your actual conviction level."
+                        )
+                    else:
+                        _mi_overexp_body = "None — no overweight positions with weak scores."
                     st.warning(
                         f"**⚠️ Accidental Overexposure ({len(_mi_overexp)})**\n\n"
                         f"Score < {CONVICTION_WEAK_SCORE}, weight above median — "
@@ -26705,10 +26717,17 @@ elif page == "🎯 My Edge":
                     )
 
                 with _mi_c3:
-                    _mi_overhang_body = (
-                        "\n".join(_mi_ticker_line(_p) for _p in _mi_overhangs)
-                        if _mi_overhangs else "None — largest positions still carry strong scores."
-                    )
+                    if _mi_overhangs:
+                        _tickers_str = ", ".join(p["Ticker"] for p in _mi_overhangs)
+                        _mi_overhang_body = (
+                            "\n".join(_mi_ticker_line(_p) for _p in _mi_overhangs)
+                            + f"\n\n**→ Next step:** Open Analysis for {_tickers_str}. "
+                            "Verify whether the original thesis still holds. If conviction "
+                            "has genuinely faded, trim to bring weight in line — do not let "
+                            "price appreciation silently grow a position you no longer believe in."
+                        )
+                    else:
+                        _mi_overhang_body = "None — largest positions still carry strong scores."
                     st.error(
                         f"**🕰️ Legacy Overhang ({len(_mi_overhangs)})**\n\n"
                         f"Top-{CONVICTION_LEGACY_TOP_N} by weight, score < {CONVICTION_FADED_SCORE} — "
