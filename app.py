@@ -17521,6 +17521,29 @@ elif page == "📒 Trade Journal":
             pm5.metric("Trades Logged", stats["total_trades"],
                        f"{stats['sell_trades']} sells · {stats['buy_trades']} buys")
 
+            # Second metric row: trading overview stats
+            _unique_tickers = trades_df["ticker"].nunique() if trades_df is not None and not trades_df.empty else 0
+            _rr_ratio = (
+                round(stats["avg_winner"] / abs(stats["avg_loser"]), 2)
+                if stats.get("avg_loser") and stats["avg_loser"] != 0 and stats.get("avg_winner")
+                else None
+            )
+            _most_traded = (
+                trades_df["ticker"].value_counts().idxmax()
+                if trades_df is not None and not trades_df.empty
+                else "—"
+            )
+            pm6, pm7, pm8 = st.columns(3)
+            pm6.metric("Unique Tickers", _unique_tickers,
+                       help="Number of distinct tickers traded across all time")
+            pm7.metric("Risk/Reward ($)",
+                       f"{_rr_ratio:.2f}:1" if _rr_ratio else "—",
+                       delta="≥ 2.0 target" if _rr_ratio and _rr_ratio >= 2.0 else None,
+                       delta_color="normal" if _rr_ratio and _rr_ratio >= 2.0 else "off",
+                       help="Avg winner ÷ avg loser in dollars — target ≥ 2.0")
+            pm8.metric("Most Traded", _most_traded,
+                       help="Ticker with the most individual trade entries (buys + sells)")
+
             # Expectancy — the pro metric
             if stats["wins"] + stats["losses"] > 0:
                 expectancy = (
@@ -17559,6 +17582,30 @@ elif page == "📒 Trade Journal":
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
                 st.plotly_chart(pnl_bar, use_container_width=True)
+
+                # Top 5 / Bottom 5 by realized P&L (only meaningful with >5 tickers)
+                if len(stats["realized_by_ticker"]) > 5:
+                    _by_t_sorted = sorted(
+                        stats["realized_by_ticker"].items(), key=lambda x: x[1], reverse=True
+                    )
+                    _top5 = _by_t_sorted[:5]
+                    _bot5 = list(reversed(_by_t_sorted[-5:]))
+                    _tp1, _tp2 = st.columns(2)
+                    with _tp1:
+                        st.markdown("**🏆 Top 5 Performers**")
+                        import pandas as _pd_perf
+                        _top_df = _pd_perf.DataFrame(_top5, columns=["Ticker", "Realized P&L ($)"])
+                        _top_df["Realized P&L ($)"] = _top_df["Realized P&L ($)"].apply(
+                            lambda v: f"${v:+,.2f}"
+                        )
+                        st.dataframe(_top_df, width="stretch", hide_index=True)
+                    with _tp2:
+                        st.markdown("**📉 Bottom 5 Performers**")
+                        _bot_df = _pd_perf.DataFrame(_bot5, columns=["Ticker", "Realized P&L ($)"])
+                        _bot_df["Realized P&L ($)"] = _bot_df["Realized P&L ($)"].apply(
+                            lambda v: f"${v:+,.2f}"
+                        )
+                        st.dataframe(_bot_df, width="stretch", hide_index=True)
 
             # Best / worst trades
             if stats["best_trade"] or stats["worst_trade"]:
@@ -17677,6 +17724,21 @@ elif page == "📒 Trade Journal":
 
                     _trig_df = _ta["trigger_df"].copy()
 
+                    # Add Total P&L column: sum of realized_pnl per trigger type
+                    if not _ta["ext_df"].empty and "trigger_type" in _ta["ext_df"].columns:
+                        _totpnl_by_trig = (
+                            _ta["ext_df"]
+                            .groupby("trigger_type")["realized_pnl"]
+                            .sum()
+                            .reset_index()
+                            .rename(columns={"trigger_type": "Trigger", "realized_pnl": "Total P&L ($)"})
+                        )
+                        _trig_df = _trig_df.merge(_totpnl_by_trig, on="Trigger", how="left")
+                        _trig_cols = list(_trig_df.columns)
+                        _trig_cols.remove("Total P&L ($)")
+                        _trig_cols.insert(1, "Total P&L ($)")
+                        _trig_df = _trig_df[_trig_cols]
+
                     def _trig_style(row):
                         exp = row.get("Expectancy ($)", 0)
                         if exp > 0:
@@ -17686,7 +17748,7 @@ elif page == "📒 Trade Journal":
                         return [""] * len(row)
 
                     _trig_display = _trig_df.copy()
-                    for _tc in ["Avg Win ($)", "Avg Loss ($)", "Expectancy ($)"]:
+                    for _tc in ["Total P&L ($)", "Avg Win ($)", "Avg Loss ($)", "Expectancy ($)"]:
                         if _tc in _trig_display.columns:
                             _trig_display[_tc] = _trig_display[_tc].apply(
                                 lambda v: f"${v:+,.0f}" if pd.notna(v) else "—"
@@ -17727,6 +17789,29 @@ elif page == "📒 Trade Journal":
                                 ))
                     _ht3.metric("Sample size", f"{_hs['sample_size']} matched pairs",
                                 help="Trades where a BUY was found before the SELL for the same ticker")
+
+                # ── Trading Volume ────────────────────────────────────────────────
+                st.markdown("#### Trading Volume")
+                try:
+                    _tv_buys = trades_df[trades_df["action"] == "BUY"].copy()
+                    _tv_sells = trades_df[trades_df["action"] == "SELL"].copy()
+                    _tv_buys["price"]  = pd.to_numeric(_tv_buys["price"],  errors="coerce")
+                    _tv_buys["shares"] = pd.to_numeric(_tv_buys["shares"], errors="coerce")
+                    _tv_sells["price"]  = pd.to_numeric(_tv_sells["price"],  errors="coerce")
+                    _tv_sells["shares"] = pd.to_numeric(_tv_sells["shares"], errors="coerce")
+                    _buy_shares = float(_tv_buys["shares"].sum())
+                    _sell_shares = float(_tv_sells["shares"].sum())
+                    _buy_vol  = float((_tv_buys["price"]  * _tv_buys["shares"]).sum())
+                    _sell_vol = float((_tv_sells["price"] * _tv_sells["shares"]).sum())
+                    _v1, _v2, _v3, _v4 = st.columns(4)
+                    _v1.metric("Buy Volume",   f"${_buy_vol:,.0f}",
+                               help="Total dollars deployed across all BUY trades")
+                    _v2.metric("Sell Volume",  f"${_sell_vol:,.0f}",
+                               help="Total dollars received across all SELL trades")
+                    _v3.metric("Shares Bought", f"{_buy_shares:,.0f}")
+                    _v4.metric("Shares Sold",   f"{_sell_shares:,.0f}")
+                except Exception:
+                    pass
 
                 # ── Behavioral insights cards ─────────────────────────────────────
                 if _ta["insights"]:
