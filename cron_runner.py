@@ -460,6 +460,8 @@ def _run_debrief(now_et, force: bool) -> int:
     # Load recommendations and trades for the week
     recs_df   = db.load_recommendations(start_date=week_start, end_date=week_ending)
     trades_df = db.load_trades()
+    # Full recommendation history for behavioral fingerprint patterns (all-time).
+    all_recs_df = db.load_recommendations()
 
     # Fetch SPY return for the week
     spy_week_pct = None
@@ -492,6 +494,7 @@ def _run_debrief(now_et, force: bool) -> int:
         trades_df     = trades_df,
         spy_week_pct  = spy_week_pct,
         broken_theses = broken_theses,
+        all_recs_df   = all_recs_df,
     )
     _log(f"debrief: {days_available} snapshot day(s) · "
          f"{len(recs_df) if not recs_df.empty else 0} rec(s) · "
