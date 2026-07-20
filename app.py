@@ -21345,9 +21345,12 @@ elif page == "💰 Account":
             _gc2.metric("Growth ($)", "—",
                         help="Open 🏠 Home and set your cash balance so total account value can be computed.")
         if _mdr is not None:
-            _gc3.metric("Return (money-weighted)", f"{_mdr['period_return_pct']:+.1f}%",
-                        help=(f"Modified Dietz over {_mdr['days']} day(s) — corrects for the timing of your "
-                              "deposits/withdrawals. Equals simple growth% when there are no mid-period flows."))
+            _mdr_since = str(_base["date"])[:10] if _base else "baseline"
+            _gc3.metric(f"Return since {_mdr_since}", f"{_mdr['period_return_pct']:+.1f}%",
+                        help=(f"Money-weighted return (Modified Dietz) from {_mdr_since} to today "
+                              f"— {_mdr['days']} day(s). Corrects for the timing of deposits/withdrawals. "
+                              "This is your all-time investment return, not a weekly figure. "
+                              "The Sunday debrief email shows a separate weekly equity-position change."))
             _gc4.metric(
                 "Annualized",
                 f"{_mdr['annualized_pct']:+.1f}%" if _mdr["annualized_pct"] is not None else "—",

@@ -246,7 +246,7 @@ def render_debrief_email(debrief: dict) -> str:
         text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
         return text
 
-    def _pct_cell(label: str, v: float | None, bold: bool = False) -> str:
+    def _pct_cell(label: str, v: float | None, bold: bool = False, subtitle: str = "") -> str:
         if v is None:
             val_html = "<span style='color:#6b7280'>N/A</span>"
         else:
@@ -254,11 +254,14 @@ def render_debrief_email(debrief: dict) -> str:
             weight   = "700" if bold else "600"
             val_html = f"<span style='color:{colour};font-weight:{weight}'>{v:+.1f}%</span>"
         lw = "700" if bold else "400"
+        sub_html = (f"<div style='font-size:0.68em;color:#9ca3af;margin-top:3px'>{subtitle}</div>"
+                    if subtitle else "")
         return (
             f"<td style='padding:14px 20px;text-align:center;border-right:1px solid #e5e7eb'>"
             f"<div style='font-size:0.75em;color:#6b7280;text-transform:uppercase;"
             f"letter-spacing:0.05em;font-weight:600;margin-bottom:4px'>{label}</div>"
             f"<div style='font-size:1.4em;font-weight:{lw}'>{val_html}</div>"
+            f"{sub_html}"
             f"</td>"
         )
 
@@ -266,12 +269,17 @@ def render_debrief_email(debrief: dict) -> str:
     if perf is not None:
         perf_block = (
             "<table width='100%' style='border-collapse:collapse;background:#f8fafc;"
-            "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0;overflow:hidden'>"
+            "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0 4px;overflow:hidden'>"
             "<tr>"
-            + _pct_cell("Portfolio", perf, bold=True)
-            + _pct_cell("S&P 500", spy)
-            + _pct_cell("Alpha", alpha, bold=True).replace("border-right:1px solid #e5e7eb", "border-right:none")
+            + _pct_cell("Portfolio", perf, bold=True, subtitle="this week · equity positions")
+            + _pct_cell("S&P 500", spy, subtitle="this week · SPY")
+            + _pct_cell("Alpha", alpha, bold=True, subtitle="vs benchmark").replace("border-right:1px solid #e5e7eb", "border-right:none")
             + "</tr></table>"
+            "<p style='font-size:0.72em;color:#9ca3af;margin:0 0 20px;text-align:center'>"
+            "Weekly change in equity position value (Mon&#8202;–&#8202;Fri). "
+            "Includes new positions opened this week. "
+            "Different from Account page&#8202;'s all-time money-weighted return."
+            "</p>"
         )
 
     # Section accent colours (left-border strip)

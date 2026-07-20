@@ -24,6 +24,7 @@ _SYSTEM_PROMPT = """You are a disciplined portfolio advisor helping an individua
 
 Section 1 — WHAT HAPPENED (2–3 sentences):
 Performance vs benchmark. Name the top contributors and detractors from the data package (these already exclude closed positions). Facts only.
+IMPORTANT — metric framing: the "Portfolio return" figure is the week's equity-position value change (Mon–Fri), not a money-weighted investment return. Say "equity positions gained/fell X%" or "portfolio value moved X% this week" — never "the portfolio returned X%" or imply it is a true investment-return metric. Do NOT reference or compare against the Account page's all-time figure; they measure different things.
 
 Section 2 — DECISIONS YOU MADE (bullet list):
 For each actionable signal surfaced this week: did the investor act or not, and what happened to the name by week-end? Be specific.
