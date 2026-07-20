@@ -14828,6 +14828,50 @@ elif page == "📈 Analysis":
                     if _sa_holding and ps and not _stop_breached and not _under_reduce:
                         _render_stop_ladder(r, _sa_holding, price, under_reduce=False, buy_add=True)
 
+                    # ── Investor Mirror cross-surface banner ──────────────────────
+                    # Show when this ticker is flagged by the Mirror tab (published
+                    # eagerly on My Edge page load; None when Mirror not yet visited).
+                    _sa_mi_match   = None
+                    _sa_mi_pattern = None
+                    for _mp in (st.session_state.get("_mirror_orphans") or []):
+                        if _mp.get("Ticker") == ticker:
+                            _sa_mi_match, _sa_mi_pattern = _mp, "orphan"
+                            break
+                    if _sa_mi_match is None:
+                        for _mp in (st.session_state.get("_mirror_overexp") or []):
+                            if _mp.get("Ticker") == ticker:
+                                _sa_mi_match, _sa_mi_pattern = _mp, "overexp"
+                                break
+                    if _sa_mi_match is None:
+                        for _mp in (st.session_state.get("_mirror_overhangs") or []):
+                            if _mp.get("Ticker") == ticker:
+                                _sa_mi_match, _sa_mi_pattern = _mp, "overhang"
+                                break
+                    if _sa_mi_match is not None:
+                        _sa_mi_score  = _sa_mi_match.get("Score", 0)
+                        _sa_mi_weight = _sa_mi_match.get("Weight (%)", 0)
+                        if _sa_mi_pattern == "orphan":
+                            st.info(
+                                f"🪞 **Investor Mirror — Orphan Conviction:** {ticker} scores "
+                                f"{_sa_mi_score:.0f} but is underweight at {_sa_mi_weight:.1f}%. "
+                                "If the gate checks below pass and timing is right, this is a "
+                                "sizing opportunity — add shares to align weight with your conviction."
+                            )
+                        elif _sa_mi_pattern == "overexp":
+                            st.warning(
+                                f"🪞 **Investor Mirror — Accidental Overexposure:** {ticker} "
+                                f"scores {_sa_mi_score:.0f} (weak conviction) but holds "
+                                f"{_sa_mi_weight:.1f}% weight. Consider trimming to bring "
+                                "allocation in line with your actual conviction."
+                            )
+                        elif _sa_mi_pattern == "overhang":
+                            st.error(
+                                f"🪞 **Investor Mirror — Legacy Overhang:** {ticker} is one of "
+                                f"your largest positions ({_sa_mi_weight:.1f}%) but conviction "
+                                f"has faded (score {_sa_mi_score:.0f}). Verify whether the "
+                                "original thesis still holds before this position grows further."
+                            )
+
                     # ── Gate checklist ────────────────────────────────────────────
                     # Pure display — reads portfolio DataFrame and bundle already in
                     # session state; no scoring or gate logic changes.
@@ -25165,6 +25209,27 @@ elif page == "🎯 My Edge":
     # ── Load flows + account data (DB, cheap) ────────────────────────────────
     _me_flows  = _me_db.load_account_flows()
     _me_anchor = _me_acct.baseline_anchor(_me_flows)
+
+    # Publish Investor Mirror alignment to session_state so the Analysis page
+    # can show a cross-surface banner when the viewed ticker is flagged.
+    _mi_pub_port = st.session_state.get("_port_df_enriched")
+    if _mi_pub_port is not None and not _mi_pub_port.empty:
+        from stock_analyzer import investor_mirror as _im_pub
+        _mi_pub_align = _im_pub.conviction_alignment(
+            _mi_pub_port, min_positions=INVESTOR_MIRROR_MIN_POSITIONS
+        )
+        if _mi_pub_align is not None:
+            st.session_state["_mirror_orphans"]   = _mi_pub_align["orphan_convictions"]
+            st.session_state["_mirror_overexp"]   = _mi_pub_align["accidental_overexposures"]
+            st.session_state["_mirror_overhangs"] = _mi_pub_align["legacy_overhangs"]
+        else:
+            st.session_state["_mirror_orphans"]   = None
+            st.session_state["_mirror_overexp"]   = None
+            st.session_state["_mirror_overhangs"] = None
+    else:
+        st.session_state["_mirror_orphans"]   = None
+        st.session_state["_mirror_overexp"]   = None
+        st.session_state["_mirror_overhangs"] = None
 
     # ── 5 tabs ────────────────────────────────────────────────────────────────
     _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d, _me_tab_e = st.tabs([
