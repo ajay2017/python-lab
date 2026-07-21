@@ -159,6 +159,25 @@ COMPOSITE_HIGH_CONVICTION = COMPOSITE_STRONG_BUY
 # setups clear when the index isn't providing tailwind.
 COMPOSITE_BUY_FLAT_DAY = 78
 
+# Minimum composite for the #1 pick to be featured with full "Act on" framing
+# in the morning action email. Below this it still appears but carries a
+# "moderate" label rather than a high-conviction directive.
+SCAN_TOP_PICK_MIN_COMPOSITE = 70
+
+# Exit-signal velocity — composite score trend over a rolling window used to
+# detect a WATCH position that is accelerating toward TRIM. Fires a section in
+# the premarket email BEFORE the TRIM threshold is actually crossed.
+EXIT_VELOCITY_LOOKBACK_DAYS  = 5   # rolling window for composite score trend
+EXIT_VELOCITY_DROP_THRESHOLD = 8   # composite-point drop over window to alert
+
+# Intraday pullback entry window (cron scan lane, Phase 3). Fires when a
+# go-verdict morning pick dips from its open by at least PULLBACK_ENTRY_DIP_PCT
+# while SPY is not in freefall (still above -PULLBACK_SPY_MAX_DOWN). Investment-
+# policy decisions: tighter dip % = more signals; looser SPY floor = allows
+# alerts even during a mild broad-market down day.
+PULLBACK_ENTRY_DIP_PCT  = 1.5   # intraday drop from open (%) that triggers alert
+PULLBACK_SPY_MAX_DOWN   = 1.0   # SPY intraday drop ceiling — above this = rout, suppress
+
 # ± alpha band (percentage points vs benchmark) for classifying a position's
 # relative performance as Outperforming / In Line / Underperforming on the
 # Performance + Relative Strength views. Awareness/display only — never a gate.

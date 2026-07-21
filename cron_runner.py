@@ -44,13 +44,14 @@ from stock_analyzer.headless_alert_engine import (
 )
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
-    render_buy_picks_email, send_email_resend,
+    render_daily_action_email, render_intraday_entry_email, send_email_resend,
 )
 
 _ET = pytz.timezone("America/New_York")
 _PROTECTIVE_ROW = 1   # alert_state lane: pre-market protective dedup
 _EOD_ROW = 2          # alert_state lane: EOD pullback dedup
 _BUY_ROW = 3          # alert_state lane: morning buy-list dedup
+_INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
 
 
 def _log(msg: str) -> None:
@@ -143,17 +144,53 @@ def _run_premarket(now_et, force: bool) -> int:
         db.save_exit_signals_batch(exit_signal_rows)
         _log(f"exit_signals captured ({len(exit_signal_rows)} rows, date={today_str}).")
 
-    fp = _fingerprint(alerts)
+    # Velocity check — detect WATCH tickers whose composite score is accelerating
+    # toward TRIM. Silently skips when exit_signals has < 2 days of WATCH history
+    # for a ticker; fills in naturally as data accumulates post-2026-07-21 launch.
+    velocity_alerts: list[dict] = []
+    try:
+        from stock_analyzer.exit_velocity import find_accelerating_watches
+        from stock_analyzer.constants import (
+            EXIT_VELOCITY_LOOKBACK_DAYS, EXIT_VELOCITY_DROP_THRESHOLD,
+        )
+        _signals_hist = db.load_exit_signals(days_back=EXIT_VELOCITY_LOOKBACK_DAYS)
+        _watch_tickers = [
+            d.get("ticker") for d in payload.get("all_deterioration_signals", [])
+            if d.get("tier") == "WATCH" and d.get("ticker")
+        ]
+        if _watch_tickers and _signals_hist is not None and not _signals_hist.empty:
+            velocity_alerts = find_accelerating_watches(
+                _signals_hist, _watch_tickers,
+                EXIT_VELOCITY_LOOKBACK_DAYS, EXIT_VELOCITY_DROP_THRESHOLD,
+            )
+            if velocity_alerts:
+                _log("velocity alerts: " + ", ".join(
+                    f"{v['ticker']} ({v['delta']:+.1f}pt over {v['n_days']}d)"
+                    for v in velocity_alerts
+                ))
+            else:
+                _log(f"velocity check: {len(_watch_tickers)} WATCH ticker(s), none accelerating.")
+        else:
+            _log("velocity check: no WATCH tickers or insufficient history — skip.")
+    except Exception as _ve:
+        _log(f"velocity check failed: {str(_ve)[:80]} — continuing without.")
+
+    # Combined fingerprint includes velocity tickers so a new acceleration
+    # triggers a re-send even when the hard-alert set is unchanged.
+    _fp_input = alerts + [{"kind": "velocity", "ticker": v["ticker"]} for v in velocity_alerts]
+    fp = _fingerprint(_fp_input)
     sent = False
-    if not alerts:
+    if not alerts and not velocity_alerts:
         _log("nothing to act on — no email.")
     elif fp == state.get("last_fingerprint") and not force:
         _log(f"unchanged since last send (fp={fp}) — no email (anti-spam).")
     else:
-        subject, html = render_alert_email(alerts, payload.get("built_at", today_str))
+        subject, html = render_alert_email(
+            alerts, payload.get("built_at", today_str), velocity_alerts=velocity_alerts,
+        )
         sent = _send_email("protective", subject, html)
 
-    if sent or not alerts:
+    if sent or (not alerts and not velocity_alerts):
         # Save dedup state ONLY on a real send or a legitimately empty run — so a
         # transient Resend failure is retried by the later DST slot rather than
         # silently suppressed (matches buy-lane dedup contract).
@@ -262,13 +299,18 @@ def _run_eod(now_et, force: bool) -> int:
     return 0
 
 
-def _buy_fingerprint(picks: list[dict]) -> str:
-    """Stable hash of the buy-list SET by ticker — re-send only when the set of
-    tickers changes (not on re-ordering / wording). Empty set → 'none'."""
-    if not picks:
-        return "none"
-    keys = sorted(str(p.get("ticker") or "").upper() for p in picks if p.get("ticker"))
-    return hashlib.sha1("|".join(keys).encode("utf-8")).hexdigest()[:16]
+def _daily_action_fingerprint(top_pick: dict, exit_alerts: list[dict]) -> str:
+    """Stable hash of the morning action brief: top ticker+score + any EXIT/TRIM
+    set. Re-fires when the top pick changes or exit signals change; silent when
+    only secondary picks shuffle."""
+    top_t = str(top_pick.get("ticker") or "").upper()
+    top_c = round(float(top_pick.get("composite_score") or 0), 1)
+    exits = sorted(
+        f"{str(a.get('ticker') or '').upper()}:{a.get('signal_type', '')}"
+        for a in exit_alerts if a.get("ticker")
+    )
+    key = f"{top_t}:{top_c}|" + "|".join(exits)
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
 def _run_scan(now_et, force: bool) -> int:
@@ -346,22 +388,153 @@ def _run_scan(now_et, force: bool) -> int:
             _why = f"tone={_tone} (S&P {_spr})"
         _log(f"no high-conviction buy setups — no email · {_why}.")
     else:
-        fp = _buy_fingerprint(hi)
+        # Sort by composite score so the highest-conviction pick leads.
+        hi.sort(key=lambda p: float(p.get("composite_score") or 0), reverse=True)
+        top_pick   = hi[0]
+        other_picks = hi[1:]
+
+        # Pull today's EXIT/TRIM signals from the premarket run so the email can
+        # warn the user to handle exits before entering any new position.
+        exit_alerts: list[dict] = []
+        try:
+            signals_df = db.load_exit_signals(days_back=1)
+            if signals_df is not None and not signals_df.empty and "signal_date" in signals_df.columns:
+                _today_rows = signals_df[
+                    (signals_df["signal_date"].astype(str) == today_str) &
+                    (signals_df["signal_type"].isin(["EXIT", "TRIM"]))
+                ]
+                exit_alerts = _today_rows.to_dict("records")
+        except Exception as _e:
+            _log(f"exit_signals load for scan email failed: {str(_e)[:80]} — skipping exit section.")
+
+        if exit_alerts:
+            _log(f"exit alerts in email: " + ", ".join(
+                f"{a.get('ticker')}/{a.get('signal_type')}" for a in exit_alerts
+            ))
+
+        fp = _daily_action_fingerprint(top_pick, exit_alerts)
         state = db.load_alert_state(_BUY_ROW) or {}
         if (state.get("last_emailed_date") == today_str
                 and state.get("last_fingerprint") == fp and not force):
-            _log(f"buy-list unchanged since last send (fp={fp}) — no email.")
+            _log(f"morning action unchanged since last send (fp={fp}) — no email.")
         else:
-            subject, html = render_buy_picks_email(hi, payload.get("built_at", today_str))
-            sent = _send_email("buy-setups", subject, html)
+            subject, html = render_daily_action_email(
+                top_pick=top_pick,
+                exit_alerts=exit_alerts,
+                other_picks=other_picks,
+                built_at=payload.get("built_at", today_str),
+            )
+            sent = _send_email("morning-action", subject, html)
             # Save dedup state ONLY on a real send — so a transient Resend failure
             # (key present, send errored) is retried by the later DST slot rather
             # than silently suppressed. (Inert/no-key also won't save → harmless.)
             if sent and db.save_alert_state(today_str, fp, _BUY_ROW):
-                _log(f"buy state saved (row={_BUY_ROW}, date={today_str}, fp={fp}).")
+                _log(f"action state saved (row={_BUY_ROW}, date={today_str}, fp={fp}).")
             elif not sent:
-                _log("buy email not sent (inert/failed) — state NOT saved (later slot may retry).")
+                _log("action email not sent (inert/failed) — state NOT saved (later slot may retry).")
     _log(f"scan done · persisted={n} · buy_sent={sent}")
+    return 0
+
+
+def _run_intraday(now_et, force: bool) -> int:
+    """Mid-morning intraday pullback window (~11:30 ET): fire when a morning
+    go-verdict pick has pulled back from its open by PULLBACK_ENTRY_DIP_PCT
+    while SPY is NOT in freefall (SPY intraday drop ≤ PULLBACK_SPY_MAX_DOWN).
+
+    Requires scanner_cache to have been written by the earlier _run_scan() step.
+    Deduplicates via _INTRADAY_ROW (row 4) so each qualifying name fires at most
+    once per day. Inert without RESEND_API_KEY."""
+    today_str = now_et.date().isoformat()
+    if not force:
+        if not is_trading_day(now_et.date()):
+            _log("intraday: not an ET trading day — skip.")
+            return 0
+        # Only run after opening volatility has settled (≥ 10:00 ET).
+        if now_et.hour < 10:
+            _log(f"intraday: too early (ET hour {now_et.hour} < 10) — skip.")
+            return 0
+
+    # Load the scanner_cache written by this morning's _run_scan step.
+    cache = db.load_scanner_cache()
+    if cache is None:
+        _log("intraday: no scanner_cache available — run scan first.")
+        return 0
+    scanner_df = cache.get("df")
+    scan_date  = cache.get("scan_date")
+    if scanner_df is None or (hasattr(scanner_df, "empty") and scanner_df.empty):
+        _log("intraday: scanner_cache is empty — skip.")
+        return 0
+    # Sanity: only use today's cache (stale data from yesterday → wrong picks).
+    # None scan_date means the row was written by an older code path with no date —
+    # treat as stale rather than assume it's fresh.
+    if (scan_date is None or scan_date != today_str) and not force:
+        _log(f"intraday: scanner_cache is from {scan_date!r}, not today ({today_str}) — skip.")
+        return 0
+
+    # Re-derive go-verdict picks from the cached scan (mirrors what _run_scan does).
+    payload = compute_morning_picks(today=now_et.date(), scanner_results=scanner_df)
+    for e in payload.get("errors", []):
+        _log(f"engine note: {e}")
+    picks = payload.get("picks", [])
+    go_picks = [
+        p for p in picks
+        if ((p.get("xref") or {}).get("verdict_reconciled") or {}).get("verdict") == "go"
+        and p.get("composite_score") is not None
+        and str(p.get("ticker") or "").strip()
+    ]
+    if not go_picks:
+        _log("intraday: no go-verdict picks in today's scan — skip.")
+        return 0
+    _log(f"intraday: {len(go_picks)} go-verdict pick(s) to check: "
+         + ", ".join(str(p.get("ticker")) for p in go_picks))
+
+    # Fetch live intraday prices for the qualifying tickers + SPY.
+    from stock_analyzer.intraday_entry import fetch_intraday_prices, compute_intraday_entries
+    from stock_analyzer.constants import PULLBACK_ENTRY_DIP_PCT, PULLBACK_SPY_MAX_DOWN
+
+    pick_tickers = [str(p.get("ticker")).upper() for p in go_picks]
+    all_tickers  = pick_tickers + ["SPY"]
+    price_data   = fetch_intraday_prices(all_tickers)
+    spy_data     = price_data.pop("SPY", None)
+    _log(f"intraday: prices fetched for {len(price_data)}/{len(pick_tickers)} pick(s)"
+         + (f" · SPY: cur={spy_data.get('current'):.2f} open={spy_data.get('open'):.2f}"
+            if spy_data else " · SPY: unavailable"))
+
+    # Check qualifying pullback entries.
+    entries = compute_intraday_entries(go_picks, price_data, spy_data,
+                                       PULLBACK_ENTRY_DIP_PCT, PULLBACK_SPY_MAX_DOWN)
+    sent = False
+    if not entries:
+        _log("intraday: no tickers qualify (none pulled back enough, or SPY in freefall).")
+    else:
+        _log("intraday pullback entries: "
+             + ", ".join(f"{e.get('ticker')} ({e.get('intraday_drop_pct'):+.1f}%)" for e in entries))
+        # Dedup: fingerprint on (ticker, date) pairs so the same entry set doesn't
+        # re-fire when the cron re-runs (DST dual-slot or FORCE re-test).
+        _fp_keys = sorted(f"{str(e.get('ticker')).upper()}:{today_str}" for e in entries)
+        fp = hashlib.sha1("|".join(_fp_keys).encode("utf-8")).hexdigest()[:16]
+        state = db.load_alert_state(_INTRADAY_ROW) or {}
+        if (state.get("last_emailed_date") == today_str
+                and state.get("last_fingerprint") == fp and not force):
+            _log(f"intraday: same entries already sent today (fp={fp}) — skip.")
+        else:
+            spy_drop_pct = None
+            if spy_data:
+                _sc = spy_data.get("current")
+                _so = spy_data.get("open")
+                if _sc and _so and _so > 0:
+                    spy_drop_pct = round((_sc - _so) / _so * 100, 2)
+            subject, html = render_intraday_entry_email(
+                entries=entries,
+                spy_drop=spy_drop_pct,
+                built_at=today_str,
+            )
+            sent = _send_email("intraday-entry", subject, html)
+            if sent and db.save_alert_state(today_str, fp, _INTRADAY_ROW):
+                _log(f"intraday state saved (row={_INTRADAY_ROW}, date={today_str}, fp={fp}).")
+            elif not sent:
+                _log("intraday email not sent (inert/failed) — state NOT saved (later slot may retry).")
+    _log(f"intraday done · entries={len(entries)} · sent={sent}")
     return 0
 
 
@@ -704,9 +877,9 @@ def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
-    # Derive mode from ET hour; named overrides (scan, thesis, debrief, monthly) bypass time-inference.
+    # Derive mode from ET hour; named overrides bypass time-inference.
     _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
-    mode = _mode_override if _mode_override in ("scan", "thesis", "debrief", "monthly") else (
+    mode = _mode_override if _mode_override in ("scan", "intraday", "thesis", "debrief", "monthly") else (
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
@@ -715,6 +888,8 @@ def main() -> int:
         return _run_test_email(now_et)
     if mode == "scan":
         return _run_scan(now_et, force)
+    if mode == "intraday":
+        return _run_intraday(now_et, force)
     if mode == "thesis":
         # Sunday lane: thesis review → weekly debrief → (first Sunday only) monthly
         # report. Isolate each lane so one's uncaught exception can't take down the

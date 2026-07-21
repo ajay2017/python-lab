@@ -23,6 +23,11 @@ on:
     # mode=scan for these cron strings (their ET hour < 12 would else derive premarket).
     - cron: "45 13 * * 1-5"  # 13:45 UTC — 09:45 EDT (summer run) / 08:45 EST (gated pre-open)
     - cron: "45 14 * * 1-5"  # 14:45 UTC — 10:45 EDT (already-done) / 09:45 EST (winter run)
+    # Mid-morning INTRADAY pullback entry window (~11:30 ET). Two UTC slots straddle
+    # EST/EDT; cron_runner gates on ET hour ≥ 10 (opening volatility settled).
+    # ALERT_RUN_MODE=intraday forces mode. Deduplicates via alert_state row 4.
+    - cron: "30 15 * * 1-5"  # 15:30 UTC — 11:30 EDT (summer run) / 10:30 EST
+    - cron: "30 16 * * 1-5"  # 16:30 UTC — 12:30 EDT (already-done) / 11:30 EST (winter run)
     # EOD run (~16:30 ET, post-close) — snapshot write + reactive pullback. Two UTC
     # slots straddle EST/EDT; the cron derives mode=eod for ET hour >= 12 and gates
     # on ET hour >= 16 so the close is final.
@@ -35,9 +40,9 @@ on:
   workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
       mode:
-        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan, thesis=force weekly thesis review, debrief=force weekly portfolio debrief, monthly=force monthly intelligence report"
+        description: "Run mode: auto=derive from ET hour, scan=force mid-morning scan, intraday=force intraday pullback check, thesis=force weekly thesis review, debrief=force weekly portfolio debrief, monthly=force monthly intelligence report"
         type: choice
-        options: [auto, scan, thesis, debrief, monthly]
+        options: [auto, scan, intraday, thesis, debrief, monthly]
         default: auto
       force:
         description: "Bypass the trading-day / hour / once-per-day guards (test)"
@@ -87,6 +92,7 @@ jobs:
           ALERT_RUN_MODE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
             || ((github.event.schedule == '45 13 * * 1-5' || github.event.schedule == '45 14 * * 1-5') && 'scan')
+            || ((github.event.schedule == '30 15 * * 1-5' || github.event.schedule == '30 16 * * 1-5') && 'intraday')
             || ((github.event.schedule == '0 22 * * 0'   || github.event.schedule == '0 23 * * 0')   && 'thesis')
             || '' }}
         run: python cron_runner.py

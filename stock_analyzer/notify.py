@@ -23,14 +23,31 @@ _KIND_STYLE = {
 }
 
 
-def render_alert_email(alerts: list[dict], built_at: str) -> tuple[str, str]:
+def render_alert_email(
+    alerts: list[dict],
+    built_at: str,
+    velocity_alerts: list[dict] | None = None,
+) -> tuple[str, str]:
     """Return (subject, html_body) for the protective-alert email.
 
-    Caller guarantees `alerts` is non-empty (no email is sent for an empty set).
+    `alerts` are the hard protective signals (stop breaches, EXIT, risk-off).
+    `velocity_alerts` (optional) are WATCH tickers whose composite score is
+    accelerating downward — shown as a separate section below hard alerts.
+    At least one of alerts / velocity_alerts must be non-empty (caller's
+    responsibility).
     """
+    velocity_alerts = velocity_alerts or []
     n = len(alerts)
+    n_vel = len(velocity_alerts)
     tickers = ", ".join(dict.fromkeys(str(a.get("ticker") or "") for a in alerts if a.get("ticker")))
-    subject = f"DRISHTA · {n} protective action{'s' if n != 1 else ''} today — {tickers}"
+    vel_tickers = ", ".join(dict.fromkeys(str(v.get("ticker") or "") for v in velocity_alerts if v.get("ticker")))
+
+    if alerts:
+        subject = f"DRISHTA · {n} protective action{'s' if n != 1 else ''} today — {tickers}"
+    else:
+        subject = (f"DRISHTA · {n_vel} WATCH accelerating — {vel_tickers}"
+                   if n_vel == 1 else
+                   f"DRISHTA · {n_vel} WATCHes accelerating — {vel_tickers}")
 
     cards = []
     for a in alerts:
@@ -59,19 +76,59 @@ def render_alert_email(alerts: list[dict], built_at: str) -> tuple[str, str]:
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:2px"><b>Trigger:</b> {trigger}</div>' if trigger else ''}
         </div>""")
 
+    # Velocity section — WATCH positions whose composite score is trending down
+    vel_html = ""
+    if velocity_alerts:
+        vel_rows = []
+        for v in velocity_alerts:
+            t   = _html.escape(str(v.get("ticker") or ""))
+            d   = v.get("delta")
+            nd  = v.get("n_days")
+            ns  = v.get("newest_score")
+            os_ = v.get("oldest_score")
+            d_str  = f"{float(d):+.1f} pts" if d is not None else ""
+            nd_str = f"over {nd} days" if nd is not None else ""
+            sc_str = (f"{float(os_):.0f} → {float(ns):.0f}"
+                      if os_ is not None and ns is not None else "")
+            detail = "  ·  ".join(x for x in [sc_str, d_str, nd_str] if x)
+            vel_rows.append(f"""
+            <div style="border-left:3px solid #f59e0b;background:#1c1400;border-radius:0 6px 6px 0;
+                        padding:10px 14px;margin:0 0 8px 0;font-family:Arial,Helvetica,sans-serif">
+              <div style="color:#f59e0b;font-weight:700;font-size:12px;letter-spacing:.3px">
+                ⚡ WATCH ACCELERATING &nbsp;·&nbsp; <span style="color:#e5e7eb">{t}</span>
+              </div>
+              {f'<div style="color:#cbd5e1;font-size:12px;margin-top:4px">Score {_html.escape(detail)}</div>' if detail else ''}
+              <div style="color:#a8a29e;font-size:12px;margin-top:3px">
+                Not yet at TRIM — but deteriorating faster than usual. Open the app to review.
+              </div>
+            </div>""")
+        vel_html = f"""
+        <div style="margin-top:{14 if alerts else 0}px">
+          {f'<div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:11px;font-weight:600;letter-spacing:.3px;margin-bottom:8px">EARLY WARNING</div>' if alerts else ''}
+          {''.join(vel_rows)}
+        </div>"""
+
+    subtitle = (f"{n} protective action{'s' if n != 1 else ''}"
+                + (f" · {n_vel} WATCH accelerating" if n_vel else "")
+                + f" · built {_html.escape(str(built_at))[:19]} ET")
+    if not alerts:
+        subtitle = f"{n_vel} early warning{'s' if n_vel != 1 else ''} · built {_html.escape(str(built_at))[:19]} ET"
+
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
         <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;font-weight:700;margin-bottom:4px">
           DRISHTA · Protective Alerts
         </div>
         <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;margin-bottom:16px">
-          {n} same-day reduce decision{'s' if n != 1 else ''} · built {_html.escape(str(built_at))[:19]} ET
+          {subtitle}
         </div>
         {''.join(cards)}
+        {vel_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;margin-top:18px;
                     border-top:1px solid #292524;padding-top:10px">
-          Protective signals only (stop breaches · deterioration EXIT · risk-off trim). These are directives,
-          not auto-executed — open DRISHTA to act. You receive this only when the set changes.
+          Protective signals (stop breaches · deterioration EXIT · risk-off trim) are directives —
+          not auto-executed, open DRISHTA to act. Early-warning WATCH velocity is informational only
+          (the position has not yet reached TRIM). You receive this only when the set changes.
         </div>
       </div>
     </body></html>"""
@@ -224,6 +281,251 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
           before acting</b> (intraday moves can leave it). Advisory — you decide and place the trade; nothing is
           auto-traded. Check the Economic Calendar for any imminent macro event. You receive this only when the
           set of setups changes; silence means nothing cleared the bar.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
+
+
+def render_daily_action_email(
+    top_pick: dict,
+    exit_alerts: list[dict],
+    other_picks: list[dict],
+    built_at: str,
+) -> tuple[str, str]:
+    """Return (subject, html_body) for the single-action morning email.
+
+    Replaces the flat buy-list format with a priority-first layout:
+      Section 1 (if any EXIT/TRIM signals from premarket run) — handle exits first
+      Section 2 — #1 entry action today (top composite pick, full detail)
+      Section 3 — other setups as a compact reference list
+
+    `exit_alerts` are rows from exit_signals (EXIT or TRIM tier only).
+    `top_pick` is the highest-composite go-verdict pick (caller guarantees non-empty).
+    `other_picks` are the remaining go-verdict picks (may be empty).
+    """
+    from stock_analyzer.constants import SCAN_TOP_PICK_MIN_COMPOSITE
+
+    ticker  = _html.escape(str(top_pick.get("ticker") or ""))
+    comp    = top_pick.get("composite_score")
+    score   = top_pick.get("score") or top_pick.get("momentum_score")
+    sector  = _html.escape(str(top_pick.get("sector") or ""))
+    thesis  = _html.escape(str(top_pick.get("thesis") or ""))[:240]
+    sz      = top_pick.get("sizing") or {}
+    _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
+    _sh, _tc   = sz.get("shares"), sz.get("total_cost")
+    _stop, _pp = sz.get("stop"), sz.get("port_pct")
+    day     = top_pick.get("day_change")
+
+    is_high_conviction = (comp or 0) >= SCAN_TOP_PICK_MIN_COMPOSITE
+
+    # Subject — includes exit ticker(s) when exits need attention first
+    exit_tickers = [_html.escape(str(a.get("ticker") or "")) for a in exit_alerts if a.get("ticker")]
+    if exit_tickers and ticker:
+        subject = f"DRISHTA · Exit {exit_tickers[0]} + Enter {ticker}"
+    elif ticker and comp is not None:
+        subject = f"DRISHTA · Act on {ticker} — {float(comp):.0f}/100"
+    else:
+        subject = f"DRISHTA · Morning action: {ticker}"
+
+    # ── Section 1: exit alerts (if any) ──────────────────────────────────────
+    exit_html = ""
+    if exit_alerts:
+        rows = []
+        for a in exit_alerts:
+            t    = _html.escape(str(a.get("ticker") or ""))
+            tier = _html.escape(str(a.get("signal_type") or ""))
+            pnl  = a.get("pnl_pct")
+            dd   = a.get("dd_from_peak_pct")
+            pnl_str = f"{float(pnl):+.1f}% P&L" if pnl is not None else ""
+            dd_str  = f"{float(dd):.1f}% from peak" if dd is not None else ""
+            detail  = "  ·  ".join(x for x in [pnl_str, dd_str] if x)
+            color   = "#ef4444" if tier == "EXIT" else "#f97316"
+            rows.append(
+                f"<div style='margin:3px 0'>"
+                f"<span style='color:{color};font-weight:700'>{tier}</span>"
+                f"&nbsp;&nbsp;<span style='color:#f1f5f9;font-weight:700'>{t}</span>"
+                + (f"&nbsp;&nbsp;<span style='color:#9ca3af;font-size:12px'>{_html.escape(detail)}</span>"
+                   if detail else "")
+                + "</div>"
+            )
+        exit_html = f"""
+        <div style="border-left:4px solid #ef4444;background:#1c0a0a;border-radius:0 6px 6px 0;
+                    padding:12px 16px;margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif">
+          <div style="color:#ef4444;font-weight:700;font-size:12px;letter-spacing:.3px;margin-bottom:6px">
+            ⚠️ HANDLE EXITS BEFORE ENTERING NEW POSITIONS
+          </div>
+          {''.join(rows)}
+        </div>"""
+
+    # ── Section 2: #1 action card ─────────────────────────────────────────────
+    score_bits = []
+    if score  is not None: score_bits.append(f"Momentum {float(score):.0f}")
+    if comp   is not None: score_bits.append(f"Composite <b style='color:#e5e7eb'>{float(comp):.0f}/100</b>")
+    if day    is not None and float(day) >= 4:
+        score_bits.append(f"<b style='color:#22c55e'>+{float(day):.1f}% today</b>")
+    score_str = "  ·  ".join(score_bits)
+
+    act_bits = []
+    if _lo is not None and _hi_p is not None:
+        _buy = f"Buy ${float(_lo):.2f}–${float(_hi_p):.2f}"
+        if _sh:  _buy += f", ~{int(_sh)} shares"
+        if _tc:  _buy += f" (~${float(_tc):,.0f}" + (f", {float(_pp):.1f}% of book" if _pp is not None else "") + ")"
+        act_bits.append(_buy)
+    if _stop is not None:
+        act_bits.append(f"stop ${float(_stop):.2f}")
+    act_str = "  ·  ".join(act_bits)
+
+    guard = (f"Only act if price is still inside ${float(_lo):.2f}–${float(_hi_p):.2f}."
+             if _lo is not None and _hi_p is not None else "")
+
+    conviction_badge = (
+        "<span style='color:#22c55e;font-weight:700'>HIGH CONVICTION</span>"
+        if is_high_conviction else
+        "<span style='color:#fbbf24;font-weight:700'>MODERATE</span>"
+    )
+
+    top_card = f"""
+    <div style="border-left:4px solid {'#22c55e' if is_high_conviction else '#fbbf24'};
+                background:#1c1917;border-radius:0 6px 6px 0;
+                padding:14px 16px;margin:0 0 6px 0;font-family:Arial,Helvetica,sans-serif">
+      <div style="color:#9ca3af;font-size:11px;font-weight:600;letter-spacing:.4px;margin-bottom:4px">
+        #1 ENTRY TODAY · {conviction_badge}
+      </div>
+      <div style="color:#f9fafb;font-size:22px;font-weight:700;margin-bottom:2px">
+        {ticker}
+        {f'<span style="color:#9ca3af;font-size:14px;font-weight:400"> · {sector}</span>' if sector else ''}
+      </div>
+      {f'<div style="color:#cbd5e1;font-size:13px;margin-bottom:6px">{score_str}</div>' if score_str else ''}
+      {f'<div style="color:#f1f5f9;font-size:14px;font-weight:600;margin-bottom:3px">→ {act_str}</div>' if act_str else ''}
+      {f'<div style="color:#fbbf24;font-size:12px;margin-bottom:4px">⚠️ {guard}</div>' if guard else ''}
+      {f'<div style="color:#a8a29e;font-size:12px">{thesis}</div>' if thesis else ''}
+    </div>"""
+
+    # ── Section 3: other setups (compact) ────────────────────────────────────
+    other_html = ""
+    if other_picks:
+        rows2 = []
+        for p in other_picks:
+            t2   = _html.escape(str(p.get("ticker") or ""))
+            c2   = p.get("composite_score")
+            s2   = _html.escape(str(p.get("sector") or ""))
+            rows2.append(
+                f"<div style='margin:4px 0;color:#d1d5db;font-size:13px'>"
+                f"<span style='color:#e5e7eb;font-weight:600'>{t2}</span>"
+                + (f"&nbsp;—&nbsp;composite {float(c2):.0f}" if c2 is not None else "")
+                + (f"&nbsp;·&nbsp;<span style='color:#9ca3af'>{s2}</span>" if s2 else "")
+                + "</div>"
+            )
+        other_html = f"""
+        <div style="border-top:1px solid #292524;margin-top:14px;padding-top:10px;
+                    font-family:Arial,Helvetica,sans-serif">
+          <div style="color:#6b7280;font-size:11px;font-weight:600;letter-spacing:.3px;margin-bottom:6px">
+            OTHER SETUPS (context — not the primary action)
+          </div>
+          {''.join(rows2)}
+        </div>"""
+
+    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
+      <div style="max-width:640px;margin:0 auto">
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;
+                    font-weight:700;margin-bottom:2px">DRISHTA · Morning Action Brief</div>
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;
+                    margin-bottom:16px">
+          {_html.escape(str(built_at))[:19]} ET · one decisive call
+        </div>
+        {exit_html}
+        {top_card}
+        {other_html}
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
+                    margin-top:18px;border-top:1px solid #292524;padding-top:10px">
+          Composite + momentum both confirm the #1 pick; all gates cleared (tone, sector,
+          concentration, macro). <b>Check price is still in the entry zone before acting —
+          intraday moves can leave it.</b> Advisory only — you place the trade. Exit signals
+          shown above are from the 8am premarket run; open the app for full context.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
+
+
+def render_intraday_entry_email(
+    entries: list[dict],
+    spy_drop: float | None,
+    built_at: str,
+) -> tuple[str, str]:
+    """Return (subject, html_body) for the intraday pullback entry-window email.
+
+    `entries` are qualifying picks enriched with intraday_drop_pct, current_price,
+    open_price from intraday_entry.compute_intraday_entries().  Non-empty guaranteed
+    by caller. `spy_drop` is SPY's intraday drop (negative float) or None.
+    """
+    n = len(entries)
+    top = entries[0]
+    top_ticker = _html.escape(str(top.get("ticker") or ""))
+    subject = (f"DRISHTA · Entry window: {top_ticker} down {abs(top.get('intraday_drop_pct', 0)):.1f}% from open"
+               if n == 1 else
+               f"DRISHTA · {n} entry windows now — {top_ticker} leads")
+
+    cards = []
+    for e in entries:
+        ticker = _html.escape(str(e.get("ticker") or ""))
+        drop   = e.get("intraday_drop_pct")
+        cur    = e.get("current_price")
+        opn    = e.get("open_price")
+        comp   = e.get("composite_score")
+        sector = _html.escape(str(e.get("sector") or ""))
+        sz     = e.get("sizing") or {}
+        _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
+        _stop  = sz.get("stop")
+
+        price_line = ""
+        if cur is not None and opn is not None and drop is not None:
+            _drop_f, _cur_f, _opn_f = float(drop), float(cur), float(opn)
+            price_line = f"<b style='color:#f87171'>{_drop_f:.1f}%</b> from open (${_opn_f:.2f}) → now <b style='color:#e5e7eb'>${_cur_f:.2f}</b>"
+
+        entry_bits = []
+        if _lo is not None and _hi_p is not None:
+            entry_bits.append(f"original zone ${float(_lo):.2f}–${float(_hi_p):.2f}")
+        if _stop is not None:
+            entry_bits.append(f"stop ${float(_stop):.2f}")
+        entry_str = "  ·  ".join(entry_bits)
+
+        cards.append(f"""
+        <div style="border-left:4px solid #22c55e;background:#1c1917;border-radius:0 6px 6px 0;
+                    padding:12px 16px;margin:0 0 10px 0;font-family:Arial,Helvetica,sans-serif">
+          <div style="color:#22c55e;font-weight:700;font-size:13px;letter-spacing:.3px">
+            📉 PULLBACK ENTRY WINDOW &nbsp;·&nbsp; <span style="color:#e5e7eb">{ticker}</span>
+            {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;{sector}</span>' if sector else ''}
+            {f'<span style="color:#9ca3af;font-weight:400">&nbsp;·&nbsp;composite {float(comp):.0f}/100</span>' if comp is not None else ''}
+          </div>
+          {f'<div style="color:#f1f5f9;font-size:14px;margin-top:6px">{price_line}</div>' if price_line else ''}
+          {f'<div style="color:#cbd5e1;font-size:12px;margin-top:4px">{_html.escape(entry_str)}</div>' if entry_str else ''}
+          <div style="color:#fbbf24;font-size:12px;margin-top:3px">
+            ⚠️ Price moves fast — verify live before acting.
+          </div>
+        </div>""")
+
+    spy_line = ""
+    if spy_drop is not None:
+        spy_line = f"SPY {float(spy_drop):+.1f}% intraday — broad market not in freefall."
+
+    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
+      <div style="max-width:640px;margin:0 auto">
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;
+                    font-weight:700;margin-bottom:2px">DRISHTA · Intraday Entry Window</div>
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;
+                    margin-bottom:16px">
+          {_html.escape(str(built_at))[:19]} ET
+          {f'&nbsp;·&nbsp;{_html.escape(spy_line)}' if spy_line else ''}
+        </div>
+        {''.join(cards)}
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
+                    margin-top:18px;border-top:1px solid #292524;padding-top:10px">
+          These names cleared all gates this morning (composite + tone + sector + macro). The
+          intraday dip may offer a better entry price than the morning scan's open. <b>Verify the
+          price is still near the current level before acting — this email may be minutes old.</b>
+          Advisory only — you place the trade. Original morning entry zone shown for reference.
         </div>
       </div>
     </body></html>"""
