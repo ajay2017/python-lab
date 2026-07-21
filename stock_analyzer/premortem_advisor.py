@@ -108,6 +108,7 @@ def build_premortem_inputs(
     portfolio: dict | None = None,
     macro: dict | None = None,
     earnings: dict | None = None,
+    recent_lessons: list[str] | None = None,
 ) -> dict:
     """
     Assemble the structured evidence package passed to generate_case_against().
@@ -123,6 +124,10 @@ def build_premortem_inputs(
         label (str — e.g. "Inflation Fight"), confidence (int, 0-100)
     earnings keys (all optional):
         next_earnings_date (str), note (str)
+    recent_lessons (optional):
+        list of lesson_category strings from past exit trades (ticker-specific
+        first; cross-ticker fallback). Injected into the prompt as additional
+        evidence so the LLM can cite the investor's own documented patterns.
     """
     return {
         "ticker":    ticker,
@@ -130,6 +135,7 @@ def build_premortem_inputs(
         "portfolio": portfolio or {},
         "macro":     macro or {},
         "earnings":  earnings or {},
+        "lessons":   recent_lessons or [],
     }
 
 
@@ -188,6 +194,13 @@ def _format_case_against_prompt(ticker: str, inputs: dict) -> str:
         lines.append("Earnings context: " + " ".join(parts))
     else:
         lines.append("Earnings context: not available.")
+
+    ls = inputs.get("lessons") or []
+    if ls:
+        lines.append(
+            "Investor's own recorded exit lessons (from their trade journal, "
+            f"most recent first): {'; '.join(ls[:5])}."
+        )
 
     lines.append("\nWrite the 3 counterarguments now, as the JSON array specified.")
     return "\n".join(lines)

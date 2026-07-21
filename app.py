@@ -1364,6 +1364,28 @@ def _build_premortem_case(ticker: str) -> dict | None:
     except Exception:
         pass
 
+    _pm_lessons: list[str] = []
+    try:
+        _pm_tdf = st.session_state.get("trades_df")
+        if _pm_tdf is not None and not _pm_tdf.empty and "lesson_category" in _pm_tdf.columns:
+            _pm_sells = _pm_tdf[_pm_tdf["action"].str.upper() == "SELL"].copy()
+            _pm_ticker_sells = (
+                _pm_sells[_pm_sells["ticker"] == ticker]
+                if "ticker" in _pm_sells.columns
+                else _pm_sells.iloc[:0]
+            )
+            _pm_src = _pm_ticker_sells if not _pm_ticker_sells.empty else _pm_sells
+            _pm_lessons = (
+                _pm_src["lesson_category"]
+                .dropna()
+                .loc[lambda s: s.str.strip() != ""]
+                .sort_index(ascending=False)
+                .head(5)
+                .tolist()
+            )
+    except Exception:
+        pass
+
     _pm_api_key = (
         st.secrets.get("anthropic", {}).get("api_key", "") if hasattr(st, "secrets") else ""
     )
@@ -1373,6 +1395,7 @@ def _build_premortem_case(ticker: str) -> dict | None:
     _pm_inputs = _pm_advisor.build_premortem_inputs(
         ticker, engine=_pm_engine, portfolio=_pm_portfolio,
         macro=_pm_macro, earnings=_pm_earnings,
+        recent_lessons=_pm_lessons,
     )
     return _pm_advisor.generate_case_against(ticker, _pm_inputs, _pm_api_key)
 
@@ -14676,11 +14699,11 @@ elif page == "📈 Analysis":
                             f"⚖️ **Strong stock, weak entry here.** {rec['label']} reflects "
                             f"quality (composite {r['total']:.0f}), but the **entry R:R is "
                             f"{rr_val:.1f}:1** — below the {RR_ENTRY_MIN:.0f}:1 target. At "
-                            f"${price:.2f} you'd risk **${_risk_ps:.2f}/sh** (to the ${r['stop']:.2f} "
-                            f"stop) to make **${_reward_ps:.2f}/sh** (to the ${targets['base']:.2f} "
+                            f"\\${price:.2f} you'd risk **\\${_risk_ps:.2f}/sh** (to the \\${r['stop']:.2f} "
+                            f"stop) to make **\\${_reward_ps:.2f}/sh** (to the \\${targets['base']:.2f} "
                             f"base target) — unfavourable asymmetry. "
                             + (f"Consider waiting for a pullback toward the lower entry zone "
-                               f"(~${_lo:.2f}) to improve it. " if _lo else "")
+                               f"(~\\${_lo:.2f}) to improve it. " if _lo else "")
                             + "If you already hold it, this is a **KEEP, not an add here** — "
                             "your judgment call."
                         )
@@ -16871,6 +16894,39 @@ elif page == "📒 Trade Journal":
                     "Couldn't generate an AI case-against (offline/rate-limited) — "
                     "write your own risk case below."
                 )
+
+            try:
+                _pm_lc_src = None
+                if trades_df is not None and not trades_df.empty and "lesson_category" in trades_df.columns:
+                    _pm_lc_sells = trades_df[trades_df["action"].str.upper() == "SELL"]
+                    _pm_lc_ticker = (
+                        _pm_lc_sells[_pm_lc_sells["ticker"] == _pm_tk]
+                        if _pm_tk and "ticker" in _pm_lc_sells.columns
+                        else _pm_lc_sells.iloc[:0]
+                    )
+                    _pm_lc_src = _pm_lc_ticker if not _pm_lc_ticker.empty else _pm_lc_sells
+                    _pm_lc_counts = (
+                        _pm_lc_src["lesson_category"].dropna()
+                        .loc[lambda s: s.str.strip() != ""]
+                        .value_counts()
+                    )
+                    if not _pm_lc_counts.empty:
+                        _pm_lc_scope = f"for {_pm_tk}" if not _pm_lc_ticker.empty and _pm_tk else "across all exits"
+                        _pm_lc_chips = "".join(
+                            f"<span style='background:#292524;border-radius:10px;"
+                            f"padding:1px 8px;color:#a78bfa;font-size:0.75em;"
+                            f"margin-right:4px;white-space:nowrap'>"
+                            f"{_html.escape(cat)} ×{cnt}</span>"
+                            for cat, cnt in _pm_lc_counts.items()
+                        )
+                        st.markdown(
+                            f"<div style='margin:6px 0 4px 0;font-size:0.8em;color:#78716c'>"
+                            f"Your recorded exit lessons {_pm_lc_scope}:</div>"
+                            f"<div style='margin-bottom:10px;line-height:2'>{_pm_lc_chips}</div>",
+                            unsafe_allow_html=True,
+                        )
+            except Exception:
+                pass
 
             st.text_area(
                 "🖊️ What would make me wrong about this? (required before this Buy can be recorded)",
@@ -22924,7 +22980,7 @@ elif page == "📖 User Guide":
 
 **The order of operations:**
 
-1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. A live BUY also asks you to **🔍 Run Pre-Mortem** — an optional AI-built case *against* the trade — and requires one line: *what would make you wrong about this*. This is friction by design (never on SELL, never on an imported/backfilled trade) — the point is to have engaged with the downside before capital moves, not to add a hoop before recording history. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
+1. **Log your positions** — **📒 Trade Journal → ➕ Log a Trade.** Enter every **BUY** (and any **SELL**) with ticker, share count, **cost basis (price paid)**, and the **trade date**. This is the source of truth: your holdings, realized P&L, and each position's *age* (the 🌱 Settling / lifecycle badges) all derive from these trades and their dates. On a **BUY** you can also write — or **✨ AI-draft** — your *investment thesis*; 🧠 AI Insights then checks weekly whether it still holds. A live BUY also asks you to **🔍 Run Pre-Mortem** — an optional AI-built case *against* the trade — and requires one line: *what would make you wrong about this*. If you've recorded exit lessons from past trades (📒 Trade Journal → Decision Journal), your own documented patterns appear as chips above the commitment field — ticker-specific first, or your cross-ticker patterns if you haven't exited this name before. This is friction by design (never on SELL, never on an imported/backfilled trade) — the point is to have engaged with the downside before capital moves, not to add a hoop before recording history. **Faster than hand-logging:** use **📥 Import from broker statement** (same page) to upload a Robinhood account-activity CSV — it parses your Buy/Sell rows into an editable preview, flags anything you've already logged so nothing double-counts, and syncs them on confirm. (Buy/Sell only for now; log cash events like dividends separately.)
 2. **Reconcile against your broker.** Confirm share counts and average cost match your brokerage *exactly*. The Trade Journal runs a **drift check** and flags mismatches (a SELL with no prior BUY, or a stored P&L that disagrees with the replayed history); use **🔄 Rebuild holdings & realized P&L** to preview and apply the correction. Wrong basis → wrong P&L → wrong trim/stop advice.
 3. **(Optional) Add Watchlist names** — **📋 Watchlist** — anything you're tracking but don't yet hold, so the scanner and brief include them.
 4. **Refresh signals** — **🏠 Home → Refresh Signals** — let live prices, composite scores, and risk metrics populate for your names.
