@@ -111,6 +111,38 @@ def _run_premarket(now_et, force: bool) -> int:
     _log(f"computed {len(alerts)} protective alert(s): "
          + (", ".join(f"{a.get('kind')}/{a.get('ticker')}" for a in alerts) or "(none)"))
 
+    # exit_signals capture — closes the gap where WATCH/TRIM/EXIT/RISK_OFF signal
+    # history only existed for days the app was opened (app.py's own MISS-path
+    # capture). Idempotent upsert on (ticker, signal_date, signal_type), so this
+    # is safe even if an interactive session also captures the same day.
+    exit_signal_rows = []
+    for d in payload.get("all_deterioration_signals", []):
+        tier = d.get("tier")
+        if tier not in ("WATCH", "TRIM", "EXIT"):
+            continue
+        exit_signal_rows.append({
+            "ticker": d.get("ticker"), "signal_date": today_str, "signal_type": tier,
+            "composite_score": d.get("composite_score"),
+            "price_at_signal": d.get("price"),
+            "dd_from_peak_pct": d.get("dd_from_peak_pct"),
+            "pnl_pct": d.get("pnl_pct"),
+            "below_ma_count": d.get("below_ma_count"),
+            "rel_strength": d.get("rel_strength"),
+        })
+    for c in payload.get("risk_off_signals", []):
+        exit_signal_rows.append({
+            "ticker": c.get("ticker"), "signal_date": today_str, "signal_type": "RISK_OFF",
+            "composite_score": c.get("composite_score"),
+            "price_at_signal": c.get("price"),
+            "dd_from_peak_pct": c.get("dd_from_peak_pct"),
+            "pnl_pct": c.get("pnl_pct"),
+            "below_ma_count": c.get("below_ma_count"),
+            "rel_strength": c.get("rel_strength"),
+        })
+    if exit_signal_rows:
+        db.save_exit_signals_batch(exit_signal_rows)
+        _log(f"exit_signals captured ({len(exit_signal_rows)} rows, date={today_str}).")
+
     fp = _fingerprint(alerts)
     sent = False
     if not alerts:
@@ -191,7 +223,20 @@ def _run_eod(now_et, force: bool) -> int:
     else:
         _log("sentiment_snapshot skipped — no held_data in payload.")
 
-    # 3. Reactive pullback email — once per qualifying down-day (row 2 dedup).
+    # 3. Daily regime persistence — one row/day, portfolio-independent, so a
+    # future "regime changed since yesterday" annotation has a real day-over-day
+    # series instead of only ever the current session's ephemeral cache.
+    try:
+        from stock_analyzer.macro_calendar import detect_macro_regime
+        regime = detect_macro_regime(os.environ.get("FRED_API_KEY") or None)
+        if db.save_daily_regime(now_et.date(), regime):
+            _log(f"daily_regime written (regime={regime.get('regime')}, date={today_str}).")
+        else:
+            _log("daily_regime NOT written (DB offline / table missing).")
+    except Exception as e:
+        _log(f"daily_regime detection failed: {str(e)[:120]}")
+
+    # 4. Reactive pullback email — once per qualifying down-day (row 2 dedup).
     pb = payload.get("pullback")
     sent = False
     if not pb:

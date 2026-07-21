@@ -199,6 +199,17 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     except Exception as e:
         det = []
         errors.append(f"deterioration_signals failed: {e}")
+
+    # composite_score enrichment for exit_signals capture (all tiers, not just
+    # the EXIT-only protective-email scope below) — mirrors app.py:4143-4149.
+    composite_map = (
+        port_df.set_index("Ticker")["Score"].to_dict()
+        if "Ticker" in port_df.columns and "Score" in port_df.columns
+        else {}
+    )
+    for d in det:
+        d["composite_score"] = composite_map.get(str(d.get("ticker", "")).upper())
+
     for d in det:
         if d.get("tier") != "EXIT":
             continue
@@ -227,6 +238,7 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         risk_off = []
         errors.append(f"assess_risk_off_derisk failed: {e}")
     for c in risk_off:
+        c["composite_score"] = composite_map.get(str(c.get("ticker", "")).upper())
         alerts.append({
             "kind": "risk_off_derisk", "ticker": c.get("ticker"),
             "action": c.get("action", "TRIM — Risk-Off"),
@@ -235,7 +247,14 @@ def compute_protective_alerts(today: date | None = None) -> dict:
             "pnl_pct": c.get("pnl_pct"),
         })
 
-    return {"alerts": alerts, "built_at": built_at, "errors": errors}
+    return {
+        "alerts": alerts, "built_at": built_at, "errors": errors,
+        # Additive — full WATCH/TRIM/EXIT + RISK_OFF signal lists (composite_score
+        # attached above) for exit_signals capture. Never used to build `alerts`
+        # above; the EXIT-only/risk_off email scope is unchanged.
+        "all_deterioration_signals": det,
+        "risk_off_signals": risk_off,
+    }
 
 
 def compute_morning_picks(today: date | None = None, scanner_results=None) -> dict:

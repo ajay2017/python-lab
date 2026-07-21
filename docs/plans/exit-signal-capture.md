@@ -1,6 +1,6 @@
 # Plan: Exit Signal Forward Capture + Behavioral Fingerprint v2 (Concept A Exit-Side)
 
-**Status: Phase 1 SHIPPED 2026-07-18 (commit `f86147d`). Phase 2 pending ≥30 days data accumulation.**
+**Status: Phase 1 SHIPPED 2026-07-18 (commit `f86147d`); cron capture gap closed 2026-07-21 (see below). Phase 2 pending ≥30 days data accumulation.**
 **Author:** Ajay Kumar
 **Date:** 2026-07-18
 
@@ -281,10 +281,13 @@ two signal_type buckets). That's the minimum signal that there's something to sh
   `classify_deterioration_tier()`, `split_defensive()` are untouched.
 - **Per-signal "did you act?" annotation on the Brief** — that's a UX enhancement that could be
   built on top of the capture table later, but is out of scope for this plan.
-- **Cron/headless capture** — the GitHub Actions cron (`headless_alert_engine.py`) also computes
+- **Cron/headless capture** — ~~the GitHub Actions cron (`headless_alert_engine.py`) also computes
   exit signals. Wiring capture there is a v2 enhancement; Phase 1 captures only from the
-  interactive app session (Home build path). Cron capture could be added later with the same
-  `save_exit_signals_batch()` call.
+  interactive app session (Home build path).~~ **DONE 2026-07-21.** `compute_protective_alerts()`
+  now additionally returns `all_deterioration_signals`/`risk_off_signals` (composite_score-enriched,
+  all tiers — additive, doesn't touch the existing EXIT-only `alerts` used for the protective
+  email); `cron_runner._run_premarket()` writes them via the same `save_exit_signals_batch()`.
+  Signal history is no longer gapped on days the app isn't opened.
 - **Changing `match_recs_to_trades()`** — exit-side matching lives in new helpers, not in the
   existing buy-side function.
 

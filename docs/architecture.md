@@ -1002,6 +1002,44 @@ ALTER TABLE recommendations
 
 `s_score` = the VADER sentiment score (0–100) at the time the rec was surfaced (what the composite's 10% sentiment pillar was built from). `avg_sent` = the raw VADER compound score (−1 to 1). Both are nullable — old rows have NULL; the upsert `ignore_duplicates=True` means a same-day re-surface leaves the first-seen row (and its stored `s_score`) untouched. Written by `db.save_recommendations` from the `app.py` rec-log path; sourced from `_grow_composites` (scanner bundles) and `_last_held_data` (held position bundles) session caches via `_s_score_for`/`_avg_sent_for` helpers. **Ships inert until the DDL is applied** — the extra dict keys pass through to `null` on the existing upsert, but the DB will reject them until the `ALTER TABLE` is run. RLS: `FOR ALL TO service_role`.
 
+### 6.21 `exit_signals` table
+
+```sql
+CREATE TABLE IF NOT EXISTS exit_signals (
+    id               BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    ticker           TEXT NOT NULL,
+    signal_date      DATE NOT NULL,
+    signal_type      TEXT NOT NULL,
+    composite_score  NUMERIC,
+    price_at_signal  NUMERIC,
+    dd_from_peak_pct NUMERIC,
+    pnl_pct          NUMERIC,
+    below_ma_count   INT,
+    rel_strength     NUMERIC,
+    surfaced_at      TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT exit_signals_unique UNIQUE (ticker, signal_date, signal_type)
+);
+```
+
+**Forward capture of every WATCH/TRIM/EXIT/RISK_OFF signal per (ticker, day)** — the prerequisite for the exit-side Behavioral Fingerprint (Concept A v2, `docs/plans/exit-signal-capture.md`; Phase 1 shipped 2026-07-18, commit `f86147d`). `signal_type` ∈ `WATCH`/`TRIM`/`EXIT`/`RISK_OFF`, sourced from `exit_advisor.classify_deterioration_tier()` and `exit_advisor.assess_risk_off_derisk()`. `composite_score` is enriched from `port_df["Score"]` at the capture site (not present on the assess_holding/risk_off dicts themselves) — null for RISK_OFF where a field doesn't apply (e.g. `dd_from_peak_pct`/`below_ma_count`/`rel_strength` on a risk_off row). Written from **two** independent paths as of 2026-07-21: (1) `app.py`'s Home MISS-path build (`app.py:4137-4199`, the original Phase 1 capture — interactive sessions only), and (2) `cron_runner._run_premarket()` (added 2026-07-21, closing Phase 1's own deferred "cron capture" scope item) via `headless_alert_engine.compute_protective_alerts()`'s additive `all_deterioration_signals`/`risk_off_signals` return keys — so signal history is now captured daily regardless of whether the app is opened. Idempotent upsert on `(ticker, signal_date, signal_type)` via `db.save_exit_signals_batch()` — safe if both paths fire the same day. Read via `db.load_exit_signals(days_back=365)`. RLS: `FOR ALL TO service_role`.
+
+### 6.22 `daily_regime` table
+
+```sql
+CREATE TABLE IF NOT EXISTS daily_regime (
+    regime_date  DATE PRIMARY KEY,
+    regime       TEXT NOT NULL,
+    label        TEXT,
+    confidence   INT,
+    fed_trend    TEXT,
+    cpi_yoy      NUMERIC,
+    source       TEXT,
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Daily persistence of the detected macro regime** (added 2026-07-21) — one row per calendar day, portfolio-independent. `regime`/`label`/`confidence`/`fed_trend`/`cpi_yoy`/`source` mirror the return shape of `macro_calendar.detect_macro_regime()` (regime id ∈ `rate_cut`/`inflation_fight`/`recession_fear`/`stagflation_risk`/`neutral`). Closes the gap Concept D's regime-conditional targets (F-188) explicitly deferred — "no Home 'regime changed' annotation (would need day-over-day regime persistence that doesn't exist)" — though **no consuming UI exists yet**; this is the persistence prerequisite only, same pattern as `exit_signals` Phase 1 vs Phase 2. Written by `cron_runner._run_eod()` once/day (alongside `daily_snapshots`/`sentiment_history`), calling `detect_macro_regime(os.environ.get("FRED_API_KEY") or None)` — degrades to the neutral fallback (`source="fallback"`) when no FRED key is configured, never fabricates a regime. Upserts on `regime_date` via `db.save_daily_regime()`; read via `db.load_daily_regime(days_back=90)`. **Ships inert until the DDL is applied** — degrades silently (`save_daily_regime` returns False). RLS: `FOR ALL TO service_role`. Not read from `st.session_state`'s ephemeral per-browser-session regime cache (`_macro_regime_{date}_{bool(fred_key)}`, used by Risk Analysis/Economic Calendar/Pre-Market Stance) — a separate, independent write path.
+
 ### `stock_analyzer/portfolio_health.py`
 
 Pure-logic module for the 🏆 Health page. No I/O, no Streamlit imports.

@@ -634,6 +634,57 @@ def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
         return False
 
 
+def save_daily_regime(regime_date, regime: dict) -> bool:
+    """Upsert the day's detected macro regime into daily_regime (one row per
+    calendar day, portfolio-independent). Read-only viewers no-op; a missing
+    table degrades to a silent no-op (returns False). Never fabricates a
+    regime — `regime` must come from a real `detect_macro_regime()` call."""
+    if _READONLY: return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    if not regime or not regime.get("regime"):
+        return False
+    record = {
+        "regime_date": str(regime_date)[:10],
+        "regime": regime.get("regime"),
+        "label": regime.get("label"),
+        "confidence": regime.get("confidence"),
+        "fed_trend": regime.get("fed_trend"),
+        "cpi_yoy": regime.get("cpi_yoy"),
+        "source": regime.get("source"),
+    }
+    try:
+        _client().table("daily_regime").upsert(
+            [record], on_conflict="regime_date"
+        ).execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_daily_regime(days_back: int = 90) -> "pd.DataFrame":
+    """Load persisted daily regime detections from the last `days_back` days.
+    Returns DataFrame with columns: regime_date, regime, label, confidence,
+    fed_trend, cpi_yoy, source. Empty DataFrame on failure/absence."""
+    import pandas as pd
+    from datetime import date, timedelta
+    empty = pd.DataFrame(columns=[
+        "regime_date", "regime", "label", "confidence", "fed_trend", "cpi_yoy", "source",
+    ])
+    if not has_db():
+        return empty
+    try:
+        start = (date.today() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client().table("daily_regime").select("*")
+            .gte("regime_date", start)
+            .order("regime_date", desc=False).execute().data
+        )
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return empty
+
+
 def save_sentiment_snapshot(snap_date, rows: list[dict]) -> bool:
     """Upsert daily sentiment readings into sentiment_history.
 
