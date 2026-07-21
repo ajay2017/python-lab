@@ -483,9 +483,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  or sharpe root_tickers) are suppressed from add-to-winner so
                  the briefing never tells the user to trim X and add to X.
     deterioration : output of deterioration_signals() — a held ticker carrying
-                 an active WATCH tier is annotated (not suppressed; WATCH is
-                 explicitly "no action yet") on its add-to-winner card so it
-                 doesn't read as contradicting the Review lane's tripwire.
+                 an active WATCH tier is SUPPRESSED from add-to-winner (moved to
+                 deterioration_blocked_adds with a visible reason), not annotated:
+                 the app must not nudge to ADD to a name showing early
+                 deterioration, even on a Strong Buy composite. WATCH is
+                 entry-price-agnostic, which is why this is the principled add
+                 gate. (Changed 2026-07-21; was annotate-only, which read as
+                 "add more to a name I'm telling you is weakening" — the FSLR case.)
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -906,8 +910,12 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     concentration_blocked_adds: list[dict] = []
     sector_blocked_adds: list[dict] = []   # adds suppressed — sector over hard cap
     cooldown_adds:     list[dict] = []     # adds suppressed — recently added (post-act cooldown)
-    # Deterioration WATCH — annotate (never suppress) add-to-winner; see
-    # docstring. Same map shape/intent as _buy_candidates's own copy.
+    deterioration_blocked_adds: list[dict] = []  # adds suppressed — active early-deterioration WATCH
+    # Deterioration WATCH — SUPPRESS add-to-winner (see docstring; changed
+    # 2026-07-21 from annotate-only). Same map shape/intent as _buy_candidates's
+    # own copy. NOTE: _buy_candidates still ANNOTATES its WATCH names — that's a
+    # different lane (awareness feed, never a gated add), so the asymmetry is
+    # intentional; do not "unify" them without a policy discussion.
     _watch_by_ticker: dict = {
         str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
     }
@@ -921,6 +929,27 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 sector  = str(row.get("Sector", ""))
                 # Skip if Act Today already flags this ticker for action
                 if ticker in _act_blocked:
+                    continue
+                # Early-deterioration WATCH — an active WATCH on a held name
+                # (below its trend MA, drawing down from its peak) means the app
+                # must NOT nudge to ADD, even on a Strong Buy composite. This was
+                # previously annotate-only, which read as "add more to a name I'm
+                # telling you is weakening" (the FSLR 2026-07-21 case). WATCH is
+                # entry-price-agnostic, so this is the principled add gate; the
+                # suppression is surfaced (never silent) via deterioration_blocked_adds.
+                _dw = _watch_by_ticker.get(ticker.upper())
+                if _dw:
+                    deterioration_blocked_adds.append({
+                        "ticker":  ticker,
+                        "score":   scr,
+                        "pnl_pct": _f(row.get("P&L (%)")),
+                        "gap":     gap,
+                        "reason":  (
+                            f"Down {_dw['dd_from_peak_pct']:.1f}% from its "
+                            f"${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — "
+                            "early deterioration Watch. Don't add to a weakening name."
+                        ),
+                    })
                     continue
                 # Post-add cooldown — you already acted on this add recently; let
                 # the new shares settle before nudging to add more (anti-churn).
@@ -1006,26 +1035,31 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 price   = _f(row.get("Price", 0))
                 is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
                 sizing  = _suggest_size(price, "Strong Uptrend", portfolio_value) if price > 0 else {}
-                _dw = _watch_by_ticker.get(ticker.upper())
+                # Honest P&L framing — the composite is entry-price-agnostic, so a
+                # Strong Buy add candidate can be up OR down vs the user's entry.
+                # State the real P&L with a single correct sign (the old copy hard-
+                # coded "Already profitable (+{:+.1f})", printing a false "+-10.8%"
+                # on a losing position). (Change 3, FSLR 2026-07-21.)
+                _pnl_v = _f(row.get("P&L (%)"))
+                _pnl_phrase = (
+                    f"Up {_pnl_v:.1f}% vs entry" if _pnl_v > 0
+                    else f"Down {abs(_pnl_v):.1f}% vs entry" if _pnl_v < 0
+                    else "At breakeven vs entry"
+                )
                 add_positions.append({
                     "ticker":    ticker,
                     "score":     scr,
                     "signal":    sig,
-                    "pnl_pct":   _f(row.get("P&L (%)")),
+                    "pnl_pct":   _pnl_v,
                     "gap":       gap,
                     "sector":    sector,
                     "is_leader": is_lead,
                     "thesis":    (
-                        f"Already profitable (+{_f(row.get('P&L (%)')):+.1f}%), "
-                        f"{gap:.1f}% above stop — trend intact, adds within existing position."
+                        f"{_pnl_phrase}, {gap:.1f}% above stop — Strong Buy, "
+                        "adds within existing position."
                         + (" Sector leading today." if is_lead else "")
                     ),
                     "sizing":    sizing,
-                    "deterioration_watch_note": (
-                        f"Also flagged in Review Before Close: down {_dw['dd_from_peak_pct']:.1f}% "
-                        f"from its ${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — early "
-                        "deterioration Watch (not yet a TRIM trigger)."
-                    ) if _dw else None,
                 })
         add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
 
@@ -1056,6 +1090,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         "concentration_blocked_adds": concentration_blocked_adds,
         "sector_blocked_adds":        sector_blocked_adds,
         "cooldown_adds":              cooldown_adds,
+        "deterioration_blocked_adds": deterioration_blocked_adds,
         "sector_blocked_picks":       sector_blocked_picks,
         "macro_blocked_picks":        macro_blocked_picks,
         "composite_skipped":          composite_skipped,

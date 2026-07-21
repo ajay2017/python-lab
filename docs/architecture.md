@@ -326,6 +326,7 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | Brief Reduce/Exit call → Analysis Trade Plan (held name) | Suppress the add-on Position Sizing block (`reduce_call_items` → `_reduce_calls`; sibling to the stop-breach suppression) | Amber "⚠️ Under a Reduce/Exit call — not a place to add" banner; composite Buy score kept (rates the stock; the exit protects the position) |
 | Rebalancer drift-trim → Grow Today add-to-winner | Suppress add on drift-overweight ticker | Concentration-blocked banner |
 | Single-name ceiling (15%) → Grow Today add-to-winner | Suppress add | Concentration-blocked banner |
+| Deterioration WATCH → Grow Today add-to-winner | Suppress add on a held name under an active early-deterioration WATCH (entry-price-agnostic; chosen over a profit/P&L gate) | "🟡 Add Suppressed — Early Deterioration Watch" banner; ticker also joins the More-Buy-Candidates dedup so it can't reappear as "ADD — Winning Position" (changed 2026-07-21 from annotate-only — the FSLR case) |
 | Sector ceiling (35%) → Watchlist ENTER_NOW | Downgrade to NEAR_ENTRY | "Portfolio Fit Blocks Entry" card |
 | Imminent macro event → Grow Today new picks | Suppress picks in affected sector | "Picks Suppressed — Imminent HIGH-Impact Macro Event" banner |
 | Held position composite Buy → Tax Advisor HARVEST | Suppress; action becomes `HOLD_FOR_SIGNAL` | "Harvest Suppressed — Investment View Holds" banner |

@@ -5373,6 +5373,7 @@ if page == "🏠 Home":
         conc_blocked  = grow.get("concentration_blocked_adds", [])
         sector_blocked = (grow.get("sector_blocked_adds", []) or []) + (grow.get("sector_blocked_picks", []) or [])
         cooldown_adds = grow.get("cooldown_adds", [])
+        deterioration_blocked = grow.get("deterioration_blocked_adds", [])
         macro_blocked = grow.get("macro_blocked_picks", [])
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
@@ -5803,9 +5804,6 @@ if page == "🏠 Home":
                 + f"</div>"
                 f"<div style='color:#d1d5db;font-size:0.82em;margin-top:5px'>"
                 f"💡 <em>{_ga['thesis']}</em></div>"
-                + (f"<div style='color:#fca5a5;font-size:0.8em;margin-top:4px'>"
-                   f"⚠ {_ga['deterioration_watch_note']}</div>"
-                   if _ga.get("deterioration_watch_note") else "")
                 + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
                    f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
                    f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
@@ -5839,6 +5837,32 @@ if page == "🏠 Home":
                 "You already acted on these — the trend's still intact, but adding again "
                 "this soon is churn, not conviction. They'll return to the add list after "
                 "the new shares settle (or if you trim and the thesis re-strengthens)."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        # Early-deterioration WATCH suppressed an add — the composite still reads
+        # Strong Buy, but the name is below its trend MA / drawing down from its
+        # peak. The app won't nudge to grow a weakening position; it says why
+        # (previously this only annotated the add card, which read as contradictory).
+        if deterioration_blocked:
+            _dt_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.79em'>• <b>{b['ticker']}</b> "
+                f"(Score {b.get('score',0):.0f} · P&L {b.get('pnl_pct',0):+.1f}%) — "
+                f"{b.get('reason','early deterioration watch')}</div>"
+                for b in deterioration_blocked[:4]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:8px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.84em;margin-bottom:4px'>"
+                "🟡 Add Suppressed — Early Deterioration Watch</div>"
+                + _dt_rows
+                + "<div style='color:#fde68a;font-size:0.76em;margin-top:6px;font-style:italic'>"
+                "These still score Strong Buy, but they're below their trend line and "
+                "pulling back from recent highs — an early deterioration Watch (also shown "
+                "in Review Before Close). The app won't nudge you to add to a weakening "
+                "position; if the trend re-strengthens, they'll return to the add list."
                 "</div></div>",
                 unsafe_allow_html=True,
             )
@@ -6953,8 +6977,19 @@ if page == "🏠 Home":
     # split (no full-width banner crossing the page).
     with _db_col_left:
         _grow_shown: set = set()
+        # Include the suppressed-add buckets too: a held name the Brief has already
+        # SUPPRESSED as an add (deterioration WATCH, cooldown, sector/single-name
+        # ceiling, risk-trim) must not reappear under "More Buy Candidates" as an
+        # "ADD — Winning Position". _buy_candidates annotates (does not suppress)
+        # WATCH, so without deterioration_blocked_adds here a WATCH add leaks and
+        # recreates the exact double-surface contradiction this change fixes. The
+        # others are defensive (they don't leak today only because _buy_candidates
+        # independently skips them — don't rely on that coupling staying in sync).
         for _gk in ("new_picks", "add_positions", "composite_skipped",
-                    "macro_blocked_picks", "composite_unavailable"):
+                    "macro_blocked_picks", "composite_unavailable",
+                    "deterioration_blocked_adds", "cooldown_adds",
+                    "sector_blocked_adds", "concentration_blocked_adds",
+                    "risk_blocked_adds"):
             for _gp_item in (_db_grow.get(_gk, []) or []):
                 _gt = _gp_item.get("ticker")
                 if _gt:
@@ -23018,7 +23053,7 @@ The Home brief is split into **offense** (left) and **defense** (right).
 
 **Right — three lanes, by urgency:**
 - **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news. If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."**
-- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, mild negative news, a broad macro event to hold through.
+- **👁️ Monitoring / Awareness (FYI)** — things to *know*, not act on: an early **deterioration watch** on a weakening hold, mild negative news, a broad macro event to hold through. While a hold is on a deterioration watch, the app also **won't nudge you to add to it** — even if its score still reads Strong Buy — and shows a "🟡 Add Suppressed — Early Deterioration Watch" note instead (don't add to a weakening name).
 - **🔧 Portfolio Tune-up (standing quality)** — slow-moving risk-metric improvements (Sharpe, drawdown). *Not* time-sensitive — act on these when you rebalance or have fresh capital, not on the clock.
 
 **Position badges:** 🌱 Settling (recently opened — given room before routine nudges), 📈 Winning (meaningful unrealised gain), ⚠️ At Risk (close to its stop). A **↔ Steady vs yesterday** chip means the signal is unchanged from yesterday — continuity, not a fresh call.
