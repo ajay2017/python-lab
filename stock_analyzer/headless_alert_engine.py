@@ -210,6 +210,27 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     for d in det:
         d["composite_score"] = composite_map.get(str(d.get("ticker", "")).upper())
 
+    # Daily analyst-target consensus snapshot (log-only, Phase 1 — no alert
+    # reads this yet). Reuses the already-loaded bundles; zero extra API cost.
+    # Skips stale-cache-served bundles so persisted history never mixes in a
+    # bundle_cache fallback value (would contaminate a future day-over-day
+    # comparison — see the INTC staleness incident precedent).
+    analyst_target_snapshots: list[dict] = []
+    for t, bundle in held_data.items():
+        if bundle.get("stale_as_of") is not None:
+            continue
+        fin = bundle.get("financials") or {}
+        target_mean = fin.get("analyst_target")
+        if target_mean is None:
+            continue
+        analyst_target_snapshots.append({
+            "ticker": t,
+            "snapshot_date": today.isoformat(),
+            "target_mean": target_mean,
+            "num_analysts": fin.get("num_analyst_opinions"),
+            "info_source": bundle.get("info_source"),
+        })
+
     for d in det:
         if d.get("tier") != "EXIT":
             continue
@@ -254,6 +275,9 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         # above; the EXIT-only/risk_off email scope is unchanged.
         "all_deterioration_signals": det,
         "risk_off_signals": risk_off,
+        # Additive — daily analyst-target consensus snapshot per held ticker,
+        # log-only (Phase 1). Never used to build `alerts` above.
+        "analyst_target_snapshots": analyst_target_snapshots,
     }
 
 

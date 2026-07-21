@@ -1049,6 +1049,23 @@ CREATE TABLE IF NOT EXISTS daily_regime (
 
 **Daily persistence of the detected macro regime** (added 2026-07-21) — one row per calendar day, portfolio-independent. `regime`/`label`/`confidence`/`fed_trend`/`cpi_yoy`/`source` mirror the return shape of `macro_calendar.detect_macro_regime()` (regime id ∈ `rate_cut`/`inflation_fight`/`recession_fear`/`stagflation_risk`/`neutral`). Closes the gap Concept D's regime-conditional targets (F-188) explicitly deferred — "no Home 'regime changed' annotation (would need day-over-day regime persistence that doesn't exist)" — though **no consuming UI exists yet**; this is the persistence prerequisite only, same pattern as `exit_signals` Phase 1 vs Phase 2. Written by `cron_runner._run_eod()` once/day (alongside `daily_snapshots`/`sentiment_history`), calling `detect_macro_regime(os.environ.get("FRED_API_KEY") or None)` — degrades to the neutral fallback (`source="fallback"`) when no FRED key is configured, never fabricates a regime. Upserts on `regime_date` via `db.save_daily_regime()`; read via `db.load_daily_regime(days_back=90)`. **Ships inert until the DDL is applied** — degrades silently (`save_daily_regime` returns False). RLS: `FOR ALL TO service_role`. Not read from `st.session_state`'s ephemeral per-browser-session regime cache (`_macro_regime_{date}_{bool(fred_key)}`, used by Risk Analysis/Economic Calendar/Pre-Market Stance) — a separate, independent write path.
 
+### 6.23 `analyst_target_snapshots` table
+
+```sql
+CREATE TABLE IF NOT EXISTS analyst_target_snapshots (
+    id             BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    ticker         TEXT NOT NULL,
+    snapshot_date  DATE NOT NULL,
+    target_mean    NUMERIC,
+    num_analysts   INT,
+    info_source    TEXT,
+    captured_at    TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT analyst_target_snapshots_unique UNIQUE (ticker, snapshot_date)
+);
+```
+
+**Log-only daily snapshot of each held ticker's analyst consensus price target** (added 2026-07-21) — one row per (ticker, day), prerequisite for a future day-over-day "consensus target dropped X%" comparison. Motivated by a real gap found in a 2026-07-21 retrospective: the existing `"revisions"` alert (`portfolio.py:472-492`, fed by yfinance's `upgrades_downgrades`) only counts rating-ACTION changes (`up`/`down`/`init`/`main`/`reit`) — a firm that keeps its rating and just cuts the price target logs as `main`/`reit`, never as a `down`, so it's structurally invisible to that alert regardless of magnitude. `target_mean`/`num_analysts` mirror `financials["analyst_target"]`/`financials["num_analyst_opinions"]` (`data.py:227,233` — already fetched on every load, zero extra API cost). `info_source` records which provider supplied `.info` when the primary was backfilled (`orchestrator.py:187`, `None` implies yfinance was sufficient) — future comparison logic should treat a delta that coincides with a source change as suspect (yfinance and FMP compute consensus differently). Rows are **skipped entirely** (not written with a stale flag) when the bundle's `stale_as_of` is set, so persisted history never mixes in a stale `bundle_cache` fallback value. Written by `cron_runner._run_premarket()` (via `headless_alert_engine.compute_protective_alerts()`'s additive `analyst_target_snapshots` return key, reusing the bundles already loaded for the protective-alert checks — no new API cost) once/day, cron-only (deliberately not also written from the interactive app path — simpler single-path model, no historical gap to retrofit the way `exit_signals` had). Upserts on `(ticker, snapshot_date)` via `db.save_analyst_target_snapshots_batch()`; read via `db.load_analyst_target_snapshots(days_back=365)`. **Ships inert until the DDL is applied** — degrades silently. RLS: `FOR ALL TO service_role`. **Phase 1 is log-only: no alert, no new `constants.py` threshold, no gate** — the % consensus-target drop worth flagging is left uncalibrated until real snapshots accumulate; wiring an actual alert into the `"revisions"` category is a deferred Phase 2 that will need its own policy discussion + Opus review (touches `constants.py` + alert logic, unlike this pure-plumbing phase).
+
 ### `stock_analyzer/portfolio_health.py`
 
 Pure-logic module for the 🏆 Health page. No I/O, no Streamlit imports.

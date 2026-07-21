@@ -144,6 +144,13 @@ def _run_premarket(now_et, force: bool) -> int:
         db.save_exit_signals_batch(exit_signal_rows)
         _log(f"exit_signals captured ({len(exit_signal_rows)} rows, date={today_str}).")
 
+    # Analyst-target consensus snapshot — log-only Phase 1, no alert wired yet.
+    # Reuses the bundles already loaded for the checks above (zero extra API cost).
+    target_rows = payload.get("analyst_target_snapshots", [])
+    if target_rows:
+        db.save_analyst_target_snapshots_batch(target_rows)
+        _log(f"analyst_target_snapshots captured ({len(target_rows)} rows, date={today_str}).")
+
     # Velocity check — detect WATCH tickers whose composite score is accelerating
     # toward TRIM. Silently skips when exit_signals has < 2 days of WATCH history
     # for a ticker; fills in naturally as data accumulates post-2026-07-21 launch.

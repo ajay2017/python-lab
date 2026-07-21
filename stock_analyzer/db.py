@@ -1786,6 +1786,54 @@ def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> None:
+    """Persist a daily analyst-consensus-target snapshot per held ticker.
+
+    Idempotent: upserts on (ticker, snapshot_date) — repeated same-day cron
+    runs are no-ops. Never raises — a capture failure must never break the
+    premarket cron. Log-only (Phase 1): no alert reads this table yet.
+
+    Each dict in `snapshots` must have at minimum: ticker, snapshot_date.
+    target_mean/num_analysts/info_source are nullable and may be omitted.
+    """
+    if _READONLY:
+        return
+    if not snapshots:
+        return
+    if not has_db():
+        return
+    try:
+        _client().table("analyst_target_snapshots").upsert(
+            snapshots,
+            on_conflict="ticker,snapshot_date",
+        ).execute()
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_analyst_target_snapshots_batch: {e}")
+
+
+def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
+    """Read persisted analyst target snapshots going back days_back calendar days.
+
+    Returns a DataFrame (column names match the analyst_target_snapshots
+    table, snake_case) on success, or an empty DataFrame on any exception.
+    """
+    try:
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("analyst_target_snapshots")
+            .select("*")
+            .gte("snapshot_date", cutoff)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 def save_watchlist(tickers: list[str]) -> bool:
     """Atomic-ish replace via upsert + sweep — same pattern as save_holdings.
 
