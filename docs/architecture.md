@@ -993,9 +993,13 @@ CREATE TABLE IF NOT EXISTS sentiment_history (
 );
 CREATE INDEX IF NOT EXISTS sentiment_history_ticker_date_idx
     ON sentiment_history (ticker, snap_date DESC);
+
+ALTER TABLE sentiment_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_sentiment_history" ON sentiment_history
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
-**Daily sentiment time-series for Tier 3 sentiment-vs-price-move analysis (F-179).** One row per (ticker, trading day). `vader_compound`/`vader_score` come from Pipeline A (VADER on yfinance/FMP headlines, same source as the composite score's 10% sentiment weight); `bullish_pct`/`bearish_pct`/`buzz_score`/`company_score`/`vs_sector_pp` come from Pipeline B (Finnhub `/stock/news-sentiment`, pre-aggregated ratios). Written by the EOD cron (`cron_runner._run_eod`) immediately after `save_daily_snapshot` — VADER values from `held_data` bundle + one Finnhub call per held ticker. Upserts on `(ticker, snap_date)`; last writer wins intraday. At least one of `vader_compound`/`bullish_pct` must be non-None (validated in `db.save_sentiment_snapshot`). Covers held tickers only (the cron's `_build_context` universe). **Ships inert until the DDL is applied** — `db.save_sentiment_snapshot` degrades silently (returns False). RLS: `FOR ALL TO service_role`.
+**Daily sentiment time-series for Tier 3 sentiment-vs-price-move analysis (F-179).** One row per (ticker, trading day). `vader_compound`/`vader_score` come from Pipeline A (VADER on yfinance/FMP headlines, same source as the composite score's 10% sentiment weight); `bullish_pct`/`bearish_pct`/`buzz_score`/`company_score`/`vs_sector_pp` come from Pipeline B (Finnhub `/stock/news-sentiment`, pre-aggregated ratios). Written by the EOD cron (`cron_runner._run_eod`) immediately after `save_daily_snapshot` — VADER values from `held_data` bundle + one Finnhub call per held ticker. Upserts on `(ticker, snap_date)`; last writer wins intraday. At least one of `vader_compound`/`bullish_pct` must be non-None (validated in `db.save_sentiment_snapshot`). Covers held tickers only (the cron's `_build_context` universe). **Ships inert until the DDL is applied** — `db.save_sentiment_snapshot` degrades silently (returns False). RLS: `FOR ALL TO service_role` — **gap found + closed 2026-07-21**: the original DDL applied to Supabase only ran the `CREATE TABLE`/`CREATE INDEX` statements above (the RLS lines weren't yet inline in this fence, unlike §6.17's `api_quota_log`), so the table sat with RLS disabled in production until Supabase's security advisor flagged it; the fence above now carries the RLS statements inline so a future copy-paste can't skip them again.
 
 **New columns added to `recommendations` (§6.12) as part of F-179:**
 
