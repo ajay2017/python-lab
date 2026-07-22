@@ -21337,13 +21337,11 @@ elif page == "📊 Predictive Analytics":
         except Exception:
             st.caption("Could not load snapshot coverage.")
 
-    # ── Behavioral Fingerprint — data-readiness audit (Concept A Week-1 audit) ─
-    with st.expander("🧬 Behavioral Fingerprint — Data Readiness Audit", expanded=False):
+    # ── Behavioral Fingerprint — signal history coverage ─────────────────────
+    with st.expander("🧬 Behavioral Fingerprint — Signal History Coverage", expanded=False):
         st.caption(
-            "One-time, informational audit — not a live feature. It answers a single "
-            "question: is there enough historical signal-to-action data to build the "
-            "Behavioral Fingerprint from history, or does it need to start capturing "
-            "forward-only? Awareness only — no gate, no recommendation, no new threshold."
+            "Shows how much historical signal-to-action data exists to power the "
+            "Behavioral Fingerprint patterns. Awareness only — no gate, no recommendation."
         )
 
         # Scoped to ACTIONABLE rec_types only (new_pick, add_winner) — buy_candidate
@@ -21358,7 +21356,7 @@ elif page == "📊 Predictive Analytics":
         _bfa_n_raw      = len(_pac_enriched)
 
         if _bfa_n_total == 0:
-            st.info("No actionable (new_pick / add_winner) recommendations logged yet — nothing to audit.")
+            st.info("No \"New Position\" or \"Add to Winner\" recommendations logged yet.")
         else:
             _bfa_90cut  = _today_et() - timedelta(days=90)
             _bfa_recent = [
@@ -21368,11 +21366,11 @@ elif page == "📊 Predictive Analytics":
             _bfa_90 = summary_stats(_bfa_recent)
 
             st.markdown(
-                "**Buy-side signal completeness** — actionable recommendations "
-                "(`new_pick` / `add_winner`) logged vs. acted on. Scoped to exclude "
-                "`buy_candidate` (the awareness-only 'More Buy Candidates' feed, never "
-                "a gated rec) — including it would deflate this rate with signals that "
-                "were never meant to be acted on directly."
+                "**Buy-side signal completeness** — "
+                "\"New Position\" and \"Add to Winner\" recommendations logged vs. acted on. "
+                "\"Buy Candidate\" signals (the awareness-only feed) are excluded — "
+                "including them would deflate this rate with signals that were never "
+                "meant to be acted on directly."
             )
             _bfa_c1, _bfa_c2, _bfa_c3 = st.columns(3)
             _bfa_c1.metric(
@@ -21391,12 +21389,17 @@ elif page == "📊 Predictive Analytics":
             )
 
             _bfa_by_type = by_rec_type(_pac_enriched)
+            _bfa_type_label_map = {
+                "new_pick":     "New Position",
+                "add_winner":   "Add to Winner",
+                "buy_candidate": "Buy Candidate",
+            }
             _bfa_type_rows = [
                 {
-                    "rec_type":    rt,
-                    "n_total":     s["n_total"],
-                    "n_acted":     s["n_acted"],
-                    "action_rate": f"{s['action_rate']:.0f}%" if s["action_rate"] is not None else "—",
+                    "Type":        _bfa_type_label_map.get(rt, rt.replace("_", " ").title()),
+                    "Signals":     s["n_total"],
+                    "Acted":       s["n_acted"],
+                    "Action Rate": f"{s['action_rate']:.0f}%" if s["action_rate"] is not None else "—",
                 }
                 for rt, s in sorted(_bfa_by_type.items())
             ]
@@ -21405,8 +21408,8 @@ elif page == "📊 Predictive Analytics":
                 width='stretch', hide_index=True,
             )
             st.caption(
-                "`buy_candidate`'s low action rate is expected — it's an awareness-only "
-                "feed, not a call to act. Shown here for completeness, not as a red flag."
+                "\"Buy Candidate\"'s low action rate is expected — it's an awareness-only "
+                "feed, not a call to act directly."
             )
 
             st.markdown(
@@ -21473,38 +21476,26 @@ elif page == "📊 Predictive Analytics":
                     )
 
             st.warning(
-                "**Exit-side signals (TRIM / EXIT / risk_advisor recommendations) have "
-                "no historical record at all.** Buy-side recommendations persist to the "
-                "`recommendations` table, but TRIM/EXIT/risk_advisor signals are computed "
-                "live each session and are never written to a persistent table — there is "
-                "no record of which TRIM/EXIT signal fired on which date for which ticker, "
-                "or whether or how fast you acted on it. That means Behavioral Fingerprint "
-                "bias patterns tied to exit-signal reaction (disposition effect, "
-                "loss-aversion timing) cannot be built from history at all, regardless of "
-                "Buy-side completeness — they would need a brand-new forward-only capture "
-                "mechanism, mirroring how Concept E's `decision_context.py` started "
-                "capturing forward-only in Phase 1 (2026-07-17), before any exit-side bias "
-                "data starts accumulating. Note that Concept E's existing capture "
-                "(`decision_context.build_snapshot()`) only records a COUNT of active "
-                "Act-Today items at decision time (`active_recs.act_today_n`), not which "
-                "specific ticker/signal-type was issued — so even that capture does not "
-                "yet close this gap."
+                "**Exit-side signals (TRIM / EXIT / Risk Advisor recommendations) have "
+                "no historical record.** These signals are computed live each session and "
+                "not persisted — there is no record of which signal fired on which date "
+                "or whether you acted on it. Behavioral Fingerprint patterns tied to exit "
+                "timing (disposition effect, loss-aversion) cannot be built from history "
+                "and will need to accumulate forward from here."
             )
 
             _bfa_rate = _bfa_all["action_rate"] or 0.0
             if _bfa_rate >= 80:
                 st.success(
-                    "✅ Historical recommendation log is ≥80% complete — Behavioral "
-                    "Fingerprint COULD use historical Buy-side data for its Buy-related "
-                    "patterns (e.g. recency-bias-on-entry). Exit-side patterns still "
-                    "require new forward capture per the finding above."
+                    "✅ Enough historical Buy-side data exists to power Behavioral "
+                    "Fingerprint patterns from history. Exit-side patterns still need "
+                    "to accumulate forward — see the note above."
                 )
             else:
                 st.info(
-                    f"📋 Historical Buy-side completeness is {_bfa_rate:.0f}% (< 80% "
-                    "threshold) — per the plan's own go/no-go gate, Behavioral "
-                    "Fingerprint should build forward-only from Concept E's Phase 1 "
-                    "capture rather than relying on historical Buy-side data."
+                    f"📋 Historical Buy-side completeness is {_bfa_rate:.0f}% "
+                    "(below the 80% threshold) — the Behavioral Fingerprint is building "
+                    "forward-only, not from historical data."
                 )
 
 
