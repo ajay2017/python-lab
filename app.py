@@ -7781,6 +7781,9 @@ elif page == "📡 Signals & Advice":
     _sa_tab1, _sa_tab2 = st.tabs(["📡 Active Signals", "🧩 Diversification"])
 
     with _sa_tab1:
+        if not actions:
+            st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
+
         # ── Active Alerts — grouped by category ──────────────────────────────
         _danger_alerts  = [a for a in alert_list if a["level"] == "danger"]
         _warning_alerts = [a for a in alert_list if a["level"] == "warning"]
@@ -8312,8 +8315,6 @@ elif page == "📡 Signals & Advice":
                             "⚠️ Algorithmic analysis — not personal financial advice. "
                             "Verify all data at the sources above before acting."
                         )
-        else:
-            st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
 
     with _sa_tab2:
 
