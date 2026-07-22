@@ -23063,20 +23063,25 @@ elif page == "📖 User Guide":
         "This is a guide to the app, not financial advice.*"
     )
 
-    with st.expander("🎯 What this app is (and isn't)", expanded=True):
-        st.markdown(
-            """
+    _ug_tab1, _ug_tab2, _ug_tab3, _ug_tab4 = st.tabs(
+        ["🚀 Start Here", "⚙️ How It Works", "🗺️ Features", "📚 Reference"]
+    )
+
+    with _ug_tab1:
+        with st.expander("🎯 What this app is (and isn't)", expanded=False):
+            st.markdown(
+                """
 **DRISHTA is a personal portfolio-intelligence advisor — it decides, it doesn't just inform.** Recommendations are issued as clear, actionable calls; suppressions are shown with a visible reason, never silently hidden. When in doubt, it recommends *nothing* rather than recommending wrongly.
 
 **It is built for a medium-term, quality-first investor — not a day trader.** You should not feel the need to watch the screen all day. The app deliberately stays quiet when there's no genuine decision to make ("✅ you're set for today"). A stream of technically-correct-but-trivial prompts is treated as a *bug*, not a feature — the goal is to surface what matters *now* and stay calm otherwise.
 
 ⚠️ *Not financial advice. Algorithmic analysis on delayed/third-party data — verify before acting.*
 """
-        )
+            )
 
-    with st.expander("🚀 First run — start here: get your data in first", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🚀 First run — start here: get your data in first", expanded=False):
+            st.markdown(
+                """
 **The single most important step — do this before trusting anything.** This app *decides*; it issues confident buy / sell / trim calls. If it doesn't know what you actually hold, or has the wrong cost basis, it will be **confidently wrong** — recommending you buy what you already own, miscomputing your concentration and position sizing, setting a stop off a bad basis, or misstating your P&L. **Garbage in → confident garbage out.** Populate your data *first*.
 
 **The order of operations:**
@@ -23089,11 +23094,11 @@ elif page == "📖 User Guide":
 
 *Persistence:* trades save to your database and carry across sessions; with no database connected they last only the current session (a one-time owner setup).
 """
-        )
+            )
 
-    with st.expander("📅 Daily workflow — what to do each morning", expanded=False):
-        st.markdown(
-            """
+        with st.expander("📅 Daily workflow — what to do each morning", expanded=False):
+            st.markdown(
+                """
 Once your trades are logged and reconciled (see *First run* above), your daily routine is short:
 
 1. **Open 🏠 Home — read Today's Brief.** This is your starting point every session. The Brief computes fresh signals on everything you hold and everything the scanner found, then sorts it into offense (left) and defense (right). You don't need to visit any other page unless the Brief points you there.
@@ -23108,11 +23113,12 @@ Once your trades are logged and reconciled (see *First run* above), your daily r
 
 *On most days, steps 1–2 take under five minutes. The app is designed to be quiet when there's nothing real to do.*
 """
-        )
+            )
 
-    with st.expander("🏠 Reading Today's Brief", expanded=False):
-        st.markdown(
-            """
+    with _ug_tab2:
+        with st.expander("🏠 Reading Today's Brief", expanded=False):
+            st.markdown(
+                """
 The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
@@ -23128,11 +23134,11 @@ The Home brief is split into **offense** (left) and **defense** (right).
 
 **Freshness:** the "📌 Built at HH:MM ET" chip auto-refreshes the Brief roughly every 30 minutes on its own during market hours — you don't need to click "Refresh Signals" just to keep it current. It re-checks whatever's already scanned rather than running a brand-new scan, so it won't pick up a stock that was never scanned in the first place (see *how the app finds candidates* below). Click **🔒 Lock Setup** to freeze the Brief for the day if you don't want it changing under you after you've decided what to do.
 """
-        )
+            )
 
-    with st.expander("🔭 How the app finds candidates (where tickers come from)", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🔭 How the app finds candidates (where tickers come from)", expanded=False):
+            st.markdown(
+                """
 Two separate questions live here — keeping them apart answers most *"why didn't X show up?"* puzzles:
 
 **1. What gets *scanned* (the universe).** Each time signals refresh, the app screens:
@@ -23160,11 +23166,11 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 
 **What it deliberately does *not* do:** it does **not** scan the entire market. A thin micro-cap up 300% on the day — the kind a broker's *"all stocks > 20% today"* filter shows — won't appear here by design: the app screens *liquid, quality* names and stays a medium-term advisor, not a squeeze-chaser. To check any specific ticker yourself, use **🔍 Research a Stock** on Home or the **📈 Analysis** page.
 """
-        )
+            )
 
-    with st.expander("🧮 How stocks are scored", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🧮 How stocks are scored", expanded=False):
+            st.markdown(
+                """
 Every stock gets a **Composite score (0–100)** blending four factors:
 
 - **Technical — 25%** (trend, momentum, RSI, relative strength)
@@ -23184,18 +23190,18 @@ This is why a name can show up in Grow Today in the morning (bull open) and quie
 
 **"Verdict withheld":** when fundamentals can't be fetched from any data source, the app does **not** invent a neutral score — it withholds the verdict and tells you so, rather than showing a confidently-wrong Hold/Buy.
 """
-        )
+            )
 
-    with st.expander("📊 Understanding verdict changes — what would flip the signal?", expanded=False):
-        st.markdown(
-            """
+        with st.expander("📊 Understanding verdict changes — what would flip the signal?", expanded=False):
+            st.markdown(
+                """
 The **verdict upgrade/downgrade expander** ("📈 What would change this signal?") appears below the verdict banner on every Analysis page. On the left, it shows how many composite points separate the current verdict from the next tier up, and which of the four pillars — Technical, Business Quality, Valuation, or Sentiment — would most easily close that gap (the smallest lift shown first). On the right, it shows your downgrade buffer: how many points above the current verdict floor, and which pillar carries the most weight (most impactful if it deteriorates). This lets you see exactly what the engine considers the core case for a stock — and what would break it.
 """
-        )
+            )
 
-    with st.expander("🚦 Why a signal gets held back (the gates)", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🚦 Why a signal gets held back (the gates)", expanded=False):
+            st.markdown(
+                """
 When a name looks strong but isn't recommended, one of these gates fired — and the app shows you which:
 
 - **Sector hard cap (35%)** — your portfolio is already at the institutional ceiling for that sector; adding more would deepen a concentration the app wants you to *trim*, not grow.
@@ -23205,11 +23211,11 @@ When a name looks strong but isn't recommended, one of these gates fired — and
 - **Market tape raised the bar** — on a flat day the bar for a *new* entry rises from 65 to **78** (and the cap drops to 1 pick); on a down day new entries are deferred entirely. A good-but-not-great name (composite 67–77) clears at a bull open and gets held back later the same day if the tape goes flat — see *"How stocks are scored"* above.
 - **Recently added (cooldown)** — you already added to this winner in the last ~10 days; the app waits for the new shares to settle before suggesting more (anti-churn).
 """
-        )
+            )
 
-    with st.expander("🛡️ How it protects a position you hold (loss protection)", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🛡️ How it protects a position you hold (loss protection)", expanded=False):
+            st.markdown(
+                """
 Buying is only half the job — the app also watches every position you hold and tells you to **reduce *before* the score fully breaks down**. Most slow losses happen while a name is still rated "Hold": it bleeds 10–20% but never trips a hard Sell. This layer catches that.
 
 It reads two things together: how far a name has fallen **from its highest point since you bought it**, and whether it's **broken below its trend** (the 50-day line). Based on severity you'll see one of three calls:
@@ -23230,11 +23236,11 @@ It reads two things together: how far a name has fallen **from its highest point
 
 **One number, two lenses — why 📈 Analysis can say "Buy" while the Brief says "reduce".** The composite score rates the *stock* — is it attractive to own? — and its technical leg gives credit for oversold, near-support conditions, so a name that's pulled back can still score a Buy. This protection layer rates the *position you hold* — is it rolling over (trend broken, lagging the market)? On a falling name the two genuinely diverge, **by design**: it looks cheap *because* it's been dropping. When that happens, protect-capital wins for the question of *adding* — the Analysis Trade Plan keeps the Buy composite visible (it's the honest attractiveness read, left unchanged) but **suppresses the add-on position sizing and shows a "⚠️ Under a Reduce/Exit call — not a place to add" banner**, so Analysis and the Brief never tell you opposite things. (The Overview's *Opportunity Signals* do the same: a name under a reduce call is pulled out of the "add on a pullback" list into a "not shown as adds" note.)
 """
-        )
+            )
 
-    with st.expander("⚖️ When a sector is over the cap — the rebalance plan", expanded=False):
-        st.markdown(
-            """
+        with st.expander("⚖️ When a sector is over the cap — the rebalance plan", expanded=False):
+            st.markdown(
+                """
 When a single sector grows past the **35% hard cap** (or approaches the **25% warn** line), the app raises a **Hard Cap Breach** card in **🔴 Act Today** — and, rather than a bare "trim your sector" nudge, it hands you a concrete plan you open with **🔎 Rebalance plan — what to trim, where to redeploy**:
 
 **Trim first — how much, and why.** It lists your holdings in that sector **weakest-conviction first** (by the engine's composite score), and for each shows the *basis* so a single number never proposes a trim blind: the composite's three pillars (**technical · fundamental · sentiment**), its **recent momentum** (1-week / 1-month), and which pillar is holding the score down. It then turns the headline target into a plan that **adds up** — fully exit the weakest names, partial-trim the last — showing the **$ · % · ≈shares** to sell each and a 🧾 flag for whether the sale **realizes a gain or a loss**; the trims sum to exactly the reduction needed to bring the sector back under the warn line.
@@ -23243,11 +23249,11 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 
 **It advises; you decide.** The engine's conviction score sets the order; correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
 """
-        )
+            )
 
-    with st.expander("🎚️ How your stop level is set — ATR, profit-ratchet & the what-if simulator", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🎚️ How your stop level is set — ATR, profit-ratchet & the what-if simulator", expanded=False):
+            st.markdown(
+                """
 Your protective stop is built from **three layers**, and each run the app uses the **tightest (highest)** of them:
 
 1. **Volatility floor (ATR stop)** — `price − 2 × ATR`, where ATR (Average True Range) is the stock's typical daily range. This sits *outside* normal day-to-day noise, so a routine wiggle doesn't stop you out. A jumpy name gets a **wider** stop and a steady one a **tighter** stop — the buffer respects each stock's own behaviour rather than an arbitrary percentage.
@@ -23265,18 +23271,18 @@ Your protective stop is built from **three layers**, and each run the app uses t
 
 It's **educational only — it explains the stop, it never changes a recommendation.** The stop shown on Analysis matches Today's Brief exactly — same ratcheted stop, same live price, same breach test — so the two surfaces never tell you different things about where your stop is.
 """
-        )
+            )
 
-    with st.expander("⚙️ Gate checks on the Trade Plan", expanded=False):
-        st.markdown(
-            """
+        with st.expander("⚙️ Gate checks on the Trade Plan", expanded=False):
+            st.markdown(
+                """
 Before you size a position, the **Gate checks** row — shown just above the position-sizing section of the Trade Plan — gives you a five-gate snapshot: **Data Quality** (are fundamentals available?), **Reward:Risk** (is the entry R:R ≥ 2×?), **Concentration** (does this fit your portfolio caps?), **Sector cap** (is the sector below 35%?), and **Earnings window** (stepping into an imminent earnings print?). Each gate shows as green ✓ (clear), red ✗ (failed), or grey — (not applicable or not yet known): a name you don't hold has no concentration to check, an R:R the app can't compute reads *unavailable*, and portfolio or earnings data that hasn't loaded yet points you to the 💰 Account or 🔔 Catalyst Watch page (each gate's caption tells you which). The checks are **awareness only** — they don't block you from entering, but they surface which data gaps or risks to consider before you commit.
 """
-        )
+            )
 
-    with st.expander("⏰ Daily automation & email alerts (works while the app is closed)", expanded=False):
-        st.markdown(
-            """
+        with st.expander("⏰ Daily automation & email alerts (works while the app is closed)", expanded=False):
+            st.markdown(
+                """
 The app's intelligence is computed live in your browser — so it can only reach you while a tab is open. To make sure **protection finds you even when the app is closed** — and so the app is **ready the moment you open it** — small scheduled jobs run in the background (a free GitHub Actions cron) on every market day. They **keep your buy-candidate list fresh** and **email you when — and *only* when — something genuinely needs you.** They re-use the exact same logic the Home brief uses, so the emails and the app never disagree.
 
 **Three runs each trading day:**
@@ -23291,12 +23297,12 @@ The app's intelligence is computed live in your browser — so it can only reach
 
 **Delivery & privacy.** Alerts are sent to the email address you configured, via an email service (Resend). Everything is **advisory — you decide and act; nothing is ever auto-traded.** The job reads your holdings to compute the alert and sends only to you.
 """
-        )
+            )
 
-    with st.expander("🧠 Where AI is used — sentiment scoring, news, thesis, earnings, debrief, monthly & analyst coverage", expanded=False):
-        st.caption("How the AI layer fits into the app — ten touchpoints across two tracks")
-        st.graphviz_chart(
-            """
+        with st.expander("🧠 Where AI is used — sentiment scoring, news, thesis, earnings, debrief, monthly & analyst coverage", expanded=False):
+            st.caption("How the AI layer fits into the app — ten touchpoints across two tracks")
+            st.graphviz_chart(
+                """
             digraph DRISHTA_AI {
                 rankdir=LR
                 compound=true
@@ -23363,11 +23369,11 @@ The app's intelligence is computed live in your browser — so it can only reach
 
                 Note [label="Gate thresholds are rules-only (constants.py).\\nSentiment (10% of composite) uses LLM scoring.\\nAll other AI outputs are awareness-only and\\nnever read back by the engine." shape=note style=filled fillcolor="#fff9c4" color="#a16207"]
             }
-            """,
-            use_container_width=True,
-        )
-        st.markdown(
-            """
+                """,
+                use_container_width=True,
+            )
+            st.markdown(
+                """
 DRISHTA uses AI across **ten touchpoints** organised into two tracks. A **fast extraction track** (Haiku) runs per-request and handles scoring and structured data extraction. A **deep reflection track** (Claude) generates narrative intelligence about your decisions over time. The diagram above shows every data path.
 
 **One guarantee, precisely stated:** Gate thresholds — BUY ≥ 65, sector caps, stop rules — live in the app's rules-only configuration and are set by rules only. The AI never moves them. The **Sentiment pillar** (10% of composite) is the one place LLM scoring feeds back into the engine: Haiku re-scores news headlines with financial domain context that VADER alone cannot provide. Every other AI output is pure awareness — the engine never reads it back, and if the AI layer is offline every page and protection works exactly the same.
@@ -23404,11 +23410,12 @@ DRISHTA uses AI across **ten touchpoints** organised into two tracks. A **fast e
 
 Nothing on this page issues a buy or sell. The engine remains the only thing that gates or recommends.
 """
-        )
+            )
 
-    with st.expander("💰 Maintaining your Account (cash, margin, growth & return)", expanded=False):
-        st.markdown(
-            """
+    with _ug_tab3:
+        with st.expander("💰 Maintaining your Account (cash, margin, growth & return)", expanded=False):
+            st.markdown(
+                """
 By default the app reasons only about the **stocks it can see** (shares × live price). The **💰 Account** page adds the rest of the picture — your cash, your true total, and how much you've actually *earned* — by letting you record a couple of things the app can't fetch yet.
 
 **1. Set your cash (the one input that unlocks everything).**
@@ -23448,11 +23455,11 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 
 **Your built-in sync check:** the app's **Total Account Value** should match your broker's total portfolio value, within a few dollars of quote timing. The precise test is **broker Total − your stock value = the net cash you entered.** Only two things can break it: an **unlogged trade** (equity is off) or a **stale cash figure** (cash is off) — fix whichever side is wrong. If the app reads *higher* than your broker, the gap is usually a margin balance you haven't entered as a negative number. Everything is advisory and view-only — nothing here ever places a trade.
 """
-        )
+            )
 
-    with st.expander("🗺️ The pages, at a glance", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🗺️ The pages, at a glance", expanded=False):
+            st.markdown(
+                """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
@@ -23474,11 +23481,11 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel) and the **Research Scorecard** (tracks whether your saved analyst calls hit their targets). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
 """
-        )
+            )
 
-    with st.expander("🏆 Health & Portfolio Dynamics", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🏆 Health & Portfolio Dynamics", expanded=False):
+            st.markdown(
+                """
 **Health gives you a single A–F construction grade** — not a buy/sell signal, but a measure of how *well-built* your book is across five dimensions:
 
 | Dimension | What it measures |
@@ -23512,11 +23519,11 @@ The toggle above the panels recalculates and re-sorts by the chosen cadence:
 
 **The scatter chart** (above the panels) lets you see the full book at once — X = months held, Y = return, bubble size = portfolio weight, color = verdict/sector/cohort (toggle via the dropdowns). A cluster of large bubbles in the bottom-left (short hold, negative return) is the earliest warning that capital allocated to new positions isn't working yet.
 """
-        )
+            )
 
-    with st.expander("📜 Recommendations History — the engine's report card", expanded=False):
-        st.markdown(
-            """
+        with st.expander("📜 Recommendations History — the engine's report card", expanded=False):
+            st.markdown(
+                """
 The **📜 Recommendations History** page is a **rules-based audit trail** (no AI) of every signal the app has surfaced, graded after the fact against what actually happened. It's the raw data the Monthly Intelligence Report narrates.
 
 - **The scorecard** matches each past recommendation to your trades to see whether you **acted** on it, then grades the outcome on **alpha** — its return *minus the market's* over the same window. (Beating the market in a down month is a win; trailing it in an up month isn't — raw return alone would credit or blame you for the market's move, not your selection.) It rolls up by conviction band and by cross-check verdict, and only grades picks old enough to have a meaningful outcome.
@@ -23525,22 +23532,22 @@ The **📜 Recommendations History** page is a **rules-based audit trail** (no A
 
 It's a **learning** surface, not a recommendation surface — it shows how the engine *and* your own decisions have actually been doing.
 """
-        )
+            )
 
-    with st.expander("🔔 Catalyst Watch — forward earnings awareness", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🔔 Catalyst Watch — forward earnings awareness", expanded=False):
+            st.markdown(
+                """
 The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report never blindsides you, across three tiers: **your holdings**, your **watchlist**, and the broader **sector universe** the scanner follows. A 🔥 flag marks a sector heating up with near-term reports.
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
 
 The page has three tabs: **📋 Positions** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
 """
-        )
+            )
 
-    with st.expander("🔥 Stress Testing & Scenario Analysis", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🔥 Stress Testing & Scenario Analysis", expanded=False):
+            st.markdown(
+                """
 The **🔥 Stress Testing** section on the 🔗 Risk Analysis page projects how your holdings would fare under market shock scenarios.
 
 **What it does:** Each position's estimated P&L under a chosen scenario (e.g., crash, rate shock) is calculated using its individual **beta vs SPY**. Named historical scenarios (COVID Crash, 2022 Rate Shock, GFC 2008) also apply **sector-specific shocks** instead of a pure beta move — reflecting that different sectors suffered differently in those events.
@@ -23560,11 +23567,11 @@ Use this over time as **calibration context** — it shows how well the model's 
 
 This is **awareness only** — it never gates a recommendation or sizes a trade.
 """
-        )
+            )
 
-    with st.expander("🚦 Signal severity — what the colors mean", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🚦 Signal severity — what the colors mean", expanded=False):
+            st.markdown(
+                """
 The app uses three color bands across all pages — the color always carries the same meaning, even when the words differ by page.
 
 | Color | Meaning | When to act |
@@ -23585,11 +23592,11 @@ The app uses three color bands across all pages — the color always carries the
 
 **Rule of thumb:** red = decide today; amber = keep in view, don't trade yet; green = the app has nothing to add right now.
 """
-        )
+            )
 
-    with st.expander("🛡️ Risk & portfolio-quality terms", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🛡️ Risk & portfolio-quality terms", expanded=False):
+            st.markdown(
+                """
 These power the **Portfolio Tune-up** lane:
 
 - **Sharpe ratio** — return *per unit of risk*. Low/negative means you're taking volatility that isn't paying you. [Investopedia ↗](https://www.investopedia.com/terms/s/sharperatio.asp)
@@ -23599,11 +23606,11 @@ These power the **Portfolio Tune-up** lane:
 - **Reward:Risk (R:R)** — potential upside vs downside on a trade; the app favours entries at 2:1 or better. [Investopedia ↗](https://www.investopedia.com/terms/r/riskrewardratio.asp)
 - **RSI** — a momentum oscillator (overbought/oversold). [Investopedia ↗](https://www.investopedia.com/terms/r/rsi.asp)
 """
-        )
+            )
 
-    with st.expander("🎯 My Edge — am I beating passive? does prep pay off? am I improving?", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🎯 My Edge — am I beating passive? does prep pay off? am I improving?", expanded=False):
+            st.markdown(
+                """
 **My Edge** is a retrospective-only page — it has no recommendations, no gates, no scores that affect anything else. It answers four questions that can't be answered anywhere else in the app:
 
 ---
@@ -23682,11 +23689,11 @@ Two diagnostic lenses — not recommendations, not gates.
 
 Each card suppresses to "insufficient data" until enough closed trades accumulate. **None of these observations change a score, a rank, or a recommendation — the engine never reads them.** The methodology note at the bottom of each section explains caveats (today's composite scores only; some patterns reflect deliberate risk management, not psychology).
 """
-        )
+            )
 
-    with st.expander("📚 Lessons Learned Library — capture patterns in how exits play out", expanded=False):
-        st.markdown(
-            """
+        with st.expander("📚 Lessons Learned Library — capture patterns in how exits play out", expanded=False):
+            st.markdown(
+                """
 When you log a SELL or TRIM in the **📒 Trade Journal**, the Decision Context expander includes a **lesson category dropdown** — a structured way to tag *why* the exit happened. Pick the one that best describes the exit pattern:
 
 1. **Followed the signal** — disciplined exit, acted on the app's recommendation
@@ -23706,11 +23713,12 @@ Example: if you've cited "Held too long" 6 times and the average trade cost $−
 
 The taxonomy is fixed so patterns stay comparable across months and years — it's a way to spot repeating exits and learn from their outcomes.
 """
-        )
+            )
 
-    with st.expander("📚 Glossary & external references", expanded=False):
-        st.markdown(
-            """
+    with _ug_tab4:
+        with st.expander("📚 Glossary & external references", expanded=False):
+            st.markdown(
+                """
 - **Composite** — the blended 0–100 score (Technical + Fundamental + Sentiment).
 - **Momentum** — a single-factor breakout signal; necessary but not sufficient for a Buy.
 - **Lifecycle (Settling / Winning / At Risk)** — where a held position is in its life, used to decide which nudges are worth showing.
@@ -23718,18 +23726,18 @@ The taxonomy is fixed so patterns stay comparable across months and years — it
 
 Learn more: [Investopedia ↗](https://www.investopedia.com/) · data terms vary by provider (see below).
 """
-        )
+            )
 
-    with st.expander("🔌 Data sources & disclaimer", expanded=False):
-        st.markdown(
-            """
+        with st.expander("🔌 Data sources & disclaimer", expanded=False):
+            st.markdown(
+                """
 - **Prices & fundamentals:** Yahoo Finance (yfinance), Finnhub, and Financial Modeling Prep (FMP) — with automatic failover between them. [yfinance ↗](https://finance.yahoo.com/) · [FMP ↗](https://site.financialmodelingprep.com/)
 - **Macro data:** FRED (Federal Reserve Economic Data). [FRED ↗](https://fred.stlouisfed.org/)
 - Prices may be delayed. Scores are algorithmic and can be wrong.
 
 **This app is a decision-support tool, not financial advice. You are responsible for your own trades.**
 """
-        )
+            )
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — AI INSIGHTS
