@@ -24,6 +24,7 @@ and conflating distinct decisions.
 
 from datetime import date
 from collections import defaultdict
+from stock_analyzer.constants import COMPOSITE_STRONG_BUY, COMPOSITE_BUY, COMPOSITE_HOLD
 
 
 def _f(v, default=0.0):
@@ -395,11 +396,11 @@ def by_composite_band(enriched: list[dict]) -> list[dict]:
     None (not scored).
     """
     bands = [
-        ("Strong Buy (≥75)",   lambda c: c is not None and c >= 75),
-        ("Buy (65–74)",        lambda c: c is not None and 65 <= c < 75),
-        ("Hold zone (44–64)",  lambda c: c is not None and 44 <= c < 65),
-        ("Sell zone (<44)",    lambda c: c is not None and c < 44),
-        ("Unscored",           lambda c: c is None),
+        (f"Strong Buy (≥{COMPOSITE_STRONG_BUY})",             lambda c: c is not None and c >= COMPOSITE_STRONG_BUY),
+        (f"Buy ({COMPOSITE_BUY}–{COMPOSITE_STRONG_BUY - 1})", lambda c: c is not None and COMPOSITE_BUY <= c < COMPOSITE_STRONG_BUY),
+        (f"Hold zone ({COMPOSITE_HOLD}–{COMPOSITE_BUY - 1})", lambda c: c is not None and COMPOSITE_HOLD <= c < COMPOSITE_BUY),
+        (f"Sell zone (<{COMPOSITE_HOLD})",                     lambda c: c is not None and c < COMPOSITE_HOLD),
+        ("Unscored",                                           lambda c: c is None),
     ]
     out: list[dict] = []
     for label, pred in bands:
@@ -655,11 +656,11 @@ def engine_trust_by_band(enriched: list[dict]) -> list[dict]:
             s = float(score)
         except (TypeError, ValueError):
             return None
-        if s < 65:
-            return (0, "Below 65 (sub-threshold)")
-        if s < 75:
-            return (65, "65–74 (BUY)")
-        return (75, "75+ (Strong BUY)")
+        if s < COMPOSITE_BUY:
+            return (0, f"Below {COMPOSITE_BUY} (sub-threshold)")
+        if s < COMPOSITE_STRONG_BUY:
+            return (COMPOSITE_BUY, f"{COMPOSITE_BUY}–{COMPOSITE_STRONG_BUY - 1} (BUY)")
+        return (COMPOSITE_STRONG_BUY, f"{COMPOSITE_STRONG_BUY}+ (Strong BUY)")
 
     buckets: dict[int, dict] = {}
     for r in enriched:

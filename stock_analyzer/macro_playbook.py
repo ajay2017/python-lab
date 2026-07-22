@@ -416,7 +416,7 @@ def _action_detail(row, event_name: str, action: str) -> str:
             trim_sh    = max(1, int(shares * trim_frac))
             trim_val   = round(trim_frac * mval)
             return (
-                f"Trim to ~15% weight: **sell {trim_sh:,} shares (~${trim_val:,.0f})** before the event. "
+                f"Trim to ~{SINGLE_NAME_CEILING:.0f}% weight: **sell {trim_sh:,} shares (~${trim_val:,.0f})** before the event. "
                 f"Keep the core position for the upside scenario — just cap the binary event risk."
             )
         trim_sh  = max(1, shares // 2)

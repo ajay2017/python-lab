@@ -47,7 +47,7 @@ def render_alert_email(
     else:
         subject = (f"DRISHTA · {n_vel} WATCH accelerating — {vel_tickers}"
                    if n_vel == 1 else
-                   f"DRISHTA · {n_vel} WATCHes accelerating — {vel_tickers}")
+                   f"DRISHTA · {n_vel} WATCH signals accelerating — {vel_tickers}")
 
     cards = []
     for a in alerts:

@@ -257,7 +257,7 @@ _IMPROVEMENT: dict[str, dict[str, str]] = {
     "concentration": {
         "low": (
             "A position or sector is at or near its hard cap — trim before adding new "
-            "exposure. Check the concentration section on Portfolio Allocation."
+            "exposure. Check the concentration section on Portfolio Overview."
         ),
         "mid": (
             "Concentration is elevated. Review the largest name and sector before "

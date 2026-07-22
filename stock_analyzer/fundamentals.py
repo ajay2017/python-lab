@@ -244,7 +244,7 @@ def business_quality_score(financials: dict, sector: str = "") -> tuple[float, d
     _missing = len(CORE_BQ_KEYS) - count_core_metrics(financials)
     if _missing >= 3:
         signals["⚠ Data Quality"] = (
-            f"{_missing}/4 core BQ metrics missing from Yahoo Finance — "
+            f"{_missing}/4 core BQ metrics unavailable from the data provider — "
             "business quality score is based on limited data and may be unreliable"
         )
 

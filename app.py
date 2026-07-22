@@ -138,6 +138,7 @@ from stock_analyzer.constants import (
     CONVICTION_FADED_SCORE,
     CONVICTION_LEGACY_TOP_N,
     BREAKEVEN_ANCHOR_DWELL_RATIO,
+    EARNINGS_MIN_BEAT_RATE_ENTRY,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -1902,7 +1903,7 @@ with st.sidebar:
             if _ah_h["errors"] > 0:
                 _ah_parts.append(f"**{_ah_h['errors']} err**")
             if _ah_h["rate_limits"] > 0:
-                _ah_parts.append(f"**{_ah_h['rate_limits']} RL**")
+                _ah_parts.append(f"**{_ah_h['rate_limits']} rate-limited**")
             if _ah_h["empty"] > 0:
                 _ah_parts.append(f"{_ah_h['empty']} empty")
             if _ah_h.get("quotas", 0) > 0:
@@ -8103,8 +8104,8 @@ elif page == "📡 Signals & Advice":
                                 _check("🔴", f"FCF Yield {fcf_y:.1f}% — company burning cash. Adds urgency to the sell signal.", "#ff4444")
 
                         # Position sizing
-                        if act["weight"] > 15:
-                            _check("⚠️", f"Position is {act['weight']:.0f}% of portfolio — above 15% threshold. Size alone justifies trimming.")
+                        if act["weight"] > SINGLE_NAME_CEILING:
+                            _check("⚠️", f"Position is {act['weight']:.0f}% of portfolio — above {SINGLE_NAME_CEILING:.0f}% threshold. Size alone justifies trimming.")
 
                     # ── Evidence & Sources — verify every data point ─────────
                     st.markdown("---")
@@ -15891,12 +15892,25 @@ elif page == "📋 Watchlist":
             if _wl_remove and st.button("🗑️ Remove selected", key="_wl_remove_btn",
                                         disabled=st.session_state.get("_readonly", False),
                                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
-                for _rt in _wl_remove:
-                    if _rt in st.session_state.watchlist:
-                        st.session_state.watchlist.remove(_rt)
-                db.save_watchlist(st.session_state.watchlist)
-                st.success(f"Removed {len(_wl_remove)} ticker(s).")
+                st.session_state["_wl_bulk_remove_confirm"] = list(_wl_remove)
                 st.rerun()
+            _wl_bulk_confirm = st.session_state.get("_wl_bulk_remove_confirm")
+            if _wl_bulk_confirm:
+                _wl_confirm_label = ", ".join(_wl_bulk_confirm) if len(_wl_bulk_confirm) <= 3 else f"{len(_wl_bulk_confirm)} tickers"
+                st.warning(f"Remove **{_wl_confirm_label}** from watchlist?")
+                _wbc1, _wbc2 = st.columns(2)
+                with _wbc1:
+                    if st.button("Yes, remove", key="_wl_bulk_confirm_yes", type="primary"):
+                        for _rt in _wl_bulk_confirm:
+                            if _rt in st.session_state.watchlist:
+                                st.session_state.watchlist.remove(_rt)
+                        db.save_watchlist(st.session_state.watchlist)
+                        st.session_state.pop("_wl_bulk_remove_confirm", None)
+                        st.rerun()
+                with _wbc2:
+                    if st.button("Cancel", key="_wl_bulk_confirm_no"):
+                        st.session_state.pop("_wl_bulk_remove_confirm", None)
+                        st.rerun()
 
     _wl = st.session_state.watchlist
     if not _wl:
@@ -20065,7 +20079,7 @@ elif page == "📜 Recommendations History":
         st.info(
             "No recommendations recorded for this range yet. As Today's Brief "
             "surfaces picks day after day, this page will fill in. "
-            "(If you only set up the `recommendations` table recently, you'll "
+            "(If you only recently started using the app, you'll "
             "have a few days of history at most.)"
         )
         st.stop()
@@ -20512,9 +20526,9 @@ elif page == "📜 Recommendations History":
 - **❌ Conflicted** — hard conflict (composite says Hold/Sell while momentum says Buy, or earnings + signal conflict). Don't act on these.
 - **🔍 Unverified** — composite wasn't loaded for the ticker at surface time, so the App couldn't verify the multi-factor signal. *Treat these as momentum-only suggestions* — they need an Analysis page check before acting.
 
-**Composite / Momentum** — Momentum is the scanner's technical-only score; Composite is the full multi-factor score (technical + fundamentals + sentiment). A Composite of NaN means it wasn't loaded at surface time — usually because it was a lower-confidence *More Buy Candidates* row from before the app began loading composite scores for that view, or because the score fetch failed for that ticker.
+**Composite / Momentum** — Momentum is the scanner's technical-only score; Composite is the full multi-factor score (technical + fundamentals + sentiment). A Composite of "not yet loaded" means it wasn't loaded at surface time — usually because it was a lower-confidence *More Buy Candidates* row from before the app began loading composite scores for that view, or because the score fetch failed for that ticker.
 
-**Outcome** — meaningful when the recommendation had a priced reference. NaN composite + Unverified verdict + low outcome usually means "the App showed it on momentum alone, you correctly skipped, market moved against the momentum signal anyway." That's a *good* skip even though the row looks unimpressive.
+**Outcome** — meaningful when the recommendation had a priced reference. Missing composite + Unverified verdict + low outcome usually means "the App showed it on momentum alone, you correctly skipped, market moved against the momentum signal anyway." That's a *good* skip even though the row looks unimpressive.
 
 **Early rows** (before verdict logic matured) may have sparse composites and "Unverified" verdicts — this is expected and doesn't need action. New rows will have richer verdicts as the engine accumulates history.
 """
@@ -21330,9 +21344,8 @@ elif page == "📊 Predictive Analytics":
         st.caption(
             "One-time, informational audit — not a live feature. It answers a single "
             "question: is there enough historical signal-to-action data to build the "
-            "Behavioral Fingerprint (Concept A, `docs/plans/next-evolution-strategy.md`) "
-            "from history, or does it need to start capturing forward-only? Awareness "
-            "only — no gate, no recommendation, no new threshold."
+            "Behavioral Fingerprint from history, or does it need to start capturing "
+            "forward-only? Awareness only — no gate, no recommendation, no new threshold."
         )
 
         # Scoped to ACTIONABLE rec_types only (new_pick, add_winner) — buy_candidate
@@ -21737,11 +21750,24 @@ elif page == "💰 Account":
                 _fc3.write(f"{_sign}${_fl.get('amount', 0):,.2f}")
                 _fc4.write(_fl.get("note") or "")
                 if not db.is_readonly():
-                    # Key on the loop index (collision-proof even if an id were
-                    # ever None) plus the id for stability across reruns.
-                    if _fc5.button("🗑", key=f"_flow_del_{_fi}_{_fl.get('id')}", help="Delete this flow"):
-                        db.delete_account_flow(_fl.get("id"))
-                        st.rerun()
+                    _fid = _fl.get("id")
+                    _fdel_key = f"_flow_del_confirm_{_fi}_{_fid}"
+                    if not st.session_state.get(_fdel_key):
+                        if _fc5.button("🗑", key=f"_flow_del_{_fi}_{_fid}", help="Delete this flow"):
+                            st.session_state[_fdel_key] = True
+                            st.rerun()
+                    else:
+                        st.warning(f"Delete this {_fl.get('flow_type', 'entry').title()} entry?")
+                        _fdy, _fdn = st.columns(2)
+                        with _fdy:
+                            if st.button("Yes, delete", key=f"_flow_del_yes_{_fi}_{_fid}", type="primary"):
+                                st.session_state.pop(_fdel_key, None)
+                                db.delete_account_flow(_fid)
+                                st.rerun()
+                        with _fdn:
+                            if st.button("Cancel", key=f"_flow_del_no_{_fi}_{_fid}"):
+                                st.session_state.pop(_fdel_key, None)
+                                st.rerun()
 
         if not db.is_readonly():
             with st.expander("➕ Log a deposit or withdrawal", expanded=False):
@@ -21947,7 +21973,7 @@ elif page == "🔔 Catalyst Watch":
     _cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Positions", "📡 Radar", "🎯 Entry Candidates"])
 
     with _cw_tab_hold:
-        st.markdown("## 📊 Your Holdings — Earnings")
+        st.markdown("## 📊 Your Positions — Earnings")
         _cw_pdf = st.session_state.get("_last_port_df")
         _cw_hd  = st.session_state.get("_last_held_data")
         if _cw_pdf is None or _cw_hd is None or (hasattr(_cw_pdf, "empty") and _cw_pdf.empty):
@@ -22118,8 +22144,8 @@ elif page == "🔔 Catalyst Watch":
                     )
                 else:
                     st.info(
-                        "No watchlist names currently pass all filters (beat rate ≥ 70%, "
-                        "composite ≥ 65, reaction not bearish, earnings within 30 days)."
+                        f"No watchlist names currently pass all filters (beat rate ≥ {EARNINGS_MIN_BEAT_RATE_ENTRY:.0f}%, "
+                        f"composite ≥ {COMPOSITE_BUY:.0f}, reaction not bearish, earnings within 30 days)."
                     )
             else:
                 st.caption(f"{len(_cw_candidates)} candidate{'s' if len(_cw_candidates) != 1 else ''} · ranked by beat rate × composite × reaction")

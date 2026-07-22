@@ -230,8 +230,8 @@ def build_risk_advisor_recommendations(
                     f"~${loss_10:,.0f} / ~${loss_20:,.0f} of extra loss in 10% / 20% corrections."
                 ),
                 "institutional_lens": (
-                    "Institutional risk teams impose a hard Beta ceiling of 1.4 for managed equity accounts, "
-                    "dropping to 1.2 during 'risk-off' macro regimes. Above 1.4, the asymmetry turns against you: "
+                    f"Institutional risk teams impose a hard Beta ceiling of {PORTFOLIO_BETA_CEILING:.1f} for managed equity accounts, "
+                    f"dropping to {PORTFOLIO_BETA_ELEVATED:.1f} during 'risk-off' macro regimes. Above {PORTFOLIO_BETA_CEILING:.1f}, the asymmetry turns against you: "
                     "high-beta stocks fall faster during corrections than they rise during rallies on a "
                     "risk-adjusted basis. The PM's job is not to eliminate beta — it's to ensure you are "
                     "being paid for it through a Sharpe Ratio that compensates for the extra volatility."
@@ -246,7 +246,7 @@ def build_risk_advisor_recommendations(
                 "recommendation": "No beta action required.",
                 "expected_outcome": "",
                 "institutional_lens": (
-                    f"Portfolio Beta of {beta:.2f} sits within Institutional 0.8–1.2 target range. "
+                    f"Portfolio Beta of {beta:.2f} sits below the {PORTFOLIO_BETA_ELEVATED:.1f} soft ceiling. "
                     "Watch for beta drift: as winners grow to a larger portfolio weight, beta creeps upward "
                     "without any new purchases. Re-check after significant P&L moves."
                 ),

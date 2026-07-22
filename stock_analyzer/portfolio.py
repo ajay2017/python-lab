@@ -1037,7 +1037,7 @@ def diversification_recommendations(
                 "reduce_dollars":  round(portfolio_value * reduce_pct / 100),
                 "weakest_tickers": weakest,
                 "reason": (
-                    f"**{sector}** is {pct:.0f}% of your portfolio — above the 20% sector cap. "
+                    f"**{sector}** is {pct:.0f}% of your portfolio — above the {SECTOR_REDUCE_TRIGGER:.0f}% sector cap. "
                     f"Intra-sector correlation means these names move together on the same macro catalyst."
                 ),
             })
