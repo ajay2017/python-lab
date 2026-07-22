@@ -901,7 +901,7 @@ CREATE TABLE analyst_coverage (
 - **Block B — Per-call accuracy table:** Sortable columns (Ticker, Article Date, Consensus, Avg PT, Price @ Article, Exit Price, Return %, PT Proximity %, Status, Window). Color-coded rows (green hit, red miss, grey pending/no-anchor). Default sort: article_date DESC.
 - **Block C — Firm Leaderboard:** Aggregates per firm (not just consensus — the per-analyst `analysts` JSONB) for evaluable rows only, showing Calls, Directional Accuracy %, PT Hit Rate %, Avg Return %. Minimum 2 calls per firm to appear (suppresses single-call noise).
 - **Block D — Best & Worst Calls:** Top/bottom 3 calls by return % (gated on ≥5 evaluable calls); cards with ticker, return %, article date, and measurement window.
-The two new columns are: `price_at_article_date` (populated at save-time via `_resolve_price_at_save()` in app.py, or backfilled by `scripts/backfill_analyst_prices.py` from yfinance) and `composite_score_at_save` (engine score at save, NULL for non-held tickers; reserved for Phase 3 engine-vs-analyst calibration). Both added 2026-07-22.
+The two new columns are: `price_at_article_date` (populated at save-time via `_resolve_price_at_save()` in app.py, or backfilled by `scripts/backfill_analyst_prices.py` from yfinance) and `composite_score_at_save` (engine score at save, NULL for non-held tickers; reserved for Phase 3 engine-vs-analyst calibration). Both added 2026-07-22. Rows with `no_anchor` status (missing price_at_article_date) now show a per-row "🔄 Fetch" button on the Research Scorecard tab (calls `analyst_intel.fetch_anchor_price()` live and saves via `db.update_analyst_coverage_price()`) instead of only being fixable via the periodic batch backfill.
 
 ### 6.16 `sector_cache` table
 
