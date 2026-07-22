@@ -7841,17 +7841,16 @@ elif page == "📡 Signals & Advice":
                             )
                             for _a in _items:
                                 if _a["level"] == "danger":
-                                    _chip_bg    = "#3b0a0a"
-                                    _chip_border= "#ff4444"
-                                    _chip_icon  = "🔴"
+                                    _chip_bg     = "#3b0a0a"
+                                    _chip_border = "#ff4444"
                                 elif _a["level"] == "warning":
-                                    _chip_bg    = "#2d2000"
-                                    _chip_border= "#f59e0b"
-                                    _chip_icon  = "🟡"
+                                    _chip_bg     = "#2d2000"
+                                    _chip_border = "#f59e0b"
                                 else:
-                                    _chip_bg    = "#0a1a2d"
-                                    _chip_border= "#3b82f6"
-                                    _chip_icon  = "ℹ️"
+                                    _chip_bg     = "#0a1a2d"
+                                    _chip_border = "#3b82f6"
+                                import re as _re
+                                _msg_html = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', _a['msg'])
                                 st.markdown(
                                     f"<div style='"
                                     f"background:{_chip_bg};"
@@ -7861,7 +7860,7 @@ elif page == "📡 Signals & Advice":
                                     f"margin-bottom:5px;"
                                     f"font-size:0.82em;"
                                     f"line-height:1.4'>"
-                                    f"{_chip_icon} {_a['msg']}"
+                                    f"{_msg_html}"
                                     f"</div>",
                                     unsafe_allow_html=True,
                                 )
