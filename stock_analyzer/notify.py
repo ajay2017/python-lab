@@ -10,6 +10,7 @@ from the engine's normalised alert list.
 from __future__ import annotations
 
 import html as _html
+import re
 
 import requests
 
@@ -532,21 +533,60 @@ def render_intraday_entry_email(
     return subject, body
 
 
+def _email_md_inline(text: str) -> str:
+    """Convert **bold** and *italic* markdown to inline HTML."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
+    return text
+
+
+def _email_section(title: str, content: str, section_colours: dict) -> str:
+    """Render one named section block for DRISHTA HTML emails."""
+    if not content:
+        return ""
+    accent = section_colours.get(title, "#6b7280")
+    parts: list[str] = []
+    in_list = False
+    for ln in content.split("\n"):
+        stripped = ln.strip()
+        if stripped.startswith(("• ", "- ", "* ")):
+            item = _email_md_inline(stripped[2:])
+            if not in_list:
+                parts.append("<ul style='margin:8px 0;padding-left:20px;color:#374151'>")
+                in_list = True
+            parts.append(f"<li style='margin:6px 0;line-height:1.55;color:#374151'>{item}</li>")
+        else:
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            if stripped:
+                parts.append(
+                    f"<p style='margin:6px 0;color:#374151;line-height:1.6'>"
+                    f"{_email_md_inline(stripped)}</p>"
+                )
+    if in_list:
+        parts.append("</ul>")
+    body = "\n".join(parts)
+    return (
+        f"<div style='margin:20px 0;background:#ffffff;border-radius:8px;"
+        f"border:1px solid #e5e7eb;border-left:4px solid {accent};overflow:hidden'>"
+        f"<div style='padding:10px 16px 8px;background:#f9fafb;"
+        f"border-bottom:1px solid #e5e7eb'>"
+        f"<span style='font-weight:700;font-size:0.85em;color:{accent};"
+        f"text-transform:uppercase;letter-spacing:0.06em'>{title}</span></div>"
+        f"<div style='padding:14px 16px;font-size:0.9em'>{body}</div>"
+        f"</div>"
+    )
+
+
 def render_debrief_email(debrief: dict) -> str:
     """Render the weekly portfolio debrief as a professional HTML email (light-mode-first)."""
-    import re
 
     week_ending  = debrief.get("week_ending", "—")
     generated_at = str(debrief.get("generated_at", ""))[:10]
     perf  = debrief.get("performance_pct")
     spy   = debrief.get("spy_pct")
     alpha = debrief.get("alpha_pct")
-
-    def _md_inline(text: str) -> str:
-        """Convert **bold** and *italic* markdown to HTML inline."""
-        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-        text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
-        return text
 
     def _pct_cell(label: str, v: float | None, bold: bool = False, subtitle: str = "") -> str:
         if v is None:
@@ -592,47 +632,7 @@ def render_debrief_email(debrief: dict) -> str:
         "One thing to watch":  "#10b981",   # green
     }
 
-    def _section(title: str, content: str) -> str:
-        if not content:
-            return ""
-        accent = _SECTION_COLOURS.get(title, "#6b7280")
-        lines   = content.split("\n")
-        parts: list[str] = []
-        in_list = False
-        for ln in lines:
-            stripped = ln.strip()
-            if stripped.startswith(("• ", "- ", "* ")):
-                item = _md_inline(stripped[2:])
-                if not in_list:
-                    parts.append(
-                        "<ul style='margin:8px 0 8px 0;padding-left:20px;color:#374151'>"
-                    )
-                    in_list = True
-                parts.append(
-                    f"<li style='margin:6px 0;line-height:1.55;color:#374151'>{item}</li>"
-                )
-            else:
-                if in_list:
-                    parts.append("</ul>")
-                    in_list = False
-                if stripped:
-                    parts.append(
-                        f"<p style='margin:6px 0;color:#374151;line-height:1.6'>"
-                        f"{_md_inline(stripped)}</p>"
-                    )
-        if in_list:
-            parts.append("</ul>")
-        body = "\n".join(parts)
-        return (
-            f"<div style='margin:20px 0;background:#ffffff;border-radius:8px;"
-            f"border:1px solid #e5e7eb;border-left:4px solid {accent};overflow:hidden'>"
-            f"<div style='padding:10px 16px 8px;background:#f9fafb;"
-            f"border-bottom:1px solid #e5e7eb'>"
-            f"<span style='font-weight:700;font-size:0.85em;color:{accent};"
-            f"text-transform:uppercase;letter-spacing:0.06em'>{title}</span></div>"
-            f"<div style='padding:14px 16px;font-size:0.9em'>{body}</div>"
-            f"</div>"
-        )
+    _section = lambda t, c: _email_section(t, c, _SECTION_COLOURS)
 
     sections_html = (
         _section("What happened",       debrief.get("section_facts", ""))
@@ -680,19 +680,12 @@ def render_debrief_email(debrief: dict) -> str:
 def render_intelligence_email(report: dict) -> str:
     """Render the monthly Portfolio Intelligence Report as a professional HTML
     email (light-mode-first; same template family as render_debrief_email)."""
-    import re
-
     period_start = str(report.get("period_start", "—"))[:10]
     period_end   = str(report.get("period_end", "—"))[:10]
     generated_at = str(report.get("generated_at", ""))[:10]
     engine_alpha = report.get("engine_alpha_pct")
     acted        = report.get("acted_count")
     missed       = report.get("missed_count")
-
-    def _md_inline(text: str) -> str:
-        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-        text = re.sub(r"\*([^*\s][^*]*?)\*",  r"<em>\1</em>",      text)
-        return text
 
     # Headline metric strip — engine alpha (Q0) + acted/missed (Q1)
     def _alpha_html(v) -> str:
@@ -725,36 +718,7 @@ def render_intelligence_email(report: dict) -> str:
         "Pattern & focus":   "#f59e0b",   # amber
     }
 
-    def _section(title: str, content: str) -> str:
-        if not content:
-            return ""
-        accent = _SECTION_COLOURS.get(title, "#6b7280")
-        parts: list[str] = []
-        in_list = False
-        for ln in content.split("\n"):
-            stripped = ln.strip()
-            if stripped.startswith(("• ", "- ", "* ")):
-                if not in_list:
-                    parts.append("<ul style='margin:8px 0;padding-left:20px;color:#374151'>")
-                    in_list = True
-                parts.append(f"<li style='margin:6px 0;line-height:1.55;color:#374151'>{_md_inline(stripped[2:])}</li>")
-            else:
-                if in_list:
-                    parts.append("</ul>")
-                    in_list = False
-                if stripped:
-                    parts.append(f"<p style='margin:6px 0;color:#374151;line-height:1.6'>{_md_inline(stripped)}</p>")
-        if in_list:
-            parts.append("</ul>")
-        body = "\n".join(parts)
-        return (
-            f"<div style='margin:20px 0;background:#ffffff;border-radius:8px;"
-            f"border:1px solid #e5e7eb;border-left:4px solid {accent};overflow:hidden'>"
-            f"<div style='padding:10px 16px 8px;background:#f9fafb;border-bottom:1px solid #e5e7eb'>"
-            f"<span style='font-weight:700;font-size:0.85em;color:{accent};"
-            f"text-transform:uppercase;letter-spacing:0.06em'>{title}</span></div>"
-            f"<div style='padding:14px 16px;font-size:0.9em'>{body}</div></div>"
-        )
+    _section = lambda t, c: _email_section(t, c, _SECTION_COLOURS)
 
     sections_html = (
         _section("Entry quality",     report.get("section_entry_quality", ""))
