@@ -1157,6 +1157,7 @@ _ANALYST_COVERAGE_COLS = [
     "id", "ticker", "company", "article_date", "report_type",
     "analysts", "consensus_rating", "avg_pt", "high_pt", "low_pt",
     "thesis", "catalysts", "risks", "raw_text", "source", "created_at",
+    "price_at_article_date", "composite_score_at_save",
 ]
 
 
@@ -1220,6 +1221,22 @@ def delete_analyst_coverage(row_id) -> bool:
         return False
     try:
         _client().table("analyst_coverage").delete().eq("id", row_id).execute()
+        return True
+    except Exception as e:
+        from stock_analyzer import api_health as _ah
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return False
+
+
+def update_analyst_coverage_price(row_id, price: float) -> bool:
+    """Backfill price_at_article_date on one existing analyst-coverage row.
+    Used by scripts/backfill_analyst_prices.py; awareness-only, never gates."""
+    if _READONLY:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("analyst_coverage").update({"price_at_article_date": price}).eq("id", row_id).execute()
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah

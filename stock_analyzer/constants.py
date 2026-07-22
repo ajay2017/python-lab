@@ -359,6 +359,11 @@ ANALYST_MIN_UPSIDE_PCT      = 15   # Phase-2 Brief-chip threshold (avg-PT upside
 ANALYST_CONSENSUS_STRONG_BUY_FRAC = 0.80
 ANALYST_CONSENSUS_BUY_FRAC        = 0.50
 ANALYST_CONSENSUS_SELL_FRAC       = 0.50
+# Research Scorecard (accuracy tracking — display-only, never gates/scores).
+ANALYST_ACCURACY_DIRECTION_DAYS = 30   # days after article_date to measure Buy/Sell directional accuracy
+ANALYST_ACCURACY_PT_HIT_PCT     = 0.75 # fraction of avg_pt the window's intra-period HIGH must reach to count as a PT "hit" (not the endpoint close)
+ANALYST_ACCURACY_LEADERBOARD_MIN_CALLS = 2   # min calls for a firm to appear on the Scorecard leaderboard (suppresses single-call noise)
+ANALYST_ACCURACY_HIGHLIGHTS_MIN_EVALUABLE = 5   # min evaluable calls before showing best/worst-call highlight cards
 # Max LLM OUTPUT tokens for one Ideas-Inbox extraction. A CNBC "biggest analyst
 # calls" roundup can carry 20-30 separate calls → the JSON array of that many
 # per-stock records overruns a small cap and truncates mid-array (→ JSON parse

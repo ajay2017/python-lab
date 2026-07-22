@@ -25045,6 +25045,43 @@ elif page == "🧠 AI Insights":
             def _ac_split_lines(text: str) -> list[str]:
                 return [l.strip() for l in text.splitlines() if l.strip()]
 
+            def _ac_resolve_price_at_save(ticker: str) -> float | None:
+                """Anchor price for the Research Scorecard — zero extra API cost
+                (reuses data already fetched for Home). Held ticker's live Price
+                from the enriched port_df first, then the held_data bundle's
+                current_price; None (silent) if neither is available — the
+                backfill script fills it in later."""
+                _pdf = st.session_state.get("_port_df_enriched")
+                if _pdf is not None and not _pdf.empty and "Ticker" in _pdf.columns:
+                    _match = _pdf[_pdf["Ticker"] == ticker]
+                    if not _match.empty:
+                        try:
+                            return float(_match.iloc[0]["Price"])
+                        except (TypeError, ValueError):
+                            pass
+                _hd  = st.session_state.get("_last_held_data") or {}
+                _fin = _hd.get(ticker) or {}
+                _cp  = _fin.get("current_price")
+                if _cp is not None:
+                    try:
+                        return float(_cp)
+                    except (TypeError, ValueError):
+                        pass
+                return None
+
+            def _ac_resolve_score_at_save(ticker: str) -> float | None:
+                """Engine composite score at save time — None for watchlist/unknown
+                tickers not currently held (no live score available)."""
+                _pdf = st.session_state.get("_port_df_enriched")
+                if _pdf is not None and not _pdf.empty and "Ticker" in _pdf.columns:
+                    _match = _pdf[_pdf["Ticker"] == ticker]
+                    if not _match.empty:
+                        try:
+                            return float(_match.iloc[0]["Score"])
+                        except (TypeError, ValueError):
+                            pass
+                return None
+
             _ac_rtype_opts  = ["initiation", "upgrade", "downgrade", "reiteration", "pt_change", "other"]
             _ac_collected: list[dict] = []   # records the user has included and are date-valid
 
@@ -25207,6 +25244,8 @@ elif page == "🧠 AI Insights":
                                 "risks":            _ac_split_lines(_ac_risks_i),
                                 "raw_text":         st.session_state.get("_ac_raw_text", ""),
                                 "source":           "cnbc_pro",
+                                "price_at_article_date":   _ac_resolve_price_at_save(_ac_ticker_i),
+                                "composite_score_at_save": _ac_resolve_score_at_save(_ac_ticker_i),
                             })
 
             # Save / Discard buttons — below all cards
@@ -25407,6 +25446,241 @@ elif page == "🧠 AI Insights":
                         st.rerun()
 
                 st.divider()
+
+        # ── Research Scorecard (Phase 2 — accuracy tracking, display-only) ─────
+        # Awareness-only: never feeds valuation_score() or any gate. Reads
+        # already-saved analyst_coverage rows; only new price fetches here are
+        # the (cached) per-row exit/window prices — the anchor price itself
+        # was persisted at save-time / by the backfill script, never re-fetched.
+        st.subheader("📊 Research Scorecard")
+        st.caption(
+            "Tracks whether pasted analyst calls were directionally correct and whether "
+            "price targets were hit — pure awareness, never feeds scoring or a gate."
+        )
+
+        from stock_analyzer.constants import (
+            ANALYST_ACCURACY_DIRECTION_DAYS as _SC_DIR_DAYS,
+            ANALYST_ACCURACY_PT_HIT_PCT as _SC_PT_HIT_PCT,
+            ANALYST_ACCURACY_LEADERBOARD_MIN_CALLS as _SC_LEADER_MIN,
+            ANALYST_ACCURACY_HIGHLIGHTS_MIN_EVALUABLE as _SC_HILITE_MIN,
+        )
+
+        _sc_df = _ai_db.load_analyst_coverage(limit=5000)
+        _sc_evaluable_source = _sc_df[_sc_df["price_at_article_date"].notna()] if not _sc_df.empty else _sc_df
+
+        if _sc_evaluable_source.empty:
+            st.info(
+                "No evaluable calls yet — prices will populate automatically when you "
+                "save new research or after the backfill script runs."
+            )
+        else:
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def _sc_cached_ohlc(ticker: str, start_iso: str, end_iso: str) -> dict | None:
+                """One OHLC fetch for [start, end]. Derives the endpoint close AND
+                the window's max High from the same frame — directional accuracy
+                (endpoint close) and PT-hit (intra-window high) use different price
+                series for the same call, but share this one fetch."""
+                try:
+                    import yfinance as _sc_yf
+                    _raw = _sc_yf.download(
+                        ticker,
+                        start=start_iso,
+                        end=str(date.fromisoformat(end_iso) + timedelta(days=1)),
+                        progress=False,
+                        auto_adjust=True,
+                        multi_level_index=False,
+                    )
+                    if _raw.empty or "Close" not in _raw.columns:
+                        return None
+                    return {
+                        "close": float(_raw["Close"].iloc[-1]),
+                        "high":  float(_raw["High"].max()) if "High" in _raw.columns else None,
+                    }
+                except Exception:
+                    return None
+
+            def _sc_fetch_window(ticker, start_date, end_date):
+                return _sc_cached_ohlc(ticker, str(start_date), str(end_date))
+
+            _sc_trades_df = _ai_db.load_trades()
+            _sc_today = _today_et()
+
+            _sc_results: list[dict] = []
+            for _, _sc_row in _sc_df.iterrows():
+                _sc_ticker = str(_sc_row.get("ticker") or "").upper()
+                _sc_adate  = None
+                _sc_araw   = _sc_row.get("article_date")
+                if _sc_araw:
+                    try:
+                        _sc_adate = datetime.strptime(str(_sc_araw)[:10], "%Y-%m-%d").date()
+                    except ValueError:
+                        _sc_adate = None
+
+                _sc_sell_after = None
+                if (
+                    _sc_adate is not None and not _sc_trades_df.empty
+                    and "traded_at" in _sc_trades_df.columns and "ticker" in _sc_trades_df.columns
+                ):
+                    _sc_t_sells = _sc_trades_df[
+                        (_sc_trades_df["ticker"].astype(str).str.upper() == _sc_ticker)
+                        & (_sc_trades_df["action"].astype(str).str.upper() == "SELL")
+                    ].copy()
+                    if not _sc_t_sells.empty:
+                        _sc_t_sells["_d"] = (
+                            pd.to_datetime(_sc_t_sells["traded_at"], utc=True, errors="coerce")
+                            .dt.tz_convert("America/New_York").dt.date
+                        )
+                        _sc_after = _sc_t_sells[_sc_t_sells["_d"] > _sc_adate]
+                        if not _sc_after.empty:
+                            _sc_sell_after = _sc_after["_d"].min()
+
+                _sc_row_dict = {
+                    "ticker":                _sc_ticker,
+                    "article_date":          _sc_adate,
+                    "price_at_article_date": _sc_row.get("price_at_article_date"),
+                    "avg_pt":                _sc_row.get("avg_pt"),
+                    "consensus_rating":      _sc_row.get("consensus_rating"),
+                }
+                _sc_cls = _ai_intel.classify_call(_sc_row_dict, _sc_sell_after, _sc_today, _sc_fetch_window)
+                _sc_cls["ticker"]                 = _sc_ticker
+                _sc_cls["article_date"]           = _sc_adate
+                _sc_cls["consensus_rating"]       = _sc_row.get("consensus_rating")
+                _sc_cls["avg_pt"]                 = _sc_row.get("avg_pt")
+                _sc_cls["price_at_article_date"]  = _sc_row.get("price_at_article_date")
+                _sc_cls["analysts"]               = _sc_row.get("analysts")
+                _sc_results.append(_sc_cls)
+
+            _sc_evaluable = [r for r in _sc_results if r["status"] in ("hit", "miss")]
+            _sc_pending   = [r for r in _sc_results if r["status"] == "pending"]
+            _sc_excluded  = [r for r in _sc_results if r["status"] in ("no_anchor", "no_price")]
+            _sc_n_eval    = len(_sc_evaluable)
+
+            # ── Block A — KPI row ────────────────────────────────────────────
+            _sc_k1, _sc_k2, _sc_k3 = st.columns(3)
+            with _sc_k1:
+                if _sc_n_eval:
+                    _sc_dir_n = sum(1 for r in _sc_evaluable if r["directional_hit"])
+                    st.metric(
+                        "Directional Accuracy", f"{_sc_dir_n / _sc_n_eval * 100:.0f}%",
+                        help=f"{_sc_dir_n}/{_sc_n_eval} calls correct on direction",
+                    )
+                else:
+                    st.metric("Directional Accuracy", "—")
+            with _sc_k2:
+                if _sc_n_eval:
+                    _sc_pt_n = sum(1 for r in _sc_evaluable if r["pt_hit"])
+                    st.metric(
+                        "PT Hit Rate", f"{_sc_pt_n / _sc_n_eval * 100:.0f}%",
+                        help=f"{_sc_pt_n}/{_sc_n_eval} calls reached ≥{_SC_PT_HIT_PCT * 100:.0f}% "
+                             "of avg PT (window high, not endpoint close)",
+                    )
+                else:
+                    st.metric("PT Hit Rate", "—")
+            with _sc_k3:
+                st.metric("Evaluable Calls", f"{_sc_n_eval} of {len(_sc_results)}")
+            st.caption(
+                f"{len(_sc_pending)} pending (< {_SC_DIR_DAYS}d since article date) · "
+                f"{len(_sc_excluded)} excluded (no anchor price yet / price fetch failed)."
+            )
+
+            # ── Block B — per-call accuracy table ────────────────────────────
+            st.markdown("**Per-call accuracy**")
+            _sc_status_labels = {
+                "hit": "✅ Hit", "miss": "❌ Miss", "pending": "⏳ Pending",
+                "no_anchor": "— No anchor", "no_price": "— No price data",
+            }
+            _sc_table_rows = [{
+                "Ticker":          r["ticker"],
+                "Article Date":    r["article_date"].isoformat() if r.get("article_date") else "—",
+                "Consensus":       r.get("consensus_rating") or "—",
+                "Avg PT":          r.get("avg_pt"),
+                "Price @ Article": r.get("price_at_article_date"),
+                "Exit Price":      r.get("exit_price"),
+                "Return %":        r.get("ret_pct"),
+                "PT Proximity %":  r.get("pt_proximity"),
+                "Status":          _sc_status_labels.get(r["status"], r["status"]),
+                "Window":          r.get("window") or "—",
+            } for r in _sc_results]
+            _sc_table_df = pd.DataFrame(_sc_table_rows).sort_values("Article Date", ascending=False)
+
+            def _sc_row_style(row):
+                if "Hit" in row["Status"]:
+                    return ["background-color:rgba(0,200,81,0.10)"] * len(row)
+                if "Miss" in row["Status"]:
+                    return ["background-color:rgba(255,68,68,0.10)"] * len(row)
+                return ["background-color:rgba(150,150,150,0.08)"] * len(row)
+
+            st.dataframe(
+                _sc_table_df.style.apply(_sc_row_style, axis=1).format({
+                    "Avg PT":          "${:,.2f}",
+                    "Price @ Article": "${:,.2f}",
+                    "Exit Price":      "${:,.2f}",
+                    "Return %":        "{:+.1f}%",
+                    "PT Proximity %":  "{:.0f}%",
+                }, na_rep="—"),
+                width='stretch', hide_index=True,
+            )
+            st.caption("🟢 Green = directional hit · 🔴 Red = miss · Grey = pending/no-anchor.")
+
+            # ── Block C — firm leaderboard ────────────────────────────────────
+            st.markdown("**🏦 Firm Leaderboard**")
+            _sc_firm_calls: dict[str, list] = {}
+            for r in _sc_evaluable:
+                _sc_analysts_raw = r.get("analysts") or []
+                if isinstance(_sc_analysts_raw, str):
+                    try:
+                        _sc_analysts_raw = json.loads(_sc_analysts_raw)
+                    except Exception:
+                        _sc_analysts_raw = []
+                for _sc_a in (_sc_analysts_raw if isinstance(_sc_analysts_raw, list) else []):
+                    _sc_firm = str((_sc_a or {}).get("firm") or "").strip()
+                    if not _sc_firm:
+                        continue
+                    _sc_f_bullish = _ai_intel.is_bullish_rating((_sc_a or {}).get("rating"))
+                    _sc_f_hit     = (_sc_f_bullish and r["ret_pct"] > 0) or (not _sc_f_bullish and r["ret_pct"] < 0)
+                    _sc_firm_calls.setdefault(_sc_firm, []).append(
+                        {"dir_hit": _sc_f_hit, "pt_hit": r["pt_hit"], "ret_pct": r["ret_pct"]}
+                    )
+
+            _sc_leader_rows = [{
+                "Firm":          _firm,
+                "Calls":         len(_calls),
+                "Dir. Accuracy": sum(c["dir_hit"] for c in _calls) / len(_calls) * 100,
+                "PT Hit Rate":   sum(c["pt_hit"] for c in _calls) / len(_calls) * 100,
+                "Avg Return %":  sum(c["ret_pct"] for c in _calls) / len(_calls),
+            } for _firm, _calls in _sc_firm_calls.items() if len(_calls) >= _SC_LEADER_MIN]
+
+            if _sc_leader_rows:
+                _sc_leader_df = pd.DataFrame(_sc_leader_rows).sort_values("Dir. Accuracy", ascending=False)
+                st.dataframe(
+                    _sc_leader_df.style.format({
+                        "Dir. Accuracy": "{:.0f}%",
+                        "PT Hit Rate":   "{:.0f}%",
+                        "Avg Return %":  "{:+.1f}%",
+                    }),
+                    width='stretch', hide_index=True,
+                )
+                st.caption(f"Minimum {_SC_LEADER_MIN} calls per firm to appear — suppresses single-call noise.")
+            else:
+                st.caption(f"Not enough evaluated calls with ≥{_SC_LEADER_MIN} per firm yet for a leaderboard.")
+
+            # ── Block D — best / worst calls (only once there's enough signal) ─
+            if _sc_n_eval >= _SC_HILITE_MIN:
+                st.markdown("**🏆 Best & Worst Calls**")
+                _sc_sorted = sorted(_sc_evaluable, key=lambda r: r["ret_pct"], reverse=True)
+                _sc_best   = _sc_sorted[:3]
+                _sc_worst  = list(reversed(_sc_sorted[-3:]))
+                _sc_bcol, _sc_wcol = st.columns(2)
+                with _sc_bcol:
+                    st.caption("Top calls")
+                    for r in _sc_best:
+                        _sc_d = r["article_date"].isoformat() if r.get("article_date") else "—"
+                        st.markdown(f"🟢 **{r['ticker']}** {r['ret_pct']:+.1f}% ({_sc_d} · {r['window']})")
+                with _sc_wcol:
+                    st.caption("Worst calls")
+                    for r in _sc_worst:
+                        _sc_d = r["article_date"].isoformat() if r.get("article_date") else "—"
+                        st.markdown(f"🔴 **{r['ticker']}** {r['ret_pct']:+.1f}% ({_sc_d} · {r['window']})")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality

@@ -25,6 +25,24 @@ from stock_analyzer.constants import ANALYST_EXTRACT_MAX_TOKENS
 # look identical to the caller. The UI reads this to show the actual cause.
 LAST_EXTRACT_ERROR: str | None = None
 
+# Shared rating taxonomy — used by both derive_consensus() (aggregate label) and
+# any per-firm classification (e.g. the Research Scorecard firm leaderboard) so
+# the two never disagree on what counts as a bullish/bearish individual rating.
+BULLISH_RATINGS = frozenset({
+    "buy", "overweight", "outperform", "strong buy", "accumulate", "add", "positive",
+})
+BEARISH_RATINGS = frozenset({
+    "sell", "underweight", "underperform", "reduce", "negative",
+})
+
+
+def is_bullish_rating(rating: str) -> bool:
+    """True if a single per-firm rating string reads as bullish (BULLISH_RATINGS
+    substring match). Used outside derive_consensus() to classify one analyst's
+    call without re-deriving a full consensus."""
+    r = (rating or "").strip().lower()
+    return any(b in r for b in BULLISH_RATINGS)
+
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
@@ -165,15 +183,9 @@ def derive_consensus(analysts: list[dict]) -> dict:
         high_pt           float | None
         low_pt            float | None
     """
-    _BULLISH = frozenset({
-        "buy", "overweight", "outperform", "strong buy", "accumulate", "add", "positive",
-    })
     _NEUTRAL = frozenset({
         "hold", "neutral", "equal-weight", "equalweight",
         "market perform", "sector perform", "in-line", "peer perform",
-    })
-    _BEARISH = frozenset({
-        "sell", "underweight", "underperform", "reduce", "negative",
     })
 
     empty: dict = {"consensus_rating": None, "avg_pt": None, "high_pt": None, "low_pt": None}
@@ -185,9 +197,9 @@ def derive_consensus(analysts: list[dict]) -> dict:
 
     for a in analysts:
         raw_rating = (a.get("rating") or "").strip().lower()
-        if any(b in raw_rating for b in _BULLISH):
+        if any(b in raw_rating for b in BULLISH_RATINGS):
             bull_n += 1
-        elif any(b in raw_rating for b in _BEARISH):
+        elif any(b in raw_rating for b in BEARISH_RATINGS):
             bear_n += 1
         elif any(n in raw_rating for n in _NEUTRAL):
             neut_n += 1
@@ -231,4 +243,93 @@ def derive_consensus(analysts: list[dict]) -> dict:
         "avg_pt":           avg_pt,
         "high_pt":          high_pt,
         "low_pt":           low_pt,
+    }
+
+
+# ── Research Scorecard — accuracy classification (Phase 2, display-only) ──────
+
+def classify_call(row: dict, sell_date_after, today_et, fetch_window) -> dict:
+    """
+    Classify one analyst_coverage row's directional/PT accuracy.
+
+    Pure Python — no LLM, no network call, no DB write. Accuracy is retrospective
+    awareness only: it NEVER feeds valuation_score() or any gate.
+
+    row              — one analyst_coverage record (dict-like) with at least
+                        ticker, article_date (date), price_at_article_date,
+                        avg_pt, consensus_rating.
+    sell_date_after  — the earliest SELL trade date after article_date for this
+                        ticker, or None if never sold (natural-exit precedence
+                        over the fixed window).
+    today_et         — today's date in America/New_York (caller resolves).
+    fetch_window(ticker, start_date, end_date) -> {"close": float|None,
+        "high": float|None} | None — ONE OHLC fetch for [start, end]; caller
+        supplies a cached implementation so close-at-end and window-max-High
+        are derived from the same frame (no double fetch).
+
+    Returns a dict with "status" always present:
+      "no_anchor" — no price_at_article_date (not yet backfilled)
+      "pending"   — inside the measurement window, not yet evaluable
+      "no_price"  — fetch_window returned no usable close
+      "hit" / "miss" — directional call verdict, plus ret_pct, exit_price,
+                       window, directional_hit, pt_hit, pt_proximity, window_end.
+    """
+    from datetime import timedelta as _td
+    from stock_analyzer.constants import (
+        ANALYST_ACCURACY_DIRECTION_DAYS,
+        ANALYST_ACCURACY_PT_HIT_PCT,
+    )
+
+    price_at_article = row.get("price_at_article_date")
+    article_date      = row.get("article_date")
+    if article_date is None:
+        return {"status": "no_anchor"}
+    try:
+        price_at_article = float(price_at_article)
+    except (TypeError, ValueError):
+        return {"status": "no_anchor"}
+    if not (price_at_article > 0):   # catches NaN (a DB NULL comes back as np.nan, not None) and <= 0
+        return {"status": "no_anchor"}
+
+    if sell_date_after is not None:
+        window_end = sell_date_after
+        window     = "sold"
+    elif (today_et - article_date).days < ANALYST_ACCURACY_DIRECTION_DAYS:
+        return {"status": "pending"}
+    else:
+        window_end = min(article_date + _td(days=ANALYST_ACCURACY_DIRECTION_DAYS), today_et)
+        window     = f"{ANALYST_ACCURACY_DIRECTION_DAYS}d"
+
+    fetched = fetch_window(row.get("ticker"), article_date, window_end)
+    if not fetched or fetched.get("close") is None:
+        return {"status": "no_price"}
+
+    exit_price  = fetched["close"]
+    window_high = fetched.get("high")
+
+    ret_pct = (exit_price - price_at_article) / price_at_article * 100
+    # consensus_rating is stored as "Label (N Buy / N Hold / N Sell)" (see
+    # derive_consensus() above) — match the LEADING label only. A bare
+    # substring check for "buy" would false-positive on every row, since the
+    # parenthetical tally always contains the literal word "Buy" regardless
+    # of which label ("Sell", "Hold", "Mixed"...) actually won.
+    consensus  = (row.get("consensus_rating") or "").strip().lower()
+    is_bullish = consensus.startswith(("strong buy", "buy"))
+    directional_hit = (is_bullish and ret_pct > 0) or (not is_bullish and ret_pct < 0)
+
+    avg_pt = row.get("avg_pt")
+    # PT hit uses the window's INTRA-PERIOD HIGH, not the endpoint close above —
+    # a genuine 75%-of-target touch counts even if price pulled back by window_end.
+    pt_hit = bool(avg_pt and window_high and window_high >= float(avg_pt) * ANALYST_ACCURACY_PT_HIT_PCT)
+    pt_proximity = (window_high / float(avg_pt) * 100) if (avg_pt and window_high) else None
+
+    return {
+        "status":          "hit" if directional_hit else "miss",
+        "ret_pct":         ret_pct,
+        "exit_price":      exit_price,
+        "window":          window,
+        "window_end":      window_end,
+        "directional_hit": directional_hit,
+        "pt_hit":          pt_hit,
+        "pt_proximity":    pt_proximity,   # based on window HIGH, not endpoint — may exceed 100%
     }
