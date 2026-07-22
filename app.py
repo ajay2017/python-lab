@@ -7792,44 +7792,83 @@ elif page == "📡 Signals & Advice":
         if not alert_list:
             st.success("✅ No active alerts — portfolio is within normal parameters.")
         else:
-            # Category labels for grouping
             _CAT_LABELS = {
-                "stop":         "🛑 Stop Loss",
-                "signal":       "📊 Signal",
-                "concentration":"🏭 Concentration",
-                "earnings":     "📅 Earnings",
-                "revisions":    "📉 Analyst Revisions",
-                "signal_change":"🔄 Signal Changes",
+                "stop":          "🛑 Stop Loss",
+                "signal":        "📊 Signal",
+                "concentration": "🏭 Concentration",
+                "earnings":      "📅 Earnings",
+                "revisions":     "📉 Analyst Revisions",
+                "signal_change": "🔄 Signal Changes",
             }
 
+            # Summary metric row
             _al1, _al2, _al3 = st.columns(3)
             _al1.metric("🔴 Danger",  len(_danger_alerts),  help="Require immediate attention")
-            _al2.metric("🟡 Watch", len(_warning_alerts), help="Monitor closely")
+            _al2.metric("🟡 Watch",   len(_warning_alerts), help="Monitor closely")
             _al3.metric("ℹ️ Info",    len(_info_alerts),    help="Noteworthy changes")
             st.markdown("")
 
-            # Group and render by category priority
-            _cat_order = ["stop", "earnings", "signal", "revisions", "concentration", "signal_change"]
-            _rendered  = set()
-            for _cat in _cat_order:
-                _cat_items = [a for a in alert_list if a.get("category") == _cat]
-                if not _cat_items:
-                    continue
-                st.markdown(f"**{_CAT_LABELS.get(_cat, _cat)}**")
-                for a in _cat_items:
-                    _rendered.add(id(a))
-                    if a["level"] == "danger":
-                        st.error(a["msg"])
-                    elif a["level"] == "warning":
-                        st.warning(a["msg"])
-                    else:
-                        st.info(a["msg"])
-            # Fallback: any alerts without a recognised category
-            for a in alert_list:
-                if id(a) not in _rendered:
-                    if a["level"] == "danger":   st.error(a["msg"])
-                    elif a["level"] == "warning": st.warning(a["msg"])
-                    else:                         st.info(a["msg"])
+            # ── Category column grid ─────────────────────────────────────────
+            # Build ordered list of categories that have at least one alert
+            _cat_order  = ["stop", "earnings", "signal", "revisions", "concentration", "signal_change"]
+            _active_cats = [c for c in _cat_order if any(a.get("category") == c for a in alert_list)]
+
+            # Uncategorised alerts go into a catch-all bucket shown last
+            _uncategorised = [a for a in alert_list if a.get("category") not in _cat_order]
+            if _uncategorised:
+                _active_cats.append("__other__")
+                _CAT_LABELS["__other__"] = "📌 Other"
+
+            # Render in rows of 3 columns
+            _N_COLS = 3
+            for _row_start in range(0, len(_active_cats), _N_COLS):
+                _row_cats = _active_cats[_row_start: _row_start + _N_COLS]
+                _grid_cols = st.columns(_N_COLS)
+                for _ci, _cat in enumerate(_row_cats):
+                    _items = (
+                        _uncategorised if _cat == "__other__"
+                        else [a for a in alert_list if a.get("category") == _cat]
+                    )
+                    with _grid_cols[_ci]:
+                        with st.container(border=True):
+                            st.markdown(
+                                f"<div style='font-size:0.95em;font-weight:700;margin-bottom:6px'>"
+                                f"{_CAT_LABELS.get(_cat, _cat)}"
+                                f"<span style='float:right;font-size:0.8em;color:#888'>"
+                                f"{len(_items)} alert{'s' if len(_items) != 1 else ''}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+                            for _a in _items:
+                                if _a["level"] == "danger":
+                                    _chip_bg    = "#3b0a0a"
+                                    _chip_border= "#ff4444"
+                                    _chip_icon  = "🔴"
+                                elif _a["level"] == "warning":
+                                    _chip_bg    = "#2d2000"
+                                    _chip_border= "#f59e0b"
+                                    _chip_icon  = "🟡"
+                                else:
+                                    _chip_bg    = "#0a1a2d"
+                                    _chip_border= "#3b82f6"
+                                    _chip_icon  = "ℹ️"
+                                st.markdown(
+                                    f"<div style='"
+                                    f"background:{_chip_bg};"
+                                    f"border-left:3px solid {_chip_border};"
+                                    f"border-radius:4px;"
+                                    f"padding:6px 10px;"
+                                    f"margin-bottom:5px;"
+                                    f"font-size:0.82em;"
+                                    f"line-height:1.4'>"
+                                    f"{_chip_icon} {_a['msg']}"
+                                    f"</div>",
+                                    unsafe_allow_html=True,
+                                )
+                # Fill empty columns in last row so the grid looks balanced
+                for _ci in range(len(_row_cats), _N_COLS):
+                    with _grid_cols[_ci]:
+                        pass
 
         # ── Custom Price Alerts ───────────────────────────────────────────────
         st.divider()
