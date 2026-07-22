@@ -39,35 +39,48 @@ dashboard. Read the scope notes before trusting a number.
 > agentic throughput, not the judgment-dense plan/threshold/review work Lead
 > does, so the cost delta here doesn't move that call.
 
-| Tier | Model | Input | Output | vs Opus 4.8 |
-|---|---|---|---|---|
-| Plan / Review / Lead | Opus 4.8 | $5 | $25 | 1× (baseline) |
-| Build | Sonnet 5 | $3 ($2 intro thru 2026-08-31) | $15 ($10 intro) | **0.6× list / 0.4× intro** |
-| Docs | Haiku 4.5 | $1 | $5 | **0.2× (20%)** |
+| Tier | Role | Model | Input | Output | vs Sonnet 5 lead (list) |
+|---|---|---|---|---|---|
+| Lead | Orchestration, design, commits | Sonnet 5 | $3 ($2 intro thru 2026-08-31) | $15 ($10 intro) | 1× (baseline) |
+| Review gate | `reviewer` agent — SHIP/FIX-FIRST | Opus 4.8 | $5 | $25 | **1.67× — correctness premium** |
+| Build | `implementer` agent — decided edits | Sonnet 5 | $3 ($2 intro) | $15 ($10 intro) | 1× — context hygiene, not savings |
+| Scaffold | `Plan` agent — structural read-only | Sonnet 5 | $3 ($2 intro) | $15 ($10 intro) | 1× — context hygiene |
+| Docs | `doc-writer` agent — doc/comment rows | Haiku 4.5 | $1 | $5 | **0.33× (saves ~67%)** |
 
-Sonnet 5 is **0.6×** of Opus 4.8 on **both** input ($3 vs $5) and output ($15 vs
-$25) at list price, so delegated build work costs **exactly 60%** of the Opus
-price regardless of the input/output mix — i.e. it **saves 40%** (or **60%**
-during the 2026-08-31 intro window, at $2/$10). Haiku is **0.2×** (saves 80%).
-The **ratio is mix-independent**; only the absolute-dollar columns below assume a
-mix (~85% input / 15% output, typical for read-heavy coding) and are therefore
-**ballpark**.
+> **Intro pricing reminder:** Sonnet 5 intro rates ($2/$10) expire **2026-08-31**.
+> After that, list price ($3/$15) applies — the Haiku saving drops from ~50%
+> to ~67% of Sonnet lead, still the strong-saving lane either way.
+
+**Economics under Sonnet 5 lead (as of 2026-07-22):**
+- **`implementer`**: same tier as lead → delegation value is **scope isolation and
+  context hygiene**, not dollar savings. Delegating a large mechanical refactor
+  still makes sense to keep the lead context clean; a one-liner is faster inline.
+- **`reviewer`** (Opus 4.8): costs **~67% more** than the Sonnet 5 lead per token.
+  This is a deliberate correctness premium — the Opus gate catches the class of
+  mistake that costs far more than any amount of review tokens. Always justified
+  before committing decision logic. Never skip it to save money.
+- **`doc-writer`** (Haiku): **~67% cheaper** than Sonnet 5 lead at list / **~50%
+  cheaper** during intro window. The strong-saving lane; route all mechanical
+  doc rows here.
+- **`Plan`**: same tier as lead, used for read-only architectural scaffolding
+  (new page structure, DB table schema, session-state wiring) that has no gate
+  or policy content. Value is a clean spec returned without consuming lead context.
 
 **2026-07-15 — Lead model confirmed as Opus 4.8, not Sonnet 5.** A commit-
 trailer audit found the lead/orchestration model had drifted to Sonnet-tier
 (trailered "Sonnet 4.6") on most commits since 2026-07-12, without an explicit
-decision recorded anywhere — this ledger's own "Plan / Review / Lead" row still
-said Opus 4.8 the whole time, so the drift was undocumented, not intentional.
-Asked the user explicitly: **Opus 4.8 stays Lead.** Rationale: Sonnet 5 is
-marketed specifically as closing the gap on *coding and agentic* work, not on
-judgment-dense decisions (thresholds, gates, cross-feature coordination) — the
-exact work Lead does on this correctness-bound app. The cost delta (40–60%,
-not 5–10×) doesn't justify moving the safety-critical tier. Both action items
-this surfaced are now closed — see the two ledger rows below (retroactive
-review + gap-fill) — and [`CLAUDE.md`](../CLAUDE.md) hard rule #4 now makes the
-review-citation requirement explicit and binding regardless of which model
-runs the main session, so this class of drift shouldn't recur silently. See
-memory `project_model_routing_drift_2026_07` for the full audit.
+decision recorded anywhere. Asked the user explicitly: **Opus 4.8 stays Lead**
+at that time. See memory `project_model_routing_drift_2026_07` for the audit.
+
+**2026-07-22 — Lead formally changed to Sonnet 5 (Option B).** A routing-roster
+review found Sonnet 5 is capable enough for lead orchestration on this app,
+and the lead had been running as Sonnet in practice anyway. Rather than fight
+the drift again, the user chose to formalize it. The Opus `reviewer` gate is
+unchanged and still mandatory — the correctness premium is justified precisely
+because the lead is no longer Opus. The `Plan` built-in agent was added to the
+roster for structural scaffolding. [`CLAUDE.md`](../CLAUDE.md) hard rule #4
+(Opus review citation required on any constants/gate/scoring commit) remains in
+force regardless of lead model.
 
 ## Conventions
 

@@ -2,32 +2,39 @@
 
 DRISHTA is a **correctness-bound** project: it issues actionable buy/sell calls,
 so a wrong recommendation or a silently-broken gate costs far more than model
-tokens. The savings therefore come **not** from downgrading the model that does
-the hard thinking, but from **delegating the easy parts down** to cheaper models
-while a capable lead plans and reviews.
+tokens. The savings come from **delegating the easy parts down** to cheaper models
+while the lead orchestrates and the Opus reviewer guards the decision logic.
+
+> **Lead model (2026-07-22):** formally set to **Sonnet 5** (main session).
+> The `reviewer` remains pinned to **Opus** — that gate is non-negotiable
+> regardless of what the lead is. See `docs/cost-routing.md` for the decision
+> rationale and updated economics.
 
 ## The model tiers
 
 | Tier | Model | Does the work that is… |
 |------|-------|------------------------|
-| **Lead** | Opus 4.8 (main session) | Reasoning-dense: design, threshold/gate/coordination decisions, subtle debugging, planning, final review. |
-| `reviewer` | **opus** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. |
-| `implementer` | **sonnet** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. |
-| `doc-writer` | **haiku** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. |
+| **Lead** | Sonnet 5 (main session) | Orchestration: design, threshold/gate/coordination decisions, subtle debugging, planning, final review. Capable enough for this role; Opus stays as the mandatory review gate before anything that touches decision logic. |
+| `Plan` | **plan** (built-in) | Read-only architectural scaffolding: structural layout of a new page, DB table design, session-state wiring, non-gate feature scaffolding. Returns a spec; the lead decides on any policy content inside it. Use for non-trivial structural questions separable from gate/threshold policy. |
+| `reviewer` | **opus** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. This is a correctness premium (~67% cost uplift over the Sonnet 5 lead) that is always worth paying before committing anything that moves money. |
+| `implementer` | **sonnet** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
+| `doc-writer` | **haiku** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. Strong-saving lane (~67% vs Sonnet 5 lead at list price). |
 
 Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
 `haiku`). The lead can also override it per-invocation when needed.
 
 ## The workflow: PLAN → ROUTE → BUILD → REVIEW → COMMIT
 
-1. **PLAN (Opus lead).** Decide *whether* to do it and *exactly how* —
-   especially any constant/threshold/coordination call. This is where judgment
-   lives and where Opus earns its cost. Output: a precise spec per chunk.
-2. **ROUTE.** For each chunk, the lead picks the cheapest model that can do it
-   safely:
+1. **PLAN (Sonnet 5 lead).** Decide *whether* to do it and *exactly how* —
+   especially any constant/threshold/coordination call. Output: a precise spec
+   per chunk. For non-trivial structural scaffolding with no policy content
+   (new page layout, table schema), optionally hand that sub-question to `Plan`
+   first and fold the result into the spec.
+2. **ROUTE.** For each chunk, the lead picks the right agent:
    - ambiguous / decision-bearing / cross-feature → **keep it on the lead**
-   - scoped, decided edit → delegate to **`implementer`** (sonnet)
-   - doc/comment write-up → delegate to **`doc-writer`** (haiku)
+   - structural scaffolding (no gate/threshold policy) → **`Plan`** (read-only, returns spec)
+   - scoped, decided edit → delegate to **`implementer`** (sonnet — context hygiene)
+   - doc/comment write-up → delegate to **`doc-writer`** (haiku — strong-saving lane)
    - broad code search ("find every place that gates on sector") → **`Explore`**
      (built-in, fast read-only fan-out)
 3. **BUILD.** Workers make the edit and compile-check. They do **not** commit and
@@ -36,6 +43,7 @@ Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
 4. **REVIEW (Opus `reviewer`).** Before committing anything that can affect a
    recommendation or a gate, run the `reviewer`. It traces the data path against
    the hard rules and the calm-advisor posture and returns SHIP / FIX-FIRST.
+   This step is mandatory regardless of which model is running the lead session.
 5. **COMMIT (lead).** The lead commits/pushes once the review passes. Commit
    authority stays with the lead so the Opus review gate is never skipped on
    decision logic.
@@ -83,6 +91,8 @@ the Anthropic Console / subscription usage view.
 
 ## TL;DR
 
-Opus thinks and reviews; Sonnet builds the decided thing; Haiku writes it up.
-Cost drops because the cheap work moves to cheap models — while the calls that
-move money never leave the model that's best at not getting them wrong.
+Sonnet 5 leads and orchestrates; Opus reviews every gate/decision-logic change
+before it ships; Haiku writes up the docs (the strong-saving lane). The Plan
+agent handles structural scaffolding so the lead's context stays clean. The
+calls that move money always pass through the Opus gate — regardless of what
+model is running the session.
