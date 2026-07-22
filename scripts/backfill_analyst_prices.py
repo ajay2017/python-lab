@@ -18,12 +18,12 @@ gate; it exists purely to anchor the Research Scorecard's return-since-call math
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from stock_analyzer import db  # noqa: E402
+from stock_analyzer import analyst_intel, db  # noqa: E402
 
 
 def _parse_article_date(raw) -> date | None:
@@ -36,8 +36,6 @@ def _parse_article_date(raw) -> date | None:
 
 
 def main() -> None:
-    import yfinance as yf
-
     df = db.load_analyst_coverage(limit=10000)
     if df is None or df.empty:
         print("No analyst_coverage rows found — nothing to backfill.")
@@ -59,28 +57,12 @@ def main() -> None:
             skipped += 1
             continue
 
-        try:
-            hist = yf.download(
-                ticker,
-                start=str(article_date),
-                end=str(article_date + timedelta(days=7)),
-                auto_adjust=True,
-                progress=False,
-                multi_level_index=False,
-            )
-        except Exception as e:
-            print(f"WARN: yfinance fetch failed for {ticker} ({article_date}) — {e} — skip")
-            skipped += 1
-            continue
-
-        if hist is None or hist.empty or "Close" not in hist.columns:
+        # Shared with the Research Scorecard's live "Fetch now" button
+        # (stock_analyzer/analyst_intel.py) so batch and on-demand fetches
+        # never drift apart.
+        price = analyst_intel.fetch_anchor_price(ticker, article_date)
+        if price is None:
             print(f"WARN: no price found for {ticker} on {article_date} — skip")
-            skipped += 1
-            continue
-
-        price = float(hist["Close"].iloc[0])
-        if price != price or price <= 0:   # NaN guard (NaN != NaN) + sanity floor
-            print(f"WARN: bad close price for {ticker} on {article_date} ({price!r}) — skip")
             skipped += 1
             continue
         if db.update_analyst_coverage_price(row_id, price):

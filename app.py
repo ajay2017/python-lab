@@ -25551,6 +25551,7 @@ elif page == "🧠 AI Insights":
                     "consensus_rating":      _sc_row.get("consensus_rating"),
                 }
                 _sc_cls = _ai_intel.classify_call(_sc_row_dict, _sc_sell_after, _sc_today, _sc_fetch_window)
+                _sc_cls["id"]                     = _sc_row.get("id")
                 _sc_cls["ticker"]                 = _sc_ticker
                 _sc_cls["article_date"]           = _sc_adate
                 _sc_cls["consensus_rating"]       = _sc_row.get("consensus_rating")
@@ -25591,6 +25592,41 @@ elif page == "🧠 AI Insights":
                 f"{len(_sc_pending)} pending (< {_SC_DIR_DAYS}d since article date) · "
                 f"{len(_sc_excluded)} excluded (no anchor price / no consensus rating / price fetch failed)."
             )
+
+            # ── Missing-anchor fetch-now — a live single-ticker yfinance pull,
+            # sharing analyst_intel.fetch_anchor_price() with the batch backfill
+            # script so the two never drift. Only save-time auto-fill (held
+            # tickers) skips this; a new-idea ticker not yet held has no live
+            # price in memory at save time and lands here until fetched.
+            _sc_no_anchor = [r for r in _sc_results if r["status"] == "no_anchor" and r.get("article_date")]
+            if _sc_no_anchor:
+                with st.expander(
+                    f"⚠️ {len(_sc_no_anchor)} call(s) missing an anchor price — fetch now",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Pulls the next trading-day close directly from Yahoo Finance and saves it — "
+                        "no need to wait for the periodic backfill workflow."
+                    )
+                    for r in _sc_no_anchor:
+                        _sc_na_c1, _sc_na_c2 = st.columns([4, 1])
+                        with _sc_na_c1:
+                            st.markdown(f"**{r['ticker']}** — {r['article_date'].isoformat()}")
+                        with _sc_na_c2:
+                            if st.button(
+                                "🔄 Fetch",
+                                key=f"_sc_fetch_{r['id']}",
+                                disabled=st.session_state.get("_readonly", False),
+                                help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None,
+                            ):
+                                _sc_price = _ai_intel.fetch_anchor_price(r["ticker"], r["article_date"])
+                                if _sc_price is None:
+                                    st.warning(f"No price data found for {r['ticker']} on {r['article_date'].isoformat()} yet — try again later.")
+                                elif _ai_db.update_analyst_coverage_price(r["id"], _sc_price):
+                                    st.success(f"{r['ticker']}: ${_sc_price:.2f} saved.")
+                                    st.rerun()
+                                else:
+                                    st.error("Database update failed — see logs.")
 
             # ── Block B — per-call accuracy table ────────────────────────────
             st.markdown("**Per-call accuracy**")

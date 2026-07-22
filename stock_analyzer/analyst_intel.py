@@ -339,3 +339,37 @@ def classify_call(row: dict, sell_date_after, today_et, fetch_window) -> dict:
         "pt_hit":          pt_hit,
         "pt_proximity":    pt_proximity,   # based on window HIGH, not endpoint — may exceed 100%
     }
+
+
+def fetch_anchor_price(ticker: str, article_date) -> float | None:
+    """Next-trading-day close for one analyst_coverage row's article_date —
+    the same anchor-price logic used by scripts/backfill_analyst_prices.py,
+    shared here so a live "fetch now" button (Research Scorecard) and the
+    batch backfill never drift apart.
+
+    Unlike derive_consensus()/classify_call() this makes a live network call
+    (yfinance) — not "pure", but the same offline-degrades-to-None contract
+    as the rest of this module: any failure (missing package, no data,
+    network error, NaN close) returns None, never raises.
+    """
+    if not ticker or article_date is None:
+        return None
+    try:
+        import yfinance as yf
+        from datetime import timedelta as _td
+        hist = yf.download(
+            ticker,
+            start=str(article_date),
+            end=str(article_date + _td(days=7)),
+            auto_adjust=True,
+            progress=False,
+            multi_level_index=False,
+        )
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            return None
+        price = float(hist["Close"].iloc[0])
+        if price != price or price <= 0:   # NaN guard (NaN != NaN) + sanity floor
+            return None
+        return price
+    except Exception:
+        return None
