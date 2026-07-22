@@ -1,0 +1,35 @@
+name: Backfill analyst_coverage prices (manual)
+
+# One-time / occasional data backfill for the Research Scorecard (F-154c,
+# docs/plans/analyst-research-accountability.md). Populates
+# analyst_coverage.price_at_article_date for rows saved before the column
+# existed, or any row the save-time auto-fill couldn't price (e.g. a
+# watchlist ticker with no live price at save time). Manual-only — no
+# schedule — because it is safe and idempotent to re-run whenever new
+# unpriced rows accumulate, but there is no recurring need to run it daily.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run backfill
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/backfill_analyst_prices.py
