@@ -219,6 +219,48 @@ class FMPProvider(DataProvider):
         _ah.record("fmp", "success")
         return out
 
+    def historical_close(self, ticker: str, start, end) -> float | None:
+        """First close on/after `start` within [start, end] — an arbitrary
+        historical window (price_history() above is period-relative-to-today,
+        which doesn't fit an old article_date). Used as the FMP failover leg
+        for the Research Scorecard's anchor-price fetch (Finnhub's free tier
+        has no historical candles at all, so it isn't in this chain). Returns
+        None on no data / parse failure rather than raising, so the orchestrator's
+        _failover_single treats "no price found" the same as an empty frame."""
+        if not self._key:
+            raise ProviderUnavailable("FMP_API_KEY not set")
+        try:
+            payload = http_get_json(f"{_BASE}/historical-price-eod/full", params={
+                "symbol": ticker, "from": str(start), "to": str(end), "apikey": self._key,
+            })
+            _db.increment_daily_quota("fmp")
+        except Exception as exc:
+            _db.increment_daily_quota("fmp")
+            _ah.record("fmp", classify_error(exc), msg=self._safe(str(exc)))
+            raise ProviderUnavailable(self._safe(str(exc))) from exc
+
+        err = _fmp_error(payload)
+        if err:
+            _ah.record("fmp", "error", msg=self._safe(err))
+            raise ProviderUnavailable(err)
+
+        rows = payload.get("historical") if isinstance(payload, dict) else payload
+        if not rows:
+            _ah.record("fmp", "empty")
+            return None
+        try:
+            df = pd.DataFrame(rows)
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date")
+            price = _num(df.iloc[0].to_dict(), "close")
+        except Exception as exc:
+            _ah.record("fmp", "error", msg=f"historical_close parse {ticker}: {self._safe(str(exc))}")
+            return None
+        if price is None or price <= 0:
+            return None
+        _ah.record("fmp", "success")
+        return price
+
     # ── Bundle (failover for the full analysis when yfinance is down) ─────────
     def _get_json(self, path: str, params: dict | None = None):
         """GET /stable/<path> with apikey; raise ProviderUnavailable (key

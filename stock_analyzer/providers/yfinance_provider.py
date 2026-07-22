@@ -103,6 +103,25 @@ class YFinanceProvider(DataProvider):
             return df
         return _retry(_fetch)
 
+    def historical_close(self, ticker: str, start, end) -> float | None:
+        """First close on/after `start` within [start, end] — an arbitrary
+        historical window (unlike price_history's period-relative-to-today),
+        used to anchor a Research Scorecard analyst-coverage row to its
+        article_date. Never raises for "no data found"; only a genuine
+        transport failure propagates (caught by the failover orchestrator)."""
+        def _fetch():
+            df = yf.download(
+                ticker, start=str(start), end=str(end),
+                auto_adjust=True, progress=False, multi_level_index=False,
+            )
+            if df is None or df.empty or "Close" not in df.columns:
+                return None
+            price = float(df["Close"].iloc[0])
+            if price != price or price <= 0:   # NaN guard (NaN != NaN)
+                return None
+            return price
+        return _retry(_fetch)
+
     # ── Bundle (history + info + news + earnings + revisions) ─────────────────
     def bundle(self, ticker: str, period: str = "6mo") -> dict:
         """Single yf.Ticker session — fetches history, info, news and earnings in one go."""

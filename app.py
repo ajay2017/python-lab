@@ -25593,7 +25593,8 @@ elif page == "🧠 AI Insights":
                 f"{len(_sc_excluded)} excluded (no anchor price / no consensus rating / price fetch failed)."
             )
 
-            # ── Missing-anchor fetch-now — a live single-ticker yfinance pull,
+            # ── Missing-anchor fetch-now — a live single-ticker pull via the
+            # yfinance -> FMP failover chain (orchestrator.get_historical_close),
             # sharing analyst_intel.fetch_anchor_price() with the batch backfill
             # script so the two never drift. Only save-time auto-fill (held
             # tickers) skips this; a new-idea ticker not yet held has no live
@@ -25605,8 +25606,8 @@ elif page == "🧠 AI Insights":
                     expanded=False,
                 ):
                     st.caption(
-                        "Pulls the next trading-day close directly from Yahoo Finance and saves it — "
-                        "no need to wait for the periodic backfill workflow."
+                        "Pulls the next trading-day close from Yahoo Finance (FMP fallback if unavailable) "
+                        "and saves it — no need to wait for the periodic backfill workflow."
                     )
                     for r in _sc_no_anchor:
                         _sc_na_c1, _sc_na_c2 = st.columns([4, 1])

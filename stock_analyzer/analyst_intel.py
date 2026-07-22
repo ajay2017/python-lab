@@ -347,27 +347,27 @@ def fetch_anchor_price(ticker: str, article_date) -> float | None:
     shared here so a live "fetch now" button (Research Scorecard) and the
     batch backfill never drift apart.
 
+    Goes through the multi-source failover chain (yfinance -> FMP; see
+    providers/orchestrator.get_historical_close) rather than calling yfinance
+    directly, so a ticker Yahoo has no data for (delisted, renamed, thin
+    coverage) gets a second, independent attempt via FMP before giving up.
+    Finnhub is NOT in this chain — its free tier serves live quotes only, no
+    historical candles (see providers/finnhub_provider.py).
+
     Unlike derive_consensus()/classify_call() this makes a live network call
-    (yfinance) — not "pure", but the same offline-degrades-to-None contract
-    as the rest of this module: any failure (missing package, no data,
+    — not "pure", but the same offline-degrades-to-None contract as the rest
+    of this module: any failure (missing package, no data from any source,
     network error, NaN close) returns None, never raises.
     """
     if not ticker or article_date is None:
         return None
     try:
-        import yfinance as yf
         from datetime import timedelta as _td
-        hist = yf.download(
-            ticker,
-            start=str(article_date),
-            end=str(article_date + _td(days=7)),
-            auto_adjust=True,
-            progress=False,
-            multi_level_index=False,
-        )
-        if hist is None or hist.empty or "Close" not in hist.columns:
+        from stock_analyzer.providers.orchestrator import get_historical_close
+        price = get_historical_close(ticker, article_date, article_date + _td(days=7))
+        if price is None:
             return None
-        price = float(hist["Close"].iloc[0])
+        price = float(price)
         if price != price or price <= 0:   # NaN guard (NaN != NaN) + sanity floor
             return None
         return price

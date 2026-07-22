@@ -23,6 +23,12 @@ Canonical return shapes (every provider must conform so consumers above
          providers must NOT fabricate prev==price; consumers handle None. See M2.)
     price_history(ticker, period) -> pandas.DataFrame indexed by datetime with
                                      at least a "Close" column (OHLCV when avail)
+    historical_close(ticker, start, end) -> float | None — first close on/after
+                                     `start` within [start, end] (an arbitrary
+                                     historical window, unlike price_history's
+                                     period-relative-to-today); None on no data,
+                                     never raises for "not found" (only for
+                                     "not configured")
     bundle(ticker, period) -> {"history": DataFrame, "info": dict, "news": list,
                                "earnings": str|None, "revisions": dict}
     market_indices() -> [{"short","full","price","change","change_pct","fetched_at"}, ...]
@@ -71,6 +77,9 @@ class DataProvider:
         raise NotImplementedError
 
     def price_history(self, ticker: str, period: str = "6mo") -> pd.DataFrame:
+        raise NotImplementedError
+
+    def historical_close(self, ticker: str, start, end) -> float | None:
         raise NotImplementedError
 
     def bundle(self, ticker: str, period: str = "6mo") -> dict:

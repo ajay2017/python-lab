@@ -131,6 +131,23 @@ def get_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
     return _failover_single(CAP_HISTORY, "price_history", ticker, period)
 
 
+def get_historical_close(ticker: str, start, end) -> float | None:
+    """First close on/after `start` within [start, end] via the CAP_HISTORY
+    failover chain (yfinance -> FMP; Finnhub has no historical candles on its
+    free tier, so it never advertises CAP_HISTORY). Unlike get_history()'s
+    period-relative-to-today window, this takes an arbitrary historical
+    window — used to anchor a Research Scorecard analyst-coverage row to its
+    article_date (analyst_intel.fetch_anchor_price()). Inherits the same
+    soft-cap / circuit-breaker provider filtering as every other failover
+    call here, so a manual per-row fetch can't bypass the shared FMP quota
+    guard. Returns None (not an exception) when every provider has no data —
+    that is the normal "genuinely no data available" outcome, not a bug."""
+    try:
+        return _failover_single(CAP_HISTORY, "historical_close", ticker, start, end)
+    except ProviderUnavailable:
+        return None
+
+
 def _info_sparse(info: dict | None) -> bool:
     """True when an `.info` dict can't support fundamental scoring — yfinance's
     `.info` intermittently returns empty/sparse, which would collapse the
