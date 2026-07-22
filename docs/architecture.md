@@ -198,6 +198,10 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `ANALYST_CONSENSUS_STRONG_BUY_FRAC` / `_BUY_FRAC` / `_SELL_FRAC` | 0.80 / 0.50 / 0.50 | Consensus **label** boundaries (fractions of rated firms) that classify the firm rating distribution into Strong Buy / Buy / Sell / Hold / Mixed. **Display-only classifications — NOT decision thresholds; never gate or score** |
 | `ANALYST_EXTRACT_MAX_TOKENS` | 8000 | Max LLM **output** tokens for one Ideas-Inbox extraction (`analyst_intel.extract_report`). Sized so a CNBC "biggest analyst calls" roundup of 20-30 separate calls fits without the JSON array truncating mid-record (which failed as a silent "extraction failed"). Plumbing knob — billed per token generated, so free for small pastes |
 | `ANALYST_EXTRACT_TIMEOUT_SEC` | 90 | Per-call timeout for one Ideas-Inbox extraction — overrides the shared 30s `LLM_REQUEST_TIMEOUT_SEC`. A big roundup makes the model generate several thousand tokens, which runs past 30s → the request times out and looks identical to a parse failure (the actual cause of the roundup bug, once truncation was ruled out by the token bump). On any failure `analyst_intel.LAST_EXTRACT_ERROR` records the real exception and the Ideas Inbox surfaces it as a "Details:" caption instead of a blind error |
+| `ANALYST_ACCURACY_DIRECTION_DAYS` | 30 | Research Scorecard (F-154c): measurement window (days after article_date) for Buy/Sell directional accuracy classification. Display-only — never gates or scores |
+| `ANALYST_ACCURACY_PT_HIT_PCT` | 0.75 | Research Scorecard: fraction of avg_pt that the window's intra-period **HIGH** must reach to count as a PT "hit" (not the endpoint close). Accounts for the short 30-day window; a genuine 75% touch is a real event, whereas a lucky endpoint price is noise-sensitive. Display-only |
+| `ANALYST_ACCURACY_LEADERBOARD_MIN_CALLS` | 2 | Research Scorecard: minimum calls per firm to appear on the Firm Leaderboard. Suppresses single-call noise |
+| `ANALYST_ACCURACY_HIGHLIGHTS_MIN_EVALUABLE` | 5 | Research Scorecard: minimum evaluable calls (status ∈ {hit, miss}) before showing the Best & Worst Calls highlight cards. Defers display until enough signal exists |
 | `COMPOSITE_BUY` | 65 | Buy boundary — used for entry AND add-to-winner (aligned) |
 | `COMPOSITE_STRONG_BUY` | 75 | Strong Buy boundary |
 | `COMPOSITE_HOLD` | 44 | Hold floor; below this = "Sell zone" |
@@ -882,11 +886,22 @@ CREATE TABLE analyst_coverage (
     risks            JSONB DEFAULT '[]',
     raw_text         TEXT,                            -- original pasted article, for re-processing
     source           TEXT DEFAULT 'cnbc_pro',
+    price_at_article_date NUMERIC,                   -- close price on article_date (next trading day); for Research Scorecard accuracy classification (Phase 1, 2026-07-22)
+    composite_score_at_save NUMERIC,                 -- engine composite score at save time (NULL if ticker not in portfolio); for future Phase 3 Engine vs Analyst calibration
     created_at       TIMESTAMPTZ DEFAULT now()
 );
 ```
 
 **Analyst Coverage / Ideas Inbox (F-154, append-only).** Structured analyst research captured by pasting article text; the LLM (`analyst_intel.extract_report`, Sonnet, returns `list[dict]`) extracts only **atomic per-firm facts** as **one record per covered stock** (a multi-stock "top picks" roundup yields N records — each analyst attaches only to the stock they discuss, never merged; list-only mentions skipped) and the app computes all aggregates (`avg_pt`/`high_pt`/`low_pt`/`consensus_rating`) in pure Python (`derive_consensus`) so no number is hallucinated. The editable preview shows one card per extracted stock (include/exclude), saving each as its own row. **Append-only** (`save_analyst_coverage` inserts). `db.load_analyst_coverage(ticker=, days=, limit=)` (backfills NULL for legacy columns) / `save_analyst_coverage()` / `delete_analyst_coverage(id)` — writers are read-only-viewer no-ops. **Awareness-only — feeds no gate, score, or verdict** (the "Wall Street vs. your engine" tension). **Phase 2 (F-154a)** reads this table per-ticker into the 📈 Analysis "🏦 Analyst Coverage" tab (reconciled against the `targetMeanPrice` provider consensus) and injects the newest row as **CONTEXT** into the F-1 thesis reviewer (citable, never a verdict override). **Phase 3 (F-154b)** annotates Grow Today "New Positions to Initiate" cards with a display-only awareness caption when the surfaced pick also has recent saved coverage (`_cached_analyst_coverage_recent` hourly snapshot; render-only, never reorders/gates picks). Optional — inert until the DDL is applied (load returns empty). RLS: `FOR ALL TO service_role`.
+
+### 6.15a Research Scorecard — Analyst Call Accuracy Tracking
+
+**Analyst Research Accountability (F-154c, awareness-only).** Display-only accuracy classification for saved analyst calls — tracks directional and price-target hit rates without ever affecting a gate, score, or verdict. Computed at render time from `analyst_coverage` rows where `price_at_article_date IS NOT NULL` via `classify_call()` in `stock_analyzer/analyst_intel.py` and fetched OHLC windows (cached `@st.cache_data` per ticker/date-range). Renders as four blocks on 🧠 AI Insights immediately after Ideas Inbox:
+- **Block A — Summary KPI row:** Directional Accuracy % (Buy/Sell calls correct on direction), PT Hit Rate % (calls reaching ≥75% of avg_pt via intra-window HIGH, not endpoint close), and Evaluable Calls count (status ∈ {hit, miss}). Pending calls (< 30 days since article date) and no-anchor rows excluded with a caption.
+- **Block B — Per-call accuracy table:** Sortable columns (Ticker, Article Date, Consensus, Avg PT, Price @ Article, Exit Price, Return %, PT Proximity %, Status, Window). Color-coded rows (green hit, red miss, grey pending/no-anchor). Default sort: article_date DESC.
+- **Block C — Firm Leaderboard:** Aggregates per firm (not just consensus — the per-analyst `analysts` JSONB) for evaluable rows only, showing Calls, Directional Accuracy %, PT Hit Rate %, Avg Return %. Minimum 2 calls per firm to appear (suppresses single-call noise).
+- **Block D — Best & Worst Calls:** Top/bottom 3 calls by return % (gated on ≥5 evaluable calls); cards with ticker, return %, article date, and measurement window.
+The two new columns are: `price_at_article_date` (populated at save-time via `_resolve_price_at_save()` in app.py, or backfilled by `scripts/backfill_analyst_prices.py` from yfinance) and `composite_score_at_save` (engine score at save, NULL for non-held tickers; reserved for Phase 3 engine-vs-analyst calibration). Both added 2026-07-22.
 
 ### 6.16 `sector_cache` table
 
