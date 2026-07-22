@@ -268,9 +268,13 @@ def classify_call(row: dict, sell_date_after, today_et, fetch_window) -> dict:
         are derived from the same frame (no double fetch).
 
     Returns a dict with "status" always present:
-      "no_anchor" — no price_at_article_date (not yet backfilled)
-      "pending"   — inside the measurement window, not yet evaluable
-      "no_price"  — fetch_window returned no usable close
+      "no_anchor"    — no price_at_article_date (not yet backfilled)
+      "no_consensus" — no consensus_rating (legacy row with no per-firm rating
+                       data) — there is no directional CALL to grade, so this
+                       is never scored as a hit/miss (a missing rating is NOT
+                       the same as an implicit Sell)
+      "pending"      — inside the measurement window, not yet evaluable
+      "no_price"     — fetch_window returned no usable close
       "hit" / "miss" — directional call verdict, plus ret_pct, exit_price,
                        window, directional_hit, pt_hit, pt_proximity, window_end.
     """
@@ -290,6 +294,8 @@ def classify_call(row: dict, sell_date_after, today_et, fetch_window) -> dict:
         return {"status": "no_anchor"}
     if not (price_at_article > 0):   # catches NaN (a DB NULL comes back as np.nan, not None) and <= 0
         return {"status": "no_anchor"}
+    if not (row.get("consensus_rating") or "").strip():
+        return {"status": "no_consensus"}
 
     if sell_date_after is not None:
         window_end = sell_date_after

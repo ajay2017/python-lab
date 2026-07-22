@@ -23888,7 +23888,9 @@ elif page == "🧠 AI Insights":
     # ─────────────────────────────────────────────────────────────────────────
 
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
-    _ai_tab_pos, _ai_tab_deb, _ai_tab_res = st.tabs(["🩺 Positions", "📅 Debriefs", "🏦 Research"])
+    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score = st.tabs(
+        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard"]
+    )
 
     with _ai_tab_pos:
         # ── Thesis Reviews ────────────────────────────────────────────────────────
@@ -25351,64 +25353,70 @@ elif page == "🧠 AI Insights":
                     unsafe_allow_html=True,
                 )
 
-                # Consensus chip + PT row
-                _ac_detail_parts = []
-                if _ac_crat:
-                    _ac_detail_parts.append(f"Consensus: **{_ac_crat}**")
-                if _ac_a_pt is not None:
-                    try:
-                        _pt_str = f"Avg PT: ${float(_ac_a_pt):.2f}"
-                        if _ac_l_pt is not None and _ac_h_pt is not None and float(_ac_l_pt) != float(_ac_h_pt):
-                            _pt_str += f" (${float(_ac_l_pt):.2f}–${float(_ac_h_pt):.2f})"
-                        _ac_detail_parts.append(_pt_str)
-                    except (TypeError, ValueError):
-                        pass
+                # Consensus/PT/thesis/raw text — collapsed by default (already
+                # persisted in Supabase; no need to render every card's full
+                # detail on page load when the library can hold hundreds of rows).
+                with st.expander("📄 Details", expanded=False):
+                    _ac_detail_parts = []
+                    if _ac_crat:
+                        _ac_detail_parts.append(f"Consensus: **{_ac_crat}**")
+                    if _ac_a_pt is not None:
+                        try:
+                            _pt_str = f"Avg PT: ${float(_ac_a_pt):.2f}"
+                            if _ac_l_pt is not None and _ac_h_pt is not None and float(_ac_l_pt) != float(_ac_h_pt):
+                                _pt_str += f" (${float(_ac_l_pt):.2f}–${float(_ac_h_pt):.2f})"
+                            _ac_detail_parts.append(_pt_str)
+                        except (TypeError, ValueError):
+                            pass
 
-                # Stated-upside range from per-firm rows
-                _ac_row_analysts = _ac_row.get("analysts") or []
-                if isinstance(_ac_row_analysts, str):
-                    try:
-                        _ac_row_analysts = json.loads(_ac_row_analysts)
-                    except Exception:
-                        _ac_row_analysts = []
-                _ac_card_ups = []
-                for _af in (_ac_row_analysts if isinstance(_ac_row_analysts, list) else []):
-                    try:
-                        _u = _af.get("upside_pct")
-                        if _u is not None:
-                            _uv = float(_u)
-                            if _uv == _uv:    # NaN guard
-                                _ac_card_ups.append(_uv)
-                    except (TypeError, ValueError, AttributeError):
-                        pass
-                if _ac_card_ups:
-                    _ac_detail_parts.append(
-                        f"Upside: {min(_ac_card_ups):.0f}%–{max(_ac_card_ups):.0f}%"
-                        if min(_ac_card_ups) != max(_ac_card_ups)
-                        else f"Upside: {_ac_card_ups[0]:.0f}%"
-                    )
-                _ac_firms_n = len(_ac_row_analysts) if isinstance(_ac_row_analysts, list) else 0
-                if _ac_firms_n:
-                    _ac_detail_parts.insert(0, f"{_ac_firms_n} firm(s)")
+                    # Stated-upside range from per-firm rows
+                    _ac_row_analysts = _ac_row.get("analysts") or []
+                    if isinstance(_ac_row_analysts, str):
+                        try:
+                            _ac_row_analysts = json.loads(_ac_row_analysts)
+                        except Exception:
+                            _ac_row_analysts = []
+                    _ac_card_ups = []
+                    for _af in (_ac_row_analysts if isinstance(_ac_row_analysts, list) else []):
+                        try:
+                            _u = _af.get("upside_pct")
+                            if _u is not None:
+                                _uv = float(_u)
+                                if _uv == _uv:    # NaN guard
+                                    _ac_card_ups.append(_uv)
+                        except (TypeError, ValueError, AttributeError):
+                            pass
+                    if _ac_card_ups:
+                        _ac_detail_parts.append(
+                            f"Upside: {min(_ac_card_ups):.0f}%–{max(_ac_card_ups):.0f}%"
+                            if min(_ac_card_ups) != max(_ac_card_ups)
+                            else f"Upside: {_ac_card_ups[0]:.0f}%"
+                        )
+                    _ac_firms_n = len(_ac_row_analysts) if isinstance(_ac_row_analysts, list) else 0
+                    if _ac_firms_n:
+                        _ac_detail_parts.insert(0, f"{_ac_firms_n} firm(s)")
 
-                if _ac_detail_parts:
-                    st.caption(" · ".join(_ac_detail_parts))
+                    if _ac_detail_parts:
+                        st.caption(" · ".join(_ac_detail_parts))
 
-                # Thesis bullets
-                _ac_thesis_list = _ac_row.get("thesis") or []
-                if isinstance(_ac_thesis_list, str):
-                    try:
-                        _ac_thesis_list = json.loads(_ac_thesis_list)
-                    except Exception:
-                        _ac_thesis_list = [_ac_thesis_list]
-                if isinstance(_ac_thesis_list, list) and _ac_thesis_list:
-                    for _tb in _ac_thesis_list:
-                        st.markdown(f"- {_tb}")
+                    # Thesis bullets
+                    _ac_thesis_list = _ac_row.get("thesis") or []
+                    if isinstance(_ac_thesis_list, str):
+                        try:
+                            _ac_thesis_list = json.loads(_ac_thesis_list)
+                        except Exception:
+                            _ac_thesis_list = [_ac_thesis_list]
+                    if isinstance(_ac_thesis_list, list) and _ac_thesis_list:
+                        for _tb in _ac_thesis_list:
+                            st.markdown(f"- {_tb}")
 
-                # Raw text expander
-                _ac_raw = _ac_row.get("raw_text") or ""
-                if _ac_raw:
-                    with st.expander("Show raw article text"):
+                    # Raw text — a checkbox toggle, not a nested expander
+                    # (Streamlit doesn't allow expanders inside expanders).
+                    _ac_raw = _ac_row.get("raw_text") or ""
+                    if _ac_raw and st.checkbox(
+                        "Show raw article text",
+                        key=f"_ac_rawtoggle_{_ac_rowid}_{_ac_i}",
+                    ):
                         st.text(_ac_raw)
 
                 # Per-card action buttons
@@ -25447,6 +25455,7 @@ elif page == "🧠 AI Insights":
 
                 st.divider()
 
+    with _ai_tab_score:
         # ── Research Scorecard (Phase 2 — accuracy tracking, display-only) ─────
         # Awareness-only: never feeds valuation_score() or any gate. Reads
         # already-saved analyst_coverage rows; only new price fetches here are
@@ -25552,7 +25561,7 @@ elif page == "🧠 AI Insights":
 
             _sc_evaluable = [r for r in _sc_results if r["status"] in ("hit", "miss")]
             _sc_pending   = [r for r in _sc_results if r["status"] == "pending"]
-            _sc_excluded  = [r for r in _sc_results if r["status"] in ("no_anchor", "no_price")]
+            _sc_excluded  = [r for r in _sc_results if r["status"] in ("no_anchor", "no_price", "no_consensus")]
             _sc_n_eval    = len(_sc_evaluable)
 
             # ── Block A — KPI row ────────────────────────────────────────────
@@ -25580,7 +25589,7 @@ elif page == "🧠 AI Insights":
                 st.metric("Evaluable Calls", f"{_sc_n_eval} of {len(_sc_results)}")
             st.caption(
                 f"{len(_sc_pending)} pending (< {_SC_DIR_DAYS}d since article date) · "
-                f"{len(_sc_excluded)} excluded (no anchor price yet / price fetch failed)."
+                f"{len(_sc_excluded)} excluded (no anchor price / no consensus rating / price fetch failed)."
             )
 
             # ── Block B — per-call accuracy table ────────────────────────────
@@ -25588,6 +25597,7 @@ elif page == "🧠 AI Insights":
             _sc_status_labels = {
                 "hit": "✅ Hit", "miss": "❌ Miss", "pending": "⏳ Pending",
                 "no_anchor": "— No anchor", "no_price": "— No price data",
+                "no_consensus": "— No rating data",
             }
             _sc_table_rows = [{
                 "Ticker":          r["ticker"],
