@@ -2795,10 +2795,9 @@ def _render_holdings_earnings(port_df, held_data):
                     for _wi, _witem in enumerate(_watch_items):
                         _wf_cols[_wi % 2].markdown(f"- {_witem}")
 
-                # Institutional Lens
                 if _pb.get("institutional_lens"):
-                    st.markdown("")
-                    st.info(f"**Institutional Lens** · {_pb['institutional_lens']}")
+                    with st.expander("Why this matters"):
+                        st.markdown(_pb['institutional_lens'])
 
                 # For MONITOR: surface the re-evaluate date so the user knows when to return.
                 if _action == "MONITOR" and _pb.get("earnings_date"):
@@ -9210,10 +9209,9 @@ elif page == "🔗 Risk Analysis":
                                 unsafe_allow_html=True,
                             )
 
-                    # Institutional Lens — full width
                     if _rec.get("institutional_lens"):
-                        st.markdown("")
-                        st.info(f"**Institutional Lens** · {_rec['institutional_lens']}")
+                        with st.expander("Why this matters"):
+                            st.markdown(_rec['institutional_lens'])
 
                     # Defensive picks — shown inside volatility and beta cards
                     if _rtype in ("volatility", "beta"):
@@ -10877,7 +10875,8 @@ elif page == "🥧 Portfolio Overview":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    st.info(f"**Institutional Lens** · {_tr['institutional_lens']}")
+                    with st.expander("Why this matters"):
+                        st.markdown(_tr['institutional_lens'])
 
         # Risk Advisor TRIM suppression — show before adds so the user sees
         # the conflict before the un-suppressed adds.
@@ -10974,7 +10973,8 @@ elif page == "🥧 Portfolio Overview":
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    st.info(f"**Institutional Lens** · {_ad['institutional_lens']}")
+                    with st.expander("Why this matters"):
+                        st.markdown(_ad['institutional_lens'])
 
         # In-tolerance positions
         if _rb_plan["ok"]:
@@ -11118,14 +11118,15 @@ elif page == "🥧 Portfolio Overview":
                                 f"</span></div>",
                                 unsafe_allow_html=True,
                             )
-                            st.info(
-                                "**Institutional Lens** · Price-sentiment divergence is a classic early warning. "
-                                "Quantitative strategists include sentiment momentum as a factor "
-                                "in their reversal models — a stock rising while its news flow deteriorates "
-                                "has historically underperformed the following month by 3–5% on average. "
-                                "This is not a sell signal in isolation, but it warrants raising the stop "
-                                "and watching the next earnings or catalyst carefully."
-                            )
+                            with st.expander("Why this matters"):
+                                st.markdown(
+                                    "Price-sentiment divergence is a classic early warning. "
+                                    "Quantitative strategists include sentiment momentum as a factor "
+                                    "in their reversal models — a stock rising while its news flow deteriorates "
+                                    "has historically underperformed the following month by 3–5% on average. "
+                                    "This is not a sell signal in isolation, but it warrants raising the stop "
+                                    "and watching the next earnings or catalyst carefully."
+                                )
                         elif _divg and _dtype == "BULLISH":
                             st.markdown(
                                 f"<div style='padding:10px 14px;background:#0a0d1a;"
@@ -11140,13 +11141,14 @@ elif page == "🥧 Portfolio Overview":
                                 f"</span></div>",
                                 unsafe_allow_html=True,
                             )
-                            st.info(
-                                "**Institutional Lens** · A stock falling while sentiment improves can signal "
-                                "an over-reaction to short-term price pressure. Institutional contrarian "
-                                "indicators flag this as a potential mean-reversion opportunity — "
-                                "particularly if the composite score remains above 55 and the fundamental "
-                                "thesis is intact. Confirm with the next news cycle before adding."
-                            )
+                            with st.expander("Why this matters"):
+                                st.markdown(
+                                    "A stock falling while sentiment improves can signal "
+                                    "an over-reaction to short-term price pressure. Institutional contrarian "
+                                    "indicators flag this as a potential mean-reversion opportunity — "
+                                    "particularly if the composite score remains above 55 and the fundamental "
+                                    "thesis is intact. Confirm with the next news cycle before adding."
+                                )
                         elif _dir == "Deteriorating ↓":
                             st.markdown(
                                 f"<div style='padding:10px 14px;background:#1a1200;"
@@ -11357,14 +11359,15 @@ elif page == "🥧 Portfolio Overview":
                             f"</span></div>",
                             unsafe_allow_html=True,
                         )
-                        st.info(
-                            "**Institutional Lens** · Tax loss harvesting is one of the highest-certainty "
-                            "alpha sources available — it doesn't require predicting the market. "
-                            "Tax-aware institutional strategies harvest losses systematically throughout "
-                            "the year, not just in December. The key discipline: replace the sold "
-                            "position with a correlated but not identical ETF or name to maintain "
-                            "market exposure while the 30-day wash sale window passes."
-                        )
+                        with st.expander("Why this matters"):
+                            st.markdown(
+                                "Tax loss harvesting is one of the highest-certainty "
+                                "alpha sources available — it doesn't require predicting the market. "
+                                "Tax-aware institutional strategies harvest losses systematically throughout "
+                                "the year, not just in December. The key discipline: replace the sold "
+                                "position with a correlated but not identical ETF or name to maintain "
+                                "market exposure while the 30-day wash sale window passes."
+                            )
 
             if _wait_rows:
                 st.markdown("#### 🟢 Wait for LTCG — Threshold Close")
@@ -11393,15 +11396,16 @@ elif page == "🥧 Portfolio Overview":
                             f"</span></div>",
                             unsafe_allow_html=True,
                         )
-                        st.info(
-                            "**Institutional Lens** · The LTCG threshold is one of the most valuable "
-                            "and underused tools in portfolio management. Institutional PMs always flag "
-                            "positions within 60 days of the 1-year mark — selling before the "
-                            f"threshold costs {(_stcg_r - _ltcg_r)*100:.0f} percentage points of "
-                            "extra tax with zero investment rationale. "
-                            "The only reason to sell before LTCG eligibility is a broken thesis — "
-                            "not a preference for cash or a desire to lock in gains."
-                        )
+                        with st.expander("Why this matters"):
+                            st.markdown(
+                                "The LTCG threshold is one of the most valuable "
+                                "and underused tools in portfolio management. Institutional PMs always flag "
+                                "positions within 60 days of the 1-year mark — selling before the "
+                                f"threshold costs {(_stcg_r - _ltcg_r)*100:.0f} percentage points of "
+                                "extra tax with zero investment rationale. "
+                                "The only reason to sell before LTCG eligibility is a broken thesis — "
+                                "not a preference for cash or a desire to lock in gains."
+                            )
 
             if _ltcg_rows:
                 with st.expander(
@@ -11718,8 +11722,8 @@ elif page == "🥧 Portfolio Overview":
                                     )
 
                             if _prec.get("institutional_lens"):
-                                st.markdown("")
-                                st.info(f"**Institutional Lens** · {_prec['institutional_lens']}")
+                                with st.expander("Why this matters"):
+                                    st.markdown(_prec['institutional_lens'])
 
         except Exception as _de:
             st.warning(f"Performance Diagnostics unavailable: {_de}")
@@ -16201,10 +16205,9 @@ elif page == "📋 Watchlist":
                 unsafe_allow_html=True,
             )
 
-            # Institutional Lens
             if _wr.get("institutional_lens"):
-                st.markdown("")
-                st.info(f"**Institutional Lens** · {_wr['institutional_lens']}")
+                with st.expander("Why this matters"):
+                    st.markdown(_wr['institutional_lens'])
 
             # Quick action: add to Trade Journal as planned trade
             st.markdown("")
@@ -18016,8 +18019,8 @@ elif page == "📒 Trade Journal":
                                 )
 
                             if _ins.get("institutional_lens"):
-                                st.markdown("")
-                                st.info(f"**Institutional Lens** · {_ins['institutional_lens']}")
+                                with st.expander("Why this matters"):
+                                    st.markdown(_ins['institutional_lens'])
 
         # ── Opportunity Cost — what you passed on and what it cost ───────────────
         with st.expander("💸 Opportunity Cost — Recommendations You Passed On", expanded=False):
@@ -22430,7 +22433,8 @@ elif page == "📅 Economic Calendar":
                             unsafe_allow_html=True,
                         )
                         if _ev.get("context"):
-                            st.info(f"**Institutional Lens** · {_ev['context']}")
+                            with st.expander("Why this matters"):
+                                st.markdown(_ev['context'])
 
                 st.markdown("")
 
@@ -22494,7 +22498,8 @@ elif page == "📅 Economic Calendar":
                             unsafe_allow_html=True,
                         )
                         if _ev.get("context"):
-                            st.info(f"**Institutional Lens** · {_ev['context']}")
+                            with st.expander("Why this matters"):
+                                st.markdown(_ev['context'])
 
                 st.markdown("")
 
