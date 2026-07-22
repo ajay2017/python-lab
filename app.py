@@ -23858,99 +23858,95 @@ elif page == "🧠 AI Insights":
         )
     st.markdown("---")
 
-    # ── Behavioral Trading Patterns — at-a-glance KPI row ────────────────────
-    # Surfaces win rate, profit factor, and overtrading signal from the Trade
-    # Journal's behavioral analytics module so pre-market checks don't require
-    # navigating to a different page.
-    _beh_tdf_raw = st.session_state.get("trades_df")
-    if _beh_tdf_raw is not None and not _beh_tdf_raw.empty and len(_beh_tdf_raw) >= 5:
-        _beh = build_full_analytics(_beh_tdf_raw)
-        _beh_wr    = _beh.get("win_rate")
-        _beh_pf    = _beh.get("profit_factor")
-        _beh_ot    = _beh.get("overtrading_stats") or {}
-        _beh_highs = [i for i in (_beh.get("insights") or []) if i.get("priority") == "HIGH"]
-
-        if _beh_wr is not None:
-            _bhc1, _bhc2, _bhc3, _bhc4 = st.columns(4)
-
-            _wr_color = "#22c55e" if _beh_wr >= 55 else ("#f59e0b" if _beh_wr >= 45 else "#ef4444")
-            _bhc1.markdown(
-                f"<div style='text-align:center'>"
-                f"<div style='color:#9ca3af;font-size:0.75em'>🎯 Win Rate</div>"
-                f"<div style='color:{_wr_color};font-weight:600'>{_beh_wr:.0f}%</div></div>",
-                unsafe_allow_html=True,
-            )
-
-            _pf_val   = _beh_pf or 0
-            _pf_color = "#22c55e" if _pf_val >= 1.5 else ("#f59e0b" if _pf_val >= 1.0 else "#ef4444")
-            _bhc2.markdown(
-                f"<div style='text-align:center'>"
-                f"<div style='color:#9ca3af;font-size:0.75em'>📈 Profit Factor</div>"
-                f"<div style='color:{_pf_color};font-weight:600'>{f'{_beh_pf:.2f}' if _beh_pf else '—'}</div></div>",
-                unsafe_allow_html=True,
-            )
-
-            _ot_cnt = _beh_ot.get("current_month_count")
-            _ot_avg = _beh_ot.get("rolling_avg")
-            if _ot_cnt is not None and _ot_avg is not None:
-                _ot_el    = _beh_ot.get("is_elevated", False)
-                _ot_color = "#ef4444" if _ot_el else "#22c55e"
-                _ot_mult  = _beh_ot.get("multiplier")
-                _ot_label = (
-                    f"{_ot_cnt} ⚠ {_ot_mult:.1f}× avg" if _ot_el
-                    else f"{_ot_cnt} / avg {_ot_avg:.1f}"
-                )
-            else:
-                _ot_color, _ot_label = "#9ca3af", "—"
-            _bhc3.markdown(
-                f"<div style='text-align:center'>"
-                f"<div style='color:#9ca3af;font-size:0.75em'>🔄 Trades This Month</div>"
-                f"<div style='color:{_ot_color}'>{_ot_label}</div></div>",
-                unsafe_allow_html=True,
-            )
-
-            if _beh_highs:
-                _bhc4.markdown(
-                    f"<div style='text-align:center'>"
-                    f"<div style='color:#9ca3af;font-size:0.75em'>🚨 Behavioral Alert</div>"
-                    f"<div style='color:#ef4444;font-weight:600'>"
-                    f"{len(_beh_highs)} alert{'s' if len(_beh_highs) > 1 else ''}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                _bhc4.markdown(
-                    "<div style='text-align:center'>"
-                    "<div style='color:#9ca3af;font-size:0.75em'>🚨 Behavioral Alert</div>"
-                    "<div style='color:#22c55e'>none</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-            # Surface HIGH-priority alerts inline so they can't be missed
-            if _beh_highs:
-                for _bhi in _beh_highs:
-                    _bw_col, _bw_btn = st.columns([4, 1])
-                    _bw_col.warning(
-                        f"**{_bhi['title']}** — "
-                        "See Trade Journal → 🧠 Behavioral Analytics for full coaching."
-                    )
-                    if _bw_btn.button(
-                        "📒 Open",
-                        key=f"beh_nav_{_bhi.get('insight_type','x')}",
-                        help="Go to Trade Journal → Behavioral Analytics",
-                    ):
-                        st.session_state["_pending_page"] = "📒 Trade Journal"
-                        st.rerun()
-
-            st.caption("Full analysis, coaching cards, and trigger breakdown: Trade Journal → 🧠 Behavioral Analytics")
-            st.markdown("---")
-    # ─────────────────────────────────────────────────────────────────────────
-
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
     _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score = st.tabs(
         ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard"]
     )
 
     with _ai_tab_pos:
+        # ── Behavioral Trading Patterns — at-a-glance KPI row ────────────────────
+        _beh_tdf_raw = st.session_state.get("trades_df")
+        if _beh_tdf_raw is not None and not _beh_tdf_raw.empty and len(_beh_tdf_raw) >= 5:
+            _beh = build_full_analytics(_beh_tdf_raw)
+            _beh_wr    = _beh.get("win_rate")
+            _beh_pf    = _beh.get("profit_factor")
+            _beh_ot    = _beh.get("overtrading_stats") or {}
+            _beh_highs = [i for i in (_beh.get("insights") or []) if i.get("priority") == "HIGH"]
+
+            if _beh_wr is not None:
+                _bhc1, _bhc2, _bhc3, _bhc4 = st.columns(4)
+
+                _wr_color = "#22c55e" if _beh_wr >= 55 else ("#f59e0b" if _beh_wr >= 45 else "#ef4444")
+                _bhc1.markdown(
+                    f"<div style='text-align:center'>"
+                    f"<div style='color:#9ca3af;font-size:0.75em'>🎯 Win Rate</div>"
+                    f"<div style='color:{_wr_color};font-weight:600'>{_beh_wr:.0f}%</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+                _pf_val   = _beh_pf or 0
+                _pf_color = "#22c55e" if _pf_val >= 1.5 else ("#f59e0b" if _pf_val >= 1.0 else "#ef4444")
+                _bhc2.markdown(
+                    f"<div style='text-align:center'>"
+                    f"<div style='color:#9ca3af;font-size:0.75em'>📈 Profit Factor</div>"
+                    f"<div style='color:{_pf_color};font-weight:600'>{f'{_beh_pf:.2f}' if _beh_pf else '—'}</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+                _ot_cnt = _beh_ot.get("current_month_count")
+                _ot_avg = _beh_ot.get("rolling_avg")
+                if _ot_cnt is not None and _ot_avg is not None:
+                    _ot_el    = _beh_ot.get("is_elevated", False)
+                    _ot_color = "#ef4444" if _ot_el else "#22c55e"
+                    _ot_mult  = _beh_ot.get("multiplier")
+                    _ot_label = (
+                        f"{_ot_cnt} ⚠ {_ot_mult:.1f}× avg" if _ot_el
+                        else f"{_ot_cnt} / avg {_ot_avg:.1f}"
+                    )
+                else:
+                    _ot_color, _ot_label = "#9ca3af", "—"
+                _bhc3.markdown(
+                    f"<div style='text-align:center'>"
+                    f"<div style='color:#9ca3af;font-size:0.75em'>🔄 Trades This Month</div>"
+                    f"<div style='color:{_ot_color}'>{_ot_label}</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+                if _beh_highs:
+                    _bhc4.markdown(
+                        f"<div style='text-align:center'>"
+                        f"<div style='color:#9ca3af;font-size:0.75em'>🚨 Behavioral Alert</div>"
+                        f"<div style='color:#ef4444;font-weight:600'>"
+                        f"{len(_beh_highs)} alert{'s' if len(_beh_highs) > 1 else ''}</div></div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    _bhc4.markdown(
+                        "<div style='text-align:center'>"
+                        "<div style='color:#9ca3af;font-size:0.75em'>🚨 Behavioral Alert</div>"
+                        "<div style='color:#22c55e'>none</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+                # Surface HIGH-priority alerts inline so they can't be missed
+                if _beh_highs:
+                    for _bhi in _beh_highs:
+                        _bw_col, _bw_btn = st.columns([4, 1])
+                        _bw_col.warning(
+                            f"**{_bhi['title']}** — "
+                            "See Trade Journal → 🧠 Behavioral Analytics for full coaching."
+                        )
+                        if _bw_btn.button(
+                            "📒 Open",
+                            key=f"beh_nav_{_bhi.get('insight_type','x')}",
+                            help="Go to Trade Journal → Behavioral Analytics",
+                        ):
+                            st.session_state["_pending_page"] = "📒 Trade Journal"
+                            st.rerun()
+
+                st.caption("Full analysis, coaching cards, and trigger breakdown: Trade Journal → 🧠 Behavioral Analytics")
+                st.markdown("---")
+
         # ── Thesis Reviews ────────────────────────────────────────────────────────
         st.subheader("📋 Thesis Reviews")
         st.markdown(
