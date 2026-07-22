@@ -20756,15 +20756,23 @@ elif page == "📊 Predictive Analytics":
                 y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
             )
             if _pac_thresh is not None:
-                _pac_calib_fig.add_vline(
-                    x=str(next(
-                        (_b["band_label"] for _b in _pac_bands if _b["band_floor"] == _pac_thresh), ""
-                    )),
-                    line_dash="dot", line_color="#FFD700",
-                    annotation_text=f"  ≥ {_pac_thresh} threshold",
-                    annotation_font_color="#FFD700",
-                    annotation_position="top right",
+                _pac_vline_label = next(
+                    (_b["band_label"] for _b in _pac_bands if _b["band_floor"] == _pac_thresh), None
                 )
+                if _pac_vline_label:
+                    _pac_calib_fig.add_vline(
+                        x=_pac_vline_label,
+                        line_dash="dot", line_color="#FFD700",
+                    )
+                    _pac_calib_fig.add_annotation(
+                        x=_pac_vline_label,
+                        y=1.0, yref="paper",
+                        text=f"≥ {_pac_thresh} threshold",
+                        showarrow=False,
+                        font=dict(color="#FFD700", size=11),
+                        xanchor="left",
+                        yanchor="bottom",
+                    )
             _pac_calib_fig.update_layout(
                 template="plotly_dark", height=320,
                 yaxis_title="Avg Alpha vs SPY (pp)", xaxis_title="Composite Score Band",
