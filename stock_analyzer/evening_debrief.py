@@ -165,7 +165,7 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
         if action_taken:
             outcome = "✅ Acted — see today's trades for entry/PnL"
         elif today_pct_val is None:
-            outcome = "—  No action taken (intraday data unavailable)"
+            outcome = "— No action taken (intraday data unavailable)"
         elif today_pct_val >= MEANINGFUL_INTRADAY_PCT:
             outcome = f"💸 Missed — would have gained {today_pct_val:+.2f}% today"
         elif today_pct_val <= -MEANINGFUL_INTRADAY_PCT:
@@ -182,13 +182,13 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
             continue
         today_pct_val = intraday_pct.get(tk)
         if today_pct_val is None:
-            outcome = "—  Intraday data unavailable"
+            outcome = "— Intraday data unavailable"
             verdict = "unknown"
         elif today_pct_val >= MEANINGFUL_INTRADAY_PCT:
             outcome = f"💭 Would have worked — {today_pct_val:+.2f}% today (composite still says wait)"
             verdict = "missed"
         elif today_pct_val <= -MEANINGFUL_INTRADAY_PCT:
-            outcome = f"✅ Skip validated — {today_pct_val:+.2f}% today (composite was right)"
+            outcome = f"🛡 Dodged — {today_pct_val:+.2f}% today (skip was right)"
             verdict = "validated"
         else:
             outcome = f"⚖ Flat — {today_pct_val:+.2f}% today"

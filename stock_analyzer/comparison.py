@@ -77,7 +77,6 @@ _SIGNAL_RANK = {
     "Strong Buy":  5,
     "Buy":         4,
     "Hold":        3,
-    "Weak Hold":   2,
     "Sell":        1,
     "Strong Sell": 0,
     "Avoid":       0,

@@ -4379,14 +4379,11 @@ if page == "🏠 Home":
     if _dpnl is not None:
         _dp_val = _dpnl["day_pnl"]
         _dp_pct = _dpnl["day_pnl_pct"]
-        if _dpnl_is_current:
-            _dp_label = "Today's P&L"
-        else:
-            _dp_label = "P&L since " + date.fromisoformat(_dpnl_baseline_date).strftime("%b %d")
+        _dp_scope = "" if _dpnl_is_current else f" · from {date.fromisoformat(_dpnl_baseline_date).strftime('%b %d')}"
         _c3.metric(
-            _dp_label,
+            "Today's P&L",
             _m(f"${_dp_val:+,.0f}"),
-            f"{_dp_pct:+.2f}%",
+            f"{_dp_pct:+.2f}%{_dp_scope}",
             delta_color="normal" if _dp_val >= 0 else "inverse",
             help=(
                 f"TRUE day P&L for your tracked positions, measured from the "
@@ -4398,20 +4395,19 @@ if page == "🏠 Home":
         )
     elif _today_loaded:
         _c3.metric(
-            "Today's P&L (held)",
+            "Today's P&L",
             _m(f"${_today_pnl:+,.0f}"),
             f"{_today_pnl_pct:+.2f}%",
             delta_color="normal" if _today_pnl >= 0 else "inverse",
             help=(
-                "Mark-to-market of your CURRENTLY-HELD positions vs yesterday's close, "
-                "updated every 60s. This is NOT your broker's account 'Today': it excludes "
-                "realized P&L from anything you bought or sold today, and marks same-day buys "
-                "from the prior close (not your fill). On an active trading day the two differ. "
-                "(A true day P&L activates once the daily-snapshot baseline is seeded.)"
+                "Held-position mark-to-market vs yesterday's close, updated every 60s. "
+                "Scope: currently-held positions only — excludes realized P&L from today's "
+                "buys/sells and marks same-day buys from the prior close, not your fill. "
+                "(A full-day P&L activates once the daily-snapshot baseline is seeded.)"
             ),
         )
     else:
-        _c3.metric("Today's P&L (held)", "Updating…", help="Loads with the live price strip")
+        _c3.metric("Today's P&L", "Updating…", help="Loads with the live price strip")
     _c4.metric("Alerts",           f"{n_danger}🔴 {n_warning}🟡",
                help=f"{n_danger} danger · {n_warning} Watch — check 📡 Signals & Advice")
     _c5.metric("Avg Score",        f"{avg_score:.0f}/100")
@@ -5378,25 +5374,27 @@ if page == "🏠 Home":
         comp_skipped  = grow.get("composite_skipped", [])
         comp_unavail  = grow.get("composite_unavailable", [])
 
-        _g_label = (
-            "📈 Grow Today"      if tone == "bull" else
-            "🛡️ Defer New Entries" if tone == "bear" else
-            "📈 High-Conviction Entries Only"
-        )
         _g_bg    = "#052e16" if tone == "bull" else "#1c1917"
         _g_bdr   = "#22c55e" if tone == "bull" else "#ef4444" if tone == "bear" else "#4b5563"
         _g_count = f" ({len(new_picks) + len(add_pos)} setups)" if (new_picks or add_pos) else ""
+        _g_subtitle = (
+            "Defer new entries — protect capital, reduce exposure."   if tone == "bear" else
+            "High-conviction only — elevated caution in effect."       if tone == "flat" else
+            ""
+        )
 
         st.markdown(
             f"<div style='background:{_g_bg};border-left:4px solid {_g_bdr};"
             f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
-            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>{_g_label}{_g_count}</span>"
+            f"<span style='font-size:1em;font-weight:700;color:#f9fafb'>📈 Grow Today{_g_count}</span>"
             + (f"<span style='color:#86efac;font-size:0.82em;margin-left:8px'>"
                f"Sector leaders: {', '.join(ls['sector'] for ls in lead_secs_ui[:2])}</span>"
                if lead_secs_ui and tone == "bull" else "")
+            + (f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px'>{_g_subtitle}</div>"
+               if _g_subtitle else "")
             + (f"<div style='color:#86efac;font-size:0.78em;margin-top:4px'>"
                f"Cleared all 5 portfolio checks — vetted for entry.</div>"
-               if tone != "bear" else "")
+               if tone == "bull" else "")
             + f"</div>",
             unsafe_allow_html=True,
         )
@@ -9796,7 +9794,8 @@ elif page == "🧩 Intelligence":
     st.caption(
         "What your ownership MEANS in aggregate — not what you own position by "
         "position, but the risk and structure of the book as a whole. "
-        "Diagnostic only; never gates, resizes, or reorders anything."
+        "Diagnostic only — composite score (🔗 Risk Analysis / 📈 Analysis) "
+        "and your own judgment still decide any action."
     )
     _pi_pdf = st.session_state.get("_port_df_enriched")
     _pi_hd  = st.session_state.get("_last_held_data")
@@ -9839,10 +9838,9 @@ elif page == "🧩 Intelligence":
                         st.info(_pi_msg)
 
                 st.caption(
-                    "If you want to reduce clustered co-movement risk, the highest-leverage "
-                    "move is usually trimming within your biggest cluster — but composite "
-                    "score (🔗 Risk Analysis / 📈 Analysis) should still decide **which** "
-                    "name, not correlation alone."
+                    "To reduce clustered co-movement risk, the highest-leverage move is "
+                    "usually trimming within your biggest cluster — composite score decides "
+                    "**which** name, not correlation alone."
                 )
 
     with _pi_tab_risk:
@@ -9914,9 +9912,8 @@ elif page == "🧩 Intelligence":
                 )
 
             st.caption(
-                "This identifies WHERE risk concentrates — it does not tell you "
-                "what to do about it. Composite score (🔗 Risk Analysis / 📈 Analysis) "
-                "and your own judgment still decide any action."
+                "This identifies WHERE volatility concentrates — it does not tell you "
+                "what to do about it."
             )
 
     with _pi_tab_factor:
@@ -10018,9 +10015,7 @@ elif page == "🧩 Intelligence":
                 )
 
             st.caption(
-                "This shows a directional lean, not an instruction — composite "
-                "score (🔗 Risk Analysis / 📈 Analysis) and your own judgment "
-                "still decide any action."
+                "This shows a directional lean, not an instruction."
             )
 
 
@@ -19165,6 +19160,15 @@ elif page == "🪞 Trade Review":
             unsafe_allow_html=True,
         )
 
+        st.caption(
+            "**Categories:** *App-Followed* — trade aligned with the app's recommendation · "
+            "*Deviated* — external info or discretionary call · *Discretionary* — neither recorded. "
+            "**Panic-window** = trade made on a day S&P 500 closed ≤ -1.5%. "
+            "**vs-SPY** = trade's % return minus SPY's % over the same holding period (closed trades only). "
+            "Open positions are marked-to-market against current price. "
+            "**Position size** measured against current portfolio value as a proxy (journal doesn't store historical portfolio snapshots)."
+        )
+
         # ── Compute Batch 2 analytics (trends, risk discipline, sector mix) ───
         # Cumulative P&L and rolling win rate over time — trend visibility
         _tr_cum_series = cumulative_pnl_series(_tr_trades)
@@ -19972,15 +19976,6 @@ elif page == "🪞 Trade Review":
                         unsafe_allow_html=True,
                     )
 
-        st.markdown("---")
-        st.caption(
-            "**Categories:** *App-Followed* — trade aligned with the app's recommendation · "
-            "*Deviated* — external info or discretionary call · *Discretionary* — neither recorded. "
-            "**Panic-window** = trade made on a day S&P 500 closed ≤ -1.5%. "
-            "**vs-SPY** = trade's % return minus SPY's % over the same holding period (closed trades only). "
-            "Open positions are marked-to-market against current price. "
-            "**Position size** measured against current portfolio value as a proxy (journal doesn't store historical portfolio snapshots)."
-        )
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE — RECOMMENDATIONS HISTORY
