@@ -79,5 +79,27 @@
     "additionalDirectories": [
       "C:\\Users\\ajay.x.ku\\python-lab\\python-lab\\.git"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/pre_tool_checks.py"
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/pre_tool_checks.py"
+          }
+        ]
+      }
+    ]
   }
 }
