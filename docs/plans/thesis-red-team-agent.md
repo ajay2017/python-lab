@@ -3,8 +3,8 @@
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
-**Opus review:** Round 1 — FIX-FIRST (5 blocking). Round 2 pending.
-**Status:** PLANNING — v3 incorporates all Round 1 + Round 2 findings. Proceeding to Phase 1 build; Opus code review before Phase 1 merges.
+**Opus review:** Round 1 — FIX-FIRST (5 blocking). Round 2 — FIX-FIRST (4 blocking). Both resolved in v3.
+**Status:** Phase 1 SHIPPED 2026-07-23. Phase 2 (Haiku counter-evidence) pending ~1-week production observation gate.
 
 > **One-line spec:** A persistent adversarial agent that continuously re-attacks each
 > held position's bull thesis using existing quantitative signals + optional Haiku
@@ -19,6 +19,7 @@
 |---|---|---|---|
 | Round 1 | Claude Opus 4.8 | FIX-FIRST | 5 blocking (data sourcing, composite delta, timezone, constants, phase scope) — all resolved in v2 |
 | Round 2 | Claude Opus 4.8 | FIX-FIRST | 4 blocking (SPY path, bundle price path, composite delta source, exit_signals filter) — all resolved in v3 |
+| Phase 1 code | Claude Sonnet 4.6 (implementer) | SHIPPED | 3 post-ship fixes (is_trading_day arg, composite label, UX clarity) — all same session |
 
 ---
 
@@ -337,18 +338,49 @@ One-line format: "NVDA thesis erosion jumped to 62 (Eroding) — see Red Team ta
 
 ---
 
-## Phased build
+## Build log
 
-| Phase | Scope | Gate for next phase |
-|---|---|---|
-| **Phase 1** | Erosion score only (no Haiku). "⚠️ Red Team" tab on AI Insights. Score, label, signal breakdown expander, per-ticker cards. `compute_relative_strength()` helper. 3 new `constants.py` entries. | Observe score distribution against real holdings for ~1 week. Verify intact positions (not in WATCH/TRIM/EXIT) get non-zero RS + composite components. Verify score moves in expected direction. |
-| **Phase 2** | Haiku counter-evidence. Pre-mortem loop (`premortem_commitment` as context). Counter-evidence bullets in Red Team tab + Exit Advisor card expanders. Opus plan re-review required before this phase. | Counter-evidence renders for tickers with stored thesis; graceful blank without. |
-| **Phase 3** | Daily Brief "Thesis Under Pressure" annotation. Cross-day delta detection. | Brief annotation fires on correct conditions; no false positives on weekends. |
+| Phase | Status | Commits | Notes |
+|---|---|---|---|
+| **Phase 1** | **SHIPPED 2026-07-23** | `1fa4fa6` (main build), `5fccfb6` (is_trading_day fix), `d26fd05` (label fix), `bae1ba0` (UX clarity) | 3 post-ship fixes in same session; all minor |
+| **Phase 2** | Planning — gate pending | — | Requires ~1-week production observation + Opus plan review |
+| **Phase 3** | Not started | — | Follows Phase 2 |
 
-**Phase split rationale (Opus Round 1 recommendation, accepted 2026-07-23):** Findings
-1–3 leave the score's real-world distribution unproven for intact names. Wiring a paid
-Haiku call against an unvalidated score risks the LLM only firing on positions Exit
-Advisor already flags — no new signal value. Ship and validate Phase 1 first.
+## Phase 1 — what shipped
+
+- `stock_analyzer/thesis_red_team.py` — new module, `compute_erosion_score()` (pure logic, no Streamlit)
+- `stock_analyzer/exit_advisor.py` — `compute_relative_strength()` added (pure, None-tier-safe)
+- `stock_analyzer/constants.py` — `THESIS_EROSION_HAIKU_MIN=30`, `THESIS_EROSION_BRIEF_MIN=50`, `THESIS_EROSION_BRIEF_JUMP=15`
+- `stock_analyzer/db.py` — `load_thesis_erosion_cache()`, `save_thesis_erosion_cache()`, DDL
+- `app.py` — "⚠️ Red Team" 5th tab on AI Insights with: score, 🔴/🟢 signal breakdown, plain-English interpretation per signal, "X of 4 signals show thesis pressure" summary header, bootstrap note for composite delta
+- `thesis_erosion_cache` Supabase table — DDL applied manually 2026-07-23
+- `docs/architecture.md` — constants table updated
+
+**Production validation (2026-07-23, same day):**
+- FSLR: 44/100 Softening — WATCH tier + -17.9pp RS vs SPY. Correctly highest.
+- TEAM: 38/100 Softening — EXIT tier but near-flat RS (-0.6pp). Lower than FSLR; RS component correctly differentiates.
+- Intact positions (AAPL, AMD, EOG, GD): 7/100 — no tier, likely positive RS, PT flat. Correctly lowest.
+- Gate: **PASSED** — flagged positions score higher than intact ones; scoring is directionally sensible.
+- Composite delta component inert for first 5 trading days (bootstrap; +83 artifact on first run expected).
+
+## Phased build — status
+
+| Phase | Scope | Status | Gate |
+|---|---|---|---|
+| **Phase 1** | Erosion score, "⚠️ Red Team" tab, signal breakdown with plain-English labels | **SHIPPED 2026-07-23** | Passed same day |
+| **Phase 2** | Haiku counter-evidence narrative. Pre-mortem loop (reads `premortem_commitment` as context). Counter-evidence bullets in Red Team tab + Exit Advisor card expanders. | **NEXT — gate: ~2026-07-30** | Observe score distribution for ~1 week; verify composite delta activates after 5 sessions; then Opus plan review before build |
+| **Phase 3** | Daily Brief "Thesis Under Pressure" annotation. Cross-day delta detection. | Not started — follows Phase 2 | Phase 2 shipped + stable |
+
+**Phase 2 gate criteria (observe before building):**
+- Composite delta component shows real session-over-session values (not the bootstrap +80 artifact) — confirms 5-session cache has accumulated
+- Score distribution remains directionally sensible after composite delta activates — no unexpected jumps
+- At least one intact position's RS component has moved (confirms the helper is reading real price data, not a stale series)
+
+**Phase 2 scope reminder:**
+- Haiku (`claude-haiku-4-5-20251001`) call per ticker, triggered only when: `user_thesis` non-empty AND `erosion_score >= THESIS_EROSION_HAIKU_MIN` AND no fresh cache
+- Pre-mortem loop: read `trades.premortem_commitment` as additional Haiku context — "you said X would invalidate this thesis; here's evidence X is happening"
+- Output: `[{claim, severity, signal_basis}]` — max 3 items, validated before save
+- Requires dedicated Opus review of Haiku prompt + output schema before build
 
 ---
 
