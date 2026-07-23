@@ -19,7 +19,12 @@ from stock_analyzer.constants import (
 )
 
 # act_today `kind`s that are genuine same-day trade decisions.
-_ACT_KINDS = frozenset({"stop_breach", "sell_signal", "risk", "risk_off_derisk"})
+# deterioration_exit / deterioration_trim are included: their card language is
+# "→ ACT: Reduce aggressively" which belongs in Act Today, not Monitoring.
+_ACT_KINDS = frozenset({
+    "stop_breach", "sell_signal", "risk", "risk_off_derisk",
+    "deterioration_exit", "deterioration_trim",
+})
 # review `action.type`s that are genuine trades (free/raise capital, reduce risk).
 _ACT_REVIEW_TYPES = frozenset({"TRIM_AND_TIGHTEN", "TRIM_TO_TARGET", "PROTECTIVE_TRIM"})
 
@@ -151,11 +156,11 @@ def reduce_call_items(act_today: list | None, review_list: list | None) -> dict[
     consumer that needs the REASON — e.g. the Analysis page's "under a Reduce/
     Exit call" reconciliation banner reads the item's `action`/`why`. First
     reduce item per ticker wins in split order: the `act` bucket, then `aware`.
-    NB: `deterioration_exit`/`_trim` are act-ORIGIN but classify to the AWARE
-    bucket (they aren't in `_ACT_KINDS`), while review-origin trims classify to
-    ACT — so a name carrying BOTH keeps the review trim's item. The gate is
-    unaffected (suppression fires regardless); only the banner's displayed reason
-    differs. Pure; safe on None/empty.
+    NB: `deterioration_exit`/`_trim` and review-origin trims all classify to the
+    ACT bucket. A name carrying BOTH will have the deterioration item first (act_today
+    is iterated before review_list); first-per-ticker wins. The gate is unaffected
+    (suppression fires regardless); only the banner's displayed reason differs.
+    Pure; safe on None/empty.
     """
     _split = split_defensive(act_today, review_list)
     out: dict[str, dict] = {}
