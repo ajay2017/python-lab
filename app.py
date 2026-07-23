@@ -25974,7 +25974,7 @@ elif page == "🧠 AI Insights":
                         st.markdown(
                             f"- Tier: `{_rsnap.get('tier') or 'None'}`\n"
                             f"- RS vs SPY (20d): `{_rsnap.get('rs_vs_spy', 0):+.1f}pp`\n"
-                            f"- Composite delta (5-session): `{_rsnap.get('comp_delta', 0):+.1f} pts`\n"
+                            f"- Composite delta (5-session): `{_rsnap.get('comp_delta', 0):+.1f}` score pts (builds after 5 trading days)\n"
                             f"- PT revision: `{_rt_pt_lbl}`"
                         )
                         if _rr.get("counter_evidence") is None:
