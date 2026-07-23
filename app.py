@@ -25810,7 +25810,7 @@ elif page == "🧠 AI Insights":
         if _rt_held_data is None or _rt_port_df is None:
             _render_portfolio_not_loaded(show_home_button=True, key_suffix="rt")
         else:
-            if not is_trading_day():
+            if not is_trading_day(_today_et()):
                 st.caption("Market closed — showing last computed scores (no new computation on non-trading days).")
 
             _rt_score_date = str(_today_et())
@@ -25867,7 +25867,7 @@ elif page == "🧠 AI Insights":
 
                 # Only compute on trading days (gate prevents weekend rows that
                 # corrupt the 5-session cross-day delta in future reads)
-                if not is_trading_day():
+                if not is_trading_day(_today_et()):
                     continue
 
                 # 2. Compute signal components
