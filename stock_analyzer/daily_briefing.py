@@ -919,6 +919,27 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     _watch_by_ticker: dict = {
         str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
     }
+    # Pre-populate deterioration_blocked_adds for ALL held WATCH names regardless of
+    # tone so the app.py dedup (_grow_shown) catches them in bear/protect mode.
+    # In bull mode the inner loop below also catches them (and continues past add);
+    # in bear/protect mode the inner loop is skipped and without this pre-pass WATCH
+    # names leak into _buy_candidates (the FSLR Protect-mode repro, 2026-07-23).
+    if port_df is not None:
+        for _, _wr in port_df.iterrows():
+            _wt = str(_wr["Ticker"]).upper()
+            _dw_pre = _watch_by_ticker.get(_wt)
+            if _dw_pre and not any(x["ticker"].upper() == _wt for x in deterioration_blocked_adds):
+                deterioration_blocked_adds.append({
+                    "ticker":  str(_wr["Ticker"]),
+                    "score":   _f(_wr.get("Score"), 0),
+                    "pnl_pct": _f(_wr.get("P&L (%)")),
+                    "gap":     _f(_wr.get("Gap to Stop (%)"), 0),
+                    "reason":  (
+                        f"Down {_dw_pre['dd_from_peak_pct']:.1f}% from its "
+                        f"${_dw_pre['peak']:.2f} peak, below SMA{_dw_pre['trend_ma']} — "
+                        "early deterioration Watch. Don't add to a weakening name."
+                    ),
+                })
     if tone == "bull" and port_df is not None:
         for _, row in port_df.iterrows():
             sig = str(row.get("Signal", ""))
@@ -939,17 +960,20 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 # suppression is surfaced (never silent) via deterioration_blocked_adds.
                 _dw = _watch_by_ticker.get(ticker.upper())
                 if _dw:
-                    deterioration_blocked_adds.append({
-                        "ticker":  ticker,
-                        "score":   scr,
-                        "pnl_pct": _f(row.get("P&L (%)")),
-                        "gap":     gap,
-                        "reason":  (
-                            f"Down {_dw['dd_from_peak_pct']:.1f}% from its "
-                            f"${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — "
-                            "early deterioration Watch. Don't add to a weakening name."
-                        ),
-                    })
+                    # Pre-pass (above) already added this in bear/protect mode;
+                    # skip duplicate in bull mode.
+                    if not any(x["ticker"].upper() == ticker.upper() for x in deterioration_blocked_adds):
+                        deterioration_blocked_adds.append({
+                            "ticker":  ticker,
+                            "score":   scr,
+                            "pnl_pct": _f(row.get("P&L (%)")),
+                            "gap":     gap,
+                            "reason":  (
+                                f"Down {_dw['dd_from_peak_pct']:.1f}% from its "
+                                f"${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — "
+                                "early deterioration Watch. Don't add to a weakening name."
+                            ),
+                        })
                     continue
                 # Post-add cooldown — you already acted on this add recently; let
                 # the new shares settle before nudging to add more (anti-churn).
