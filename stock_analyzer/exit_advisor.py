@@ -124,6 +124,29 @@ def _exit_floor(atr_pct: float) -> float:
                DETERIORATION_EXIT_DD_CEILING)
 
 
+def compute_relative_strength(price_series, spy_series, window=20):
+    """
+    Return ticker 20-day return minus SPY 20-day return in pct-pts.
+    Returns 0.0 on any error (missing data, too-short series, etc.).
+
+    Pure function — no Streamlit dependency. Called from thesis_red_team.py
+    (adversarial-review RS component) and directly from app.py's Red Team tab.
+    `window` defaults to 20 to match REL_STRENGTH_LOOKBACK_DAYS in constants.py.
+    """
+    try:
+        if price_series is None or spy_series is None:
+            return 0.0
+        p = price_series.dropna()
+        s = spy_series.dropna()
+        if len(p) < window + 1 or len(s) < window + 1:
+            return 0.0
+        ticker_ret = (p.iloc[-1] / p.iloc[-(window + 1)] - 1) * 100
+        spy_ret    = (s.iloc[-1] / s.iloc[-(window + 1)] - 1) * 100
+        return float(ticker_ret - spy_ret)
+    except Exception:
+        return 0.0
+
+
 def classify_deterioration_tier(
     *,
     dd_from_peak_pct: float,   # POSITIVE % below the high-water mark (8.0 = 8% below)

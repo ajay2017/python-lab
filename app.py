@@ -145,6 +145,8 @@ from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
 )
 from stock_analyzer import exit_advisor
+from stock_analyzer.exit_advisor import compute_relative_strength
+from stock_analyzer.thesis_red_team import compute_erosion_score
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
     split_defensive, reduce_call_items,
@@ -23867,8 +23869,8 @@ elif page == "🧠 AI Insights":
     st.markdown("---")
 
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
-    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score = st.tabs(
-        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard"]
+    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt = st.tabs(
+        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team"]
     )
 
     with _ai_tab_pos:
@@ -25790,6 +25792,196 @@ elif page == "🧠 AI Insights":
                     for r in _sc_worst:
                         _sc_d = r["article_date"].isoformat() if r.get("article_date") else "—"
                         st.markdown(f"🔴 **{r['ticker']}** {r['ret_pct']:+.1f}% ({_sc_d} · {r['window']})")
+
+    with _ai_tab_rt:
+        # ── Thesis Red Team — Phase 1: quantitative erosion score ──────────────
+        # Strictly additive: erosion score never modifies composite score, gate
+        # decisions, or any recommendation. Refreshes once per trading day via
+        # the thesis_erosion_cache table (ticker × ET date). Haiku counter-evidence
+        # is Phase 2 — not wired here. See docs/plans/thesis-red-team-agent.md.
+        st.markdown(
+            "**Thesis Red Team** — daily adversarial review of your held theses. "
+            "Refreshes once per trading day. Never affects scores or recommendations."
+        )
+
+        # ── Cold-load guard ────────────────────────────────────────────────────
+        _rt_held_data = st.session_state.get("_last_held_data")
+        _rt_port_df   = st.session_state.get("_port_df_enriched")
+        if _rt_held_data is None or _rt_port_df is None:
+            _render_portfolio_not_loaded(show_home_button=True, key_suffix="rt")
+        else:
+            if not is_trading_day():
+                st.caption("Market closed — showing last computed scores (no new computation on non-trading days).")
+
+            _rt_score_date = str(_today_et())
+
+            # Held tickers from open positions
+            _rt_held_tickers = sorted(_open_tickers) if _open_tickers else []
+
+            # Build score map: ticker → composite Score from _port_df_enriched
+            _rt_score_map: dict = {}
+            if (
+                not _rt_port_df.empty
+                and "Ticker" in _rt_port_df.columns
+                and "Score" in _rt_port_df.columns
+            ):
+                _rt_score_map = {
+                    str(_r["Ticker"]).upper(): float(_r.get("Score") or 0)
+                    for _, _r in _rt_port_df.iterrows()
+                    if _r.get("Ticker")
+                }
+
+            # Load today's exit_signals tier per ticker (highest severity wins).
+            # exit_signals is a DataFrame; filter to today's score_date.
+            _rt_today_tiers: dict = {}
+            try:
+                _rt_exit_df = db.load_exit_signals(days_back=3)
+                if not _rt_exit_df.empty and "signal_date" in _rt_exit_df.columns:
+                    _TIER_SEV = {"EXIT": 3, "TRIM": 2, "WATCH": 1}
+                    for _, _erow in _rt_exit_df.iterrows():
+                        if str(_erow.get("signal_date", "")) == _rt_score_date:
+                            _etk = str(_erow.get("ticker", "")).upper()
+                            _est = str(_erow.get("signal_type", "")).upper()
+                            if _TIER_SEV.get(_est, 0) > _TIER_SEV.get(_rt_today_tiers.get(_etk, ""), 0):
+                                _rt_today_tiers[_etk] = _est
+            except Exception:
+                pass
+
+            # SPY close series for relative-strength computation
+            _rt_spy_close = pd.Series(dtype=float)
+            try:
+                _rt_spy_df = _cached_spy("6mo")
+                if _rt_spy_df is not None and "Close" in _rt_spy_df.columns:
+                    _rt_spy_close = _rt_spy_df["Close"]
+            except Exception:
+                pass
+
+            _rt_results = []
+
+            for _rt_ticker in _rt_held_tickers:
+                # 1. Cache check — skip compute if already scored today
+                _rt_cached = db.load_thesis_erosion_cache(_rt_ticker, _rt_score_date)
+                if _rt_cached:
+                    _rt_results.append({"ticker": _rt_ticker, **_rt_cached})
+                    continue
+
+                # Only compute on trading days (gate prevents weekend rows that
+                # corrupt the 5-session cross-day delta in future reads)
+                if not is_trading_day():
+                    continue
+
+                # 2. Compute signal components
+                _rt_tier = _rt_today_tiers.get(_rt_ticker)
+
+                _rt_tk_bundle = (_rt_held_data or {}).get(_rt_ticker, {})
+                _rt_tk_df     = _rt_tk_bundle.get("df", pd.DataFrame())
+                _rt_tk_close  = (
+                    _rt_tk_df["Close"]
+                    if not _rt_tk_df.empty and "Close" in _rt_tk_df.columns
+                    else pd.Series(dtype=float)
+                )
+                _rt_rs = compute_relative_strength(_rt_tk_close, _rt_spy_close)
+
+                _rt_comp_today = float(_rt_score_map.get(_rt_ticker, 0.0))
+
+                # 5-session-ago composite from own cache (inert for first 5 trading days)
+                _rt_comp_lag = 0.0
+                for _rt_lag in range(5, 12):
+                    _rt_lag_date = str(_today_et() - timedelta(days=_rt_lag))
+                    _rt_lag_row  = db.load_thesis_erosion_cache(_rt_ticker, _rt_lag_date)
+                    if _rt_lag_row:
+                        _rt_snap = _rt_lag_row.get("signals_snapshot") or {}
+                        if isinstance(_rt_snap, dict) and _rt_snap.get("composite_today") is not None:
+                            _rt_comp_lag = float(_rt_snap["composite_today"])
+                            break
+                _rt_comp_delta = _rt_comp_today - _rt_comp_lag  # positive = rising (good)
+
+                # PT revision: inert (7=flat) until analyst_target_snapshots accumulates
+                _rt_pt_pts = 7.0
+
+                # 3. Compute erosion score
+                _rt_erosion = compute_erosion_score(
+                    _rt_tier, _rt_rs, _rt_comp_delta, _rt_pt_pts
+                )
+
+                # 4. Build signals_snapshot (composite_today required for future lookback)
+                _rt_snapshot = {
+                    "composite_today": _rt_comp_today,
+                    "comp_delta":      round(_rt_comp_delta, 2),
+                    "rs_vs_spy":       round(_rt_rs, 2),
+                    "tier":            _rt_tier,
+                    "pt_pts":          _rt_pt_pts,
+                }
+
+                # 5. Persist
+                db.save_thesis_erosion_cache(
+                    ticker=_rt_ticker,
+                    score_date=_rt_score_date,
+                    erosion_score=_rt_erosion["score"],
+                    erosion_label=_rt_erosion["label"],
+                    signals_snapshot=_rt_snapshot,
+                )
+
+                _rt_results.append({
+                    "ticker":           _rt_ticker,
+                    "erosion_score":    _rt_erosion["score"],
+                    "erosion_label":    _rt_erosion["label"],
+                    "signals_snapshot": _rt_snapshot,
+                    "counter_evidence": None,
+                })
+
+            # 6. Render
+            _rt_results.sort(key=lambda r: r.get("erosion_score") or 0, reverse=True)
+
+            # Summary bar
+            _rt_counts = {"Breaking": 0, "Eroding": 0, "Softening": 0, "Intact": 0}
+            for _rr in _rt_results:
+                _rl = _rr.get("erosion_label", "Intact")
+                _rt_counts[_rl] = _rt_counts.get(_rl, 0) + 1
+            _rt_c1, _rt_c2, _rt_c3, _rt_c4 = st.columns(4)
+            _rt_c1.metric("Breaking",  _rt_counts["Breaking"])
+            _rt_c2.metric("Eroding",   _rt_counts["Eroding"])
+            _rt_c3.metric("Softening", _rt_counts["Softening"])
+            _rt_c4.metric("Intact",    _rt_counts["Intact"])
+
+            if not _rt_results:
+                st.info(
+                    "No erosion scores computed yet. "
+                    "Visit Home to load portfolio data on a trading day."
+                )
+            else:
+                st.divider()
+
+                # Per-ticker expandable cards, sorted highest erosion first
+                _LABEL_COLORS = {
+                    "Breaking":  "🔴",
+                    "Eroding":   "🟠",
+                    "Softening": "🟡",
+                    "Intact":    "🟢",
+                }
+                for _rr in _rt_results:
+                    _rl   = _rr.get("erosion_label", "Intact")
+                    _rscr = _rr.get("erosion_score") or 0
+                    _icon = _LABEL_COLORS.get(_rl, "")
+                    with st.expander(f"{_icon} {_rr['ticker']} — {_rl} ({_rscr:.0f}/100)"):
+                        _rsnap = _rr.get("signals_snapshot") or {}
+                        st.markdown("**Signal breakdown**")
+                        _rt_pt_lbl = (
+                            "Cut"  if _rsnap.get("pt_pts", 7) == 15 else
+                            "Up"   if _rsnap.get("pt_pts", 7) == 0  else
+                            "Flat"
+                        )
+                        st.markdown(
+                            f"- Tier: `{_rsnap.get('tier') or 'None'}`\n"
+                            f"- RS vs SPY (20d): `{_rsnap.get('rs_vs_spy', 0):+.1f}pp`\n"
+                            f"- Composite delta (5-session): `{_rsnap.get('comp_delta', 0):+.1f} pts`\n"
+                            f"- PT revision: `{_rt_pt_lbl}`"
+                        )
+                        if _rr.get("counter_evidence") is None:
+                            st.caption(
+                                "Phase 1 — quantitative score only. "
+                                "Haiku counter-evidence narrative arrives in Phase 2."
+                            )
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality

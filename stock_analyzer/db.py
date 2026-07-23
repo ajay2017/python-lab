@@ -339,6 +339,29 @@ the user acted on it):
         do update set call_count = public.api_quota_log.call_count + 1;
     end;
     $$;
+
+    -- thesis_erosion_cache: daily adversarial erosion score per held ticker
+    -- (Thesis Red Team Agent, Phase 1 — shipped 2026-07-23). One row per
+    -- (ticker, score_date). score_date is ET ISO date from _today_et().
+    -- counter_evidence is null in Phase 1; populated with Haiku bear-case
+    -- bullets in Phase 2. signals_snapshot MUST include composite_today for
+    -- the 5-session-ago composite lookback used in future rows.
+    -- Optional: until created, load returns None / save no-ops; the Red Team
+    -- tab shows only live-computed (non-cached) scores on trading days.
+    create table if not exists public.thesis_erosion_cache (
+        ticker           text        NOT NULL,
+        score_date       text        NOT NULL,
+        erosion_score    numeric     NOT NULL,
+        erosion_label    text        NOT NULL,
+        counter_evidence jsonb,
+        signals_snapshot jsonb       NOT NULL,
+        created_at       timestamptz DEFAULT now(),
+        PRIMARY KEY (ticker, score_date)
+    );
+    alter table public.thesis_erosion_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.thesis_erosion_cache;
+    create policy "Allow all (service role)" on public.thesis_erosion_cache
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -2137,6 +2160,66 @@ def save_sentiment_llm_cache(
         return True
     except Exception:
         return False
+
+
+# ── Thesis Red Team Agent — erosion score day-cache (ticker × date) ──────────
+# Persists the daily quantitative erosion score (Phase 1) and — in Phase 2 —
+# optional Haiku counter-evidence bullets. System cache → NOT _READONLY-gated
+# (same classification as sentiment_llm_cache / bundle_cache). One row per
+# (ticker, score_date); score_date is the ET date string from _today_et().
+# signals_snapshot MUST include composite_today for the 5-session-ago delta
+# lookback used in future rows. Degrades gracefully when table is absent.
+
+def load_thesis_erosion_cache(ticker: str, score_date: str) -> dict | None:
+    """Return cached erosion result for (ticker, score_date) or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date) — caller should compute and call save_thesis_erosion_cache.
+    Never raises.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("thesis_erosion_cache")
+            .select("erosion_score,erosion_label,counter_evidence,signals_snapshot")
+            .eq("ticker", t)
+            .eq("score_date", score_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_thesis_erosion_cache(
+    ticker, score_date, erosion_score, erosion_label, signals_snapshot,
+    counter_evidence=None
+):
+    """Upsert erosion score row. Best-effort — never raises.
+
+    counter_evidence is None in Phase 1; populated with validated Haiku
+    bear-case bullets in Phase 2. signals_snapshot must include
+    composite_today for the 5-session lookback used by future rows.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return
+    try:
+        _client().table("thesis_erosion_cache").upsert({
+            "ticker":           t,
+            "score_date":       score_date,
+            "erosion_score":    erosion_score,
+            "erosion_label":    erosion_label,
+            "counter_evidence": counter_evidence,
+            "signals_snapshot": signals_snapshot,
+        }).execute()
+    except Exception:
+        pass
 
 
 # ── Alert-cron dedup state (single row, id=1) ────────────────────────────────

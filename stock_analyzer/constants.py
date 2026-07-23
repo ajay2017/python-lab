@@ -856,3 +856,12 @@ CONVICTION_WEAK_SCORE           = 50    # Accidental Overexposure: Score below t
 CONVICTION_FADED_SCORE          = 60    # Legacy Overhang: top-N position with Score below this → fading conviction
 CONVICTION_LEGACY_TOP_N         = 3     # how many largest-weight positions to inspect for legacy overhang
 BREAKEVEN_ANCHOR_DWELL_RATIO    = 1.3   # anchoring flag if -2–0% bracket avg_days ≥ this × adjacent-loss-brackets mean
+
+# ── Thesis Red Team Agent ─────────────────────────────────────────────────────
+# Awareness-only adversarial layer: never modifies composite score, gate
+# decisions, or any recommendation. Phase 1 = quantitative erosion score
+# only (no LLM); Phase 2 = Haiku counter-evidence; Phase 3 = Daily Brief
+# annotation. See docs/plans/thesis-red-team-agent.md.
+THESIS_EROSION_HAIKU_MIN  = 30   # min erosion score to trigger Haiku counter-evidence (Phase 2)
+THESIS_EROSION_BRIEF_MIN  = 50   # erosion score threshold for Daily Brief annotation (Phase 3)
+THESIS_EROSION_BRIEF_JUMP = 15   # same-day score jump that triggers Brief annotation (Phase 3)
