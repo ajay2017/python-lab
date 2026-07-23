@@ -1538,11 +1538,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 if _f(_row.get("Weight (%)"), 0) > _trim_floor:
                     _drift_trim_set.add(str(_row["Ticker"]).upper())
 
-    # Deterioration WATCH — annotate (never suppress) add-to-winner: a held
-    # name can legitimately score Strong Buy on the composite while its own
-    # price structure shows early strain (down from peak, below trend) that
-    # hasn't confirmed into a TRIM. Surfacing this on the card itself avoids
-    # the "Go" verdict reading as contradicting a WATCH shown elsewhere.
+    # Deterioration WATCH — SUPPRESS add-to-winner (same policy as _grow_today).
+    # A WATCH ticker must not appear as "ADD — Winning Position" anywhere in the
+    # Brief — it contradicts the Review lane's early-deterioration warning.
     _watch_by_ticker: dict = {
         str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
     }
@@ -1602,15 +1600,12 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "Signal": sig, "Score": scr,
                 "RSI": 0, "1M Momentum": 0, "Trend": sig,
             }
+            # Deterioration WATCH — suppress entirely (don't annotate-and-include;
+            # "ADD — Winning Position" next to a Watch contradicts the Review lane).
+            if _watch_by_ticker.get(ticker.upper()):
+                continue
             xref = _cross_reference(ticker, _synthetic, port_df, news_items, held_data, today,
                                     earnings_lookup=earnings_lookup, composites=composites)
-            _dw = _watch_by_ticker.get(ticker.upper())
-            if _dw:
-                xref["conflicts"] = list(xref.get("conflicts") or []) + [
-                    f"Also flagged in Review Before Close: down {_dw['dd_from_peak_pct']:.1f}% "
-                    f"from its ${_dw['peak']:.2f} peak, below SMA{_dw['trend_ma']} — early "
-                    "deterioration Watch (not yet a TRIM trigger)."
-                ]
             items.append({
                 "type":           "add_winner",
                 "icon":           "➕",
