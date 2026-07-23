@@ -25933,6 +25933,14 @@ elif page == "🧠 AI Insights":
             # 6. Render
             _rt_results.sort(key=lambda r: r.get("erosion_score") or 0, reverse=True)
 
+            # How to read this
+            st.caption(
+                "**How to read this:** Higher score = more pressure on the thesis. "
+                "0–24 Intact · 25–49 Softening · 50–74 Eroding · 75–100 Breaking. "
+                "Signals that push the score up are shown in red; signals holding the thesis are neutral."
+            )
+            st.divider()
+
             # Summary bar
             _rt_counts = {"Breaking": 0, "Eroding": 0, "Softening": 0, "Intact": 0}
             for _rr in _rt_results:
@@ -25952,35 +25960,88 @@ elif page == "🧠 AI Insights":
             else:
                 st.divider()
 
-                # Per-ticker expandable cards, sorted highest erosion first
                 _LABEL_COLORS = {
                     "Breaking":  "🔴",
                     "Eroding":   "🟠",
                     "Softening": "🟡",
                     "Intact":    "🟢",
                 }
+
+                # Plain-English signal interpretations
+                def _rt_tier_text(tier):
+                    if tier == "EXIT":
+                        return "EXIT tier active — deep deterioration signal", True
+                    if tier == "TRIM":
+                        return "TRIM tier active — momentum and drawdown signal", True
+                    if tier == "WATCH":
+                        return "WATCH tier active — early deterioration flagged", True
+                    return "No structural deterioration signal", False
+
+                def _rt_rs_text(rs):
+                    if rs <= -10:
+                        return f"{rs:+.1f}pp vs SPY — significantly underperforming the market", True
+                    if rs < 0:
+                        return f"{rs:+.1f}pp vs SPY — mildly underperforming the market", True
+                    return f"{rs:+.1f}pp vs SPY — outperforming or in line with the market", False
+
+                def _rt_comp_text(delta):
+                    if delta < -5:
+                        return f"{delta:+.1f} pts — composite score falling (thesis weakening)", True
+                    if delta > 5:
+                        return f"{delta:+.1f} pts — composite score rising (thesis intact)", False
+                    return f"{delta:+.1f} pts — composite score stable", False
+
+                def _rt_pt_text(pt_pts):
+                    if pt_pts == 15:
+                        return "Analyst price target cut — bearish revision", True
+                    if pt_pts == 0:
+                        return "Analyst price target raised — bullish revision", False
+                    return "No analyst price target revision", False
+
                 for _rr in _rt_results:
                     _rl   = _rr.get("erosion_label", "Intact")
                     _rscr = _rr.get("erosion_score") or 0
                     _icon = _LABEL_COLORS.get(_rl, "")
-                    with st.expander(f"{_icon} {_rr['ticker']} — {_rl} ({_rscr:.0f}/100)"):
-                        _rsnap = _rr.get("signals_snapshot") or {}
-                        st.markdown("**Signal breakdown**")
-                        _rt_pt_lbl = (
-                            "Cut"  if _rsnap.get("pt_pts", 7) == 15 else
-                            "Up"   if _rsnap.get("pt_pts", 7) == 0  else
-                            "Flat"
-                        )
+                    _rsnap = _rr.get("signals_snapshot") or {}
+
+                    # Count how many signals are under pressure for the summary line
+                    _rt_tier_msg,  _rt_tier_bad  = _rt_tier_text(_rsnap.get("tier"))
+                    _rt_rs_msg,    _rt_rs_bad    = _rt_rs_text(float(_rsnap.get("rs_vs_spy", 0)))
+                    _rt_comp_msg,  _rt_comp_bad  = _rt_comp_text(float(_rsnap.get("comp_delta", 0)))
+                    _rt_ptx_msg,   _rt_ptx_bad   = _rt_pt_text(float(_rsnap.get("pt_pts", 7)))
+                    _rt_pressure_n = sum([_rt_tier_bad, _rt_rs_bad, _rt_comp_bad, _rt_ptx_bad])
+
+                    _summary = (
+                        f"{_rt_pressure_n} of 4 signals show thesis pressure"
+                        if _rt_pressure_n > 0 else
+                        "All 4 signals support the thesis today"
+                    )
+
+                    with st.expander(f"{_icon} {_rr['ticker']} — {_rl} ({_rscr:.0f}/100)  ·  {_summary}"):
+                        st.markdown("**Signal breakdown** — signals in 🔴 are pushing the score up")
+
+                        def _rt_sig_line(label, msg, is_bad):
+                            prefix = "🔴" if is_bad else "🟢"
+                            return f"- {prefix} **{label}:** {msg}"
+
                         st.markdown(
-                            f"- Tier: `{_rsnap.get('tier') or 'None'}`\n"
-                            f"- RS vs SPY (20d): `{_rsnap.get('rs_vs_spy', 0):+.1f}pp`\n"
-                            f"- Composite delta (5-session): `{_rsnap.get('comp_delta', 0):+.1f}` score pts (builds after 5 trading days)\n"
-                            f"- PT revision: `{_rt_pt_lbl}`"
+                            _rt_sig_line("Deterioration tier",    _rt_tier_msg,  _rt_tier_bad) + "\n" +
+                            _rt_sig_line("Momentum vs market",    _rt_rs_msg,    _rt_rs_bad)   + "\n" +
+                            _rt_sig_line("Composite trend",       _rt_comp_msg,  _rt_comp_bad) + "\n" +
+                            _rt_sig_line("Analyst PT revision",   _rt_ptx_msg,   _rt_ptx_bad)
                         )
+
+                        if _rsnap.get("comp_delta", 0) > 20:
+                            st.caption(
+                                "Composite trend shows a large positive delta because the 5-session "
+                                "history is still building (first 5 trading days after launch). "
+                                "This component will reflect real session-over-session changes once the cache accumulates."
+                            )
+
                         if _rr.get("counter_evidence") is None:
                             st.caption(
-                                "Phase 1 — quantitative score only. "
-                                "Haiku counter-evidence narrative arrives in Phase 2."
+                                "Phase 1 — quantitative signals only. "
+                                "Phase 2 adds a written bear case explaining what the data is saying in plain English."
                             )
 
 # ═══════════════════════════════════════════════════════════════════════════════
