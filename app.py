@@ -3448,7 +3448,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 4  # bumped: earnings WATCH card suppressed when deterioration exit active
+    _SYNTH_SCHEMA_VER = 5  # bumped: WATCH tickers suppressed from buy_candidates add_winner
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
