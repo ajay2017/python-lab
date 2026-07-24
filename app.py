@@ -1552,6 +1552,14 @@ def _check_password():
         return
     _render_brand(large=True)
     st.subheader("Sign In")
+
+    _fails = st.session_state.get("_login_fails", 0)
+    _locked_until = st.session_state.get("_login_locked_until", 0.0)
+    if time.time() < _locked_until:
+        remaining = int(_locked_until - time.time())
+        st.error(f"Too many failed attempts. Try again in {remaining}s.")
+        st.stop()
+
     pwd = st.text_input("Password", type="password")
     if st.button("Login", type="primary"):
         if pwd == expected:
@@ -1559,14 +1567,23 @@ def _check_password():
             # ever set equal, the owner always lands on the owner role.
             st.session_state.auth_ok   = True
             st.session_state["auth_role"] = "owner"
+            st.session_state["_login_fails"] = 0
             st.rerun()
         elif ro_expected and pwd == ro_expected:
             # Read-only password — viewer access.
             st.session_state.auth_ok   = True
             st.session_state["auth_role"] = "viewer"
+            st.session_state["_login_fails"] = 0
             st.rerun()
         else:
-            st.error("Incorrect password")
+            _fails += 1
+            st.session_state["_login_fails"] = _fails
+            if _fails >= 10:
+                st.session_state["_login_locked_until"] = time.time() + 300  # 5-min lockout
+                st.session_state["_login_fails"] = 0
+            elif _fails >= 3:
+                time.sleep(2)   # 2s delay after 3rd+ failure
+            st.error(f"Incorrect password ({_fails} failed attempt{'s' if _fails != 1 else ''})")
     st.stop()
 
 _check_password()
