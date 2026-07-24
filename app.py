@@ -187,6 +187,7 @@ from stock_analyzer import decision_context as _dctx
 from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import portfolio_intelligence
+from stock_analyzer import structural_scanner
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
@@ -9892,8 +9893,8 @@ elif page == "🧩 Intelligence":
         st.stop()
     _render_portfolio_stale_banner(key_suffix="pi")
 
-    _pi_tab_clusters, _pi_tab_risk, _pi_tab_factor = st.tabs([
-        "🕸️ Correlation Clusters", "⚖️ Risk Budget", "📐 Factor Tilt"
+    _pi_tab_clusters, _pi_tab_risk, _pi_tab_factor, _pi_tab_structural = st.tabs([
+        "🕸️ Correlation Clusters", "⚖️ Risk Budget", "📐 Factor Tilt", "🧬 Structural Scan"
     ])
 
     with _pi_tab_clusters:
@@ -10105,6 +10106,91 @@ elif page == "🧩 Intelligence":
             st.caption(
                 "This shows a directional lean, not an instruction."
             )
+
+    with _pi_tab_structural:
+        st.caption(
+            "Composes the three panels above into one view: which positions are "
+            "most dangerous together, and what a shock to your biggest risk "
+            "contributor could cost the whole book. **Directional, not precise** — "
+            "the cascade estimate uses a simplified beta approximation, exactly as "
+            "noisy as the Factor Tilt estimates above for a 10-20 position book; "
+            "treat it as a rough lean, not a measurement."
+        )
+
+        _ss_corr_df = st.session_state.get("_corr_df_cache")
+        if _ss_corr_df is None or (hasattr(_ss_corr_df, "empty") and _ss_corr_df.empty):
+            st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+        else:
+            _ss_weights = dict(zip(_pi_pdf["Ticker"], _pi_pdf["Weight (%)"]))
+            _ss_rb = portfolio_intelligence.risk_budget(_pi_hd, _ss_weights)
+            _ss_clusters = portfolio_intelligence.correlation_clusters(_ss_corr_df, _ss_weights)
+
+            if not _ss_rb["positions"]:
+                st.info("Not enough price history across your positions to compute a structural scan this session.")
+            else:
+                # Blast Radius Map — pure Python, always computed live, never gated
+                _ss_blast = structural_scanner.blast_radius(_ss_corr_df, _ss_rb["positions"])
+
+                st.markdown("**💥 Blast Radius Map**")
+                if not _ss_blast:
+                    st.caption("Not enough correlated positions to estimate a cascade this session.")
+                else:
+                    _ss_cols = st.columns(len(_ss_blast))
+                    for _ss_col, _ss_b in zip(_ss_cols, _ss_blast):
+                        with _ss_col:
+                            st.metric(
+                                f"{_ss_b['shocked_ticker']} {_ss_b['shock_pct']:.0f}%",
+                                f"{_ss_b['portfolio_impact_pct']:+.1f}% portfolio",
+                            )
+                            if _ss_b["contributing_tickers"]:
+                                _ss_contrib_str = ", ".join(
+                                    f"{c['ticker']} ({c['corr']:+.2f})"
+                                    for c in _ss_b["contributing_tickers"][:3]
+                                )
+                                st.caption(f"Cascades via: {_ss_contrib_str}")
+                            else:
+                                st.caption("No strongly-correlated names to cascade through.")
+
+                st.divider()
+
+                # Narrative — button-gated (day-cached, never auto-computed on tab
+                # view: Streamlit executes every tab body on every rerun regardless
+                # of which tab is selected, so an auto-compute design here would
+                # fire the Haiku call far more than once/day)
+                st.markdown("**🧬 Structural Narrative**")
+                _ss_scan_date = str(_today_et())
+                _ss_cached = db.load_structural_scan_cache(_ss_scan_date)
+
+                if _ss_cached and _ss_cached.get("narrative"):
+                    st.markdown(_ss_cached["narrative"])
+                    st.caption(f"Computed {_ss_scan_date} ET — quantitative panels above are always live.")
+                else:
+                    if st.button("🧬 Generate structural narrative", key="_ss_gen_narrative_btn"):
+                        with st.spinner("Synthesizing structural narrative…"):
+                            _ss_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                            _ss_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
+                            _ss_evidence = structural_scanner.build_narrative_inputs(
+                                _ss_clusters, _ss_rb["positions"], _ss_blast, _ss_factor_cache
+                            )
+                            _ss_narrative = structural_scanner.generate_structural_narrative(
+                                _ss_evidence, _ss_api_key
+                            )
+                        if _ss_narrative:
+                            db.save_structural_scan_cache(
+                                scan_date=_ss_scan_date,
+                                narrative=_ss_narrative,
+                                blast_radius=_ss_blast,
+                                cluster_snapshot=_ss_clusters,
+                                risk_budget_snapshot=_ss_rb["positions"][:3],
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("Narrative generation failed — API unavailable or rate-limited. Try again.")
+
+                st.caption(
+                    "Full pairwise correlations: 🕸️ Correlation Clusters. "
+                    "Per-position risk contribution: ⚖️ Risk Budget."
+                )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

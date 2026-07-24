@@ -385,6 +385,31 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.debate_cache;
     create policy "Allow all (service role)" on public.debate_cache
         for all to service_role using (true) with check (true);
+
+    -- structural_scan_cache: daily portfolio-level structural vulnerability
+    -- narrative (Structural Vulnerability Scanner, Phase 1). ONE row per
+    -- scan_date (ET ISO date via _today_et()) — this is a portfolio-wide
+    -- synthesis, not per-ticker. blast_radius/cluster_snapshot/risk_budget_snapshot
+    -- are the exact evidence used to generate narrative, kept for audit.
+    -- narrative is null if the Haiku call failed — a failed/empty result is
+    -- NEVER written (the caller only calls save when narrative succeeded), so a
+    -- transient failure can be retried immediately rather than caching a
+    -- placeholder for the rest of the day.
+    -- Until table created: load returns None, save no-ops; the tab still renders
+    -- the quantitative Blast Radius panel live and shows the generate button.
+    create table if not exists public.structural_scan_cache (
+        scan_date            text        NOT NULL,
+        narrative            text,
+        blast_radius         jsonb       NOT NULL,
+        cluster_snapshot     jsonb       NOT NULL,
+        risk_budget_snapshot jsonb       NOT NULL,
+        created_at           timestamptz DEFAULT now(),
+        PRIMARY KEY (scan_date)
+    );
+    alter table public.structural_scan_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.structural_scan_cache;
+    create policy "Allow all (service role)" on public.structural_scan_cache
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -2462,6 +2487,57 @@ def save_debate_cache(
             "grounded":        grounded,
             "transcript":      transcript,
             "corpus_snapshot": corpus_snapshot,
+        }).execute()
+    except Exception:
+        pass
+
+
+# ── Structural Vulnerability Scanner — daily portfolio-level cache ──────────
+# Persists the Blast Radius Map + generated narrative for one ET calendar day.
+# ONE row per scan_date (no ticker key — portfolio-wide synthesis, not a
+# per-position score). System cache → NOT _READONLY-gated (same
+# classification as debate_cache / sentiment_llm_cache). Degrades gracefully
+# when table is absent: load returns None, save no-ops.
+
+def load_structural_scan_cache(scan_date: str) -> dict | None:
+    """Return cached structural scan result for scan_date or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date) — caller should compute and show the generate button.
+    Never raises.
+    """
+    if not scan_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("structural_scan_cache")
+            .select("narrative,blast_radius,cluster_snapshot,risk_budget_snapshot")
+            .eq("scan_date", scan_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_structural_scan_cache(scan_date, narrative, blast_radius, cluster_snapshot, risk_budget_snapshot):
+    """Upsert structural scan row. Best-effort — never raises.
+
+    Caller must only invoke this when narrative is non-None (a successful
+    Haiku call) — never cache a failed/empty result.
+    """
+    if not scan_date or not has_db():
+        return
+    try:
+        _client().table("structural_scan_cache").upsert({
+            "scan_date":            scan_date,
+            "narrative":            narrative,
+            "blast_radius":         blast_radius,
+            "cluster_snapshot":     cluster_snapshot,
+            "risk_budget_snapshot": risk_budget_snapshot,
         }).execute()
     except Exception:
         pass
