@@ -174,6 +174,18 @@ Lower architectural risk than Idea #2. Builds directly on existing `_corr_df_cac
 
 ## Idea #4 — Information Asymmetry Detector (P4)
 
+> **Superseded by the dedicated plan (2026-07-24):** the "three sources disagree on
+> forward PE" premise below is not achievable as written — research found Finnhub
+> supplies live price only in this codebase (no fundamentals capability at all), and
+> FMP's own forward PE is sometimes a synthetic derivation from its trailing PE rather
+> than an independent read, making a naive fundamentals comparison ambiguous between a
+> real data fault and a methodology difference. The dedicated plan,
+> [docs/plans/information-asymmetry-detector.md](information-asymmetry-detector.md),
+> narrows scope to persisting the already-shipped, already-computed PRICE cross-check
+> (the one field with a genuine multi-source comparison today) and annotating the
+> existing red banner with a day-over-day widening note. Read the dedicated plan, not
+> this section, for the current design.
+
 ### What it is
 
 Monitors cross-source data divergence (Finnhub vs. yfinance vs. FMP) as a first-class signal. When three sources agree on a metric, confidence is high. When they diverge, that divergence is surfaced as a "look closer" alert.
@@ -245,7 +257,7 @@ Each idea requires:
 |---|---|---|
 | #1 Thesis Red Team Agent | [docs/plans/thesis-red-team-agent.md](thesis-red-team-agent.md) | Phase 1 SHIPPED 2026-07-23 — Phase 2 gate: ~2026-07-30 |
 | #2 Multi-Agent Debate | [docs/plans/multi-agent-debate.md](multi-agent-debate.md) | Phase 1 SHIPPED 2026-07-23 (commit `e745e48`) — Phase 2 gate: ≥3 days production observation |
-| #3 Structural Vulnerability Scanner | [docs/plans/structural-vulnerability-scanner.md](structural-vulnerability-scanner.md) | Plan SHIP 2026-07-23 (3 Opus rounds) — surfaces as a 4th tab on 🧩 Intelligence (not 🔗 Risk Analysis as originally assumed — see plan's opening section); ready for implementation |
-| #4 Information Asymmetry Detector | `docs/plans/information-asymmetry-detector.md` | Not yet written |
+| #3 Structural Vulnerability Scanner | [docs/plans/structural-vulnerability-scanner.md](structural-vulnerability-scanner.md) | Phase 1 SHIPPED 2026-07-24 (commit `9b47117`) — surfaces as a 4th tab on 🧩 Intelligence (not 🔗 Risk Analysis as originally assumed — see plan's opening section). Phase 2 gate: ≥3 days production observation |
+| #4 Information Asymmetry Detector | [docs/plans/information-asymmetry-detector.md](information-asymmetry-detector.md) | Plan SHIP 2026-07-24 (2 Opus rounds) — scope narrowed to price-cross-check history + widening annotation (not the original 3-source fundamentals divergence idea — see plan's opening section); ready for implementation |
 | #5 Regime-Aware Stress Testing | `docs/plans/adversarial-stress-testing.md` | Not yet written |
 | #6 Autonomous Pattern Discovery | `docs/plans/autonomous-pattern-discovery.md` | Not yet written |
