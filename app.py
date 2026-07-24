@@ -23390,7 +23390,7 @@ The app's intelligence is computed live in your browser — so it can only reach
             )
 
         with st.expander("🧠 Where AI is used — sentiment scoring, news, thesis, earnings, debrief, monthly & analyst coverage", expanded=False):
-            st.caption("How the AI layer fits into the app — ten touchpoints across two tracks")
+            st.caption("How the AI layer fits into the app — twelve touchpoints across two tracks")
             st.graphviz_chart(
                 """
             digraph DRISHTA_AI {
@@ -23464,7 +23464,7 @@ The app's intelligence is computed live in your browser — so it can only reach
             )
             st.markdown(
                 """
-DRISHTA uses AI across **ten touchpoints** organised into two tracks. A **fast extraction track** (Haiku) runs per-request and handles scoring and structured data extraction. A **deep reflection track** (Claude) generates narrative intelligence about your decisions over time. The diagram above shows every data path.
+DRISHTA uses AI across **twelve touchpoints** organised into two tracks. A **fast extraction track** (Haiku) runs per-request and handles scoring and structured data extraction. A **deep reflection track** (Claude) generates narrative intelligence about your decisions over time. The diagram above shows every data path.
 
 **One guarantee, precisely stated:** Gate thresholds — BUY ≥ 65, sector caps, stop rules — live in the app's rules-only configuration and are set by rules only. The AI never moves them. The **Sentiment pillar** (10% of composite) is the one place LLM scoring feeds back into the engine: Haiku re-scores news headlines with financial domain context that VADER alone cannot provide. Every other AI output is pure awareness — the engine never reads it back, and if the AI layer is offline every page and protection works exactly the same.
 
@@ -23495,6 +23495,8 @@ DRISHTA uses AI across **ten touchpoints** organised into two tracks. A **fast e
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
 - **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A written bear-case narrative (Phase 2) will be added once the quantitative score has been validated in production for one week. **Strictly display-only: the erosion score never feeds a gate or changes a recommendation.**
+
+- **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
 - **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news. Your choice of provider: Claude, OpenAI, Gemini, or Groq. For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
 
@@ -23571,7 +23573,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), and the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home.
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), and the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )
 
