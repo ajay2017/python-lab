@@ -208,6 +208,19 @@ Very low LLM dependency — this is primarily a quantitative comparison layer on
 
 ## Idea #5 — Regime-Aware Adversarial Stress Testing (P5)
 
+> **Superseded by the dedicated plan (2026-07-24):** the "scenario plausibility score:
+> how likely in the next 90 days" line below cannot be honestly computed — the only
+> historical regime persistence (`daily_regime`, shipped 2026-07-21) has ~3 days of
+> data, nowhere near enough for a genuine base rate. The dedicated plan,
+> [docs/plans/regime-aware-stress-testing.md](regime-aware-stress-testing.md), drops
+> the fabricated probability in favor of the regime detector's real, already-computed
+> confidence score, and surfaces as a new expander on the existing 🔥 Stress Testing
+> tab (🔗 Risk Analysis) rather than a new page. Also found: there are two different
+> `detect_macro_regime` functions in this codebase (`macro_calendar.py`'s FRED-based
+> detector, and an older unrelated one in `macro.py`) — the dedicated plan uses
+> `macro_calendar.py`'s exclusively. Read the dedicated plan, not this section, for
+> the current design.
+
 ### What it is
 
 Rather than generic stress tests ("what if 2008?"), this agent builds a custom worst-case macro scenario specifically designed to damage the user's *current* portfolio composition — then monitors for early indicators of that scenario.
@@ -258,6 +271,6 @@ Each idea requires:
 | #1 Thesis Red Team Agent | [docs/plans/thesis-red-team-agent.md](thesis-red-team-agent.md) | Phase 1 SHIPPED 2026-07-23 — Phase 2 gate: ~2026-07-30 |
 | #2 Multi-Agent Debate | [docs/plans/multi-agent-debate.md](multi-agent-debate.md) | Phase 1 SHIPPED 2026-07-23 (commit `e745e48`) — Phase 2 gate: ≥3 days production observation |
 | #3 Structural Vulnerability Scanner | [docs/plans/structural-vulnerability-scanner.md](structural-vulnerability-scanner.md) | Phase 1 SHIPPED 2026-07-24 (commit `9b47117`) — surfaces as a 4th tab on 🧩 Intelligence (not 🔗 Risk Analysis as originally assumed — see plan's opening section). Phase 2 gate: ≥3 days production observation |
-| #4 Information Asymmetry Detector | [docs/plans/information-asymmetry-detector.md](information-asymmetry-detector.md) | Plan SHIP 2026-07-24 (2 Opus rounds) — scope narrowed to price-cross-check history + widening annotation (not the original 3-source fundamentals divergence idea — see plan's opening section); ready for implementation |
-| #5 Regime-Aware Stress Testing | `docs/plans/adversarial-stress-testing.md` | Not yet written |
+| #4 Information Asymmetry Detector | [docs/plans/information-asymmetry-detector.md](information-asymmetry-detector.md) | Phase 1 SHIPPED 2026-07-24 (commit `6e3ebd2`) — scope narrowed to price-cross-check history + widening annotation (not the original 3-source fundamentals divergence idea — see plan's opening section) |
+| #5 Regime-Aware Stress Testing | [docs/plans/regime-aware-stress-testing.md](regime-aware-stress-testing.md) | Plan SHIP 2026-07-24 (3 Opus rounds) — new expander on the existing 🔥 Stress Testing tab (🔗 Risk Analysis), not a new page; scope narrowed to drop the roadmap's fabricated "90-day plausibility" framing in favor of the regime detector's real confidence score (see plan's opening section); ready for implementation |
 | #6 Autonomous Pattern Discovery | `docs/plans/autonomous-pattern-discovery.md` | Not yet written |
