@@ -77,7 +77,7 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
                 _comp_line += f" ({lbl})"
             lines.append(_comp_line)
         _pillar_parts = []
-        for key, name in (("t_score", "Momentum"), ("bq_score", "Fundamentals"),
+        for key, name in (("t_score", "Technical"), ("bq_score", "Fundamentals"),
                           ("val_score", "Valuation"), ("s_score", "Sentiment")):
             v = corpus.get(key)
             if v is not None:

@@ -70,12 +70,17 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
     specific counterargument (§1 of the case-against prompt).
 
     Pure; None-safe. Bundle keys per bundle_loader.load_all(): t_score/
-    t_signals (momentum), bq_score/bq_signals (fundamentals, aliased f_score/
+    t_signals (technical), bq_score/bq_signals (fundamentals, aliased f_score/
     f_signals), val_score/val_signals (valuation), s_score (sentiment — no
     signals dict; the top headlines stand in for it). t_signals/bq_signals/
     val_signals are each a {factor_name: description} DICT (per technicals.py/
     fundamentals.py/valuation.py's `tuple[float, dict]` return type), not a
     list — converted to strings via _signals_dict_to_strings before return.
+
+    Labelled "technical" (not "momentum") to avoid colliding with the
+    market-scanner's separate momentum/breakout score shown elsewhere in the
+    UI (e.g. reconcile_signals()'s "Momentum NN/100" badge) — the two scores
+    are computed differently and can diverge sharply.
 
     Returns {"driving_pillar": str|None, "driving_signals": list[str]} —
     degrades to (None, []) if no pillar scores are present in the bundle.
@@ -87,7 +92,7 @@ def driving_pillar_from_bundle(bundle: dict) -> dict:
         if isinstance(h, dict) and h.get("headline")
     ][:3]
     _pillars = {
-        "momentum":     (bundle.get("t_score"), _signals_dict_to_strings(bundle.get("t_signals"))),
+        "technical":    (bundle.get("t_score"), _signals_dict_to_strings(bundle.get("t_signals"))),
         "fundamentals": (
             bundle.get("bq_score") if bundle.get("bq_score") is not None else bundle.get("f_score"),
             _signals_dict_to_strings(bundle.get("bq_signals") or bundle.get("f_signals")),
@@ -115,7 +120,7 @@ def build_premortem_inputs(
 
     engine keys (all optional):
         composite (float 0-100), band (str e.g. "Strong Buy"),
-        driving_pillar (str: "fundamentals"|"valuation"|"momentum"|"sentiment"),
+        driving_pillar (str: "fundamentals"|"valuation"|"technical"|"sentiment"),
         driving_signals (list[str] — the specific factors behind that pillar)
     portfolio keys (all optional):
         n_positions (int), top_sector (str), top_sector_weight_pct (float),
