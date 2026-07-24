@@ -189,6 +189,7 @@ from stock_analyzer import premortem_advisor as _pm_advisor
 from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
+from stock_analyzer import regime_stress
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
@@ -9920,6 +9921,94 @@ elif page == "🔗 Risk Analysis":
                         "🟡 Amber = estimated loss 10–20%  ·  "
                         "Beta-adjusted for market-wide scenarios; sector overrides for historical events."
                     )
+
+            with st.expander("🎯 Regime-Aware Adversarial Scenario (Beta)", expanded=False):
+                st.caption(
+                    "Combines your portfolio's structural weak points with the current "
+                    "macro regime to name the single compound scenario most likely to "
+                    "hurt this specific book. The confidence score reflects how "
+                    "confident the regime detector is in its CURRENT read — it is not "
+                    "a forecast of anything happening in the next 90 days."
+                )
+
+                _rs_corr_df = st.session_state.get("_corr_df_cache")
+                if _rs_corr_df is None or (hasattr(_rs_corr_df, "empty") and _rs_corr_df.empty):
+                    st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+                else:
+                    _rs_weights = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
+                    _rs_rb = portfolio_intelligence.risk_budget(held_data, _rs_weights)
+                    _rs_clusters = portfolio_intelligence.correlation_clusters(_rs_corr_df, _rs_weights)
+
+                    if not _rs_rb["positions"]:
+                        st.info("Not enough price history to compute a regime-aware scenario this session.")
+                    else:
+                        _rs_blast = structural_scanner.blast_radius(_rs_corr_df, _rs_rb["positions"])
+
+                        # Reuse the existing regime cache — byte-for-byte identical
+                        # fred_key derivation to the Regime Fit section (app.py:9504-9509)
+                        # so bool(fred_key) always matches across the page — never
+                        # re-derive this differently.
+                        _rs_fred_key = (
+                            st.secrets.get("fred", {}).get("api_key")
+                            or os.environ.get("FRED_API_KEY", "")
+                            or st.session_state.get("_ec_fred_key", "")
+                        )
+                        _rs_regime_cache_key = f"_macro_regime_{_today_et()}_{bool(_rs_fred_key)}"
+                        if _rs_regime_cache_key not in st.session_state:
+                            with st.spinner("Detecting macro regime…"):
+                                try:
+                                    _rs_det_regime = detect_macro_regime_fred(
+                                        str(_rs_fred_key).strip() if _rs_fred_key else None
+                                    )
+                                except Exception:
+                                    _rs_det_regime = {
+                                        "regime": "neutral", "label": "Data-Dependent",
+                                        "icon": "📊", "color": "#6b7280", "bg": "#111827",
+                                        "fed_trend": "unknown", "cpi_yoy": None,
+                                        "rationale": "Regime detection unavailable.",
+                                        "source": "fallback",
+                                        "confidence": 0, "scores": {}, "signals": [],
+                                    }
+                                st.session_state[_rs_regime_cache_key] = _rs_det_regime
+                        _rs_regime = st.session_state[_rs_regime_cache_key]
+                        _rs_cross_asset = _cached_cross_asset()
+
+                        _rs_col1, _rs_col2 = st.columns(2)
+                        _rs_col1.metric("Current regime", _rs_regime.get("label", "—"))
+                        _rs_col2.metric("Regime confidence", f"{_rs_regime.get('confidence', 0)}/100")
+
+                        _rs_scan_date = str(_today_et())
+                        _rs_cached = db.load_regime_scenario_cache(_rs_scan_date)
+
+                        if _rs_cached and _rs_cached.get("scenario_narrative"):
+                            st.markdown(_rs_cached["scenario_narrative"])
+                            _rs_watchlist = _rs_cached.get("indicator_watchlist") or []
+                            if _rs_watchlist:
+                                st.markdown("**Early indicators to watch:**")
+                                for _rs_ind in _rs_watchlist:
+                                    st.markdown(f"- {_rs_ind}")
+                            st.caption(f"Computed {_rs_scan_date} ET.")
+                        else:
+                            if st.button("🎯 Generate regime-aware scenario", key="_rs_gen_btn"):
+                                with st.spinner("Synthesizing regime-aware scenario…"):
+                                    _rs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                                    _rs_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
+                                    _rs_evidence = regime_stress.build_regime_scenario_inputs(
+                                        _rs_blast, _rs_clusters, _rs_regime, _rs_cross_asset, _rs_factor_cache
+                                    )
+                                    _rs_result = regime_stress.generate_regime_scenario(_rs_evidence, _rs_api_key)
+                                if _rs_result and _rs_result.get("scenario_narrative"):
+                                    db.save_regime_scenario_cache(
+                                        scan_date=_rs_scan_date,
+                                        scenario_narrative=_rs_result["scenario_narrative"],
+                                        indicator_watchlist=_rs_result.get("indicator_watchlist", []),
+                                        blast_radius_snapshot=_rs_blast,
+                                        regime_snapshot=_rs_regime,
+                                        cross_asset_snapshot=_rs_cross_asset,
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.warning("Scenario generation failed — API unavailable or rate-limited. Try again.")
 
             st.info(
                 "**Methodology:** Market-wide scenarios multiply each position's individual beta × SPY shock. "

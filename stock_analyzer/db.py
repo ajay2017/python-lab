@@ -439,6 +439,32 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.price_xcheck_history;
     create policy "Allow all (service role)" on public.price_xcheck_history
         for all to service_role using (true) with check (true);
+
+    -- regime_scenario_cache: daily portfolio-level regime-aware adversarial
+    -- scenario narrative (Regime-Aware Adversarial Stress Testing, Phase 1).
+    -- ONE row per scan_date (ET ISO date via _today_et()) — portfolio-wide, not
+    -- per-ticker. Composes structural_scanner.blast_radius() + macro_calendar's
+    -- FRED regime detector + cross_asset's USD signal into one Haiku-narrated
+    -- compound scenario. scenario_narrative is null only if the Haiku call
+    -- failed, but a failed/empty result is NEVER written (the caller only calls
+    -- save when scenario_narrative succeeded), so a transient failure can be
+    -- retried immediately rather than caching a placeholder for the rest of the
+    -- day. Until table created: load returns None, save no-ops; the expander
+    -- still shows the generate button.
+    create table if not exists public.regime_scenario_cache (
+        scan_date             text        NOT NULL,
+        scenario_narrative    text,
+        indicator_watchlist   jsonb,
+        blast_radius_snapshot jsonb       NOT NULL,
+        regime_snapshot       jsonb       NOT NULL,
+        cross_asset_snapshot  jsonb       NOT NULL,
+        created_at            timestamptz DEFAULT now(),
+        PRIMARY KEY (scan_date)
+    );
+    alter table public.regime_scenario_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.regime_scenario_cache;
+    create policy "Allow all (service role)" on public.regime_scenario_cache
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -2615,6 +2641,60 @@ def save_structural_scan_cache(scan_date, narrative, blast_radius, cluster_snaps
             "blast_radius":         blast_radius,
             "cluster_snapshot":     cluster_snapshot,
             "risk_budget_snapshot": risk_budget_snapshot,
+        }).execute()
+    except Exception:
+        pass
+
+
+# ── Regime-Aware Adversarial Stress Testing — daily portfolio-level cache ───
+# Persists the compound scenario narrative + indicator watchlist for one ET
+# calendar day. ONE row per scan_date (no ticker key — portfolio-wide
+# synthesis, not a per-position score). System cache → NOT _READONLY-gated
+# (same classification as debate_cache / sentiment_llm_cache /
+# structural_scan_cache). Degrades gracefully when table is absent: load
+# returns None, save no-ops.
+
+def load_regime_scenario_cache(scan_date: str) -> dict | None:
+    """Return cached regime scenario result for scan_date or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date) — caller should compute and show the generate button.
+    Never raises.
+    """
+    if not scan_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("regime_scenario_cache")
+            .select("scenario_narrative,indicator_watchlist,blast_radius_snapshot,regime_snapshot,cross_asset_snapshot")
+            .eq("scan_date", scan_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_regime_scenario_cache(scan_date, scenario_narrative, indicator_watchlist,
+                                blast_radius_snapshot, regime_snapshot, cross_asset_snapshot):
+    """Upsert regime scenario row. Best-effort — never raises.
+
+    Caller must only invoke this when scenario_narrative is non-None (a
+    successful Haiku call) — never cache a failed/empty result.
+    """
+    if not scan_date or not has_db():
+        return
+    try:
+        _client().table("regime_scenario_cache").upsert({
+            "scan_date":             scan_date,
+            "scenario_narrative":    scenario_narrative,
+            "indicator_watchlist":   indicator_watchlist,
+            "blast_radius_snapshot": blast_radius_snapshot,
+            "regime_snapshot":       regime_snapshot,
+            "cross_asset_snapshot":  cross_asset_snapshot,
         }).execute()
     except Exception:
         pass
