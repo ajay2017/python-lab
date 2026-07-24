@@ -23679,7 +23679,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).

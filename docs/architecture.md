@@ -364,6 +364,7 @@ The app was historically 100% dependent on yfinance (unofficial, no SLA) for all
 
 **Price cross-check** (`orchestrator.crosscheck_batch` / `crosscheck_price`, surfaced on the Portfolio page, cached 5 min):
 - Validates the live-price primary against an INDEPENDENT source. **`prev_close` is checked strictly** (`DATA_XCHECK_PREVCLOSE_TOL_PCT` 0.5%) — a settled value that must match across sources, so a breach is a real integrity fault (missed split, wrong-symbol mapping, poisoned feed). **Live price is checked loosely** (`DATA_XCHECK_LIVE_TOL_PCT` 3.0%) because a delayed validator legitimately differs from a real-time primary intraday. A breach renders a fail-loud red banner ("Price unverified — sources disagree").
+- **Widening history (F-126, Information Asymmetry Detector Phase 1, shipped 2026-07-24):** the cross-check result is additionally persisted to `price_xcheck_history` (§6.27), one row per (ticker, ET trading day), written from the interactive Home page path only (day-deduped via `st.session_state`, never from cron — see §6.27 for why). When a held ticker is currently failing cross-check, its banner bullet is annotated per failing leg with "widened from X% to Y% since `<date>`" when the most recent prior row (21-day lookback) shows a smaller gap. `data.divergence_widened()` is the pure diff+threshold helper. Display-only — never changes whether the banner fires.
 
 **Secrets:** `FINNHUB_API_KEY`, `FMP_API_KEY` (Streamlit Cloud secrets). `_util.get_secret` reads top-level first, then tolerates a key mis-nested under a `[section]` (a common TOML mistake), then falls back to an env var (offline `selftest`). A missing key → provider reports unconfigured and is skipped (no error).
 
@@ -1139,6 +1140,47 @@ CREATE TABLE IF NOT EXISTS structural_scan_cache (
 ```
 
 **Daily portfolio-level structural narrative** (Structural Vulnerability Scanner, Phase 1 — shipped 2026-07-24). One row per `scan_date` (America/New_York ISO date via `_today_et()`) — this is a **portfolio-wide** synthesis, not per-ticker, unlike `thesis_erosion_cache`/`debate_cache`. `narrative` is the Haiku-generated 2-4 sentence structural explanation; `null` only if the Haiku call failed, but a failed/empty narrative is never written in the first place (the caller only calls `save_structural_scan_cache()` when the narrative call succeeded), so a `null` narrative should never actually appear in a saved row. `blast_radius` is `stock_analyzer.structural_scanner.blast_radius()`'s output at scan time (one dict per shocked ticker, the top-3 risk-budget contributors); `cluster_snapshot` is `portfolio_intelligence.correlation_clusters()`'s output; `risk_budget_snapshot` is the top-3 `risk_budget()` positions — all three kept for audit alongside the narrative they produced. Written by `db.save_structural_scan_cache()` (upsert, best-effort); read by `db.load_structural_scan_cache(scan_date)`. **Button-gated write, not auto-computed** — the tab's Blast Radius Map (pure Python) recomputes live every render, but the narrative only calls Haiku inside an explicit "🧬 Generate structural narrative" button click, because Streamlit executes every tab body on every page rerun regardless of which tab is selected — an auto-compute design would fire the LLM call far more than once/day. System cache — not `_READONLY`-gated (same classification as `debate_cache`/`thesis_erosion_cache`). RLS: `FOR ALL TO service_role`.
+
+### 6.27 `price_xcheck_history` table
+
+```sql
+CREATE TABLE IF NOT EXISTS price_xcheck_history (
+    ticker           TEXT        NOT NULL,
+    check_date       TEXT        NOT NULL,
+    primary_source   TEXT,
+    validator_source TEXT,
+    prev_gap_pct     NUMERIC,
+    live_gap_pct     NUMERIC,
+    ok               BOOLEAN     NOT NULL,
+    created_at       TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (ticker, check_date)
+);
+```
+
+**Daily history of the already-shipped price cross-check** (Information Asymmetry
+Detector, Phase 1 — shipped 2026-07-24; F-126). One row per `(ticker, check_date)`
+where `check_date` is the America/New_York ISO date (`_today_et()`) — closes the one
+gap in the pre-existing F-123 price cross-check (§4.0.4), which had zero history
+before this table (a 5-minute `st.cache_data` TTL only). `primary_source`/
+`validator_source`/`prev_gap_pct`/`live_gap_pct`/`ok` mirror
+`orchestrator.crosscheck_batch()`'s per-ticker result fields exactly — no
+recomputation, purely a persistence of an already-computed value. **Written from the
+interactive Home page path only, day-deduped via `st.session_state`, NEVER from
+`cron_runner.py`** — the premarket cron path does not call
+`crosscheck_price`/`crosscheck_batch` today, so logging from cron would mean a
+genuinely new per-ticker second-provider fetch every cron run; the interactive path
+already pays for this computation every 5 minutes via `_cached_price_xcheck`. Enables
+the F-126 "widened since `<date>`" banner annotation: `db.load_price_xcheck_history(
+ticker, before_date, days_back=21)` returns the most recent row strictly before
+`before_date` within a 21-day lookback, or `None` if no prior row exists (never
+fabricates a baseline). `data.divergence_widened(today_gap_pct, prior_gap_pct,
+min_widen_pp=1.0)` is the pure diff+threshold helper deciding whether to append the
+annotation — `min_widen_pp` is a display-annotation default, not a `constants.py`
+policy value, since it only decides whether a sentence is appended to an already-firing
+banner. Written by `db.save_price_xcheck_history_batch()` (upsert on
+`(ticker, check_date)`, best-effort, `_READONLY`-gated since this technically writes
+on every distinct trading day the app is opened); read by
+`db.load_price_xcheck_history()`. RLS: `FOR ALL TO service_role`.
 
 ### `stock_analyzer/portfolio_health.py`
 
