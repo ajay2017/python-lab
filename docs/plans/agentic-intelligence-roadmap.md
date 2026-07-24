@@ -253,6 +253,21 @@ An agent that discovers new behavioral patterns in the user's trade + outcome hi
 
 Requires substantial historical trade + outcome data to avoid statistical noise (minimum ~30 completed trades per pattern). Behavioral Fingerprint (F-193) already handles the known patterns. This is the unsupervised-discovery extension — higher statistical validity risk. Build after the simpler ideas have generated more outcome data.
 
+> **SHELVED 2026-07-24 — see [docs/plans/autonomous-pattern-discovery.md](autonomous-pattern-discovery.md)
+> for the full evaluation.** The ≥30-trade gate cleared (66 SELL / 75 BUY), but two
+> findings closed off every viable design: (1) the only genuinely untapped dimension,
+> `decision_context`, has just 17 populated rows — too thin to test safely, ruling out
+> the original open-ended combinatorial search (exactly the multiple-comparisons trap
+> this section already flagged as the risk); (2) a rescoped "cross-surface ranking"
+> design (merging Trade Review's 9 diagnostics with Behavioral Fingerprint's 6) failed
+> Opus review — Behavioral Fingerprint has no severity tier to rank against, and
+> promoting its explicitly neutral momentum/conviction cards into a "blind spots" list
+> would contradict that module's own non-accusatory framing. The fallback (Trade
+> Review diagnostics alone) turned out to duplicate an already-existing section
+> (`app.py`'s "🎯 Course-Correction Recommendations", already severity-sorted). User
+> decision: shelve rather than ship a diminished or redundant feature. **The roadmap
+> closes at P1-P5 shipped.**
+
 ---
 
 ## What to build first — session decision record
@@ -273,4 +288,4 @@ Each idea requires:
 | #3 Structural Vulnerability Scanner | [docs/plans/structural-vulnerability-scanner.md](structural-vulnerability-scanner.md) | Phase 1 SHIPPED 2026-07-24 (commit `9b47117`) — surfaces as a 4th tab on 🧩 Intelligence (not 🔗 Risk Analysis as originally assumed — see plan's opening section). Phase 2 gate: ≥3 days production observation |
 | #4 Information Asymmetry Detector | [docs/plans/information-asymmetry-detector.md](information-asymmetry-detector.md) | Phase 1 SHIPPED 2026-07-24 (commit `6e3ebd2`) — scope narrowed to price-cross-check history + widening annotation (not the original 3-source fundamentals divergence idea — see plan's opening section) |
 | #5 Regime-Aware Stress Testing | [docs/plans/regime-aware-stress-testing.md](regime-aware-stress-testing.md) | Plan SHIP 2026-07-24 (3 Opus rounds) — new expander on the existing 🔥 Stress Testing tab (🔗 Risk Analysis), not a new page; scope narrowed to drop the roadmap's fabricated "90-day plausibility" framing in favor of the regime detector's real confidence score (see plan's opening section); ready for implementation |
-| #6 Autonomous Pattern Discovery | `docs/plans/autonomous-pattern-discovery.md` | Not yet written |
+| #6 Autonomous Pattern Discovery | [docs/plans/autonomous-pattern-discovery.md](autonomous-pattern-discovery.md) | SHELVED 2026-07-24 — every viable design closed off (see plan doc + note above). **Roadmap complete at P1-P5.** |
