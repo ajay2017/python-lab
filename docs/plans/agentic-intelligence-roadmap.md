@@ -3,8 +3,11 @@
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
-**Status:** IDEATION — not yet designed or built. This is a brainstorm-to-roadmap
-document. Each idea requires a dedicated plan + Opus design review before any build starts.
+**Status:** COMPLETE — P1-P5 shipped, P6 evaluated-and-shelved (2026-07-24). This v1 is
+the historical record for the shipped red-team features. **Continued in
+[agentic-intelligence-roadmap-v2.md](agentic-intelligence-roadmap-v2.md)** — the 360°
+completion roadmap (remaining defensive whitespace + the offensive/opportunity side),
+which is now the living document.
 
 > **Scope:** Brainstormed 2026-07-23. Core premise: shift DRISHTA from reactive/defensive
 > signal-reading to proactive/offensive adversarial intelligence — actively generating
