@@ -120,6 +120,7 @@ python-lab/
     ├── risk_advisor.py             Risk flags and advisor recommendations (exact beta impact)
     ├── exit_advisor.py             Exit-discipline + market-risk: deterioration WATCH/TRIM/EXIT ladder, risk-off de-risk overlay, Market-Risk Posture dial (classify_deterioration_tier · risk_off_regime · assess_risk_off_derisk · market_risk_posture — pure logic); also compute_relative_strength() (20-session RS vs SPY, shared by Thesis Red Team + Multi-Agent Debate)
     ├── debate_agent.py             Multi-Agent Debate Agent Phase 1 (F-197): build_entry_corpus + run_debate — 5-Haiku sequential Bull/Bear/Judge debate for Grow Today entry candidates; debate_cache table; awareness-only, never gates
+    ├── structural_scanner.py       Structural Vulnerability Scanner Phase 1 (F-198): blast_radius() (single-factor beta cascade estimate, reuses portfolio_intelligence.py's risk_budget/correlation_clusters as inputs) + generate_structural_narrative() (1 Haiku call/day); structural_scan_cache table; awareness-only, never gates
     ├── concentration.py            Concentration & sizing discipline: single-name ceiling enforcement + high-beta cluster awareness (pure logic)
     ├── cross_asset.py              Cross-Asset Pulse — 5-signal macro stress (credit/VIX-term/dollar/copper/3m10y → 0–5 stress score; awareness-only, Risk tab + Brief one-liner; F-09c)
     ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
@@ -1123,6 +1124,22 @@ CREATE TABLE IF NOT EXISTS debate_cache (
 
 **Structured Bull vs Bear debate result per candidate** (Multi-Agent Debate Agent, Phase 1 — shipped 2026-07-23). One row per `(ticker, debate_type, debate_date)` where `debate_type` ∈ {`entry` (Phase 1, triggered from 📈 Grow Today), `exit` (Phase 2, not yet built)} and `debate_date` is the America/New_York ISO date (`_today_et()`). `verdict` ∈ {`bull_wins`, `bear_wins`, `contested`} — `bull_wins`/`bear_wins` require the Judge's `bull_case_score`/`bear_case_score` gap to reach `DEBATE_WIN_MARGIN` (20, module-level constant in `stock_analyzer/debate_agent.py` — a display classifier, not a `constants.py` policy threshold, since no gate or score is affected regardless of its value). `key_dispute` is the Judge's one-sentence summary of the specific claim Bull and Bear most disagree on (`null` if the two sides converged). `grounded` is `false` when the Judge assessed either side as arguing generically instead of citing the supplied evidence corpus. `transcript` is the ordered `[{round, agent, text}]` list from all 4 debate rounds (Bull open → Bear response → Bull rebuttal → Bear close); `corpus_snapshot` is the exact evidence dict both agents debated from (`build_entry_corpus()`), kept for auditability. Row is only written when `transcript` is non-empty — a failed run (no API key, a mid-debate Haiku failure) is never cached, so a transient failure can be retried immediately rather than showing a false "Contested" verdict for the rest of the day. Written by `db.save_debate_cache()` (upsert, best-effort); read by `db.load_debate_cache(ticker, debate_type, debate_date)`. System cache — not `_READONLY`-gated (same classification as `thesis_erosion_cache`/`sentiment_llm_cache`). RLS: `FOR ALL TO service_role`.
 
+### 6.26 `structural_scan_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS structural_scan_cache (
+    scan_date            TEXT        NOT NULL,
+    narrative            TEXT,
+    blast_radius         JSONB       NOT NULL,
+    cluster_snapshot     JSONB       NOT NULL,
+    risk_budget_snapshot JSONB       NOT NULL,
+    created_at           TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (scan_date)
+);
+```
+
+**Daily portfolio-level structural narrative** (Structural Vulnerability Scanner, Phase 1 — shipped 2026-07-24). One row per `scan_date` (America/New_York ISO date via `_today_et()`) — this is a **portfolio-wide** synthesis, not per-ticker, unlike `thesis_erosion_cache`/`debate_cache`. `narrative` is the Haiku-generated 2-4 sentence structural explanation; `null` only if the Haiku call failed, but a failed/empty narrative is never written in the first place (the caller only calls `save_structural_scan_cache()` when the narrative call succeeded), so a `null` narrative should never actually appear in a saved row. `blast_radius` is `stock_analyzer.structural_scanner.blast_radius()`'s output at scan time (one dict per shocked ticker, the top-3 risk-budget contributors); `cluster_snapshot` is `portfolio_intelligence.correlation_clusters()`'s output; `risk_budget_snapshot` is the top-3 `risk_budget()` positions — all three kept for audit alongside the narrative they produced. Written by `db.save_structural_scan_cache()` (upsert, best-effort); read by `db.load_structural_scan_cache(scan_date)`. **Button-gated write, not auto-computed** — the tab's Blast Radius Map (pure Python) recomputes live every render, but the narrative only calls Haiku inside an explicit "🧬 Generate structural narrative" button click, because Streamlit executes every tab body on every page rerun regardless of which tab is selected — an auto-compute design would fire the LLM call far more than once/day. System cache — not `_READONLY`-gated (same classification as `debate_cache`/`thesis_erosion_cache`). RLS: `FOR ALL TO service_role`.
+
 ### `stock_analyzer/portfolio_health.py`
 
 Pure-logic module for the 🏆 Health page. No I/O, no Streamlit imports.
@@ -1488,6 +1505,7 @@ flowchart LR
 | F-174 | Pre-Earnings Playbook extract | `earnings_intel.py` | Sonnet 4.6 | On-demand (paste + Extract) | `ANALYST_EXTRACT_MAX_TOKENS` (8000 tok, shared budget) | DB `earnings_context` (after editable-preview save) |
 | F-176 | F-1 Earnings Thesis Checkpoint | `thesis_advisor.py` | Sonnet 4.6 | On-demand (Positions tab CTA, gated on a recent `earnings_results` row) | 300 tok | DB `thesis_reviews` |
 | F-197 | Multi-Agent Debate — entry (Phase 1) | `debate_agent.py` | Haiku (5 sequential calls/run) | On-demand (⚔️ Debate button, Grow Today candidate card) | 200 tok × 4 rounds + 300 tok judge | DB `debate_cache` |
+| F-198 | Structural Scan narrative (Phase 1) | `structural_scanner.py` | Haiku (1 call/day) | On-demand ("🧬 Generate structural narrative" button, 🧩 Intelligence tab) | 300 tok | DB `structural_scan_cache` |
 | — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
 | — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
 | — | VADER rescorer (`rescore_news_items_llm`) | `news_intelligence.py` | Haiku | Home load + Analysis page (automatic, per held ticker set) | Small JSON list | Session, keyed by day + sorted-ticker-set. Suppress-only: can only raise a VADER compound score, never lower; removes false-positive negatives from financial news. temperature=0, 8s timeout, VADER fallback on any failure. Never creates a new Act Today card or flips a buy-candidate verdict. |
