@@ -14,6 +14,7 @@ Design principles (mirrors premortem_advisor.py):
 """
 
 import json
+import math
 
 from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
 
@@ -101,6 +102,29 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
         conv = corpus.get("conviction")
         if conv:
             lines.append(f"Conviction tier: {conv}")
+        # Exit-debate evidence (rendered only when present; entry corpus omits
+        # these keys, so this block is a no-op for entry debates).
+        pnl = corpus.get("unrealized_pnl_pct")
+        if pnl is not None:
+            lines.append(f"Unrealized P&L: {pnl:+.1f}%")
+        tier = corpus.get("deterioration_tier")
+        if tier:
+            lines.append(f"Deterioration tier: {tier}")
+        dsig = corpus.get("deterioration_signals")
+        if dsig:
+            lines.append(f"Deterioration signals — {dsig}")
+        ero = corpus.get("thesis_erosion_score")
+        if ero is not None:
+            lines.append(f"Thesis erosion score: {round(float(ero))}/100")
+        dh = corpus.get("days_held")
+        if dh is not None:
+            lines.append(f"Days held: {dh}")
+        sd = corpus.get("stop_distance_pct")
+        if sd is not None:
+            lines.append(f"Distance above protective stop: {sd:+.1f}%")
+        thesis = corpus.get("user_thesis")
+        if thesis:
+            lines.append(f"Original buy thesis: {thesis}")
         return "\n".join(lines)
     except Exception:
         return ""
@@ -244,9 +268,155 @@ def build_entry_corpus(ticker, grow_candidate_row, grow_bundle, spy_close_series
     return corpus
 
 
-def build_exit_corpus(ticker, _port_df_row, _held_data_bundle, _erosion_cache_row, _trade_row) -> dict:
-    # Phase 2 — exit corpus builder (stub; parameters populated in Phase 2)
-    return {"ticker": str(ticker).upper().strip(), "debate_type": "exit"}
+def build_exit_corpus(ticker, port_df_row, held_data_bundle, erosion_cache_row,
+                      trade_row, deterioration_payload) -> dict:
+    """
+    Assemble the evidence package for an exit ("Challenge This Exit") debate.
+
+    Parameters:
+        ticker                — str, the held ticker under a TRIM/EXIT signal
+        port_df_row           — dict from the enriched port_df row (keys:
+                                Price, Score, Sector, "P&L (%)", Stop, …)
+        held_data_bundle      — held_data[ticker] bundle (keys: df, atr,
+                                position_age_days, …)
+        erosion_cache_row     — db.load_thesis_erosion_cache row or None
+                                (key: erosion_score)
+        trade_row             — most-recent BUY trade row (dict) or None
+                                (key: user_thesis)
+        deterioration_payload — exit_advisor.assess_holding output for this
+                                ticker (keys: tier, dd_from_peak_pct,
+                                rel_strength, below_ma_count, trend_ma, sma,
+                                trim_floor, exit_floor). The Bear's real
+                                ammunition — cited, never invented.
+
+    Returns a flat dict. Each field individually try/except-ed — missing fields
+    excluded silently. Never raises overall.
+    """
+    corpus: dict = {"ticker": str(ticker).upper().strip(), "debate_type": "exit"}
+
+    _row = port_df_row or {}
+    _bd  = held_data_bundle or {}
+    _det = deterioration_payload or {}
+    _tr  = trade_row or {}
+
+    # Price history — held_data bundles use "df"; fall back to "history".
+    _hist = _bd.get("df")
+    if _hist is None:
+        _hist = _bd.get("history")
+
+    try:
+        _px = _row.get("Price")
+        if _px is not None:
+            corpus["current_price"] = round(float(_px), 2)
+        elif _hist is not None and not _hist.empty and "Close" in _hist.columns:
+            corpus["current_price"] = round(float(_hist["Close"].iloc[-1]), 2)
+    except Exception:
+        pass
+
+    try:
+        _pnl = _row.get("P&L (%)")
+        if _pnl is not None:
+            corpus["unrealized_pnl_pct"] = round(float(_pnl), 1)
+    except Exception:
+        pass
+
+    try:
+        if _det.get("tier"):
+            corpus["deterioration_tier"] = _det.get("tier")
+    except Exception:
+        pass
+
+    # Deterioration signals — the Bear's factual ammunition, assembled from the
+    # real numbers behind the tier (never fabricated).
+    try:
+        _sig = []
+        if _det.get("dd_from_peak_pct") is not None:
+            _sig.append(f"down {_det['dd_from_peak_pct']:.1f}% from peak")
+        if _det.get("trim_floor") is not None and _det.get("exit_floor") is not None:
+            _sig.append(f"trigger {_det['trim_floor']:.0f}%/{_det['exit_floor']:.0f}%")
+        if _det.get("below_ma_count") is not None:
+            _sig.append(f"{_det['below_ma_count']}/3 sessions below SMA{_det.get('trend_ma', '')}")
+        if _det.get("rel_strength") is not None:
+            _sig.append(f"rel-strength {_det['rel_strength']:+.1f}pp vs SPY")
+        if _det.get("sma") is not None:
+            _sig.append(f"SMA{_det.get('trend_ma', '')} ${_det['sma']:.2f}")
+        if _sig:
+            corpus["deterioration_signals"] = "; ".join(_sig)
+    except Exception:
+        pass
+
+    # Relative strength — reuse the payload's already-computed value (no re-fetch).
+    try:
+        if _det.get("rel_strength") is not None:
+            corpus["rs_vs_spy_20d_pp"] = round(float(_det["rel_strength"]), 1)
+    except Exception:
+        pass
+
+    try:
+        if erosion_cache_row and erosion_cache_row.get("erosion_score") is not None:
+            corpus["thesis_erosion_score"] = erosion_cache_row.get("erosion_score")
+    except Exception:
+        pass
+
+    try:
+        if _row.get("Score") is not None:
+            corpus["composite_score"] = _row.get("Score")
+    except Exception:
+        pass
+
+    try:
+        _lbl = _row.get("Signal") or _row.get("Verdict") or _row.get("composite_label")
+        if _lbl:
+            corpus["composite_label"] = _lbl
+    except Exception:
+        pass
+
+    try:
+        if _hist is not None and not _hist.empty and "Close" in _hist.columns:
+            _m5 = float(_hist["Close"].pct_change(5).iloc[-1] * 100)
+            if not math.isnan(_m5):
+                corpus["momentum_5d_pct"] = round(_m5, 1)
+    except Exception:
+        pass
+
+    try:
+        if _hist is not None and not _hist.empty and "Close" in _hist.columns:
+            _m20 = float(_hist["Close"].pct_change(20).iloc[-1] * 100)
+            if not math.isnan(_m20):
+                corpus["momentum_20d_pct"] = round(_m20, 1)
+    except Exception:
+        pass
+
+    try:
+        _age = _bd.get("position_age_days")
+        if _age is not None:
+            corpus["days_held"] = int(_age)
+    except Exception:
+        pass
+
+    try:
+        _stop = _row.get("Stop")
+        _px2  = corpus.get("current_price")
+        if _stop is not None and _px2:
+            corpus["stop_distance_pct"] = round(
+                (float(_px2) - float(_stop)) / float(_px2) * 100, 1
+            )
+    except Exception:
+        pass
+
+    try:
+        if _row.get("Sector"):
+            corpus["sector"] = _row.get("Sector")
+    except Exception:
+        pass
+
+    try:
+        if _tr.get("user_thesis"):
+            corpus["user_thesis"] = str(_tr.get("user_thesis"))
+    except Exception:
+        pass
+
+    return corpus
 
 
 # ── Main debate runner ────────────────────────────────────────────────────────
@@ -285,41 +455,55 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
     corpus_text = _format_corpus(corpus, debate_type)
     transcript  = []
 
-    # Round 1 — Bull opens
-    r1 = _call_haiku(
-        client, model, _BULL_SYSTEM,
-        f"Evidence:\n{corpus_text}\n\nPresent the strongest specific case FOR entering {ticker}.",
-    )
+    _is_exit = debate_type == "exit"
+
+    # Round 1 — Bull opens (entry: defend the buy; exit: defend the hold)
+    if _is_exit:
+        _r1 = (f"Evidence:\n{corpus_text}\n\nPresent the strongest specific case for "
+               f"CONTINUING TO HOLD {ticker} despite the exit signal. Anchor on the original "
+               f"thesis if one is supplied. Do NOT argue to hold merely because the position "
+               f"is underwater — argue only from the thesis and current data.")
+    else:
+        _r1 = f"Evidence:\n{corpus_text}\n\nPresent the strongest specific case FOR entering {ticker}."
+    r1 = _call_haiku(client, model, _BULL_SYSTEM, _r1)
     if not r1:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round1_failed"}
     transcript.append({"round": 1, "agent": "bull", "text": r1})
 
-    # Round 2 — Bear responds
-    r2 = _call_haiku(
-        client, model, _BEAR_SYSTEM,
-        f"Evidence:\n{corpus_text}\n\n---\nBull's case:\n{r1}\n\n---\n"
-        f"Counter Bull's argument with the strongest specific evidence AGAINST this position.",
-    )
+    # Round 2 — Bear responds (entry: case against; exit: case for exiting now)
+    if _is_exit:
+        _r2 = (f"Evidence:\n{corpus_text}\n\n---\nBull's case for holding:\n{r1}\n\n---\n"
+               f"The exit signal has fired. Make the strongest specific case for EXITING NOW, "
+               f"citing the specific deterioration signals in the evidence. This is closing an "
+               f"existing long, not opening a short.")
+    else:
+        _r2 = (f"Evidence:\n{corpus_text}\n\n---\nBull's case:\n{r1}\n\n---\n"
+               f"Counter Bull's argument with the strongest specific evidence AGAINST this position.")
+    r2 = _call_haiku(client, model, _BEAR_SYSTEM, _r2)
     if not r2:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round2_failed"}
     transcript.append({"round": 2, "agent": "bear", "text": r2})
 
     # Round 3 — Bull rebuts
-    r3 = _call_haiku(
-        client, model, _BULL_SYSTEM,
-        f"Evidence:\n{corpus_text}\n\n---\nBull Round 1:\n{r1}\n\nBear's counter:\n{r2}\n\n---\n"
-        f"Rebut Bear's specific objection with evidence.",
-    )
+    if _is_exit:
+        _r3 = (f"Evidence:\n{corpus_text}\n\n---\nBull Round 1:\n{r1}\n\nBear's exit case:\n{r2}\n\n---\n"
+               f"Rebut the exit case — is the deterioration temporary or noise, or does it break the thesis?")
+    else:
+        _r3 = (f"Evidence:\n{corpus_text}\n\n---\nBull Round 1:\n{r1}\n\nBear's counter:\n{r2}\n\n---\n"
+               f"Rebut Bear's specific objection with evidence.")
+    r3 = _call_haiku(client, model, _BULL_SYSTEM, _r3)
     if not r3:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round3_failed"}
     transcript.append({"round": 3, "agent": "bull", "text": r3})
 
     # Round 4 — Bear closes
-    r4 = _call_haiku(
-        client, model, _BEAR_SYSTEM,
-        f"Evidence:\n{corpus_text}\n\n---\nBull:\n{r1}\n\nBear:\n{r2}\n\nBull rebuttal:\n{r3}\n\n---\n"
-        f"State the ONE remaining concern that Bull's rebuttal did not adequately address.",
-    )
+    if _is_exit:
+        _r4 = (f"Evidence:\n{corpus_text}\n\n---\nBull:\n{r1}\n\nBear:\n{r2}\n\nBull rebuttal:\n{r3}\n\n---\n"
+               f"State the ONE reason the exit should still stand despite the Bull's defense.")
+    else:
+        _r4 = (f"Evidence:\n{corpus_text}\n\n---\nBull:\n{r1}\n\nBear:\n{r2}\n\nBull rebuttal:\n{r3}\n\n---\n"
+               f"State the ONE remaining concern that Bull's rebuttal did not adequately address.")
+    r4 = _call_haiku(client, model, _BEAR_SYSTEM, _r4)
     if not r4:
         return {"transcript": transcript, "verdict": None, "partial": True, "error": "round4_failed"}
     transcript.append({"round": 4, "agent": "bear", "text": r4})

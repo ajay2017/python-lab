@@ -196,7 +196,7 @@ from stock_analyzer.account import (
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
-from stock_analyzer.daily_briefing import build_daily_briefing
+from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
 from stock_analyzer.trade_review import (
     build_trade_review, build_insights, build_recommendations,
@@ -6391,6 +6391,131 @@ if page == "🏠 Home":
                             use_container_width=False,
                         ):
                             st.session_state["_pending_page"] = "🧠 AI Insights"
+                            st.rerun()
+
+                # ── Challenge This Exit (D2 Exit Red-Team) ───────────────────
+                # On single-name deterioration TRIM/EXIT cards only. Runs the
+                # existing 5-Haiku debate in exit mode: a Bull defends the hold
+                # (anchored on the buy thesis, barred from sunk-cost reasoning)
+                # vs a Bear arguing the fired deterioration signal. A SECOND
+                # OPINION — never suppresses the card or changes the tier.
+                # Rendered full-width (not in a column) so the transcript reads
+                # cleanly. Gated on `kind` (authoritative), NOT the action string.
+                if _db_item.get("kind") in ("deterioration_trim", "deterioration_exit"):
+                    _dbx_cached = db.load_debate_cache(_db_ticker, "exit", str(_today_et()))
+                    _dbx_runs   = st.session_state.get("_debate_runs_this_session", 0)
+                    if _dbx_cached:
+                        _xv  = _dbx_cached.get("verdict")
+                        _xkd = _dbx_cached.get("key_dispute")
+                        _xbs = _dbx_cached.get("bull_case_score")
+                        _xbr = _dbx_cached.get("bear_case_score")
+                        _xgr = _dbx_cached.get("grounded")
+                        _xtr = _dbx_cached.get("transcript") or []
+                        _xfailed = _xv is None and not _xtr
+                        _xicon = (
+                            "🟢 Hold defensible" if _xv == "bull_wins" else
+                            "🔴 Exit supported"  if _xv == "bear_wins" else
+                            "⚖️ Contested"        if _xv == "contested" else
+                            "⚠️ Error"
+                        )
+                        with st.expander(f"⚔️ Exit debate — {_xicon}", expanded=False):
+                            st.caption(
+                                "This debate challenges the exit signal — it does not change "
+                                "it. The recommendation stands; this is a structured second "
+                                "opinion before you act."
+                            )
+                            if _xfailed:
+                                st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
+                            else:
+                                if _xbs is not None and _xbr is not None:
+                                    _xc1, _xc2 = st.columns(2)
+                                    _xc1.metric("Hold case", f"{_xbs}/100")
+                                    _xc2.metric("Exit case", f"{_xbr}/100")
+                                if _xkd:
+                                    st.markdown(f"**Key dispute:** {_xkd}")
+                                if _xgr is False:
+                                    st.warning("One or both agents relied on generic arguments — treat this debate with lower confidence.")
+                            if _xtr:
+                                st.markdown("**Transcript:**")
+                                for _xt in _xtr:
+                                    _xag  = (_xt.get("agent") or "").title()
+                                    _xcol = "#22c55e" if _xt.get("agent") == "bull" else "#ef4444"
+                                    st.markdown(
+                                        f"<span style='color:{_xcol}'>**Round {_xt.get('round')} — {_xag}:**</span> {_xt.get('text', '')}",
+                                        unsafe_allow_html=True,
+                                    )
+                    else:
+                        _dbx_disabled = _dbx_runs >= debate_agent.DEBATE_SESSION_CEILING
+                        _dbx_help = (
+                            f"Session limit reached ({debate_agent.DEBATE_SESSION_CEILING}/{debate_agent.DEBATE_SESSION_CEILING})"
+                            if _dbx_disabled else
+                            "Run a Bull-vs-Bear debate challenging this exit signal (~15 seconds, 5 Haiku calls)"
+                        )
+                        if st.button("⚔️ Challenge This Exit",
+                                     key=f"debate_exit_{_db_ticker}_{_db_item['action'][:10]}",
+                                     disabled=_dbx_disabled, help=_dbx_help):
+                            with st.spinner(f"Challenging the exit for {_db_ticker} — 5 Haiku calls, ~15 seconds…"):
+                                _api_key_x = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                                _x_pdf = st.session_state.get("_port_df_enriched")
+                                _x_hd  = st.session_state.get("_last_held_data") or {}
+                                _x_spy = _cached_spy("6mo")
+                                # Full deterioration payload (the Bear's real
+                                # ammunition) — recomputed on-demand for this click
+                                # only; pure pandas, no API call.
+                                _x_det = None
+                                try:
+                                    _x_all_det = deterioration_signals(_x_pdf, _x_hd, _x_spy)
+                                    _x_det = next(
+                                        (d for d in _x_all_det if str(d.get("ticker", "")).upper() == _db_ticker),
+                                        None,
+                                    )
+                                except Exception:
+                                    _x_det = None
+                                _x_row = {}
+                                try:
+                                    if _x_pdf is not None and "Ticker" in _x_pdf.columns:
+                                        _x_match = _x_pdf[_x_pdf["Ticker"].astype(str).str.upper() == _db_ticker]
+                                        if not _x_match.empty:
+                                            _x_row = _x_match.iloc[0].to_dict()
+                                except Exception:
+                                    _x_row = {}
+                                _x_bundle = _x_hd.get(_db_ticker) or {}
+                                _x_ero = db.load_thesis_erosion_cache(_db_ticker, str(_today_et()))
+                                _x_trade = {}
+                                try:
+                                    _x_tdf = st.session_state.get("trades_df")
+                                    if _x_tdf is not None and not _x_tdf.empty:
+                                        _x_buys = _x_tdf[
+                                            (_x_tdf["ticker"].astype(str).str.upper() == _db_ticker)
+                                            & (_x_tdf["action"].astype(str).str.upper() == "BUY")
+                                        ]
+                                        if not _x_buys.empty:
+                                            _x_trade = _x_buys.iloc[-1].to_dict()
+                                except Exception:
+                                    _x_trade = {}
+                                _x_corpus = debate_agent.build_exit_corpus(
+                                    _db_ticker, _x_row, _x_bundle, _x_ero, _x_trade, _x_det
+                                )
+                                _x_result = debate_agent.run_debate(_x_corpus, "exit", _api_key_x)
+                            # Only cache + count runs with real content — skip
+                            # empty failures so a transient error doesn't poison
+                            # the day-cache until tomorrow (mirrors entry debate).
+                            if _x_result.get("transcript"):
+                                db.save_debate_cache(
+                                    ticker=_db_ticker,
+                                    debate_type="exit",
+                                    debate_date=str(_today_et()),
+                                    verdict=_x_result.get("verdict"),
+                                    key_dispute=_x_result.get("key_dispute"),
+                                    bull_case_score=_x_result.get("bull_case_score"),
+                                    bear_case_score=_x_result.get("bear_case_score"),
+                                    grounded=_x_result.get("grounded"),
+                                    transcript=_x_result.get("transcript", []),
+                                    corpus_snapshot=_x_corpus,
+                                )
+                                st.session_state["_debate_runs_this_session"] = _dbx_runs + 1
+                            else:
+                                st.warning("Debate could not complete — API unavailable or rate-limited. Session slot not consumed.")
                             st.rerun()
 
             # ── Rebalance plan (Hard-Cap-Breach / sector-concentration cards) ──
