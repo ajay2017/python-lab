@@ -121,6 +121,7 @@ python-lab/
     ├── exit_advisor.py             Exit-discipline + market-risk: deterioration WATCH/TRIM/EXIT ladder, risk-off de-risk overlay, Market-Risk Posture dial (classify_deterioration_tier · risk_off_regime · assess_risk_off_derisk · market_risk_posture — pure logic); also compute_relative_strength() (20-session RS vs SPY, shared by Thesis Red Team + Multi-Agent Debate)
     ├── debate_agent.py             Multi-Agent Debate Agent Phase 1 (F-197): build_entry_corpus + run_debate — 5-Haiku sequential Bull/Bear/Judge debate for Grow Today entry candidates; debate_cache table; awareness-only, never gates
     ├── structural_scanner.py       Structural Vulnerability Scanner Phase 1 (F-198): blast_radius() (single-factor beta cascade estimate, reuses portfolio_intelligence.py's risk_budget/correlation_clusters as inputs) + generate_structural_narrative() (1 Haiku call/day); structural_scan_cache table; awareness-only, never gates
+    ├── regime_stress.py            Regime-Aware Adversarial Stress Testing Phase 1 (F-200): build_regime_scenario_inputs + generate_regime_scenario — composes structural_scanner.blast_radius() + macro_calendar's FRED regime detector + cross_asset's USD signal into 1 Haiku call/day naming the compound scenario most likely to hurt this portfolio; regime_scenario_cache table; zero new quant modeling; awareness-only, never gates
     ├── concentration.py            Concentration & sizing discipline: single-name ceiling enforcement + high-beta cluster awareness (pure logic)
     ├── cross_asset.py              Cross-Asset Pulse — 5-signal macro stress (credit/VIX-term/dollar/copper/3m10y → 0–5 stress score; awareness-only, Risk tab + Brief one-liner; F-09c)
     ├── watchlist_advisor.py        Watchlist analysis with ENTER_NOW portfolio-risk gate
@@ -1182,6 +1183,47 @@ banner. Written by `db.save_price_xcheck_history_batch()` (upsert on
 on every distinct trading day the app is opened); read by
 `db.load_price_xcheck_history()`. RLS: `FOR ALL TO service_role`.
 
+### 6.28 `regime_scenario_cache` table
+
+```sql
+CREATE TABLE IF NOT EXISTS regime_scenario_cache (
+    scan_date             TEXT        NOT NULL,
+    scenario_narrative    TEXT,
+    indicator_watchlist   JSONB,
+    blast_radius_snapshot JSONB       NOT NULL,
+    regime_snapshot       JSONB       NOT NULL,
+    cross_asset_snapshot  JSONB       NOT NULL,
+    created_at            TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (scan_date)
+);
+```
+
+**Daily portfolio-level regime-aware adversarial scenario narrative** (Regime-Aware
+Adversarial Stress Testing, Phase 1 — shipped 2026-07-24; F-200). One row per
+`scan_date` (America/New_York ISO date via `_today_et()`) — portfolio-wide, not
+per-ticker, same grain as `structural_scan_cache`. `scenario_narrative` is the
+Haiku-generated 2-4 sentence compound-scenario explanation; a failed/empty narrative is
+never written (the caller only calls `save_regime_scenario_cache()` when the call
+succeeded). `indicator_watchlist` is a validated jsonb list of canonical signal
+labels selected by the LLM from the regime detector's real `signals` list —
+normalized-matched (`.strip().casefold()`), always the stored canonical label, never
+the LLM's echoed text. `blast_radius_snapshot`/`regime_snapshot`/`cross_asset_snapshot`
+are the exact evidence dicts used (`structural_scanner.blast_radius()`'s output,
+`macro_calendar.detect_macro_regime()`'s return dict, `cross_asset.compute_cross_asset_signals()`'s
+return dict), kept for audit — all three `NOT NULL` (a deliberate, safe divergence from
+`structural_scan_cache`'s equivalent columns, since all three are always populated at
+the single guarded call site). **Button-gated write, not auto-computed** — same
+Streamlit execution-model reasoning as `structural_scan_cache`: the expander's body
+runs every rerun regardless of visual state, so the Haiku call fires only inside an
+explicit "🎯 Generate regime-aware scenario" button click. Written by
+`db.save_regime_scenario_cache()` (upsert, best-effort); read by
+`db.load_regime_scenario_cache(scan_date)`. **Deliberately NOT `_READONLY`-gated** —
+same classification as `structural_scan_cache`/`debate_cache`/`thesis_erosion_cache`:
+a recomputable analytical narrative, not user-authored data (contrast with
+`price_xcheck_history`, which IS gated as an accumulating per-ticker ledger of the
+owner's holdings' data-quality state — the two patterns are reconciled, not
+inconsistent). RLS: `FOR ALL TO service_role`.
+
 ### `stock_analyzer/portfolio_health.py`
 
 Pure-logic module for the 🏆 Health page. No I/O, no Streamlit imports.
@@ -1548,6 +1590,7 @@ flowchart LR
 | F-176 | F-1 Earnings Thesis Checkpoint | `thesis_advisor.py` | Sonnet 4.6 | On-demand (Positions tab CTA, gated on a recent `earnings_results` row) | 300 tok | DB `thesis_reviews` |
 | F-197 | Multi-Agent Debate — entry (Phase 1) | `debate_agent.py` | Haiku (5 sequential calls/run) | On-demand (⚔️ Debate button, Grow Today candidate card) | 200 tok × 4 rounds + 300 tok judge | DB `debate_cache` |
 | F-198 | Structural Scan narrative (Phase 1) | `structural_scanner.py` | Haiku (1 call/day) | On-demand ("🧬 Generate structural narrative" button, 🧩 Intelligence tab) | 300 tok | DB `structural_scan_cache` |
+| F-200 | Regime-Aware Adversarial Scenario (Phase 1) | `regime_stress.py` | Haiku (1 call/day) | On-demand ("🎯 Generate regime-aware scenario" button, 🔗 Risk Analysis → 🔥 Stress Testing tab) | 400 tok | DB `regime_scenario_cache` |
 | — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
 | — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
 | — | VADER rescorer (`rescore_news_items_llm`) | `news_intelligence.py` | Haiku | Home load + Analysis page (automatic, per held ticker set) | Small JSON list | Session, keyed by day + sorted-ticker-set. Suppress-only: can only raise a VADER compound score, never lower; removes false-positive negatives from financial news. temperature=0, 8s timeout, VADER fallback on any failure. Never creates a new Act Today card or flips a buy-candidate verdict. |
