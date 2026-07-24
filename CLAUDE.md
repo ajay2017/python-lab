@@ -6,7 +6,7 @@ A directive distillation for any Claude session working in this repo. Read first
 
 ## Project orientation
 
-Personal portfolio intelligence app for a single user. Streamlit Community Cloud deploy; auto-deploys from `main`. Never run locally — the secrets architecture assumes Streamlit Cloud (see [DEVELOPMENT.md](DEVELOPMENT.md)).
+Personal portfolio intelligence app for a single user. Primary deploy is Streamlit Community Cloud, auto-deploying from `main`. A Railway Hobby pilot (`drishta.up.railway.app`) has run in parallel since 2026-07-24 against the same Supabase DB — see [docs/plans/railway-migration.md](docs/plans/railway-migration.md) for status and [DEVELOPMENT.md](DEVELOPMENT.md) for the secrets architecture. Never run locally — both deploys assume their respective hosted secrets delivery, not a local `.env`/`secrets.toml` dev loop.
 
 ## Operating posture
 
@@ -20,7 +20,7 @@ Personal portfolio intelligence app for a single user. Streamlit Community Cloud
 
 2. **Never disable RLS.** Supabase tables are protected by `FOR ALL TO service_role` policies. The Streamlit secret `[supabase] key` must be the service-role / secret key (not publishable). If you see "row-level security blocking" errors, the fix is to swap secrets and reboot the app via Streamlit Cloud → Manage app → Reboot — not to disable RLS.
 
-3. **Never run the app locally to test changes.** Push to `main`, wait ~2 min for Streamlit Cloud auto-redeploy, hard-refresh the browser (Ctrl+F5).
+3. **Never run the app locally to test changes.** Push to `main`, wait ~2 min for Streamlit Cloud auto-redeploy (and, during the Railway pilot, its auto-redeploy too), hard-refresh the browser (Ctrl+F5).
 
 4. **Any commit touching `stock_analyzer/constants.py`, a gate, or a scoring/recommendation formula requires an Opus review before it ships, cited in the commit body** (`Review = Opus reviewer: SHIP/FIX-FIRST, N blocking; ...`). This applies **regardless of which model is running the main session** — invoke the `reviewer` subagent (pinned `model: opus` in [`.claude/agents/reviewer.md`](.claude/agents/reviewer.md)) explicitly; don't rely on the main session's own judgment as a substitute. A commit in this category with no review citation is itself a defect — flag it. (Two 2026-07-15 commits shipped without this citation and needed a retroactive review to close the gap — see `docs/cost-routing.md`.)
 

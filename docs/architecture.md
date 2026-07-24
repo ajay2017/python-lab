@@ -26,7 +26,7 @@
 | Database | Supabase (PostgreSQL) | client 2.29.0 | Holdings, watchlist, and trade persistence |
 | AI / LLM | Anthropic / OpenAI / Google | Latest | AI Snapshot generation (Home section) + AI Insights (Anthropic-only) |
 | Timezone | pytz | ≥2024.1 | All time comparisons use America/New_York (ET) |
-| Deployment | Streamlit Community Cloud | — | Hosting; secrets injected via dashboard |
+| Deployment | Streamlit Community Cloud (primary) + Railway Hobby (pilot, since 2026-07-24) | — | Hosting; both auto-deploy from `main` against the same Supabase DB (§9) |
 
 ---
 
@@ -38,7 +38,7 @@
 └────────────────────────┬────────────────────────────────────┘
                          │ HTTPS
 ┌────────────────────────▼────────────────────────────────────┐
-│              Streamlit Community Cloud                        │
+│     Streamlit Community Cloud  /  Railway Hobby (pilot)       │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │                      app.py                            │  │
 │  │  - Page routing (session_state nav_page)               │  │
@@ -1369,17 +1369,25 @@ fetch_live_prices()         # Called by 60s auto-refresh fragment (Finnhub real-
 
 ## 9. Deployment
 
-| Attribute | Detail |
-|-----------|--------|
-| Platform | Streamlit Community Cloud |
-| Repository | GitHub (public or private) |
-| Branch | `main` |
-| Entry point | `app.py` |
-| Python version | 3.12 (declared in `runtime.txt`) |
-| Dependencies | `requirements.txt` |
-| Secrets management | Streamlit Cloud Secrets dashboard (`.streamlit/secrets.toml` format) |
+Two platforms currently deploy from the same `main` branch against the same Supabase DB:
+Streamlit Community Cloud (primary, in production use) and a Railway Hobby pilot
+(`drishta.up.railway.app`, live since 2026-07-24 — plan + rationale in
+[docs/plans/railway-migration.md](plans/railway-migration.md)). They don't conflict; either
+can be reloaded/rebooted independently.
+
+| Attribute | Streamlit Community Cloud | Railway Hobby (pilot) |
+|-----------|---------------------------|------------------------|
+| Repository / Branch | GitHub, `main` | GitHub, `main` |
+| Entry point | `app.py` | `app.py` via `railway_start.sh` (see 9.1b) |
+| Python version | 3.12 (`runtime.txt`) | 3.12 (`runtime.txt`, nixpacks) |
+| Dependencies | `requirements.txt` | `requirements.txt` |
+| Config file | — | `railway.toml` (nixpacks build, healthcheck `/_stcore/health`, `replicas = 1`) |
+| Secrets management | Secrets dashboard, native `.streamlit/secrets.toml` format | Variables tab (flat env vars only — no file-based secrets UI found) |
+| Sleep behaviour | Sleeps after inactivity (~15–30s cold-start wake) | "Serverless" toggle enabled (Settings → Deploy) — sleeps after 10 min idle, wakes on next request from a cached build image |
 
 ### 9.1 Required Secrets
+
+**Streamlit Cloud** — set in the Secrets dashboard, native TOML:
 
 ```toml
 SUPABASE_URL    = "https://xxxxxxxxxxxx.supabase.co"
@@ -1390,13 +1398,35 @@ OPENAI_API_KEY  = "sk-..."
 GOOGLE_API_KEY  = "AIza..."
 ```
 
-All secrets are accessed via `st.secrets["KEY_NAME"]` in the application code. They are never committed to the repository.
+All secrets are accessed via `st.secrets["KEY_NAME"]` (or `st.secrets["section"]["key"]`) in the
+application code. They are never committed to the repository.
+
+**Railway** — set as flat Service Variables (`SUPABASE_URL`, `SUPABASE_KEY`, `ANTHROPIC_API_KEY`,
+`FRED_API_KEY`, `FINNHUB_API_KEY`, `FMP_API_KEY`, `APP_PASSWORD`, `APP_READONLY_PASSWORD`). The
+GitHub Actions cron's own vars (`RESEND_API_KEY`, `ALERT_*`) are **not** needed here — the cron
+runs on GitHub Actions regardless of which platform hosts the UI (§3.11 / NF-27).
+
+#### 9.1b Why Railway needs `railway_start.sh`
+
+~50 call sites across `app.py` and `stock_analyzer/` call `st.secrets.get(...)` directly (not the
+safer `providers/_util.get_secret()` dual-source helper). Railway's Variables tab only injects
+flat env vars — there is no `.streamlit/secrets.toml` file on disk. When that file doesn't exist
+**at all**, Streamlit's lazy secrets loader raises `StreamlitSecretNotFoundError` on the *first*
+access anywhere in the app (not a graceful per-key miss), which crashed Home on first deploy.
+`railway_start.sh` writes a real `.streamlit/secrets.toml` from the env vars before launching
+Streamlit, so every `st.secrets` call site works unmodified — Railway's Variables tab stays the
+single source of truth, and the script re-runs (re-materializing the file) on every container
+start, including wake-from-sleep. `app.py::_check_password()` additionally has a direct
+`APP_PASSWORD`/`APP_READONLY_PASSWORD` env-var fallback (belt-and-suspenders, since the
+materialized file already covers it) plus a brute-force lockout (3+ fails → 2s delay, 10 fails →
+5-min lockout via `_login_fails`/`_login_locked_until` session_state keys) — Railway has no
+Streamlit-native "Private app" OAuth layer, so the password gate needed its own rate limiting.
 
 ### 9.2 Deployment Process
 
 1. Push changes to `main` branch on GitHub
-2. Streamlit Community Cloud detects the push and automatically redeploys
-3. Typical redeploy time: 1–3 minutes
+2. Streamlit Community Cloud and Railway both detect the push and auto-redeploy independently
+3. Typical redeploy time: 1–3 minutes (both platforms)
 4. No CI/CD pipeline; manual testing before push is the quality gate
 
 ---

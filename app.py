@@ -16810,7 +16810,7 @@ elif page == "📒 Trade Journal":
     if not db.has_db():
         st.warning(
             "🟡 **No database connection** — trades will only last for this session.  \n"
-            "Connect a database via your Streamlit Cloud app secrets to persist trades permanently."
+            "Connect a database via your hosting platform's app secrets to persist trades permanently."
         )
 
     # ── Defensive drift check ────────────────────────────────────────────────
@@ -19397,7 +19397,7 @@ elif page == "📒 Trade Journal":
     if not db.has_db():
         st.info(
             "💡 **Database not connected** — trades above are session-only and will be lost on refresh.  \n"
-            "Connect a database via your Streamlit Cloud app secrets to persist trades between sessions."
+            "Connect a database via your hosting platform's app secrets to persist trades between sessions."
         )
     else:
         st.markdown(
@@ -20319,7 +20319,7 @@ elif page == "📜 Recommendations History":
     if not db.has_db():
         st.warning(
             "🟡 Database not connected — recommendations history requires an "
-            "active database connection. Connect one via your Streamlit Cloud app secrets."
+            "active database connection. Connect one via your hosting platform's app secrets."
         )
         st.stop()
 
@@ -20872,7 +20872,7 @@ elif page == "📊 Predictive Analytics":
     if not db.has_db():
         st.warning(
             "🟡 Database not connected — Predictive Analytics requires an active "
-            "database connection. Connect one via your Streamlit Cloud app secrets."
+            "database connection. Connect one via your hosting platform's app secrets."
         )
         st.stop()
 

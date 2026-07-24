@@ -25,7 +25,7 @@ The app is not a brokerage or order-execution system.
 - **Portfolio size:** Variable; moderate risk tolerance
 - **Experience level:** Active investor, growing familiarity with technical and fundamental analysis
 - **Usage pattern:** Daily briefing check before market open; ad-hoc analysis during trading hours; end-of-day journal entries
-- **Access:** Web browser via Streamlit Community Cloud; no mobile-specific UI required
+- **Access:** Web browser via Streamlit Community Cloud (primary) or the Railway Hobby pilot (since 2026-07-24, same Supabase DB); no mobile-specific UI required
 
 ---
 
@@ -506,7 +506,7 @@ The 📊 Recommendations History page is the **rule-based** retrospective over e
 | NF-14 | When market is closed, the app must display a context note indicating data reflects last close |
 | NF-15 | Pre-market intel cache TTL: 5 minutes (300 seconds); keyed on held tickers + watchlist to ensure correct data after holdings change |
 | NF-16 | Risk-free rate (^IRX) cache TTL: 24 hours (86400 seconds); fallback to 4.5% if Yahoo Finance unavailable |
-| NF-17 | All date comparisons must use America/New_York (ET) timezone via pytz to prevent midnight UTC rollover producing wrong calendar dates on Streamlit Cloud |
+| NF-17 | All date comparisons must use America/New_York (ET) timezone via pytz to prevent midnight UTC rollover producing wrong calendar dates — Streamlit Cloud's worker runs UTC; the Railway pilot container's system clock has not been independently verified, so the pytz conversion must not be assumed unnecessary there |
 
 ### 4.3 Reliability
 
@@ -526,8 +526,8 @@ The 📊 Recommendations History page is the **rule-based** retrospective over e
 
 | ID | Requirement |
 |----|-------------|
-| NF-30 | All secrets (Supabase URL/key, LLM API keys, market-data keys `FINNHUB_API_KEY` / `FMP_API_KEY`, `[fred] api_key`) must be stored in Streamlit Cloud Secrets, never in code or committed files. A missing market-data key degrades gracefully (provider skipped), never crashes. The headless cron (§3.11) reads the same secrets from **GitHub repo secrets** (incl. `RESEND_API_KEY` / `ALERT_EMAIL_TO` / `ALERT_EMAIL_FROM`); its Supabase key is the same service-role key class as Streamlit (RLS stays on per NF-32). |
-| NF-31 | No user authentication required (single-user personal app) |
+| NF-30 | All secrets (Supabase URL/key, LLM API keys, market-data keys `FINNHUB_API_KEY` / `FMP_API_KEY`, `[fred] api_key`) must be stored in the hosting platform's secret store, never in code or committed files. On Streamlit Cloud that's the Secrets dashboard (native TOML); on the Railway pilot it's flat Service Variables, materialized into a real `.streamlit/secrets.toml` at container startup by `railway_start.sh` (docs/architecture.md §9.1b) so the ~50 direct `st.secrets.get(...)` call sites work unmodified on either platform. A missing market-data key degrades gracefully (provider skipped), never crashes. The headless cron (§3.11) reads the same secrets from **GitHub repo secrets** (incl. `RESEND_API_KEY` / `ALERT_EMAIL_TO` / `ALERT_EMAIL_FROM`) independent of either UI host; its Supabase key is the same service-role key class as Streamlit (RLS stays on per NF-32). |
+| NF-31 | Single-user personal app, gated by a password screen (`app.py::_check_password()`) — not multi-user/role-based auth. `[app] password` / `APP_PASSWORD` grants full (owner) access; an optional `[app] readonly_password` / `APP_READONLY_PASSWORD` grants a read-only viewer role (§ readonly viewer, `project_readonly_viewer`). A failed-attempt counter adds a 2s delay after 3+ fails and a 5-minute lockout after 10 fails (`_login_fails`/`_login_locked_until` session_state) — added for the Railway pilot, which has no Streamlit-native "Private app" OAuth layer on top of the password gate. |
 | NF-32 | Row Level Security is **enabled** on all public-schema tables with `FOR ALL TO service_role` policies. The Streamlit secret `[supabase] key` must be the service-role / secret key (bypasses RLS); the publishable/anon key has no matching policy and is denied. This is defense-in-depth: a leaked publishable key cannot access portfolio data. |
 
 ### 4.5 Usability

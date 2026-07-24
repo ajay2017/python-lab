@@ -3,7 +3,44 @@
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
-**Status:** PILOT — analysis complete, no code changes made yet. Follow phases in order.
+**Status:** PILOT LIVE as of 2026-07-24 at `drishta.up.railway.app`. Phases 0b, 1, 2, 3, 4
+done (with real deviations from this plan — see "What actually happened" below); Phase 0a
+(Anthropic key rotation) deferred by user choice; Phase 5 (parallel-run comparison) is the
+current phase; Phase 6 (cutover) not started.
+
+### What actually happened vs. this plan (2026-07-24)
+
+- **No "Secret Files" feature found in Railway's current UI.** Settings only has
+  Source/Networking/Scale/Build/Deploy/Config-as-code/Feature-flags/Danger — no file-based
+  secrets option as this plan's Phase 3 assumed. Railway's Variables tab (flat env vars,
+  auto-suggested by scanning the source for `os.getenv`/`os.environ` calls) is the only
+  secrets mechanism available.
+- **That surfaced a real architecture gap:** ~50 call sites across `app.py` and
+  `stock_analyzer/` call `st.secrets.get(...)` directly. With no `.streamlit/secrets.toml`
+  file on disk at all (env-vars-only), Streamlit's lazy secrets loader raises
+  `StreamlitSecretNotFoundError` on the *first* access anywhere — not a graceful per-key
+  miss — which crashed Home (stuck on the loading radar) on first deploy.
+- **Fix:** `railway_start.sh` (new file) writes `.streamlit/secrets.toml` from the Railway
+  env vars at container startup, before launching Streamlit — fixes every `st.secrets` call
+  site at once, no app-code changes needed elsewhere. `railway.toml`'s `startCommand` now
+  runs this script. Full detail: `docs/architecture.md` §9.1b.
+- **`app.py::_check_password()`** also got a direct `APP_PASSWORD`/`APP_READONLY_PASSWORD`
+  env-var fallback (commit `3310a61`) plus the Phase 1b brute-force lockout — belt-and-
+  suspenders alongside the materialized secrets.toml.
+- **A bad `FINNHUB_API_KEY` value (pasted with stray quotes) triggered a real, live
+  confirmation of the multi-source price failover** — the price strip correctly fell back
+  to "Yahoo Finance (15-min delayed)" until the key was fixed, then self-healed to
+  "Finnhub (real-time)". Working as designed.
+- **Cost:** always-on Hobby usage projected ~$8.30/mo (base $5 + usage overage), not the
+  plan's assumed flat $5. Enabled Railway's **Serverless toggle** (Settings → Deploy) since
+  the app isn't used overnight — sleeps after 10 min idle, wakes on next request from a
+  cached build image. Watch actual next-day cost to confirm it helped; an open browser tab's
+  60s auto-refresh may count as traffic and prevent sleep. Full detail + fallback option
+  (scheduled external stop/start) in memory `project_railway_migration`.
+- **Phase 0a (Anthropic key rotation) — deferred by explicit user choice**, not automated
+  away. Note: the exposed key (prefix `sk-ant-api03-x_sV2...`) was printed into a Claude
+  session transcript via an over-broad `grep` during Phase 3 troubleshooting — a real
+  exposure event, independent of Railway itself. Still pending rotation.
 
 ---
 
