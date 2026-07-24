@@ -235,7 +235,7 @@ Each idea requires:
 | Idea | Plan doc | Status |
 |---|---|---|
 | #1 Thesis Red Team Agent | [docs/plans/thesis-red-team-agent.md](thesis-red-team-agent.md) | Phase 1 SHIPPED 2026-07-23 — Phase 2 gate: ~2026-07-30 |
-| #2 Multi-Agent Debate | `docs/plans/multi-agent-debate.md` | Not yet written |
+| #2 Multi-Agent Debate | [docs/plans/multi-agent-debate.md](multi-agent-debate.md) | Plan SHIP 2026-07-23 (3 Opus rounds) — Phase 1 build in progress |
 | #3 Structural Vulnerability Scanner | `docs/plans/structural-vulnerability-scanner.md` | Not yet written |
 | #4 Information Asymmetry Detector | `docs/plans/information-asymmetry-detector.md` | Not yet written |
 | #5 Regime-Aware Stress Testing | `docs/plans/adversarial-stress-testing.md` | Not yet written |

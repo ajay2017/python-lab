@@ -211,6 +211,7 @@ from stock_analyzer.quick_research import research_ticker as _qr_research
 from stock_analyzer.decision_journal import compute_patterns
 from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
+from stock_analyzer import debate_agent
 
 # Brand: DRISHTA (Sanskrit for "vision/insight") — "Beyond Noise".
 # page_icon falls back to an emoji if the logo file isn't deployed yet so
@@ -5776,6 +5777,93 @@ if page == "🏠 Home":
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _gp["ticker"]
                 st.rerun()
+
+            # ── Debate button (Multi-Agent Debate, Phase 1) ──────────────────────────
+            _deb_ticker = (_gp.get("ticker") or "").upper()
+            _deb_cs     = _gp.get("composite_score")
+            _gc_map     = st.session_state.get("_grow_composites") or {}
+            if _deb_ticker and _deb_cs is not None and _deb_ticker in _gc_map:
+                _deb_cached = db.load_debate_cache(_deb_ticker, "entry", str(_today_et()))
+                _deb_runs   = st.session_state.get("_debate_runs_this_session", 0)
+                if _deb_cached:
+                    # Render stored debate result
+                    _dv  = _deb_cached.get("verdict")
+                    _kd  = _deb_cached.get("key_dispute")
+                    _bsc = _deb_cached.get("bull_case_score")
+                    _ebc = _deb_cached.get("bear_case_score")
+                    _grd = _deb_cached.get("grounded")
+                    _trn = _deb_cached.get("transcript") or []
+                    # Distinguish a genuine Judge verdict from a cached failure
+                    _deb_failed = _dv is None and not _trn
+                    _dv_icon = (
+                        "🟢 Bull wins" if _dv == "bull_wins" else
+                        "🔴 Bear wins" if _dv == "bear_wins" else
+                        "⚖️ Contested"   if _dv == "contested" else
+                        "⚠️ Error"
+                    )
+                    with st.expander(f"⚔️ Debate — {_dv_icon}", expanded=False):
+                        if _deb_failed:
+                            st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
+                        else:
+                            if _bsc is not None and _ebc is not None:
+                                _dc1, _dc2 = st.columns(2)
+                                _dc1.metric("Bull score", f"{_bsc}/100")
+                                _dc2.metric("Bear score", f"{_ebc}/100")
+                            if _kd:
+                                st.markdown(f"**Key dispute:** {_kd}")
+                            if _grd is False:
+                                st.warning("One or both agents relied on generic arguments — treat this debate with lower confidence.")
+                        if _trn:
+                            st.markdown("**Transcript:**")
+                            for _tr in _trn:
+                                _ag = (_tr.get("agent") or "").title()
+                                _ag_color = "#22c55e" if _tr.get("agent") == "bull" else "#ef4444"
+                                st.markdown(
+                                    f"<span style='color:{_ag_color}'>**Round {_tr.get('round')} — {_ag}:**</span> {_tr.get('text', '')}",
+                                    unsafe_allow_html=True,
+                                )
+                else:
+                    _deb_btn_disabled = _deb_runs >= debate_agent.DEBATE_SESSION_CEILING
+                    _deb_btn_help = (
+                        f"Session limit reached ({debate_agent.DEBATE_SESSION_CEILING}/{debate_agent.DEBATE_SESSION_CEILING})"
+                        if _deb_btn_disabled else
+                        "Run a Bull vs Bear structured debate on this candidate (~15 seconds, 5 Haiku calls)"
+                    )
+                    if st.button("⚔️ Debate", key=f"debate_entry_{_deb_ticker}",
+                                 disabled=_deb_btn_disabled, help=_deb_btn_help):
+                        with st.spinner(f"Running debate for {_deb_ticker} — 5 Haiku calls, ~15 seconds…"):
+                            _api_key_deb = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                            _deb_bundle  = _gc_map.get(_deb_ticker, {})
+                            _deb_spy_df  = _cached_spy("6mo")
+                            _deb_spy_cl  = (
+                                _deb_spy_df["Close"]
+                                if _deb_spy_df is not None and "Close" in _deb_spy_df.columns
+                                else pd.Series(dtype=float)
+                            )
+                            _deb_corpus  = debate_agent.build_entry_corpus(
+                                _deb_ticker, _gp, _deb_bundle, _deb_spy_cl
+                            )
+                            _deb_result  = debate_agent.run_debate(_deb_corpus, "entry", _api_key_deb)
+                        # Only cache + count runs with real content — skip
+                        # empty failures so a transient error doesn't poison
+                        # the day-cache until tomorrow.
+                        if _deb_result.get("transcript"):
+                            db.save_debate_cache(
+                                ticker=_deb_ticker,
+                                debate_type="entry",
+                                debate_date=str(_today_et()),
+                                verdict=_deb_result.get("verdict"),
+                                key_dispute=_deb_result.get("key_dispute"),
+                                bull_case_score=_deb_result.get("bull_case_score"),
+                                bear_case_score=_deb_result.get("bear_case_score"),
+                                grounded=_deb_result.get("grounded"),
+                                transcript=_deb_result.get("transcript", []),
+                                corpus_snapshot=_deb_corpus,
+                            )
+                            st.session_state["_debate_runs_this_session"] = _deb_runs + 1
+                        else:
+                            st.warning("Debate could not complete — API unavailable or rate-limited. Session slot not consumed.")
+                        st.rerun()
 
         # Add-to-winner
         if add_pos:

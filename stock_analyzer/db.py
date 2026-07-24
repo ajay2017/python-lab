@@ -362,6 +362,29 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.thesis_erosion_cache;
     create policy "Allow all (service role)" on public.thesis_erosion_cache
         for all to service_role using (true) with check (true);
+
+    -- debate_cache: stores Bull vs Bear structured debate results per (ticker, debate_type, debate_date).
+    -- debate_type: 'entry' (from Grow Today) | 'exit' (Phase 2, Exit Advisor).
+    -- debate_date: ET ISO date string from _today_et(). transcript = [{round, agent, text}] list.
+    -- Until table created: load returns None, save no-ops.
+    create table if not exists public.debate_cache (
+        ticker          text        NOT NULL,
+        debate_type     text        NOT NULL,
+        debate_date     text        NOT NULL,
+        verdict         text,
+        key_dispute     text,
+        bull_case_score numeric,
+        bear_case_score numeric,
+        grounded        boolean,
+        transcript      jsonb       NOT NULL,
+        corpus_snapshot jsonb       NOT NULL,
+        created_at      timestamptz DEFAULT now(),
+        PRIMARY KEY (ticker, debate_type, debate_date)
+    );
+    alter table public.debate_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.debate_cache;
+    create policy "Allow all (service role)" on public.debate_cache
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -2376,3 +2399,69 @@ def delete_account_flow(flow_id) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Multi-Agent Debate — Bull vs Bear day-cache (ticker × debate_type × date) ─
+# Persists structured debate results (transcript + Judge verdict) per
+# (ticker, debate_type, debate_date). debate_type = 'entry' (Phase 1, Grow
+# Today) | 'exit' (Phase 2, Exit Advisor). debate_date is the ET ISO date
+# string from _today_et(). System cache → NOT _READONLY-gated (same
+# classification as sentiment_llm_cache / bundle_cache). Degrades gracefully
+# when table is absent: load returns None, save no-ops.
+
+def load_debate_cache(ticker: str, debate_type: str, debate_date: str) -> dict | None:
+    """Return cached debate result for (ticker, debate_type, debate_date) or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date/type) — caller should run the debate and call save_debate_cache.
+    Never raises.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("debate_cache")
+            .select("verdict,key_dispute,bull_case_score,bear_case_score,grounded,transcript")
+            .eq("ticker", t)
+            .eq("debate_type", debate_type)
+            .eq("debate_date", debate_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_debate_cache(
+    ticker, debate_type, debate_date,
+    verdict, key_dispute,
+    bull_case_score, bear_case_score,
+    grounded, transcript, corpus_snapshot,
+):
+    """Upsert debate result row. Best-effort — never raises.
+
+    transcript is the [{round, agent, text}] list from run_debate().
+    corpus_snapshot is the build_entry_corpus() dict persisted for audit.
+    """
+    t = str(ticker or "").upper().strip()
+    if not t or not has_db():
+        return
+    try:
+        _client().table("debate_cache").upsert({
+            "ticker":          t,
+            "debate_type":     debate_type,
+            "debate_date":     debate_date,
+            "verdict":         verdict,
+            "key_dispute":     key_dispute,
+            "bull_case_score": bull_case_score,
+            "bear_case_score": bear_case_score,
+            "grounded":        grounded,
+            "transcript":      transcript,
+            "corpus_snapshot": corpus_snapshot,
+        }).execute()
+    except Exception:
+        pass
