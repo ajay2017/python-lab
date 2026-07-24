@@ -1549,6 +1549,10 @@ def _check_password():
     except Exception:
         expected    = ""
         ro_expected = ""
+    # No secrets.toml file on Railway — fall back to flat env vars so the
+    # password gate works without mounting a Secret File.
+    expected    = expected    or os.environ.get("APP_PASSWORD", "")
+    ro_expected = ro_expected or os.environ.get("APP_READONLY_PASSWORD", "")
     if not expected or st.session_state.get("auth_ok"):
         return
     _render_brand(large=True)
