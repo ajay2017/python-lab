@@ -410,6 +410,35 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.structural_scan_cache;
     create policy "Allow all (service role)" on public.structural_scan_cache
         for all to service_role using (true) with check (true);
+
+    -- price_xcheck_history: persists the already-shipped price cross-check result
+    -- (orchestrator.crosscheck_price/crosscheck_batch) once per Eastern trading
+    -- day per held ticker (Information Asymmetry Detector, Phase 1). ONE row per
+    -- (ticker, check_date). Written from the interactive Home page path (day-
+    -- deduped via a session flag), NOT from cron — the premarket cron path never
+    -- calls the cross-provider validator today, so writing from cron would add a
+    -- new per-ticker second-provider fetch every run; the interactive path
+    -- already computes this for free every 5 minutes via _cached_price_xcheck.
+    -- Enables a day-over-day "widened since X" annotation on the existing red
+    -- banner — impossible before this table existed (the prior check was a
+    -- 5-minute TTL cache with zero history).
+    -- Until table created: load returns None, save no-ops; the banner renders
+    -- exactly as it does today, with no trend annotation.
+    create table if not exists public.price_xcheck_history (
+        ticker           text        NOT NULL,
+        check_date       text        NOT NULL,
+        primary_source   text,
+        validator_source text,
+        prev_gap_pct     numeric,
+        live_gap_pct     numeric,
+        ok               boolean     NOT NULL,
+        created_at       timestamptz DEFAULT now(),
+        PRIMARY KEY (ticker, check_date)
+    );
+    alter table public.price_xcheck_history enable row level security;
+    drop policy if exists "Allow all (service role)" on public.price_xcheck_history;
+    create policy "Allow all (service role)" on public.price_xcheck_history
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -1920,6 +1949,54 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame(rows) if rows else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+def save_price_xcheck_history_batch(rows: list[dict]) -> None:
+    """Persist today's price cross-check result per held ticker.
+
+    Idempotent: upserts on (ticker, check_date) — repeated writes same day
+    are no-ops in effect (overwrite with the same day's latest value).
+    Never raises.
+    """
+    if _READONLY:
+        return
+    if not rows:
+        return
+    if not has_db():
+        return
+    try:
+        _client().table("price_xcheck_history").upsert(
+            rows, on_conflict="ticker,check_date",
+        ).execute()
+    except Exception:
+        pass
+
+
+def load_price_xcheck_history(ticker: str, before_date: str, days_back: int = 21) -> dict | None:
+    """Return the most recent row for `ticker` strictly before `before_date`,
+    within the last `days_back` calendar days, or None if no such row exists
+    (table absent, DB offline, or genuinely no prior history yet). Never raises.
+    """
+    if not ticker or not has_db():
+        return None
+    try:
+        from datetime import date, timedelta
+        cutoff = (date.fromisoformat(before_date) - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("price_xcheck_history")
+            .select("*")
+            .eq("ticker", ticker)
+            .lt("check_date", before_date)
+            .gte("check_date", cutoff)
+            .order("check_date", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
 
 
 def save_watchlist(tickers: list[str]) -> bool:

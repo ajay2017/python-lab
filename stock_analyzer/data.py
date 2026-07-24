@@ -45,6 +45,29 @@ def crosscheck_validator_degraded() -> str | None:
     return _orch.live_price_validator_degraded()
 
 
+def divergence_widened(today_gap_pct: float | None, prior_gap_pct: float | None,
+                        min_widen_pp: float = 1.0) -> bool:
+    """
+    True if today's cross-check gap is at least min_widen_pp percentage points
+    larger than the prior recorded gap. False if either value is None (can't
+    compare), or if the gap has narrowed/stayed flat. Never raises.
+
+    min_widen_pp is a display-annotation threshold, not a policy/gate value —
+    it decides whether to APPEND a sentence to an existing banner, nothing more.
+    """
+    try:
+        if today_gap_pct is None or prior_gap_pct is None:
+            return False
+        # float() coerce defensively — Supabase can return numeric columns as
+        # JSON strings under some client configs; a bare subtraction would then
+        # raise and silently drop the annotation via the except below. Coercing
+        # here keeps the annotation robust without weakening the "never raises,
+        # display-only" contract.
+        return (float(today_gap_pct) - float(prior_gap_pct)) >= min_widen_pp
+    except Exception:
+        return False
+
+
 DEFAULT_TICKERS = {
     "Micron Technology": "MU",
     "AMD": "AMD",

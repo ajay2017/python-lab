@@ -49,6 +49,7 @@ from stock_analyzer.data import (
     fetch_spy, fetch_tlt, fetch_vix, fetch_live_prices, fetch_market_indices, market_status,
     curate_news_items, fetch_price_history, fetch_risk_free_rate,
     crosscheck_price, crosscheck_prices, crosscheck_validator_degraded,
+    divergence_widened,
     fetch_earnings_calendar, fetch_next_earnings,
     is_trading_day,
 )
@@ -3032,6 +3033,24 @@ if page == "🏠 Home":
         # banner on live health, which would mask genuine integrity faults.
         _xc_validator_down = crosscheck_validator_degraded()
         _xc = _cached_price_xcheck(tuple(sorted(held_tickers)))
+
+        _xc_today_str = str(_today_et())
+        if st.session_state.get("_price_xcheck_logged_date") != _xc_today_str and _xc:
+            _xc_rows = [
+                {
+                    "ticker": t,
+                    "check_date": _xc_today_str,
+                    "primary_source": r.get("primary_source"),
+                    "validator_source": r.get("validator"),
+                    "prev_gap_pct": r.get("prev_gap_pct"),
+                    "live_gap_pct": r.get("live_gap_pct"),
+                    "ok": bool(r.get("ok", True)),
+                }
+                for t, r in _xc.items()
+            ]
+            db.save_price_xcheck_history_batch(_xc_rows)
+            st.session_state["_price_xcheck_logged_date"] = _xc_today_str
+
         _xc_bad = {t: r for t, r in _xc.items() if not r.get("ok", True)}
         if _xc_bad:
             _xc_lines = []
@@ -3044,6 +3063,24 @@ if page == "🏠 Home":
                     )
                 if r.get("live_ok") is False:
                     _bits.append(f"live-price gap {r.get('live_gap_pct')}%")
+
+                _xc_prior = db.load_price_xcheck_history(t, _xc_today_str, days_back=21)
+                if _xc_prior:
+                    if r.get("prev_ok") is False and divergence_widened(
+                        r.get("prev_gap_pct"), _xc_prior.get("prev_gap_pct")
+                    ):
+                        _bits.append(
+                            f"prior-close gap widened from {_xc_prior.get('prev_gap_pct')}% to "
+                            f"{r.get('prev_gap_pct')}% since {_xc_prior.get('check_date')}"
+                        )
+                    if r.get("live_ok") is False and divergence_widened(
+                        r.get("live_gap_pct"), _xc_prior.get("live_gap_pct")
+                    ):
+                        _bits.append(
+                            f"live-price gap widened from {_xc_prior.get('live_gap_pct')}% to "
+                            f"{r.get('live_gap_pct')}% since {_xc_prior.get('check_date')}"
+                        )
+
                 _xc_lines.append(
                     f"- **{t}**: {r.get('primary_source')} vs {r.get('validator', 'independent source')} "
                     f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
