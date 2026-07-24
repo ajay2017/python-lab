@@ -142,6 +142,15 @@ Streamlit is synchronous and request-driven. A 4-round multi-LLM-call debate is:
 
 ## Idea #3 — Structural Vulnerability Scanner (P3)
 
+> **Superseded by the dedicated plan (2026-07-23):** the "Where it surfaces" section
+> below assumed the 🔗 Risk Analysis page — written before checking that 🧩 Intelligence
+> (shipped 2026-07-17, three weeks earlier) already ships Correlation Clusters, Risk
+> Budget, and Factor Tilt panels covering most of "What it produces" below. The
+> dedicated plan, [docs/plans/structural-vulnerability-scanner.md](structural-vulnerability-scanner.md),
+> corrects this: surfaces as a 4th tab on 🧩 Intelligence, reusing those three existing
+> panels and adding only the genuinely new Blast Radius Map + LLM narrative. Read the
+> dedicated plan, not this section, for the current design.
+
 ### What it is
 
 An agent that scans the portfolio for non-obvious structural weaknesses — hidden factor clustering, blast-radius chains, and "open port" exposures — and surfaces the specific exploit chain.
@@ -235,8 +244,8 @@ Each idea requires:
 | Idea | Plan doc | Status |
 |---|---|---|
 | #1 Thesis Red Team Agent | [docs/plans/thesis-red-team-agent.md](thesis-red-team-agent.md) | Phase 1 SHIPPED 2026-07-23 — Phase 2 gate: ~2026-07-30 |
-| #2 Multi-Agent Debate | [docs/plans/multi-agent-debate.md](multi-agent-debate.md) | Plan SHIP 2026-07-23 (3 Opus rounds) — Phase 1 build in progress |
-| #3 Structural Vulnerability Scanner | `docs/plans/structural-vulnerability-scanner.md` | Not yet written |
+| #2 Multi-Agent Debate | [docs/plans/multi-agent-debate.md](multi-agent-debate.md) | Phase 1 SHIPPED 2026-07-23 (commit `e745e48`) — Phase 2 gate: ≥3 days production observation |
+| #3 Structural Vulnerability Scanner | [docs/plans/structural-vulnerability-scanner.md](structural-vulnerability-scanner.md) | Plan SHIP 2026-07-23 (3 Opus rounds) — surfaces as a 4th tab on 🧩 Intelligence (not 🔗 Risk Analysis as originally assumed — see plan's opening section); ready for implementation |
 | #4 Information Asymmetry Detector | `docs/plans/information-asymmetry-detector.md` | Not yet written |
 | #5 Regime-Aware Stress Testing | `docs/plans/adversarial-stress-testing.md` | Not yet written |
 | #6 Autonomous Pattern Discovery | `docs/plans/autonomous-pattern-discovery.md` | Not yet written |
