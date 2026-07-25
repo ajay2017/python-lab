@@ -491,6 +491,32 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.thesis_cluster_cache;
     create policy "Allow all (service role)" on public.thesis_cluster_cache
         for all to service_role using (true) with check (true);
+
+    -- missed_opportunity_cache: daily portfolio-level Missed-Opportunity
+    -- Pattern result (Agentic Intelligence Roadmap v2, O1). ONE row per
+    -- scan_date — portfolio-wide, not per-ticker. Finds a descriptive
+    -- pattern across engine "new_pick" recommendations never acted on
+    -- (Haiku), verified in pure Python against a closed set of categorical
+    -- fields (sector/price_band/composite_band/verdict/outcome_label) — a
+    -- non-conforming ticker is dropped from its pattern, never rendered as
+    -- if it fit. patterns is an empty JSON array when Haiku found no
+    -- coherent pattern — a VALID result, not a failure; a genuine failure
+    -- (no API key, timeout, malformed response) is never written (the
+    -- caller only calls save when the Haiku call succeeded), so a
+    -- transient failure can be retried immediately rather than caching a
+    -- placeholder for the rest of the day. Until table created: load
+    -- returns None, save no-ops; the section still shows the generate button.
+    create table if not exists public.missed_opportunity_cache (
+        scan_date       text        NOT NULL,
+        patterns        jsonb       NOT NULL,
+        missed_snapshot jsonb       NOT NULL,
+        created_at      timestamptz DEFAULT now(),
+        PRIMARY KEY (scan_date)
+    );
+    alter table public.missed_opportunity_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.missed_opportunity_cache;
+    create policy "Allow all (service role)" on public.missed_opportunity_cache
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -2776,6 +2802,58 @@ def save_thesis_cluster_cache(scan_date, clusters, thesis_snapshot, truncated=Fa
             "clusters":        clusters,
             "thesis_snapshot": thesis_snapshot,
             "truncated":       bool(truncated),
+        }).execute()
+    except Exception:
+        pass
+
+
+# ── Missed-Opportunity Pattern — daily portfolio-level cache (O1) ──────────
+# Persists the pattern-detection result for one ET calendar day. ONE row per
+# scan_date (no ticker key — portfolio-wide synthesis). System cache → NOT
+# _READONLY-gated (same classification as debate_cache / structural_scan_cache
+# / thesis_cluster_cache — a recomputable analytical narrative, not
+# user-authored data). Degrades gracefully when table is absent: load
+# returns None, save no-ops.
+
+def load_missed_opportunity_cache(scan_date: str) -> dict | None:
+    """Return cached missed-opportunity-pattern result for scan_date or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date) — caller should compute and show the generate button.
+    Never raises.
+    """
+    if not scan_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("missed_opportunity_cache")
+            .select("patterns,missed_snapshot")
+            .eq("scan_date", scan_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_missed_opportunity_cache(scan_date, patterns, missed_snapshot):
+    """Upsert missed-opportunity-pattern row. Best-effort — never raises.
+
+    Caller must only invoke this when the Haiku call succeeded (patterns is
+    a list, possibly empty — "no coherent pattern found" is a valid,
+    cacheable result) — never cache a genuine failure (None from
+    generate_missed_opportunity_patterns).
+    """
+    if not scan_date or not has_db():
+        return
+    try:
+        _client().table("missed_opportunity_cache").upsert({
+            "scan_date":       scan_date,
+            "patterns":        patterns,
+            "missed_snapshot": missed_snapshot,
         }).execute()
     except Exception:
         pass

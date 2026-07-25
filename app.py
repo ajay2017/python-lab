@@ -191,6 +191,7 @@ from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 from stock_analyzer import regime_stress
 from stock_analyzer import thesis_cluster
+from stock_analyzer import missed_opportunity
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
@@ -20882,6 +20883,87 @@ elif page == "📜 Recommendations History":
                     _rh_mt, hide_index=True, width='stretch',
                     height=min(480, 60 + 35 * len(_rh_mt)),
                 )
+
+        # ── 🔍 Missed-Opportunity Pattern (O1, Agentic Intelligence Roadmap v2) ──
+        # Gated on the UNFILTERED _rh_enriched_all snapshot, deliberately
+        # NOT the status-filtered _rh_enriched the flat list above uses —
+        # distinct_missed()'s "acted via ANY surfacing" safeguard would
+        # silently break under the Acted-only/Missed-only dropdown otherwise.
+        # A sibling section to the block above, not nested inside it, so it
+        # renders regardless of the current status filter.
+        st.markdown("### 🔍 Missed-Opportunity Pattern")
+        st.caption(
+            "Looks for a real, descriptive pattern across New Positions to Initiate "
+            "you never acted on — grounded in real outcomes, never a forward-looking "
+            "buy signal for names that resemble it."
+        )
+        _mo_corpus = missed_opportunity.build_missed_opportunity_corpus(_rh_enriched_all)
+
+        if len(_mo_corpus) < missed_opportunity._MIN_MISSED_TICKERS:
+            st.caption(
+                "Not enough graded missed opportunities yet to look for a pattern — "
+                "this will populate as more surfaced picks mature."
+            )
+        else:
+            _mo_scan_date = str(_today_et())
+            _mo_cached    = db.load_missed_opportunity_cache(_mo_scan_date)
+            _mo_patterns  = _mo_cached.get("patterns") if _mo_cached else None
+
+            if _mo_patterns is None:
+                if st.button("🔍 Look for a pattern", key="_mo_gen_btn"):
+                    with st.spinner("Analyzing skipped recommendations for a shared pattern…"):
+                        _mo_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                        _mo_result  = missed_opportunity.generate_missed_opportunity_patterns(
+                            _mo_corpus, _mo_api_key
+                        )
+                    if _mo_result is not None:
+                        _mo_snapshot = [
+                            {**c, "first_rec_date": (
+                                c["first_rec_date"].isoformat()
+                                if c.get("first_rec_date") else None
+                            )}
+                            for c in _mo_corpus
+                        ]
+                        db.save_missed_opportunity_cache(
+                            scan_date=_mo_scan_date,
+                            patterns=_mo_result["patterns"],
+                            missed_snapshot=_mo_snapshot,
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Analysis could not complete — API unavailable or rate-limited. Try again.")
+            else:
+                if not _mo_patterns:
+                    st.success("No systematic pattern found in what you've skipped today.")
+                else:
+                    _mo_by_ticker = {c["ticker"]: c for c in _mo_corpus}
+                    for _mo_p in _mo_patterns:
+                        _mo_names = ", ".join(_mo_p["tickers"])
+                        st.markdown(f"**{_mo_names}**")
+                        st.caption(_mo_p["pattern_label"])
+                        st.caption(
+                            f"Shared trait: {_mo_p['shared_dimension']} = "
+                            f"\"{_mo_p['shared_value']}\""
+                        )
+                        _mo_mix = missed_opportunity.pattern_outcome_mix(_mo_p["tickers"], _mo_corpus)
+                        st.caption(
+                            f"Outcome mix — {_mo_mix['win']} rose · {_mo_mix['loss']} fell · "
+                            f"{_mo_mix['flat']} flat"
+                        )
+                        with st.expander("Show real data behind this pattern"):
+                            for _mo_t in _mo_p["tickers"]:
+                                _mo_row = _mo_by_ticker.get(_mo_t) or {}
+                                _mo_alpha = _mo_row.get("alpha_pct")
+                                _mo_alpha_str = f"{_mo_alpha:+.1f}pp vs SPY" if _mo_alpha is not None else "alpha n/a"
+                                _mo_outcome = _mo_row.get("outcome_pct")
+                                _mo_outcome_str = f"{_mo_outcome:+.1f}%" if _mo_outcome is not None else "n/a"
+                                st.markdown(
+                                    f"- **{_mo_t}** — {_mo_row.get('sector', 'Other')} · "
+                                    f"{_mo_row.get('price_band', 'unknown')} · "
+                                    f"{_mo_row.get('composite_band', 'Unscored')} · "
+                                    f"outcome {_mo_outcome_str} ({_mo_alpha_str})"
+                                )
+                st.caption(f"Computed {_mo_scan_date} ET from your saved recommendation history.")
 
     with _rh_tab_trends:
         # ── Trends ──────────────────────────────────────────────────────────────
