@@ -465,6 +465,32 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.regime_scenario_cache;
     create policy "Allow all (service role)" on public.regime_scenario_cache
         for all to service_role using (true) with check (true);
+
+    -- thesis_cluster_cache: daily portfolio-level Hidden Same-Bet Detector
+    -- result (Agentic Intelligence Roadmap v2, D1). ONE row per scan_date —
+    -- portfolio-wide, not per-ticker. Semantically clusters held positions'
+    -- saved buy theses (Haiku) to find groups secretly betting on the same
+    -- underlying assumption, then classifies each cluster unverified/
+    -- possible/confirmed against correlation_clusters() in pure Python
+    -- (never an LLM judgment call). clusters is an empty JSON array when
+    -- Haiku found no shared assumption — a VALID result, not a failure; a
+    -- genuine failure (no API key, timeout, malformed response) is never
+    -- written (the caller only calls save when the Haiku call succeeded),
+    -- so a transient failure can be retried immediately rather than caching
+    -- a placeholder for the rest of the day. Until table created: load
+    -- returns None, save no-ops; the section still shows the generate button.
+    create table if not exists public.thesis_cluster_cache (
+        scan_date       text        NOT NULL,
+        clusters        jsonb       NOT NULL,
+        thesis_snapshot jsonb       NOT NULL,
+        truncated       boolean     DEFAULT false,
+        created_at      timestamptz DEFAULT now(),
+        PRIMARY KEY (scan_date)
+    );
+    alter table public.thesis_cluster_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.thesis_cluster_cache;
+    create policy "Allow all (service role)" on public.thesis_cluster_cache
+        for all to service_role using (true) with check (true);
 """
 
 import os
@@ -2695,6 +2721,61 @@ def save_regime_scenario_cache(scan_date, scenario_narrative, indicator_watchlis
             "blast_radius_snapshot": blast_radius_snapshot,
             "regime_snapshot":       regime_snapshot,
             "cross_asset_snapshot":  cross_asset_snapshot,
+        }).execute()
+    except Exception:
+        pass
+
+
+# ── Hidden Same-Bet Detector — daily portfolio-level cache (D1) ────────────
+# Persists the thesis-cluster classification result for one ET calendar day.
+# ONE row per scan_date (no ticker key — portfolio-wide synthesis). System
+# cache → NOT _READONLY-gated (same classification as debate_cache /
+# structural_scan_cache / regime_scenario_cache — a recomputable analytical
+# narrative, not user-authored data). Degrades gracefully when table is
+# absent: load returns None, save no-ops.
+
+def load_thesis_cluster_cache(scan_date: str) -> dict | None:
+    """Return cached thesis-cluster result for scan_date or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date) — caller should compute and show the generate button.
+    Never raises.
+    """
+    if not scan_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("thesis_cluster_cache")
+            .select("clusters,thesis_snapshot,truncated")
+            .eq("scan_date", scan_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_thesis_cluster_cache(scan_date, clusters, thesis_snapshot, truncated=False):
+    """Upsert thesis-cluster row. Best-effort — never raises.
+
+    Caller must only invoke this when the Haiku call succeeded (clusters is
+    a list, possibly empty — "no shared assumption found" is a valid,
+    cacheable result) — never cache a genuine failure (None from
+    generate_thesis_clusters). truncated records whether any thesis text
+    was cut for the prompt, so the render can note it consistently on both
+    the generation and cache-hit paths (not just the moment of generation).
+    """
+    if not scan_date or not has_db():
+        return
+    try:
+        _client().table("thesis_cluster_cache").upsert({
+            "scan_date":       scan_date,
+            "clusters":        clusters,
+            "thesis_snapshot": thesis_snapshot,
+            "truncated":       bool(truncated),
         }).execute()
     except Exception:
         pass

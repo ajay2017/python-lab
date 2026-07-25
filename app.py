@@ -190,6 +190,7 @@ from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 from stock_analyzer import regime_stress
+from stock_analyzer import thesis_cluster
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
@@ -10390,6 +10391,9 @@ elif page == "🧩 Intelligence":
         )
 
         _ss_corr_df = st.session_state.get("_corr_df_cache")
+        _ss_clusters = None  # always defined — the Hidden Same-Bet section below
+        # (gated on thesis coverage, not price data) needs to check this even
+        # when the correlation-gated branch below never runs this render.
         if _ss_corr_df is None or (hasattr(_ss_corr_df, "empty") and _ss_corr_df.empty):
             st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
         else:
@@ -10463,6 +10467,82 @@ elif page == "🧩 Intelligence":
                     "Full pairwise correlations: 🕸️ Correlation Clusters. "
                     "Per-position risk contribution: ⚖️ Risk Budget."
                 )
+
+        st.divider()
+
+        # ── Hidden Same-Bet Detector (D1, Agentic Intelligence Roadmap v2) ──
+        # Gated ONLY on thesis coverage — deliberately INDEPENDENT of the
+        # price-correlation gate above. Nesting this inside that gate would
+        # silently hide the whole section (including the "not enough
+        # theses" message) whenever price history was thin, which is the
+        # wrong failure mode for a thesis-only signal (Opus review finding).
+        st.markdown("**🧠 Hidden Same-Bet Detector**")
+        st.caption(
+            "Positions that look diversified by price and sector can still secretly "
+            "bet on the same underlying assumption. Semantically clusters your saved "
+            "buy theses to find those groups, then checks each one against Correlation "
+            "Clusters above to see whether the numbers would have caught it."
+        )
+        _hsb_trades_df = st.session_state.get("trades_df")
+        _hsb_corpus = thesis_cluster.build_thesis_corpus(_pi_pdf, _hsb_trades_df)
+
+        if len(_hsb_corpus) < 2:
+            st.caption(
+                "Not enough saved theses yet to check for hidden overlaps — save an "
+                "investment thesis when you log a BUY and this will populate."
+            )
+        else:
+            _hsb_scan_date = str(_today_et())
+            _hsb_cached     = db.load_thesis_cluster_cache(_hsb_scan_date)
+            _hsb_validated  = _hsb_cached.get("clusters") if _hsb_cached else None
+
+            if _hsb_validated is None:
+                if st.button("🧠 Check for hidden shared bets", key="_hsb_gen_btn"):
+                    with st.spinner("Analyzing saved theses for shared assumptions…"):
+                        _hsb_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                        _hsb_result  = thesis_cluster.generate_thesis_clusters(_hsb_corpus, _hsb_api_key)
+                    if _hsb_result is not None:
+                        db.save_thesis_cluster_cache(
+                            scan_date=_hsb_scan_date,
+                            clusters=_hsb_result["clusters"],
+                            thesis_snapshot=_hsb_corpus,
+                            truncated=_hsb_result.get("truncated", False),
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Analysis could not complete — API unavailable or rate-limited. Try again.")
+            else:
+                # Classification is computed fresh every render using THIS
+                # session's correlation data — never frozen at generation
+                # time, so a cluster found "unverified" (no price data that
+                # session) correctly reclassifies once price data is
+                # available later the same day, rather than staying stale.
+                _hsb_classified = thesis_cluster.classify_clusters(_hsb_validated, _ss_clusters)
+
+                if not _hsb_classified:
+                    st.success("No shared assumption found in your saved theses today.")
+                else:
+                    _hsb_state_style = {
+                        "unverified": ("⚪", "Unverified — no price-correlation data this session"),
+                        "possible":   ("🟠", "Possible shared assumption — review"),
+                        "confirmed":  ("🟡", "Confirmed — also visible in Correlation Clusters"),
+                    }
+                    for _hsb_c in _hsb_classified:
+                        _hsb_icon, _hsb_label = _hsb_state_style.get(
+                            _hsb_c["state"], ("⚪", _hsb_c["state"])
+                        )
+                        _hsb_names = ", ".join(_hsb_c["tickers"])
+                        st.markdown(f"{_hsb_icon} **{_hsb_names}** — {_hsb_label}")
+                        st.caption(_hsb_c["shared_assumption"])
+                        if _hsb_c.get("corr_subpairs"):
+                            _hsb_pairs_str = "; ".join(
+                                ", ".join(p) for p in _hsb_c["corr_subpairs"]
+                            )
+                            st.caption(f"Already price-correlated within this group: {_hsb_pairs_str}")
+
+                if _hsb_cached and _hsb_cached.get("truncated"):
+                    st.caption("Note: one or more theses were truncated for this scan.")
+                st.caption(f"Computed {_hsb_scan_date} ET from your saved theses.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
