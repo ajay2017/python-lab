@@ -143,7 +143,7 @@ partially built" facts against HEAD — the table above is dated 2026-07-24 and 
 | ID | Candidate | Plan doc | Status |
 |---|---|---|---|
 | D2 | Exit Red-Team | [docs/plans/exit-red-team.md](exit-red-team.md) | **SHIPPED 2026-07-24** (commit `fb3676e`; F-197 Phase 2) |
-| D1 | Hidden Same-Bet Detector | *(to write)* | Priority 2 |
+| D1 | Hidden Same-Bet Detector | [docs/plans/hidden-same-bet-detector.md](hidden-same-bet-detector.md) | **SHIPPED 2026-07-24** (commit `5e8479f`; F-199) |
 | O1 | Missed-Opportunity Pattern | *(to write)* | Priority 3 |
 | D3 | Signal Coherence Auditor | *(to write)* | Priority 4 |
 | O4 | Watchlist Resurrection | *(to write)* | Priority 5 (parallel quick-win) |
