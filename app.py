@@ -10539,6 +10539,13 @@ elif page == "🧩 Intelligence":
                                 ", ".join(p) for p in _hsb_c["corr_subpairs"]
                             )
                             st.caption(f"Already price-correlated within this group: {_hsb_pairs_str}")
+                        _hsb_quotes = _hsb_c.get("quotes") or {}
+                        if _hsb_quotes:
+                            with st.expander("Show evidence from each thesis"):
+                                for _hsb_t in _hsb_c["tickers"]:
+                                    _hsb_q = _hsb_quotes.get(_hsb_t)
+                                    if _hsb_q:
+                                        st.markdown(f"**{_hsb_t}:** _\"{_hsb_q}\"_")
 
                 if _hsb_cached and _hsb_cached.get("truncated"):
                     st.caption("Note: one or more theses were truncated for this scan.")

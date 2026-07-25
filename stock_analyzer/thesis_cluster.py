@@ -229,6 +229,7 @@ def _parse_cluster_response(raw_json: str, corpus: list[dict]):
             quotes_by_norm = {str(k).strip().casefold(): v for k, v in raw_quotes.items()}
 
             verified_tickers = []
+            verified_quotes  = {}
             _seen_tickers = set()
             for raw_t in raw_tickers:
                 norm = str(raw_t).strip().casefold()
@@ -250,6 +251,7 @@ def _parse_cluster_response(raw_json: str, corpus: list[dict]):
                     continue  # dedup — a repeated ticker can't count twice toward the min-2 floor
                 _seen_tickers.add(canonical)
                 verified_tickers.append(canonical)
+                verified_quotes[canonical] = str(quote).strip()
 
             if len(verified_tickers) < _MIN_THESIS_POSITIONS:
                 continue  # group collapsed below minimum after validation
@@ -257,6 +259,7 @@ def _parse_cluster_response(raw_json: str, corpus: list[dict]):
             validated.append({
                 "tickers": verified_tickers,
                 "shared_assumption": str(assumption).strip(),
+                "quotes": verified_quotes,
             })
 
         return validated
@@ -309,6 +312,7 @@ def classify_clusters(validated_clusters, correlation_clusters_result) -> list[d
             result.append({
                 "tickers":           cluster["tickers"],
                 "shared_assumption": cluster["shared_assumption"],
+                "quotes":            cluster.get("quotes", {}),
                 "state":             state,
                 "corr_subpairs":     subpairs,
             })
