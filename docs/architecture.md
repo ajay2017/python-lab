@@ -92,7 +92,7 @@ python-lab/
     ├── sentiment.py                VADER-based news sentiment scoring
     ├── news_sentiment.py           Finnhub news-sentiment awareness — bullish%/buzz/vs-sector → label + held-position shift alert (pure wrapper over FinnhubProvider.fetch_news_sentiment; F-74)
     ├── scoring.py                  Composite score weights and recommendation tiers
-    ├── signal_reconciliation.py    Central authority resolving scanner vs. composite vs. context into one buy/skip verdict (reconcile_signals) — every recommendation surface calls it
+    ├── signal_reconciliation.py    Central authority resolving scanner vs. composite vs. context into one buy/skip verdict (reconcile_signals) — every recommendation surface calls it. Also exposes classify_composite_direction() (F-202, D3): a public wrapper over the private _composite_class(), for callers on held positions where Score/Signal IS the composite (no separate momentum score to reconcile against)
     ├── portfolio.py                Portfolio DataFrame construction; stop integrity gate
     ├── account.py                  Account-level pure calc (net contributed capital, growth, money-weighted/Modified-Dietz return); signed net cash nets margin
     ├── daily_pnl.py                Positions-scope day-over-day P&L (Tier B): broker-style equity-delta vs persisted daily_snapshots baseline + the day's trades
@@ -1625,6 +1625,7 @@ flowchart LR
 | F-198 | Structural Scan narrative (Phase 1) | `structural_scanner.py` | Haiku (1 call/day) | On-demand ("🧬 Generate structural narrative" button, 🧩 Intelligence tab) | 300 tok | DB `structural_scan_cache` |
 | F-199 | Hidden Same-Bet Detector (D1) | `thesis_cluster.py` | Haiku (1 call/day) | On-demand ("🧠 Check for hidden shared bets" button, 🧩 Intelligence → 🧬 Structural Scan tab) | 600 tok | DB `thesis_cluster_cache` |
 | F-201 | Missed-Opportunity Pattern (O1) | `missed_opportunity.py` | Haiku (1 call/day) | On-demand ("🔍 Look for a pattern" button, 📊 Recommendations History → Summary tab) | 600 tok | DB `missed_opportunity_cache` |
+| F-202 | Signal Coherence Auditor (D3) | `signal_reconciliation.py` (`classify_composite_direction`), `db.py` (`load_debate_verdicts`) | **None — zero LLM calls** | Live on every render, 🧩 Intelligence → 🧭 Signal Coherence tab | 0 tok | None — no cache table (pure Python join, computed fresh each render) |
 | F-200 | Regime-Aware Adversarial Scenario (Phase 1) | `regime_stress.py` | Haiku (1 call/day) | On-demand ("🎯 Generate regime-aware scenario" button, 🔗 Risk Analysis → 🔥 Stress Testing tab) | 400 tok | DB `regime_scenario_cache` |
 | — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
 | — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
