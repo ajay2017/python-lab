@@ -4308,7 +4308,7 @@ if page == "🏠 Home":
                             "ticker":           _tk,
                             "rec_date":         _today_et(),
                             "rec_type":         "buy_candidate",
-                            "price_at_surface": _price_for(_tk),
+                            "price_at_surface": _price_for(_tk, _p.get("price")),
                             "composite_score":  _composite_for(_tk),
                             "momentum_score":   _p.get("score"),
                             "sector":           _p.get("sector", ""),
