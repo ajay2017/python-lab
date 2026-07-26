@@ -3,9 +3,11 @@
 **Date:** 2026-07-24
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8
-**Status:** Phase 1 (D2), Phase 2 (D1 + O1), and Phase 3 (D3 + O4) ALL SHIPPED as of
-2026-07-26. Phase 4 (O5/O6/O2/D4) not yet started. See the status table below for the
-live per-item state.
+**Status:** Phase 1 (D2), Phase 2 (D1 + O1), and Phase 3 (D3 + O4) ALL SHIPPED. Phase 4
+underway: the sizing/exit pair (O5 + O6) SHIPPED 2026-07-26. O2 is next — re-evaluate
+whether it's still needed now that O5/O6 have shipped (roadmap's own "only if the pair
+leaves a gap" condition) — then D4. See the status table below for the live per-item
+state.
 
 > **Supersedes:** [agentic-intelligence-roadmap.md](agentic-intelligence-roadmap.md)
 > (v1), which shipped P1-P5 and closed P6 (Autonomous Pattern Discovery) as
@@ -147,8 +149,8 @@ partially built" facts against HEAD — the table above is dated 2026-07-24 and 
 | O1 | Missed-Opportunity Pattern | [docs/plans/missed-opportunity-pattern.md](missed-opportunity-pattern.md) | **SHIPPED 2026-07-24** (commit `b11e34a`; F-201) |
 | D3 | Signal Coherence Auditor | [docs/plans/signal-coherence-auditor.md](signal-coherence-auditor.md) | **SHIPPED 2026-07-26** (commit `df36c6d`; F-202) — production-validated 2026-07-26 |
 | O4 | Watchlist Resurrection | [docs/plans/watchlist-resurrection.md](watchlist-resurrection.md) | **SHIPPED 2026-07-26** (commit `631e6ba`; F-203) — production-validated 2026-07-26 |
-| O5 | Sizing Alpha | *(to write)* | Phase 4 |
-| O6 | Premature-Exit Cost | *(to write)* | Phase 4 |
+| O5 | Sizing Alpha | [docs/plans/sizing-alpha.md](sizing-alpha.md) | **SHIPPED 2026-07-26** (commit `0b6c50d`; F-205) |
+| O6 | Premature-Exit Cost | [docs/plans/premature-exit-cost.md](premature-exit-cost.md) | **SHIPPED 2026-07-26** (commit `0b6c50d`; F-206) |
 | O2 | Conviction Under-Confidence | *(to write)* | Phase 4 |
 | D4 | Catalyst-Specific Stress | *(to write)* | Phase 4 |
 | O3 | Regime Exposure Gap | — | Parked (data-gated) |

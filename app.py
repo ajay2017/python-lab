@@ -24777,8 +24777,11 @@ Two diagnostic lenses — not recommendations, not gates.
 - **Disposition Effect** — are you holding losing positions longer than winners? A ratio above 1.5× is the published retail-investor benchmark for this bias.
 - **Win/Loss Closure Ratio** — how many gain-realising sells per loss-realising sell? Above 2× can signal loss aversion — taking gains readily while holding through losses.
 - **Breakeven Anchoring** — do positions linger unusually long in the −2 to 0% P&L zone? A spike in that bracket means you may be anchoring to the purchase price ("waiting to get back to even") rather than the thesis.
+- **Premature-Exit Cost** — among your winning trades, do the ones you sold quickly (less than half your own average winner-hold time) realize less gain than the ones you were patient with? A real, already-realized comparison — never a forecast of what a quick exit "would have" made.
 
 Each card suppresses to "insufficient data" until enough closed trades accumulate. **None of these observations change a score, a rank, or a recommendation — the engine never reads them.** The methodology note at the bottom of each section explains caveats (today's composite scores only; some patterns reflect deliberate risk management, not psychology).
+
+**📏 Sizing Alpha** asks whether your own dollar-sizing tracks your own realized outcomes. Since there's no reliable record of "conviction at the moment of a specific buy," this splits your closed trades into Small/Medium/Large dollar terciles (based on your own historical range, not a fixed threshold) and shows each tercile's real average realized gain. Shown in absolute dollars, not adjusted for portfolio growth over your account's history — descriptive context, never a rule to size up next time.
 """
             )
 
