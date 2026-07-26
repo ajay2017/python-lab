@@ -3,8 +3,26 @@
 **Date:** 2026-07-26
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** SHIP (revised after Opus design review — FIX-FIRST round resolved). Ready
-for implementation. `WATCHLIST_STALE_DAYS` policy value confirmed by the user: **30**.
+**Status:** SHIPPED. Design SHIP after 1 FIX-FIRST round resolved; pre-ship code review
+FIX-FIRST → SHIP after resolving the mechanically-enforced docs gap (below).
+`WATCHLIST_STALE_DAYS` policy value confirmed by the user: **30**.
+
+> **Opus pre-ship code review (round 1): FIX-FIRST, 1 blocking (docs-check), 2
+> non-blocking.** All design-review requirements verified correctly implemented in
+> code (single-predicate rule, held-exclusion on both actions, graceful degradation,
+> purely additive). **Blocking:** `WATCHLIST_STALE_DAYS` wasn't yet in the
+> `docs/architecture.md` constants table — `scripts/check_constants_documented.py`
+> (the mechanically-enforced CI gate) failed on it. Fixed: row added. **Non-blocking,
+> both applied:** (1) the caption said "just qualified to enter" / "currently
+> qualifies to enter" for BOTH `ENTER_NOW` and `NEAR_ENTRY` tickers, overstating
+> `NEAR_ENTRY` (which is *near*, not at, entry) — reworded to "actionable again" to
+> accurately cover both. (2) `load_watchlist_added_dates()` truncated the raw UTC
+> `added_at` string to its first 10 characters instead of converting to
+> America/New_York first (as the design spec required) — a watchlist add logged in
+> the evening ET could undercount `days_since_added` by 1 near the UTC/ET date
+> boundary. Fixed: proper `pytz`-based UTC→ET conversion before taking `.date()`
+> (mirrors the existing `America/New_York` conversion pattern used elsewhere in
+> `db.py`, e.g. `load_analyst_coverage`).
 
 > **Opus design review (round 1): FIX-FIRST** — 1 blocking finding, fixed in this
 > revision. **Blocking:** the original draft computed the KPI count and the per-ticker

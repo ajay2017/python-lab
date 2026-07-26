@@ -1046,6 +1046,38 @@ def load_watchlist() -> list[str]:
     return list(_DEFAULT_WATCHLIST)
 
 
+def load_watchlist_added_dates() -> dict[str, str]:
+    """Return {ticker: added_at (ISO date string)} for every watchlist row.
+    Separate from load_watchlist() (which returns a flat list and has callers
+    throughout app.py expecting that shape) — used only by O4 Watchlist
+    Resurrection. Missing/unreadable rows are simply absent from the dict
+    (never fabricated as "very stale" or "never stale"). Returns {} on any
+    failure — graceful degradation, never raises."""
+    if not has_db():
+        return {}
+    try:
+        from datetime import datetime
+        import pytz
+        _et = pytz.timezone("America/New_York")
+        rows = _client().table("watchlist").select("ticker,added_at").execute().data
+        result: dict[str, str] = {}
+        for r in (rows or []):
+            t = str(r.get("ticker") or "").strip().upper()
+            added = r.get("added_at")
+            if not (t and added):
+                continue
+            try:
+                _dt = datetime.fromisoformat(str(added).replace("Z", "+00:00"))
+                if _dt.tzinfo is None:
+                    _dt = pytz.utc.localize(_dt)
+                result[t] = _dt.astimezone(_et).date().isoformat()
+            except (TypeError, ValueError):
+                continue
+        return result
+    except Exception:
+        return {}
+
+
 # ── Trades ───────────────────────────────────────────────────────────────────
 
 _TRADE_COLS = ["id", "ticker", "action", "shares", "price",

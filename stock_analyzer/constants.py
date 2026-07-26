@@ -191,6 +191,13 @@ PERF_ALPHA_BAND_PCT = 5.0
 # the Analysis page is a research/judgement surface, so the user decides).
 RR_ENTRY_MIN = 2.0
 
+# Watchlist Resurrection (O4, Agentic Intelligence Roadmap v2, 2026-07-26). A
+# watchlist ticker added at least this many days ago that is now ENTER_NOW/
+# NEAR_ENTRY is flagged as plausibly forgotten — a memory jog, never a gate.
+# User-set policy value (not derived from ANALYST_COVERAGE_FRESH_DAYS, which
+# means the opposite thing — "still fresh" — for a different, passive surface).
+WATCHLIST_STALE_DAYS = 30
+
 # ── Risk per trade (position sizing) ─────────────────────────────────────────
 RISK_PCT_PER_TRADE = 0.015       # 1.5% portfolio risk per trade (Moderate)
 

@@ -103,6 +103,7 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_GATE_MIN_METRICS,
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     RR_ENTRY_MIN,
+    WATCHLIST_STALE_DAYS,
     CATALYST_WATCH_WINDOW_DAYS,
     GROW_CANDIDATE_POOL,
     REFRESH_COOLDOWN_SEC,
@@ -16711,6 +16712,38 @@ elif page == "📋 Watchlist":
                   delta="Thesis broken" if _wl_remove else None,
                   delta_color="inverse" if _wl_remove else "off")
 
+    # ── Watchlist Resurrection (O4, Agentic Intelligence Roadmap v2) ─────────
+    # One predicate drives BOTH this summary line and every per-card caption
+    # below (blocking finding from design review — a count/caption split here
+    # would repeat the double-surface mismatch class this app has hit before).
+    # Held tickers are excluded for BOTH actions: the existing "Already in
+    # Portfolio" override further down only intercepts ENTER_NOW, so this
+    # predicate applies the held-exclusion itself rather than assuming it's
+    # inherited.
+    _wl_added_dates = db.load_watchlist_added_dates()
+    _wl_today = _today_et()
+    _wl_resurrected: set = set()
+    for _wr in _wl_recs:
+        if _wr["action"] not in ("ENTER_NOW", "NEAR_ENTRY"):
+            continue
+        if _wr["ticker"] in _wl_held:
+            continue
+        _wl_added_str = _wl_added_dates.get(_wr["ticker"])
+        if not _wl_added_str:
+            continue
+        try:
+            _wl_added_date = date.fromisoformat(_wl_added_str)
+        except (TypeError, ValueError):
+            continue
+        if (_wl_today - _wl_added_date).days >= WATCHLIST_STALE_DAYS:
+            _wl_resurrected.add(_wr["ticker"])
+
+    if _wl_resurrected:
+        st.caption(
+            f"👁️ {len(_wl_resurrected)} watchlist name(s) you've been sitting on "
+            f"for {WATCHLIST_STALE_DAYS}+ days are actionable again."
+        )
+
     st.markdown("")
 
     # ── Per-ticker cards ──────────────────────────────────────────────────────
@@ -16783,6 +16816,13 @@ elif page == "📋 Watchlist":
             f"| Readiness {_wr['readiness_pct']}%",
             expanded=_expand,
         ):
+            if _ticker in _wl_resurrected:
+                _wl_added_days = (_wl_today - date.fromisoformat(_wl_added_dates[_ticker])).days
+                st.info(
+                    f"👁️ You've watched **{_ticker}** since {_wl_added_dates[_ticker]} "
+                    f"({_wl_added_days}d) and it's actionable again.",
+                    icon="👁️",
+                )
             st.caption(
                 "**Readiness** = % of entry criteria currently met "
                 "(price in zone, score, trend, R:R, sector fit)."
