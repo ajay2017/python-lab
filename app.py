@@ -6224,6 +6224,16 @@ if page == "🏠 Home":
                 return None
             return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
 
+        # Shared severity palette for the Act Today / Review / Defensive cards
+        # below — previously each function hardcoded its own hex (including one
+        # drift: TRIM_AND_TIGHTEN's ACT label rendered green, like a gain, when
+        # every other TRIM directive is amber). One source now, three consumers.
+        _HOME_URGENT   = "#ef4444"  # red   — Act Today bucket / critical priority
+        _HOME_ELEVATED = "#f59e0b"  # amber — active ACT directive / medium priority
+        _HOME_CALM     = "#94a3b8"  # grey  — Watch / monitoring, no action needed
+        _HOME_GAIN     = "#00C851"  # green — matches the Home live price strip
+        _HOME_LOSS     = "#ff4444"  # red   — matches the Home live price strip
+
         # Format a structured action dict into (color, label, text) so each
         # item renders the directive directly instead of a "consider X" prose.
         def _fmt_action(action: dict) -> tuple[str, str, str]:
@@ -6231,34 +6241,34 @@ if page == "🏠 Home":
             if t == "WATCH":
                 # "Watch" is the display label (Consistency #2); the comparison above
                 # still keys on the internal "WATCH" action type.
-                return ("#94a3b8", "Watch",
+                return (_HOME_CALM, "Watch",
                         "no action today — see Trigger below for what would escalate.")
             if t == "TIGHTEN_ONLY":
                 ns = action.get("new_stop")
-                return ("#fbbf24", "ACT",
+                return (_HOME_ELEVATED, "ACT",
                         f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
             if t == "TRIM_AND_TIGHTEN":
                 ns = action.get("new_stop")
                 stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
-                return ("#22c55e", "ACT",
+                return (_HOME_ELEVATED, "ACT",
                         f"Trim {action['trim_shares']} shares "
                         f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
                         f"{stop_str}")
             if t == "TRIM_TO_TARGET":
-                return ("#fbbf24", "ACT",
+                return (_HOME_ELEVATED, "ACT",
                         f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
                         f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
             if t == "PROTECTIVE_TRIM":
-                return ("#fbbf24", "ACT",
+                return (_HOME_ELEVATED, "ACT",
                         f"Trim {action['trim_ticker']} (weakest in sector, score "
                         f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
                         f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
                         f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
             if t == "DETERIORATION_WATCH":
-                return ("#94a3b8", "Watch",
+                return (_HOME_CALM, "Watch",
                         "no action today — early deterioration; watching for follow-through "
                         "(see Trigger for what escalates it to a TRIM).")
-            return ("#94a3b8", "—", "—")
+            return (_HOME_CALM, "—", "—")
 
         # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
         # Two complementary sources (primary + backup so both don't fail
@@ -6318,7 +6328,7 @@ if page == "🏠 Home":
             _db_bg      = "#450a0a" if _db_is_crit else "#1c1917"
             # Red left bar for any Act-bucket card (or a critical one); amber only
             # when this act-origin item is shown in the calm Awareness lane.
-            _db_border  = "#ef4444" if (in_act or _db_is_crit) else "#f59e0b"
+            _db_border  = _HOME_URGENT if (in_act or _db_is_crit) else _HOME_ELEVATED
             _db_ticker  = _db_item.get("ticker")
             _db_weight_txt = (
                 f" · {_db_item['weight']:.1f}% of portfolio"
@@ -6335,7 +6345,7 @@ if page == "🏠 Home":
             _db_why       = _db_item.get("why", "")
             _db_trigger   = _db_item.get("trigger", "")
             _db_flags     = _db_item.get("risk_flags", []) or []
-            _act_color    = "#ef4444" if (in_act or _db_is_crit) else "#fbbf24"
+            _act_color    = _HOME_URGENT if (in_act or _db_is_crit) else _HOME_ELEVATED
 
             _body = ""
             if _db_directive:
@@ -6860,9 +6870,9 @@ if page == "🏠 Home":
             # Red accents when this review item was promoted into the red "Act
             # Today" bucket (e.g. a PROTECTIVE_TRIM); amber/grey keep the calm
             # Monitoring styling otherwise.
-            _db_border  = ("#ef4444" if in_act
-                           else "#f59e0b" if _db_rev.get("priority") == "medium"
-                           else "#78716c")
+            _db_border  = (_HOME_URGENT if in_act
+                           else _HOME_ELEVATED if _db_rev.get("priority") == "medium"
+                           else _HOME_CALM)
             _db_bg      = "#1c1917"
             _db_ticker  = _db_rev.get("ticker")
             _headline   = _db_rev.get("headline", "")
@@ -6871,7 +6881,7 @@ if page == "🏠 Home":
             _trigger    = _db_rev.get("trigger", "")
             _act_color, _act_label, _act_text = _fmt_action(_action)
             if in_act:
-                _act_color = "#ef4444"  # match the red Act Today header
+                _act_color = _HOME_URGENT  # match the red Act Today header
 
             # Append alternatives only on weak-large TRIM_TO_TARGET items —
             # this is the case where we're freeing capital and the user
@@ -7214,6 +7224,61 @@ if page == "🏠 Home":
                 "These lift risk-adjusted quality over time — act on them when you're "
                 "rebalancing or have fresh capital, not on the clock."
             )
+
+        # ── Holdings — full position table ───────────────────────────────────
+        # Home never had a persistent table of every position (only the live
+        # price-strip cards above and the transient cold-load snapshot) — this
+        # closes that gap. Day Δ% comes from the same `_live_prices` the price
+        # strip already populates (`fetch_live_prices`, cached in session_state
+        # at the top of this page); it is NOT a column on `port_df`, so a
+        # missing/stale quote renders "—" rather than a fabricated 0.00%.
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+        st.subheader(f"💼 Holdings ({len(port_df)})")
+        _live_px  = st.session_state.get("_live_prices") or {}
+        _hold_rows = []
+        for _, _hr in port_df.iterrows():
+            _ht      = str(_hr["Ticker"])
+            _hlive   = _live_px.get(_ht, {})
+            _hday    = _hlive.get("change_pct")
+            _hprice  = _hlive.get("price", _hr["Price"])
+            _htotal  = _hr["P&L (%)"]
+            _hshares = _hr["Shares"]
+            _hval    = _hr["Market Value"]
+            _hweight = _hr["Weight (%)"]
+            _hshares_txt = _m(f"{_hshares:,.0f}")
+            _hval_txt    = _m(f"${_hval:,.0f}")
+            _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
+            _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
+            _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
+            _hold_rows.append(
+                f"<tr>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_ht}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hshares_txt}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>${_hprice:,.2f}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hval_txt}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_hday_color}'>{_hday_disp}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_htot_color}'>{_htotal:+.1f}%</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hweight:.1f}%</td>"
+                f"</tr>"
+            )
+        st.markdown(
+            "<div style='overflow-x:auto'>"
+            "<table style=\"width:100%;border-collapse:collapse;background:#0f172a;"
+            "border:1px solid #334155;border-radius:12px;font-family:'JetBrains Mono',ui-monospace,monospace;"
+            "font-variant-numeric:tabular-nums;font-size:0.86rem\">"
+            "<thead><tr>"
+            + "".join(
+                f"<th style='text-align:{'left' if _lbl == 'Ticker' else 'right'};padding:10px 14px;"
+                f"font-family:Inter,system-ui,sans-serif;font-size:0.7rem;font-weight:700;"
+                f"letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
+                f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
+                for _lbl in ("Ticker", "Shares", "Price", "Value", "Day Δ%", "Total Δ%", "Weight")
+            )
+            + "</tr></thead><tbody>"
+            + "".join(_hold_rows)
+            + "</tbody></table></div>",
+            unsafe_allow_html=True,
+        )
 
         # News Sentiment Shift — brief awareness cards for held positions
         _sentiment_brief = _cached_sentiment(",".join(sorted(held_tickers))) if held_tickers else {}
