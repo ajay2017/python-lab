@@ -3,7 +3,39 @@
 **Date:** 2026-07-26
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** DRAFT — pending Opus design review.
+**Status:** SHIP (revised after Opus design review — FIX-FIRST round resolved). One
+open policy question for the user (the new window constant) flagged below.
+
+> **Opus design review (round 1): FIX-FIRST** — 3 blocking findings, fixed in this
+> revision. All reuse claims verified accurate (macro calendar shape, earnings
+> calendar shape, P5's render-order/local-variable behavior, blast_radius/
+> correlation_clusters recompute cost, graceful degradation to empty). **Blocking
+> #1 — the ranking metric was structurally rigged toward macro events, and
+> anti-informative for the worst offenders.** Summing the weight% of a macro event's
+> `affected_tickers` against a single earnings event's one-ticker weight means a
+> broad macro event will almost always outscore a specific name — and two macro
+> categories (`Fed Policy`/FOMC, `Growth`/GDP) use an `__ALL__` sentinel that returns
+> *every* held ticker from `_affected_tickers()`, guaranteeing they score the
+> maximum possible overlap by construction, precisely because they say nothing
+> about *which* structural weak point is exposed. Left as designed, this feature
+> would predictably always surface "the next CPI/FOMC" — uninformative, and a direct
+> §2B calm-advisor violation (a correct-but-undifferentiated prompt that doesn't
+> change week to week). **Fixed: two separate candidate lists** (macro, earnings),
+> never cross-scored against each other — see the revised ranking spec below.
+> `__ALL__`-category macro events are excluded from the structural-overlap ranking
+> entirely (they threaten everything equally, so they can't discriminate a weak
+> point — the opposite of this feature's purpose). **Blocking #2 — an undefined
+> field reference** ("blast-radius contribution %") that doesn't exist under that
+> name in `blast_radius()`'s actual return shape — **fixed: pinned to the exact
+> field**, `portfolio_impact_pct` from the entry where the ticker is the
+> `shocked_ticker`. **Blocking #3 — an ambiguous "weak-point ticker set" definition**
+> (`blast_radius()` has two ticker roles — `shocked_ticker` and cascade
+> `contributing_tickers[].ticker` — and the plan didn't say which, or both) —
+> **fixed: pinned explicitly to the union of both**, plus every ticker appearing in
+> any `correlation_clusters()` cluster. 2 non-blocking corrections also folded in
+> (a distinct new window constant instead of reusing `EARNINGS_URGENCY_SOON_DAYS`,
+> to avoid a silent cross-feature policy coupling; per-ticker earnings dedup to the
+> soonest date).
 
 > **One-line spec:** A new "📅 Catalyst-Specific Stress (Beta)" expander, sibling to
 > P5's "🎯 Regime-Aware Adversarial Scenario" on the same 🔗 Risk Analysis → 🔥 Stress
@@ -90,33 +122,65 @@ this is not a new cost, just a second call to the same pure functions.
 
 ## What's genuinely new
 
-1. **One new pure-Python function**, `catalyst_stress.rank_catalyst_threats(macro_events, earnings_events, blast_radius_results, clusters, port_df) -> list[dict]`:
-   - Build the "weak-point ticker set": blast-radius top contributors ∪ all
-     correlation-cluster member tickers.
-   - Candidate events = HIGH-impact macro events (within `EARNINGS_URGENCY_SOON_DAYS`
-     — reused as the urgency window, no new constant) whose `affected_tickers`
-     intersects the weak-point set, **plus** held-ticker earnings within the same
-     window where that specific ticker IS in the weak-point set.
-   - Score each candidate by the combined portfolio weight% of the overlapping
-     tickers (macro event: sum of `affected_tickers ∩ weak-point set` weights;
-     earnings event: that ticker's own weight%, plus its blast-radius contribution %
-     if it's a top-3 contributor).
-   - Return candidates sorted by score, descending. Empty list if no candidate has
-     any weak-point overlap — a legitimate, expected "nothing catalyst-specific
-     stands out" result, not an error.
+1. **One new pure-Python function**, `catalyst_stress.rank_catalyst_threats(macro_events, earnings_events, blast_radius_results, clusters) -> dict`:
+   - **Weak-point ticker set (pinned exactly, per review finding #3):** the union of
+     (a) every `shocked_ticker` across `blast_radius_results`, (b) every
+     `contributing_tickers[].ticker` across the same results (the cascade names —
+     exposed via correlation even though not directly shocked), and (c) every
+     ticker appearing in any `correlation_clusters()` cluster's `tickers` list.
+   - **Two SEPARATE candidate lists, never cross-scored (per review finding #1):**
+     - *Macro candidates:* HIGH-impact events from `build_macro_calendar()` within
+       `CATALYST_STRESS_WINDOW_DAYS`, **excluding any event whose category resolves
+       to the `__ALL__` sentinel** (`Fed Policy`/FOMC, `Growth`/GDP) — these threaten
+       every sector equally and provide zero discrimination about *which* weak point
+       is exposed, the opposite of this feature's purpose. Score = combined
+       portfolio weight% of `affected_tickers ∩ weak-point set`.
+     - *Earnings candidates:* held tickers with an upcoming earnings date (soonest
+       date only per ticker — per review finding on dedup, `_cached_catalyst_calendar()`
+       can return more than one row per ticker) within the same window, where that
+       ticker IS in the weak-point set. Score = that ticker's own portfolio weight%
+       **plus, if it appears as a `shocked_ticker` in any `blast_radius_results`
+       entry, that entry's own `portfolio_impact_pct`** (the exact field pinned per
+       review finding #2 — no other "contribution" number is invented).
+   - Returns `{"macro": [...sorted desc...], "earnings": [...sorted desc...]}` — both
+     lists may be empty (a legitimate "nothing catalyst-specific stands out" result,
+     not an error). The two lists are never merged or compared against each other;
+     if both have a top candidate, both are passed to the Haiku step as two distinct
+     threats (a ticker can legitimately face both a sector-wide macro exposure and
+     its own earnings date in the same window — these are genuinely separate risks,
+     not one compounded event, per review finding on the double-surface edge case).
 2. **One new Haiku call**, `catalyst_stress.generate_catalyst_narrative(evidence, api_key, model)` —
    mirrors `regime_stress.generate_regime_scenario()`'s exact shape: given the
-   top-ranked candidate event(s) plus the same blast-radius/cluster evidence P5 uses,
-   write a 2-4 sentence narrative naming WHY this specific dated event threatens
-   THESE SPECIFIC weak points — citing only supplied tickers/clusters/event details,
-   never inventing a threat mechanism not evidenced. "No catalyst-specific threat
-   stands out" is a valid, expected output when the ranking found no overlap.
+   top macro candidate (if any) AND the top earnings candidate (if any), plus the
+   same blast-radius/cluster evidence P5 uses, write a 2-4 sentence narrative naming
+   WHY each present candidate threatens the SPECIFIC weak points it overlaps with —
+   citing only supplied tickers/clusters/event details, never inventing a threat
+   mechanism not evidenced, and never merging two distinct candidates into a single
+   fabricated compound event. "No catalyst-specific threat stands out" is a valid,
+   expected output when both lists are empty.
 3. **New cache table** `catalyst_stress_cache` — identical shape to
    `regime_scenario_cache` (one row per `scan_date`, snapshot fields for
-   auditability, never caches a failed/empty result).
-4. **A new expander**, "📅 Catalyst-Specific Stress (Beta)," rendered as a sibling to
+   auditability, never caches a failed/empty result — the day-cache guard lives at
+   the call site, mirroring P5's exact `if result and result.get("...")` pattern,
+   per review finding that this guard is NOT provided by the module itself).
+4. **New constant** `CATALYST_STRESS_WINDOW_DAYS = 14` in `constants.py` — a
+   dedicated window, deliberately NOT reusing `EARNINGS_URGENCY_SOON_DAYS` (per
+   review finding: that constant's documented meaning is the Catalyst Watch
+   earnings-playbook "SOON" display tier; reusing it here would silently couple two
+   unrelated features to one tunable knob, and a macro print and an earnings report
+   have genuinely different natural look-ahead horizons anyway). **Open question for
+   the user** (see below).
+5. **A new expander**, "📅 Catalyst-Specific Stress (Beta)," rendered as a sibling to
    P5's expander on the same 🔥 Stress Testing tab — same button-gated,
    day-cached-once-generated pattern.
+
+### Open policy question for the user (per CLAUDE.md rule 1)
+
+`CATALYST_STRESS_WINDOW_DAYS` is a threshold decision. Proposing **14 days** as the
+default (same numeric value as `EARNINGS_URGENCY_SOON_DAYS`, since that horizon was
+already reasoned through for a similar "how far ahead is this still decision-relevant"
+question — but as its own independent constant, not a shared reference), adjustable
+before ship.
 
 **Explicitly NOT built:** no new stress/shock formula, no new event-sourcing code
 (macro or earnings), no change to `blast_radius()`/`correlation_clusters()`/
