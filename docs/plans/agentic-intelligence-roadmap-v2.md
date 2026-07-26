@@ -3,11 +3,11 @@
 **Date:** 2026-07-24
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8
-**Status:** Phase 1 (D2), Phase 2 (D1 + O1), and Phase 3 (D3 + O4) ALL SHIPPED. Phase 4:
-the sizing/exit pair (O5 + O6) SHIPPED 2026-07-26; O2 SHELVED 2026-07-26 (its own
-"only if the pair leaves a gap" condition resolved — no gap remains that O5 doesn't
-already cover). D4 Catalyst-Specific Stress is the one item left. See the status table
-below for the live per-item state.
+**Status:** ROADMAP COMPLETE (2026-07-26). Phase 1 (D2), Phase 2 (D1 + O1), Phase 3
+(D3 + O4), and Phase 4 (O5 + O6 + D4) all SHIPPED; O2 SHELVED (its own "only if the
+pair leaves a gap" condition resolved — no gap remained); O3 remains PARKED
+(data-gated on `daily_regime` accumulation — revisit once that history is deep
+enough). See the status table below for the final per-item state.
 
 > **Supersedes:** [agentic-intelligence-roadmap.md](agentic-intelligence-roadmap.md)
 > (v1), which shipped P1-P5 and closed P6 (Autonomous Pattern Discovery) as
@@ -116,7 +116,8 @@ Every "reuses / partially built" note below was **verified against HEAD 2026-07-
    up a brand-new forward-only day-cache that would sit empty for weeks — the same
    class of problem that keeps O3 parked. User's call: shelve rather than build a
    weaker rehash of O5.
-8. D4 Catalyst-Specific Stress (a P5 variant, not a new axis).
+8. D4 Catalyst-Specific Stress (a P5 variant, not a new axis). **SHIPPED 2026-07-26.**
+   Closes the roadmap.
 
 **Parked:** O3 Regime Exposure Gap — data-gated on `daily_regime` accumulation.
 
@@ -162,5 +163,5 @@ partially built" facts against HEAD — the table above is dated 2026-07-24 and 
 | O5 | Sizing Alpha | [docs/plans/sizing-alpha.md](sizing-alpha.md) | **SHIPPED 2026-07-26** (commit `0b6c50d`; F-205) |
 | O6 | Premature-Exit Cost | [docs/plans/premature-exit-cost.md](premature-exit-cost.md) | **SHIPPED 2026-07-26** (commit `0b6c50d`; F-206) |
 | O2 | Conviction Under-Confidence | — | **SHELVED 2026-07-26** — re-evaluated against its own "only if O5/O6 leave a gap" condition; see note below |
-| D4 | Catalyst-Specific Stress | *(to write)* | Phase 4 |
+| D4 | Catalyst-Specific Stress | [docs/plans/catalyst-specific-stress.md](catalyst-specific-stress.md) | **SHIPPED 2026-07-26** (commit `0dcecf1`; F-207) |
 | O3 | Regime Exposure Gap | — | Parked (data-gated) |
