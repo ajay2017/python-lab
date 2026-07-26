@@ -7273,11 +7273,9 @@ if page == "🏠 Home":
             for _ci, _item in enumerate(_act_bucket):
                 _render_defensive_card(_item, _ci, in_act=True)
 
-        # Holdings — full position table, right after Act Today (matches the
-        # approved Option-A mockup). Shared with the Summary page via
-        # _render_holdings_table() (module-level, near _m()) — same output.
-        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-        _render_holdings_table(port_df)
+        # Holdings table removed from here 2026-07-26 — it now lives on the
+        # 🧾 Summary page (_render_holdings_table(), shared/module-level, still
+        # used from there) so it isn't duplicated across two pages.
 
         # Monitoring / Awareness — FYI, nothing to execute
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
