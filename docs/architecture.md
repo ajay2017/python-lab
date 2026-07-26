@@ -1627,6 +1627,7 @@ flowchart LR
 | F-199 | Hidden Same-Bet Detector (D1) | `thesis_cluster.py` | Haiku (1 call/day) | On-demand ("🧠 Check for hidden shared bets" button, 🧩 Intelligence → 🧬 Structural Scan tab) | 600 tok | DB `thesis_cluster_cache` |
 | F-201 | Missed-Opportunity Pattern (O1) | `missed_opportunity.py` | Haiku (1 call/day) | On-demand ("🔍 Look for a pattern" button, 📊 Recommendations History → Summary tab) | 600 tok | DB `missed_opportunity_cache` |
 | F-202 | Signal Coherence Auditor (D3) | `signal_reconciliation.py` (`classify_composite_direction`), `db.py` (`load_debate_verdicts`) | **None — zero LLM calls** | Live on every render, 🧩 Intelligence → 🧭 Signal Coherence tab | 0 tok | None — no cache table (pure Python join, computed fresh each render) |
+| F-203 | Watchlist Resurrection (O4) | `db.py` (`load_watchlist_added_dates`) | **None — zero LLM calls** | Live on every render, 👁️ Watchlist page (highlight over existing cards) | 0 tok | None — no cache table (pure Python predicate, computed fresh each render) |
 | F-200 | Regime-Aware Adversarial Scenario (Phase 1) | `regime_stress.py` | Haiku (1 call/day) | On-demand ("🎯 Generate regime-aware scenario" button, 🔗 Risk Analysis → 🔥 Stress Testing tab) | 400 tok | DB `regime_scenario_cache` |
 | — | Pre-market Stance | `premarket_stance.py` | Haiku | Manual refresh button | 500 tok | Session state, keyed by trading date |
 | — | AI Monitoring Brief | `app.py` | Sonnet or Haiku (user pick) | Manual button | 700 tok | Session state, keyed by (provider, model) |
