@@ -205,7 +205,7 @@ from stock_analyzer.trade_review import (
     cumulative_pnl_series, rolling_win_rate,
     position_size_discipline, sector_mix,
 )
-from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite, classify_signal_change
+from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite, classify_signal_change, classify_composite_direction
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.premarket_stance import (
@@ -10167,8 +10167,9 @@ elif page == "🧩 Intelligence":
         st.stop()
     _render_portfolio_stale_banner(key_suffix="pi")
 
-    _pi_tab_clusters, _pi_tab_risk, _pi_tab_factor, _pi_tab_structural = st.tabs([
-        "🕸️ Correlation Clusters", "⚖️ Risk Budget", "📐 Factor Tilt", "🧬 Structural Scan"
+    _pi_tab_clusters, _pi_tab_risk, _pi_tab_factor, _pi_tab_structural, _pi_tab_coherence = st.tabs([
+        "🕸️ Correlation Clusters", "⚖️ Risk Budget", "📐 Factor Tilt", "🧬 Structural Scan",
+        "🧭 Signal Coherence",
     ])
 
     with _pi_tab_clusters:
@@ -10551,6 +10552,175 @@ elif page == "🧩 Intelligence":
                 if _hsb_cached and _hsb_cached.get("truncated"):
                     st.caption("Note: one or more theses were truncated for this scan.")
                 st.caption(f"Computed {_hsb_scan_date} ET from your saved theses.")
+
+    with _pi_tab_coherence:
+        # Signal Coherence Auditor (D3, Agentic Intelligence Roadmap v2). Pure
+        # Python join over three EXISTING per-ticker surfaces — no LLM call, no
+        # cache table. Only renders tickers where the present signals genuinely
+        # disagree; full agreement produces no card (calm rule — this tab is the
+        # one on the roadmap flagged as most noise-prone).
+        st.caption(
+            "Where the app's own signals disagree with each other on a name you "
+            "hold — composite score, thesis review, and debate verdict, side by "
+            "side. Diagnostic only; nothing here gates or recommends."
+        )
+
+        _sca_held = []
+        if _pi_pdf is not None and not _pi_pdf.empty:
+            for _, _sca_row in _pi_pdf.iterrows():
+                _sca_held.append({
+                    "ticker": str(_sca_row["Ticker"]).upper(),
+                    "score":  _sca_row.get("Score"),
+                    "signal": _sca_row.get("Signal"),
+                })
+
+        # Most recent BUY date per ticker — used to tag a stale entry-type debate
+        # as "buy-time" rather than a live re-litigation (Opus review finding #4).
+        _sca_trade_date: dict = {}
+        if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
+            _sca_tdf = st.session_state.trades_df
+            if "traded_at" in _sca_tdf.columns and "action" in _sca_tdf.columns:
+                _sca_buys = _sca_tdf[_sca_tdf["action"] == "BUY"].sort_values("traded_at", ascending=False)
+                for _, _sca_brow in _sca_buys.iterrows():
+                    _sca_bt = str(_sca_brow["ticker"]).upper()
+                    if _sca_bt not in _sca_trade_date:
+                        _sca_trade_date[_sca_bt] = str(_sca_brow.get("traded_at", ""))[:10]
+
+        # Thesis erosion — latest reviewed row per ticker.
+        _sca_reviews_df = db.load_thesis_reviews()
+        _sca_erosion: dict = {}
+        if not _sca_reviews_df.empty:
+            for _, _sca_rv in _sca_reviews_df.iterrows():
+                _sca_t = str(_sca_rv["ticker"]).upper()
+                if _sca_t not in _sca_erosion:
+                    _sca_erosion[_sca_t] = {
+                        "status":      _sca_rv.get("status"),
+                        "reviewed_at": str(_sca_rv.get("reviewed_at", ""))[:10],
+                    }
+
+        # Debate verdict — most recent row per ticker across BOTH debate_types;
+        # on a same-date tie, prefer the exit debate (the current hold decision)
+        # over an entry debate (Opus review finding #2).
+        _sca_debate: dict = {}
+        if _sca_held:
+            _sca_deb_df = db.load_debate_verdicts([h["ticker"] for h in _sca_held])
+            if not _sca_deb_df.empty:
+                _sca_deb_df = _sca_deb_df.copy()
+                _sca_deb_df["_priority"] = (_sca_deb_df["debate_type"] == "exit").astype(int)
+                _sca_deb_sorted = _sca_deb_df.sort_values(
+                    by=["debate_date", "_priority"], ascending=[False, False]
+                )
+                for _, _sca_d in _sca_deb_sorted.iterrows():
+                    _sca_dt = str(_sca_d["ticker"]).upper()
+                    if _sca_dt not in _sca_debate:
+                        _sca_debate[_sca_dt] = {
+                            "verdict":     _sca_d.get("verdict"),
+                            "debate_type": _sca_d.get("debate_type"),
+                            "debate_date": _sca_d.get("debate_date"),
+                        }
+
+        # ── Join + contradiction detection ──────────────────────────────────
+        # Verified invariant (Opus design review): in BOTH debate types, Bull
+        # argues the bullish case (continue holding / do buy) and Bear argues
+        # the bearish case (exit / don't buy) — bull_wins is bullish-aligned in
+        # both entry and exit debates. Do NOT invert exit-debate polarity.
+        _sca_evaluated = 0  # tickers with >=2 signals present (the audit gate)
+        _sca_cards = []
+        for _sca_h in _sca_held:
+            _sca_t = _sca_h["ticker"]
+            _sca_signals = []
+
+            _sca_score_raw = _sca_h.get("score")
+            try:
+                _sca_score_val = (
+                    float(_sca_score_raw)
+                    if _sca_score_raw is not None and not pd.isna(_sca_score_raw)
+                    else None
+                )
+            except (TypeError, ValueError):
+                _sca_score_val = None
+            _sca_sig_raw = _sca_h.get("signal")
+            _sca_sig_label = (
+                "" if _sca_sig_raw is None or pd.isna(_sca_sig_raw) else str(_sca_sig_raw).strip()
+            )
+            _sca_comp_dir = classify_composite_direction(_sca_sig_label or None, _sca_score_val)
+            _sca_comp_text = "Composite: " + (_sca_sig_label or _sca_comp_dir.title())
+            if _sca_score_val is not None:
+                _sca_comp_text += f" ({_sca_score_val:.0f})"
+            _sca_signals.append({
+                "direction": (
+                    "bull" if _sca_comp_dir == "buy" else
+                    "bear" if _sca_comp_dir == "sell" else "neutral"
+                ),
+                "text": _sca_comp_text,
+            })
+
+            _sca_ero = _sca_erosion.get(_sca_t)
+            if _sca_ero and _sca_ero.get("status"):
+                _sca_status = _sca_ero.get("status")
+                _sca_signals.append({
+                    "direction": (
+                        "bull" if _sca_status == "INTACT" else
+                        "bear" if _sca_status == "BROKEN" else "neutral"
+                    ),
+                    "text": f"Thesis: {_sca_status} (reviewed {_sca_ero.get('reviewed_at')})",
+                })
+
+            _sca_deb = _sca_debate.get(_sca_t)
+            if _sca_deb:
+                _sca_verdict = _sca_deb.get("verdict")
+                _sca_deb_date = _sca_deb.get("debate_date")
+                _sca_is_buytime = (
+                    _sca_deb.get("debate_type") == "entry"
+                    and _sca_t in _sca_trade_date
+                    and _sca_deb_date is not None
+                    and str(_sca_deb_date) < _sca_trade_date[_sca_t]
+                )
+                _sca_type_label = "buy-time" if _sca_is_buytime else str(_sca_deb.get("debate_type") or "")
+                _sca_verdict_label = (
+                    "Bull wins" if _sca_verdict == "bull_wins" else
+                    "Bear wins" if _sca_verdict == "bear_wins" else
+                    "Contested"
+                )
+                _sca_signals.append({
+                    "direction": (
+                        "bull" if _sca_verdict == "bull_wins" else
+                        "bear" if _sca_verdict == "bear_wins" else "neutral"
+                    ),
+                    "text": f"Debate: {_sca_verdict_label} — {_sca_type_label}, {_sca_deb_date}",
+                })
+
+            if len(_sca_signals) < 2:
+                continue
+            _sca_evaluated += 1
+            _sca_dirs = {s["direction"] for s in _sca_signals}
+            if "bull" in _sca_dirs and "bear" in _sca_dirs:
+                _sca_cards.append({"ticker": _sca_t, "signals": _sca_signals})
+
+        if not _sca_held:
+            st.info("No held positions to audit this session.")
+        elif _sca_evaluated == 0:
+            st.caption(
+                "Not enough overlapping signals yet to audit. This fills in as you "
+                "save theses (weekly thesis review) and run debates (⚔️ buttons on "
+                "candidates and deterioration cards)."
+            )
+        elif not _sca_cards:
+            st.caption("No disagreements found among your signals today.")
+        else:
+            for _sca_card in _sca_cards:
+                st.markdown(f"**{_sca_card['ticker']}**")
+                _sca_chip_cols = st.columns(len(_sca_card["signals"]))
+                for _sca_i, _sca_sig in enumerate(_sca_card["signals"]):
+                    _sca_color = (
+                        "#22c55e" if _sca_sig["direction"] == "bull" else
+                        "#ef4444" if _sca_sig["direction"] == "bear" else "#94a3b8"
+                    )
+                    _sca_chip_cols[_sca_i].markdown(
+                        f"<span style='color:{_sca_color};font-weight:600'>{_sca_sig['text']}</span>",
+                        unsafe_allow_html=True,
+                    )
+                st.divider()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

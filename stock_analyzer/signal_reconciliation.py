@@ -187,6 +187,16 @@ def reconcile_signals(
     }
 
 
+def classify_composite_direction(composite_signal: str | None, composite_score: float | None) -> str:
+    """
+    Public wrapper around _composite_class() for callers outside this module that
+    need the composite's own directional class ('buy'|'hold'|'sell'|'unknown') without
+    reconciling it against a separate momentum score (e.g. D3 Signal Coherence
+    Auditor, which reads held positions where Score/Signal already IS the composite).
+    """
+    return _composite_class(composite_signal, composite_score)
+
+
 def classify_signal_change(from_sig: str, to_sig: str) -> dict:
     """
     Given a previous and current signal label, return a dict with:

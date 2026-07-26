@@ -2647,6 +2647,31 @@ def save_debate_cache(
         pass
 
 
+def load_debate_verdicts(tickers: list[str]) -> pd.DataFrame:
+    """Return every debate_cache row for the given tickers (both debate_types,
+    all dates) — used by D3 Signal Coherence Auditor to pick the most recent
+    verdict per ticker across entry/exit debates. Empty DataFrame on any
+    failure or empty input (graceful degradation, never raises)."""
+    cols = ["ticker", "debate_type", "debate_date", "verdict"]
+    empty = pd.DataFrame(columns=cols)
+    if not has_db() or not tickers:
+        return empty
+    try:
+        upper_tickers = [t.strip().upper() for t in tickers]
+        rows = (
+            _client()
+            .table("debate_cache")
+            .select("ticker,debate_type,debate_date,verdict")
+            .in_("ticker", upper_tickers)
+            .order("debate_date", desc=True)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return empty
+
+
 # ── Structural Vulnerability Scanner — daily portfolio-level cache ──────────
 # Persists the Blast Radius Map + generated narrative for one ET calendar day.
 # ONE row per scan_date (no ticker key — portfolio-wide synthesis, not a
