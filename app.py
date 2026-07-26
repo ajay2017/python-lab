@@ -8306,7 +8306,7 @@ elif page == "📡 Signals & Advice":
 
     with _sa_tab1:
         if not actions:
-            st.success("✅ Portfolio is well-balanced — no rebalancing actions needed at this time.")
+            st.success("✅ Portfolio is well-balanced — no signal-driven actions needed at this time.")
 
         # ── Active Alerts — grouped by category ──────────────────────────────
         _danger_alerts  = [a for a in alert_list if a["level"] == "danger"]
@@ -8472,9 +8472,9 @@ elif page == "📡 Signals & Advice":
 
         st.divider()
 
-        # Rebalancing advisor cards — flat (no extra expander)
+        # Signal-driven action cards — flat (no extra expander)
         if actions:
-            st.subheader("💡 Rebalancing Recommendations")
+            st.subheader("💡 Signal-Driven Actions")
             st.caption(
                 "Each recommendation shows exactly what triggered it, the score breakdown, "
                 "and a pre-evaluated decision checklist — so you decide, not an algorithm."
@@ -24563,7 +24563,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Diagnostic only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
-- **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; rebalancing recommendations) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it.
+- **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it. Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
