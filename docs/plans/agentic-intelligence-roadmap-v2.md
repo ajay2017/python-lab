@@ -3,11 +3,11 @@
 **Date:** 2026-07-24
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8
-**Status:** Phase 1 (D2), Phase 2 (D1 + O1), and Phase 3 (D3 + O4) ALL SHIPPED. Phase 4
-underway: the sizing/exit pair (O5 + O6) SHIPPED 2026-07-26. O2 is next — re-evaluate
-whether it's still needed now that O5/O6 have shipped (roadmap's own "only if the pair
-leaves a gap" condition) — then D4. See the status table below for the live per-item
-state.
+**Status:** Phase 1 (D2), Phase 2 (D1 + O1), and Phase 3 (D3 + O4) ALL SHIPPED. Phase 4:
+the sizing/exit pair (O5 + O6) SHIPPED 2026-07-26; O2 SHELVED 2026-07-26 (its own
+"only if the pair leaves a gap" condition resolved — no gap remains that O5 doesn't
+already cover). D4 Catalyst-Specific Stress is the one item left. See the status table
+below for the live per-item state.
 
 > **Supersedes:** [agentic-intelligence-roadmap.md](agentic-intelligence-roadmap.md)
 > (v1), which shipped P1-P5 and closed P6 (Autonomous Pattern Discovery) as
@@ -104,8 +104,18 @@ Every "reuses / partially built" note below was **verified against HEAD 2026-07-
 5. **O4 Watchlist Resurrection.** Cheapest item — slot in parallel whenever there's slack.
 
 **Phase 4 — optimization tier (nice-to-have, not perimeter-critical)**
-6. O5 Sizing Alpha + O6 Premature-Exit Cost (the sizing/exit pair).
-7. O2 Conviction Under-Confidence (only if the pair leaves a gap).
+6. O5 Sizing Alpha + O6 Premature-Exit Cost (the sizing/exit pair). **SHIPPED 2026-07-26.**
+7. ~~O2 Conviction Under-Confidence (only if the pair leaves a gap).~~ **SHELVED
+   2026-07-26** — re-evaluated per this item's own condition once O5/O6 shipped. O2's
+   premise needs composite SCORE at a past buy/hold date joined to realized outcome; no
+   table anywhere stores a historical per-ticker composite score (re-confirmed against
+   HEAD — same wall O5 hit and worked around by using dollar size instead, since size IS
+   reliably recorded but score-at-a-past-date is not). O5 already ships the closest
+   honest proxy this schema supports (size vs. realized outcome). Building O2 anyway
+   would mean either reusing O5's exact substrate under a different label, or standing
+   up a brand-new forward-only day-cache that would sit empty for weeks — the same
+   class of problem that keeps O3 parked. User's call: shelve rather than build a
+   weaker rehash of O5.
 8. D4 Catalyst-Specific Stress (a P5 variant, not a new axis).
 
 **Parked:** O3 Regime Exposure Gap — data-gated on `daily_regime` accumulation.
@@ -151,6 +161,6 @@ partially built" facts against HEAD — the table above is dated 2026-07-24 and 
 | O4 | Watchlist Resurrection | [docs/plans/watchlist-resurrection.md](watchlist-resurrection.md) | **SHIPPED 2026-07-26** (commit `631e6ba`; F-203) — production-validated 2026-07-26 |
 | O5 | Sizing Alpha | [docs/plans/sizing-alpha.md](sizing-alpha.md) | **SHIPPED 2026-07-26** (commit `0b6c50d`; F-205) |
 | O6 | Premature-Exit Cost | [docs/plans/premature-exit-cost.md](premature-exit-cost.md) | **SHIPPED 2026-07-26** (commit `0b6c50d`; F-206) |
-| O2 | Conviction Under-Confidence | *(to write)* | Phase 4 |
+| O2 | Conviction Under-Confidence | — | **SHELVED 2026-07-26** — re-evaluated against its own "only if O5/O6 leave a gap" condition; see note below |
 | D4 | Catalyst-Specific Stress | *(to write)* | Phase 4 |
 | O3 | Regime Exposure Gap | — | Parked (data-gated) |
