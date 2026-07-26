@@ -3,7 +3,24 @@
 **Date:** 2026-07-26
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** DRAFT — pending Opus design review.
+**Status:** SHIP (revised after Opus design review — FIX-FIRST round resolved). One
+open policy question for the user (the per-bucket floor) flagged below.
+
+> **Opus design review (round 1): FIX-FIRST** — 1 blocking finding, fixed in this
+> revision. **Blocking: the "reuse `INVESTOR_MIRROR_MIN_CLOSED_LOTS` per bucket"
+> reasoning was statistically unsound.** `disposition_effect()` partitions the FULL
+> closed-lot pool into winners/losers (each roughly half the pool); O6 first
+> restricts to WINNERS ONLY, then splits that already-smaller subset into
+> quick/patient (each roughly a quarter of the full pool in a balanced case).
+> Requiring 10 in each bucket under that reasoning silently demands a much bigger
+> trade history than any sibling card — likely leaving the card permanently dark for
+> a single-user personal-portfolio app. Design principle 5's "no new floor needed,
+> same as its neighbors" claim is corrected below; a feature-specific floor,
+> reasoned from the actual population size, replaces it — **pending the user's
+> policy sign-off** (a `constants.py` value, per CLAUDE.md hard rule 1). 4
+> non-blocking corrections also folded in below (the `is_gain` None-coercion gotcha;
+> mean-vs-median split-point honesty; a caption note that one sell decision can
+> contribute fragments to both buckets; breakeven exits counting as "winners").
 
 > **One-line spec:** A 4th card ("⏱️ Premature-Exit Cost") slotted into the existing
 > 2×2 Behavioral Biases grid on 🪞 Investor Mirror (My Edge). Among your own **winning**
@@ -69,23 +86,49 @@ a specific position's alternate history.
 ## What's genuinely new
 
 1. **One new pure-Python function**, `investor_mirror.premature_exit_cost(closed_lots, min_n)`:
-   - Filter to `is_gain == True` lots with valid `days_held`/`pnl_pct`/`shares`.
-   - Compute the share-weighted average `days_held` across ALL winners (this module's
-     own copy of the "average winner hold" — independent of `disposition_effect()`'s
-     gating on a populated loser group).
+   - Filter to lots where `is_gain == True` **and** `pnl_pct`/`days_held`/`shares` are
+     all non-null (explicit `.dropna()`, same pattern as `breakeven_anchoring()`) —
+     **not** `is_gain` alone. Per design review: `is_gain = (pnl_abs or 0.0) >= 0`
+     (`investor_mirror.py:133`) evaluates **True when `pnl_abs` is `None`** (missing
+     price data), so filtering on `is_gain` alone would silently admit phantom
+     "winners" with no real P&L. The explicit `.dropna()` on `pnl_pct` closes this.
+   - Compute the share-weighted average `days_held` across ALL qualifying winners —
+     this module's own copy of "average winner hold," computed independently of
+     `disposition_effect()`'s return (confirmed necessary, not over-cautious: that
+     function's gate at `investor_mirror.py:170` requires BOTH winners AND losers to
+     meet `min_n`, so it returns `None` — silently withholding `winner_avg_days` —
+     whenever losers are thin even if winners are plentiful).
    - Split into **quick** (`days_held < PREMATURE_EXIT_RATIO × avg_winner_days`) and
-     **patient** (the rest).
-   - Requires both groups to have ≥ `min_n` lots (reuses `INVESTOR_MIRROR_MIN_CLOSED_LOTS`,
-     same floor already required per-group in `disposition_effect()` — no new floor
-     invented).
+     **patient** (the rest). Caption notes this split point is a **mean**, not a
+     median — winner hold-time distributions are typically right-skewed (a long tail
+     of multi-year holds), so "quick" means "shorter than your own average," not an
+     absolute judgment call; this is a wording/honesty note, not a computation change.
+   - Requires both groups to have ≥ `min_n` lots — **`min_n` is feature-specific, not
+     borrowed from `INVESTOR_MIRROR_MIN_CLOSED_LOTS`** (see the floor correction
+     below).
    - Returns share-weighted average `pnl_pct` for each group, plus counts and the
      computed `avg_winner_days` split-point — never a dollar or "left on the table"
      estimate.
 2. **New constant** `PREMATURE_EXIT_RATIO = 0.5` in `constants.py` — the "how much
    shorter than your own average counts as a quick exit" threshold. Same class as the
    sibling `DISPOSITION_CONCERN_RATIO`/`WINLOSS_CONCERN_RATIO`/`BREAKEVEN_ANCHOR_DWELL_RATIO`
-   (a tuning ratio for an awareness-only behavioral lens, not a decision gate) — still
-   a policy-ish value worth the user's confirmation before ship, per house convention.
+   (a tuning ratio for an awareness-only behavioral lens, not a decision gate).
+
+### Floor correction (round-1 blocking finding) — needs user sign-off
+
+`disposition_effect()`'s `min_n=10` applies to winners and losers each drawn from
+the FULL closed-lot pool (each roughly half the pool in a balanced history). O6
+first restricts to **winners only**, then splits that already-smaller subset again
+into quick/patient — under a balanced history, each final bucket is roughly a
+**quarter** of the full pool. Reusing `min_n=10` there silently demands roughly
+**twice** the trade history `disposition_effect()` needs, for a personal-portfolio
+app where that history is inherently modest — the card would likely never clear the
+bar. **A feature-specific floor, sized for the actual (smaller) population it draws
+from, is the honest fix** — proposing **`PREMATURE_EXIT_MIN_LOTS = 5`** per bucket
+(same proportional strictness as `disposition_effect()`'s 10-from-the-full-pool,
+scaled for a population roughly half that size), as a new `constants.py` value
+requiring the user's confirmation before ship, same as `WATCHLIST_STALE_DAYS` and
+every other new policy threshold on this roadmap.
 3. **Card D** on 🪞 Investor Mirror's Behavioral Biases grid, in the open `_mi_bc2`
    slot, matching the existing 3 cards' exact style (`st.container(border=True)`,
    `st.metric` headline, a caption explaining the comparison, an insufficient-data
@@ -111,11 +154,23 @@ pattern as the 3 existing Behavioral Biases cards).
    management (a thesis broke early, a stop got hit on a name that happened to still
    be a "winner" by a hair). Caption language must reflect that, mirroring the
    existing cards' "observed patterns — not verdicts" framing (`app.py:28824-28828`).
-4. **Same gating floor as its neighbors.** Reuses `INVESTOR_MIRROR_MIN_CLOSED_LOTS`
-   per group — no new, weaker floor invented just to force a result to appear sooner.
+4. **A floor sized for the actual population, not borrowed from a larger one.**
+   Per the round-1 correction above, `PREMATURE_EXIT_MIN_LOTS` (proposed 5) is a new,
+   feature-specific constant — deliberately NOT `INVESTOR_MIRROR_MIN_CLOSED_LOTS`,
+   since this feature's buckets draw from a smaller (winners-only, twice-split)
+   population than any sibling card's.
 5. **Graceful degradation.** Returns `None` (→ "insufficient data" caption, matching
    the other 3 cards' exact pattern) when either bucket is below the floor, or when
    `closed_lots` is empty — never raises, never forces a result.
+6. **One sell decision can span both buckets.** When a single SELL transaction draws
+   from multiple prior BUY lots at different ages (e.g. an old tranche and a recent
+   add), each fragment gets its own `days_held` and can land in a different bucket —
+   this is not a data error, but the render's caption should note it so a "quick" or
+   "patient" label is understood as per-lot-fragment, not necessarily "the whole
+   position was one clean decision." Exact-breakeven exits (`pnl_pct == 0`) count as
+   winners under this module's existing `is_gain` convention (`>= 0`) — harmless,
+   since their near-zero P&L barely moves the weighted average, but worth being
+   aware of.
 
 ## Non-goals
 

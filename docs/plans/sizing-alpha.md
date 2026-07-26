@@ -3,7 +3,30 @@
 **Date:** 2026-07-26
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** DRAFT — pending Opus design review.
+**Status:** SHIP (revised after Opus design review — FIX-FIRST round resolved). Ready
+for implementation.
+
+> **Opus design review (round 1): FIX-FIRST** — 2 blocking findings, fixed in this
+> revision. The conviction→dollar-size pivot itself was confirmed correct and
+> well-grounded (all HEAD-audit claims verified against source). **Blocking #1 —
+> wrong unit of analysis:** bucketing by FIFO-matched SELL FRAGMENT (as the module's
+> other cards do) is self-defeating specifically for a dollar-sizing feature, and the
+> bias runs in one damaging direction: a single large, successful bet that gets
+> scaled out in pieces (exactly the trim discipline this app already encourages) gets
+> shredded into several small-dollar fragments, artificially inflating the "Small"
+> tercile with pieces of what was actually one large winning bet — pushing the result
+> toward a false "flat sizing" conclusion. **Fixed: size by the ORIGINATING BUY LOT**
+> (group closed-lot rows by `(ticker, buy_date, buy_price)`, one dollar-size and one
+> weighted outcome per group), not the sell fragment. **Blocking #2 — unspecified tie
+> behavior:** `pd.qcut` on a series with many identical values (a common real
+> pattern — round-dollar buys) either raises or, with `duplicates="drop"`, silently
+> collapses to fewer than 3 buckets while still being presented as a 3-way
+> comparison. **Fixed: rank-based tie-robust split** (`pd.qcut(series.rank(method="first"), 3, ...)`),
+> with an explicit guard returning `None` (→ the existing "insufficient data"
+> caption) when fewer than 3 distinct dollar values exist. 3 non-blocking
+> corrections also folded in below (dollar-weighting instead of raw shares;
+> re-confirmed floor after the unit change; the "absolute, not portfolio-relative"
+> caveat is now an explicit pre-ship-review checklist item, not just prose).
 
 > **One-line spec:** A new full-width "📏 Sizing Alpha" section on 🪞 Investor Mirror
 > (My Edge), below the existing Behavioral Biases grid. Splits your own closed-lot
@@ -82,19 +105,38 @@ app.
 1. **One new pure-Python function**, `investor_mirror.sizing_alpha(closed_lots, min_n)`:
    - Filter to lots with valid `shares`, `buy_price`, `pnl_pct` (dropna, same pattern
      as the module's other functions).
-   - Compute each lot's **fragment dollar size** = `shares × buy_price` — the
-     FIFO-matched fragment's own committed dollars, consistent with this module's
-     existing atomic unit (a single original BUY split across multiple SELLs already
-     produces multiple fragment rows in every other Investor Mirror metric; O5 keeps
-     that same convention rather than inventing a different unit just for this
-     feature — noted explicitly as a known simplification, see Non-goals).
-   - Split into **terciles** by fragment dollar size (`pd.qcut` or an equivalent
-     rank-based split — adapts to the account's own range, no fixed dollar cutoff).
-   - Requires each tercile to have ≥ `INVESTOR_MIRROR_MIN_CLOSED_LOTS` lots (same
-     floor already used per-group elsewhere in this module — total lots required ≥
-     3 × that floor for a valid 3-way split).
-   - Returns each tercile's share-weighted average `pnl_pct`, lot count, and the
-     dollar range spanned (min/max fragment size in that tercile, for the caption).
+   - **Group by the ORIGINATING BUY LOT, not the sell fragment** — `groupby(["ticker", "buy_date", "buy_price"])`
+     over the closed-lot rows. For each group: `dollar_size = buy_price × Σ(shares)`
+     across its fragments; `outcome_pnl_pct` = the dollar-weighted average `pnl_pct`
+     across its fragments (weight = each fragment's own `shares × buy_price`, i.e.
+     dollar-weighted, not share-weighted — see below). **This fixes the round-1
+     blocking finding**: bucketing at the sell-fragment level would shred a single
+     large, later-scaled-out winning bet into several small-dollar fragments,
+     systematically inflating the "Small" tercile with pieces of large winners and
+     biasing the whole comparison toward a false "flat sizing" conclusion. Grouping
+     by the originating buy lot restores one dollar-size + one outcome per actual
+     sizing decision.
+   - Split into **terciles** by buy-lot dollar size using a **tie-robust rank split**:
+     `pd.qcut(dollar_size.rank(method="first"), 3, labels=["Small","Medium","Large"])`
+     — guarantees exactly 3 equal-count groups even when many buy lots share an
+     identical dollar amount (a common real pattern, e.g. round-number buys), which
+     plain `pd.qcut` would either raise on or silently collapse via `duplicates="drop"`.
+     **Explicit guard:** if fewer than 3 distinct dollar values exist across all
+     qualifying buy lots, return `None` (→ the existing "insufficient data" caption)
+     rather than force a degenerate split. **This fixes the round-1 blocking finding**
+     on unspecified tie behavior.
+   - Requires each tercile to have ≥ `INVESTOR_MIRROR_MIN_CLOSED_LOTS` buy lots (same
+     floor already used per-group elsewhere in this module; note the population is
+     now buy lots, not fragments — a smaller, more honest count post-fix, see the
+     re-confirmed-floor note below).
+   - Returns each tercile's **dollar-weighted** average `outcome_pnl_pct` (weight =
+     each buy lot's own `dollar_size` — chosen over share-weighting because raw share
+     counts aren't comparable across tickers at very different prices, e.g. 1000
+     shares of a $2 stock vs. 10 shares of a $500 stock; dollar-weighting is the
+     coherent choice for a feature whose entire axis is dollar size), lot count, and
+     the dollar range spanned per tercile (min/max — noting in the render that
+     adjacent tercile ranges may occasionally overlap or coincide under the
+     rank-based tie split, a cosmetic edge case, not a data error).
 2. **Section 3 — "📏 Sizing Alpha"** on 🪞 Investor Mirror, full-width below the
    Behavioral Biases grid, reusing the same `_mi_lots` (recomputed via the identical
    session-state cache key already used by Section 2 — no new computation, no new
@@ -113,20 +155,32 @@ cache table (same live-computed pattern as the rest of this page).
 2. **Never fabricates a "conviction" data point that doesn't exist.** The entire
    redesign above exists to honor this — dollar size (real, recorded) replaces
    conviction (unrecorded, would require an unreliable join) as the axis.
-3. **Explicit caveat on the one real limitation.** The render must plainly state that
-   sizing is shown in absolute dollars, not adjusted for portfolio growth over the
-   account's history — this is the honesty bar every "directional, not precise"
-   metric in this app already meets (Factor Tilt, Blast Radius).
+3. **Explicit caveat on the one real limitation — verify it actually renders at
+   pre-ship review, not just appears in this plan.** The render must plainly state
+   that sizing is shown in absolute dollars, not adjusted for portfolio growth over
+   the account's history — this is the honesty bar every "directional, not precise"
+   metric in this app already meets (Factor Tilt, Blast Radius). Per design review,
+   this is the one real honesty gate in this feature and is easy to drop during
+   implementation — pre-ship review must confirm the caption text is present, not
+   just planned.
 4. **Descriptive, not prescriptive.** A gap between Small/Medium/Large tercile
    outcomes is evidence to reflect on, not a rule to size up next time — some large
    positions are deliberate high-conviction bets that didn't work out, some small
    positions are toe-in-the-water buys that happened to run; a handful of trades
    don't prove a durable skill either way.
-5. **Same gating floor as its neighbors.** Reuses `INVESTOR_MIRROR_MIN_CLOSED_LOTS` —
-   no new, weaker floor invented to force a result to appear sooner.
+5. **Same gating floor as its neighbors — re-confirmed after the unit-of-analysis
+   fix.** Reuses `INVESTOR_MIRROR_MIN_CLOSED_LOTS` (no new constant invented, which
+   would itself trip CLAUDE.md's Opus-review requirement for a `constants.py`
+   change). The population this floor now applies to is **buy lots**, not sell
+   fragments — a smaller, more honest count than a fragment-level count would have
+   been. This means the section may stay dark (insufficient data) for longer on a
+   modest trade history than a fragment-level count would suggest — accepted as
+   correct per design review: graceful degradation is preferable to a metric built
+   on a systematically biased unit.
 6. **Graceful degradation.** Returns `None` (→ an "insufficient data" caption
-   matching the existing cards' pattern) when total valid lots can't support a
-   3-way split at the required floor — never raises, never forces a result.
+   matching the existing cards' pattern) when total valid buy lots can't support a
+   3-way split at the required floor, or when fewer than 3 distinct dollar sizes
+   exist for the tercile split — never raises, never forces a result.
 
 ## Non-goals
 
@@ -134,11 +188,15 @@ cache table (same live-computed pattern as the rest of this page).
   join — ruled out during HEAD audit as unreliable/low-coverage.
 - Does not normalize dollar size by portfolio value at the time of each trade (no
   point-in-time total-portfolio-value history exists to do this honestly).
-- Does not treat a FIFO-matched fragment differently from a whole, unsplit position —
-  a large original buy later sold in several smaller pieces will appear as several
-  smaller-dollar fragments, each carrying the SAME realized pnl_pct. This is a known
-  simplification consistent with how every other Investor Mirror metric already
-  treats the fragment as its atomic unit (`win_loss_closure_ratio`'s own docstring
-  makes the identical trade-off for sells spanning multiple buy lots).
+- Does not use the sell-fragment as its atomic unit (unlike every other Investor
+  Mirror metric) — deliberately groups by the originating buy lot instead, per the
+  round-1 design-review fix, since the sizing question specifically requires one
+  dollar-size per actual sizing decision. Two residual, accepted simplifications
+  remain: **(1)** a buy lot that is only PARTIALLY sold by the data's end sizes and
+  scores only its realized portion (the still-open remainder isn't counted — no
+  unrealized-P&L estimate is introduced); **(2)** two separate BUY trades on the same
+  ticker, same date, at an identical price will merge into one group under the
+  `(ticker, buy_date, buy_price)` key — an accepted, rare edge case, not a
+  data-integrity issue (their combined dollars and outcome are still both real).
 - Does not touch `conviction_alignment()`, `disposition_effect()`,
   `win_loss_closure_ratio()`, or `breakeven_anchoring()`.
