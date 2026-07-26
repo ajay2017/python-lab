@@ -29050,8 +29050,8 @@ elif page == "🎯 My Edge":
             "every trade — the dollar amount actually committed — split into "
             "Small/Medium/Large terciles of your own historical range (not a fixed "
             "dollar threshold). **Shown in absolute dollars, not adjusted for "
-            "portfolio growth over your account's history** — a $5,000 bet early on "
-            "may have been a much bigger relative commitment than $5,000 today."
+            "portfolio growth over your account's history** — a \\$5,000 bet early on "
+            "may have been a much bigger relative commitment than \\$5,000 today."
         )
 
         _mi_sizing = _im.sizing_alpha(_mi_lots, min_n=INVESTOR_MIRROR_MIN_CLOSED_LOTS)
@@ -29067,7 +29067,7 @@ elif page == "🎯 My Edge":
                     f"{_mi_sz_t['label']} (n={_mi_sz_t['n_lots']})",
                     f"{_mi_sz_t['avg_pnl_pct']:+.1f}%",
                     help=(
-                        f"${_mi_sz_t['dollar_lo']:,.0f}–${_mi_sz_t['dollar_hi']:,.0f} "
+                        f"\\${_mi_sz_t['dollar_lo']:,.0f}–\\${_mi_sz_t['dollar_hi']:,.0f} "
                         "per buy lot, dollar-weighted average realized gain."
                     ),
                 )
