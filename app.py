@@ -299,11 +299,21 @@ _DRISHTA_LOADING_HTML = """
 # this block handles component-level overrides that config.toml can't reach.
 st.markdown("""
 <style>
-/* Metric value — larger + bolder so portfolio numbers read at a glance */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* Hide Streamlit chrome — the "⋮" menu and "Made with Streamlit" footer.
+   Header is left alone so the sidebar-collapse control still works. */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+
+/* Metric value — larger + bolder so portfolio numbers read at a glance.
+   Monospace + tabular-nums so decimals line up across adjacent metrics. */
 [data-testid="stMetricValue"] {
     font-size: 1.35rem !important;
     font-weight: 700 !important;
     letter-spacing: -0.01em;
+    font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+    font-variant-numeric: tabular-nums;
 }
 /* Metric label — small-caps category tag */
 [data-testid="stMetricLabel"] > div {
@@ -312,9 +322,13 @@ st.markdown("""
     letter-spacing: 0.07em !important;
     opacity: 0.65;
 }
-/* Metric delta — compact */
+/* Metric delta — compact, same tabular treatment as the value */
 [data-testid="stMetricDelta"] svg { vertical-align: middle; }
-[data-testid="stMetricDelta"] { font-size: 0.82rem !important; }
+[data-testid="stMetricDelta"] {
+    font-size: 0.82rem !important;
+    font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+    font-variant-numeric: tabular-nums;
+}
 
 /* Sidebar nav — tighter items, subtle hover highlight */
 [data-testid="stSidebar"] .stRadio > div { gap: 2px !important; }
@@ -1733,14 +1747,14 @@ with st.sidebar:
         "MAIN":      "#3b82f6",
         "RESEARCH":  "#22d3ee",
         "PORTFOLIO": "#22c55e",
-        "ALERTS":    "#f59e0b",
+        "SIGNALS":   "#f59e0b",
         "AI":        "#a78bfa",
     }
     _NAV_ICON = {
         "MAIN":      "🏠",
         "RESEARCH":  "📈",
         "PORTFOLIO": "🧩",
-        "ALERTS":    "🔔",
+        "SIGNALS":   "🔔",
         "AI":        "🧠",
     }
 
@@ -1764,12 +1778,12 @@ with st.sidebar:
             ("My Edge",             "🎯 My Edge",              ":material/trophy:"),
             ("Risk Analysis",   "🔗 Risk Analysis",           ":material/monitoring:"),
             ("Intelligence", "🧩 Intelligence", ":material/hub:"),
-            ("Signals & Advice", "📡 Signals & Advice",        ":material/notifications_active:"),
             ("Trade Journal",   "📒 Trade Journal",           ":material/book:"),
             ("Trade Review",    "🪞 Trade Review",             ":material/rate_review:"),
             ("Recommendations", "📜 Recommendations History",  ":material/history:"),
         ]),
-        ("ALERTS", [
+        ("SIGNALS", [
+            ("Signals & Advice",  "📡 Signals & Advice",  ":material/notifications_active:"),
             ("Catalyst Watch",    "🔔 Catalyst Watch",    ":material/bolt:"),
             ("Economic Calendar", "📅 Economic Calendar", ":material/calendar_month:"),
         ]),
