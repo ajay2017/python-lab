@@ -869,6 +869,145 @@ def _m(val_str: str) -> str:
     return "••••••" if st.session_state.get("_privacy", True) else val_str
 
 
+# Shared severity palette for Act Today / Review cards (Home) and the simple
+# action cards on the Summary page — one source instead of each renderer
+# hardcoding its own hex.
+_HOME_URGENT   = "#ef4444"  # red   — Act Today bucket / critical priority
+_HOME_ELEVATED = "#f59e0b"  # amber — active ACT directive / medium priority
+_HOME_CALM     = "#94a3b8"  # grey  — Watch / monitoring, no action needed
+_HOME_GAIN     = "#00C851"  # green — matches the Home live price strip
+_HOME_LOSS     = "#ff4444"  # red   — matches the Home live price strip
+
+
+def _fmt_action(action: dict) -> tuple[str, str, str]:
+    """Format a structured rebalancer/deterioration action dict into
+    (color, label, text) so a card renders the directive directly instead of
+    a "consider X" prose. Shared by Home's Review Before Close cards and the
+    Summary page's simple action cards."""
+    t = (action or {}).get("type", "")
+    if t == "WATCH":
+        # "Watch" is the display label; the comparison above still keys on
+        # the internal "WATCH" action type.
+        return (_HOME_CALM, "Watch",
+                "no action today — see Trigger below for what would escalate.")
+    if t == "TIGHTEN_ONLY":
+        ns = action.get("new_stop")
+        return (_HOME_ELEVATED, "ACT",
+                f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
+    if t == "TRIM_AND_TIGHTEN":
+        ns = action.get("new_stop")
+        stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
+        return (_HOME_ELEVATED, "ACT",
+                f"Trim {action['trim_shares']} shares "
+                f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
+                f"{stop_str}")
+    if t == "TRIM_TO_TARGET":
+        return (_HOME_ELEVATED, "ACT",
+                f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
+                f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
+    if t == "PROTECTIVE_TRIM":
+        return (_HOME_ELEVATED, "ACT",
+                f"Trim {action['trim_ticker']} (weakest in sector, score "
+                f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
+                f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
+                f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
+    if t == "DETERIORATION_WATCH":
+        return (_HOME_CALM, "Watch",
+                "no action today — early deterioration; watching for follow-through "
+                "(see Trigger for what escalates it to a TRIM).")
+    return (_HOME_CALM, "—", "—")
+
+
+def _render_holdings_table(port_df) -> None:
+    """Full-position Holdings table — Ticker/Shares/Price/Value/Day Δ%/Total
+    Δ%/Weight, tabular-nums, gain/loss colored. Shared by Home and the
+    Summary page so both render the identical table from one place. Day Δ%
+    joins `_live_prices` (published by the price-strip fragment) since it is
+    NOT a column on `port_df`; a missing/stale quote renders "—" rather than
+    a fabricated 0.00%."""
+    st.subheader(f"💼 Holdings ({len(port_df)})")
+    _live_px = st.session_state.get("_live_prices") or {}
+    _hold_rows = []
+    for _, _hr in port_df.iterrows():
+        _ht      = str(_hr["Ticker"])
+        _hlive   = _live_px.get(_ht, {})
+        _hday    = _hlive.get("change_pct")
+        _hprice  = _hlive.get("price", _hr["Price"])
+        _htotal  = _hr["P&L (%)"]
+        _hshares = _hr["Shares"]
+        _hval    = _hr["Market Value"]
+        _hweight = _hr["Weight (%)"]
+        _hshares_txt = _m(f"{_hshares:,.0f}")
+        _hval_txt    = _m(f"${_hval:,.0f}")
+        _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
+        _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
+        _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
+        _hold_rows.append(
+            f"<tr>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_ht}</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hshares_txt}</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>${_hprice:,.2f}</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hval_txt}</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_hday_color}'>{_hday_disp}</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_htot_color}'>{_htotal:+.1f}%</td>"
+            f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hweight:.1f}%</td>"
+            f"</tr>"
+        )
+    st.markdown(
+        "<div style='overflow-x:auto'>"
+        "<table style=\"width:100%;border-collapse:collapse;background:#0f172a;"
+        "border:1px solid #334155;border-radius:12px;font-family:'JetBrains Mono',ui-monospace,monospace;"
+        "font-variant-numeric:tabular-nums;font-size:0.86rem\">"
+        "<thead><tr>"
+        + "".join(
+            f"<th style='text-align:{'left' if _lbl == 'Ticker' else 'right'};padding:10px 14px;"
+            f"font-family:Inter,system-ui,sans-serif;font-size:0.7rem;font-weight:700;"
+            f"letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
+            f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
+            for _lbl in ("Ticker", "Shares", "Price", "Value", "Day Δ%", "Total Δ%", "Weight")
+        )
+        + "</tr></thead><tbody>"
+        + "".join(_hold_rows)
+        + "</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_simple_action_card(item: dict, urgent: bool = False) -> None:
+    """Lean Act-Today card for the Summary page: tier badge + ticker +
+    one-line rationale — matches the approved Option-A mockup. Deliberately
+    NOT the full-featured Home card (no Analyze button, Exit Red-Team debate,
+    journal context, or tax notes — those stay Home-only); this is a read-only
+    at-a-glance view. Handles both item shapes Home's decision_bucket produces
+    (plain dicts with `action`/`directive` text, and `_source == "review"`
+    dicts carrying a structured `action` dict for `_fmt_action`)."""
+    is_review = item.get("_source") == "review"
+    ticker = item.get("ticker") or item.get("event") or ""
+    icon = item.get("icon", "")
+    if is_review:
+        _color, _label, _text = _fmt_action(item.get("action", {}) or {})
+        if urgent:
+            _color = _HOME_URGENT
+        headline = item.get("headline", "")
+        text = _text + (f" {headline}" if headline and not _text.endswith(headline) else "")
+    else:
+        _is_crit = item.get("priority") == "critical"
+        _color = _HOME_URGENT if (urgent or _is_crit) else _HOME_ELEVATED
+        _label = str(item.get("action", "—"))
+        text = item.get("directive") or item.get("why") or item.get("reason") or "—"
+    st.markdown(
+        f"<div style='background:#1c1917;border-left:3px solid {_color};"
+        f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
+        f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
+        f"{icon} <span style='color:{_color};font-weight:700'>{_label}</span>"
+        + (f" — <span style='color:#fbbf24'>{ticker}</span>" if ticker else "")
+        + f"</div>"
+        f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:4px'>{text}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_stop_ladder(r: dict, holding: dict, price: float,
                         under_reduce: bool = False, buy_add: bool = False) -> None:
     """Analysis-page explainer + what-if simulator for a HELD position's stop.
@@ -1761,6 +1900,7 @@ with st.sidebar:
     _NAV_GROUPS = [
         ("MAIN", [
             ("Home",    "🏠 Home",                    ":material/home:"),
+            ("Summary", "🧾 Summary",                 ":material/receipt_long:"),
             ("Account", "💰 Account",                 ":material/account_balance_wallet:"),
             ("Scanner", "🔍 Market Scanner",           ":material/radar:"),
             ("User Guide", "📖 User Guide",           ":material/help:"),
@@ -6224,51 +6364,10 @@ if page == "🏠 Home":
                 return None
             return {"thesis": thesis, "thesis_date": thesis_date, "lessons": lessons}
 
-        # Shared severity palette for the Act Today / Review / Defensive cards
-        # below — previously each function hardcoded its own hex (including one
-        # drift: TRIM_AND_TIGHTEN's ACT label rendered green, like a gain, when
-        # every other TRIM directive is amber). One source now, three consumers.
-        _HOME_URGENT   = "#ef4444"  # red   — Act Today bucket / critical priority
-        _HOME_ELEVATED = "#f59e0b"  # amber — active ACT directive / medium priority
-        _HOME_CALM     = "#94a3b8"  # grey  — Watch / monitoring, no action needed
-        _HOME_GAIN     = "#00C851"  # green — matches the Home live price strip
-        _HOME_LOSS     = "#ff4444"  # red   — matches the Home live price strip
-
-        # Format a structured action dict into (color, label, text) so each
-        # item renders the directive directly instead of a "consider X" prose.
-        def _fmt_action(action: dict) -> tuple[str, str, str]:
-            t = (action or {}).get("type", "")
-            if t == "WATCH":
-                # "Watch" is the display label (Consistency #2); the comparison above
-                # still keys on the internal "WATCH" action type.
-                return (_HOME_CALM, "Watch",
-                        "no action today — see Trigger below for what would escalate.")
-            if t == "TIGHTEN_ONLY":
-                ns = action.get("new_stop")
-                return (_HOME_ELEVATED, "ACT",
-                        f"Raise stop to ${ns:.2f}." if ns else "Raise stop — ATR unavailable, set manually.")
-            if t == "TRIM_AND_TIGHTEN":
-                ns = action.get("new_stop")
-                stop_str = f" AND raise stop to ${ns:.2f}." if ns else "."
-                return (_HOME_ELEVATED, "ACT",
-                        f"Trim {action['trim_shares']} shares "
-                        f"(≈${action['trim_dollars']:,.0f}, {action['trim_pct']:.0f}% of position)"
-                        f"{stop_str}")
-            if t == "TRIM_TO_TARGET":
-                return (_HOME_ELEVATED, "ACT",
-                        f"Trim {action['from_weight']:.1f}% → {action['target_weight']:.1f}% "
-                        f"({action['trim_shares']} shares ≈ ${action['trim_dollars']:,.0f}).")
-            if t == "PROTECTIVE_TRIM":
-                return (_HOME_ELEVATED, "ACT",
-                        f"Trim {action['trim_ticker']} (weakest in sector, score "
-                        f"{action['weakest_score']:.0f}) by {action['trim_shares']} shares "
-                        f"(≈${action['trim_dollars']:,.0f}). Sector exposure: "
-                        f"{action['from_exposure']:.1f}% → {action['to_exposure']:.1f}%.")
-            if t == "DETERIORATION_WATCH":
-                return (_HOME_CALM, "Watch",
-                        "no action today — early deterioration; watching for follow-through "
-                        "(see Trigger for what escalates it to a TRIM).")
-            return (_HOME_CALM, "—", "—")
+        # _HOME_URGENT/_HOME_ELEVATED/_HOME_CALM/_HOME_GAIN/_HOME_LOSS and
+        # _fmt_action() are now module-level (near `_m()`) so the Summary
+        # page's simple action cards can share them too — resolved here via
+        # normal module scope, no local redefinition needed.
 
         # Alternative reallocation targets for weak-large TRIM_TO_TARGET items.
         # Two complementary sources (primary + backup so both don't fail
@@ -7174,64 +7273,11 @@ if page == "🏠 Home":
             for _ci, _item in enumerate(_act_bucket):
                 _render_defensive_card(_item, _ci, in_act=True)
 
-        # ── Holdings — full position table ───────────────────────────────────
-        # Placed right after Act Today (matches the approved Option-A mockup:
-        # KPIs → Act Today → Holdings) so the full position reference sits
-        # right under the day's decisions, not buried below the calmer
-        # Monitoring/Tune-up sections. Home never had a persistent table of
-        # every position before this (only the live price-strip cards above
-        # and the transient cold-load snapshot). Day Δ% comes from the same
-        # `_live_prices` the price strip already populates (`fetch_live_prices`,
-        # cached in session_state at the top of this page); it is NOT a column
-        # on `port_df`, so a missing/stale quote renders "—" rather than a
-        # fabricated 0.00%.
+        # Holdings — full position table, right after Act Today (matches the
+        # approved Option-A mockup). Shared with the Summary page via
+        # _render_holdings_table() (module-level, near _m()) — same output.
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-        st.subheader(f"💼 Holdings ({len(port_df)})")
-        _live_px  = st.session_state.get("_live_prices") or {}
-        _hold_rows = []
-        for _, _hr in port_df.iterrows():
-            _ht      = str(_hr["Ticker"])
-            _hlive   = _live_px.get(_ht, {})
-            _hday    = _hlive.get("change_pct")
-            _hprice  = _hlive.get("price", _hr["Price"])
-            _htotal  = _hr["P&L (%)"]
-            _hshares = _hr["Shares"]
-            _hval    = _hr["Market Value"]
-            _hweight = _hr["Weight (%)"]
-            _hshares_txt = _m(f"{_hshares:,.0f}")
-            _hval_txt    = _m(f"${_hval:,.0f}")
-            _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
-            _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
-            _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
-            _hold_rows.append(
-                f"<tr>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_ht}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hshares_txt}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>${_hprice:,.2f}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hval_txt}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_hday_color}'>{_hday_disp}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_htot_color}'>{_htotal:+.1f}%</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hweight:.1f}%</td>"
-                f"</tr>"
-            )
-        st.markdown(
-            "<div style='overflow-x:auto'>"
-            "<table style=\"width:100%;border-collapse:collapse;background:#0f172a;"
-            "border:1px solid #334155;border-radius:12px;font-family:'JetBrains Mono',ui-monospace,monospace;"
-            "font-variant-numeric:tabular-nums;font-size:0.86rem\">"
-            "<thead><tr>"
-            + "".join(
-                f"<th style='text-align:{'left' if _lbl == 'Ticker' else 'right'};padding:10px 14px;"
-                f"font-family:Inter,system-ui,sans-serif;font-size:0.7rem;font-weight:700;"
-                f"letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
-                f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
-                for _lbl in ("Ticker", "Shares", "Price", "Value", "Day Δ%", "Total Δ%", "Weight")
-            )
-            + "</tr></thead><tbody>"
-            + "".join(_hold_rows)
-            + "</tbody></table></div>",
-            unsafe_allow_html=True,
-        )
+        _render_holdings_table(port_df)
 
         # Monitoring / Awareness — FYI, nothing to execute
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
@@ -8117,6 +8163,122 @@ if page == "🏠 Home":
             f'</div>'
         )
         _brief_slot.markdown(_css + _card, unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — SUMMARY
+# ═════════════════════════════════════════════════════════════════════════════
+# Added 2026-07-26: portfolio state + today's actions on one lean page,
+# WITHOUT touching Home's own rendering — Home keeps its full Today's
+# Brief/Grow Today/Monitoring/Evening Debrief content unchanged. This page
+# only reads what Home's preamble already published to session_state this
+# session (`_port_df_enriched`, `_live_prices`, `_portfolio_value`,
+# `_home_synth_cache`) plus the same pure `split_defensive()` call Home uses
+# for its own Act Today bucket — no new computation of recommendations.
+elif page == "🧾 Summary":
+    st.title("🧾 Summary")
+    st.caption("Portfolio state + today's actions, at a glance. Full detail lives on 🏠 Home.")
+    _sm_pdf = st.session_state.get("_port_df_enriched")
+    _sm_hd  = st.session_state.get("_last_held_data")
+    if _sm_pdf is None or _sm_hd is None or (hasattr(_sm_pdf, "empty") and _sm_pdf.empty):
+        _render_portfolio_not_loaded(show_home_button=True, key_suffix="sm")
+        st.stop()
+    _render_portfolio_stale_banner(key_suffix="sm")
+
+    port_df = _sm_pdf
+
+    # ── KPI tiles — cheap, independent recomputation from already-cached
+    # data (zero change to Home's own preamble). Today's P&L uses the
+    # simpler held-mark calc (F-03) rather than Home's fuller Tier-B upgrade
+    # (F-03a), to avoid a second daily_snapshots round-trip on this page.
+    _sm_total_val     = st.session_state.get("_portfolio_value", 0.0)
+    _sm_total_pnl     = port_df["P&L ($)"].sum()
+    _sm_total_cost    = (port_df["Avg Cost"] * port_df["Shares"]).sum()
+    _sm_total_pnl_pct = _sm_total_pnl / _sm_total_cost * 100 if _sm_total_cost else 0
+    _sm_avg_score     = port_df["Score"].mean()
+    _sm_best  = port_df.loc[port_df["P&L (%)"].idxmax()]
+    _sm_worst = port_df.loc[port_df["P&L (%)"].idxmin()]
+
+    _sm_live = st.session_state.get("_live_prices") or {}
+    _sm_today_pnl = sum(
+        (_sm_live[r["Ticker"]]["price"] - _sm_live[r["Ticker"]]["prev_close"]) * r["Shares"]
+        for _, r in port_df.iterrows()
+        if r["Ticker"] in _sm_live and (_sm_live[r["Ticker"]].get("prev_close") or 0) > 0
+    ) if _sm_live else None
+    _sm_today_pnl_pct = (
+        _sm_today_pnl / _sm_total_val * 100
+        if (_sm_today_pnl is not None and _sm_total_val) else None
+    )
+
+    _sm_bundle    = (st.session_state.get("_home_synth_cache") or {}).get("bundle", {})
+    _sm_n_danger  = _sm_bundle.get("n_danger", 0)
+    _sm_n_warning = _sm_bundle.get("n_warning", 0)
+    _sm_div_score = _sm_bundle.get("div_score")
+    _sm_div_label = _sm_bundle.get("_div_label", "")
+    _sm_rag_label = _sm_bundle.get("_rag_label", "")
+    _sm_rag_color = _sm_bundle.get("_rag_color", "#6b7280")
+
+    st.markdown(
+        f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
+        f"padding:14px 20px;margin-bottom:16px'>"
+        f"<div style='display:flex;align-items:center;gap:10px'>"
+        f"<span style='font-size:1.2em;font-weight:700;color:#f9fafb'>Portfolio Snapshot</span>"
+        + (f"<span style='background:{_sm_rag_color};color:#000;padding:2px 10px;"
+           f"border-radius:20px;font-size:0.7em;font-weight:800;letter-spacing:0.05em'>"
+           f"{_sm_rag_label}</span>" if _sm_rag_label else "")
+        + f"<span style='margin-left:auto;color:#6b7280;font-size:0.75em'>"
+          f"{len(port_df)} positions · {datetime.now().strftime('%b %d, %Y')}</span>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    _s1, _s2, _s3, _s4, _s5, _s6, _s7, _s8 = st.columns(8)
+    _s1.metric("Portfolio Value", _m(f"${_sm_total_val:,.0f}"))
+    _s2.metric("Unrealized P&L", _m(f"${_sm_total_pnl:,.0f}"),
+               f"{_sm_total_pnl_pct:+.1f}%", delta_color="normal")
+    if _sm_today_pnl is not None:
+        _s3.metric(
+            "Today's P&L", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
+            delta_color="normal" if _sm_today_pnl >= 0 else "inverse",
+            help="Held-position mark-to-market vs yesterday's close — same base calc as "
+                 "Home's F-03 metric (Home may show a fuller Tier-B figure once available).",
+        )
+    else:
+        _s3.metric("Today's P&L", "Updating…",
+                    help="Loads once live prices are cached — visit 🏠 Home, or wait ~60s.")
+    _s4.metric("Alerts", f"{_sm_n_danger}🔴 {_sm_n_warning}🟡",
+               help="See 📡 Signals & Advice for detail.")
+    _s5.metric("Avg Score", f"{_sm_avg_score:.0f}/100")
+    _s6.metric("Diversification", f"{_sm_div_score:.0f}/100" if _sm_div_score is not None else "—",
+               _sm_div_label, delta_color="off")
+    _s7.metric(f"Best: {_sm_best['Ticker']}",
+               _m(f"${_sm_best['P&L ($)']:,.0f}"), f"{_sm_best['P&L (%)']:+.1f}%", delta_color="normal")
+    _s8.metric(f"Worst: {_sm_worst['Ticker']}",
+               _m(f"${_sm_worst['P&L ($)']:,.0f}"), f"{_sm_worst['P&L (%)']:+.1f}%", delta_color="normal")
+
+    # ── Act Today — reads the same daily-brief data Home computed this
+    # session (published via _home_synth_cache) and calls the identical pure
+    # split_defensive(); never recomputes recommendations independently.
+    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+    _sm_daily_brief = _sm_bundle.get("_daily_brief")
+    if _sm_daily_brief is None:
+        st.info("Act Today needs today's Brief to be built first — visit 🏠 Home once this "
+                "session, then come back here.")
+    else:
+        _sm_split      = split_defensive(_sm_daily_brief.get("act_today") or [],
+                                          _sm_daily_brief.get("review_list") or [])
+        _sm_act_bucket = _sm_split["act"]
+        st.subheader(f"🔴 Act Today ({len(_sm_act_bucket)})" if _sm_act_bucket
+                     else "✅ Act Today — you're set")
+        if not _sm_act_bucket:
+            st.success("Nothing to act on today.")
+        else:
+            for _sm_item in _sm_act_bucket:
+                _render_simple_action_card(_sm_item, urgent=True)
+
+    # ── Holdings — identical table to Home's (shared function, same output).
+    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+    _render_holdings_table(port_df)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
