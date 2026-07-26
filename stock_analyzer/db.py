@@ -466,6 +466,27 @@ the user acted on it):
     create policy "Allow all (service role)" on public.regime_scenario_cache
         for all to service_role using (true) with check (true);
 
+    -- catalyst_stress_cache: daily portfolio-level Catalyst-Specific Stress
+    -- narrative (D4, Agentic Intelligence Roadmap v2). ONE row per scan_date —
+    -- portfolio-wide, not per-ticker. Same shape/degradation contract as
+    -- regime_scenario_cache above: narrative is NEVER written on a failed/empty
+    -- Haiku call, so a transient failure can be retried immediately. Until
+    -- table created: load returns None, save no-ops; the expander still shows
+    -- the generate button.
+    create table if not exists public.catalyst_stress_cache (
+        scan_date             text        NOT NULL,
+        narrative             text,
+        ranked_snapshot       jsonb       NOT NULL,
+        blast_radius_snapshot jsonb       NOT NULL,
+        clusters_snapshot     jsonb       NOT NULL,
+        created_at            timestamptz DEFAULT now(),
+        PRIMARY KEY (scan_date)
+    );
+    alter table public.catalyst_stress_cache enable row level security;
+    drop policy if exists "Allow all (service role)" on public.catalyst_stress_cache;
+    create policy "Allow all (service role)" on public.catalyst_stress_cache
+        for all to service_role using (true) with check (true);
+
     -- thesis_cluster_cache: daily portfolio-level Hidden Same-Bet Detector
     -- result (Agentic Intelligence Roadmap v2, D1). ONE row per scan_date —
     -- portfolio-wide, not per-ticker. Semantically clusters held positions'
@@ -2804,6 +2825,57 @@ def save_regime_scenario_cache(scan_date, scenario_narrative, indicator_watchlis
             "blast_radius_snapshot": blast_radius_snapshot,
             "regime_snapshot":       regime_snapshot,
             "cross_asset_snapshot":  cross_asset_snapshot,
+        }).execute()
+    except Exception:
+        pass
+
+
+# ── Catalyst-Specific Stress — daily portfolio-level cache (D4) ────────────
+# Persists the catalyst narrative + ranked candidates for one ET calendar day.
+# ONE row per scan_date (no ticker key). System cache → NOT _READONLY-gated
+# (same classification as regime_scenario_cache / structural_scan_cache).
+# Degrades gracefully when table is absent: load returns None, save no-ops.
+
+def load_catalyst_stress_cache(scan_date: str) -> dict | None:
+    """Return cached catalyst stress result for scan_date or None.
+
+    None means cache miss (table not created yet, DB offline, or no row for
+    this date) — caller should compute and show the generate button.
+    Never raises.
+    """
+    if not scan_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("catalyst_stress_cache")
+            .select("narrative,ranked_snapshot,blast_radius_snapshot,clusters_snapshot")
+            .eq("scan_date", scan_date)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def save_catalyst_stress_cache(scan_date, narrative, ranked_snapshot,
+                                blast_radius_snapshot, clusters_snapshot):
+    """Upsert catalyst stress row. Best-effort — never raises.
+
+    Caller must only invoke this when narrative is non-None (a successful
+    Haiku call) — never cache a failed/empty result.
+    """
+    if not scan_date or not has_db():
+        return
+    try:
+        _client().table("catalyst_stress_cache").upsert({
+            "scan_date":             scan_date,
+            "narrative":             narrative,
+            "ranked_snapshot":       ranked_snapshot,
+            "blast_radius_snapshot": blast_radius_snapshot,
+            "clusters_snapshot":     clusters_snapshot,
         }).execute()
     except Exception:
         pass

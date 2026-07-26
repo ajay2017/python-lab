@@ -540,6 +540,15 @@ EARNINGS_MIN_BEAT_RATE_ENTRY             = 70.0  # catalyst scanner — min beat
 # CATALYST_WATCH_WINDOW_DAYS above; not a gate.
 ECONOMIC_CALENDAR_WINDOW_DAYS = 45
 
+# Catalyst-Specific Stress (D4, Agentic Intelligence Roadmap v2, 2026-07-26).
+# How far ahead a HIGH-impact macro event or a held-ticker earnings date must
+# fall to count as "upcoming" for the structural-overlap ranking. Deliberately
+# a DISTINCT constant from EARNINGS_URGENCY_SOON_DAYS above (that one drives the
+# Catalyst Watch earnings-playbook "SOON" display tier — a different feature;
+# sharing one knob would silently couple two unrelated decisions). User-set
+# policy value, not a gate.
+CATALYST_STRESS_WINDOW_DAYS = 14
+
 # ── Macro-event playbook gates (macro_playbook.py) ───────────────────────────
 # Pre-event PROTECT / WATCH classification thresholds. Values surfaced here
 # so future changes are policy decisions, not hidden literals.

@@ -106,6 +106,7 @@ from stock_analyzer.constants import (
     WATCHLIST_STALE_DAYS,
     PREMATURE_EXIT_RATIO,
     PREMATURE_EXIT_MIN_LOTS,
+    CATALYST_STRESS_WINDOW_DAYS,
     CATALYST_WATCH_WINDOW_DAYS,
     GROW_CANDIDATE_POOL,
     REFRESH_COOLDOWN_SEC,
@@ -193,6 +194,7 @@ from stock_analyzer import regime_targets as _rgt_mod
 from stock_analyzer import portfolio_intelligence
 from stock_analyzer import structural_scanner
 from stock_analyzer import regime_stress
+from stock_analyzer import catalyst_stress
 from stock_analyzer import thesis_cluster
 from stock_analyzer import missed_opportunity
 from stock_analyzer.account import (
@@ -10396,6 +10398,93 @@ elif page == "🔗 Risk Analysis":
                 "observed during those events — more accurate for portfolios with sector concentration. "
                 "Estimates assume linear beta and do not model liquidity effects or margin calls."
             )
+
+            with st.expander("📅 Catalyst-Specific Stress (Beta)", expanded=False):
+                st.caption(
+                    "Where the scenario above asks what ongoing macro CONDITION threatens "
+                    "this book, this asks the event-driven question: which single "
+                    f"upcoming DATED EVENT (within {CATALYST_STRESS_WINDOW_DAYS} days — "
+                    "a HIGH-impact, sector-specific macro print, or a held position's own "
+                    "earnings report) threatens the SAME structural weak points found above."
+                )
+
+                _cs_corr_df = st.session_state.get("_corr_df_cache")
+                if _cs_corr_df is None or (hasattr(_cs_corr_df, "empty") and _cs_corr_df.empty):
+                    st.info("Correlation data isn't available this session — revisit 🏠 Home to compute it.")
+                else:
+                    _cs_weights = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
+                    _cs_rb = portfolio_intelligence.risk_budget(held_data, _cs_weights)
+
+                    if not _cs_rb["positions"]:
+                        st.info("Not enough price history to compute catalyst-specific stress this session.")
+                    else:
+                        # Recomputed independently of P5's own local _rs_blast/_rs_clusters
+                        # (never published to session_state) — see plan's render-order
+                        # decision. Cheap pure Python, same cost P5 itself already pays.
+                        _cs_blast    = structural_scanner.blast_radius(_cs_corr_df, _cs_rb["positions"])
+                        _cs_clusters = portfolio_intelligence.correlation_clusters(_cs_corr_df, _cs_weights)
+
+                        _cs_held_tickers = tuple(sorted({
+                            str(t).upper() for t in port_df["Ticker"].tolist()
+                        }))
+                        _cs_today = _today_et()
+                        _cs_macro_events = build_macro_calendar(
+                            port_df,
+                            days_ahead=CATALYST_STRESS_WINDOW_DAYS,
+                            days_behind=0,
+                            today=_cs_today,
+                        )
+                        with st.spinner("Loading held-ticker earnings dates…"):
+                            _cs_earn_from = _cs_today.isoformat()
+                            _cs_earn_to   = (_cs_today + timedelta(days=CATALYST_STRESS_WINDOW_DAYS)).isoformat()
+                            _cs_earnings_events = _cached_catalyst_calendar(
+                                _cs_held_tickers, _cs_earn_from, _cs_earn_to
+                            )
+
+                        _cs_ranked = catalyst_stress.rank_catalyst_threats(
+                            _cs_macro_events, _cs_earnings_events, _cs_blast, _cs_clusters,
+                            port_df, CATALYST_STRESS_WINDOW_DAYS, today=_cs_today,
+                        )
+
+                        _cs_scan_date = str(_cs_today)
+                        _cs_cached = db.load_catalyst_stress_cache(_cs_scan_date)
+
+                        if _cs_cached and _cs_cached.get("narrative"):
+                            st.markdown(_cs_cached["narrative"])
+                            st.caption(f"Computed {_cs_scan_date} ET.")
+                        elif not _cs_ranked["macro"] and not _cs_ranked["earnings"]:
+                            st.caption(
+                                "No upcoming HIGH-impact macro event or held-position earnings "
+                                f"report within {CATALYST_STRESS_WINDOW_DAYS} days overlaps your "
+                                "current structural weak points."
+                            )
+                        else:
+                            if st.button("📅 Generate catalyst-specific stress", key="_cs_gen_btn"):
+                                with st.spinner("Synthesizing catalyst-specific stress…"):
+                                    _cs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                                    _cs_evidence = catalyst_stress.build_catalyst_stress_inputs(
+                                        _cs_ranked, _cs_blast, _cs_clusters
+                                    )
+                                    _cs_result = catalyst_stress.generate_catalyst_narrative(_cs_evidence, _cs_api_key)
+                                if _cs_result and _cs_result.get("narrative"):
+                                    db.save_catalyst_stress_cache(
+                                        scan_date=_cs_scan_date,
+                                        narrative=_cs_result["narrative"],
+                                        ranked_snapshot=_cs_ranked,
+                                        blast_radius_snapshot=_cs_blast,
+                                        clusters_snapshot=_cs_clusters,
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.warning("Narrative generation failed — API unavailable or rate-limited. Try again.")
+
+                st.caption(
+                    "**Methodology:** Ranks upcoming macro events and held-ticker earnings "
+                    "dates by overlap with the SAME blast-radius/correlation evidence as the "
+                    "scenario above — never a new stress calculation. Macro events that "
+                    "threaten every sector equally (Fed Policy, Growth/GDP releases) are "
+                    "excluded from ranking since they can't identify a SPECIFIC weak point."
+                )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

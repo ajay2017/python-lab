@@ -314,6 +314,16 @@ def _affected_tickers(category: str, port_df: _pd.DataFrame) -> list[str]:
     return result
 
 
+def is_all_sector_category(category: str) -> bool:
+    """True when an event category's impact map is the `__ALL__` sentinel
+    (Fed Policy, Growth) — i.e. it threatens every sector equally and so
+    provides no discrimination about which specific holding is exposed.
+    Used by catalyst_stress.py to exclude these from structural-overlap
+    ranking (an event hitting everything can't identify a specific weak
+    point, which is the opposite of what that ranking needs)."""
+    return _SECTOR_IMPACT.get(category, {}).get("__ALL__", 0) >= 2
+
+
 def affected_sectors(category: str, min_severity: int = 2) -> set[str]:
     """
     Return the set of sector names materially impacted by a macro event of the
