@@ -8175,7 +8175,10 @@ if page == "🏠 Home":
 # for its own Act Today bucket — no new computation of recommendations.
 elif page == "🧾 Summary":
     st.title("🧾 Summary")
-    st.caption("Portfolio state + today's actions, at a glance. Full detail lives on 🏠 Home.")
+    st.caption(
+        "Portfolio state + today's actions, at a glance. Full detail lives on 🏠 Home. "
+        f"· Data as of {datetime.now().strftime('%b %d, %Y')}."
+    )
     _sm_pdf = st.session_state.get("_port_df_enriched")
     _sm_hd  = st.session_state.get("_last_held_data")
     if _sm_pdf is None or _sm_hd is None or (hasattr(_sm_pdf, "empty") and _sm_pdf.empty):
@@ -8213,22 +8216,12 @@ elif page == "🧾 Summary":
     _sm_n_warning = _sm_bundle.get("n_warning", 0)
     _sm_div_score = _sm_bundle.get("div_score")
     _sm_div_label = _sm_bundle.get("_div_label", "")
-    _sm_rag_label = _sm_bundle.get("_rag_label", "")
-    _sm_rag_color = _sm_bundle.get("_rag_color", "#6b7280")
-
-    st.markdown(
-        f"<div style='background:#111827;border:1px solid #1f2937;border-radius:12px;"
-        f"padding:14px 20px;margin-bottom:16px'>"
-        f"<div style='display:flex;align-items:center;gap:10px'>"
-        f"<span style='font-size:1.2em;font-weight:700;color:#f9fafb'>Portfolio Snapshot</span>"
-        + (f"<span style='background:{_sm_rag_color};color:#000;padding:2px 10px;"
-           f"border-radius:20px;font-size:0.7em;font-weight:800;letter-spacing:0.05em'>"
-           f"{_sm_rag_label}</span>" if _sm_rag_label else "")
-        + f"<span style='margin-left:auto;color:#6b7280;font-size:0.75em'>"
-          f"{len(port_df)} positions · {datetime.now().strftime('%b %d, %Y')}</span>"
-        f"</div></div>",
-        unsafe_allow_html=True,
-    )
+    # No RAG banner here (dropped 2026-07-26) — it duplicated Home's identical
+    # "Portfolio Command Center" bar and its "Action Required" chip (driven by
+    # danger-level Active Alerts, F-169) can legitimately disagree with an
+    # empty Act Today bucket (a different signal — same-day trade decisions),
+    # which read as a flat contradiction on this short page. The Alerts KPI
+    # tile below already surfaces the same n_danger/n_warning counts calmly.
 
     _s1, _s2, _s3, _s4, _s5, _s6, _s7, _s8 = st.columns(8)
     _s1.metric("Portfolio Value", _m(f"${_sm_total_val:,.0f}"))
