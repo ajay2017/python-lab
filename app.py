@@ -7174,6 +7174,65 @@ if page == "🏠 Home":
             for _ci, _item in enumerate(_act_bucket):
                 _render_defensive_card(_item, _ci, in_act=True)
 
+        # ── Holdings — full position table ───────────────────────────────────
+        # Placed right after Act Today (matches the approved Option-A mockup:
+        # KPIs → Act Today → Holdings) so the full position reference sits
+        # right under the day's decisions, not buried below the calmer
+        # Monitoring/Tune-up sections. Home never had a persistent table of
+        # every position before this (only the live price-strip cards above
+        # and the transient cold-load snapshot). Day Δ% comes from the same
+        # `_live_prices` the price strip already populates (`fetch_live_prices`,
+        # cached in session_state at the top of this page); it is NOT a column
+        # on `port_df`, so a missing/stale quote renders "—" rather than a
+        # fabricated 0.00%.
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+        st.subheader(f"💼 Holdings ({len(port_df)})")
+        _live_px  = st.session_state.get("_live_prices") or {}
+        _hold_rows = []
+        for _, _hr in port_df.iterrows():
+            _ht      = str(_hr["Ticker"])
+            _hlive   = _live_px.get(_ht, {})
+            _hday    = _hlive.get("change_pct")
+            _hprice  = _hlive.get("price", _hr["Price"])
+            _htotal  = _hr["P&L (%)"]
+            _hshares = _hr["Shares"]
+            _hval    = _hr["Market Value"]
+            _hweight = _hr["Weight (%)"]
+            _hshares_txt = _m(f"{_hshares:,.0f}")
+            _hval_txt    = _m(f"${_hval:,.0f}")
+            _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
+            _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
+            _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
+            _hold_rows.append(
+                f"<tr>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_ht}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hshares_txt}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>${_hprice:,.2f}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hval_txt}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_hday_color}'>{_hday_disp}</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_htot_color}'>{_htotal:+.1f}%</td>"
+                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hweight:.1f}%</td>"
+                f"</tr>"
+            )
+        st.markdown(
+            "<div style='overflow-x:auto'>"
+            "<table style=\"width:100%;border-collapse:collapse;background:#0f172a;"
+            "border:1px solid #334155;border-radius:12px;font-family:'JetBrains Mono',ui-monospace,monospace;"
+            "font-variant-numeric:tabular-nums;font-size:0.86rem\">"
+            "<thead><tr>"
+            + "".join(
+                f"<th style='text-align:{'left' if _lbl == 'Ticker' else 'right'};padding:10px 14px;"
+                f"font-family:Inter,system-ui,sans-serif;font-size:0.7rem;font-weight:700;"
+                f"letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
+                f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
+                for _lbl in ("Ticker", "Shares", "Price", "Value", "Day Δ%", "Total Δ%", "Weight")
+            )
+            + "</tr></thead><tbody>"
+            + "".join(_hold_rows)
+            + "</tbody></table></div>",
+            unsafe_allow_html=True,
+        )
+
         # Monitoring / Awareness — FYI, nothing to execute
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
         st.markdown(
@@ -7224,61 +7283,6 @@ if page == "🏠 Home":
                 "These lift risk-adjusted quality over time — act on them when you're "
                 "rebalancing or have fresh capital, not on the clock."
             )
-
-        # ── Holdings — full position table ───────────────────────────────────
-        # Home never had a persistent table of every position (only the live
-        # price-strip cards above and the transient cold-load snapshot) — this
-        # closes that gap. Day Δ% comes from the same `_live_prices` the price
-        # strip already populates (`fetch_live_prices`, cached in session_state
-        # at the top of this page); it is NOT a column on `port_df`, so a
-        # missing/stale quote renders "—" rather than a fabricated 0.00%.
-        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
-        st.subheader(f"💼 Holdings ({len(port_df)})")
-        _live_px  = st.session_state.get("_live_prices") or {}
-        _hold_rows = []
-        for _, _hr in port_df.iterrows():
-            _ht      = str(_hr["Ticker"])
-            _hlive   = _live_px.get(_ht, {})
-            _hday    = _hlive.get("change_pct")
-            _hprice  = _hlive.get("price", _hr["Price"])
-            _htotal  = _hr["P&L (%)"]
-            _hshares = _hr["Shares"]
-            _hval    = _hr["Market Value"]
-            _hweight = _hr["Weight (%)"]
-            _hshares_txt = _m(f"{_hshares:,.0f}")
-            _hval_txt    = _m(f"${_hval:,.0f}")
-            _hday_disp  = f"{_hday:+.2f}%" if _hday is not None else "—"
-            _hday_color = (_HOME_GAIN if _hday >= 0 else _HOME_LOSS) if _hday is not None else _HOME_CALM
-            _htot_color = _HOME_GAIN if _htotal >= 0 else _HOME_LOSS
-            _hold_rows.append(
-                f"<tr>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;font-weight:700'>{_ht}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hshares_txt}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>${_hprice:,.2f}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hval_txt}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_hday_color}'>{_hday_disp}</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right;color:{_htot_color}'>{_htotal:+.1f}%</td>"
-                f"<td style='padding:9px 14px;border-top:1px solid #1f2937;text-align:right'>{_hweight:.1f}%</td>"
-                f"</tr>"
-            )
-        st.markdown(
-            "<div style='overflow-x:auto'>"
-            "<table style=\"width:100%;border-collapse:collapse;background:#0f172a;"
-            "border:1px solid #334155;border-radius:12px;font-family:'JetBrains Mono',ui-monospace,monospace;"
-            "font-variant-numeric:tabular-nums;font-size:0.86rem\">"
-            "<thead><tr>"
-            + "".join(
-                f"<th style='text-align:{'left' if _lbl == 'Ticker' else 'right'};padding:10px 14px;"
-                f"font-family:Inter,system-ui,sans-serif;font-size:0.7rem;font-weight:700;"
-                f"letter-spacing:0.05em;text-transform:uppercase;color:#9ca3af;"
-                f"background:#111827;border-bottom:1px solid #334155'>{_lbl}</th>"
-                for _lbl in ("Ticker", "Shares", "Price", "Value", "Day Δ%", "Total Δ%", "Weight")
-            )
-            + "</tr></thead><tbody>"
-            + "".join(_hold_rows)
-            + "</tbody></table></div>",
-            unsafe_allow_html=True,
-        )
 
         # News Sentiment Shift — brief awareness cards for held positions
         _sentiment_brief = _cached_sentiment(",".join(sorted(held_tickers))) if held_tickers else {}
