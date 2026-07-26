@@ -995,14 +995,19 @@ def _render_simple_action_card(item: dict, urgent: bool = False) -> None:
         _color = _HOME_URGENT if (urgent or _is_crit) else _HOME_ELEVATED
         _label = str(item.get("action", "—"))
         text = item.get("directive") or item.get("why") or item.get("reason") or "—"
+    # Pill badge (icon + label) + ticker on its own bold line below, matching
+    # the approved Option-A mockup's card anatomy — not inline text.
     st.markdown(
-        f"<div style='background:#1c1917;border-left:3px solid {_color};"
-        f"border-radius:6px;padding:10px 14px;margin-bottom:8px'>"
-        f"<div style='color:#f9fafb;font-weight:600;font-size:0.88em'>"
-        f"{icon} <span style='color:{_color};font-weight:700'>{_label}</span>"
-        + (f" — <span style='color:#fbbf24'>{ticker}</span>" if ticker else "")
-        + f"</div>"
-        f"<div style='color:#e7e5e4;font-size:0.83em;margin-top:4px'>{text}</div>"
+        f"<div style='background:#15161a;border:1px solid rgba(255,255,255,0.10);"
+        f"border-left:3px solid {_color};border-radius:10px;padding:14px 16px;"
+        f"margin-bottom:14px;height:100%'>"
+        f"<span style='display:inline-flex;align-items:center;gap:6px;font-size:0.68rem;"
+        f"font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 10px;"
+        f"border-radius:20px;margin-bottom:10px;color:{_color};background:{_color}22'>"
+        f"{icon} {_label}</span>"
+        f"<div style='font-family:\"JetBrains Mono\",ui-monospace,monospace;font-weight:700;"
+        f"font-size:1.02rem;margin:4px 0;color:#f9fafb'>{ticker}</div>"
+        f"<div style='color:#c3c2b7;font-size:0.82rem;line-height:1.45'>{text}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -8264,8 +8269,13 @@ elif page == "🧾 Summary":
         if not _sm_act_bucket:
             st.success("Nothing to act on today.")
         else:
-            for _sm_item in _sm_act_bucket:
-                _render_simple_action_card(_sm_item, urgent=True)
+            # 3-column grid, matching the approved Option-A mockup — reused
+            # across rows when there are more than 3 items (Streamlit lets a
+            # column be written to more than once per rerun).
+            _sm_act_cols = st.columns(3)
+            for _sm_idx, _sm_item in enumerate(_sm_act_bucket):
+                with _sm_act_cols[_sm_idx % 3]:
+                    _render_simple_action_card(_sm_item, urgent=True)
 
     # ── Holdings — identical table to Home's (shared function, same output).
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
