@@ -23,6 +23,7 @@ from stock_analyzer.constants import (
     CONVICTION_FADED_SCORE,
     CONVICTION_LEGACY_TOP_N,
     BREAKEVEN_ANCHOR_DWELL_RATIO,
+    PREMATURE_EXIT_RATIO,
 )
 
 
@@ -378,4 +379,143 @@ def conviction_alignment(
         "orphan_convictions":       orphans,
         "accidental_overexposures": overexposed,
         "legacy_overhangs":         overhangs,
+    }
+
+
+# ── Sizing Alpha (O5, Agentic Intelligence Roadmap v2) ────────────────────────
+
+def sizing_alpha(closed_lots: pd.DataFrame, min_n: int) -> Optional[dict]:
+    """Does your own dollar-sizing track your own realized outcomes?
+
+    "Conviction at time of buy" is not reliably recorded anywhere in this app's
+    schema (verified during design: recommendations.conviction only covers
+    same-day engine surfacings; decision_context captures portfolio context,
+    not the traded ticker's own score) — so this uses the one thing that IS
+    reliably recorded for every trade: the dollar size actually committed.
+
+    Groups closed-lot fragments by their ORIGINATING BUY LOT
+    (ticker, buy_date, buy_price) — not by sell fragment — so a single large
+    position later scaled out in several pieces is sized and scored once, not
+    shredded into several small-dollar fragments that would bias the result.
+
+    Splits buy lots into dollar-size terciles via a rank-based split (robust to
+    many identically-sized buys, e.g. round-dollar purchases) and returns each
+    tercile's dollar-weighted average realized outcome. Descriptive only — never
+    a portfolio-%-adjusted figure (no point-in-time portfolio-value history
+    exists to normalize by) and never a forecast.
+
+    Returns None if fewer than 3 distinct buy-lot dollar sizes exist, or if any
+    tercile has fewer than min_n buy lots.
+
+    Return keys:
+        terciles — list of {label, n_lots, dollar_lo, dollar_hi, avg_pnl_pct},
+                   ordered Small -> Medium -> Large
+    """
+    if closed_lots is None or closed_lots.empty:
+        return None
+
+    valid = closed_lots.dropna(subset=["shares", "buy_price", "pnl_pct"])
+    valid = valid[(valid["shares"] > 0) & (valid["buy_price"] > 0)]
+    if valid.empty:
+        return None
+
+    df = valid.copy()
+    df["_frag_dollars"] = df["shares"] * df["buy_price"]
+
+    lots = []
+    for (ticker, buy_date, buy_price), grp in df.groupby(["ticker", "buy_date", "buy_price"]):
+        total_shares = float(grp["shares"].sum())
+        dollar_size = buy_price * total_shares
+        outcome = _weighted_avg(grp["pnl_pct"], grp["_frag_dollars"])
+        if outcome is None:
+            continue
+        lots.append({"dollar_size": dollar_size, "pnl_pct": outcome})
+
+    if len(lots) < 3:
+        return None
+
+    lots_df = pd.DataFrame(lots)
+    if lots_df["dollar_size"].nunique() < 3:
+        return None
+
+    ranks = lots_df["dollar_size"].rank(method="first")
+    try:
+        lots_df["_tercile"] = pd.qcut(ranks, 3, labels=["Small", "Medium", "Large"])
+    except ValueError:
+        return None
+
+    terciles = []
+    for label in ["Small", "Medium", "Large"]:
+        sub = lots_df[lots_df["_tercile"] == label]
+        if len(sub) < min_n:
+            return None
+        avg_pnl = _weighted_avg(sub["pnl_pct"], sub["dollar_size"])
+        terciles.append({
+            "label":      label,
+            "n_lots":     len(sub),
+            "dollar_lo":  round(float(sub["dollar_size"].min()), 0),
+            "dollar_hi":  round(float(sub["dollar_size"].max()), 0),
+            "avg_pnl_pct": round(avg_pnl, 2) if avg_pnl is not None else None,
+        })
+
+    return {"terciles": terciles}
+
+
+# ── Premature-Exit Cost (O6, Agentic Intelligence Roadmap v2) ─────────────────
+
+def premature_exit_cost(closed_lots: pd.DataFrame, min_n: int) -> Optional[dict]:
+    """Do winners sold quickly (relative to your OWN average winner-hold) realize
+    less gain than winners you held longer?
+
+    Never estimates a counterfactual dollar "cost" (that would require forecasting
+    a hypothetical later price — a fabrication risk this app forbids). Reports only
+    a real, already-realized comparison: share-weighted average pnl_pct for a
+    "quick exit" bucket (held < PREMATURE_EXIT_RATIO x your own average winner
+    hold) vs. a "patient" bucket (the rest).
+
+    Filters on is_gain == True AND a non-null pnl_pct explicitly — is_gain alone
+    is insufficient, since build_closed_lots's `is_gain = (pnl_abs or 0.0) >= 0`
+    evaluates True when pnl_abs is None (missing price data).
+
+    Computes its own average-winner-hold rather than reusing disposition_effect()'s
+    return, since that function requires BOTH a populated winner AND loser group
+    to return anything — it would silently withhold winner_avg_days whenever losers
+    are thin, even with plenty of winners.
+
+    Returns None if either bucket has fewer than min_n lots, or if closed_lots is
+    empty/has no valid winners.
+
+    Return keys:
+        avg_winner_days — the computed split-point (share-weighted mean)
+        quick  — {n_lots, avg_pnl_pct}
+        patient — {n_lots, avg_pnl_pct}
+    """
+    if closed_lots is None or closed_lots.empty:
+        return None
+
+    valid = closed_lots.dropna(subset=["pnl_pct", "days_held", "shares", "pnl_abs"])
+    winners = valid[valid["is_gain"].astype(bool)]
+    if winners.empty:
+        return None
+
+    avg_winner_days = _weighted_avg(winners["days_held"], winners["shares"])
+    if avg_winner_days is None or avg_winner_days <= 0:
+        return None
+
+    split_point = PREMATURE_EXIT_RATIO * avg_winner_days
+    quick   = winners[winners["days_held"] <  split_point]
+    patient = winners[winners["days_held"] >= split_point]
+
+    if len(quick) < min_n or len(patient) < min_n:
+        return None
+
+    quick_avg   = _weighted_avg(quick["pnl_pct"],   quick["shares"])
+    patient_avg = _weighted_avg(patient["pnl_pct"], patient["shares"])
+    if quick_avg is None or patient_avg is None:
+        return None
+
+    return {
+        "avg_winner_days": round(avg_winner_days, 1),
+        "quick":   {"n_lots": len(quick),   "avg_pnl_pct": round(quick_avg, 2)},
+        "patient": {"n_lots": len(patient), "avg_pnl_pct": round(patient_avg, 2)},
     }

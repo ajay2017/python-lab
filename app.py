@@ -104,6 +104,8 @@ from stock_analyzer.constants import (
     FUNDAMENTALS_CACHE_MAX_AGE_DAYS,
     RR_ENTRY_MIN,
     WATCHLIST_STALE_DAYS,
+    PREMATURE_EXIT_RATIO,
+    PREMATURE_EXIT_MIN_LOTS,
     CATALYST_WATCH_WINDOW_DAYS,
     GROW_CANDIDATE_POOL,
     REFRESH_COOLDOWN_SEC,
@@ -28982,6 +28984,51 @@ elif page == "🎯 My Edge":
                         "purchase price rather than the thesis."
                     )
 
+            # Card D — Premature-Exit Cost (O6, Agentic Intelligence Roadmap v2)
+            with st.container(border=True):
+                st.markdown("**⏱️ Premature-Exit Cost**")
+                _mi_pec = _im.premature_exit_cost(
+                    _mi_lots, min_n=PREMATURE_EXIT_MIN_LOTS
+                )
+                if _mi_pec is None:
+                    st.caption(
+                        f"Insufficient data — need ≥ {PREMATURE_EXIT_MIN_LOTS} winning "
+                        "lots in each of the quick-exit and patient groups."
+                    )
+                else:
+                    _mi_pec_gap = (
+                        _mi_pec["patient"]["avg_pnl_pct"] - _mi_pec["quick"]["avg_pnl_pct"]
+                    )
+                    st.metric(
+                        "Quick-exit winners vs. patient winners",
+                        f"{_mi_pec['quick']['avg_pnl_pct']:+.1f}% vs {_mi_pec['patient']['avg_pnl_pct']:+.1f}%",
+                        help=(
+                            f"Your own average (mean, not median) winner-hold is "
+                            f"{_mi_pec['avg_winner_days']:.0f} days — a long tail of "
+                            "multi-year holds can pull this above the typical hold. "
+                            f"\"Quick exit\" = held < {PREMATURE_EXIT_RATIO:.0%} of that average."
+                        ),
+                    )
+                    st.caption(
+                        f"n = {_mi_pec['quick']['n_lots']} quick-exit lots · "
+                        f"{_mi_pec['patient']['n_lots']} patient lots. Real, already-realized "
+                        "gains — never a forecast of what a quick exit \"would have\" made. "
+                        "Some quick exits are deliberate risk management, not impulsiveness — "
+                        "this is an observed pattern, not a verdict. A single sell can span "
+                        "both buckets when it drew from lots bought at different times."
+                    )
+                    if _mi_pec_gap > 0:
+                        st.caption(
+                            f"Patient winners averaged {_mi_pec_gap:.1f} percentage points "
+                            "more gain than quick-exit winners, in your own trade history."
+                        )
+                    else:
+                        st.caption(
+                            f"Quick-exit winners averaged {abs(_mi_pec_gap):.1f} percentage "
+                            "points as much or more gain than patient winners — no evidence "
+                            "of a premature-exit pattern in your own trade history."
+                        )
+
         st.caption(
             "**Methodology:** Conviction Alignment uses today's composite scores "
             "(historical scores are not stored). Behavioral bias cards use "
@@ -28989,5 +29036,64 @@ elif page == "🎯 My Edge":
             f"Anchoring flag threshold: {BREAKEVEN_ANCHOR_DWELL_RATIO:.0%} above adjacent "
             "loss-bracket mean."
         )
+
+        # ── Section 3 — Sizing Alpha (O5, Agentic Intelligence Roadmap v2) ───
+        st.markdown("---")
+        st.markdown("### 📏 Sizing Alpha")
+        st.caption(
+            "Does your own dollar-sizing track your own realized outcomes? "
+            "\"Conviction at the time of a specific buy\" isn't reliably recorded "
+            "anywhere in this app, so this uses the one thing that IS recorded for "
+            "every trade — the dollar amount actually committed — split into "
+            "Small/Medium/Large terciles of your own historical range (not a fixed "
+            "dollar threshold). **Shown in absolute dollars, not adjusted for "
+            "portfolio growth over your account's history** — a $5,000 bet early on "
+            "may have been a much bigger relative commitment than $5,000 today."
+        )
+
+        _mi_sizing = _im.sizing_alpha(_mi_lots, min_n=INVESTOR_MIRROR_MIN_CLOSED_LOTS)
+        if _mi_sizing is None:
+            st.caption(
+                f"Insufficient data — need ≥ {INVESTOR_MIRROR_MIN_CLOSED_LOTS} closed "
+                "buy lots in each of the Small/Medium/Large dollar terciles."
+            )
+        else:
+            _mi_sz_cols = st.columns(3)
+            for _mi_sz_i, _mi_sz_t in enumerate(_mi_sizing["terciles"]):
+                _mi_sz_cols[_mi_sz_i].metric(
+                    f"{_mi_sz_t['label']} (n={_mi_sz_t['n_lots']})",
+                    f"{_mi_sz_t['avg_pnl_pct']:+.1f}%",
+                    help=(
+                        f"${_mi_sz_t['dollar_lo']:,.0f}–${_mi_sz_t['dollar_hi']:,.0f} "
+                        "per buy lot, dollar-weighted average realized gain."
+                    ),
+                )
+            _mi_sz_large  = _mi_sizing["terciles"][2]["avg_pnl_pct"]
+            _mi_sz_medium = _mi_sizing["terciles"][1]["avg_pnl_pct"]
+            _mi_sz_small  = _mi_sizing["terciles"][0]["avg_pnl_pct"]
+            _mi_sz_mid_note = (
+                "Your Medium tercile sat between the two."
+                if min(_mi_sz_small, _mi_sz_large) < _mi_sz_medium < max(_mi_sz_small, _mi_sz_large)
+                else "Your Medium tercile didn't sit between the two — not a clean gradient."
+            )
+            if _mi_sz_large > _mi_sz_small:
+                st.caption(
+                    f"Your largest bets averaged {_mi_sz_large - _mi_sz_small:.1f} "
+                    "percentage points more gain than your smallest — descriptive "
+                    f"context, not a rule to size up next time. {_mi_sz_mid_note}"
+                )
+            else:
+                st.caption(
+                    f"Your smallest bets averaged {_mi_sz_small - _mi_sz_large:.1f} "
+                    "percentage points as much or more gain than your largest — "
+                    f"sizing hasn't tracked outcome in your own trade history so far. {_mi_sz_mid_note}"
+                )
+            st.caption(
+                "Sized by the ORIGINATING buy lot (not by sell fragment), so a large "
+                "position later sold in pieces is counted once, at its full size. "
+                "Some large bets are deliberate high-conviction calls that simply "
+                "didn't work out; some small bets are toe-in-the-water buys that ran — "
+                "a handful of trades doesn't prove a durable skill either way."
+            )
 
 st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")

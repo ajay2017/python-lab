@@ -863,6 +863,10 @@ CONVICTION_WEAK_SCORE           = 50    # Accidental Overexposure: Score below t
 CONVICTION_FADED_SCORE          = 60    # Legacy Overhang: top-N position with Score below this → fading conviction
 CONVICTION_LEGACY_TOP_N         = 3     # how many largest-weight positions to inspect for legacy overhang
 BREAKEVEN_ANCHOR_DWELL_RATIO    = 1.3   # anchoring flag if -2–0% bracket avg_days ≥ this × adjacent-loss-brackets mean
+# Premature-Exit Cost (O6, Agentic Intelligence Roadmap v2, 2026-07-26) — sizing_alpha
+# (O5) reuses INVESTOR_MIRROR_MIN_CLOSED_LOTS above, no new constant needed there.
+PREMATURE_EXIT_RATIO            = 0.5   # winner held < this × own avg winner-hold days → "quick exit" bucket
+PREMATURE_EXIT_MIN_LOTS         = 5     # min winning lots per quick/patient bucket — feature-specific, NOT INVESTOR_MIRROR_MIN_CLOSED_LOTS (that floor is sized for a larger, non-winners-only population; reusing it here would likely leave the card permanently dark)
 
 # ── Thesis Red Team Agent ─────────────────────────────────────────────────────
 # Awareness-only adversarial layer: never modifies composite score, gate
