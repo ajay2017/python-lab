@@ -187,6 +187,41 @@ def reconcile_signals(
     }
 
 
+def effective_verdict_bucket(xref: dict) -> str:
+    """Resolve a buy-candidate's display bucket ('confirmed' | 'unverified' |
+    'conflicted') the SAME way its own card renders — preferring
+    verdict_reconciled (reconcile_signals' output) over the legacy `verdict`
+    field on daily_briefing._cross_reference()'s xref dict, falling back to
+    the legacy field only when reconciled isn't present.
+
+    Both fields ship on every xref, and app.py's candidate cards already
+    prefer verdict_reconciled for their own color/label/one-liner. A summary
+    count computed from the legacy field alone can disagree with what the
+    cards right below it show (e.g. a held position whose composite agrees
+    with momentum shows "reconciled: go" on its own card, but an analyst-
+    revisions downgrade — a signal reconcile_signals never sees — trips the
+    legacy verdict to "mixed"). Route every bucket TALLY through this
+    function so it can never drift from what the cards actually display.
+    See memory `project_verdict_divergence`.
+    """
+    reconciled = (xref or {}).get("verdict_reconciled") or {}
+    rv = reconciled.get("verdict")
+    if rv == "go":
+        return "confirmed"
+    if rv == "verify":
+        return "unverified"
+    if rv in ("caution", "skip"):
+        return "conflicted"
+
+    # No reconciled verdict on this xref — fall back to the legacy field.
+    lv = (xref or {}).get("verdict")
+    if lv == "confirmed":
+        return "confirmed"
+    if lv in ("conflicted", "caution", "mixed"):
+        return "conflicted"
+    return "unverified"
+
+
 def classify_composite_direction(composite_signal: str | None, composite_score: float | None) -> str:
     """
     Public wrapper around _composite_class() for callers outside this module that

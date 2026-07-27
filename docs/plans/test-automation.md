@@ -9,8 +9,8 @@
 tests). Batch 6 (`signal_reconciliation.py` + `daily_briefing._cross_reference()`)
 added 2026-07-27, same session, at the user's request to cover the
 "informational labeling" candidate too. **Surfaced a real, currently-shipping
-finding while writing it — see Batch 6 below.** 180 tests total, all passing
-locally in `.venv` (Python 3.14.6).
+finding while writing it, then FIXED same session (185 tests after the fix's
+own 5 new tests) — see Batch 6 below.**
 
 ## Why
 
@@ -171,9 +171,14 @@ functions first.
    = `"go"` (reconcile_signals never sees revisions at all). A user could see
    a card sorted/colored as "Mixed" while its prominent one-liner reads "Go —
    All Signals Agree" — a real, currently-shipping inconsistency, not a test
-   artifact. **Not fixed here** — flagged for the user to decide whether/how
-   to reconcile (e.g. teach `reconcile_signals()` about revisions, or drop the
-   legacy `verdict` field in favor of `verdict_reconciled` everywhere).
+   artifact. **FIXED same session, narrowly scoped, Opus-reviewed (SHIP, 0
+   blocking):** new `signal_reconciliation.effective_verdict_bucket()` resolves
+   the bucket the same way the cards already render; the "More Buy Candidates"
+   header count (the one place confirmed to have a live header-vs-card
+   contradiction) now calls it instead of reading the legacy field directly.
+   `_buy_candidates`'s sort order and the historical Predictive Analytics tab
+   were deliberately left untouched — see memory `project_verdict_divergence`
+   for the full writeup and `docs/shipped-log.md` for the commit.
 
 ## Explicitly out of scope
 
@@ -187,6 +192,6 @@ functions first.
 
 ## What's next (not part of this plan, noted for a future session)
 
-All 6 batches shipped, 180 tests. No further candidates are currently queued.
-The one open item is the Batch 6 finding above (legacy vs. reconciled verdict
-divergence) — a product/architecture decision for the user, not a testing gap.
+All 6 batches shipped, 185 tests. No further candidates are currently queued.
+The Batch 6 finding (legacy vs. reconciled verdict divergence) has been fixed
+(see Batch 6 above) — nothing open remains from this initiative.

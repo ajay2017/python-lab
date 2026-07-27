@@ -18,6 +18,7 @@ from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_HOLD
 from stock_analyzer.signal_reconciliation import (
     classify_composite_direction,
     classify_signal_change,
+    effective_verdict_bucket,
     lookup_composite,
     reconcile_signals,
 )
@@ -185,3 +186,42 @@ def test_classify_signal_change_improved():
 def test_classify_signal_change_neither_when_signal_unchanged_direction():
     assert classify_signal_change("Hold", "Hold") == {"degraded": False, "improved": False}
     assert classify_signal_change("Buy", "Strong Buy") == {"degraded": False, "improved": False}
+
+
+# ── effective_verdict_bucket ──────────────────────────────────────────────────
+#
+# Closes the daily_briefing._cross_reference() divergence documented in memory
+# project_verdict_divergence: a summary count built from the raw legacy xref
+# `verdict` field could disagree with the reconciled color/label/one-liner
+# each candidate's own card renders. Every caller that TALLIES candidates by
+# confidence must route through this function instead of reading `verdict`
+# directly, so the count can never drift from what the cards show.
+
+def test_effective_bucket_prefers_reconciled_go_over_legacy_mixed():
+    # The exact divergence case: legacy says "mixed" (an analyst-revisions
+    # conflict reconcile_signals never sees), but reconciled says "go".
+    xref = {"verdict": "mixed", "verdict_reconciled": {"verdict": "go"}}
+    assert effective_verdict_bucket(xref) == "confirmed"
+
+
+def test_effective_bucket_reconciled_verify_maps_to_unverified():
+    xref = {"verdict": "confirmed", "verdict_reconciled": {"verdict": "verify"}}
+    assert effective_verdict_bucket(xref) == "unverified"
+
+
+def test_effective_bucket_reconciled_caution_and_skip_map_to_conflicted():
+    assert effective_verdict_bucket({"verdict_reconciled": {"verdict": "caution"}}) == "conflicted"
+    assert effective_verdict_bucket({"verdict_reconciled": {"verdict": "skip"}}) == "conflicted"
+
+
+def test_effective_bucket_falls_back_to_legacy_when_reconciled_missing():
+    assert effective_verdict_bucket({"verdict": "confirmed"}) == "confirmed"
+    assert effective_verdict_bucket({"verdict": "unverified"}) == "unverified"
+    assert effective_verdict_bucket({"verdict": "conflicted"}) == "conflicted"
+    assert effective_verdict_bucket({"verdict": "caution"}) == "conflicted"
+    assert effective_verdict_bucket({"verdict": "mixed"}) == "conflicted"
+
+
+def test_effective_bucket_defaults_to_unverified_on_empty_xref():
+    assert effective_verdict_bucket({}) == "unverified"
+    assert effective_verdict_bucket(None) == "unverified"  # type: ignore[arg-type]  -- exercises the function's own None guard

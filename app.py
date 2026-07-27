@@ -211,7 +211,7 @@ from stock_analyzer.trade_review import (
     cumulative_pnl_series, rolling_win_rate,
     position_size_discipline, sector_mix,
 )
-from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite, classify_signal_change, classify_composite_direction
+from stock_analyzer.signal_reconciliation import reconcile_signals, lookup_composite, classify_signal_change, classify_composite_direction, effective_verdict_bucket
 from stock_analyzer.comparison import build_comparison
 from stock_analyzer.premarket import build_premarket_brief, is_premarket
 from stock_analyzer.premarket_stance import (
@@ -7469,9 +7469,14 @@ if page == "🏠 Home":
             if str(b.get("ticker", "")).upper() not in _grow_shown
         ]
 
-        _db_confirmed   = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "confirmed")
-        _db_unverified  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") == "unverified")
-        _db_conflicted  = sum(1 for b in _db_buys_unique if b.get("xref", {}).get("verdict") in ("conflicted", "caution", "mixed"))
+        # Bucket via effective_verdict_bucket() — NOT the raw legacy xref["verdict"]
+        # — so this header count can never disagree with what each candidate's own
+        # card renders two lines below (which already prefers verdict_reconciled).
+        # See memory project_verdict_divergence for the concrete case this closes.
+        _db_buckets     = [effective_verdict_bucket(b.get("xref", {})) for b in _db_buys_unique]
+        _db_confirmed   = _db_buckets.count("confirmed")
+        _db_unverified  = _db_buckets.count("unverified")
+        _db_conflicted  = _db_buckets.count("conflicted")
         _db_c2_label    = f"🟢 More Buy Candidates ({len(_db_buys_unique)})"
         _db_c2_parts    = []
         if _db_confirmed:  _db_c2_parts.append(f"✅ {_db_confirmed} confirmed")
