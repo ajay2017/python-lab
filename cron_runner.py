@@ -745,7 +745,7 @@ def _run_debrief(now_et, force: bool) -> int:
     email_to   = os.environ.get("ALERT_EMAIL_TO", "").strip()
     email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
     if resend_key and email_to and email_from:
-        html    = _notify.render_debrief_email(result)
+        html    = _notify.render_debrief_email(result, week_had_trades=package.get("week_had_trades", False))
         subject = f"DRISHTA Weekly Debrief — week of {result['week_ending']}"
         ok, detail = _notify.send_email_resend(
             api_key=resend_key, sender=email_from, to=email_to,

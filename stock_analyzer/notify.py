@@ -579,8 +579,14 @@ def _email_section(title: str, content: str, section_colours: dict) -> str:
     )
 
 
-def render_debrief_email(debrief: dict) -> str:
-    """Render the weekly portfolio debrief as a professional HTML email (light-mode-first)."""
+def render_debrief_email(debrief: dict, week_had_trades: bool = False) -> str:
+    """Render the weekly portfolio debrief as a professional HTML email (light-mode-first).
+
+    week_had_trades: True when a BUY/SELL landed inside the joined week — the
+    equity-value tiles then reflect position-size changes as well as price
+    moves, not price performance alone (same class of caveat as the Summary
+    page's Alpha vs SPY tile, added 2026-07-26).
+    """
 
     week_ending  = debrief.get("week_ending", "—")
     generated_at = str(debrief.get("generated_at", ""))[:10]
@@ -625,6 +631,15 @@ def render_debrief_email(debrief: dict) -> str:
             "Different from Account page&#8202;'s all-time money-weighted return."
             "</p>"
         )
+        if week_had_trades:
+            perf_block += (
+                "<p style='font-size:0.75em;color:#b45309;background:#fffbeb;"
+                "border:1px solid #fde68a;border-radius:6px;padding:8px 12px;"
+                "margin:0 0 20px;text-align:center'>"
+                "⚠️ Trades occurred this week — these figures reflect position-size "
+                "changes as well as price moves, not price performance alone."
+                "</p>"
+            )
 
     # Section accent colours (left-border strip)
     _SECTION_COLOURS = {
