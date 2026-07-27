@@ -4559,6 +4559,56 @@ if page == "🏠 Home":
     # Overlay covers the full synthesis (data load + brief build). Clear here
     # so content appears in one shot rather than progressively after load_all.
     _load_slot.empty()
+
+    # ── Structural alert banner — AWARENESS ONLY, never gates ────────────────
+    # Diffs today's live correlation_clusters() against the most recent
+    # structural_scan_cache snapshot ON OR BEFORE today (db.
+    # load_structural_scan_baseline() -- "on or before", not strictly "prior",
+    # so the banner self-clears once today's own scan has been generated/
+    # reviewed). Zero new data fetches, zero new LLM calls -- corr_df is
+    # already computed above by the synthesis block; this is a pure-Python
+    # diff. Placed HERE (after the hit/miss synthesis converges), not next to
+    # the earlier Day Shock banner, because corr_df/_corr_df_cache aren't
+    # freshly published for THIS render until the synthesis block above
+    # finishes — placing it earlier would read last render's stale value.
+    # Full design + 3-round Opus review: docs/plans/structural-scanner-phase2.md.
+    if corr_df is not None and not corr_df.empty:
+        _struct_alert_weights = dict(zip(port_df["Ticker"], port_df["Weight (%)"]))
+        _struct_alert_clusters_today = portfolio_intelligence.correlation_clusters(
+            corr_df, _struct_alert_weights
+        )
+        _struct_alert_baseline = db.load_structural_scan_baseline(str(_today_et()))
+        _struct_alert_baseline_snapshot = (
+            _struct_alert_baseline.get("cluster_snapshot") if _struct_alert_baseline else None
+        )
+        _struct_alert_new_clusters = structural_scanner.detect_new_clusters(
+            _struct_alert_clusters_today, _struct_alert_baseline_snapshot, corr_df
+        )
+    else:
+        _struct_alert_baseline = None
+        _struct_alert_new_clusters = None  # offline -- distinct from "[] checked, found nothing"
+
+    st.session_state["_structural_alert_cache"] = _struct_alert_new_clusters
+
+    if _struct_alert_new_clusters:
+        _struct_alert_baseline_date = _struct_alert_baseline.get("scan_date")
+        st.warning(
+            f"🧬 **Structural alert — {len(_struct_alert_new_clusters)} new correlation "
+            f"cluster{'s' if len(_struct_alert_new_clusters) != 1 else ''} formed since your "
+            f"last Structural Scan ({_struct_alert_baseline_date})**  \n"
+            "Awareness only — composite scores and gates are unaffected. "
+            "See 🧩 Intelligence → 🧬 Structural Scan for the full picture."
+        )
+        for _struct_alert_c in _struct_alert_new_clusters:
+            _struct_alert_pairs_str = ", ".join(
+                f"{a}-{b}" for a, b in _struct_alert_c["new_pairs"]
+            )
+            st.caption(
+                f"**{', '.join(_struct_alert_c['tickers'])}** ({_struct_alert_c['tier']}, "
+                f"{_struct_alert_c['combined_weight_pct']:.1f}% combined weight) — "
+                f"new pairing: {_struct_alert_pairs_str}"
+            )
+
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
         e for e in _macro_events
@@ -24984,7 +25034,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
 - **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, a **"🧭 Elsewhere in DRISHTA"** section with a **🩺 Thesis Review** pointer (how many held names' thesis review needs attention, linking to 🧠 AI Insights — never a second independent verdict) and a **🔔 Catalyst Watch** pointer (how many holdings report earnings within the week, linking to 🔔 Catalyst Watch), and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.

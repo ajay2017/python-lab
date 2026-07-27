@@ -2776,6 +2776,39 @@ def save_structural_scan_cache(scan_date, narrative, blast_radius, cluster_snaps
         pass
 
 
+def load_structural_scan_baseline(as_of_date: str) -> dict | None:
+    """Return the most recent structural_scan_cache row with scan_date <=
+    as_of_date, or None (no scan has ever run, table absent, or DB offline).
+
+    Deliberately <=, not < -- once today's own narrative has been generated,
+    today's own snapshot IS the correct comparison baseline (comparing live
+    clusters against themselves correctly yields zero new pairs, clearing the
+    Home "Structural alert" banner for the day). Using strict < would keep
+    comparing against a stale prior day even after the user has reviewed
+    today's scan. See docs/plans/structural-scanner-phase2.md.
+
+    Only cluster_snapshot + scan_date are needed by Phase 2 -- narrative and
+    the other JSONB columns from that historical row are not read here.
+    Never raises.
+    """
+    if not as_of_date or not has_db():
+        return None
+    try:
+        rows = (
+            _client()
+            .table("structural_scan_cache")
+            .select("scan_date,cluster_snapshot")
+            .lte("scan_date", as_of_date)
+            .order("scan_date", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 # ── Regime-Aware Adversarial Stress Testing — daily portfolio-level cache ───
 # Persists the compound scenario narrative + indicator watchlist for one ET
 # calendar day. ONE row per scan_date (no ticker key — portfolio-wide

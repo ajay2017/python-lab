@@ -16,6 +16,8 @@ Design principles (mirrors debate_agent.py):
   contribute a cascade — no new correlation cutoff invented here.
 """
 
+from itertools import combinations
+
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, LLM_REQUEST_TIMEOUT_SEC
 
 # ── Module-level defaults (what-if scenario inputs, NOT investment-policy
@@ -266,3 +268,76 @@ def generate_structural_narrative(evidence: dict, api_key: str,
         return text or None
     except Exception:
         return None
+
+
+# ── Phase 2: newly-formed cluster detection (Home "Structural alert" banner) ─
+
+def detect_new_clusters(today_clusters, prior_cluster_snapshot, corr_df,
+                         threshold=CORR_HIGH_PAIRS_THRESHOLD):
+    """
+    Compare today's live correlation_clusters() output against the most
+    recent structural_scan_cache snapshot's cluster_snapshot (see
+    db.load_structural_scan_baseline() -- "most recent scan on or before
+    today", not strictly "prior"). Returns the subset of today's clusters
+    containing at least one ticker PAIR that (a) was NOT already co-clustered
+    in the baseline snapshot and (b) IS a direct positive edge today
+    (corr_df.loc[a,b] >= threshold, SIGNED not abs() -- matches
+    correlation_clusters()'s own edge condition, portfolio_intelligence.py:78)
+    -- pair-level comparison restricted to verifiable direct positive edges,
+    so a cluster losing a member (decorrelation) is never flagged, an
+    anti-correlated transitive pair is never cited as if it were a real
+    co-movement pairing, and a pair that only co-occurs transitively (never
+    itself directly correlated >= threshold) is never cited as if it were.
+
+    prior_cluster_snapshot: the "cluster_snapshot" field of the row returned
+    by db.load_structural_scan_baseline() -- or None if NO scan has ever been
+    generated (returns [] in that case; a first-ever comparison with nothing
+    to diff against is not "everything is new"). An empty list [] (a real
+    scan ran and found zero clusters that day) is a DIFFERENT, meaningful
+    state and is NOT treated the same as None -- every one of today's real
+    clusters then flags as new, the cleanest possible new-formation signal.
+
+    Returns a list of dicts, each a copy of the matching today_clusters entry
+    plus one new key:
+        "new_pairs": [[tickerA, tickerB], ...]  -- the specific, verified-
+                     direct-positive-edge pair(s) driving the "new" flag,
+                     sorted, for citation in the banner (never a bare "new
+                     cluster" claim with no basis, and never citing an
+                     unverified or anti-correlated pair).
+    Never raises -- degrades to [] on any missing/malformed input.
+    """
+    try:
+        if prior_cluster_snapshot is None or not today_clusters:
+            return []
+        if corr_df is None or getattr(corr_df, "empty", True):
+            return []
+
+        prior_pairs = set()
+        for c in prior_cluster_snapshot:
+            members = sorted(c.get("tickers") or [])
+            for a, b in combinations(members, 2):
+                prior_pairs.add(frozenset((a, b)))
+
+        flagged = []
+        for c in today_clusters:
+            members = sorted(c.get("tickers") or [])
+            new_pairs = []
+            for a, b in combinations(members, 2):
+                if frozenset((a, b)) in prior_pairs:
+                    continue  # already co-clustered as of the baseline
+                if a not in corr_df.index or b not in corr_df.columns:
+                    continue
+                try:
+                    corr_ab = float(corr_df.loc[a, b])
+                except Exception:
+                    continue
+                if corr_ab != corr_ab:  # NaN
+                    continue
+                if corr_ab >= threshold:  # SIGNED, not abs()
+                    new_pairs.append(sorted((a, b)))
+            if new_pairs:
+                flagged.append({**c, "new_pairs": new_pairs})
+
+        return flagged
+    except Exception:
+        return []
