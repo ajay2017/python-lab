@@ -152,7 +152,9 @@ from stock_analyzer.tax_advisor import (
 )
 from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
-from stock_analyzer.thesis_red_team import compute_erosion_score
+from stock_analyzer.thesis_red_team import (
+    compute_erosion_score, build_counter_evidence_inputs, generate_counter_evidence,
+)
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
     split_defensive, reduce_call_items,
@@ -6810,6 +6812,23 @@ if page == "🏠 Home":
                             else:
                                 st.warning("Debate could not complete — API unavailable or rate-limited. Session slot not consumed.")
                             st.rerun()
+
+                # ── Thesis Red Team Phase 2 — read-only bear-case expander ──
+                # Pure cache read, NO compute triggered from this site (the
+                # sole compute/Haiku-call site is the Red Team tab loop under
+                # 🧠 AI Insights). Does NOT show the erosion score chip — the
+                # score is partially derived from the same tier that fired
+                # this card, so showing it here would be circular. Same
+                # `kind` gate as Challenge This Exit above. See
+                # docs/plans/thesis-red-team-phase2.md, Surface 2.
+                if _db_item.get("kind") in ("deterioration_trim", "deterioration_exit"):
+                    _rt_card_cached = db.load_thesis_erosion_cache(_db_ticker, str(_today_et()))
+                    _rt_card_ce = (_rt_card_cached or {}).get("counter_evidence")
+                    if _rt_card_ce is not None and _rt_card_ce:   # non-None, non-empty only
+                        with st.expander("⚠️ Red Team — since you bought"):
+                            for _ce in _rt_card_ce:
+                                _sev_icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}.get(_ce.get("severity"), "🟡")
+                                st.markdown(f"- {_sev_icon} {_ce['claim']}  \n  *({_ce['signal_basis']})*")
 
             # ── Rebalance plan (Hard-Cap-Breach / sector-concentration cards) ──
             # Completes the trim→redeploy loop that the copy promises but the
@@ -25028,7 +25047,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A written bear-case narrative (Phase 2) will be added once the quantitative score has been validated in production for one week. **Strictly display-only: the erosion score never feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, a written **bear case** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it. If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the bear case explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same bear case also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. **Strictly display-only: neither the score nor the bear case ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
@@ -25416,6 +25435,12 @@ elif page == "🧠 AI Insights":
     # Build thesis lookup: ticker → most recent BUY with a thesis
     _thesis_by_ticker: dict = {}
     _trade_date_by_ticker: dict = {}
+    # Thesis Red Team Phase 2: same-row premortem commitment + the truly-most-
+    # recent BUY's entry price (may be a DIFFERENT row than the thesis one if
+    # the most recent BUY itself lacks a thesis — deliberate, pre-existing
+    # distinction, see docs/plans/thesis-red-team-phase2.md).
+    _premortem_by_ticker: dict = {}
+    _entry_price_by_ticker: dict = {}
     if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
         _tdf = st.session_state.trades_df
         if "user_thesis" in _tdf.columns:
@@ -25423,11 +25448,15 @@ elif page == "🧠 AI Insights":
             for _, _brow in _buys.iterrows():
                 _bt = str(_brow["ticker"]).upper()
                 if _bt not in _trade_date_by_ticker:
-                    _trade_date_by_ticker[_bt] = str(_brow.get("traded_at", ""))[:10]
+                    _trade_date_by_ticker[_bt]  = str(_brow.get("traded_at", ""))[:10]
+                    _entry_price_by_ticker[_bt] = _brow.get("price")
                 if _bt not in _thesis_by_ticker:
                     _th = _brow.get("user_thesis")
                     if _th and str(_th).strip():
                         _thesis_by_ticker[_bt] = str(_th).strip()
+                        _pm = _brow.get("premortem_commitment")
+                        if _pm and str(_pm).strip():
+                            _premortem_by_ticker[_bt] = str(_pm).strip()
 
     # All open positions
     _open_tickers = set()
@@ -27441,11 +27470,15 @@ elif page == "🧠 AI Insights":
                         st.markdown(f"🔴 **{r['ticker']}** {r['ret_pct']:+.1f}% ({_sc_d} · {r['window']})")
 
     with _ai_tab_rt:
-        # ── Thesis Red Team — Phase 1: quantitative erosion score ──────────────
-        # Strictly additive: erosion score never modifies composite score, gate
-        # decisions, or any recommendation. Refreshes once per trading day via
-        # the thesis_erosion_cache table (ticker × ET date). Haiku counter-evidence
-        # is Phase 2 — not wired here. See docs/plans/thesis-red-team-agent.md.
+        # ── Thesis Red Team — Phase 1 (erosion score) + Phase 2 (Haiku bear
+        # case + Pre-Mortem loop) ───────────────────────────────────────────
+        # Strictly additive: neither the score nor the narrative ever modify
+        # the composite score, gate decisions, or any recommendation.
+        # Refreshes once per trading day via the thesis_erosion_cache table
+        # (ticker × ET date). See docs/plans/thesis-red-team-agent.md (Phase 1)
+        # and docs/plans/thesis-red-team-phase2.md (Phase 2, 6 review rounds).
+        import math
+        from stock_analyzer.constants import THESIS_EROSION_HAIKU_MIN
         st.markdown(
             "**Thesis Red Team** — daily adversarial review of your held theses. "
             "Refreshes once per trading day. Never affects scores or recommendations."
@@ -27532,7 +27565,8 @@ elif page == "🧠 AI Insights":
                 _rt_comp_today = float(_rt_score_map.get(_rt_ticker, 0.0))
 
                 # 5-session-ago composite from own cache (inert for first 5 trading days)
-                _rt_comp_lag = 0.0
+                _rt_comp_lag       = 0.0
+                _rt_comp_lag_found = False
                 for _rt_lag in range(5, 12):
                     _rt_lag_date = str(_today_et() - timedelta(days=_rt_lag))
                     _rt_lag_row  = db.load_thesis_erosion_cache(_rt_ticker, _rt_lag_date)
@@ -27540,6 +27574,7 @@ elif page == "🧠 AI Insights":
                         _rt_snap = _rt_lag_row.get("signals_snapshot") or {}
                         if isinstance(_rt_snap, dict) and _rt_snap.get("composite_today") is not None:
                             _rt_comp_lag = float(_rt_snap["composite_today"])
+                            _rt_comp_lag_found = True
                             break
                 _rt_comp_delta = _rt_comp_today - _rt_comp_lag  # positive = rising (good)
 
@@ -27560,6 +27595,47 @@ elif page == "🧠 AI Insights":
                     "pt_pts":          _rt_pt_pts,
                 }
 
+                # 4b. Phase 2 — Haiku counter-evidence (only on cache-miss, same
+                # branch as the score compute above). Every value handed to the
+                # prompt is None-safe AND finite-safe (NaN/inf coerced to None
+                # here) — see docs/plans/thesis-red-team-phase2.md's Round 4/5
+                # fixes for why each of these four needs this, not just a
+                # `is None` check.
+                _rt_thesis_text    = _thesis_by_ticker.get(_rt_ticker)
+                _rt_premortem_text = _premortem_by_ticker.get(_rt_ticker)
+                _rt_entry_price    = _entry_price_by_ticker.get(_rt_ticker)
+                _rt_trade_date     = _trade_date_by_ticker.get(_rt_ticker)
+                _rt_counter_evidence = None   # None until a call is actually attempted
+                if _rt_erosion["score"] >= THESIS_EROSION_HAIKU_MIN and _rt_thesis_text:
+                    _rt_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
+                    try:
+                        _rt_age_days = (_today_et() - date.fromisoformat(_rt_trade_date)).days
+                    except (ValueError, TypeError):
+                        _rt_age_days = None
+
+                    _rt_live_price = float(_rt_tk_close.iloc[-1]) if not _rt_tk_close.empty else None
+                    if _rt_live_price is not None and not math.isfinite(_rt_live_price):
+                        _rt_live_price = None
+                    if _rt_entry_price is not None and not math.isfinite(float(_rt_entry_price)):
+                        _rt_entry_price = None
+                    _rt_comp_delta_clean = _rt_comp_delta if _rt_comp_lag_found else None
+                    if _rt_comp_delta_clean is not None and not math.isfinite(_rt_comp_delta_clean):
+                        _rt_comp_delta_clean = None
+                    _rt_rs_clean = _rt_rs if math.isfinite(_rt_rs) else None
+
+                    _rt_inputs = build_counter_evidence_inputs(
+                        ticker=_rt_ticker,
+                        price=_rt_live_price, entry_price=_rt_entry_price,
+                        position_age_days=_rt_age_days,
+                        user_thesis=_rt_thesis_text, premortem_commitment=_rt_premortem_text,
+                        tier=_rt_tier, rs_vs_spy=_rt_rs_clean,
+                        composite_delta=_rt_comp_delta_clean,
+                    )
+                    _rt_counter_evidence = generate_counter_evidence(_rt_ticker, _rt_inputs, _rt_api_key)
+                    # _rt_counter_evidence: a list (0-3 items, valid — including
+                    # []) or None (call failed). Never test truthiness — an
+                    # empty list is a valid "no grounded bear case" result.
+
                 # 5. Persist
                 db.save_thesis_erosion_cache(
                     ticker=_rt_ticker,
@@ -27567,6 +27643,7 @@ elif page == "🧠 AI Insights":
                     erosion_score=_rt_erosion["score"],
                     erosion_label=_rt_erosion["label"],
                     signals_snapshot=_rt_snapshot,
+                    counter_evidence=_rt_counter_evidence,
                 )
 
                 _rt_results.append({
@@ -27574,7 +27651,7 @@ elif page == "🧠 AI Insights":
                     "erosion_score":    _rt_erosion["score"],
                     "erosion_label":    _rt_erosion["label"],
                     "signals_snapshot": _rt_snapshot,
-                    "counter_evidence": None,
+                    "counter_evidence": _rt_counter_evidence,
                 })
 
             # 6. Render
@@ -27685,11 +27762,26 @@ elif page == "🧠 AI Insights":
                                 "This component will reflect real session-over-session changes once the cache accumulates."
                             )
 
-                        if _rr.get("counter_evidence") is None:
-                            st.caption(
-                                "Phase 1 — quantitative signals only. "
-                                "Phase 2 adds a written bear case explaining what the data is saying in plain English."
-                            )
+                        # Phase 2 — Haiku bear case. counter_evidence is one
+                        # of: None (never triggered, or the call failed),
+                        # [] (call completed, found nothing grounded), or a
+                        # 1-3 item list (a real bear case). Never test
+                        # truthiness — [] and None mean different things.
+                        _rce = _rr.get("counter_evidence")
+                        _r_thesis = _thesis_by_ticker.get(_rr["ticker"])
+                        if _rce is not None and _rce:
+                            st.markdown("**Bear case** — since you bought, the data now shows:")
+                            for _ce in _rce:
+                                _sev_icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}.get(_ce.get("severity"), "🟡")
+                                st.markdown(f"- {_sev_icon} {_ce['claim']}  \n  *({_ce['signal_basis']})*")
+                        elif _rce is not None:
+                            st.caption("No grounded bear case found today — current signals don't support a specific counter-argument.")
+                        elif not _r_thesis:
+                            st.caption("No thesis on record for this position — add one in AI Insights → Positions to enable the bear case.")
+                        elif _rr.get("erosion_score", 0) >= THESIS_EROSION_HAIKU_MIN:
+                            st.caption("Bear case not available for today's read.")
+                        else:
+                            st.caption("No material counter-evidence threshold reached today.")
 
     with _ai_tab_dlog:
         # ── Debate Log (Multi-Agent Debate Phase 3) ───────────────────────────
