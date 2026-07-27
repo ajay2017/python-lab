@@ -8291,10 +8291,34 @@ elif page == "🧾 Summary":
                 _sm_port_cumret = (_sm_joined["port"] / _sm_joined["port"].iloc[0] - 1) * 100
                 _sm_spy_cumret  = (_sm_joined["spy"]  / _sm_joined["spy"].iloc[0]  - 1) * 100
                 _sm_alpha_series = _sm_port_cumret - _sm_spy_cumret
+
+                # Flag capital-flow contamination: a BUY/SELL logged within the
+                # window moves equity for a reason OTHER than market performance,
+                # silently inflating/deflating this equity-level read (confirmed
+                # live 2026-07-27 — a mid-window capital add produced a misleading
+                # +15.9% headline). The honest fix is a money-weighted return
+                # (needs account_flows setup); this visible caption is the
+                # lighter-weight compromise the user chose instead of gating the
+                # tile on that setup.
+                _sm_alpha_has_flows = False
+                _sm_tdf = st.session_state.get("trades_df")
+                if _sm_tdf is not None and not _sm_tdf.empty and "traded_at" in _sm_tdf.columns:
+                    _sm_win_start, _sm_win_end = _sm_joined.index.min(), _sm_joined.index.max()
+                    _sm_t = _sm_tdf.copy()
+                    _sm_t["_d"] = (
+                        pd.to_datetime(_sm_t["traded_at"], utc=True, errors="coerce")
+                        .dt.tz_convert("America/New_York").dt.date.astype(str)
+                    )
+                    _sm_t = _sm_t[_sm_t["action"].astype(str).str.upper().isin(["BUY", "SELL"])]
+                    _sm_alpha_has_flows = bool(
+                        ((_sm_t["_d"] >= _sm_win_start) & (_sm_t["_d"] <= _sm_win_end)).any()
+                    )
+
                 _sm_alpha = {
-                    "pct":    float(_sm_alpha_series.iloc[-1]),
-                    "n_days": len(_sm_joined),
-                    "series": _sm_alpha_series.tolist(),
+                    "pct":       float(_sm_alpha_series.iloc[-1]),
+                    "n_days":    len(_sm_joined),
+                    "series":    _sm_alpha_series.tolist(),
+                    "has_flows": _sm_alpha_has_flows,
                 }
     except Exception:
         _sm_alpha = None
@@ -8368,6 +8392,11 @@ elif page == "🧾 Summary":
                         _sm_alpha["series"],
                         color=_HOME_GAIN if _sm_alpha["pct"] >= 0 else _HOME_LOSS,
                         key="sm_alpha_spark",
+                    )
+                if _sm_alpha.get("has_flows"):
+                    st.caption(
+                        "⚠️ Capital added/removed during this window — not a pure "
+                        "performance read."
                     )
             else:
                 st.caption("Alpha vs SPY — building history (needs a few more days of snapshots).")
@@ -24768,7 +24797,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
             st.markdown(
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
-- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
+- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
