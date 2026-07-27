@@ -6813,7 +6813,7 @@ if page == "🏠 Home":
                                 st.warning("Debate could not complete — API unavailable or rate-limited. Session slot not consumed.")
                             st.rerun()
 
-                # ── Thesis Red Team Phase 2 — read-only bear-case expander ──
+                # ── Thesis Red Team Phase 2 — read-only counter-evidence expander ──
                 # Pure cache read, NO compute triggered from this site (the
                 # sole compute/Haiku-call site is the Red Team tab loop under
                 # 🧠 AI Insights). Does NOT show the erosion score chip — the
@@ -25047,7 +25047,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, a written **bear case** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it. If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the bear case explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same bear case also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. **Strictly display-only: neither the score nor the bear case ever feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. **Strictly display-only: neither the score nor the counter-evidence ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
@@ -27634,7 +27634,7 @@ elif page == "🧠 AI Insights":
                     _rt_counter_evidence = generate_counter_evidence(_rt_ticker, _rt_inputs, _rt_api_key)
                     # _rt_counter_evidence: a list (0-3 items, valid — including
                     # []) or None (call failed). Never test truthiness — an
-                    # empty list is a valid "no grounded bear case" result.
+                    # empty list is a valid "no grounded counter-evidence" result.
 
                 # 5. Persist
                 db.save_thesis_erosion_cache(
@@ -27767,24 +27767,28 @@ elif page == "🧠 AI Insights":
                                 "This component will reflect real session-over-session changes once the cache accumulates."
                             )
 
-                        # Phase 2 — Haiku bear case. counter_evidence is one
-                        # of: None (never triggered, or the call failed),
-                        # [] (call completed, found nothing grounded), or a
-                        # 1-3 item list (a real bear case). Never test
-                        # truthiness — [] and None mean different things.
+                        # Phase 2 — Haiku counter-evidence. Named distinctly
+                        # from the Debate feature's "Bull/Bear score" (a
+                        # different mechanism) to avoid the two being
+                        # confused when shown near each other on Act Today.
+                        # counter_evidence is one of: None (never triggered,
+                        # or the call failed), [] (call completed, found
+                        # nothing grounded), or a 1-3 item list (real
+                        # counter-evidence). Never test truthiness — [] and
+                        # None mean different things.
                         _rce = _rr.get("counter_evidence")
                         _r_thesis = _thesis_by_ticker.get(_rr["ticker"])
                         if _rce is not None and _rce:
-                            st.markdown("**Bear case** — since you bought, the data now shows:")
+                            st.markdown("**Counter-evidence** — since you bought, the data now shows:")
                             for _ce in _rce:
                                 _sev_icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}.get(_ce.get("severity"), "🟡")
                                 st.markdown(f"- {_sev_icon} {_ce['claim']}  \n  *({_ce['signal_basis']})*")
                         elif _rce is not None:
-                            st.caption("No grounded bear case found today — current signals don't support a specific counter-argument.")
+                            st.caption("No grounded counter-evidence found today — current signals don't support a specific counter-argument.")
                         elif not _r_thesis:
-                            st.caption("No thesis on record for this position — add one in AI Insights → Positions to enable the bear case.")
+                            st.caption("No thesis on record for this position — add one in AI Insights → Positions to enable counter-evidence.")
                         elif _rr.get("erosion_score", 0) >= THESIS_EROSION_HAIKU_MIN:
-                            st.caption("Bear case not available for today's read.")
+                            st.caption("Counter-evidence not available for today's read.")
                         else:
                             st.caption("No material counter-evidence threshold reached today.")
 
