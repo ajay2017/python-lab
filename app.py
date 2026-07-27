@@ -24713,6 +24713,8 @@ The **📜 Recommendations History** page is a **rules-based audit trail** (no A
 - **The flow chart** visualises the same funnel: everything surfaced → acted vs. not-acted → win / loss / flat.
 
 It's a **learning** surface, not a recommendation surface — it shows how the engine *and* your own decisions have actually been doing.
+
+*Known gap: "more buy candidates" surfaced before 2026-07-26 never captured a price snapshot, so their missed-outcome/alpha shows blank in the By-verdict and By-composite-band views for that older data — permanent for those rows, fixed for anything surfaced since.*
 """
             )
 
