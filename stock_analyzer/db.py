@@ -2725,6 +2725,35 @@ def load_debate_verdicts(tickers: list[str]) -> pd.DataFrame:
         return empty
 
 
+def load_all_debates(limit: int = 200) -> list[dict]:
+    """Return up to `limit` most recent debate_cache rows, most recent first
+    (debate_date, then created_at as a tiebreak within the same date), for
+    the AI Insights Debate Log tab (Multi-Agent Debate Phase 3).
+
+    Excludes corpus_snapshot (large audit-only payload, not needed for
+    display — same exclusion load_debate_cache already makes for its own
+    single-row read). Never raises — degrades to [] on any failure (table
+    absent, DB offline), which the tab renders as "no debates yet."
+    """
+    if not has_db():
+        return []
+    try:
+        rows = (
+            _client()
+            .table("debate_cache")
+            .select("ticker,debate_type,debate_date,verdict,key_dispute,"
+                     "bull_case_score,bear_case_score,grounded,transcript")
+            .order("debate_date", desc=True)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+        return rows or []
+    except Exception:
+        return []
+
+
 # ── Structural Vulnerability Scanner — daily portfolio-level cache ──────────
 # Persists the Blast Radius Map + generated narrative for one ET calendar day.
 # ONE row per scan_date (no ticker key — portfolio-wide synthesis, not a

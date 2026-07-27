@@ -899,6 +899,89 @@ def _render_sparkline(values: list[float], color: str, key: str) -> None:
     st.plotly_chart(_fig, use_container_width=True, config={"displayModeBar": False}, key=key)
 
 
+def _debate_verdict_icon(verdict: str | None, debate_type: str) -> str:
+    """Verdict icon + label text for a debate's expander title — must be
+    computed BEFORE the expander opens (Streamlit needs the title string up
+    front), so this is deliberately separate from body rendering
+    (_render_debate_result below). Hoisted module-level (not a closure) since
+    Streamlit only executes the matching page branch per rerun — this is
+    called from Home's Grow Today/Act Today cards AND 🧠 AI Insights' Debate
+    Log tab (Multi-Agent Debate Phase 3).
+
+    debate_type: "entry" or "exit" — selects label wording only ("Bull
+    wins"/"Bear wins" vs "Hold defensible"/"Exit supported"); the same
+    verdict values (bull_wins/bear_wins/contested/None) drive both.
+    """
+    if debate_type == "exit":
+        return (
+            "🟢 Hold defensible" if verdict == "bull_wins" else
+            "🔴 Exit supported"  if verdict == "bear_wins" else
+            "⚖️ Contested"        if verdict == "contested" else
+            "⚠️ Error"
+        )
+    return (
+        "🟢 Bull wins" if verdict == "bull_wins" else
+        "🔴 Bear wins" if verdict == "bear_wins" else
+        "⚖️ Contested"  if verdict == "contested" else
+        "⚠️ Error"
+    )
+
+
+def _render_debate_result(row: dict, debate_type: str) -> None:
+    """Render one stored debate's body: exit-only calm-advisor disclaimer,
+    scores, key dispute, grounded warning, and full transcript. Shared by the
+    entry-debate cache-hit render, the exit-debate cache-hit render, and the
+    🧠 AI Insights Debate Log tab (Multi-Agent Debate Phase 3) — extracted here
+    so the same markup doesn't exist a third time. Caller is responsible for
+    the expander itself and its title (use _debate_verdict_icon() for that,
+    computed first — see docs/plans/multi-agent-debate-phase3.md).
+
+    row: a debate_cache row (dict) with verdict/key_dispute/bull_case_score/
+         bear_case_score/grounded/transcript keys — as returned by
+         db.load_debate_cache() or db.load_all_debates().
+    debate_type: "entry" or "exit" — selects label wording (score-column
+         labels) AND whether the exit-only disclaimer renders.
+    """
+    _v   = row.get("verdict")
+    _kd  = row.get("key_dispute")
+    _bsc = row.get("bull_case_score")
+    _brc = row.get("bear_case_score")
+    _grd = row.get("grounded")
+    _trn = row.get("transcript") or []
+    _failed = _v is None and not _trn
+
+    if debate_type == "exit":
+        _bull_label, _bear_label = "Hold case", "Exit case"
+        st.caption(
+            "This debate challenges the exit signal — it does not change "
+            "it. The recommendation stands; this is a structured second "
+            "opinion before you act."
+        )
+    else:
+        _bull_label, _bear_label = "Bull score", "Bear score"
+
+    if _failed:
+        st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
+    else:
+        if _bsc is not None and _brc is not None:
+            _c1, _c2 = st.columns(2)
+            _c1.metric(_bull_label, f"{_bsc}/100")
+            _c2.metric(_bear_label, f"{_brc}/100")
+        if _kd:
+            st.markdown(f"**Key dispute:** {_kd}")
+        if _grd is False:
+            st.warning("One or both agents relied on generic arguments — treat this debate with lower confidence.")
+    if _trn:
+        st.markdown("**Transcript:**")
+        for _tr in _trn:
+            _ag = (_tr.get("agent") or "").title()
+            _ag_color = "#22c55e" if _tr.get("agent") == "bull" else "#ef4444"
+            st.markdown(
+                f"<span style='color:{_ag_color}'>**Round {_tr.get('round')} — {_ag}:**</span> {_tr.get('text', '')}",
+                unsafe_allow_html=True,
+            )
+
+
 def _fmt_action(action: dict) -> tuple[str, str, str]:
     """Format a structured rebalancer/deterioration action dict into
     (color, label, text) so a card renders the directive directly instead of
@@ -6121,42 +6204,13 @@ if page == "🏠 Home":
                 _deb_cached = db.load_debate_cache(_deb_ticker, "entry", str(_today_et()))
                 _deb_runs   = st.session_state.get("_debate_runs_this_session", 0)
                 if _deb_cached:
-                    # Render stored debate result
-                    _dv  = _deb_cached.get("verdict")
-                    _kd  = _deb_cached.get("key_dispute")
-                    _bsc = _deb_cached.get("bull_case_score")
-                    _ebc = _deb_cached.get("bear_case_score")
-                    _grd = _deb_cached.get("grounded")
-                    _trn = _deb_cached.get("transcript") or []
-                    # Distinguish a genuine Judge verdict from a cached failure
-                    _deb_failed = _dv is None and not _trn
-                    _dv_icon = (
-                        "🟢 Bull wins" if _dv == "bull_wins" else
-                        "🔴 Bear wins" if _dv == "bear_wins" else
-                        "⚖️ Contested"   if _dv == "contested" else
-                        "⚠️ Error"
-                    )
+                    # Render stored debate result (Multi-Agent Debate Phase 3
+                    # extracted this into shared _debate_verdict_icon()/
+                    # _render_debate_result() helpers, reused by the exit-debate
+                    # site below and the 🧠 AI Insights Debate Log tab).
+                    _dv_icon = _debate_verdict_icon(_deb_cached.get("verdict"), "entry")
                     with st.expander(f"⚔️ Debate — {_dv_icon}", expanded=False):
-                        if _deb_failed:
-                            st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
-                        else:
-                            if _bsc is not None and _ebc is not None:
-                                _dc1, _dc2 = st.columns(2)
-                                _dc1.metric("Bull score", f"{_bsc}/100")
-                                _dc2.metric("Bear score", f"{_ebc}/100")
-                            if _kd:
-                                st.markdown(f"**Key dispute:** {_kd}")
-                            if _grd is False:
-                                st.warning("One or both agents relied on generic arguments — treat this debate with lower confidence.")
-                        if _trn:
-                            st.markdown("**Transcript:**")
-                            for _tr in _trn:
-                                _ag = (_tr.get("agent") or "").title()
-                                _ag_color = "#22c55e" if _tr.get("agent") == "bull" else "#ef4444"
-                                st.markdown(
-                                    f"<span style='color:{_ag_color}'>**Round {_tr.get('round')} — {_ag}:**</span> {_tr.get('text', '')}",
-                                    unsafe_allow_html=True,
-                                )
+                        _render_debate_result(_deb_cached, "entry")
                 else:
                     _deb_btn_disabled = _deb_runs >= debate_agent.DEBATE_SESSION_CEILING
                     _deb_btn_help = (
@@ -6649,45 +6703,15 @@ if page == "🏠 Home":
                     _dbx_cached = db.load_debate_cache(_db_ticker, "exit", str(_today_et()))
                     _dbx_runs   = st.session_state.get("_debate_runs_this_session", 0)
                     if _dbx_cached:
-                        _xv  = _dbx_cached.get("verdict")
-                        _xkd = _dbx_cached.get("key_dispute")
-                        _xbs = _dbx_cached.get("bull_case_score")
-                        _xbr = _dbx_cached.get("bear_case_score")
-                        _xgr = _dbx_cached.get("grounded")
-                        _xtr = _dbx_cached.get("transcript") or []
-                        _xfailed = _xv is None and not _xtr
-                        _xicon = (
-                            "🟢 Hold defensible" if _xv == "bull_wins" else
-                            "🔴 Exit supported"  if _xv == "bear_wins" else
-                            "⚖️ Contested"        if _xv == "contested" else
-                            "⚠️ Error"
-                        )
+                        # Multi-Agent Debate Phase 3 extracted this into the
+                        # shared _debate_verdict_icon()/_render_debate_result()
+                        # helpers (reused by the entry-debate site above and
+                        # the 🧠 AI Insights Debate Log tab). Title PREFIX here
+                        # ("Exit debate", not "Debate") is deliberately kept
+                        # distinct from the entry site's.
+                        _xicon = _debate_verdict_icon(_dbx_cached.get("verdict"), "exit")
                         with st.expander(f"⚔️ Exit debate — {_xicon}", expanded=False):
-                            st.caption(
-                                "This debate challenges the exit signal — it does not change "
-                                "it. The recommendation stands; this is a structured second "
-                                "opinion before you act."
-                            )
-                            if _xfailed:
-                                st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
-                            else:
-                                if _xbs is not None and _xbr is not None:
-                                    _xc1, _xc2 = st.columns(2)
-                                    _xc1.metric("Hold case", f"{_xbs}/100")
-                                    _xc2.metric("Exit case", f"{_xbr}/100")
-                                if _xkd:
-                                    st.markdown(f"**Key dispute:** {_xkd}")
-                                if _xgr is False:
-                                    st.warning("One or both agents relied on generic arguments — treat this debate with lower confidence.")
-                            if _xtr:
-                                st.markdown("**Transcript:**")
-                                for _xt in _xtr:
-                                    _xag  = (_xt.get("agent") or "").title()
-                                    _xcol = "#22c55e" if _xt.get("agent") == "bull" else "#ef4444"
-                                    st.markdown(
-                                        f"<span style='color:{_xcol}'>**Round {_xt.get('round')} — {_xag}:**</span> {_xt.get('text', '')}",
-                                        unsafe_allow_html=True,
-                                    )
+                            _render_debate_result(_dbx_cached, "exit")
                     else:
                         _dbx_disabled = _dbx_runs >= debate_agent.DEBATE_SESSION_CEILING
                         _dbx_help = (
@@ -25055,7 +25079,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), and the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below). It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), and the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )
 
@@ -25448,8 +25472,8 @@ elif page == "🧠 AI Insights":
     st.markdown("---")
 
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
-    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt = st.tabs(
-        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team"]
+    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog = st.tabs(
+        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log"]
     )
 
     with _ai_tab_pos:
@@ -27622,6 +27646,36 @@ elif page == "🧠 AI Insights":
                                 "Phase 1 — quantitative signals only. "
                                 "Phase 2 adds a written bear case explaining what the data is saying in plain English."
                             )
+
+    with _ai_tab_dlog:
+        # ── Debate Log (Multi-Agent Debate Phase 3) ───────────────────────────
+        # Browsable history of every stored debate — read-only, diagnostic
+        # only. Zero new LLM calls, zero new cache table (reuses debate_cache
+        # as-is via db.load_all_debates()). Renders an honest state at any
+        # volume, including today's handful of rows — never gated on a
+        # minimum row count. Plan: docs/plans/multi-agent-debate-phase3.md.
+        st.caption(
+            "Every Bull vs Bear debate you've run, most recent first — both "
+            "entry candidates (📈 Grow Today) and exit challenges (🔴 Act Today's "
+            "deterioration cards). A second opinion, never a re-scored recommendation."
+        )
+        _dlog_rows = db.load_all_debates()
+
+        if not _dlog_rows:
+            st.info(
+                "No debates yet. Run one from a Grow Today candidate (⚔️ Debate) or "
+                "a deterioration card (⚔️ Challenge This Exit) to see it here."
+            )
+        else:
+            for _dl_row in _dlog_rows:
+                _dl_ticker = _dl_row.get("ticker", "—")
+                _dl_type   = _dl_row.get("debate_type", "entry")
+                _dl_date   = _dl_row.get("debate_date", "—")
+                _dl_type_label = "Exit" if _dl_type == "exit" else "Entry"
+                with st.expander(f"{_dl_ticker} · {_dl_type_label} · {_dl_date}", expanded=False):
+                    _render_debate_result(_dl_row, _dl_type)
+            if len(_dlog_rows) >= 200:
+                st.caption("Showing the 200 most recent debates.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality
