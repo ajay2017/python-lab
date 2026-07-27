@@ -6,7 +6,7 @@ Trade Journal a BUY would breach the single-name/sector ceilings. Both are pure
 functions with no I/O, so exact boundary behaviour is pinned here rather than
 only being exercised implicitly through the UI.
 """
-from stock_analyzer.concentration import assess_add_concentration, gating_denominator
+from stock_analyzer.concentration import assess_add_concentration, gating_denominator, high_beta_share
 from stock_analyzer.constants import SECTOR_CEILING, SECTOR_ELEVATED, SINGLE_NAME_CEILING
 
 
@@ -105,3 +105,31 @@ def test_assess_add_concentration_flags_sector_elevated_only():
     assert result is not None
     assert result["sector_elevated"] is True
     assert result["sector_hard"] is False
+
+
+# ── high_beta_share ───────────────────────────────────────────────────────────
+
+def test_high_beta_share_no_positions_returns_zero():
+    assert high_beta_share([], beta_threshold=1.3) == 0.0
+
+
+def test_high_beta_share_all_unknown_beta_returns_zero():
+    assert high_beta_share([(50.0, None), (50.0, None)], beta_threshold=1.3) == 0.0
+
+
+def test_high_beta_share_computes_share_of_known_weight_only():
+    # 30% weight at high beta, 20% at low beta, 50% unknown -- unknown is
+    # excluded from BOTH numerator and denominator, so the share is computed
+    # over the 50% with known beta, not the full 100%.
+    positions = [(30.0, 1.5), (20.0, 0.8), (50.0, None)]
+    assert high_beta_share(positions, beta_threshold=1.3) == 60.0  # 30 / (30+20) * 100
+
+
+def test_high_beta_share_boundary_is_inclusive():
+    assert high_beta_share([(100.0, 1.3)], beta_threshold=1.3) == 100.0
+    assert high_beta_share([(100.0, 1.29)], beta_threshold=1.3) == 0.0
+
+
+def test_high_beta_share_ignores_rows_with_unknown_weight():
+    positions = [(None, 2.0), (40.0, 1.5)]
+    assert high_beta_share(positions, beta_threshold=1.3) == 100.0

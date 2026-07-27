@@ -3,12 +3,11 @@
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** PLAN COMPLETE 2026-07-27 — all 4 batches shipped, 119 tests, all
-passing locally in `.venv` (Python 3.14.6). Batch 1 (constants invariants +
-`scoring.py` + `concentration.py`), Batch 2 (`exit_advisor.py` deterioration
-tiers + risk-off regime), Batch 3 (`portfolio.py` stop-ladder + trim +
-diversification), and Batch 4 (`risk_advisor.py`'s 7-metric recommendation
-engine) all shipped same-session, 2026-07-27.
+**Status:** Original 4-batch plan COMPLETE 2026-07-27 (119 tests). Batch 5
+(`daily_briefing.py`'s buy-candidate suppression funnel + weak-large flag,
+`concentration.py`'s `high_beta_share()`) added 2026-07-27, same session, as
+a follow-on once the "what's next" candidates below were picked up. 148 tests
+total, all passing locally in `.venv` (Python 3.14.6).
 
 ## Why
 
@@ -114,22 +113,45 @@ functions first.
    and that single-name overweight is gated to `score >= WEAK_CONVICTION_SCORE`
    so it never double-fires with daily_briefing's separate weak-large flag.
 
+5. **`daily_briefing.py` buy-candidate funnel + weak-large flag, `concentration.py`'s
+   `high_beta_share()` — SHIPPED 2026-07-27.** `tests/test_daily_briefing.py`
+   (23 tests) + 5 tests appended to `tests/test_concentration.py`, using a new
+   `make_port_df()` fixture builder in `tests/conftest.py`. Covers `_trim_targets()`
+   (only beta/sharpe HIGH/MEDIUM recs qualify as a trim conflict — volatility/
+   drawdown/tail-risk recs recommend diversifying, not trimming, so they must
+   NOT suppress an add-to-winner), `_recently_added()`'s cooldown boundary, and
+   — the main piece — `_buy_candidates()`'s add-to-winner block, which has SIX
+   independent suppression `continue` guards (act-today, recent-add cooldown,
+   risk-advisor trim conflict, single-name ceiling, drift-trim overweight,
+   deterioration WATCH) each pinned with its own test, since a refactor
+   dropping just one guard would be invisible without a test targeting that
+   exact path. Also verifies the scanner-pick price capture (regression for
+   this session's earlier price_at_surface fix) and, via `_review_list()`,
+   that the weak-large flag fires ONLY when `score < WEAK_CONVICTION_SCORE` —
+   proving from the daily_briefing side what Batch 4 already proved from the
+   risk_advisor side, that the two "overweight" surfaces partition cleanly on
+   that score boundary and never double-fire on the same ticker.
+   `high_beta_share()`'s None-weight/None-beta exclusion from both numerator
+   and denominator, and its inclusive `>=` threshold boundary.
+
 ## Explicitly out of scope
 
 - `app.py` — Streamlit orchestration/UI, too coupled to `st.session_state` and
   live secrets to unit-test cheaply; not where the pure decision logic lives.
 - Any live network/Supabase-hitting test — everything runs on synthetic
   fixtures so the suite stays fast and deterministic in CI.
+- `_cross_reference()`'s own verdict logic (news/earnings/analyst-revision
+  cross-referencing) — `_buy_candidates()`'s tests treat its `xref` output as
+  opaque, testing only the suppression funnel around it. `_cross_reference`
+  is a different, self-contained concern and would need its own fixture work.
 - Making the GitHub Actions run a required branch-protection check — deferred
   indefinitely; revisit if the suite ever flakes or a real regression slips
   through despite a green run.
 
 ## What's next (not part of this plan, noted for a future session)
 
-All 4 originally-scoped batches are done. If further regression coverage is
-wanted later, natural next candidates (not committed to, not scoped) would be
-`daily_briefing.py`'s buy-candidate/weak-large-flag funnel (the counterpart
-to risk_advisor's single-name concentration rec — the two "never double-fire"
-today only because their gates happen to be complementary) and `concentration.py`'s
-`high_beta_share()` (untested so far; simple pure function, low priority since
-it's a display-only proxy, not a gate).
+All 5 batches shipped. If further regression coverage is wanted later, a
+natural next candidate (not committed to, not scoped) is `_cross_reference()`
+itself (the verdict engine `_buy_candidates()` calls, deliberately left opaque
+above) — lower priority since it's informational (confidence labeling), not a
+suppression gate.

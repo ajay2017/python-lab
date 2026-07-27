@@ -80,3 +80,42 @@ def make_risk_advisor_inputs(
 def find_rec(recs, rec_type):
     """First rec dict of the given `type`, or None."""
     return next((r for r in recs if r["type"] == rec_type), None)
+
+
+def make_port_df(rows):
+    """Build a port_df for stock_analyzer.daily_briefing's _buy_candidates()/
+    _review_list() — a "safe" default row (no gate/suppression triggered)
+    unless a field is overridden. `_gate_wt`/`_gate_wt_col` fall back to
+    "Weight (%)" when "Gate Weight (%)" is absent, so it's omitted here.
+
+    Per-row fields: ticker, weight (%), score, signal, price, sector, pnl_pct,
+    gap_to_stop (%), shares, mom_1m, stop.
+    """
+    defaults = dict(
+        weight=10.0, score=50.0, signal="Hold", price=100.0, sector="Tech",
+        pnl_pct=0.0, gap_to_stop=None, shares=10, mom_1m=0.0, stop=90.0,
+    )
+    filled = [{**defaults, **r} for r in rows]
+    data = [
+        {
+            "Ticker": r["ticker"],
+            "Weight (%)": r["weight"],
+            "Score": r["score"],
+            "Signal": r["signal"],
+            "Price": r["price"],
+            "Sector": r["sector"],
+            "P&L (%)": r["pnl_pct"],
+            "Gap to Stop (%)": r["gap_to_stop"],
+            "Shares": r["shares"],
+            "1M Momentum": r["mom_1m"],
+            "Stop": r["stop"],
+        }
+        for r in filled
+    ]
+    return pd.DataFrame(data)
+
+
+def find_item(items, ticker):
+    """First item dict for `ticker` (case-insensitive), or None."""
+    ticker = str(ticker).upper()
+    return next((i for i in items if str(i.get("ticker", "")).upper() == ticker), None)
