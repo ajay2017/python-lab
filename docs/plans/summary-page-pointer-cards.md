@@ -29,7 +29,20 @@ different module (`thesis_red_team.py`). The shipped card correctly reads
 the tab directly since `_pending_page` can only select a page, not a tab within it).
 See "Selected cards" section #2 below for the corrected spec as actually built.
 
-**Build order for this plan now starts at card #3 (Catalyst Watch).**
+**Card #3 (Catalyst Watch) SHIPPED 2026-07-27.** Second card in the "🧭 Elsewhere in
+DRISHTA" section. Reuses the SAME 24h process-wide `@st.cache_data`-cached
+`_cached_held_earnings_dates()` call (identical `tickers_tuple` + 90-day range)
+Catalyst Watch's own "Your Holdings — Earnings" tier already uses — verified this
+by reading its `@st.cache_data(ttl=86400)` decoration before building, not assumed
+from the plan's original "no new fetch" guess. Whichever page runs first this cache
+window pays the fetch once, the other gets a free hit. Filtered to
+`CATALYST_WATCH_WINDOW_DAYS` (7), the same constant that page uses. Always renders a
+state ("N reporting" or "None soon") rather than hiding. See "Selected cards"
+section #3 below for the shipped spec.
+
+**Build order for this plan now starts at card #4 (Watchlist actionable count) —
+the last one, and still the least certain re: reuse-vs-recompute (see that section's
+own note below).**
 
 > **One-line spec:** Add a "🧭 Elsewhere in DRISHTA" section to 🧾 Summary — a small
 > row of read-only pointer cards, each surfacing one already-computed signal from
@@ -120,19 +133,28 @@ pattern needed.
   the 2026-07-26 sweep already put this data in front of us; cheap DB read, no new
   modeling.
 
-### 3. Catalyst Watch (Signals group)
-- **Shows:** a count of held names reporting earnings within the week, e.g. "3
-  holdings report this week."
-- **Reuses:** `held_data`'s existing `earnings` field per ticker — already loaded and
-  read the same way in `daily_briefing.py`'s `_review_list()` (confirmed this
-  session: `earn_date = (data or {}).get("earnings")`). No new fetch.
+### 3. Catalyst Watch (Signals group) — SHIPPED 2026-07-27
+- **Spec corrected during the build:** the original guess ("just read `held_data`'s
+  `earnings` field, no new fetch") was checked against the actual Catalyst Watch
+  page and found incomplete — `_render_holdings_earnings()` also backfills any
+  missing bundle date via `_cached_held_earnings_dates()` (an FMP/yfinance
+  per-name fallback). Using only the raw `held_data` field would have undercounted
+  vs. the real Catalyst Watch page and risked the two silently disagreeing —
+  exactly the double-surface bug class this plan's design principles rule out.
+  **Resolution:** call the same `_cached_held_earnings_dates()`, which is a 24h
+  process-wide `@st.cache_data` cache keyed on `(tickers_tuple, from_str, to_str)`
+  — using the identical call signature Catalyst Watch uses means this is the SAME
+  cached computation, not a second one; whichever page runs first pays the fetch,
+  the other gets a free hit.
+- **Shows:** a count of held names reporting earnings within
+  `CATALYST_WATCH_WINDOW_DAYS` (7) days — "N reporting" or a calm "None soon" (shown,
+  not hidden, when zero).
+- **Reuses:** `held_data`'s own bundle-loaded `earnings` field first (zero cost,
+  matching `_render_holdings_earnings()`'s exact fallback order), then
+  `_cached_held_earnings_dates()` for the same shared 24h cache.
 - **Points to:** 🔔 Catalyst Watch.
-- **To verify at build time:** decide the exact window (7 days, matching
-  `CATALYST_WATCH_WINDOW_DAYS`? or a tighter "this week" cut) — don't invent a new
-  threshold without checking what constant already governs Catalyst Watch's own
-  window, to avoid a second silently-different definition of "soon."
-- **Why third:** near-zero cost (data already in memory), different nav group so it
-  doesn't compete with the Portfolio-group cards.
+- **Why third:** cheap once the shared-cache resolution above was confirmed;
+  different nav group so it doesn't compete with the Portfolio-group cards.
 
 ### 4. Watchlist actionable count (Research group) — build last, least certain
 - **Shows:** a count of watchlist names currently `ENTER_NOW`/`NEAR_ENTRY`, e.g. "4

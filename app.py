@@ -8472,11 +8472,47 @@ elif page == "🧾 Summary":
     except Exception:
         _sm_n_reviewed = 0
 
-    if _sm_n_reviewed > 0:
-        st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
-        st.markdown("**🧭 Elsewhere in DRISHTA**")
-        _sm_ptr_cols = st.columns(3)
-        with _sm_ptr_cols[0]:
+    # Card #3 — Catalyst Watch. Reuses the SAME 24h process-wide
+    # @st.cache_data(_cached_held_earnings_dates) call — same tickers_tuple
+    # + 90-day range Catalyst Watch's own "Your Holdings — Earnings" tier
+    # uses — so whichever page runs first pays the (cached) fetch once and
+    # the other gets a free hit; never a second independent computation.
+    # Prefers held_data's own bundle-loaded earnings date first (zero cost),
+    # matching _render_holdings_earnings' exact preference order. Filtered
+    # to CATALYST_WATCH_WINDOW_DAYS (7) — the SAME window constant that
+    # page uses, not an invented "this week" cutoff. Always shows a state
+    # (including "0 reporting") rather than hiding — earnings timing is
+    # useful to see even when the answer is "none soon."
+    _sm_today_d = datetime.now().date()
+    _sm_n_earnings_soon = 0
+    try:
+        _sm_earn_held_tuple = tuple(sorted(
+            str(_pr["Ticker"]).strip().upper() for _, _pr in port_df.iterrows()
+        ))
+        _sm_earn_dates = _cached_held_earnings_dates(
+            _sm_earn_held_tuple, _sm_today_d.isoformat(),
+            (_sm_today_d + timedelta(days=90)).isoformat(),
+        )
+        for _, _pr in port_df.iterrows():
+            _sm_et = _pr["Ticker"]
+            _sm_ed = (_sm_hd.get(_sm_et, {}) or {}).get("earnings") or _sm_earn_dates.get(str(_sm_et).strip().upper())
+            if not _sm_ed:
+                continue
+            try:
+                _sm_edate = datetime.strptime(_sm_ed, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            _sm_edays = (_sm_edate - _sm_today_d).days
+            if 0 <= _sm_edays <= CATALYST_WATCH_WINDOW_DAYS:
+                _sm_n_earnings_soon += 1
+    except Exception:
+        _sm_n_earnings_soon = 0
+
+    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+    st.markdown("**🧭 Elsewhere in DRISHTA**")
+    _sm_ptr_cols = st.columns(3)
+    with _sm_ptr_cols[0]:
+        if _sm_n_reviewed > 0:
             st.markdown("**🩺 Thesis Review**")
             if _sm_n_broken or _sm_n_weakening:
                 _sm_tr_parts = []
@@ -8497,6 +8533,22 @@ elif page == "🧾 Summary":
             if st.button("→ AI Insights", key="sm_ptr_thesis"):
                 st.session_state["_pending_page"] = "🧠 AI Insights"
                 st.rerun()
+    with _sm_ptr_cols[1]:
+        st.markdown("**🔔 Catalyst Watch**")
+        if _sm_n_earnings_soon:
+            _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
+            _sm_cw_color = "#f59e0b"
+        else:
+            _sm_cw_line  = "None soon"
+            _sm_cw_color = "#22c55e"
+        st.markdown(
+            f"<div style='font-size:1.1em;font-weight:600;color:{_sm_cw_color}'>{_sm_cw_line}</div>"
+            f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
+            st.session_state["_pending_page"] = "🔔 Catalyst Watch"
+            st.rerun()
 
     # ── Holdings — identical table to Home's (shared function, same output).
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
@@ -24860,7 +24912,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
             st.markdown(
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
-- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, a **"🧭 Elsewhere in DRISHTA"** section with a **🩺 Thesis Review** pointer (how many held names' thesis review needs attention, linking to 🧠 AI Insights — never a second independent verdict), and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
+- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, a **"🧭 Elsewhere in DRISHTA"** section with a **🩺 Thesis Review** pointer (how many held names' thesis review needs attention, linking to 🧠 AI Insights — never a second independent verdict) and a **🔔 Catalyst Watch** pointer (how many holdings report earnings within the week, linking to 🔔 Catalyst Watch), and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
