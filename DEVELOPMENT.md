@@ -221,6 +221,13 @@ Log the outcome in [docs/test-results.md](docs/test-results.md) if it's worth
 tracking (a new batch, a failure, a coverage shift) — that file is the running
 history of pass/fail counts and coverage, not a one-time snapshot.
 
+**As of 2026-07-27 this is also mechanically enforced**, not just documented:
+`.claude/hooks/pre_tool_checks.py` blocks a `git commit` touching
+`stock_analyzer/`/`tests/` (and always blocks `git push`) if `pytest tests/`
+fails — see [docs/testing-strategy.md](docs/testing-strategy.md) §2 for the
+exact behavior and its caveats (Claude Code sessions only, takes effect after
+a session restart per memory `feedback_hook_enforcement`).
+
 A GitHub Actions workflow (`.github/workflows/tests.yml`) also runs this on
 push/PR touching `stock_analyzer/**` or `tests/**` — it's a pre-push safety
 net (red ❌ on the commit), not a deploy gate; neither Streamlit Cloud nor

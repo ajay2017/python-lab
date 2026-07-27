@@ -64,17 +64,35 @@ change doesn't require touching the test.
 pip install -r requirements-dev.txt   # one-time
 pytest tests/ -v
 ```
-Run this before committing any change to a gate, scoring formula, or
-`constants.py` — required in practice, since those changes also need an Opus
-review (CLAUDE.md rule #4) and a failing boundary test is exactly the kind of
-thing that review should catch first.
+
+**Mechanically enforced, not just documented practice, as of 2026-07-27.**
+`.claude/hooks/pre_tool_checks.py` (a Claude Code `PreToolUse` hook, registered
+in `.claude/settings.json`) intercepts `git commit`/`git push` tool calls and:
+- On `commit`, if any staged file is under `stock_analyzer/` or `tests/`, runs
+  `pytest tests/ -q` and **blocks the commit** (exit 2, failure output printed)
+  if it doesn't pass.
+- On `push`, always runs the suite first and **blocks the push** the same way
+  — this covers a commit that landed before the gate existed, or from another
+  session/tool, so a known-failing suite can never reach `origin/main`.
+- Fails open on infra problems (missing `.venv`, pytest not installed, a
+  120s timeout) — warns but does not block, since that's an environment gap,
+  not a code problem.
+
+**Caveat, learned the hard way from the rule #4 citation hook**
+(memory `feedback_hook_enforcement`): a hook edit takes effect for Claude Code
+sessions that start or reload `settings.json` *after* the change lands — a
+session already running when the hook file changes does not retroactively
+pick it up mid-session. It also only fires for git commands run *through*
+Claude Code's Bash/PowerShell tools; it is not a real `.git/hooks/` script,
+so a manual `git commit`/`git push` from an external terminal is not covered.
 
 **CI:** `.github/workflows/tests.yml` runs the suite on push/PR touching
 `stock_analyzer/**` or `tests/**`. This is a **pre-push safety net, not a
 deploy gate** — neither Streamlit Cloud nor Railway consults GitHub Actions,
 so a red ❌ shows up on the commit but does not block the redeploy. Making it
 a required branch-protection check is deliberately deferred until the suite
-has a longer track record of not being flaky.
+has a longer track record of not being flaky. (This CI check is now a second,
+independent line of defense behind the local hook above, not the only one.)
 
 ---
 

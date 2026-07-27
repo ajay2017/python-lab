@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Pre-tool-use hook: mechanically enforce hard rules #3 and #4 from CLAUDE.md."""
+"""Pre-tool-use hook: mechanically enforce hard rules #3 and #4 from CLAUDE.md,
+plus a regression-test gate on `git commit`/`git push` (docs/testing-strategy.md).
+"""
 import json
+import os
 import re
 import subprocess
 import sys
@@ -25,8 +28,11 @@ def main() -> None:
         )
         sys.exit(2)
 
+    is_commit = bool(re.search(r"\bgit\s+commit\b", command))
+    is_push = bool(re.search(r"\bgit\s+push\b", command))
+
     # Hard rule #4: Commits touching gate files require an Opus review citation
-    if re.search(r"\bgit\s+commit\b", command):
+    if is_commit:
         staged = _get_staged_files()
         triggered = _gate_files_staged(staged)
 
@@ -40,7 +46,37 @@ def main() -> None:
                 )
                 sys.exit(2)
 
+        # Regression-test gate (docs/testing-strategy.md): block the commit if
+        # `pytest tests/` fails, scoped to commits that actually touch tested
+        # code so an unrelated docs-only commit isn't slowed down. A missing/
+        # broken test environment does NOT block -- that's an infra gap, not a
+        # code problem -- it just warns.
+        if _touches_tested_code(staged):
+            _gate_on_pytest("commit", "committing")
+
+    # Always re-check before push, regardless of which files are in the
+    # commits being pushed -- push sends whatever HEAD currently is, so one
+    # suite run against the working tree covers it. Catches the case where a
+    # commit landed before this gate existed, or from another session/tool.
+    if is_push:
+        _gate_on_pytest("push", "pushing")
+
     sys.exit(0)
+
+
+def _gate_on_pytest(noun: str, gerund: str) -> None:
+    ok, detail = _run_pytest()
+    if ok is False:
+        print(
+            f"BLOCKED (regression suite failing): `pytest tests/` did not pass.\n"
+            f"{detail}\n"
+            f"Fix the failure (or update the test if this is a deliberate policy "
+            f"change) before {gerund}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    elif ok is None:
+        print(f"WARNING: could not run the regression suite ({detail}) -- not blocking {noun}.", file=sys.stderr)
 
 
 def _get_staged_files() -> list[str]:
@@ -68,6 +104,10 @@ def _gate_files_staged(staged: list[str]) -> list[str]:
     return [f for f in staged if f in _GATE_FILES]
 
 
+def _touches_tested_code(staged: list[str]) -> bool:
+    return any(f.startswith("stock_analyzer/") or f.startswith("tests/") for f in staged)
+
+
 def _has_review_citation(command: str) -> bool:
     if re.search(r"Review\s*=\s*Opus reviewer", command):
         return True
@@ -80,6 +120,41 @@ def _has_review_citation(command: str) -> bool:
         except Exception:
             pass
     return False
+
+
+def _find_python() -> str | None:
+    """Locate the project .venv's python, assuming cwd is the repo root (same
+    assumption _get_staged_files already relies on via bare `git` calls)."""
+    here = os.getcwd()
+    for candidate in (
+        os.path.join(here, ".venv", "Scripts", "python.exe"),  # Windows
+        os.path.join(here, ".venv", "bin", "python"),          # POSIX
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _run_pytest() -> tuple:
+    """Returns (True, "") on pass, (False, detail) on failure, (None, detail)
+    when the suite couldn't be run at all (missing venv/pytest, timeout)."""
+    py = _find_python()
+    if not py:
+        return None, ".venv python not found -- run `pip install -r requirements-dev.txt` in .venv"
+    try:
+        r = subprocess.run(
+            [py, "-m", "pytest", "tests/", "-q"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "pytest timed out after 120s -- investigate a hang before proceeding"
+    except Exception as e:
+        return None, f"could not invoke pytest ({e})"
+
+    if r.returncode == 0:
+        return True, ""
+    tail = "\n".join((r.stdout or "").strip().splitlines()[-15:])
+    return False, tail
 
 
 if __name__ == "__main__":
