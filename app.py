@@ -8402,13 +8402,15 @@ elif page == "🧾 Summary":
                 st.caption("Alpha vs SPY — building history (needs a few more days of snapshots).")
         with _t2:
             if _sm_posture is not None:
-                st.markdown("**Risk Posture**")
+                st.markdown("**🔗 Risk Posture**")
                 st.markdown(
                     f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture['emoji']} {_sm_posture['label']}</div>"
                     f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
                     unsafe_allow_html=True,
                 )
-                st.caption("→ see 🔗 Risk Analysis for the full read")
+                if st.button("→ Risk Analysis", key="sm_ptr_riskposture"):
+                    st.session_state["_pending_page"] = "🔗 Risk Analysis"
+                    st.rerun()
 
     # ── Act Today — reads the same daily-brief data Home computed this
     # session (published via _home_synth_cache) and calls the identical pure
