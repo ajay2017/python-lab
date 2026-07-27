@@ -58,7 +58,7 @@ When you open this folder after time away:
 3. **Open `MEMORY.md`** (the auto-memory index) to refresh on durable decisions and feedback.
 4. **Check `git log --oneline -10`** to see what the last commits were.
 5. **Glance at the Phase 4 todo list** (see "Outstanding Work" below) for what's still queued.
-6. **Open the deployed app** and click through Home / Today's Brief / Watchlist / Stock Analysis to confirm everything still loads.
+6. **Open the deployed app** and click through Home / Today's Brief / Watchlist / Stock Analysis to confirm everything still loads (the standing post-deploy smoke test — see [docs/testing-strategy.md](docs/testing-strategy.md) §4.1).
 
 You're ready to work.
 
@@ -77,7 +77,8 @@ python-lab/
 │   └── drishta_logo.png           Brand asset (single combined image)
 ├── docs/
 │   ├── requirements.md            Functional + non-functional reqs + operating posture
-│   └── architecture.md            Module map, data flow, scoring model, db schema
+│   ├── architecture.md            Module map, data flow, scoring model, db schema
+│   └── testing-strategy.md        Automated (pytest) vs. manual testing — what covers what, and when
 ├── tests/                         pytest regression suite over stock_analyzer/ pure logic (see docs/plans/test-automation.md)
 └── stock_analyzer/
     ├── constants.py               SINGLE SOURCE OF TRUTH for decision thresholds + DATA_* provider config
@@ -219,6 +220,12 @@ A GitHub Actions workflow (`.github/workflows/tests.yml`) also runs this on
 push/PR touching `stock_analyzer/**` or `tests/**` — it's a pre-push safety
 net (red ❌ on the commit), not a deploy gate; neither Streamlit Cloud nor
 Railway consults GitHub Actions.
+
+pytest only covers `stock_analyzer/`'s pure logic — it does NOT cover `app.py`
+UI, live data providers, Supabase, cron jobs, or whether the recommendations
+are actually good. See [docs/testing-strategy.md](docs/testing-strategy.md)
+for the full split and what manual checking still needs to happen for each
+kind of change.
 
 ### Switching to another project (and coming back)
 - This project's `.venv/` stays put — no cleanup needed

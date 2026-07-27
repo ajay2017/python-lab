@@ -1435,7 +1435,7 @@ Streamlit-native "Private app" OAuth layer, so the password gate needed its own 
 1. Push changes to `main` branch on GitHub
 2. Streamlit Community Cloud and Railway both detect the push and auto-redeploy independently
 3. Typical redeploy time: 1–3 minutes (both platforms)
-4. No CI/CD pipeline; manual testing before push is the quality gate
+4. GitHub Actions runs `tests.yml` (pytest over `stock_analyzer/` pure logic, 185 tests as of 2026-07-27) and `docs-check.yml` (constants-doc coverage) on push, but **neither gates the deploy** — Streamlit Cloud and Railway don't consult GitHub Actions, so a red ❌ shows up on the commit, not a blocked deploy. Manual testing (post-deploy smoke check + feature click-through) remains the quality gate for anything outside `stock_analyzer/`'s pure logic — see `docs/testing-strategy.md` for the full split.
 
 ---
 
