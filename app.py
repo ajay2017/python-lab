@@ -883,6 +883,21 @@ _HOME_GAIN     = "#00C851"  # green — matches the Home live price strip
 _HOME_LOSS     = "#ff4444"  # red   — matches the Home live price strip
 
 
+def _render_sparkline(values: list[float], color: str, key: str) -> None:
+    """Tiny inline trend line (no axes/gridlines/legend) under a KPI tile.
+    `values` chronological, oldest first. No-ops below 2 points."""
+    if not values or len(values) < 2:
+        return
+    _fig = go.Figure(go.Scatter(y=values, mode="lines",
+                                 line=dict(color=color, width=1.6), hoverinfo="skip"))
+    _fig.update_layout(
+        height=36, margin=dict(l=0, r=0, t=2, b=2),
+        xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(_fig, use_container_width=True, config={"displayModeBar": False}, key=key)
+
+
 def _fmt_action(action: dict) -> tuple[str, str, str]:
     """Format a structured rebalancer/deterioration action dict into
     (color, label, text) so a card renders the directive directly instead of
@@ -8232,8 +8247,32 @@ elif page == "🧾 Summary":
     # which read as a flat contradiction on this short page. The Alerts KPI
     # tile below already surfaces the same n_danger/n_warning counts calmly.
 
+    # Portfolio Value sparkline — trailing daily equity from the optional
+    # daily_snapshots table (same table Tier B day-P&L reads on Home). One
+    # extra lightweight query, independent of that heavier Tier-B calc this
+    # page deliberately skips above. Empty/thin history just means no
+    # sparkline — never an error, matching the table's degrade-silently norm.
+    _sm_val_history: list = []
+    try:
+        _sm_snap_df = db.load_recent_snapshots(days=15)
+        if not _sm_snap_df.empty:
+            _sm_val_history = (
+                (_sm_snap_df["shares"] * _sm_snap_df["close_price"])
+                .groupby(_sm_snap_df["snapshot_date"].astype(str)).sum()
+                .sort_index().tolist()
+            )
+    except Exception:
+        _sm_val_history = []
+
     _s1, _s2, _s3, _s4, _s5, _s6, _s7, _s8 = st.columns(8)
-    _s1.metric("Portfolio Value", _m(f"${_sm_total_val:,.0f}"))
+    with _s1:
+        st.metric("Portfolio Value", _m(f"${_sm_total_val:,.0f}"))
+        if len(_sm_val_history) >= 2:
+            _render_sparkline(
+                _sm_val_history,
+                color=_HOME_GAIN if _sm_val_history[-1] >= _sm_val_history[0] else _HOME_LOSS,
+                key="sm_pv_spark",
+            )
     _s2.metric("Unrealized P&L", _m(f"${_sm_total_pnl:,.0f}"),
                f"{_sm_total_pnl_pct:+.1f}%", delta_color="normal")
     if _sm_today_pnl is not None:
@@ -24643,6 +24682,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
             st.markdown(
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
+- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a leaner Act Today card list, and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
