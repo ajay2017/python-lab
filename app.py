@@ -27742,7 +27742,12 @@ elif page == "🧠 AI Insights":
                     )
 
                     with st.expander(f"{_icon} {_rr['ticker']} — {_rl} ({_rscr:.0f}/100)  ·  {_summary}"):
-                        st.markdown("**Signal breakdown** — signals in 🔴 are pushing the score up")
+                        _rt_breakdown_caption = (
+                            "**Signal breakdown** — signals in 🔴 are pushing the score up"
+                            if _rt_pressure_n > 0 else
+                            "**Signal breakdown** — all 🟢, nothing is pushing the score up today"
+                        )
+                        st.markdown(_rt_breakdown_caption)
 
                         def _rt_sig_line(label, msg, is_bad):
                             prefix = "🔴" if is_bad else "🟢"
