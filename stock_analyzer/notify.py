@@ -589,6 +589,8 @@ def render_debrief_email(debrief: dict) -> str:
     alpha = debrief.get("alpha_pct")
 
     def _pct_cell(label: str, v: float | None, bold: bool = False, subtitle: str = "") -> str:
+        if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
+            v = None
         if v is None:
             val_html = "<span style='color:#6b7280'>N/A</span>"
         else:

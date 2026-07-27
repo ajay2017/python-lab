@@ -69,7 +69,7 @@ Rules:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _pct(v: float | None) -> str:
-    if v is None:
+    if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
         return "N/A"
     return f"{v:+.1f}%"
 
@@ -98,6 +98,14 @@ def build_debrief_package(
     Returns a dict consumed by generate_debrief().
     """
     import pandas as pd
+
+    # yfinance can return a >=2-row frame with a NaN Close (holiday gap, partial
+    # fetch, upstream glitch) rather than raising — that NaN then survives as a
+    # float (not None) and renders as the literal string "nan" downstream instead
+    # of the intended "N/A". Treat it the same as "unavailable" at the one place
+    # both the cron and on-demand callers funnel through.
+    if isinstance(spy_week_pct, float) and spy_week_pct != spy_week_pct:
+        spy_week_pct = None
 
     week_start = week_ending - timedelta(days=6)
 
