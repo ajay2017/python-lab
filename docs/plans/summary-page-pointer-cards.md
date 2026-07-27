@@ -3,18 +3,33 @@
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** PARTIALLY OVERTAKEN BY A PARALLEL SESSION — card #1 (Risk Posture) shipped
-2026-07-27 via a different, concurrent conversation's "Summary KPI Tier 3" work before
-this plan's Phase 1 build started. That session's version: a plain read-only badge
-(emoji + label + one-line `summary` text + "→ see 🔗 Risk Analysis" caption) sitting in
-a new second row under the KPI tiles (alongside an Alpha-vs-SPY tile), reusing
-`exit_advisor.market_risk_posture()` + the published `_fragility_cache` exactly as
-scoped below — it does NOT include this plan's correlated-pairs flag embellishment.
-User decision (confirmed cross-session 2026-07-27): keep that build as-is, don't
-duplicate it here. **Build order for this plan now starts at card #2 (Thesis Red
-Team)** — see that section below for the next buildable Phase 1 item. Card #1's
-section is left intact below for the record (design rationale, correlated-pairs
-detail not yet built) but should not be re-implemented.
+**Status:** Card #1 (Risk Posture) shipped 2026-07-27 via a parallel session's
+"Summary KPI Tier 3" work, before this plan's Phase 1 build started — a plain
+read-only badge (emoji + label + one-line `summary` text + "→ see 🔗 Risk Analysis"
+caption) sitting in a second row under the KPI tiles (alongside an Alpha-vs-SPY
+tile), reusing `exit_advisor.market_risk_posture()` + the published
+`_fragility_cache` exactly as scoped below — it does NOT include this plan's
+correlated-pairs flag embellishment. User decision (confirmed cross-session
+2026-07-27): keep that build as-is, don't duplicate it here.
+
+**Card #2 (Thesis Review) SHIPPED 2026-07-27.** Built as the first card in a new
+"🧭 Elsewhere in DRISHTA" section (between Act Today and Holdings, as originally
+scoped below) — Risk Posture stays in its own separate KPI-row home, not moved here.
+**Naming correction made during the build:** this plan originally called this card
+"Thesis Red Team" and pointed it at the ⚠️ Red Team tab — wrong on both counts.
+`thesis_reviews` (the table explored together during the 2026-07-26 sweep:
+BROKEN=2, WEAKENING=19, INTACT=51) is F-1's per-holding INTACT/WEAKENING/BROKEN
+thesis review, which renders on AI Insights' **🩺 Positions** tab (confirmed via its
+own identical "N need review" header count, `app.py` ~line 25151-25156). The ⚠️ Red
+Team tab is a completely different feature — a quantitative 0–100 erosion score
+(`thesis_erosion_cache`, Intact/Softening/Eroding/Breaking bands) built by a
+different module (`thesis_red_team.py`). The shipped card correctly reads
+`thesis_reviews` and points to "🧠 AI Insights" (landing on the default first tab,
+🩺 Positions — the correct destination, by coincidence of tab order, not by naming
+the tab directly since `_pending_page` can only select a page, not a tab within it).
+See "Selected cards" section #2 below for the corrected spec as actually built.
+
+**Build order for this plan now starts at card #3 (Catalyst Watch).**
 
 > **One-line spec:** Add a "🧭 Elsewhere in DRISHTA" section to 🧾 Summary — a small
 > row of read-only pointer cards, each surfacing one already-computed signal from
@@ -84,17 +99,23 @@ pattern needed.
 - **Why first:** this is the one candidate that was already partially scoped once
   before (the deferred Tier 3 item) — least new ground to cover.
 
-### 2. Thesis Red Team (AI group)
-- **Shows:** a count by erosion status, e.g. "2 Softening, 1 Breaking of N held."
-- **Reuses:** a `thesis_reviews` read (columns: `id, ticker, trade_date, reviewed_at,
-  status, summary, inputs_hash, created_at` — confirmed against `db.py`'s
-  `_THESIS_REVIEW_COLS` this session). Status values: `INTACT` / `WEAKENING` /
-  `BROKEN` (confirmed against live data during the 2026-07-26 sweep).
-- **Points to:** 🧠 AI Insights → ⚠️ Red Team tab.
-- **To verify at build time:** `thesis_reviews` currently holds one row per
-  (ticker, trade_date) — confirm which row is "current" per ticker if a position has
-  multiple trade_date entries (take most recent `reviewed_at`, matching the existing
-  Signal Coherence Auditor's own precedent for reading this same table).
+### 2. Thesis Review (AI group) — SHIPPED 2026-07-27, renamed from "Thesis Red Team"
+- **Corrected name and destination (was wrong in the original plan):** this reads
+  `thesis_reviews` — F-1's per-holding INTACT/WEAKENING/BROKEN review — which renders
+  on AI Insights' **🩺 Positions** tab, not the ⚠️ Red Team tab (a different feature,
+  `thesis_erosion_cache`, a quantitative 0–100 score with its own Intact/Softening/
+  Eroding/Breaking bands). See the plan status header above for the full correction.
+- **Shows:** a count of held tickers whose most recent review is WEAKENING or BROKEN,
+  e.g. "1 Broken, 2 Weakening of N reviewed" — or "All Intact" when none need
+  attention (shown calmly, not hidden).
+- **Reuses:** `db.load_thesis_reviews()` (columns: `id, ticker, trade_date,
+  reviewed_at, status, summary, inputs_hash, created_at`), reduced to one row per
+  ticker via `sort_values("reviewed_at", ascending=False).drop_duplicates("ticker")`
+  — the identical pattern the AI Insights page's own "🩺 Positions" header count and
+  the Act Today "Thesis broken" button's `_broken_thesis_tickers` set already use.
+  Status values: `INTACT` / `WEAKENING` / `BROKEN`.
+- **Points to:** 🧠 AI Insights (lands on the default first tab, 🩺 Positions, where
+  this exact count already lives).
 - **Why second:** directly usable now that the missed-alpha bug fix (`51b2441`) and
   the 2026-07-26 sweep already put this data in front of us; cheap DB read, no new
   modeling.

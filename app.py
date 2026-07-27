@@ -8435,6 +8435,69 @@ elif page == "🧾 Summary":
                 with _sm_act_cols[_sm_idx % 3]:
                     _render_simple_action_card(_sm_item, urgent=True)
 
+    # ── 🧭 Elsewhere in DRISHTA — bounded pointer section (plan:
+    # docs/plans/summary-page-pointer-cards.md). Card #1 (Risk Posture)
+    # already lives in the Tier-3 row above; this holds the remaining cards
+    # as they ship. Read-only pointers only — never a second independent
+    # computation of anything another page already owns.
+    #
+    # Card #2 — Thesis Review status. Reuses the SAME "most recent review
+    # per ticker" logic + WEAKENING/BROKEN predicate as the AI Insights
+    # page's own "🩺 Positions" header count and the Act Today "Thesis
+    # broken" button's `_broken_thesis_tickers` set — never a second
+    # independent verdict. This is thesis_reviews (F-1's per-holding
+    # INTACT/WEAKENING/BROKEN review), NOT the ⚠️ Red Team tab's separate
+    # quantitative erosion score (thesis_erosion_cache) — different table,
+    # different tab. Withholds (no card) when no held ticker has a saved
+    # review yet; shows a calm "All Intact" read when none need attention
+    # (never disappears just because nothing's wrong — matches Act Today's
+    # own "you're set" pattern).
+    _sm_held_tickers = set(port_df["Ticker"].astype(str).str.upper())
+    _sm_n_weakening = 0
+    _sm_n_broken    = 0
+    _sm_n_reviewed  = 0
+    try:
+        _sm_rv_df = db.load_thesis_reviews()
+        if not _sm_rv_df.empty:
+            _sm_rv_latest = (
+                _sm_rv_df.sort_values("reviewed_at", ascending=False)
+                .drop_duplicates(subset="ticker")
+            )
+            _sm_rv_latest = _sm_rv_latest[
+                _sm_rv_latest["ticker"].astype(str).str.upper().isin(_sm_held_tickers)
+            ]
+            _sm_n_reviewed  = len(_sm_rv_latest)
+            _sm_n_weakening = int((_sm_rv_latest["status"] == "WEAKENING").sum())
+            _sm_n_broken    = int((_sm_rv_latest["status"] == "BROKEN").sum())
+    except Exception:
+        _sm_n_reviewed = 0
+
+    if _sm_n_reviewed > 0:
+        st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+        st.markdown("**🧭 Elsewhere in DRISHTA**")
+        _sm_ptr_cols = st.columns(3)
+        with _sm_ptr_cols[0]:
+            st.markdown("**🩺 Thesis Review**")
+            if _sm_n_broken or _sm_n_weakening:
+                _sm_tr_parts = []
+                if _sm_n_broken:
+                    _sm_tr_parts.append(f"{_sm_n_broken} Broken")
+                if _sm_n_weakening:
+                    _sm_tr_parts.append(f"{_sm_n_weakening} Weakening")
+                _sm_tr_line  = ", ".join(_sm_tr_parts)
+                _sm_tr_color = "#ef4444" if _sm_n_broken else "#f59e0b"
+            else:
+                _sm_tr_line  = "All Intact"
+                _sm_tr_color = "#22c55e"
+            st.markdown(
+                f"<div style='font-size:1.1em;font-weight:600;color:{_sm_tr_color}'>{_sm_tr_line}</div>"
+                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>of {_sm_n_reviewed} reviewed</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("→ AI Insights", key="sm_ptr_thesis"):
+                st.session_state["_pending_page"] = "🧠 AI Insights"
+                st.rerun()
+
     # ── Holdings — identical table to Home's (shared function, same output).
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
     _render_holdings_table(port_df)
@@ -24797,7 +24860,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
             st.markdown(
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
-- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
+- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, a **"🧭 Elsewhere in DRISHTA"** section with a **🩺 Thesis Review** pointer (how many held names' thesis review needs attention, linking to 🧠 AI Insights — never a second independent verdict), and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
