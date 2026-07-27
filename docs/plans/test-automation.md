@@ -3,7 +3,9 @@
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** Batch 1 (constants invariants + `scoring.py` + `concentration.py`) SHIPPED 2026-07-27.
+**Status:** Batch 1 (constants invariants + `scoring.py` + `concentration.py`) SHIPPED
+2026-07-27. Batch 2 (`exit_advisor.py` deterioration tiers + risk-off regime)
+SHIPPED 2026-07-27.
 
 ## Why
 
@@ -64,9 +66,20 @@ functions first.
    (`gating_denominator()` margin/cash/stale/over-levered branches,
    `assess_add_concentration()` single-name/sector breach + elevated + trim-math
    boundaries). 31 tests, all passing locally in `.venv` (Python 3.14.6).
-2. **`exit_advisor.py` — pending.** `classify_deterioration_tier()` (WATCH/TRIM/
-   EXIT boundaries — the tier this book's own hysteresis gap already lives
-   against), `risk_off_regime()`, `market_risk_posture()`, `_trim_floor`/`_exit_floor`.
+2. **`exit_advisor.py` — SHIPPED 2026-07-27.** `tests/test_exit_advisor.py` (32
+   tests): `_trim_floor`/`_exit_floor` ATR-scaling + ceiling caps;
+   `classify_deterioration_tier()` boundaries for all three tiers plus the
+   non-obvious interactions the docstring calls out — WATCH is
+   relative-strength-independent but requires `trend_broken_now`; TRIM does
+   NOT require `trend_broken_now` (only the 2-of-3 `below_ma_count` history
+   matters); a high-ATR name gets a wider floor before TRIM fires at the same
+   raw drawdown %; EXIT's three escalation paths (underwater vs. cost, $250+
+   loss, deep-drawdown shortcut) and that escalation is never silenced by
+   settling grace while base TRIM/WATCH are; `risk_off_regime()`'s two
+   independent legs (trend break, VIX spike) degrading to "not tripped" on
+   short history rather than fabricating a read; `market_risk_posture()`'s
+   `armed` flag requiring BOTH fragility ≥ caution AND regime risk-off (fragile
+   alone does not arm the de-risk action).
 3. **`portfolio.py` stop/sizing — pending.** `protective_stop()`,
    `manual_stop_wins()`, `stop_ladder()` (a known trap already exists here per
    `project_stop_ladder_and_display` memory — raw `stop` vs. the ratcheted
