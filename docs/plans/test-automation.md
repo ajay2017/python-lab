@@ -115,7 +115,7 @@ functions first.
 
 5. **`daily_briefing.py` buy-candidate funnel + weak-large flag, `concentration.py`'s
    `high_beta_share()` — SHIPPED 2026-07-27.** `tests/test_daily_briefing.py`
-   (23 tests) + 5 tests appended to `tests/test_concentration.py`, using a new
+   (24 tests) + 5 tests appended to `tests/test_concentration.py`, using a new
    `make_port_df()` fixture builder in `tests/conftest.py`. Covers `_trim_targets()`
    (only beta/sharpe HIGH/MEDIUM recs qualify as a trim conflict — volatility/
    drawdown/tail-risk recs recommend diversifying, not trimming, so they must
