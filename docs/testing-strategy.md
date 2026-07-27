@@ -209,6 +209,7 @@ about the recommendations feels off) — not part of the per-push routine.
 | Need | Where |
 |---|---|
 | Full pytest batch history, design principles, the verdict-divergence finding it surfaced | `docs/plans/test-automation.md` |
+| Latest pytest pass/fail counts + coverage, and run history | `docs/test-results.md` |
 | The Railway-pilot-specific 12-row smoke checklist | `docs/plans/railway-migration.md` §4c |
 | Rec-engine health-check history and methodology | memory `project_rec_engine_evaluation` |
 | Mockup-first UI convention | memory `feedback_mockup_first_ux` |

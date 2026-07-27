@@ -91,6 +91,7 @@ Only #1 is mechanically guarded; #2–#6 are the author's checklist. When wrappi
 | Functional requirements + operating policy | [docs/requirements.md](docs/requirements.md) |
 | Architecture, data flow, scoring model, db schema, known behaviours | [docs/architecture.md](docs/architecture.md) |
 | What's automated (pytest) vs. what needs manual testing, and when | [docs/testing-strategy.md](docs/testing-strategy.md) |
+| Latest pytest pass/fail counts + coverage, and run history | [docs/test-results.md](docs/test-results.md) |
 | Auto-memory index (durable feedback, threshold rationale, etc.) | `MEMORY.md` (Claude auto-memory, outside repo) |
 | Full shipped-feature changelog (history, not needed every session) | [docs/shipped-log.md](docs/shipped-log.md) |
 

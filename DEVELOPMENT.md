@@ -78,7 +78,8 @@ python-lab/
 ├── docs/
 │   ├── requirements.md            Functional + non-functional reqs + operating posture
 │   ├── architecture.md            Module map, data flow, scoring model, db schema
-│   └── testing-strategy.md        Automated (pytest) vs. manual testing — what covers what, and when
+│   ├── testing-strategy.md        Automated (pytest) vs. manual testing — what covers what, and when
+│   └── test-results.md            Running log of pytest pass/fail + coverage, updated each run
 ├── tests/                         pytest regression suite over stock_analyzer/ pure logic (see docs/plans/test-automation.md)
 └── stock_analyzer/
     ├── constants.py               SINGLE SOURCE OF TRUTH for decision thresholds + DATA_* provider config
@@ -216,6 +217,10 @@ or similar decision-logic modules:
 ```
 pytest tests/ -v
 ```
+Log the outcome in [docs/test-results.md](docs/test-results.md) if it's worth
+tracking (a new batch, a failure, a coverage shift) — that file is the running
+history of pass/fail counts and coverage, not a one-time snapshot.
+
 A GitHub Actions workflow (`.github/workflows/tests.yml`) also runs this on
 push/PR touching `stock_analyzer/**` or `tests/**` — it's a pre-push safety
 net (red ❌ on the commit), not a deploy gate; neither Streamlit Cloud nor

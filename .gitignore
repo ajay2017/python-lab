@@ -4,3 +4,5 @@ __pycache__/
 *.pyo
 .env
 .streamlit/secrets.toml
+.coverage
+.pytest_cache/
