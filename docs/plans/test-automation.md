@@ -5,9 +5,12 @@
 **Analysis model:** Claude Sonnet 5
 **Status:** Original 4-batch plan COMPLETE 2026-07-27 (119 tests). Batch 5
 (`daily_briefing.py`'s buy-candidate suppression funnel + weak-large flag,
-`concentration.py`'s `high_beta_share()`) added 2026-07-27, same session, as
-a follow-on once the "what's next" candidates below were picked up. 148 tests
-total, all passing locally in `.venv` (Python 3.14.6).
+`concentration.py`'s `high_beta_share()`) added 2026-07-27, same session (148
+tests). Batch 6 (`signal_reconciliation.py` + `daily_briefing._cross_reference()`)
+added 2026-07-27, same session, at the user's request to cover the
+"informational labeling" candidate too. **Surfaced a real, currently-shipping
+finding while writing it — see Batch 6 below.** 180 tests total, all passing
+locally in `.venv` (Python 3.14.6).
 
 ## Why
 
@@ -134,24 +137,56 @@ functions first.
    `high_beta_share()`'s None-weight/None-beta exclusion from both numerator
    and denominator, and its inclusive `>=` threshold boundary.
 
+6. **`signal_reconciliation.py` + `daily_briefing._cross_reference()` —
+   SHIPPED 2026-07-27**, at the user's explicit request to cover the
+   "informational labeling" candidate Batch 5 had deliberately left out.
+   `tests/test_signal_reconciliation.py` (21 tests): `classify_composite_direction()`'s
+   label-beats-score precedence and score-boundary fallback;
+   `reconcile_signals()`'s 4-tier verdict ladder (`skip`/`caution`/`verify`/`go`)
+   — several tests exist specifically to pin the CHECK ORDER, not just each
+   condition alone, since the composite-conflict skip check runs before the
+   negative-news skip check, which runs before the earnings-caution check,
+   which runs before the missing-composite verify check; `lookup_composite()`'s
+   port_df-before-composites-dict source priority and its "empty match must
+   fall through, not false-positive" edge case. `tests/test_daily_briefing.py`
+   gained 11 more tests for `_cross_reference()`'s OWN verdict chain
+   (`confirmed`/`mixed`/`conflicted`/`caution`/`unverified` — a DIFFERENT
+   5-tier system from `reconcile_signals()`'s 4-tier one), including the
+   documented earnings+conflict ESCALATION the source comment calls out.
+
+   **Real finding surfaced while writing this batch (not a bug fix — documented,
+   not yet decided whether to address):** `_cross_reference()` computes TWO
+   independently-derived verdicts in the same returned dict — the legacy
+   `verdict` field (its own if/elif chain, includes an analyst-revisions
+   layer that reconcile_signals has no concept of) and `verdict_reconciled`
+   (from `reconcile_signals()`, which only sees momentum/composite/earnings/
+   news). `app.py` uses BOTH live: the legacy `verdict` drives sorting/
+   coloring/grouping in most surfaces (e.g. the "confirmed" bucket split at
+   app.py ~22648), while `verdict_reconciled['one_liner']` is rendered as the
+   prominent explanation text (app.py ~5897, ~7479). `test_cross_reference_legacy_and_reconciled_verdicts_can_diverge`
+   pins a concrete, realistic case: a held position with a Strong-Buy
+   composite that agrees with technical momentum (no earnings/news conflict)
+   but a recent analyst-revisions downgrade — legacy `verdict` = `"mixed"`
+   (revisions count as a legacy-only conflict) while `verdict_reconciled['verdict']`
+   = `"go"` (reconcile_signals never sees revisions at all). A user could see
+   a card sorted/colored as "Mixed" while its prominent one-liner reads "Go —
+   All Signals Agree" — a real, currently-shipping inconsistency, not a test
+   artifact. **Not fixed here** — flagged for the user to decide whether/how
+   to reconcile (e.g. teach `reconcile_signals()` about revisions, or drop the
+   legacy `verdict` field in favor of `verdict_reconciled` everywhere).
+
 ## Explicitly out of scope
 
 - `app.py` — Streamlit orchestration/UI, too coupled to `st.session_state` and
   live secrets to unit-test cheaply; not where the pure decision logic lives.
 - Any live network/Supabase-hitting test — everything runs on synthetic
   fixtures so the suite stays fast and deterministic in CI.
-- `_cross_reference()`'s own verdict logic (news/earnings/analyst-revision
-  cross-referencing) — `_buy_candidates()`'s tests treat its `xref` output as
-  opaque, testing only the suppression funnel around it. `_cross_reference`
-  is a different, self-contained concern and would need its own fixture work.
 - Making the GitHub Actions run a required branch-protection check — deferred
   indefinitely; revisit if the suite ever flakes or a real regression slips
   through despite a green run.
 
 ## What's next (not part of this plan, noted for a future session)
 
-All 5 batches shipped. If further regression coverage is wanted later, a
-natural next candidate (not committed to, not scoped) is `_cross_reference()`
-itself (the verdict engine `_buy_candidates()` calls, deliberately left opaque
-above) — lower priority since it's informational (confidence labeling), not a
-suppression gate.
+All 6 batches shipped, 180 tests. No further candidates are currently queued.
+The one open item is the Batch 6 finding above (legacy vs. reconciled verdict
+divergence) — a product/architecture decision for the user, not a testing gap.

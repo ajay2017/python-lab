@@ -25,6 +25,7 @@ from stock_analyzer.constants import (
 )
 from stock_analyzer.daily_briefing import (
     _buy_candidates,
+    _cross_reference,
     _recently_added,
     _review_list,
     _trim_targets,
@@ -242,3 +243,121 @@ def test_weak_large_flag_silent_when_conviction_is_strong():
     }])
     items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0)
     assert find_item(items, "AAA") is None
+
+
+# ── _cross_reference ──────────────────────────────────────────────────────────
+#
+# _cross_reference() computes its OWN legacy verdict ('confirmed'/'mixed'/
+# 'conflicted'/'caution'/'unverified') via a dedicated if/elif chain, AND
+# separately calls signal_reconciliation.reconcile_signals() for a second,
+# independently-computed verdict ('go'/'verify'/'caution'/'skip') stored under
+# verdict_reconciled. app.py uses BOTH live in the UI -- the legacy `verdict`
+# drives sorting/coloring/grouping in most surfaces (e.g. the "confirmed"
+# bucket split at app.py ~22648), while verdict_reconciled['one_liner'] is
+# rendered as the prominent explanation text (app.py ~5897, ~7479). These two
+# verdicts are NOT guaranteed to agree, because reconcile_signals() has no
+# concept of the analyst-revisions layer (Layer 5) that only the legacy chain
+# considers -- see test_cross_reference_legacy_and_reconciled_verdicts_can_diverge
+# below, which pins a concrete case where they disagree.
+
+def _scanner_row(**overrides):
+    row = dict(Signal="Buy", Score=80.0, RSI=60.0, Trend="Up")
+    row.update(overrides)
+    return row
+
+
+def _held_df(ticker="AAA", signal=None, score=None):
+    import pandas as pd
+    return pd.DataFrame([{"Ticker": ticker, "Signal": signal, "Score": score}])
+
+
+def test_cross_reference_confirmed_when_composite_agrees_no_conflicts():
+    composites = {"AAA": {"rec": {"label": "Strong Buy"}, "total": 85.0}}
+    result = _cross_reference("AAA", _scanner_row(), None, [], {}, _TODAY, composites=composites)
+    assert result["verdict"] == "confirmed"
+
+
+def test_cross_reference_unverified_not_held_no_composite():
+    result = _cross_reference("AAA", _scanner_row(), None, [], {}, _TODAY)
+    assert result["verdict"] == "unverified"
+    assert "Run Analysis First" in result["verdict_label"]
+
+
+def test_cross_reference_unverified_held_no_composite_uses_different_label():
+    port_df = _held_df("AAA", signal=None, score=None)
+    result = _cross_reference("AAA", _scanner_row(), port_df, [], {}, _TODAY)
+    assert result["verdict"] == "unverified"
+    assert result["is_held"] is True
+    assert "Composite Signal Missing" in result["verdict_label"]
+
+
+def test_cross_reference_composite_conflict_alone_gives_conflicted():
+    port_df = _held_df("AAA", signal="Hold", score=50.0)
+    result = _cross_reference("AAA", _scanner_row(), port_df, [], {}, _TODAY)
+    assert result["verdict"] == "conflicted"
+    assert "Composite vs Technical" in result["verdict_label"]
+
+
+def test_cross_reference_sentiment_conflict_alone_gives_mixed():
+    news = [{"ticker": "AAA", "compound": -0.5, "headline": "bad news"}]
+    result = _cross_reference("AAA", _scanner_row(), None, news, {}, _TODAY)
+    assert result["verdict"] == "mixed"
+    assert "Negative News" in result["verdict_label"]
+
+
+def test_cross_reference_earnings_conflict_alone_gives_caution():
+    earnings_lookup = {"AAA": "2026-07-29"}  # 2 days out from _TODAY
+    result = _cross_reference("AAA", _scanner_row(), None, [], {}, _TODAY, earnings_lookup=earnings_lookup)
+    assert result["verdict"] == "caution"
+    assert "Earnings Within" in result["verdict_label"]
+
+
+def test_cross_reference_earnings_plus_composite_conflict_escalates_to_conflicted():
+    # The docstring/comment above the verdict chain explicitly requires this:
+    # earnings + another conflict must ESCALATE to "conflicted", not settle
+    # for the lower "caution" tier earnings would give alone.
+    port_df = _held_df("AAA", signal="Sell", score=30.0)
+    earnings_lookup = {"AAA": "2026-07-29"}
+    result = _cross_reference("AAA", _scanner_row(), port_df, [], {}, _TODAY, earnings_lookup=earnings_lookup)
+    assert result["verdict"] == "conflicted"
+    assert "Earnings + Signal Conflict" in result["verdict_label"]
+
+
+def test_cross_reference_composite_and_sentiment_conflict_gives_multiple_conflicts():
+    port_df = _held_df("AAA", signal="Sell", score=30.0)
+    news = [{"ticker": "AAA", "compound": -0.5, "headline": "bad news"}]
+    result = _cross_reference("AAA", _scanner_row(), port_df, news, {}, _TODAY)
+    assert result["verdict"] == "conflicted"
+    assert "Multiple Conflicts" in result["verdict_label"]
+
+
+def test_cross_reference_analyst_downgrade_alone_gives_generic_mixed():
+    # A revisions-only conflict (no composite/sentiment/earnings conflict)
+    # still downgrades the verdict via the generic `elif conflicts:` branch,
+    # with the plain "Mixed" label (not the specific Negative-News one).
+    held_data = {"AAA": {"revisions": {"net": -3}}}
+    result = _cross_reference("AAA", _scanner_row(), None, [], held_data, _TODAY)
+    assert result["verdict"] == "mixed"
+    assert result["verdict_label"] == "⚠️ Mixed"
+
+
+def test_cross_reference_layers_checked_matches_agreed_plus_conflicts():
+    result = _cross_reference("AAA", _scanner_row(), None, [], {}, _TODAY)
+    assert result["layers_checked"] == len(result["agreed"]) + len(result["conflicts"])
+
+
+def test_cross_reference_legacy_and_reconciled_verdicts_can_diverge():
+    # Composite agrees with technical (Strong Buy, no conflict) and there's no
+    # earnings/news conflict -- but an analyst-revisions downgrade (Layer 5,
+    # legacy-only) still knocks the LEGACY verdict down to "mixed", while
+    # reconcile_signals() -- which has no revisions input at all -- sees a
+    # clean composite/momentum agreement and returns "go". Both fields ship
+    # live in the same dict and are both rendered in the UI (see module note
+    # above), so this is a real, currently-shipping inconsistency, not a test
+    # artifact -- pinned here as documented current behaviour, not asserting
+    # it's correct.
+    port_df = _held_df("AAA", signal="Strong Buy", score=90.0)
+    held_data = {"AAA": {"revisions": {"net": -3}}}
+    result = _cross_reference("AAA", _scanner_row(), port_df, [], held_data, _TODAY)
+    assert result["verdict"] == "mixed"
+    assert result["verdict_reconciled"]["verdict"] == "go"
