@@ -8247,22 +8247,74 @@ elif page == "🧾 Summary":
     # which read as a flat contradiction on this short page. The Alerts KPI
     # tile below already surfaces the same n_danger/n_warning counts calmly.
 
-    # Portfolio Value sparkline — trailing daily equity from the optional
-    # daily_snapshots table (same table Tier B day-P&L reads on Home). One
-    # extra lightweight query, independent of that heavier Tier-B calc this
-    # page deliberately skips above. Empty/thin history just means no
-    # sparkline — never an error, matching the table's degrade-silently norm.
+    # Trailing daily equity from the optional daily_snapshots table (same
+    # table Tier B day-P&L reads on Home) — powers both the Portfolio Value
+    # sparkline and Alpha vs SPY below. Date-filtered (not row-count-limited)
+    # so the window is exactly what it's labeled. One extra lightweight
+    # query, independent of Home's heavier Tier-B calc. Empty/thin history
+    # just means no sparkline/tile — never an error.
+    _sm_val_dates: list = []
     _sm_val_history: list = []
     try:
-        _sm_snap_df = db.load_recent_snapshots(days=15)
+        _sm_snap_start = (_today_et() - timedelta(days=45)).isoformat()
+        _sm_snap_df = db.load_daily_snapshots(start_date=_sm_snap_start, end_date=_today_et().isoformat())
         if not _sm_snap_df.empty:
-            _sm_val_history = (
-                (_sm_snap_df["shares"] * _sm_snap_df["close_price"])
+            _sm_eq_by_day = (
+                (_sm_snap_df["shares"].astype(float) * _sm_snap_df["close_price"].astype(float))
                 .groupby(_sm_snap_df["snapshot_date"].astype(str)).sum()
-                .sort_index().tolist()
+                .sort_index()
             )
+            _sm_val_dates   = _sm_eq_by_day.index.tolist()
+            _sm_val_history = _sm_eq_by_day.tolist()
     except Exception:
-        _sm_val_history = []
+        _sm_val_dates, _sm_val_history = [], []
+
+    # Alpha vs SPY (30d) — Tier 3. APPROXIMATE: equity-level return, NOT
+    # adjusted for buys/sells during the window (the precise money-weighted
+    # return lives on 💰 Account → Capital Trend, gated on account_flows
+    # baseline setup — this tile works for everyone, with an honest caveat,
+    # per user decision 2026-07-27). Window shrinks honestly when fewer than
+    # 30 trading days of snapshot history exist yet — the label always
+    # matches the actual window used (`_sm_alpha["n_days"]`), never claims
+    # "30d" for a shorter read. Withholds (no tile) below `_SM_ALPHA_MIN_DAYS`.
+    _SM_ALPHA_MIN_DAYS = 5
+    _sm_alpha = None
+    try:
+        _sm_n = min(30, len(_sm_val_history))
+        if _sm_n >= _SM_ALPHA_MIN_DAYS:
+            _sm_port_s = pd.Series(_sm_val_history[-_sm_n:], index=_sm_val_dates[-_sm_n:])
+            _sm_spy_close = _cached_spy("3mo")["Close"].dropna()
+            _sm_spy_s = _sm_spy_close.copy()
+            _sm_spy_s.index = _sm_spy_s.index.strftime("%Y-%m-%d")
+            _sm_joined = pd.DataFrame({"port": _sm_port_s, "spy": _sm_spy_s}).dropna()
+            if len(_sm_joined) >= _SM_ALPHA_MIN_DAYS:
+                _sm_port_cumret = (_sm_joined["port"] / _sm_joined["port"].iloc[0] - 1) * 100
+                _sm_spy_cumret  = (_sm_joined["spy"]  / _sm_joined["spy"].iloc[0]  - 1) * 100
+                _sm_alpha_series = _sm_port_cumret - _sm_spy_cumret
+                _sm_alpha = {
+                    "pct":    float(_sm_alpha_series.iloc[-1]),
+                    "n_days": len(_sm_joined),
+                    "series": _sm_alpha_series.tolist(),
+                }
+    except Exception:
+        _sm_alpha = None
+
+    # Risk Posture — Tier 3, read-only pointer. Reuses the SAME
+    # market_risk_posture() call + already-published fragility cache the
+    # 🔗 Risk Analysis dial uses — never a second independent verdict.
+    # Withholds (no card) when fragility isn't computed yet, mirroring the dial.
+    from stock_analyzer.exit_advisor import risk_off_regime as _sm_ro_regime, market_risk_posture as _sm_mk_posture
+    from stock_analyzer.constants import RISK_OFF_TREND_MA as _SM_RO_MA
+    _sm_posture = None
+    try:
+        _sm_ro_armed, _sm_ro_reasons = _sm_ro_regime(
+            _cached_spy("1y"), _cached_vix(), trend_ma=_SM_RO_MA, vix_threshold=RISK_OFF_VIX_LEVEL,
+        )
+        _sm_posture = _sm_mk_posture(
+            st.session_state.get("_fragility_cache"), risk_off=_sm_ro_armed, reasons=_sm_ro_reasons,
+        )
+    except Exception:
+        _sm_posture = None
 
     _s1, _s2, _s3, _s4, _s5, _s6, _s7, _s8 = st.columns(8)
     with _s1:
@@ -8294,6 +8346,40 @@ elif page == "🧾 Summary":
                _m(f"${_sm_best['P&L ($)']:,.0f}"), f"{_sm_best['P&L (%)']:+.1f}%", delta_color="normal")
     _s8.metric(f"Worst: {_sm_worst['Ticker']}",
                _m(f"${_sm_worst['P&L ($)']:,.0f}"), f"{_sm_worst['P&L (%)']:+.1f}%", delta_color="normal")
+
+    # ── Alpha vs SPY + Risk Posture — Tier 3, second row (approved mockup).
+    # A new row rather than widening the 8-tile row above (unchanged).
+    if _sm_alpha is not None or _sm_posture is not None:
+        st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+        _t1, _t2 = st.columns(2)
+        with _t1:
+            if _sm_alpha is not None:
+                st.metric(
+                    f"Alpha vs SPY ({_sm_alpha['n_days']}d)",
+                    f"{_sm_alpha['pct']:+.1f}%",
+                    "beating SPY" if _sm_alpha["pct"] >= 0 else "trailing SPY",
+                    delta_color="normal" if _sm_alpha["pct"] >= 0 else "inverse",
+                    help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
+                         "adjusted for any buys/sells during that time. For the precise "
+                         "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+                )
+                if len(_sm_alpha["series"]) >= 2:
+                    _render_sparkline(
+                        _sm_alpha["series"],
+                        color=_HOME_GAIN if _sm_alpha["pct"] >= 0 else _HOME_LOSS,
+                        key="sm_alpha_spark",
+                    )
+            else:
+                st.caption("Alpha vs SPY — building history (needs a few more days of snapshots).")
+        with _t2:
+            if _sm_posture is not None:
+                st.markdown("**Risk Posture**")
+                st.markdown(
+                    f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture['emoji']} {_sm_posture['label']}</div>"
+                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("→ see 🔗 Risk Analysis for the full read")
 
     # ── Act Today — reads the same daily-brief data Home computed this
     # session (published via _home_synth_cache) and calls the identical pure
@@ -24682,7 +24768,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
             st.markdown(
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
-- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a leaner Act Today card list, and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
+- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
