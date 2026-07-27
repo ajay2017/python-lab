@@ -3748,6 +3748,20 @@ if page == "🏠 Home":
     except Exception:
         _dpnl = None
 
+    # Publish Tier-B to session_state so 🧾 Summary shows the SAME number
+    # instead of independently recomputing the cheaper held-only mark — two
+    # tiles both labeled "Today's P&L" disagreeing with no visible cue was a
+    # trust problem (CLAUDE.md coordination pattern + never-silently-filter
+    # ethos). Dated so a stale cross-day value is never reused; Summary falls
+    # back to its own held-mark calc, honestly labeled "(held)", when this
+    # cache is absent or stale (e.g. a session that lands on Summary first).
+    st.session_state["_dpnl_cache"] = {
+        "dpnl": _dpnl,
+        "baseline_date": _dpnl_baseline_date,
+        "is_current": _dpnl_is_current,
+        "date": _today_et().isoformat(),
+    }
+
     # (Re)write TODAY's snapshot ONLY in the post-close window (regular session
     # over: TRADING DAY AND ET ≥ 16:00), so close_price is the FINAL settled close.
     # A generic `not is_open` would also fire during PRE-MARKET (4:00–9:30) and
@@ -8364,6 +8378,21 @@ elif page == "🧾 Summary":
     _sm_best  = port_df.loc[port_df["P&L (%)"].idxmax()]
     _sm_worst = port_df.loc[port_df["P&L (%)"].idxmin()]
 
+    # Today's P&L — prefer Home's Tier-B "true" day P&L, published this
+    # session to `_dpnl_cache` (dated, so a stale cross-day value is never
+    # reused), so this page AGREES with Home instead of showing a second,
+    # cheaper number under the same label. Falls back to the plain held-mark
+    # calc below — honestly labeled "(held)" — when Home hasn't run yet this
+    # session (e.g. landing directly on Summary).
+    _sm_dpnl_pub = st.session_state.get("_dpnl_cache")
+    _sm_dpnl = None
+    _sm_dpnl_baseline_date = None
+    _sm_dpnl_is_current = False
+    if _sm_dpnl_pub and _sm_dpnl_pub.get("date") == _today_et().isoformat():
+        _sm_dpnl = _sm_dpnl_pub.get("dpnl")
+        _sm_dpnl_baseline_date = _sm_dpnl_pub.get("baseline_date")
+        _sm_dpnl_is_current = _sm_dpnl_pub.get("is_current", False)
+
     _sm_live = st.session_state.get("_live_prices") or {}
     _sm_today_pnl = sum(
         (_sm_live[r["Ticker"]]["price"] - _sm_live[r["Ticker"]]["prev_close"]) * r["Shares"]
@@ -8491,12 +8520,27 @@ elif page == "🧾 Summary":
             )
     _s2.metric("Unrealized P&L", _m(f"${_sm_total_pnl:,.0f}"),
                f"{_sm_total_pnl_pct:+.1f}%", delta_color="normal")
-    if _sm_today_pnl is not None:
+    if _sm_dpnl is not None:
+        _sm_dp_scope = (
+            "" if _sm_dpnl_is_current
+            else f" · from {date.fromisoformat(_sm_dpnl_baseline_date).strftime('%b %d')}"
+        )
         _s3.metric(
-            "Today's P&L", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
+            "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
+            f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
+            delta_color="normal" if _sm_dpnl["day_pnl"] >= 0 else "inverse",
+            help=(
+                f"TRUE day P&L for tracked positions, measured from the "
+                f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
+                f"Same figure as 🏠 Home (published this session)."
+            ),
+        )
+    elif _sm_today_pnl is not None:
+        _s3.metric(
+            "Today's P&L (held)", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
             delta_color="normal" if _sm_today_pnl >= 0 else "inverse",
-            help="Held-position mark-to-market vs yesterday's close — same base calc as "
-                 "Home's F-03 metric (Home may show a fuller Tier-B figure once available).",
+            help="Held-position mark-to-market vs yesterday's close — excludes today's trades. "
+                 "Visit 🏠 Home first this session for the fuller Tier-B figure.",
         )
     else:
         _s3.metric("Today's P&L", "Updating…",
