@@ -358,6 +358,16 @@ reworking Home itself.
 | F-52 | Analysis Summary expander: formatted markdown summary for all analysed tickers |
 | F-53 | Source links: Yahoo Finance, Finviz, SEC filings, Yahoo News |
 
+### 3.3a Compare (⚖️ Compare page)
+
+**Added to spec 2026-07-27 — a doc gap, not a new build; the page has existed since before shipped-log.md tracking began.** `app.py:17625-17833`, `elif page == "⚖️ Compare":`, backed by `stock_analyzer/comparison.py` (`build_comparison`, `_compute_verdict`, `_portfolio_fit`).
+
+| ID | Requirement |
+|----|-------------|
+| F-208 | **Two-ticker side-by-side comparison.** Exactly two tickers via two text inputs, triggered by a Compare button; identical tickers rejected with a warning. Quick-pick buttons auto-fill from "Watchlist top 2" and/or "Portfolio top 2 by weight"; defaults pre-fill from the last comparison run or the first two watchlist tickers. Data via `load_all()` (30-min `@st.cache_data` freshness, not reused from another page's session state). No charts — custom HTML tables per section (Headline, Overview, Technicals, Business Quality, Valuation, Sentiment & Analyst, Risk, Setup), with the winning cell in each row shaded green. Result cached in `st.session_state["_cmp_result_cache"]` keyed by `(ticker_a, ticker_b)` so it survives reruns from the page's own "Deep dive" buttons (→ 📈 Analysis) without recomputing. |
+| F-209 | **Verdict never fabricates a pick.** `_compute_verdict()` returns `"tie"` with `confidence: "low"` when the composite-score gap between the two tickers is under 3 points — a close call is shown as a close call, not forced to a winner. |
+| F-210 | **Portfolio-fit awareness (not a gate here).** `_portfolio_fit()` checks each ticker's sector weight against `SECTOR_ELEVATED`/`SECTOR_CEILING` (same basis as the hard sector-cap gate, G-19) and flags "🚫 hard ceiling breached" or "⚠️ elevated" alongside the comparison — informational on this page; the actual gate still lives where a real BUY would be gated (Grow Today / Watchlist ENTER_NOW). |
+
 ### 3.4 Market Scanner
 
 | ID | Requirement |
@@ -405,12 +415,32 @@ Three internal tabs (restructured 2026-07-16 per the I12 UX remediation): **📝
 | F-167 | **Overtrading detection (behavioral analytics).** `trade_analytics._build_overtrading_stats()` computes the current calendar-month BUY+SELL count (excludes SPLIT rows) vs a rolling 12-month average. Returns `{current_month, current_month_count, rolling_avg, multiplier, is_elevated}`. `build_behavioral_insights()` surfaces two overtrading insight cards: **HIGH** at ≥ 2.0× rolling average (pace is markedly above normal, with institutional-lens framing on transaction costs and reactive trading risk); **MEDIUM** at ≥ 1.5× (elevated pace with context). `build_full_analytics()` now includes `win_rate` (was computed but not returned in prior versions — now in both the `empty` sentinel and the return dict) and `overtrading_stats` in the returned dict. (Commit 3cbd6a6.) |
 | F-168 | **Stress test — historical scenario replay (model vs actual).** For scenarios that have a real event window (`stress_test.HISTORICAL_WINDOWS`), an optional "📅 How did your holdings actually perform?" expander appears below the stress-test results (2026-07-13: now on the 🔗 Risk Analysis page, moved from Home in the nav cleanup). Three scenarios have windows: COVID Crash (2020-02-19 → 2020-03-23), 2022 Rate Shock (2022-01-03 → 2022-10-13), GFC 2008 (2007-10-09 → 2009-03-09). Loading is button-gated and lazy (user clicks "📥 Load historical data"); results are cached in `st.session_state[f"_hist_stress_{scenario_id}"]`. `stress_test.fetch_historical_drawdowns(scenario_id, tickers)` fetches actual OHLCV via yfinance for each held ticker in the event window and computes peak-to-trough drawdown as `(min_close − first_close) / first_close × 100`. Tickers with fewer than 5 trading days in the window (IPO after event start, delisted) return `None` and display N/A. Results render as a **Model Est. (%) / Actual (%) / Δ (Actual−Model)** table; rows with Δ > 5 are green-highlighted (model over-estimated the loss — actual was better than feared), rows with Δ < −5 are red-highlighted (model under-estimated — actual was worse). A "🔄 Refresh data" button clears the session cache. Custom Scenario and scenarios without a `HISTORICAL_WINDOWS` entry show no expander. Awareness only; never issues a recommendation or gates an entry. (Commit 0e8dc9f.) |
 
+### 3.6a Trade Review (🪞 Trade Review page)
+
+**Added to spec 2026-07-27 — a doc gap flagged internally back on 2026-07-24 (see `docs/shipped-log.md`'s Agentic Roadmap P6 closing note: "🪞 Trade Review... itself discovered mid-session, undocumented in memory") and never closed until now.** `app.py:20449`, `elif page == "🪞 Trade Review":`. Pure-logic backing module `stock_analyzer/trade_review.py` (no Streamlit/API calls). Answers: "are app-followed trades outperforming ones made off external info?"
+
+| ID | Requirement |
+|----|-------------|
+| F-214 | **Nine independently sample-gated behavioral diagnostics**, each rendered only above its own minimum-sample floor (never a fabricated read on thin data): Holding-Period Imbalance (winners cut short vs. losers held longer, ≥3 wins & ≥3 losses), Signal-Defying Bias (outcome when the user traded against the recorded signal, ≥3 defying trades), vs-SPY Drag (% of closed trades beating SPY + cumulative $ alpha, ≥3 closed), Re-Entered Tickers (net P&L on tickers bought ≥2 times, ≥2 trades/ticker), Trigger-Type Effectiveness (win rate/P&L by MANUAL/RECOMMENDATION/WATCHLIST_ENTRY/etc., ≥2 types × ≥3 trades each, total ≥6, spread ≥20pp), Lesson-Capture Rate (% of trades with a logged lesson, and whether lesson-writers outperform, ≥6 judged trades), Day-of-Week Timing (win rate/P&L by execution weekday, ≥10 total, ≥2 weekdays × ≥2 each, spread ≥30pp), Position-Size Discipline (vs. `SINGLE_NAME_CEILING` 15%), and Sector Mix (vs. `SECTOR_ELEVATED` 25%). All computation (FIFO buy/sell pairing, per-trade P&L, diagnostics) happens in `trade_review.py`; the page only calls `build_trade_review`/`build_recommendations`/`build_insights` and renders. |
+| F-215 | **Position-size % uses current portfolio value, not historical** (an explicit, documented approximation — a trade's size-at-the-time isn't reconstructed from point-in-time portfolio value, which doesn't exist as a stored series). Findings are described in the page's own copy as "never speculative." |
+| F-216 | **Deliberately NOT merged with Behavioral Fingerprint.** A plan to combine these 9 diagnostics with Behavioral Fingerprint's 6 patterns into one "Blind Spots" list was scoped and then shelved after Opus design review — Behavioral Fingerprint has no severity tiers, and folding its explicitly neutral cards into a "blind spot" label would have contradicted that tab's own non-accusatory posture. The considered fallback (a Trade-Review-only severity-ranked list) turned out to duplicate this page's own already-existing "🎯 Course-Correction Recommendations" section — so nothing was built; the two pages remain independent by design, not by oversight. |
+
 ### 3.7 Economic Calendar
 
 | ID | Requirement |
 |----|-------------|
 | F-90 | Display upcoming macro events (Non-Farm Payrolls, CPI, FOMC, etc.) with dates |
 | F-91 | Show relevance of each event to the current portfolio holdings |
+
+### 3.7a Macro (🌐 Macro page)
+
+**Added to spec 2026-07-27 — a doc gap, not a new build.** `app.py:14312-14484`, `elif page == "🌐 Macro":`, single linear flow (no tabs), backed by `stock_analyzer/macro.py`.
+
+| ID | Requirement |
+|----|-------------|
+| F-211 | **Manual-load regime read (TLT/SPY/VIX).** A "Load macro signals" button fetches 3 price series and caches them in `st.session_state["_macro_raw"]` — not auto-loaded on page open, not auto-refreshed. `detect_macro_regime(tlt_ret, spy_ret, vix)` (`stock_analyzer/macro.py`) classifies: TLT 3-month return < -3% → `rising_rates`, > +3% → `falling_rates`, else neutral on rates; VIX ≥ `RISK_OFF_VIX_LEVEL` (25) → `risk_off`, ≤ `RISK_ON_VIX_LEVEL` (15) → `risk_on`, else neutral on volatility (SPY return only labels bull/bear/sideways, doesn't drive the combined regime). Rate signal wins if non-neutral, else the risk signal, else `neutral`. Output regime keys: `rising_rates` / `falling_rates` / `risk_off` / `risk_on` / `neutral`. |
+| F-212 | **⚠️ Landmine — do not confuse with the FRED-based regime detector used elsewhere.** This page's `detect_macro_regime` (`macro.py`) is a SEPARATE, independent function from `detect_macro_regime_fred` (`stock_analyzer/macro_calendar.py`), which feeds real gates/targets elsewhere (Premortem stance narrative, Regime-Conditional Targets, the Risk Analysis regime cache). The two use different inputs (TLT/SPY/VIX price action here vs. FRED macro data there) and different label taxonomies. This page's regime read is diagnostic-only, lives in page-local session state, and is not consumed by any other page or gate. |
+| F-213 | **Sector Rotation Playbook + portfolio macro alignment.** For the detected regime, shows an overweight/underweight sector list from a static `REGIME_FAVORED` table. `portfolio_macro_exposure()` labels each holding Tailwind↑/Headwind↓/Neutral↔ purely by whether its sector is in the current regime's overweight/underweight list (a categorical match, not a continuous alignment score), alongside a static per-sector `RATE_SENSITIVITY` score and a horizontal bar chart. No cross-asset signals (credit spreads, dollar, copper, yield curve) are used on this page — that's a distinct feature (Cross-Asset Pulse, F-09c). Awareness only; never gates or gets consumed by any recommendation. |
 
 ### 3.8 Watchlist
 
