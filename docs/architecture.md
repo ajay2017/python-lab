@@ -318,6 +318,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `THESIS_EROSION_HAIKU_MIN` | 30 | Thesis Red Team Agent (Phase 2) — minimum erosion score (0–100) required to trigger a Haiku counter-evidence call for the position. Below this the erosion score is shown with no LLM narrative. Bounds the Phase 2 Haiku API cost to positions with material signal. **Phase 1 is inert** (no Haiku). |
 | `THESIS_EROSION_BRIEF_MIN` | 50 | Thesis Red Team Agent (Phase 3) — erosion score threshold for a Daily Brief "Thesis Under Pressure" annotation. Fires when today's score meets or exceeds this floor AND crossed it since yesterday (first breach), or unconditionally if yesterday's row is absent. Awareness annotation only — never a gate. |
 | `THESIS_EROSION_BRIEF_JUMP` | 15 | Thesis Red Team Agent (Phase 3) — a single-day score increase of this many points triggers the Daily Brief annotation regardless of whether the absolute score crosses `THESIS_EROSION_BRIEF_MIN`. Catches sudden deterioration before the absolute floor is reached. Awareness annotation only. |
+| `DAY_SHOCK_PCT` | 5.0 | Day Shock banner (Home) — a held position moving ≥ this % (up or down) same-day triggers a "Day Shock" banner, independent of `classify_deterioration_tier`'s trend-break condition. Exists because a single-day move can occur while the position is still above its 50-day MA, where the deterioration tier stays silent. Awareness only — never alters WATCH/TRIM/EXIT tier or any recommendation. |
 
 ### 4.0.2 Cross-feature coordination caches
 
@@ -335,6 +336,7 @@ Features publish to `st.session_state` when they own a piece of decision state; 
 | `_reduce_calls` | After `build_daily_briefing` (`decision_bucket.reduce_call_items`) | Stock Analysis Trade Plan | Held names under a Reduce/Exit call → suppress add-on sizing + "not a place to add" banner, so Analysis can't say "add" while the Brief says "reduce" |
 | `_acct_gate_cache` | Portfolio page (concentration-gate wiring, ~app.py:2710) | Grow Today 15%/35% suppression, entry nudge, watchlist/quick-research/comparison entry-fit | One number all gate consumers read for the concentration basis + denom. **Now `basis="equity"`, `denom=invested equity`** (2026-07-09 — reqs G-19); the net-capital path is retired |
 | `_leverage_cache` | Portfolio page (same wiring point) | 🔗 Risk Analysis leverage read (+ 💰 Account ⚖️ note) | Margin/leverage AWARENESS (`{levered, margin_debit, net_capital, equity, ratio, stale}`) — read-only, **never gates** (F-09d) |
+| `_day_shock_cache` | Home page (after `_price_strip`) | Home Day Shock banner (currently the only reader) | Held tickers moving ≥`DAY_SHOCK_PCT` same-day, `{ticker: {price, prev_close, chg_pct}}` — AWARENESS, **never gates** |
 
 ### 4.0.3 Coordination gates currently enforced
 

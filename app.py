@@ -144,6 +144,7 @@ from stock_analyzer.constants import (
     CONVICTION_LEGACY_TOP_N,
     BREAKEVEN_ANCHOR_DWELL_RATIO,
     EARNINGS_MIN_BEAT_RATE_ENTRY,
+    DAY_SHOCK_PCT,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -3219,6 +3220,49 @@ if page == "🏠 Home":
         st.divider()
 
     _price_strip(held_tickers)
+
+    # ── Day Shock awareness banner — AWARENESS ONLY, never gates ──────────────
+    # A single-day move can happen well above the 50-day trend line, where
+    # classify_deterioration_tier's trend-break condition stays silent (see
+    # constants.DAY_SHOCK_PCT). This just guarantees the user sees a shock that
+    # the price strip's per-ticker badges don't call attention to on their own.
+    _live_for_shock = st.session_state.get("_live_prices") or {}
+    _day_shock_cache = {}
+    for _t in held_tickers:
+        _lp = _live_for_shock.get(_t)
+        if not _lp:
+            continue
+        _chg, _prev, _px = _lp.get("change_pct"), _lp.get("prev_close"), _lp.get("price")
+        if _chg is None or _prev is None or _px is None:
+            continue
+        if abs(_chg) >= DAY_SHOCK_PCT:
+            _day_shock_cache[_t] = {"price": _px, "prev_close": _prev, "chg_pct": _chg}
+    st.session_state["_day_shock_cache"] = _day_shock_cache
+
+    if _day_shock_cache:
+        st.warning(
+            f"⚠️ **Day Shock — {len(_day_shock_cache)} position"
+            f"{'s' if len(_day_shock_cache) != 1 else ''} moved "
+            f"≥{DAY_SHOCK_PCT:.0f}% today**  \n"
+            "Awareness only — not a recommendation change. Deterioration tier "
+            "(WATCH/TRIM/EXIT) is unaffected unless the 50-day trend is also broken."
+        )
+        _shock_rows = []
+        for _t, _d in sorted(_day_shock_cache.items(), key=lambda kv: -abs(kv[1]["chg_pct"])):
+            _is_up = _d["chg_pct"] >= 0
+            _fg = "#00C851" if _is_up else "#ff4444"
+            _bg = "rgba(0,200,81,0.18)" if _is_up else "rgba(255,68,68,0.18)"
+            _arrow = "🔺" if _is_up else "🔻"
+            _shock_rows.append(
+                "<div style='display:flex;align-items:center;gap:12px;padding:4px 0;'>"
+                f"<span style='display:inline-flex;align-items:center;gap:7px;padding:4px 12px;"
+                f"border-radius:999px;font-weight:700;font-size:0.9em;"
+                f"background:{_bg};color:{_fg};border:1px solid {_fg}80;'>"
+                f"{_arrow} {_t} {_d['chg_pct']:+.2f}%</span>"
+                f"<span style='color:#94a3b8;font-size:0.88em;'>"
+                f"${_d['prev_close']:.2f} → ${_d['price']:.2f}</span></div>"
+            )
+        st.markdown("".join(_shock_rows), unsafe_allow_html=True)
 
     # ── Price cross-check guardrail (fail loud on source disagreement) ───────
     # The settled prev_close should match across independent sources; a breach
@@ -24919,7 +24963,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
         with st.expander("🗺️ The pages, at a glance", expanded=False):
             st.markdown(
                 """
-- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
+- **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse.
 - **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, a **"🧭 Elsewhere in DRISHTA"** section with a **🩺 Thesis Review** pointer (how many held names' thesis review needs attention, linking to 🧠 AI Insights — never a second independent verdict) and a **🔔 Catalyst Watch** pointer (how many holdings report earnings within the week, linking to 🔔 Catalyst Watch), and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.

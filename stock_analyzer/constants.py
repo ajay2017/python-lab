@@ -885,3 +885,11 @@ PREMATURE_EXIT_MIN_LOTS         = 5     # min winning lots per quick/patient buc
 THESIS_EROSION_HAIKU_MIN  = 30   # min erosion score to trigger Haiku counter-evidence (Phase 2)
 THESIS_EROSION_BRIEF_MIN  = 50   # erosion score threshold for Daily Brief annotation (Phase 3)
 THESIS_EROSION_BRIEF_JUMP = 15   # same-day score jump that triggers Brief annotation (Phase 3)
+
+# ── Day Shock awareness banner (Home) ─────────────────────────────────────────
+# Flags any held position moving ≥ this % (up or down) same-day, independent of
+# classify_deterioration_tier's trend-break condition. AWARENESS ONLY — never
+# alters WATCH/TRIM/EXIT tier or any recommendation; exists so a single-day
+# shock that stays above the 50-day MA (and so doesn't trip the tier) is still
+# visible instead of silently absorbed into the price strip's per-ticker badges.
+DAY_SHOCK_PCT = 5.0   # abs same-day % move (up or down) that triggers the banner
