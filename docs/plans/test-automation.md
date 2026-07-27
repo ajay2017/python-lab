@@ -3,10 +3,12 @@
 **Date:** 2026-07-27
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 5
-**Status:** Batch 1 (constants invariants + `scoring.py` + `concentration.py`) SHIPPED
-2026-07-27. Batch 2 (`exit_advisor.py` deterioration tiers + risk-off regime)
-SHIPPED 2026-07-27. Batch 3 (`portfolio.py` stop-ladder + trim + diversification)
-SHIPPED 2026-07-27.
+**Status:** PLAN COMPLETE 2026-07-27 — all 4 batches shipped, 119 tests, all
+passing locally in `.venv` (Python 3.14.6). Batch 1 (constants invariants +
+`scoring.py` + `concentration.py`), Batch 2 (`exit_advisor.py` deterioration
+tiers + risk-off regime), Batch 3 (`portfolio.py` stop-ladder + trim +
+diversification), and Batch 4 (`risk_advisor.py`'s 7-metric recommendation
+engine) all shipped same-session, 2026-07-27.
 
 ## Why
 
@@ -96,8 +98,21 @@ functions first.
    not the source, since the source is correct and this is exactly the kind
    of easy-to-misread scale a regression test should pin) and its danger/
    warning risk-pair threshold classification.
-4. **`risk_advisor.py` — pending.** `build_risk_advisor_recommendations()`
-   against a fixed synthetic portfolio fixture in `tests/conftest.py`.
+4. **`risk_advisor.py` — SHIPPED 2026-07-27.** `tests/test_risk_advisor.py`
+   (28 tests), built against a reusable `make_risk_advisor_inputs()` fixture
+   factory added to `tests/conftest.py` (a "safe" default portfolio where every
+   metric overridable is otherwise designed not to trigger a rec — each test
+   varies only the one field it's checking). Covers the HIGH/MEDIUM/(OK)
+   priority ladder for all 5 portfolio-level metrics (beta, Sharpe, volatility,
+   drawdown, tail-risk/CVaR-VaR ratio) plus sector and single-name
+   concentration. Specifically pins the "dead zones" between a metric's action
+   ladder and its OK band where NO recommendation should fire at all (Sharpe
+   0.8-1.0, drawdown -20%..-10%) — these are easy to silently break in a
+   refactor since there's no rec object to assert against, only an absence.
+   Also pins that the "Other" unclassified-sector bucket is excluded from the
+   top-sector pick (a real sector overweight could otherwise hide behind it)
+   and that single-name overweight is gated to `score >= WEAK_CONVICTION_SCORE`
+   so it never double-fires with daily_briefing's separate weak-large flag.
 
 ## Explicitly out of scope
 
@@ -105,5 +120,16 @@ functions first.
   live secrets to unit-test cheaply; not where the pure decision logic lives.
 - Any live network/Supabase-hitting test — everything runs on synthetic
   fixtures so the suite stays fast and deterministic in CI.
-- Making the GitHub Actions run a required branch-protection check — revisit
-  once Batches 2-4 exist and the suite has a track record of not being flaky.
+- Making the GitHub Actions run a required branch-protection check — deferred
+  indefinitely; revisit if the suite ever flakes or a real regression slips
+  through despite a green run.
+
+## What's next (not part of this plan, noted for a future session)
+
+All 4 originally-scoped batches are done. If further regression coverage is
+wanted later, natural next candidates (not committed to, not scoped) would be
+`daily_briefing.py`'s buy-candidate/weak-large-flag funnel (the counterpart
+to risk_advisor's single-name concentration rec — the two "never double-fire"
+today only because their gates happen to be complementary) and `concentration.py`'s
+`high_beta_share()` (untested so far; simple pure function, low priority since
+it's a display-only proxy, not a gate).
