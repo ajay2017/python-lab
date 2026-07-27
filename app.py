@@ -6684,7 +6684,18 @@ if page == "🏠 Home":
                                             & (_x_tdf["action"].astype(str).str.upper() == "BUY")
                                         ]
                                         if not _x_buys.empty:
-                                            _x_trade = _x_buys.iloc[-1].to_dict()
+                                            # trades_df loads newest-first (db.load_trades()
+                                            # orders traded_at desc) — take the most recent
+                                            # BUY that actually HAS a non-empty thesis, same
+                                            # fix as thesis_cluster.build_thesis_corpus's
+                                            # identical lookup (D1 pre-ship review finding).
+                                            for _, _x_buy_row in _x_buys.iterrows():
+                                                _x_thesis_val = _x_buy_row.get("user_thesis")
+                                                if _x_thesis_val and str(_x_thesis_val).strip():
+                                                    _x_trade = _x_buy_row.to_dict()
+                                                    break
+                                            else:
+                                                _x_trade = _x_buys.iloc[0].to_dict()
                                 except Exception:
                                     _x_trade = {}
                                 _x_corpus = debate_agent.build_exit_corpus(
@@ -21660,7 +21671,12 @@ elif page == "📜 Recommendations History":
         # Honest framing: per-$1k notional + named outliers — never a fabricated
         # portfolio-% counterfactual (you can't buy every surfaced name; capital,
         # concentration caps and the gates all bind).
-        _rh_missed = distinct_missed(_rh_enriched)
+        # Built from the unfiltered snapshot, NOT the page's status-filtered
+        # _rh_enriched — distinct_missed()'s "acted via ANY surfacing" safeguard
+        # would otherwise silently break under the Acted-only/Missed-only dropdown
+        # (a bought-but-skipped-elsewhere name miscounted as missed, or the list
+        # emptied entirely under "Acted only"). Same fix as the O1 section below.
+        _rh_missed = distinct_missed(_rh_enriched_all)
         if _rh_missed:
             _rh_ms  = missed_split(_rh_missed)
             _rh_bm  = _rh_ms.get("biggest_miss")
