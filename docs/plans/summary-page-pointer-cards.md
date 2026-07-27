@@ -40,9 +40,29 @@ window pays the fetch once, the other gets a free hit. Filtered to
 state ("N reporting" or "None soon") rather than hiding. See "Selected cards"
 section #3 below for the shipped spec.
 
-**Build order for this plan now starts at card #4 (Watchlist actionable count) —
-the last one, and still the least certain re: reuse-vs-recompute (see that section's
-own note below).**
+**Card #4 (Watchlist actionable count) — DROPPED 2026-07-27, not built.** Investigated
+before writing any code, per this plan's own "flag it back to the user" instruction:
+`build_watchlist_recommendation()` needs a rich per-ticker `data` dict that only
+exists after the Watchlist page itself runs `_parallel_load_all(list(watchlist),
+period="6mo")` — a full analysis-bundle fetch for every tracked ticker (58 at the
+time of checking), shown behind its own loading spinner. Confirmed neither the raw
+data (`_wl_data`) nor the computed recommendations (`_wl_recs`) are published to
+`st.session_state` anywhere — they're page-local variables, so there is no cache for
+Summary to cheaply reuse, unlike the other three cards. Building this card as
+scoped would mean Summary silently triggering that same expensive fetch itself —
+exactly the "second independent computation" this plan's design principles rule
+out, and a real cost regression on a page whose whole point is to be the cheap,
+lean glance. **User decision: drop the card rather than build a cost regression or
+a degraded substitute** (a bare ticker-count with no actionability signal was
+considered and rejected as too weak to be worth building).
+
+**PLAN COMPLETE at 3 of the original 4 cards (Risk Posture, Thesis Review, Catalyst
+Watch) — a legitimately finished, cohesive set covering the Portfolio/AI/Signals nav
+groups.** No further phases planned. Re-open only if a genuinely cheap read for a
+Research-group signal turns up later — don't resurrect the Watchlist version of
+this idea without re-checking whether `_wl_data`/`_wl_recs` have since been
+published to session_state (unlikely without a deliberate refactor of the Watchlist
+page itself).
 
 > **One-line spec:** Add a "🧭 Elsewhere in DRISHTA" section to 🧾 Summary — a small
 > row of read-only pointer cards, each surfacing one already-computed signal from
@@ -156,24 +176,18 @@ pattern needed.
 - **Why third:** cheap once the shared-cache resolution above was confirmed;
   different nav group so it doesn't compete with the Portfolio-group cards.
 
-### 4. Watchlist actionable count (Research group) — build last, least certain
-- **Shows:** a count of watchlist names currently `ENTER_NOW`/`NEAR_ENTRY`, e.g. "4
-  names now actionable of 58 tracked."
-- **Reuses:** `build_watchlist_recommendation()` (`stock_analyzer/watchlist_advisor.py`,
-  confirmed real via `docs/plans/watchlist-resurrection.md`) — the same
-  classification the 👁️ Watchlist page and the already-shipped Watchlist
-  Resurrection feature (F-203) already compute.
-- **Points to:** 📋 Watchlist.
-- **To verify at build time:** `build_watchlist_recommendation()` runs per-ticker on
-  the Watchlist page's own render — confirm whether Summary can cheaply reuse an
-  already-published result (if the Watchlist page hasn't been visited this session,
-  there may be nothing to read yet, meaning this card would need its own compute
-  pass — the one candidate of the four where "reuse, don't recompute" might not be
-  free). If it turns out to require a real new computation pass, that changes this
-  card's cost tier and is worth flagging back to the user before building it.
-- **Why last:** the one card where the "just reuse an existing value" assumption is
-  least certain — see above. Build the other three first, see how the section feels
-  live, then decide if this one is still worth it.
+### 4. Watchlist actionable count (Research group) — DROPPED, not built
+- **What was scoped:** a count of watchlist names currently `ENTER_NOW`/`NEAR_ENTRY`,
+  e.g. "4 names now actionable of 58 tracked," reusing
+  `build_watchlist_recommendation()` (`stock_analyzer/watchlist_advisor.py`) and
+  pointing to 📋 Watchlist.
+- **Why it was dropped:** confirmed at build-time investigation (not assumed) that
+  `build_watchlist_recommendation()` requires a per-ticker `data` dict only produced
+  by the Watchlist page's own `_parallel_load_all(list(watchlist), period="6mo")` —
+  a full bundle fetch per tracked ticker, and neither that raw data nor the computed
+  recs are published to `st.session_state`. There is no cheap reuse path; building
+  this would mean Summary re-triggering that same expensive fetch itself. See the
+  plan status header above for the full writeup and the user's decision.
 
 ## Explicitly held back from this round (not forgotten, just not in Phase 1)
 
@@ -208,8 +222,10 @@ considered and deliberately deferred, not missed.
 5. **Graceful degradation.** Any card whose underlying data isn't available this
    session (page not yet visited, cache empty, table unreachable) simply doesn't
    render — no error, no placeholder implying something's wrong.
-6. **Bounded set.** Four cards, one per nav group, for this phase. Don't grow this
-   list without deliberately revisiting the cap.
+6. **Bounded set.** Three cards shipped (Risk Posture, Thesis Review, Catalyst
+   Watch), one per nav group; a 4th (Watchlist) was scoped and deliberately dropped
+   on cost grounds, not forgotten. Don't grow this list without deliberately
+   revisiting the cap.
 
 ## Non-goals
 
