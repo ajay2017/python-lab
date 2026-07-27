@@ -1,0 +1,38 @@
+name: Regression tests
+
+# Runs the tests/ pytest suite against stock_analyzer/ pure-logic modules —
+# scoring, gates, thresholds. Does NOT gate the Streamlit Cloud / Railway
+# deploy (neither consults GitHub Actions); this is a pre-push safety net so a
+# regression shows up as a red X on the commit instead of only being found by
+# hand-testing production after redeploy. See docs/plans/test-automation.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "stock_analyzer/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "pytest.ini"
+  pull_request:
+    paths:
+      - "stock_analyzer/**"
+      - "tests/**"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "pytest.ini"
+  workflow_dispatch: {}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run pytest
+        run: pytest tests/ -v

@@ -78,6 +78,7 @@ python-lab/
 ├── docs/
 │   ├── requirements.md            Functional + non-functional reqs + operating posture
 │   └── architecture.md            Module map, data flow, scoring model, db schema
+├── tests/                         pytest regression suite over stock_analyzer/ pure logic (see docs/plans/test-automation.md)
 └── stock_analyzer/
     ├── constants.py               SINGLE SOURCE OF TRUTH for decision thresholds + DATA_* provider config
     ├── data.py                    Public market-data API (fetch_* + crosscheck_*); routes to providers/ orchestrator
@@ -203,6 +204,21 @@ docs(architecture): record the fragility gauge
 ```
 python -c "import ast, io; ast.parse(io.open(r'app.py', encoding='utf-8').read()); print('OK')"
 ```
+
+### Regression tests before touching scoring/gates
+`tests/` holds a `pytest` regression suite over `stock_analyzer/`'s pure-logic
+modules (scoring, concentration, gates) — see `docs/plans/test-automation.md`
+for scope/rationale. One-time setup: `pip install -r requirements-dev.txt`
+(dev-only, not installed on Streamlit Cloud/Railway). Run before committing
+any change to `stock_analyzer/constants.py`, `scoring.py`, `concentration.py`,
+or similar decision-logic modules:
+```
+pytest tests/ -v
+```
+A GitHub Actions workflow (`.github/workflows/tests.yml`) also runs this on
+push/PR touching `stock_analyzer/**` or `tests/**` — it's a pre-push safety
+net (red ❌ on the commit), not a deploy gate; neither Streamlit Cloud nor
+Railway consults GitHub Actions.
 
 ### Switching to another project (and coming back)
 - This project's `.venv/` stays put — no cleanup needed
