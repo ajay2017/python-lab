@@ -5,6 +5,7 @@
 **Analysis model:** Claude Sonnet 5
 **Status:** Batch 1 (constants invariants + `scoring.py` + `concentration.py`) SHIPPED
 2026-07-27. Batch 2 (`exit_advisor.py` deterioration tiers + risk-off regime)
+SHIPPED 2026-07-27. Batch 3 (`portfolio.py` stop-ladder + trim + diversification)
 SHIPPED 2026-07-27.
 
 ## Why
@@ -80,11 +81,21 @@ functions first.
    short history rather than fabricating a read; `market_risk_posture()`'s
    `armed` flag requiring BOTH fragility ≥ caution AND regime risk-off (fragile
    alone does not arm the de-risk action).
-3. **`portfolio.py` stop/sizing — pending.** `protective_stop()`,
-   `manual_stop_wins()`, `stop_ladder()` (a known trap already exists here per
-   `project_stop_ladder_and_display` memory — raw `stop` vs. the ratcheted
-   `_sa_holding['Stop']` — a good regression-test candidate since it's already
-   caused one bug), `trim_allocation()`, `diversification_score()`.
+3. **`portfolio.py` stop/sizing — SHIPPED 2026-07-27.** `tests/test_portfolio.py`
+   (28 tests): `protective_stop()` ratchet-rung boundaries and the "ATR stop
+   can still beat a modest ratchet floor" nuance; `manual_stop_wins()`'s
+   tight-vs-loose boundary (a manual stop wins only when at least as tight —
+   the split-brain closed 2026-07-07 this predicate exists to prevent);
+   `stop_ladder()`'s `auto_source` "which number actually binds" logic
+   (ratchet vs. ATR), manual-override gating, `stopped_out` flag, and
+   ratchet-rung/next-tier bookkeeping; `trim_allocation()`'s greedy
+   full-exit-then-partial-trim distribution and shortfall reporting;
+   `diversification_score()`'s score formula (caught a wrong assumption while
+   writing the test — zero correlation scores 50, the MIDPOINT of the
+   anti-correlated(-1)=100 .. lockstep(+1)=0 scale, not 100 — fixed the test,
+   not the source, since the source is correct and this is exactly the kind
+   of easy-to-misread scale a regression test should pin) and its danger/
+   warning risk-pair threshold classification.
 4. **`risk_advisor.py` — pending.** `build_risk_advisor_recommendations()`
    against a fixed synthetic portfolio fixture in `tests/conftest.py`.
 
