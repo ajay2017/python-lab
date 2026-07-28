@@ -148,6 +148,45 @@ def money_weighted_return(baseline_value, baseline_date, ending_value, ending_da
     }
 
 
+# Display-caveat floor for annualized MWR, NOT an investment-policy threshold
+# (Account growth and My Edge / Benchmark Mirror are both display-only, never
+# gate a recommendation) — kept local rather than in constants.py, same
+# rationale as risk.py's _ZERO_VOL_EPS: it can only add explanatory context to
+# a number, never move a decision.
+_ANNUALIZE_CAVEAT_MAX_DAYS = 90
+
+
+def annualization_caveat(days: int | None, is_levered: bool = False) -> str | None:
+    """Explanatory caption for when an annualized MWR is likely to look far more
+    dramatic than the underlying period return warrants. A short tracking window
+    (< _ANNUALIZE_CAVEAT_MAX_DAYS) and/or a levered (margin) account both amplify
+    a real but modest dollar move into a much larger annualized percentage.
+    Returns None when neither condition applies — nothing to caveat."""
+    if days is None:
+        return None
+    short = days < _ANNUALIZE_CAVEAT_MAX_DAYS
+    if short and is_levered:
+        return (
+            f"⚠️ Annualized over just {days} days on a leveraged account — short "
+            "windows and margin both amplify a real but modest move into a much "
+            "larger-looking yearly rate. Treat the period return above as the more "
+            "grounded number right now."
+        )
+    if short:
+        return (
+            f"Annualized over just {days} days — short windows amplify swings into "
+            "a larger-looking yearly rate. Treat this as directional, not literal, "
+            "until the tracking period is longer."
+        )
+    if is_levered:
+        return (
+            "⚠️ This account carries a margin debit — leverage amplifies both gains "
+            "and losses relative to your own capital, so the annualized rate moves "
+            "more than an unlevered account's would."
+        )
+    return None
+
+
 def build_equity_timeseries(snapshots_df, flows: list[dict]) -> dict | None:
     """Pair daily equity totals (from daily_snapshots) with a forward-filled NCC
     step function (from account_flows) for a capital-trend chart.

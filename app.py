@@ -203,6 +203,7 @@ from stock_analyzer import missed_opportunity
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
+    annualization_caveat,
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer.news_intelligence import build_news_intelligence
@@ -23488,6 +23489,10 @@ elif page == "💰 Account":
                 help=(f"Annualized money-weighted return — populates once the tracking period ≥ 30 days "
                       f"(currently {_mdr['days']}d, too short to annualize meaningfully)."),
             )
+            if _mdr["annualized_pct"] is not None:
+                _mdr_caveat = annualization_caveat(_mdr["days"], is_levered=_levered)
+                if _mdr_caveat:
+                    st.caption(_mdr_caveat)
         else:
             _gc3.metric("Return (money-weighted)", "—",
                         help="Needs a baseline + a loaded portfolio (open 🏠 Home and set your cash).")
@@ -28222,6 +28227,11 @@ elif page == "🎯 My Edge":
                 "raw alpha and near-zero beta-adjusted alpha."
             )
             st.caption(f"📐 \"Your Return\" is measured on **{_me_val_basis}**.")
+            if _me_actual_ann is not None:
+                _me_levered = _me_cash is not None and _me_cash < 0
+                _me_caveat = _me_acct.annualization_caveat(_me_actual_mwr["days"], is_levered=_me_levered)
+                if _me_caveat:
+                    st.caption(_me_caveat)
 
             st.divider()
 
