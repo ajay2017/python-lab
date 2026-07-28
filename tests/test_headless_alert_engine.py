@@ -263,6 +263,18 @@ def test_build_context_happy_path():
     assert result["vix"] == 16.0
 
 
+def test_build_context_fragility_none_when_beta_is_nan():
+    # Regression test for the 2026-07-27 Opus-review follow-up (fixed
+    # 2026-07-28): `beta = port_risk.get("beta")` didn't route through the
+    # NaN-aware `_f()` helper, so a NaN beta (e.g. pandas column-dtype
+    # promotion) would pass the `is not None` guard and get admitted into
+    # run_scenario/assess_fragility instead of correctly skipping fragility.
+    result = _run_build_context(_patch_context_deps(
+        compute_portfolio_risk_metrics={"beta": float("nan")}
+    ))
+    assert result["fragility"] is None
+
+
 def test_build_context_fragility_none_when_beta_missing():
     result = _run_build_context(_patch_context_deps(compute_portfolio_risk_metrics={"beta": None}))
     assert result["ok"] is True
@@ -461,6 +473,21 @@ def test_protective_alerts_analyst_target_snapshot_skips_missing_target():
     ctx = _ok_ctx(
         [_port_row("AAPL", gap_to_stop=5.0)],
         held_data={"AAPL": {"financials": {}, "stale_as_of": None}},
+    )
+    result = _run_protective_alerts(ctx)
+    assert result["analyst_target_snapshots"] == []
+
+
+def test_protective_alerts_analyst_target_snapshot_skips_nan_target():
+    # Regression test for the 2026-07-27 Opus-review follow-up (fixed
+    # 2026-07-28): `target_mean = fin.get("analyst_target")` bypassed the
+    # NaN-aware `_f()` helper, so a NaN target from yfinance would pass the
+    # `is None` guard and get persisted -- poisoning a future day-over-day
+    # analyst-target comparison. Log-only Phase 1, but the fix closes the
+    # gap before anything downstream reads this table.
+    ctx = _ok_ctx(
+        [_port_row("AAPL", gap_to_stop=5.0)],
+        held_data={"AAPL": {"financials": {"analyst_target": float("nan")}, "stale_as_of": None}},
     )
     result = _run_protective_alerts(ctx)
     assert result["analyst_target_snapshots"] == []

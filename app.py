@@ -81,6 +81,9 @@ from stock_analyzer.rebalancer import (
 from stock_analyzer.constants import (
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
+    PORTFOLIO_DRAWDOWN_ACTION_MAX,
+    PORTFOLIO_DRAWDOWN_HIGH_MAX,
+    PORTFOLIO_DRAWDOWN_OK_MIN,
     REGIME_CONFIDENCE_MIN_DISPLAY,
     TICKER_BETA_HIGH,
     TICKER_BETA_CRITICAL,
@@ -9707,9 +9710,9 @@ elif page == "🔗 Risk Analysis":
             # Max Drawdown
             if _mdd is not None:
                 _mdd_lbl = (
-                    "Modest"      if _mdd > -10 else
-                    "Normal"      if _mdd > -20 else
-                    "Significant" if _mdd > -30 else "Severe"
+                    "Modest"      if _mdd > PORTFOLIO_DRAWDOWN_OK_MIN else
+                    "Normal"      if _mdd > PORTFOLIO_DRAWDOWN_ACTION_MAX else
+                    "Significant" if _mdd > PORTFOLIO_DRAWDOWN_HIGH_MAX else "Severe"
                 )
                 _rm7.metric("Max Drawdown", f"{_mdd:.1f}%", _mdd_lbl,
                             delta_color="off", help=_tip("Portfolio Max Drawdown"))

@@ -151,7 +151,7 @@ def _build_context(today: date) -> dict:
         port_risk = {}
     fragility = None
     try:
-        beta = port_risk.get("beta") if port_risk else None
+        beta = _f(port_risk.get("beta")) if port_risk else None
         if beta is not None:
             mild = next((s for s in SCENARIOS if s["id"] == "mild_correction"), None)
             mild_res = (run_scenario(mild, port_df, held_data, beta,
@@ -233,7 +233,7 @@ def compute_protective_alerts(today: date | None = None) -> dict:
         if bundle.get("stale_as_of") is not None:
             continue
         fin = bundle.get("financials") or {}
-        target_mean = fin.get("analyst_target")
+        target_mean = _f(fin.get("analyst_target"))
         if target_mean is None:
             continue
         analyst_target_snapshots.append({

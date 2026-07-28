@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (clearing the flagged-findings backlog)
+## 1. Latest run — 2026-07-28 (clearing the last 2 low-urgency follow-ups)
 
-**1106 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 10.69s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**1108 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 10.47s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -43,7 +43,7 @@ active: 10.69s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_watchlist_advisor.py` | 45 | `watchlist_advisor.py` (incl. `_portfolio_risk_gate()` and the in-zone-R:R-not-validated NEAR_ENTRY copy fix) |
 | `test_risk.py` | 43 | `risk.py` (position sizing, ATR stops, Sharpe/Sortino/VaR/beta) |
 | `test_macro_playbook.py` | 67 | `macro_playbook.py` (Pre-Event Macro Playbook: PROTECT/WATCH/HOLD/OPPORTUNITY action classifier, post-event scenario classification) |
-| `test_headless_alert_engine.py` | 57 | `headless_alert_engine.py` (cron protective-alert / morning-picks / EOD engine: `_build_context`, `compute_protective_alerts`, `compute_morning_picks`, `compute_eod`, `_assess_pullback`) |
+| `test_headless_alert_engine.py` | 59 | `headless_alert_engine.py` (cron protective-alert / morning-picks / EOD engine: `_build_context`, `compute_protective_alerts`, `compute_morning_picks`, `compute_eod`, `_assess_pullback`; +2 NaN-guard regression tests) |
 | `test_portfolio_health.py` | 92 | `portfolio_health.py` (Portfolio Construction Health Score: 5 sub-scores + A-F grade, Portfolio Dynamics tenure/cohort/alignment) |
 | `test_rebalancer.py` | 33 | `rebalancer.py` (drift classification, trim/add urgency + rationale, News Intelligence / Risk Advisor coordination gates) |
 | `test_signal_hysteresis.py` | 32 | `signal_hysteresis.py` (calm-advisor "steady vs yesterday" annotator) |
@@ -55,7 +55,7 @@ active: 10.69s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
 | `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
 | `test_news_intelligence.py` | 76 | `news_intelligence.py` (significance scoring, negative-news alerts, opportunity detection + Reduce/Exit suppression, sector digest, suppress-only + bidirectional LLM rescore helpers) |
-| **Total** | **1106** | |
+| **Total** | **1108** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -178,6 +178,69 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — Closed the last 2 low-urgency follow-ups: `headless_alert_engine.py` NaN guards, `app.py` Max-Drawdown caption constant-wiring, 1108/1108 passing
+
+User asked to clear the last 2 remaining low-urgency items too, before
+starting anything new — a deliberate "fresh start" with nothing left
+outstanding.
+
+**`headless_alert_engine.py` — both non-blocking NaN-guard follow-ups from
+the 2026-07-27 Opus review, now fixed:**
+- `_build_context()`'s `beta = port_risk.get("beta") if port_risk else None`
+  didn't route through the file's own NaN-aware `_f()` helper (the same one
+  that fixed the stop-breach bug in that review), so a NaN beta could pass
+  the `is not None` guard and get admitted into `run_scenario`/
+  `assess_fragility` instead of correctly skipping fragility. Fixed to
+  `beta = _f(port_risk.get("beta")) if port_risk else None`.
+- The analyst-target-snapshot capture's `target_mean =
+  fin.get("analyst_target")` had the same gap — a NaN target from yfinance
+  would pass the `is None` guard and get persisted, which could poison a
+  future day-over-day analyst-target comparison (log-only Phase 1 today,
+  nothing reads this table yet, but the gap would have been silent until
+  something did). Fixed to `target_mean = _f(fin.get("analyst_target"))`.
+
+Added 2 regression tests to `tests/test_headless_alert_engine.py` (59
+total, was 57): a NaN-beta case confirming `fragility` stays `None`, and a
+NaN-analyst-target case confirming the snapshot list stays empty. Not
+Opus-reviewed — both are the SAME NaN-aware-parsing bug class already
+Opus-reviewed and shipped for the stop-breach case in this file
+(2026-07-27), applied here via the identical existing `_f()` helper with
+no new logic, no gate-firing behavior changed. Coverage unchanged (252
+stmts, 26 missed, 90%).
+
+**`app.py` — wired the Max Drawdown metric-caption thresholds to the
+`risk_advisor.py` constants they numerically mirror:** the 🔗 Risk
+Analysis page's Max Drawdown metric card computed its own "Modest / Normal
+/ Significant / Severe" label from bare `-10`/`-20`/`-30` literals that
+happen to exactly match all 3 of `risk_advisor.py`'s
+`PORTFOLIO_DRAWDOWN_OK_MIN`/`_ACTION_MAX`/`_HIGH_MAX` constants (added
+earlier the same session) — a genuine, unambiguous 1:1 duplicate, not a
+coincidence. Imported the 3 constants at the top of `app.py` and replaced
+the 3 literals so a future constant retune can't silently drift the
+caption out of sync with the actual gate it's describing. **Deliberately
+left the Volatility/Sharpe/Beta metric captions alone** — checked each
+against its `risk_advisor.py` counterpart and found they are NOT genuine
+duplicates: Volatility's caption uses a 4-tier Low/Moderate/Elevated/High
+taxonomy at 15/20/30 where only the top boundary (30) coincidentally
+matches `PORTFOLIO_VOL_HIGH_PCT`, the other two (15/20) have no
+`risk_advisor.py` counterpart at all (`PORTFOLIO_VOL_MEDIUM_PCT` is 25,
+not 20); Sharpe's caption (0.5/1.0/1.5) doesn't match the Sharpe ladder
+(0.4/0.8/1.0) anywhere; Beta's label thresholds (1.2/0.8) don't match
+`PORTFOLIO_BETA_ELEVATED` (1.3), only its `delta_color` line's `>1.4`
+happens to match `PORTFOLIO_BETA_CEILING`. Wiring a ladder where only one
+of three boundaries is a real duplicate would leave the code MORE
+confusing (why import a constant for one tier and hardcode its siblings?)
+without meaningfully reducing drift risk, since the tiers that matter
+(the top HIGH boundary) is the only one a `constants.py` reader would ever
+retune anyway — left as local, legitimately-independent display literals.
+Compile-checked (`py_compile`, since `app.py` can't run locally per
+CLAUDE.md — Streamlit/plotly aren't in the dev venv). Not Opus-reviewed —
+display-caption-only, doesn't touch `constants.py` (only imports existing
+constants into `app.py`) or change any gate/scoring formula.
+
+**This closes every item on the session's test-coverage-and-hardening
+effort with nothing outstanding.** 1108 tests total, all passing.
 
 ### 2026-07-28 — Cleared the remaining flagged-findings backlog: `watchlist_advisor.py` NEAR_ENTRY copy fix, `comparison.py` dead import, `decision_journal.py` avg-loss-sign copy fix, 1106/1106 passing
 
