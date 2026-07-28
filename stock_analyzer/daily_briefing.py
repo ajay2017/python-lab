@@ -52,6 +52,8 @@ from stock_analyzer.constants import (
     STOP_TIGHTEN_ATR_MULT,
     STOP_TIGHTEN_MIN_GAIN_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
+    EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
+    EARNINGS_OVERWEIGHT_TOLERANCE_PP,
     EARNINGS_OVERWEIGHT_TRIM_TO_PCT,
     WEAK_LARGE_TRIM_TO_PCT,
     MACRO_AFFECTED_TRIM_THRESHOLD_PCT,
@@ -1631,6 +1633,20 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 
 # ── Review Before Close ────────────────────────────────────────────────────────
 
+def _dynamic_overweight_floor(n_positions: int) -> float:
+    """Equal-weight + EARNINGS_OVERWEIGHT_TOLERANCE_PP buffer, clamped to
+    [EARNINGS_OVERWEIGHT_TRIM_PCT, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT]. A flat
+    threshold assumes a fixed portfolio size; this scales with however many
+    positions are actually held, while still capping binary earnings-event
+    exposure even for a deliberately concentrated book.
+    """
+    if n_positions <= 0:
+        return EARNINGS_OVERWEIGHT_TRIM_PCT
+    eq_target = 100.0 / n_positions
+    return max(EARNINGS_OVERWEIGHT_TRIM_PCT,
+               min(eq_target + EARNINGS_OVERWEIGHT_TOLERANCE_PP, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT))
+
+
 def _review_list(port_df, news_items, macro_events, held_data, today,
                  portfolio_value: float = 0.0,
                  act_today: list | None = None,
@@ -1778,9 +1794,12 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
 
     # 2 — Earnings within 7 days
     # Action policy:
-    #   - Weight > EARNINGS_OVERWEIGHT_TRIM_PCT (12%) → trim to TRIM_TO_PCT (10%).
-    #   - Weight ≤ threshold → WATCH; sizing already conservative for the binary risk.
+    #   - Weight > dynamic overweight floor (position-count-aware — see
+    #     _dynamic_overweight_floor) → trim to TRIM_TO_PCT (10%).
+    #   - Weight ≤ floor → WATCH; sizing already conservative for the binary risk.
     seen_earn: set = set()
+    _n_pos = len(port_df) if port_df is not None else 0
+    _overweight_floor = _dynamic_overweight_floor(_n_pos)
     for ticker, data in (held_data or {}).items():
         earn_date = (data or {}).get("earnings")
         if not earn_date or ticker in seen_earn:
@@ -1798,7 +1817,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         shares = int(_f(pm["Shares"].iloc[0]))
         price  = _f(pm["Price"].iloc[0])
         label  = "TODAY" if days == 0 else f"in {days}d"
-        if weight > EARNINGS_OVERWEIGHT_TRIM_PCT and portfolio_value > 0:
+        if weight > _overweight_floor and portfolio_value > 0:
             target_value = portfolio_value * (EARNINGS_OVERWEIGHT_TRIM_TO_PCT / 100)
             current_value = portfolio_value * (weight / 100)
             trim_dollars = round(current_value - target_value, 0)
@@ -1812,17 +1831,17 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
                 "reason_key":     "earnings",
             }
             why = (
-                f"Weight {weight:.1f}% × binary earnings risk above the "
-                f"{EARNINGS_OVERWEIGHT_TRIM_PCT:.0f}% overweight threshold. "
-                "Trim to size-down the binary event exposure."
+                f"Weight {weight:.1f}% × binary earnings risk above your "
+                f"{_overweight_floor:.1f}% position-count-adjusted threshold "
+                f"(N={_n_pos} positions). Trim to size-down the binary event exposure."
             )
             trigger = "Beat → re-enter post-print if composite holds; Miss → existing stop protects rest."
         else:
             action = {"type": "WATCH"}
             why = (
                 f"Weight {weight:.1f}% within tolerance "
-                f"(≤ {EARNINGS_OVERWEIGHT_TRIM_PCT:.0f}% overweight threshold). "
-                "Existing sizing already conservative for the binary risk."
+                f"(≤ {_overweight_floor:.1f}% position-count-adjusted threshold, "
+                f"N={_n_pos} positions). Existing sizing already conservative for the binary risk."
             )
             trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
         items.append({

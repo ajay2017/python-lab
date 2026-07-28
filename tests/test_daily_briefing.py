@@ -19,6 +19,8 @@ from stock_analyzer.constants import (
     ADD_WINNER_COOLDOWN_DAYS,
     ADD_WINNER_MIN_GAP_PCT,
     COMPOSITE_BUY,
+    EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
+    EARNINGS_OVERWEIGHT_TRIM_PCT,
     LARGE_POSITION_WEIGHT_PCT,
     SINGLE_NAME_CEILING,
     WEAK_CONVICTION_SCORE,
@@ -26,6 +28,7 @@ from stock_analyzer.constants import (
 from stock_analyzer.daily_briefing import (
     _buy_candidates,
     _cross_reference,
+    _dynamic_overweight_floor,
     _recently_added,
     _review_list,
     _trim_targets,
@@ -243,6 +246,126 @@ def test_weak_large_flag_silent_when_conviction_is_strong():
     }])
     items = _review_list(port_df, [], [], {}, _TODAY, portfolio_value=100_000.0)
     assert find_item(items, "AAA") is None
+
+
+# ── Review Before Close: earnings-overweight dynamic floor ──────────────────
+# A flat EARNINGS_OVERWEIGHT_TRIM_PCT (12%) assumed a fixed ~10-position
+# portfolio: at N positions, pure equal-weight is 100/N, which exceeds 12%
+# once N < ~8 -- so a concentrated, deliberate portfolio got flagged on
+# nearly every name regardless of genuine over-concentration. Found against a
+# real 7-position portfolio (2026-07-28) where 5/7 holdings tripped the flat
+# 12% despite none exceeding equal-weight+TOLERANCE_WATCH (19.3% at N=7).
+# _dynamic_overweight_floor(n) = clamp(100/n + TOLERANCE_WATCH,
+# EARNINGS_OVERWEIGHT_TRIM_PCT, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT).
+
+def _earn_rows(subject_ticker: str, subject_weight: float, n: int, filler_weight: float = 5.0):
+    """`n` total port_df rows: one subject ticker plus (n-1) uninvolved fillers
+    (not in held_data, so the earnings loop never touches them) -- just to
+    pin len(port_df) at exactly `n` for the dynamic-floor calculation.
+
+    score is pinned well above WEAK_CONVICTION_SCORE on every row so the
+    sibling "weak large position" rule (out of scope for this change, and not
+    deduped against this one -- see daily_briefing.py:1839) never co-fires and
+    contaminates which item find_item() picks up after priority-sorting."""
+    strong_score = WEAK_CONVICTION_SCORE + 20
+    return [{"ticker": subject_ticker, "weight": subject_weight, "score": strong_score}] + [
+        {"ticker": f"FILL{i}", "weight": filler_weight, "score": strong_score} for i in range(n - 1)
+    ]
+
+
+def test_earnings_overweight_trims_when_weight_exceeds_dynamic_floor():
+    n = 8  # mid-range N -> floor is 100/8+5=17.5, unclamped by either bound
+    floor = _dynamic_overweight_floor(n)
+    assert EARNINGS_OVERWEIGHT_TRIM_PCT < floor < EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT
+    port_df = make_port_df(_earn_rows("AAA", floor + 3.0, n))
+    held_data = {"AAA": {"earnings": "2026-07-29"}}
+    items = _review_list(port_df, [], [], held_data, _TODAY, portfolio_value=100_000.0)
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["action"]["type"] == "TRIM_TO_TARGET"
+    assert item["action"]["reason_key"] == "earnings"
+
+
+def test_earnings_overweight_watches_when_weight_below_dynamic_floor_but_above_old_flat_threshold():
+    # The key regression proof: this weight sits ABOVE the old flat 12%
+    # trigger (so pre-fix code would have wrongly fired) but BELOW the new
+    # N-aware floor for this position count -- must now WATCH, not trim.
+    n = 8
+    floor = _dynamic_overweight_floor(n)
+    weight = (EARNINGS_OVERWEIGHT_TRIM_PCT + floor) / 2.0
+    assert EARNINGS_OVERWEIGHT_TRIM_PCT < weight < floor
+    port_df = make_port_df(_earn_rows("AAA", weight, n))
+    held_data = {"AAA": {"earnings": "2026-07-29"}}
+    items = _review_list(port_df, [], [], held_data, _TODAY, portfolio_value=100_000.0)
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["action"]["type"] == "WATCH"
+
+
+def test_earnings_overweight_floor_clamps_to_ceiling_at_low_n():
+    # Raw 100/3+5 = 38.3%, which must clamp DOWN to the ceiling -- otherwise a
+    # hyper-concentrated 3-name book could ride an unreasonably large position
+    # into a binary earnings print with no trim ever firing.
+    n = 3
+    floor = _dynamic_overweight_floor(n)
+    assert floor == EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT
+    weight = EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT + 3.0
+    port_df = make_port_df(_earn_rows("AAA", weight, n, filler_weight=10.0))
+    held_data = {"AAA": {"earnings": "2026-07-29"}}
+    items = _review_list(port_df, [], [], held_data, _TODAY, portfolio_value=100_000.0)
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["action"]["type"] == "TRIM_TO_TARGET"
+
+
+def test_earnings_overweight_floor_clamps_to_legacy_minimum_at_high_n():
+    # Raw 100/20+5 = 10%, which must clamp UP to EARNINGS_OVERWEIGHT_TRIM_PCT
+    # (12%) -- a diversified 20-name portfolio must stay AT LEAST as strict as
+    # today's legacy flat threshold, never looser. Weight=11% sits between the
+    # raw (10) and clamped (12) floor, so this proves the clamp -- not raw
+    # 100/N+5 math -- governs the decision.
+    n = 20
+    floor = _dynamic_overweight_floor(n)
+    assert floor == EARNINGS_OVERWEIGHT_TRIM_PCT
+    port_df = make_port_df(_earn_rows("AAA", 11.0, n))
+    held_data = {"AAA": {"earnings": "2026-07-29"}}
+    items = _review_list(port_df, [], [], held_data, _TODAY, portfolio_value=100_000.0)
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["action"]["type"] == "WATCH"
+
+
+def test_earnings_overweight_real_portfolio_none_fire_at_n7():
+    # Direct regression test against the real 7-position portfolio that
+    # motivated this fix (2026-07-28): under the flat 12% threshold, 5 of 7
+    # holdings fired a TRIM_TO_TARGET card simultaneously despite none being
+    # genuinely overweight for a 7-name book (floor at N=7 is 19.3%).
+    # score pinned above WEAK_CONVICTION_SCORE on every row -- otherwise the
+    # sibling weak-large-position rule (out of scope here, not deduped
+    # against this one) independently co-fires on every position >=10%
+    # weight and contaminates which item find_item() sees after sorting.
+    strong_score = WEAK_CONVICTION_SCORE + 20
+    port_df = make_port_df([
+        {"ticker": "BKNG", "weight": 12.9, "score": strong_score},
+        {"ticker": "EOG",  "weight": 9.4,  "score": strong_score},
+        {"ticker": "GD",   "weight": 15.5, "score": strong_score},
+        {"ticker": "LLY",  "weight": 16.2, "score": strong_score},
+        {"ticker": "REGN", "weight": 18.2, "score": strong_score},
+        {"ticker": "SPOT", "weight": 13.3, "score": strong_score},
+        {"ticker": "V",    "weight": 14.5, "score": strong_score},
+    ])
+    held_data = {
+        "REGN": {"earnings": "2026-07-30"},
+        "GD":   {"earnings": "2026-07-29"},
+        "V":    {"earnings": "2026-07-28"},
+        "SPOT": {"earnings": "2026-08-01"},
+        "BKNG": {"earnings": "2026-08-03"},
+    }
+    items = _review_list(port_df, [], [], held_data, _TODAY, portfolio_value=100_000.0)
+    for ticker in ("REGN", "GD", "V", "SPOT", "BKNG"):
+        item = find_item(items, ticker)
+        assert item is not None, f"{ticker} missing from Review Before Close"
+        assert item["action"]["type"] == "WATCH", f"{ticker} unexpectedly fired a TRIM"
 
 
 # ── _cross_reference ──────────────────────────────────────────────────────────

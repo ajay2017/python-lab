@@ -468,12 +468,30 @@ PULLBACK_ALERT_INDEX_PCT = -3.0
 ALERT_EOD_HOUR_ET        = 16   # EOD run fires only after this ET hour (post-close → final price)
 
 # 📅 Earnings overweight — trim-down rule.
-# Binary event = asymmetric risk. Above EARNINGS_OVERWEIGHT_TRIM_PCT, the
-# expected earnings move would breach the per-trade risk budget; trim down
-# to EARNINGS_OVERWEIGHT_TRIM_TO_PCT (aligned with LARGE_POSITION_WEIGHT_PCT
-# floor — "large but not overweight").
-EARNINGS_OVERWEIGHT_TRIM_PCT    = 12.0
-EARNINGS_OVERWEIGHT_TRIM_TO_PCT = 10.0
+# Binary event = asymmetric risk. The trigger is now POSITION-COUNT-AWARE
+# (see daily_briefing._dynamic_overweight_floor): floor = clamp(100/N +
+# EARNINGS_OVERWEIGHT_TOLERANCE_PP, EARNINGS_OVERWEIGHT_TRIM_PCT,
+# EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT). A flat threshold assumed a fixed
+# ~10-position book and fired on nearly every name in a more concentrated
+# portfolio purely from equal-weight math, not genuine over-concentration
+# (found + fixed 2026-07-28 against a real 7-position portfolio where 5/7
+# names tripped the old flat 12% despite none exceeding equal-weight+5pp).
+# EARNINGS_OVERWEIGHT_TRIM_PCT is now the MIN clamp bound (floor-of-the-
+# floor — keeps today's behavior for diversified portfolios where 100/N
+# would otherwise dip below it). Trim down to EARNINGS_OVERWEIGHT_TRIM_TO_PCT
+# (aligned with LARGE_POSITION_WEIGHT_PCT floor — "large but not overweight");
+# the trim TARGET stays flat regardless of N (deliberate — only the trigger
+# is dynamic). EARNINGS_OVERWEIGHT_TOLERANCE_PP intentionally duplicates the
+# numeric value of rebalancer.TOLERANCE_WATCH (5.0) rather than importing it —
+# Opus review flagged that coupling a binary-event risk gate to the
+# rebalancer's general drift-monitor band means a retune of one silently
+# shifts the other; this constant is deliberately independent so it can be
+# tuned on its own investment-policy merits.
+EARNINGS_OVERWEIGHT_TRIM_PCT          = 12.0
+EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT  = 22.0  # binary-event risk cap even for a
+                                               # deliberately concentrated book
+EARNINGS_OVERWEIGHT_TOLERANCE_PP      = 5.0   # buffer added to equal-weight (100/N)
+EARNINGS_OVERWEIGHT_TRIM_TO_PCT       = 10.0
 
 # 🔍 Weak large position — trim-down rule.
 # Target is set below the 10% LARGE_POSITION_WEIGHT_PCT re-flag threshold so

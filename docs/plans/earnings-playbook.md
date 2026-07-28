@@ -40,6 +40,25 @@ Existing earnings-window constants in `constants.py` (do not change these values
 | `EARNINGS_OVERWEIGHT_TRIM_PCT` | 12.0 |
 | `EARNINGS_OVERWEIGHT_TRIM_TO_PCT` | 10.0 |
 
+**Update 2026-07-28:** `EARNINGS_OVERWEIGHT_TRIM_PCT` was recalibrated — the "do not change" note
+above was about not touching it *during Phase 1 build*, not a permanent lock, and this genuinely
+needed revisiting. It was a flat trigger that assumed a fixed ~10-position portfolio; at N held
+positions, equal-weight alone is `100/N`, which exceeds 12% once N drops below ~8 — so a
+concentrated, deliberate portfolio got flagged on nearly every name regardless of real
+over-concentration (found against a real 7-position portfolio where 5/7 holdings tripped the flat
+12% despite none exceeding equal-weight+tolerance). The trigger is now position-count-aware via
+`daily_briefing._dynamic_overweight_floor(n)` = `clamp(100/n + EARNINGS_OVERWEIGHT_TOLERANCE_PP,
+EARNINGS_OVERWEIGHT_TRIM_PCT, EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT)` — `EARNINGS_OVERWEIGHT_TRIM_PCT`
+(12.0) is now the min-clamp bound, and two new constants were added: `EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT`
+(22.0, caps binary-event risk even for a deliberately concentrated book) and
+`EARNINGS_OVERWEIGHT_TOLERANCE_PP` (5.0, the equal-weight buffer — deliberately its own constant,
+not imported from `rebalancer.TOLERANCE_WATCH` despite the identical value, per an Opus review
+flag that coupling this binary-event gate to the rebalancer's general drift-monitor band would
+let a rebalancer retune silently shift it). `EARNINGS_OVERWEIGHT_TRIM_TO_PCT` (the trim target) is
+unchanged — only the trigger became dynamic. Opus-reviewed before ship (see commit body). The
+sibling "weak large position" rule (`LARGE_POSITION_WEIGHT_PCT`) has the same flat-threshold
+pattern and is a known, deliberately deferred follow-up — not addressed here.
+
 ---
 
 ## Design invariants
