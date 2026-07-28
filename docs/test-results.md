@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-ranked-list, batch 13: `earnings_advisor.py`)
+## 1. Latest run — 2026-07-28 (post-ranked-list, batch 14: `perf_advisor.py`)
 
-**965 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 10.87s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**1011 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 13.06s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -53,7 +53,8 @@ active: 10.87s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_comparison.py` | 57 | `comparison.py` (2-ticker Compare page: per-row winner picking, composite-first/sub-factor-tiebreak verdict, portfolio-fit notes) |
 | `test_decision_journal.py` | 31 | `decision_journal.py` (signal-followed vs. ignored accuracy, costly-deviation/good-override lists, lessons library, behavioral insight) |
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
-| **Total** | **965** | |
+| `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
+| **Total** | **1011** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -88,17 +89,18 @@ in the tested logic itself. Batch-by-batch scope is in
 | `comparison.py` | 147 | 5 | **97%** |
 | `decision_journal.py` | 67 | 0 | **100%** |
 | `earnings_advisor.py` | 145 | 3 | **98%** |
+| `perf_advisor.py` | 116 | 0 | **100%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,111 missed, 27%** (up —
-`earnings_advisor.py` moving from 0% to 98%, the 4th fresh-prioritization
-pick from the same Explore-agent survey). ~53 modules remain with zero
-tests; `perf_advisor.py`/`news_intelligence.py` are the survey's remaining
-lower-priority candidates. Not a target to chase for its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 9,995 missed, 28%** (up —
+`perf_advisor.py` moving from 0% to 100%, the 5th fresh-prioritization pick
+from the same Explore-agent survey). ~52 modules remain with zero tests;
+`news_intelligence.py` is the survey's last remaining lower-priority
+candidate. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -174,6 +176,43 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `perf_advisor.py` backfilled (46 tests, 100% coverage), 1011/1011 passing, no bug found
+
+Fifth fresh-prioritization pick from the same post-ranked-list Explore
+survey. `perf_advisor.py` powers the Performance Attribution page:
+`compute_attribution()` computes each held position's return over a
+selected lookback window vs. SPY and vs. its sector ETF (via
+`portfolio.SECTOR_ETF`), categorising it Alpha Generator (beats SPY by
+≥5% AND beats its sector ETF by ≥3%) / Sector Rider (beats SPY by ≥5% but
+not its sector — the classic "confusing beta with alpha" case, including
+when no sector-ETF return data is available at all) / Alpha Destroyer
+(trails SPY by ≥5%) / In Line, plus a dollar-alpha figure (opportunity
+cost/benefit vs. holding SPY at the same weight); `build_perf_recommendations()`
+then turns each category into a ranked, narrative recommendation card
+(HIGH/MEDIUM/MONITOR/OK), with the Alpha Destroyer branch further splitting
+into a 3-tier thesis assessment keyed off the composite score against
+`COMPOSITE_HOLD` (score≥60 "hold with a 30-day review trigger" /
+score≥`COMPOSITE_HOLD` "borderline, trim 40-50%" / below-floor "broken
+thesis, exit or reduce to minimum"). 46 tests: `_f()`/`_opt()`'s NaN/None/
+unparseable handling (incl. `_opt`'s must-not-treat-0.0-as-missing case),
+`compute_attribution()`'s full empty/short-circuit ladder (empty port_df,
+empty/None spy_df, insufficient SPY or per-holding history, missing
+weight/market-value/held-data/close-column, zero-or-negative market value,
+tz-aware index localization), all 4 category boundaries plus the
+no-sector-data-defaults-to-Sector-Rider case, dollar-alpha sort order, and
+the unmapped-sector-falls-back-to-SPY-ETF case; `build_perf_recommendations()`'s
+empty/None/zero/negative-portfolio-value bail-outs, each category's
+priority and narrative content, the Alpha Destroyer HIGH/MEDIUM split at
+the -15% alpha boundary and all 3 thesis tiers (pinned exactly at the
+`COMPOSITE_HOLD` boundary using the real imported constant, not a
+hardcoded literal, per CLAUDE.md's doc/test-integrity discipline), the
+Sector Rider title's alpha-vs-sector-unavailable fallback copy, and the
+HIGH→MEDIUM→MONITOR→OK sort order. One initial test failure was the
+author's own fixture mistake (used a sector string with no `SECTOR_ETF`
+mapping, so it silently fell back to the "SPY" ETF instead of the intended
+sector ETF — fixed by using a sector that's actually in the map), not a
+source bug. No production bug found. Now 100% covered (116 stmts, 0 missed).
 
 ### 2026-07-28 — `earnings_advisor.py` backfilled (56 tests), 965/965 passing, no bug found
 
