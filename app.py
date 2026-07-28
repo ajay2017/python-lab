@@ -4085,6 +4085,7 @@ if page == "🏠 Home":
             _risk_advisor_recs = build_risk_advisor_recommendations(
                 port_df, held_data, _port_risk, h_rets, total_val,
                 gate_denom=_gate_denom,
+                trades_df=st.session_state.get("trades_df"),
             )
             st.session_state["_risk_high_alerts_cache"] = [
                 r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
@@ -6254,6 +6255,9 @@ if page == "🏠 Home":
                         f"Awareness only — doesn't change this recommendation."
                     )
 
+            if _gp.get("sector_elevated_warning"):
+                st.caption(f"⚠️ {_gp['sector_elevated_warning']}")
+
             if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _gp["ticker"]
@@ -6352,6 +6356,9 @@ if page == "🏠 Home":
                 + f"</div>",
                 unsafe_allow_html=True,
             )
+            if _ga.get("sector_elevated_warning"):
+                st.caption(f"⚠️ {_ga['sector_elevated_warning']}")
+
             if st.button(f"▶ Analyze {_ga['ticker']}", key=f"_db_grow_add_{_ga['ticker']}"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _ga["ticker"]
@@ -7024,6 +7031,18 @@ if page == "🏠 Home":
                                     f"{_tc['weight']:.1f}% · P&L {_tc['pnl_pct']:+.1f}%"
                                 )
                                 _trim_basis(_t, _tc)
+                        _trim_recent = _rebal_flag.get("trim_excluded_recent") or []
+                        if _trim_recent:
+                            _tr_names = ", ".join(
+                                f"**{r['ticker']}** (~\\${r['market_value']:,.0f})"
+                                for r in _trim_recent
+                            )
+                            st.caption(
+                                f"🕐 Held back from today's plan — {_tr_names} "
+                                + ("was" if len(_trim_recent) == 1 else "were")
+                                + " opened today; giving same-day buys a day to settle before "
+                                "suggesting an exit. Reconsidered in tomorrow's brief."
+                            )
                         st.caption(
                             "_Greedy: your weakest-conviction names are trimmed first (engine order — small "
                             "gaps are within scoring noise). Shares are approximate; the $/pp are the target. "
@@ -7733,6 +7752,8 @@ if page == "🏠 Home":
                     + f"</div>",
                     unsafe_allow_html=True,
                 )
+                if _db_buy.get("sector_elevated_warning"):
+                    st.caption(f"⚠️ {_db_buy['sector_elevated_warning']}")
                 if st.button(f"▶ Analyze {_db_buy['ticker']}", key=f"_db_buy_{_db_buy['ticker']}",
                              use_container_width=False):
                     st.session_state["_pending_page"]    = "📈 Analysis"
@@ -25358,6 +25379,8 @@ When a single sector grows past the **35% hard cap** (or approaches the **25% wa
 **Where to redeploy — engine-vetted, correlation-checked.** For your **under-represented** sectors it names real tickers to consider, scored on the **same Composite ≥ 65 Buy gate** used everywhere else (a ✅ passer is "a genuine entry," not filler), each annotated with its **correlation to your actual book** (🟢 genuine diversifier → 🔴 moves with what you already own) so you can pick a name that truly spreads risk — plus your saved analyst research as an awareness note. **▶ Analyze** jumps to the full scorecard to trade from there.
 
 **It advises; you decide.** The engine's conviction score sets the order; correlation and analyst data only *annotate* (they never re-rank or gate). When a sector *must* be cut there are two honest schools — **trim the laggard** (momentum) or **take profit on the runner** (rebalance) — and the card names both and leaves the final call to you. Nothing is auto-sold.
+
+**A same-day buy gets a one-day grace period.** If you bought a name *today*, the trim plan holds it back from the list even if it's your weakest-conviction name in an over-cap sector — you won't see a buy recommended and, hours later on the same brief, that exact position flagged for a full exit. A "🕐 Held back from today's plan" note names it; it returns to normal trim ranking the next day. If a sector is **approaching** the 25% warn line (not yet over the 35% cap), new picks and add-to-winners there aren't suppressed — they carry an amber "sector already elevated" note instead, so the buy side stays honest about a sector the trim side is already watching without blocking a genuinely good entry.
 """
             )
 

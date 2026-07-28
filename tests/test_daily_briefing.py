@@ -22,6 +22,8 @@ from stock_analyzer.constants import (
     EARNINGS_OVERWEIGHT_TRIM_CEILING_PCT,
     EARNINGS_OVERWEIGHT_TRIM_PCT,
     LARGE_POSITION_WEIGHT_PCT,
+    SECTOR_CEILING,
+    SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
     WEAK_CONVICTION_SCORE,
 )
@@ -29,6 +31,7 @@ from stock_analyzer.daily_briefing import (
     _buy_candidates,
     _cross_reference,
     _dynamic_overweight_floor,
+    _grow_today,
     _recently_added,
     _review_list,
     _trim_targets,
@@ -212,6 +215,85 @@ def test_add_to_winner_suppressed_by_drift_trim_overweight():
     ])
     items = _buy_candidates(port_df, None, [], {}, _TODAY)
     assert find_item(items, "AAA") is None
+
+
+# ── _buy_candidates: sector concentration (SHOP whiplash fix) ────────────────
+# _buy_candidates previously had NO sector-concentration awareness at all —
+# closed alongside _grow_today's gate in the same pass (a buy recommended here,
+# hours later flagged for a full sector-cap trim, is the exact whiplash bug).
+
+def test_scanner_pick_suppressed_at_sector_hard_cap():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 5.0, "sector": "Tech"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "sector": "Tech"}])
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
+    assert find_item(items, "NEW") is None
+
+
+def test_scanner_pick_gets_elevated_sector_warning_not_suppressed():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_ELEVATED + 2.0, "sector": "Tech"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "sector": "Tech"}])
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
+    item = find_item(items, "NEW")
+    assert item is not None
+    assert item["sector_elevated_warning"] is not None
+
+
+def test_scanner_pick_no_warning_below_elevated_band():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_ELEVATED - 10.0, "sector": "Tech"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0, "sector": "Tech"}])
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY)
+    item = find_item(items, "NEW")
+    assert item is not None
+    assert item["sector_elevated_warning"] is None
+
+
+def test_add_to_winner_suppressed_at_sector_hard_cap():
+    port_df = make_port_df([_winner_row(weight=SECTOR_CEILING + 5.0, sector="Tech")])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    assert find_item(items, "AAA") is None
+
+
+def test_add_to_winner_gets_elevated_sector_warning_not_suppressed():
+    # AAA stays well below SINGLE_NAME_CEILING itself; BBB pushes the shared
+    # Tech sector into the elevated band without tripping single-name gates.
+    port_df = make_port_df([
+        _winner_row(weight=10.0, sector="Tech"),
+        {"ticker": "BBB", "weight": SECTOR_ELEVATED + 2.0 - 10.0, "sector": "Tech"},
+    ])
+    items = _buy_candidates(port_df, None, [], {}, _TODAY)
+    item = find_item(items, "AAA")
+    assert item is not None
+    assert item["sector_elevated_warning"] is not None
+
+
+# ── _grow_today: sector concentration (the reported SHOP live-brief bug) ────
+
+def test_grow_today_new_pick_suppressed_at_sector_hard_cap():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_CEILING + 5.0, "sector": "Tech"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"})
+    assert find_item(grow["new_picks"], "NEW") is None
+    assert find_item(grow["sector_blocked_picks"], "NEW") is not None
+
+
+def test_grow_today_new_pick_gets_elevated_sector_warning_not_suppressed():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_ELEVATED + 2.0, "sector": "Tech"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["sector_elevated_warning"] is not None
+
+
+def test_grow_today_new_pick_no_warning_below_elevated_band():
+    port_df = make_port_df([{"ticker": "HELD", "weight": SECTOR_ELEVATED - 10.0, "sector": "Tech"}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Tech"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"}, composites=composites)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["sector_elevated_warning"] is None
 
 
 # ── Review Before Close: weak-large position flag ────────────────────────────

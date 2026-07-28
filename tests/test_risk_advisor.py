@@ -10,7 +10,10 @@ absence. Tests build a small synthetic portfolio via
 tests.conftest.make_risk_advisor_inputs so each case varies only the field(s)
 relevant to the branch under test.
 """
+from datetime import datetime
+
 import pandas as pd
+import pytz
 
 from stock_analyzer.constants import (
     DRAWDOWN_CONTRIB_MAX,
@@ -31,6 +34,7 @@ from stock_analyzer.constants import (
     TAIL_RATIO_HIGH_MIN,
     WEAK_CONVICTION_SCORE,
 )
+from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from tests.conftest import find_rec, make_risk_advisor_inputs
 
@@ -361,6 +365,97 @@ def test_unclassified_sector_excluded_from_top_pick_and_flagged_separately():
     other_rec = find_rec(recs, "unclassified_holdings")
     assert other_rec is not None
     assert other_rec["priority"] == "LOW"
+
+
+# ── same-day-buy trim exclusion (trades_df) ───────────────────────────────────
+# A ticker recommended as a buy and bought hours earlier the same session must
+# not immediately be the trim engine's #1 full-exit candidate (the SHOP case).
+
+_SECTOR_BREACH_ROWS = [
+    {"ticker": "OLDCO", "weight": 20.0, "market_value": 20_000.0, "sector": "Tech", "score": 50},
+    {"ticker": "NEWCO", "weight": 20.0, "market_value": 20_000.0, "sector": "Tech", "score": 40},
+]
+
+
+def _et_noon_today_as_utc_iso() -> str:
+    # traded_at is stored UTC (Supabase timestamptz) -- a bare date string would
+    # parse as UTC-midnight, which is still the PREVIOUS day in ET (evening EDT/
+    # EST the day before), so tests must build a real ET-local timestamp and
+    # convert it, not hand a date-only string to a UTC-aware comparison.
+    _today = _today_et()
+    _ts_et = pytz.timezone("America/New_York").localize(
+        datetime(_today.year, _today.month, _today.day, 12, 0)
+    )
+    return _ts_et.astimezone(pytz.utc).isoformat()
+
+
+def test_same_day_buy_excluded_from_trim_and_recorded():
+    trades_df = pd.DataFrame([
+        {"ticker": "NEWCO", "action": "BUY", "traded_at": _et_noon_today_as_utc_iso()},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(_SECTOR_BREACH_ROWS)
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df
+    )
+    rec = find_rec(recs, "sector_concentration")
+    assert rec is not None
+    assert {c["ticker"] for c in rec["trim_candidates"]} == {"OLDCO"}
+    assert {c["ticker"] for c in rec["trim_excluded_recent"]} == {"NEWCO"}
+
+
+def test_same_day_buy_near_utc_midnight_boundary_still_excluded():
+    # traded_at is stored UTC (Supabase timestamptz). A buy at 11:30 PM ET is
+    # still "today" in ET but has already rolled into tomorrow's UTC calendar
+    # date -- comparing raw UTC dates against _today_et() would silently miss
+    # this real-world case (a buy late in the trading day), which is exactly
+    # the boundary the SHOP whiplash fix needs to hold.
+    _today = _today_et()
+    _ts_et = pytz.timezone("America/New_York").localize(
+        datetime(_today.year, _today.month, _today.day, 23, 30)
+    )
+    trades_df = pd.DataFrame([
+        {"ticker": "NEWCO", "action": "BUY", "traded_at": _ts_et.astimezone(pytz.utc).isoformat()},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(_SECTOR_BREACH_ROWS)
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df
+    )
+    rec = find_rec(recs, "sector_concentration")
+    assert {c["ticker"] for c in rec["trim_candidates"]} == {"OLDCO"}
+    assert {c["ticker"] for c in rec["trim_excluded_recent"]} == {"NEWCO"}
+
+
+def test_older_buy_not_excluded_from_trim():
+    trades_df = pd.DataFrame([
+        {"ticker": "NEWCO", "action": "BUY", "traded_at": "2020-01-01"},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(_SECTOR_BREACH_ROWS)
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df
+    )
+    rec = find_rec(recs, "sector_concentration")
+    assert {c["ticker"] for c in rec["trim_candidates"]} == {"OLDCO", "NEWCO"}
+    assert rec["trim_excluded_recent"] == []
+
+
+def test_same_day_sell_does_not_exclude_from_trim():
+    trades_df = pd.DataFrame([
+        {"ticker": "NEWCO", "action": "SELL", "traded_at": _today_et().isoformat()},
+    ])
+    port_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(_SECTOR_BREACH_ROWS)
+    recs = build_risk_advisor_recommendations(
+        port_df, held_data, port_risk, h_rets, pv, gd, trades_df=trades_df
+    )
+    rec = find_rec(recs, "sector_concentration")
+    assert {c["ticker"] for c in rec["trim_candidates"]} == {"OLDCO", "NEWCO"}
+    assert rec["trim_excluded_recent"] == []
+
+
+def test_no_trades_df_is_backward_compatible():
+    recs = _recs(_SECTOR_BREACH_ROWS)  # trades_df omitted entirely
+    rec = find_rec(recs, "sector_concentration")
+    assert {c["ticker"] for c in rec["trim_candidates"]} == {"OLDCO", "NEWCO"}
+    assert rec["trim_excluded_recent"] == []
 
 
 # ── single-name concentration ─────────────────────────────────────────────────

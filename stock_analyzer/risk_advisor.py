@@ -12,6 +12,7 @@ import pandas as pd
 
 from collections import defaultdict
 
+from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.constants import (
     DRAWDOWN_CONTRIB_MAX,
     PORTFOLIO_BETA_CEILING,
@@ -66,6 +67,7 @@ def build_risk_advisor_recommendations(
     h_rets: dict,
     portfolio_value: float,
     gate_denom: float | None = None,
+    trades_df: pd.DataFrame | None = None,
 ) -> list[dict]:
     """
     Returns a ranked list of recommendation dicts.  Each dict has:
@@ -79,11 +81,41 @@ def build_risk_advisor_recommendations(
       recommendation  : specific, actionable advice
       expected_outcome: quantified result if recommendation is followed
       institutional_lens    : teaching moment / professional context
+
+    trades_df : optional trade log (st.session_state.trades_df shape). When
+      supplied, a ticker with a same-day BUY is excluded from the sector
+      concentration rec's `trim_candidates` — the whiplash of Grow Today
+      recommending a buy and, hours later on the same brief, the trim plan
+      naming that exact position for a full exit. Excluded names surface in
+      `trim_excluded_recent` instead of vanishing silently; they reappear as
+      normal trim candidates once the buy is no longer same-day.
     """
     if not port_risk or port_df.empty:
         return []
 
     recs: list[dict] = []
+
+    # Same-day BUY tickers — see trades_df docstring note above.
+    _bought_today: set[str] = set()
+    if trades_df is not None and not trades_df.empty:
+        _today = _today_et()
+        for _, _tr in trades_df.iterrows():
+            if str(_tr.get("action", "") or "").upper() != "BUY":
+                continue
+            _ta = _tr.get("traded_at")
+            if _ta is None:
+                continue
+            # traded_at is a Supabase timestamptz (UTC) — must convert to ET
+            # before taking the calendar date, or a buy filled after ~8pm ET
+            # rolls into "tomorrow" in UTC and silently isn't excluded (the
+            # exact whiplash this check exists to prevent). utc=True handles
+            # both a raw ISO string and an already-parsed Timestamp.
+            _ta_ts = pd.to_datetime(_ta, utc=True, errors="coerce")
+            if pd.isna(_ta_ts):
+                continue
+            _ta_date = _ta_ts.tz_convert("America/New_York").date()
+            if _ta_date == _today:
+                _bought_today.add(str(_tr.get("ticker", "")).upper())
 
     # Use None-preserving coercion for every metric that gates a recommendation.
     # Coercing missing data to 0.0 produces confidently-wrong HIGH-priority
@@ -644,6 +676,13 @@ def build_risk_advisor_recommendations(
             # names with no real composite (score_raw is None) are EXCLUDED so a
             # missing score can't masquerade as lowest conviction. Account-basis
             # weight, consistent with root_tickers.
+            _trim_eligible = sorted(
+                (h for h in sector_holdings[top_sec] if h["score_raw"] is not None),
+                key=lambda h: h["score_raw"],
+            )
+            # Same-day BUY names are held back from the trim plan (see trades_df
+            # docstring note) — surfaced separately in trim_excluded_recent so a
+            # resulting shortfall is explained, not silent.
             trim_candidates = [
                 {
                     "ticker":       h["ticker"],
@@ -653,10 +692,18 @@ def build_risk_advisor_recommendations(
                     "market_value": h["market_value"],   # for greedy trim allocation
                     "price":        h["price"],
                 }
-                for h in sorted(
-                    (h for h in sector_holdings[top_sec] if h["score_raw"] is not None),
-                    key=lambda h: h["score_raw"],
-                )
+                for h in _trim_eligible
+                if h["ticker"].upper() not in _bought_today
+            ]
+            trim_excluded_recent = [
+                {
+                    "ticker":       h["ticker"],
+                    "score":        round(float(h["score_raw"]), 0),
+                    "weight":       round(h["weight"] * _acct_f, 1),
+                    "market_value": h["market_value"],
+                }
+                for h in _trim_eligible
+                if h["ticker"].upper() in _bought_today
             ]
 
             recs.append({
@@ -684,6 +731,7 @@ def build_risk_advisor_recommendations(
                 # trim_target_* = the headline directive's target ($/pp + denom),
                 # so the render's greedy allocation adds up to the same figure.
                 "trim_candidates":    trim_candidates,
+                "trim_excluded_recent": trim_excluded_recent,
                 "redeploy_sectors":   redeploy_sectors,
                 "trim_target_pp":     round(excess_pp, 1),
                 "trim_target_dollar": excess_dollar,

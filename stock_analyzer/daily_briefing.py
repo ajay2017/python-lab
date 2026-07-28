@@ -32,6 +32,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY_FLAT_DAY,
     SINGLE_NAME_CEILING,
     SECTOR_CEILING,
+    SECTOR_ELEVATED,
     UNCLASSIFIED_SECTOR,
     MACRO_IMMINENT_DAYS,
     EARNINGS_IMMINENT_DAYS,
@@ -579,15 +580,28 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # is simultaneously telling the user to TRIM (the ESTC case: a Strong-Buy add
     # surfaced while its sector was 44% over the 35% cap). The deploy-capital
     # signal must defer to the protect-capital signal. Mirrors the macro gate.
+    # Elevated (not yet hard-capped) sectors — the same SECTOR_ELEVATED band
+    # Risk Advisor already renders as its MEDIUM "Elevated Sector Concentration"
+    # card. A pick here isn't suppressed (a 25-35% sector isn't yet a breach),
+    # but it's warned so the buy side doesn't stay silent about a sector the
+    # trim side is already watching (the SHOP case: a buy recommended while
+    # under 35% that, once bought, immediately became the trim engine's #1
+    # full-exit candidate the same day — see risk_advisor's trim_excluded_recent
+    # for the matching same-day-buy backstop on the trim side).
     _breached_sectors: set = set()
+    _elevated_sectors: set = set()
+    _sector_wt_map: dict = {}
     if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
         _sec_wt = port_df.groupby("Sector")[_gate_wt_col(port_df)].sum()
         # "Other" is a classification artifact (unclassified holdings), not a
         # real correlated sector — exclude it so picks/adds aren't suppressed by
         # a phantom cap breach. Mirrors risk_advisor's UNCLASSIFIED_SECTOR exclusion.
-        _breached_sectors = {str(_s) for _s, _w in _sec_wt.items()
-                             if _f(_w, 0) >= SECTOR_CEILING
-                             and str(_s) != UNCLASSIFIED_SECTOR}
+        _sector_wt_map = {str(_s): _f(_w, 0) for _s, _w in _sec_wt.items()
+                          if str(_s) != UNCLASSIFIED_SECTOR}
+        _breached_sectors = {_s for _s, _w in _sector_wt_map.items()
+                             if _w >= SECTOR_CEILING}
+        _elevated_sectors = {_s for _s, _w in _sector_wt_map.items()
+                             if SECTOR_ELEVATED <= _w < SECTOR_CEILING}
 
     # On bear days — no new entries, return protection message
     if tone == "bear":
@@ -876,6 +890,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "sizing":          sizing,
                 "xref":            xref,
                 "divergence":      _divergence,
+                # Elevated (not hard-capped) sector warning — see _elevated_sectors
+                # above. Not a gate: the pick stands, but the user sees the sector
+                # is already in the band Risk Advisor is watching for a trim.
+                "sector_elevated_warning": (
+                    f"{sector} sector already at {_sector_wt_map.get(sector, 0):.1f}% "
+                    f"(warn level {SECTOR_ELEVATED:.0f}%) — this buy adds to a sector "
+                    "Risk Advisor already has flagged for trim."
+                    if sector in _elevated_sectors else None
+                ),
             }
             if is_mover:
                 _mover_picks.append(pick)
@@ -1097,6 +1120,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                         + (" Sector leading today." if is_lead else "")
                     ),
                     "sizing":    sizing,
+                    # Elevated (not hard-capped) sector warning — see _elevated_sectors.
+                    "sector_elevated_warning": (
+                        f"{sector} sector already at {_sector_wt_map.get(sector, 0):.1f}% "
+                        f"(warn level {SECTOR_ELEVATED:.0f}%) — this add adds to a sector "
+                        "Risk Advisor already has flagged for trim."
+                        if sector in _elevated_sectors else None
+                    ),
                 })
         add_positions.sort(key=lambda x: (-x["score"], -x["gap"]))
 
@@ -1540,6 +1570,30 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
     # Risk Advisor trim targets — suppress same-ticker add-to-winner conflicts.
     _trim_set = _trim_targets(risk_recs)
 
+    # Sector concentration — mirrors _grow_today's gate (same rationale: don't
+    # open/add into a sector Risk Advisor is already telling the user to trim).
+    # This surface previously had NO sector awareness at all, a gap wider than
+    # _grow_today's — closed alongside it in the same pass (SHOP whiplash fix).
+    _breached_sectors: set = set()
+    _elevated_sectors: set = set()
+    _sector_wt_map: dict = {}
+    if port_df is not None and not port_df.empty and "Weight (%)" in port_df.columns:
+        _sec_wt = port_df.groupby("Sector")[_gate_wt_col(port_df)].sum()
+        _sector_wt_map = {str(_s): _f(_w, 0) for _s, _w in _sec_wt.items()
+                          if str(_s) != UNCLASSIFIED_SECTOR}
+        _breached_sectors = {_s for _s, _w in _sector_wt_map.items() if _w >= SECTOR_CEILING}
+        _elevated_sectors = {_s for _s, _w in _sector_wt_map.items()
+                             if SECTOR_ELEVATED <= _w < SECTOR_CEILING}
+
+    def _sector_warning(sector: str) -> str | None:
+        if sector not in _elevated_sectors:
+            return None
+        return (
+            f"{sector} sector already at {_sector_wt_map.get(sector, 0):.1f}% "
+            f"(warn level {SECTOR_ELEVATED:.0f}%) — this buy adds to a sector "
+            "Risk Advisor already has flagged for trim."
+        )
+
     # Drift-trim positions — same suppression as _grow_today
     _drift_trim_set: set = set()
     if port_df is not None and not port_df.empty:
@@ -1568,6 +1622,11 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
 
         for _, row in top_picks.iterrows():
             ticker = str(row["Ticker"])
+            sector = str(row.get("Sector", "—"))
+            # Sector concentration gate — same rationale as _grow_today: don't
+            # surface a fresh position in a sector already over the hard cap.
+            if sector in _breached_sectors:
+                continue
             xref   = _cross_reference(ticker, row.to_dict(), port_df, news_items, held_data, today,
                                       composites=composites)
             items.append({
@@ -1578,11 +1637,12 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "price":          _f(row.get("Price"), None),
                 "score":          _f(row.get("Score")),
                 "scanner_signal": str(row.get("Signal", "")),
-                "sector":         str(row.get("Sector", "—")),
+                "sector":         sector,
                 "rsi":            _f(row.get("RSI")),
                 "mom_1m":         _f(row.get("1M Momentum")),
                 "trend":          str(row.get("Trend", "")),
                 "xref":           xref,
+                "sector_elevated_warning": _sector_warning(sector),
             })
 
     # 2 — Add-to-winner: held, Strong Buy composite, Score ≥ COMPOSITE_BUY (65),
@@ -1609,6 +1669,11 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
             # Drift-trim conflict — position is drift-overweight; don't add
             if ticker.upper() in _drift_trim_set:
                 continue
+            _sector = str(row.get("Sector", "—"))
+            # Sector concentration gate — same rationale as _grow_today: don't
+            # add to a position whose sector is already over the hard cap.
+            if _sector in _breached_sectors:
+                continue
             # Build a minimal scanner_row from portfolio data for cross-reference
             _synthetic = {
                 "Signal": sig, "Score": scr,
@@ -1628,13 +1693,14 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                 "price":          _f(row.get("Price"), None),
                 "score":          scr,
                 "scanner_signal": sig,
-                "sector":         str(row.get("Sector", "—")),
+                "sector":         _sector,
                 "rsi":            0,
                 "mom_1m":         _f(row.get("1M Momentum", 0)),
                 "trend":          sig,
                 "gap_to_stop":    gap,
                 "pnl_pct":        _f(row.get("P&L (%)")),
                 "xref":           xref,
+                "sector_elevated_warning": _sector_warning(_sector),
             })
 
     _verdict_order = {"confirmed": 0, "mixed": 1, "caution": 1, "unverified": 2, "conflicted": 3}
