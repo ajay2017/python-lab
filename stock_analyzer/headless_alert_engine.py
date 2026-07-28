@@ -16,6 +16,7 @@ not "reach me now" decisions. Inputs come from Supabase (holdings/trades/stops)
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 
 import pytz
@@ -43,10 +44,22 @@ _ET = pytz.timezone("America/New_York")
 
 
 def _f(v, default=None):
+    """Parse to float, or `default` on anything unparseable — including NaN.
+
+    A source field that's legitimately None (e.g. "Stop Unavailable" ->
+    gap_to_stop=None in portfolio.py) gets silently pandas-coerced to NaN once
+    it shares a DataFrame column with any row that has a real float value.
+    float(nan) doesn't raise, so without this check a caller doing
+    `if _f(x) is None: skip` would miss it -- NaN passed straight through as
+    a "real" float. Confirmed reachable: found while testing the stop-breach
+    loop below, which would otherwise fire a bogus SELL alert on a ticker
+    whose stop is actually unknown.
+    """
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return default
+    return default if math.isnan(f) else f
 
 
 def _vix_level() -> float | None:

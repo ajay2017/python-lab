@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-27 (post-roadmap health check, batch 3: `macro_playbook.py`)
+## 1. Latest run — 2026-07-27 (post-roadmap health check, batch 4: `headless_alert_engine.py`)
 
-**437 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 3.58s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**494 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 8.99s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -43,7 +43,8 @@ active: 3.58s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_watchlist_advisor.py` | 35 | `watchlist_advisor.py` (incl. `_portfolio_risk_gate()`) |
 | `test_risk.py` | 43 | `risk.py` (position sizing, ATR stops, Sharpe/Sortino/VaR/beta) |
 | `test_macro_playbook.py` | 67 | `macro_playbook.py` (Pre-Event Macro Playbook: PROTECT/WATCH/HOLD/OPPORTUNITY action classifier, post-event scenario classification) |
-| **Total** | **437** | |
+| `test_headless_alert_engine.py` | 57 | `headless_alert_engine.py` (cron protective-alert / morning-picks / EOD engine: `_build_context`, `compute_protective_alerts`, `compute_morning_picks`, `compute_eod`, `_assess_pullback`) |
+| **Total** | **494** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -68,17 +69,19 @@ in the tested logic itself. Batch-by-batch scope is in
 | `risk_advisor.py` | 175 | 13 | **93%** |
 | `risk.py` | 171 | 7 | **96%** |
 | `macro_playbook.py` | 252 | 13 | **95%** |
+| `headless_alert_engine.py` | 252 | 26 | **90%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,774 stmts, 11,973 missed, 13%** (up from
-11% earlier the same day). Still dominated by ~63 modules with zero tests at
-all — ranked remaining gaps with real decision/gate logic: `portfolio_health.py`,
-`rebalancer.py`, `signal_hysteresis.py` (tied to the still-parked
-deterioration-hysteresis queue item), `position_lifecycle.py`,
+**Whole-`stock_analyzer/` total: 13,776 stmts, 11,348 missed, 18%** (up from
+13% earlier the same day — mostly `headless_alert_engine.py` moving from 0%
+to 90%, not organic drift elsewhere). Still dominated by ~62 modules with zero
+tests at all — ranked remaining gaps with real decision/gate logic:
+`portfolio_health.py`, `rebalancer.py`, `signal_hysteresis.py` (tied to the
+still-parked deterioration-hysteresis queue item), `position_lifecycle.py`,
 `tax_advisor.py`. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
@@ -106,6 +109,17 @@ across many identical rows — a flat/halted position could show a Sharpe of
 ±3.4e16 instead of 0.0. Fixed with a `_ZERO_VOL_EPS = 1e-9` tolerance check.
 Opus-reviewed: SHIP, 0 blocking.
 
+**`headless_alert_engine.py`'s batch also found and fixed a real production
+bug** (see the dated history entry below): its `_f()` float-parsing helper
+returned NaN itself instead of falling back to `default` when a "Stop
+Unavailable" ticker's `gap_to_stop=None` got pandas-coerced to NaN by a
+mixed-dtype column — the stop-breach loop's `gap is None` guard never caught
+it, and NaN > 0 is also False, so a ticker whose stop was unknown/uncomputable
+would fire a bogus "SELL — Stop Breached" cron alert. Fixed by making `_f()`
+NaN-aware (`math.isnan` check). Opus-reviewed: SHIP, 0 blocking, 2
+non-blocking (log-only NaN-vs-None guards elsewhere in the same file,
+outside the alert-firing path — not yet actioned, see history entry).
+
 ---
 
 ## 2. History
@@ -113,6 +127,72 @@ Opus-reviewed: SHIP, 0 blocking.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-27 — `headless_alert_engine.py` backfilled (57 tests), found + fixed a real NaN/stop-breach bug, 494/494 passing
+
+Continuation of the same-day post-roadmap health check, next module on the
+ranked priority list — and the module the `macro_playbook.py` batch's
+correction had pointed at: this is the actual home of
+`compute_protective_alerts()`/`_assess_pullback()`/`PULLBACK_ALERT_INDEX_PCT`
+(the pullback-awareness feature), plus `compute_morning_picks()` (the Grow
+Today equivalent for the cron) and `compute_eod()` (the Today's-P&L snapshot
++ reactive pullback read). Unlike prior batches this module hard-imports
+`streamlit` (via `db.py`) and `vaderSentiment` (via `bundle_loader.py` →
+`sentiment.py`) at module load time even though it never touches the
+Streamlit runtime itself — the dev venv is deliberately bare of both (see
+`project_python314_blocker` memory), so the test file stubs them into
+`sys.modules` before import; every real call into `db.*`/`load_bundle` is
+mocked directly in the tests, so neither stub's behavior is ever exercised.
+57 tests: `_f()`/`_vix_level()`/`_assess_pullback()` as pure-ish units, then
+`_build_context()`'s ok/errors short-circuiting (no DB, load_holdings
+exception, no holdings, all bundles fail to load, empty port_df, rfr/SPY
+fetch failures that degrade gracefully) via mocked `db`/`fetch_spy`/
+`fetch_vix`/`load_bundle`/`build_portfolio_df`/`compute_portfolio_risk_metrics`/
+`run_scenario`/`assess_fragility`, then `compute_protective_alerts()`'s
+stop-breach > deterioration-EXIT > risk-off priority and single-surface
+dedup (a ticker already alerted via stop breach is excluded from both the
+EXIT-tier check and `assess_risk_off_derisk`'s `exclude_tickers`), the
+analyst-target-snapshot stale-skip, and `compute_morning_picks()`'s
+tone-gated composite bar (`COMPOSITE_BUY` bull / `COMPOSITE_BUY_FLAT_DAY`
+flat / no bar on bear) and diagnostic counts, and `compute_eod()`'s
+snapshot-row filtering.
+
+**Found and fixed a real bug, not a test-writing mistake:** `portfolio.py:302-303`
+explicitly sets `gap_to_stop = None` for a ticker whose stop couldn't be
+computed ("Stop Unavailable" — reachable for real, e.g. a beaten-down name
+whose ATR is large enough that `atr_stop_loss()` in `risk.py` returns a
+non-positive stop). Once that `None` sits in the same `port_df` DataFrame
+column as any other ticker's real numeric gap, pandas silently promotes the
+whole column to float64 and coerces the `None` to `NaN`. `_f()`'s original
+`try: return float(v) except (TypeError, ValueError): return default` does
+NOT raise on `float(nan)`, so it returned `NaN` itself instead of `default`.
+Downstream, `compute_protective_alerts()`'s stop-breach loop does
+`gap = _f(row.get("Gap to Stop (%)")); if gap is None or gap > 0: continue`
+— `NaN is None` is False and `NaN > 0` is also False, so the row fell
+through and fabricated a bogus "SELL — Stop Breached" cron alert for a
+ticker whose stop was actually unknown, not breached. **Fixed** at the root
+(the shared `_f()` helper, not the one call site) by adding `import math`
+and changing it to `f = float(v); return default if math.isnan(f) else f`.
+Per CLAUDE.md hard rule #4 (this changes whether a protective SELL fires):
+**Opus reviewer: SHIP, 0 blocking.** Confirmed reachability (traced
+`gap_to_stop=None`'s producer in `portfolio.py` back to a real negative-ATR-
+stop case in `risk.py`, not a contrived scenario), confirmed the fix is
+complete across all 8 of the file's `_f()` call sites (one is a bonus fix —
+`int(_f(shares, 0) or 0)` previously crashed with `ValueError` on a NaN
+Shares value; now correctly falls back to `0`), and confirmed no other
+`_f()` caller's behavior regresses. **Two non-blocking follow-ups flagged by
+the review, not yet actioned** (both outside the alert-firing path so no
+live decision is affected today): `headless_alert_engine.py:237`'s
+`if target_mean is None: continue` (analyst-target-snapshot capture) doesn't
+catch a NaN `analyst_target` from yfinance — log-only Phase 1, but could
+poison a future day-over-day comparison; and `:155`'s `if beta is not None:`
+admits a NaN beta into `run_scenario`/`assess_fragility` (fragility-only,
+harmless today). Added regression tests for both the direct `_f(NaN)` case
+and the full pandas-coercion path through `compute_protective_alerts()`. Now
+90% covered (252 stmts, 26 missed — remaining gaps are mostly redundant
+exception-branch pairs already exercised once each, e.g. the SPY-1y/vix/
+bundle-load/material-add-age/run_scenario try/excepts, plus a couple of
+`compute_morning_picks()`'s local-import exception branches).
 
 ### 2026-07-27 — `macro_playbook.py` backfilled (67 tests), 437/437 passing
 
