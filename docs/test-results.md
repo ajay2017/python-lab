@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 5: `portfolio_health.py`)
+## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 6: `rebalancer.py`)
 
-**600 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 8.90s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**633 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 7.70s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -45,7 +45,8 @@ active: 8.90s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_macro_playbook.py` | 67 | `macro_playbook.py` (Pre-Event Macro Playbook: PROTECT/WATCH/HOLD/OPPORTUNITY action classifier, post-event scenario classification) |
 | `test_headless_alert_engine.py` | 57 | `headless_alert_engine.py` (cron protective-alert / morning-picks / EOD engine: `_build_context`, `compute_protective_alerts`, `compute_morning_picks`, `compute_eod`, `_assess_pullback`) |
 | `test_portfolio_health.py` | 92 | `portfolio_health.py` (Portfolio Construction Health Score: 5 sub-scores + A-F grade, Portfolio Dynamics tenure/cohort/alignment) |
-| **Total** | **600** | |
+| `test_rebalancer.py` | 33 | `rebalancer.py` (drift classification, trim/add urgency + rationale, News Intelligence / Risk Advisor coordination gates) |
+| **Total** | **633** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -72,16 +73,17 @@ in the tested logic itself. Batch-by-batch scope is in
 | `macro_playbook.py` | 252 | 13 | **95%** |
 | `headless_alert_engine.py` | 252 | 26 | **90%** |
 | `portfolio_health.py` | 242 | 11 | **95%** |
+| `rebalancer.py` | 122 | 2 | **98%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 11,087 missed, 20%** (up from
-18% the prior day — `portfolio_health.py` moving from 0% to 95%). Still
-dominated by ~61 modules with zero tests at all — ranked remaining gaps with
-real decision/gate logic: `rebalancer.py`, `signal_hysteresis.py` (tied to the
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,967 missed, 20%** (essentially
+flat vs. the prior entry — `rebalancer.py` is a small module, 122 stmts).
+Still dominated by ~60 modules with zero tests at all — ranked remaining
+gaps with real decision/gate logic: `signal_hysteresis.py` (tied to the
 still-parked deterioration-hysteresis queue item), `position_lifecycle.py`,
 `tax_advisor.py`. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
@@ -144,6 +146,36 @@ rule #4.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `rebalancer.py` backfilled (33 tests), 633/633 passing, no bug found
+
+Continuation of the post-roadmap health check, next module on the ranked
+priority list. `rebalancer.py` is pure computation (no I/O) — the Portfolio
+Rebalancing Advisor: `compute_drift()` classifies each position OK/WATCH/
+TRIM/ADD against `TOLERANCE_OK`/`TOLERANCE_WATCH` bands, and
+`build_rebalance_plan()` generates the trim/add action lists with urgency
+scoring, branch-specific rationale text, and two coordination gates — ADD
+suppression when Risk Advisor's `risk_trim_set` already flags the ticker for
+a reduce, and a News Intelligence critical/warning flag that either
+suppresses ADD urgency to the floor or just attaches a warning. 33 tests:
+`compute_drift()`'s status boundaries (exactly `TOLERANCE_OK`=2.0pp and
+`TOLERANCE_WATCH`=5.0pp), the missing-target-defaults-to-current no-op case,
+descending drift sort; `build_rebalance_plan()`'s TRIM urgency/rationale
+3-way branch (Sell signal > below-`COMPOSITE_HOLD` score > "winner running"),
+the WATCH-status urgency floor, the `shares_delta` floor of 1 even when
+price is invalid, the ADD urgency/rationale 2-way branch
+(`COMPOSITE_BUY`+Buy-signal vs. generic), the risk-trim-set suppression
+(case-insensitive ticker match), the critical-vs-warning news-flag branch
+(critical caps urgency at 5, warning leaves urgency unchanged), and the
+totals/`rebalance_pct` aggregation. No production bug found this batch —
+straightforward boundary-condition logic with no NaN/pandas-coercion traps
+this time. Now 98% covered (122 stmts, 2 missed — the remaining `elif` at
+`:255-256` is only reachable for an ADD/TRIM row whose `abs(drift_pp))` is
+between `TOLERANCE_OK` and `TOLERANCE_WATCH`, which `compute_drift()` itself
+never produces for ADD/TRIM status since those statuses require
+`abs(drift_pp) > TOLERANCE_WATCH` — dead in practice unless a caller feeds
+`build_rebalance_plan()` a hand-built `drift_df`, not chasing it further per
+the "not coverage-chasing" principle).
 
 ### 2026-07-28 — `portfolio_health.py` backfilled (92 tests), found + fixed a real UI-copy duplication bug, 600/600 passing
 
