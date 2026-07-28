@@ -67,7 +67,7 @@ from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
 from stock_analyzer import earnings_intel as _earn_intel
-from stock_analyzer.watchlist_advisor import build_watchlist_recommendation
+from stock_analyzer.watchlist_advisor import build_watchlist_recommendation, sort_key_for_action
 from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.stress_test import (
     SCENARIOS, run_scenario, run_all_scenarios, assess_fragility,
@@ -17504,10 +17504,9 @@ elif page == "📋 Watchlist":
         st.warning("Could not generate analysis for any watchlist ticker. Check your connection.")
         st.stop()
 
-    # Sort: REMOVE (HIGH) → HOLD_OFF_EARNINGS (MEDIUM) → ENTER_NOW → NEAR_ENTRY → WAIT_ENTRY → WAIT_CATALYST
-    _wl_sort = {"REMOVE": 0, "HOLD_OFF_EARNINGS": 1, "ENTER_NOW": 2,
-                "NEAR_ENTRY": 3, "WAIT_ENTRY": 4, "WAIT_CATALYST": 5}
-    _wl_recs.sort(key=lambda x: _wl_sort.get(x["action"], 6))
+    # Sort: ENTER_NOW → NEAR_ENTRY → REMOVE → HOLD_OFF_EARNINGS → WAIT_ENTRY → WAIT_CATALYST
+    # (actionable opportunities first — see sort_key_for_action for rationale)
+    _wl_recs.sort(key=lambda x: sort_key_for_action(x["action"]))
 
     # ── KPI summary strip ─────────────────────────────────────────────────────
     _wl_enter  = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")
@@ -17555,10 +17554,81 @@ elif page == "📋 Watchlist":
             f"for {WATCHLIST_STALE_DAYS}+ days are actionable again."
         )
 
+    # ── Filter / search / sort control bar ────────────────────────────────────
+    _wl_hold_count = sum(1 for r in _wl_recs if r["action"] == "HOLD_OFF_EARNINGS")
+    _wl_wait_count = sum(1 for r in _wl_recs if r["action"] in ("WAIT_ENTRY", "WAIT_CATALYST"))
+    # Option VALUES are static keys (not count-embedded strings) so the widget's
+    # persisted selection survives a rerun where counts change — Streamlit
+    # resets a widget's value when its options list itself changes shape.
+    _WL_FILTER_LABELS = {
+        "actionable": f"🎯 Actionable ({_wl_enter + _wl_near})",
+        "hold":       f"⚠️ Hold ({_wl_hold_count})",
+        "wait":       f"⏳ Waiting ({_wl_wait_count})",
+        "remove":     f"🔴 Remove ({_wl_remove})",
+        "all":        f"All ({len(_wl_recs)})",
+    }
+    _wl_ctrl_c1, _wl_ctrl_c2, _wl_ctrl_c3 = st.columns([3, 2, 2])
+    with _wl_ctrl_c1:
+        _wl_filter_sel = st.segmented_control(
+            "Filter", options=list(_WL_FILTER_LABELS.keys()),
+            format_func=lambda k: _WL_FILTER_LABELS[k],
+            default="actionable", key="_wl_filter_seg",
+            label_visibility="collapsed",
+        )
+    with _wl_ctrl_c2:
+        _wl_search = st.text_input(
+            "Search", placeholder="🔍 Filter ticker…", key="_wl_search_box",
+            label_visibility="collapsed",
+        )
+    with _wl_ctrl_c3:
+        _wl_sort_sel = st.selectbox(
+            "Sort", options=["Priority (default)", "Score", "Readiness", "Days watched"],
+            key="_wl_sort_sel", label_visibility="collapsed",
+        )
+
+    # segmented_control returns None when the user deselects the active pill
+    if _wl_filter_sel is None:
+        _wl_filter_sel = "actionable"
+
+    if _wl_filter_sel == "actionable":
+        _wl_view = [r for r in _wl_recs if r["action"] in ("ENTER_NOW", "NEAR_ENTRY")]
+    elif _wl_filter_sel == "hold":
+        _wl_view = [r for r in _wl_recs if r["action"] == "HOLD_OFF_EARNINGS"]
+    elif _wl_filter_sel == "wait":
+        _wl_view = [r for r in _wl_recs if r["action"] in ("WAIT_ENTRY", "WAIT_CATALYST")]
+    elif _wl_filter_sel == "remove":
+        _wl_view = [r for r in _wl_recs if r["action"] == "REMOVE"]
+    else:
+        _wl_view = list(_wl_recs)
+
+    if _wl_search:
+        _wl_search_u = _wl_search.strip().upper()
+        _wl_view = [r for r in _wl_view if _wl_search_u in r["ticker"]]
+
+    if _wl_sort_sel == "Score":
+        _wl_view.sort(key=lambda r: -(r["score"] or 0))
+    elif _wl_sort_sel == "Readiness":
+        _wl_view.sort(key=lambda r: -(r["readiness_pct"] or 0))
+    elif _wl_sort_sel == "Days watched":
+        def _wl_days_watched_key(r):
+            _d = _wl_added_dates.get(r["ticker"])
+            if not _d:
+                return -1
+            try:
+                return (_wl_today - date.fromisoformat(_d)).days
+            except (TypeError, ValueError):
+                return -1
+        _wl_view.sort(key=_wl_days_watched_key, reverse=True)
+    else:
+        _wl_view.sort(key=lambda r: (sort_key_for_action(r["action"]), -(r["score"] or 0)))
+
+    if not _wl_view:
+        st.info("No watchlist names match this filter/search.")
+
     st.markdown("")
 
-    # ── Per-ticker cards ──────────────────────────────────────────────────────
-    for _wr in _wl_recs:
+    # ── Per-ticker rows ────────────────────────────────────────────────────────
+    for _wr in _wl_view:
         _action   = _wr["action"]
         _priority = _wr["priority"]
         _ticker   = _wr["ticker"]
@@ -17603,7 +17673,16 @@ elif page == "📋 Watchlist":
             "OK":      "#00C851",
             "MONITOR": "#4a9eff",
         }.get(_priority, "#888")
-        _expand = _action in ("ENTER_NOW", "REMOVE", "HOLD_OFF_EARNINGS")
+        # Row badge colors (bg, fg, border) — distinct from _bclr, which colors
+        # the inner detail banners by priority rather than by action.
+        _a_bg, _a_fg, _a_bd = {
+            "ENTER_NOW":         ("#052e16", "#4ade80", "#16a34a"),
+            "NEAR_ENTRY":        ("#3b2a0a", "#fcd34d", "#d97706"),
+            "WAIT_ENTRY":        ("#1e293b", "#93c5fd", "#3b82f6"),
+            "WAIT_CATALYST":     ("#1e293b", "#93c5fd", "#3b82f6"),
+            "HOLD_OFF_EARNINGS": ("#2d1a05", "#fdba74", "#92400e"),
+            "REMOVE":            ("#3f1d1d", "#fca5a5", "#ef4444"),
+        }.get(_action, ("#1f2937", "#9ca3af", "#374151"))
 
         _price    = _wr["price"]
         _entry_lo = _wr["entry_lo"]
@@ -17621,12 +17700,49 @@ elif page == "📋 Watchlist":
             except Exception:
                 pass
 
-        with st.expander(
-            f"{_a_icon} **{_a_label}** · {_ticker}  "
-            f"| Score {_wr['score']:.0f}/100 · {_wr['signal']}  "
-            f"| Readiness {_wr['readiness_pct']}%",
-            expanded=_expand,
-        ):
+        _row_open_key = f"_wl_row_open_{_ticker}"
+        _row_is_open  = st.session_state.get(_row_open_key, False)
+
+        with st.container(border=True):
+            _rc1, _rc2 = st.columns([1, 24])
+            with _rc1:
+                if st.button("▾" if _row_is_open else "▸", key=f"_wl_toggle_{_ticker}"):
+                    st.session_state[_row_open_key] = not _row_is_open
+                    st.rerun()
+            with _rc2:
+                _readi = max(0, min(100, int(_wr["readiness_pct"] or 0)))
+                _watched_chip = ""
+                if _ticker in _wl_resurrected:
+                    _wdays = (_wl_today - date.fromisoformat(_wl_added_dates[_ticker])).days
+                    _watched_chip = f"<span style='color:#86efac'>👁️ {_wdays}d</span>"
+                _earn_chip = (
+                    f"<span style='color:#f59e0b'>Earnings {_earn_d}d</span>"
+                    if _earn_d is not None and 0 <= _earn_d <= 7 else ""
+                )
+                _price_chip = f"<span style='color:#9ca3af'>${_price:.2f}</span>" if _price else ""
+                _rr_chip = f"<span style='color:#9ca3af'>R:R {_rr:.1f}:1</span>" if _rr else ""
+                st.markdown(
+                    f"<div style='padding:4px 12px;border-left:4px solid {_a_bd};"
+                    f"display:flex;align-items:center;gap:16px;flex-wrap:wrap;font-size:0.92em'>"
+                    f"<span style='background:{_a_bg};color:{_a_fg};border:1px solid {_a_bd};"
+                    f"font-size:0.68em;font-weight:800;letter-spacing:0.05em;padding:3px 10px;"
+                    f"border-radius:20px;text-transform:uppercase;white-space:nowrap'>"
+                    f"{_a_icon} {_a_label}</span>"
+                    f"<span style='font-weight:800;color:#e5e7eb'>{_ticker}</span>"
+                    f"<span style='color:#9ca3af'>Score {_wr['score']:.0f}/100</span>"
+                    f"<span style='color:#9ca3af;display:inline-flex;align-items:center;gap:6px'>"
+                    f"Readiness <span style='width:60px;height:6px;background:#1f2937;"
+                    f"border-radius:3px;display:inline-block;overflow:hidden'>"
+                    f"<span style='height:100%;width:{_readi}%;background:#00C851;display:block'></span>"
+                    f"</span> {_readi}%</span>"
+                    f"{_price_chip}{_rr_chip}{_earn_chip}{_watched_chip}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            if not _row_is_open:
+                continue
+
             if _ticker in _wl_resurrected:
                 _wl_added_days = (_wl_today - date.fromisoformat(_wl_added_dates[_ticker])).days
                 st.info(
@@ -17766,9 +17882,9 @@ elif page == "📋 Watchlist":
                 with st.expander("Why this matters"):
                     st.markdown(_wr['institutional_lens'])
 
-            # Quick action: add to Trade Journal as planned trade
+            # Quick actions: log a planned trade, jump to full Analysis, remove
             st.markdown("")
-            _qa_col1, _qa_col2 = st.columns([1, 3])
+            _qa_col1, _qa_col2, _qa_col3 = st.columns([1, 1, 2])
             with _qa_col1:
                 if _action == "ENTER_NOW":
                     # Use the shared trade-button helper so the Decision Context
@@ -17794,6 +17910,12 @@ elif page == "📋 Watchlist":
                         label=f"📒 Log buy for {_ticker}",
                     )
             with _qa_col2:
+                if st.button(f"▶ Analyze {_ticker}", key=f"_wl_analyze_{_ticker}"):
+                    st.session_state["_pending_page"]    = "📈 Analysis"
+                    st.session_state["_analysis_ticker"] = _ticker
+                    st.session_state["_nav_origin"]      = "📋 Watchlist"
+                    st.rerun()
+            with _qa_col3:
                 if _action == "REMOVE":
                     _del_key = f"_wl_del_confirm_{_ticker}"
                     if not st.session_state.get(_del_key):
@@ -25127,7 +25249,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
-- **📋 Watchlist** — names you're tracking, with enter-now flags. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
+- **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Five live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, and Sentiment Alignment — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.

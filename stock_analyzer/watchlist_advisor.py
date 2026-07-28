@@ -51,6 +51,25 @@ _ACTION_PRIORITY = {
     "WAIT_CATALYST":      "MONITOR",
 }
 
+# Watchlist page display order: actionable opportunities first, then
+# thesis-broken/earnings-hold, then the passive waiting states. Deliberately
+# NOT the same ordering as _ACTION_PRIORITY (which ranks REMOVE/HOLD_OFF_EARNINGS
+# above ENTER_NOW) — that ordering buried the page's most actionable names
+# under a wall of earnings-hold cards.
+_ACTION_SORT_RANK = {
+    "ENTER_NOW":          0,
+    "NEAR_ENTRY":         1,
+    "REMOVE":             2,
+    "HOLD_OFF_EARNINGS":  3,
+    "WAIT_ENTRY":         4,
+    "WAIT_CATALYST":      5,
+}
+
+
+def sort_key_for_action(action: str) -> int:
+    """Display-order rank for a watchlist action (lower sorts first)."""
+    return _ACTION_SORT_RANK.get(action, 6)
+
 
 def _earn_days_until(earn_str: str | None) -> int | None:
     if not earn_str:

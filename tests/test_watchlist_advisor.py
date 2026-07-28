@@ -9,6 +9,7 @@ from stock_analyzer.watchlist_advisor import (
     _pct_from_entry,
     _portfolio_risk_gate,
     build_watchlist_recommendation,
+    sort_key_for_action,
 )
 
 
@@ -246,3 +247,46 @@ def test_conditions_missing_never_contains_empty_strings():
     rec = build_watchlist_recommendation("XYZ", _base_data())
     assert all(c for c in rec["conditions_met"])
     assert all(c for c in rec["conditions_missing"])
+
+
+# ─── sort_key_for_action ──────────────────────────────────────────────────────
+
+def test_sort_key_puts_enter_now_first():
+    assert sort_key_for_action("ENTER_NOW") == 0
+
+
+def test_sort_key_puts_near_entry_second():
+    assert sort_key_for_action("NEAR_ENTRY") == 1
+
+
+def test_sort_key_ranks_enter_now_ahead_of_remove_and_hold_off():
+    # The watchlist page's actionability fix: opportunities must outrank
+    # thesis-broken/earnings-hold in the default display order.
+    assert sort_key_for_action("ENTER_NOW") < sort_key_for_action("REMOVE")
+    assert sort_key_for_action("ENTER_NOW") < sort_key_for_action("HOLD_OFF_EARNINGS")
+    assert sort_key_for_action("NEAR_ENTRY") < sort_key_for_action("REMOVE")
+    assert sort_key_for_action("NEAR_ENTRY") < sort_key_for_action("HOLD_OFF_EARNINGS")
+
+
+def test_sort_key_orders_remove_ahead_of_hold_off_earnings():
+    assert sort_key_for_action("REMOVE") < sort_key_for_action("HOLD_OFF_EARNINGS")
+
+
+def test_sort_key_orders_hold_off_ahead_of_wait_states():
+    assert sort_key_for_action("HOLD_OFF_EARNINGS") < sort_key_for_action("WAIT_ENTRY")
+    assert sort_key_for_action("HOLD_OFF_EARNINGS") < sort_key_for_action("WAIT_CATALYST")
+
+
+def test_sort_key_orders_wait_entry_ahead_of_wait_catalyst():
+    assert sort_key_for_action("WAIT_ENTRY") < sort_key_for_action("WAIT_CATALYST")
+
+
+def test_sort_key_unknown_action_sorts_last():
+    known_ranks = [
+        sort_key_for_action(a)
+        for a in (
+            "ENTER_NOW", "NEAR_ENTRY", "REMOVE",
+            "HOLD_OFF_EARNINGS", "WAIT_ENTRY", "WAIT_CATALYST",
+        )
+    ]
+    assert sort_key_for_action("SOMETHING_UNRECOGNIZED") > max(known_ranks)
