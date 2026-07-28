@@ -519,21 +519,31 @@ def synthesize_directives(
     # the top (Extreme) divergence band clearing min_n so a 1-2-pick anecdote
     # isn't narrated as a pattern. This never feeds back into the composite
     # score or the 5-gate pipeline — awareness only.
+    #
+    # Gated on day20_n/day20_alpha (not day1_pct_red) because the validated
+    # shape of this band is "looks calm at Day+1/Day+5, damage shows up by
+    # Day+20" (see band_narrative()'s primary branch) — the OPPOSITE of an
+    # earlier version of this text, which wrongly said picks "open red on
+    # Day+1... though the effect fades by maturity." That was backwards
+    # relative to the actual data (caught 2026-07-28 during Phase 2 design
+    # review, after the user's own live data showed Day+1 ~0%, Day+20 -14pp)
+    # and would have misdirected the user to expect the WRONG horizon's risk.
     if entry_timing_bands:
         _et_extreme = next(
             (b for b in entry_timing_bands if b.get("band_label") == "Extreme"), None
         )
-        if (_et_extreme and _et_extreme.get("day1_n", 0) >= min_n
-                and _et_extreme.get("day1_pct_red") is not None):
+        if (_et_extreme and _et_extreme.get("day20_n", 0) >= min_n
+                and _et_extreme.get("day20_alpha") is not None
+                and _et_extreme["day20_alpha"] < 0):
             directives.append({
                 "type": "caution",
                 "text": (
                     f"New Position picks where momentum ran far ahead of the composite "
-                    f"score (Extreme divergence) have opened red on Day+1 "
-                    f"{_et_extreme['day1_pct_red']:.0%} of the time in your history — "
-                    f"though the effect has tended to fade by the time the outcome matures. "
-                    f"Worth a second look before sizing up on a hot-momentum, "
-                    f"barely-qualifying pick."
+                    f"score (Extreme divergence) have often looked calm in the first few "
+                    f"days but underperformed SPY by {_et_extreme['day20_alpha']:+.1f}pp "
+                    f"on average by the time the outcome matured — the real cost has "
+                    f"tended to show up late, not at entry. Worth a second look before "
+                    f"sizing up on a hot-momentum, barely-qualifying pick."
                 ),
                 "source_tab": "⏱️ Entry Timing",
             })

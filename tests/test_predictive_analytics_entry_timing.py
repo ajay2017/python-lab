@@ -13,6 +13,7 @@ from stock_analyzer.predictive_analytics import (
     divergence_at_entry,
     find_illustrating_case,
     forward_alpha_at_horizon,
+    synthesize_directives,
 )
 
 
@@ -301,3 +302,76 @@ def test_band_narrative_appends_illustrating_ticker():
         illustrating_ticker="AMD",
     )
     assert text.endswith("This is the AMD-shaped case.")
+
+
+# ── synthesize_directives — Entry Timing directive ───────────────────────────
+# Regression coverage for a bug caught during Phase 2 design review
+# (2026-07-28): the ORIGINAL directive was gated on day1_n/day1_pct_red and
+# claimed picks "open red on Day+1... though the effect fades by maturity" --
+# backwards from the validated shape (calm at Day+1, damage shows up by
+# Day+20, per band_narrative's primary branch). The directive must be gated
+# on day20_n/day20_alpha and describe the correct direction.
+
+def _avm_insufficient():
+    return {"edge": "insufficient", "edge_pp": None}
+
+
+def test_entry_timing_directive_cites_day20_and_correct_direction():
+    bands = [{
+        "band_label": "Extreme", "n": 20,
+        "day1_alpha": -0.04, "day1_pct_red": 0.5, "day1_n": 20,
+        "day5_alpha": 0.3, "day5_pct_red": 0.41, "day5_n": 17,
+        "day20_alpha": -14.2, "p_positive_alpha": 0.5, "day20_n": 20,
+    }]
+    directives = synthesize_directives(
+        bands=[], thresh=None, avm=_avm_insufficient(), conv=[], rtype=[], sec_alph=[],
+        n_graded=0, min_n=5, entry_timing_bands=bands,
+    )
+    et_dirs = [d for d in directives if d["source_tab"] == "⏱️ Entry Timing"]
+    assert len(et_dirs) == 1
+    assert et_dirs[0]["type"] == "caution"
+    text = et_dirs[0]["text"]
+    assert "opened red on day+1" not in text.lower()
+    assert "fade by the time" not in text.lower()
+    assert "-14.2pp" in text
+    assert "calm" in text.lower()
+    assert "late" in text.lower()
+
+
+def test_entry_timing_directive_absent_when_day20_sample_thin():
+    # OLD (buggy) gate checked day1_n/day1_pct_red, which would have fired
+    # here despite a thin Day+20 sample (n=2) -- the directive is ABOUT
+    # Day+20, so that's the horizon that must clear min_n.
+    bands = [{
+        "band_label": "Extreme", "n": 20,
+        "day1_alpha": -5.0, "day1_pct_red": 0.9, "day1_n": 20,
+        "day5_alpha": -3.0, "day5_pct_red": 0.8, "day5_n": 17,
+        "day20_alpha": -14.2, "p_positive_alpha": 0.2, "day20_n": 2,
+    }]
+    directives = synthesize_directives(
+        bands=[], thresh=None, avm=_avm_insufficient(), conv=[], rtype=[], sec_alph=[],
+        n_graded=0, min_n=5, entry_timing_bands=bands,
+    )
+    assert not [d for d in directives if d["source_tab"] == "⏱️ Entry Timing"]
+
+
+def test_entry_timing_directive_absent_when_day20_alpha_not_negative():
+    bands = [{
+        "band_label": "Extreme", "n": 20,
+        "day1_alpha": 0.0, "day1_pct_red": 0.5, "day1_n": 20,
+        "day5_alpha": 0.3, "day5_pct_red": 0.4, "day5_n": 17,
+        "day20_alpha": 2.0, "p_positive_alpha": 0.8, "day20_n": 20,
+    }]
+    directives = synthesize_directives(
+        bands=[], thresh=None, avm=_avm_insufficient(), conv=[], rtype=[], sec_alph=[],
+        n_graded=0, min_n=5, entry_timing_bands=bands,
+    )
+    assert not [d for d in directives if d["source_tab"] == "⏱️ Entry Timing"]
+
+
+def test_entry_timing_directive_absent_when_no_extreme_band():
+    directives = synthesize_directives(
+        bands=[], thresh=None, avm=_avm_insufficient(), conv=[], rtype=[], sec_alph=[],
+        n_graded=0, min_n=5, entry_timing_bands=[{"band_label": "Aligned", "n": 12}],
+    )
+    assert not [d for d in directives if d["source_tab"] == "⏱️ Entry Timing"]

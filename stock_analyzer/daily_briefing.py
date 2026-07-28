@@ -72,6 +72,7 @@ from stock_analyzer.signal_reconciliation import (
 from stock_analyzer.position_lifecycle import classify_position_state
 from stock_analyzer.portfolio import resolve_sector
 from stock_analyzer import exit_advisor
+from stock_analyzer.predictive_analytics import divergence_at_entry
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -848,6 +849,15 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             else:
                 conviction = "low"
 
+            # Entry Timing (F-220 Phase 2) — momentum vs composite divergence at
+            # the moment this pick fires. Diagnostic annotation only, never a
+            # gate: the pick has already cleared every gate above (composite,
+            # staleness, fundamentals, macro, sector, act-today) by this point.
+            # Grow Today's own render (app.py) decides whether/how to caption it.
+            _divergence = divergence_at_entry({
+                "momentum_score": _f(row.get("Score", 0)), "composite_score": _composite_score,
+            })
+
             pick = {
                 "ticker":          ticker,
                 "score":           _f(row.get("Score", 0)),    # momentum / scanner score
@@ -865,6 +875,7 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 "thesis":          thesis,
                 "sizing":          sizing,
                 "xref":            xref,
+                "divergence":      _divergence,
             }
             if is_mover:
                 _mover_picks.append(pick)

@@ -148,6 +148,7 @@ from stock_analyzer.constants import (
     BREAKEVEN_ANCHOR_DWELL_RATIO,
     EARNINGS_MIN_BEAT_RATE_ENTRY,
     DAY_SHOCK_PCT,
+    ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -6223,6 +6224,36 @@ if page == "🏠 Home":
                         pass
                 if _ac_parts:
                     st.caption(f"🏦 Your saved research: {' · '.join(_ac_parts)} ({_ac_cov.get('n_firms', '?')} firms) — awareness only")
+
+            # Entry Timing (F-220 Phase 2) — the fresh pick's own momentum-vs-
+            # composite divergence, computed at brief-build time in daily_briefing
+            # ._grow_today() (pick["divergence"]). Deliberately does NOT quote a
+            # live historical alpha % here: that requires the same per-ticker
+            # forward-close fetch the Entry Timing tab button-gates because it's
+            # too heavy to run on every page load — re-running it on every brief
+            # build would defeat that. Points to the tab for current numbers
+            # instead. Never gates — this pick already cleared every gate above.
+            _gp_div = _gp.get("divergence")
+            if _gp_div is not None and _gp_div > ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX:
+                if _gp.get("is_mover"):
+                    st.caption(
+                        "⏱️ This pick's momentum is running well ahead of its composite "
+                        "score — in your history, similar Extreme-divergence picks have "
+                        "often looked calm early but underperformed SPY by the time the "
+                        "position matured. See 📊 Predictive Analytics → ⏱️ Entry Timing "
+                        "for current numbers. Awareness only — doesn't change this "
+                        "recommendation."
+                    )
+                else:
+                    st.caption(
+                        f"⏱️ Momentum ({_gp['score']:.0f}) is running well ahead of the "
+                        f"composite score ({_comp_sc:.0f}) — in your history, similar "
+                        f"Extreme-divergence picks have often looked calm early but "
+                        f"underperformed SPY by the time the position matured. See "
+                        f"📊 Predictive Analytics → ⏱️ Entry Timing for current numbers. "
+                        f"Awareness only — doesn't change this recommendation."
+                    )
+
             if st.button(f"▶ Analyze {_gp['ticker']}", key=f"_db_grow_{_gp['ticker']}"):
                 st.session_state["_pending_page"]    = "📈 Analysis"
                 st.session_state["_analysis_ticker"] = _gp["ticker"]
@@ -25238,6 +25269,8 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 **Data freshness gate:** candidates require fresh fundamentals (≤ 2 calendar days old) and data not served from a cache fallback. If data is stale, the signal is held back and shown as **"Pending Verification"** with a **Refresh** button instead — once you refresh and it clears the composite gate (≥ 65), it surfaces.
 
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
+
+**⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick — in your own history, similar cases have often looked calm in the first few days but underperformed by the time the position matured. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
 
 **"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Fundamental + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
 
