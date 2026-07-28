@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-27 (post-roadmap health check, batch 4: `headless_alert_engine.py`)
+## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 5: `portfolio_health.py`)
 
-**494 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 8.99s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**600 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 8.90s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -44,7 +44,8 @@ active: 8.99s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_risk.py` | 43 | `risk.py` (position sizing, ATR stops, Sharpe/Sortino/VaR/beta) |
 | `test_macro_playbook.py` | 67 | `macro_playbook.py` (Pre-Event Macro Playbook: PROTECT/WATCH/HOLD/OPPORTUNITY action classifier, post-event scenario classification) |
 | `test_headless_alert_engine.py` | 57 | `headless_alert_engine.py` (cron protective-alert / morning-picks / EOD engine: `_build_context`, `compute_protective_alerts`, `compute_morning_picks`, `compute_eod`, `_assess_pullback`) |
-| **Total** | **494** | |
+| `test_portfolio_health.py` | 92 | `portfolio_health.py` (Portfolio Construction Health Score: 5 sub-scores + A-F grade, Portfolio Dynamics tenure/cohort/alignment) |
+| **Total** | **600** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -70,17 +71,17 @@ in the tested logic itself. Batch-by-batch scope is in
 | `risk.py` | 171 | 7 | **96%** |
 | `macro_playbook.py` | 252 | 13 | **95%** |
 | `headless_alert_engine.py` | 252 | 26 | **90%** |
+| `portfolio_health.py` | 242 | 11 | **95%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,776 stmts, 11,348 missed, 18%** (up from
-13% earlier the same day — mostly `headless_alert_engine.py` moving from 0%
-to 90%, not organic drift elsewhere). Still dominated by ~62 modules with zero
-tests at all — ranked remaining gaps with real decision/gate logic:
-`portfolio_health.py`, `rebalancer.py`, `signal_hysteresis.py` (tied to the
+**Whole-`stock_analyzer/` total: 13,794 stmts, 11,087 missed, 20%** (up from
+18% the prior day — `portfolio_health.py` moving from 0% to 95%). Still
+dominated by ~61 modules with zero tests at all — ranked remaining gaps with
+real decision/gate logic: `rebalancer.py`, `signal_hysteresis.py` (tied to the
 still-parked deterioration-hysteresis queue item), `position_lifecycle.py`,
 `tax_advisor.py`. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
@@ -120,6 +121,22 @@ NaN-aware (`math.isnan` check). Opus-reviewed: SHIP, 0 blocking, 2
 non-blocking (log-only NaN-vs-None guards elsewhere in the same file,
 outside the alert-firing path — not yet actioned, see history entry).
 
+**`portfolio_health.py`'s batch found and fixed a real UI-copy logic bug**
+(see the dated history entry below): the Portfolio Health "Improvements"
+card's concentration callout, when BOTH single-name and sector concentration
+were meaningfully elevated (>60% of their respective caps), was supposed to
+show both details but instead duplicated whichever one fired first — the
+"is this dimension already shown" check tested for the literal substring
+`"worst_name"`/`"worst_sector"` in the rendered HTML text, which never
+appears there (the text contains the actual ticker/sector value, not the
+dict key name), so the check was always true and the sector detail was
+silently dropped whenever the name was the dominant driver. Fixed by
+tracking which one was added with explicit booleans instead of string
+sniffing. Not Opus-reviewed — this only affects the supporting detail line
+under an already-computed recommendation (the sub-score, grade, and action
+text are all unaffected), not a gate/scoring formula per CLAUDE.md hard
+rule #4.
+
 ---
 
 ## 2. History
@@ -127,6 +144,52 @@ outside the alert-firing path — not yet actioned, see history entry).
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `portfolio_health.py` backfilled (92 tests), found + fixed a real UI-copy duplication bug, 600/600 passing
+
+Continuation of the post-roadmap health check, next module on the ranked
+priority list. `portfolio_health.py` is pure computation (no I/O, no
+Streamlit) — the Portfolio Construction Health Score (5 sub-scores:
+concentration, sector_balance, diversification, factor_exposure,
+signal_integrity → weighted average → A-F grade) and Portfolio Dynamics
+(per-position tenure/cohort/engine-alignment for the Portfolio Overview
+page). 92 tests: each sub-score helper's None-guards and boundary math
+(`_concentration_score()`'s three-zone name/sector scoring incl. the
+`Gate Weight (%)` column fallback; `_sector_balance_score()`'s Shannon-entropy
+calc incl. the 2-sector 55-point cap; `_diversification_score_sub()`'s
+avg-corr rescaling and div_score_val fallback; `_factor_exposure_score()`'s
+severity-tier base score + high-beta-share penalty tiers; `_signal_integrity_
+score()`'s NaN-score exclusion from the weighted average), `_build_specific()`'s
+per-dimension callout text, `_build_improvements()`'s top-2-worst selection
+and low/mid bucket split, `compute_health_score()`'s end-to-end averaging
+and "?" no-data grade, and `compute_portfolio_dynamics()`'s FIFO-aware
+tenure lookup via `_build_open_lots()` (incl. the re-entry-resets-the-clock
+case), cohort boundaries (Fresh <1mo / Growing 1-6mo / Established >6mo),
+the BUY/HOLD/WATCH/EXIT verdict ladder against `COMPOSITE_BUY`/`_HOLD`/
+`_SELL`, and vitality/alignment aggregation.
+
+**Found and fixed a real bug, not a test-writing mistake:** `_build_specific()`'s
+concentration callout has a "show both name and sector when both are
+meaningfully elevated (>60% of their cap)" fallback, intended to fire when
+only one of the two was added by the primary branches above it. That
+fallback checked `"worst_name" not in parts[0]` / `"worst_sector" not in
+parts[0]` — testing for the literal substring `"worst_name"`/`"worst_sector"`
+(the dict key names) inside the ALREADY-RENDERED HTML text, which never
+contains those literal strings (it contains the actual ticker/sector value
+interpolated in). That check is therefore always true, so whenever the
+single-name detail fired first (`name_ratio >= sector_ratio`), the fallback
+re-added a DUPLICATE name line instead of the sector detail the user was
+supposed to see — e.g. a name at 14%/15% cap and its sector at 30%/35% cap
+(both >60% elevated) rendered "AAPL at 14% ... AAPL at 14%" instead of ever
+surfacing the sector info. The mirror case (sector firing first) happened to
+work by coincidence, since adding "name" second was the intended completion
+either way. **Fixed** by tracking which detail was actually added with
+explicit `added_name`/`added_sector` booleans instead of the broken string-
+containment check. Not Opus-reviewed: this only changes the supporting
+detail line under an already-computed recommendation card — the sub-score
+math, grade, and action text are untouched, so it isn't a gate/scoring-
+formula change under CLAUDE.md hard rule #4. Now 95% covered (242 stmts,
+11 missed).
 
 ### 2026-07-27 — `headless_alert_engine.py` backfilled (57 tests), found + fixed a real NaN/stop-breach bug, 494/494 passing
 

@@ -338,23 +338,32 @@ def _build_specific(key: str, detail: dict) -> str | None:
         name_ratio   = max_name   / cap_name   if cap_name   else 0
         sector_ratio = max_sector / cap_sector if cap_sector else 0
         parts = []
+        added_name = added_sector = False
         if name_ratio >= sector_ratio and detail.get("worst_name"):
             parts.append(
                 f"<strong>{detail['worst_name']}</strong> at {max_name}% "
                 f"(single-name cap: {cap_name}%)"
             )
+            added_name = True
         if sector_ratio >= name_ratio and detail.get("worst_sector"):
             parts.append(
                 f"<strong>{detail['worst_sector']}</strong> sector at {max_sector}% "
                 f"(sector cap: {cap_sector}%)"
             )
-        # Show both when both are meaningfully elevated (ratio > 0.6)
+            added_sector = True
+        # Show both when both are meaningfully elevated (ratio > 0.6). Tracks
+        # which one was already added via added_name/added_sector rather than
+        # sniffing for the literal substring "worst_name"/"worst_sector" in
+        # the rendered text -- that text never contains those key names (it
+        # contains the actual ticker/sector value), so the old check was
+        # always true and this branch always re-added the name, never the
+        # sector, whenever the name fired first above.
         if name_ratio > 0.6 and sector_ratio > 0.6 and len(parts) == 1:
-            if detail.get("worst_name") and "worst_name" not in parts[0]:
+            if not added_name and detail.get("worst_name"):
                 parts.append(
                     f"<strong>{detail['worst_name']}</strong> at {max_name}%"
                 )
-            elif detail.get("worst_sector") and "worst_sector" not in parts[0]:
+            elif not added_sector and detail.get("worst_sector"):
                 parts.append(
                     f"<strong>{detail['worst_sector']}</strong> sector at {max_sector}%"
                 )
