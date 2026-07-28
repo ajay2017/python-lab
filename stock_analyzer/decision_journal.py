@@ -174,7 +174,7 @@ def compute_patterns(trades_df: pd.DataFrame) -> dict:
         avg_cost = sum(c["realized_pnl"] for c in costly_list) / len(costly_list)
         insight  = (
             f"You've overridden sell signals {len(costly_list)} times with an avg loss of "
-            f"${avg_cost:,.0f} per trade. Following signals would have saved "
+            f"${abs(avg_cost):,.0f} per trade. Following signals would have saved "
             f"${abs(i_pnl):,.0f} in this period."
         )
     elif f_acc is not None and i_acc is not None:

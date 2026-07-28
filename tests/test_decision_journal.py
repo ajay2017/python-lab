@@ -256,7 +256,10 @@ def test_behavioral_insight_costly_deviations_takes_priority_at_2_or_more():
     ])
     result = dj.compute_patterns(df)
     assert "overridden sell signals 2 times" in result["behavioral_insight"]
-    assert "$-150" in result["behavioral_insight"]  # avg cost = (-100-200)/2
+    # avg cost = (-100-200)/2 = -150, shown as a positive magnitude next to
+    # the word "loss" (abs()'d 2026-07-28 -- "avg loss of $-150" read oddly).
+    assert "$150" in result["behavioral_insight"]
+    assert "$-150" not in result["behavioral_insight"]
 
 
 def test_behavioral_insight_one_costly_deviation_falls_to_accuracy_branch():

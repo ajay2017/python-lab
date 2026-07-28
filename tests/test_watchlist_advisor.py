@@ -216,6 +216,41 @@ def test_enter_now_requires_validated_rr_not_just_present_price():
     assert rec["action"] != "ENTER_NOW"
 
 
+def test_near_entry_in_zone_missing_target_gets_distinct_copy_not_approaching():
+    # Regression test for the 2026-07-27 flagged UX gap (fixed 2026-07-28):
+    # price is ALREADY inside the zone (entry_lo=95 <= 100 <= entry_hi=100)
+    # but there's no target price at all, so rr stays None and ENTER_NOW's
+    # gate fails. The generic NEAR_ENTRY "Approaching Entry Zone (+0.0% above
+    # zone)" copy was actively misleading here -- price isn't approaching
+    # anything, it already arrived; the real blocker is the missing target.
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={}))
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["title"] == "XYZ — In Entry Zone, R:R Not Yet Validated"
+    assert "Approaching Entry Zone" not in rec["title"]
+    assert "no validated price target" in rec["summary"]
+
+
+def test_near_entry_in_zone_low_rr_gets_distinct_copy_not_approaching():
+    # Same distinct-copy branch, but the target price IS known -- R:R is just
+    # below the RR_ENTRY_MIN floor rather than missing entirely.
+    rec = build_watchlist_recommendation("XYZ", _base_data(targets={"base": 115.0}))
+    # base=115, price=100, stop=90 -> rr = (115-100)/(100-90) = 1.5 < RR_ENTRY_MIN(2.0)
+    assert rec["action"] == "NEAR_ENTRY"
+    assert rec["title"] == "XYZ — In Entry Zone, R:R Not Yet Validated"
+    assert "1.5" in rec["summary"]
+    assert "below the 2:1 minimum" in rec["summary"]
+
+
+def test_near_entry_generic_approaching_copy_unaffected_when_out_of_zone():
+    # The distinct in-zone branch must NOT swallow the ordinary "price above
+    # zone, R:R would be fine if you were at the right price" case.
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(current_price=105.0, entry_lo=90.0, entry_hi=100.0)
+    )
+    assert rec["action"] == "NEAR_ENTRY"
+    assert "Approaching Entry Zone" in rec["title"]
+
+
 def test_near_entry_when_price_moderately_above_zone():
     # price 5% above entry_hi of 100 -> pct_above=5, not near_zone(<=3) but <=8
     rec = build_watchlist_recommendation(

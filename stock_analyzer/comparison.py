@@ -14,8 +14,6 @@ doesn't support.
 """
 
 from stock_analyzer.constants import (
-    PORTFOLIO_BETA_ELEVATED,
-    PORTFOLIO_BETA_CEILING,
     SECTOR_ELEVATED,
     SECTOR_CEILING,
 )

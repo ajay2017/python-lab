@@ -379,6 +379,53 @@ def build_watchlist_recommendation(
             portfolio_caution=soft_caution,
         )
 
+    # ── NEAR ENTRY — price already in zone, R:R not yet validated ───────────
+    # ENTER_NOW requires rr is not None and rr >= RR_ENTRY_MIN. When price is
+    # already IN the entry zone but that condition fails (no target price at
+    # all, or a computed R:R below the minimum), pct_above is <= 0 (at/below
+    # entry_hi) -- the generic "Approaching Entry Zone (+0.0% above zone)" /
+    # "watch for a small pullback" copy just below is actively wrong here:
+    # price isn't approaching anything, it already arrived. The real blocker
+    # is R:R, not price distance -- say that instead. Found 2026-07-27 while
+    # writing regression tests, fixed 2026-07-28 (see project_test_automation
+    # memory / docs/plans/test-automation.md).
+    if score >= COMPOSITE_BUY and in_zone and (rr is None or rr < RR_ENTRY_MIN):
+        rr_reason = (
+            f"R:R is only {rr:.1f}:1 — below the {RR_ENTRY_MIN:.0f}:1 minimum"
+            if rr is not None else
+            "no validated price target, so risk/reward can't be computed"
+        )
+        return _card(
+            ticker, "NEAR_ENTRY", score, rec_label, price, entry_lo, entry_hi,
+            stop, rr, earn_days,
+            title=f"{ticker} — In Entry Zone, R:R Not Yet Validated",
+            summary=(
+                f"Score {score:.0f}/100 and price is already inside the entry zone "
+                f"(${entry_lo:.2f}–${entry_hi:.2f}). Entry isn't confirmed yet: {rr_reason}."
+            ),
+            detail=(
+                f"The thesis is solid (score {score:.0f}/100, {rec_label}) and price at "
+                f"${price:.2f} is right where you wanted it. But {rr_reason}. "
+                "Refresh analyst targets (or set one manually) and re-check before opening "
+                "the position — entering without a validated R:R is incomplete homework, "
+                "not a green light."
+            ),
+            conditions_met=[
+                f"Score {score:.0f}/100 — above 65 threshold",
+                f"Signal: {rec_label}",
+                f"Price in entry zone (${entry_lo:.2f}–${entry_hi:.2f})",
+            ],
+            conditions_missing=[
+                f"Risk/reward not validated — {rr_reason}",
+            ],
+            institutional_lens=(
+                "Price being right is necessary but not sufficient. A validated risk/reward "
+                "ratio requires a real target, not just an entry zone. Institutional desks "
+                "never size a position off price alone — target, stop, and entry all have to "
+                "line up before capital moves. Refresh the data before entering; don't skip the check."
+            ),
+        )
+
     # ── NEAR ENTRY ───────────────────────────────────────────────────────────
     if score >= COMPOSITE_BUY and pct_above is not None and pct_above <= 8:
         return _card(

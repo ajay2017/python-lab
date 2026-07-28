@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (`risk_advisor.py` full hardcoded-threshold sweep)
+## 1. Latest run — 2026-07-28 (clearing the flagged-findings backlog)
 
-**1103 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 12.17s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**1106 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 10.69s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -40,7 +40,7 @@ active: 12.17s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_thesis_red_team.py` | 30 | `thesis_red_team.py` (Phase 1 `compute_erosion_score()` backfill + Phase 2 Haiku contract) |
 | `test_valuation.py` | 31 | `valuation.py` |
 | `test_decision_bucket.py` | 27 | `decision_bucket.py` |
-| `test_watchlist_advisor.py` | 35 | `watchlist_advisor.py` (incl. `_portfolio_risk_gate()`) |
+| `test_watchlist_advisor.py` | 45 | `watchlist_advisor.py` (incl. `_portfolio_risk_gate()` and the in-zone-R:R-not-validated NEAR_ENTRY copy fix) |
 | `test_risk.py` | 43 | `risk.py` (position sizing, ATR stops, Sharpe/Sortino/VaR/beta) |
 | `test_macro_playbook.py` | 67 | `macro_playbook.py` (Pre-Event Macro Playbook: PROTECT/WATCH/HOLD/OPPORTUNITY action classifier, post-event scenario classification) |
 | `test_headless_alert_engine.py` | 57 | `headless_alert_engine.py` (cron protective-alert / morning-picks / EOD engine: `_build_context`, `compute_protective_alerts`, `compute_morning_picks`, `compute_eod`, `_assess_pullback`) |
@@ -51,11 +51,11 @@ active: 12.17s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_tax_advisor.py` | 59 | `tax_advisor.py` (FIFO tax-lot reconstruction, STCG/LTCG classification, harvest/wait action ladder, holding-period + wash-sale awareness helpers) |
 | `test_decision_quality.py` | 68 | `decision_quality.py` (monthly/quarterly Decision Quality grades, Workflow ROI prep-tier classification) |
 | `test_comparison.py` | 57 | `comparison.py` (2-ticker Compare page: per-row winner picking, composite-first/sub-factor-tiebreak verdict, portfolio-fit notes) |
-| `test_decision_journal.py` | 31 | `decision_journal.py` (signal-followed vs. ignored accuracy, costly-deviation/good-override lists, lessons library, behavioral insight) |
+| `test_decision_journal.py` | 31 | `decision_journal.py` (signal-followed vs. ignored accuracy, costly-deviation/good-override lists, lessons library, behavioral insight; avg-loss-sign copy fix) |
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
 | `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
 | `test_news_intelligence.py` | 76 | `news_intelligence.py` (significance scoring, negative-news alerts, opportunity detection + Reduce/Exit suppression, sector digest, suppress-only + bidirectional LLM rescore helpers) |
-| **Total** | **1103** | |
+| **Total** | **1106** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -74,7 +74,7 @@ in the tested logic itself. Batch-by-batch scope is in
 | `scoring.py` | 15 | 0 | **100%** |
 | `concentration.py` | 47 | 0 | **100%** |
 | `valuation.py` | 64 | 0 | **100%** |
-| `watchlist_advisor.py` | 109 | 0 | **100%** |
+| `watchlist_advisor.py` | 115 | 0 | **100%** |
 | `signal_reconciliation.py` | 86 | 4 | **95%** |
 | `decision_bucket.py` | 75 | 2 | **97%** |
 | `risk_advisor.py` | 175 | 13 | **93%** |
@@ -98,12 +98,11 @@ in the tested logic itself. Batch-by-batch scope is in
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 9,855 missed, 29%** (up —
-`news_intelligence.py` moving from 0% to 100%, the 6th and final
-fresh-prioritization pick from the same Explore-agent survey — the survey
-list is now exhausted). ~51 modules remain with zero tests, none flagged
-by the original survey as having real decision/gate logic worth chasing.
-Not a target to chase for its own sake per `docs/plans/test-automation.md`'s
+**Whole-`stock_analyzer/` total: 13,810 stmts, 9,854 missed, 29%** (stmt
+count ticked up slightly — the `watchlist_advisor.py` NEAR_ENTRY copy fix
+added a new branch). ~51 modules remain with zero tests, none flagged by
+the original survey as having real decision/gate logic worth chasing. Not
+a target to chase for its own sake per `docs/plans/test-automation.md`'s
 "golden-value regression, not coverage-chasing" principle. Track this
 section mainly to notice a SUDDEN drop in a targeted module (a signal
 something broke), not to push the whole-package number up for its own
@@ -179,6 +178,69 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — Cleared the remaining flagged-findings backlog: `watchlist_advisor.py` NEAR_ENTRY copy fix, `comparison.py` dead import, `decision_journal.py` avg-loss-sign copy fix, 1106/1106 passing
+
+User asked to close out the last 3 outstanding items accumulated across
+this session's whole test-coverage effort, to clear the list.
+
+**`watchlist_advisor.py` — fixed the flagged NEAR_ENTRY copy gap
+(2026-07-27 finding, fixed 2026-07-28):** a stock priced ALREADY inside its
+entry zone but lacking a validated R:R (either no target price at all, or
+a computed R:R below `RR_ENTRY_MIN`) fell through `ENTER_NOW`'s gate and
+into the generic NEAR_ENTRY branch, which renders "Approaching Entry Zone
+(+0.0% above zone)" / "watch for a small pullback" — actively misleading,
+since `pct_above` is always `<= 0` when price is in-zone (the stock isn't
+approaching anything, it already arrived) and the real blocker is the
+missing/insufficient R:R, unrelated to price distance. **Fixed** by adding
+a new branch immediately before the generic NEAR_ENTRY check:
+`score >= COMPOSITE_BUY and in_zone and (rr is None or rr < RR_ENTRY_MIN)`
+renders a distinct card ("In Entry Zone, R:R Not Yet Validated") that
+names the actual blocker (no target price, or "R:R is only X:1 — below
+the 2:1 minimum") and recommends refreshing analyst targets rather than
+"wait for a pullback." Same `action="NEAR_ENTRY"` string, priority, and
+sort rank as before (verified `app.py`'s only two `NEAR_ENTRY` consumers —
+the count/pill/emoji lookup, and a `"Portfolio Fit" in title` check for
+the unrelated hard-breach downgrade case — are both unaffected), so this
+is a display-copy fix, not a decision/priority change. Added 3 regression
+tests to `tests/test_watchlist_advisor.py` (45 total): the missing-target
+case, the known-but-low-R:R case, and a guard test confirming the
+ordinary "price above zone" NEAR_ENTRY copy still renders unchanged when
+NOT in-zone. Not Opus-reviewed — same reasoning as the earlier
+`portfolio_health.py`/`decision_journal.py` copy fixes this session: the
+action, priority, and gating boundary are byte-identical for every input;
+only the explanatory text for an already-decided NEAR_ENTRY outcome
+changed, so this isn't a gate/scoring-formula change under CLAUDE.md hard
+rule #4. Now 100% covered (115 stmts, 0 missed; stmt count rose from 109
+with the new branch).
+
+**`comparison.py` — removed the flagged dead import (2026-07-27 finding,
+fixed 2026-07-28):** `PORTFOLIO_BETA_ELEVATED`/`PORTFOLIO_BETA_CEILING`
+were imported but never referenced anywhere in the file (re-confirmed via
+grep before removing). Deleted both from the import block. No behavior
+change; no test change needed (nothing referenced them). Still 97% covered
+(147 stmts, 5 missed — unchanged, import-line removal didn't shift the
+gap).
+
+**`decision_journal.py` — fixed the avg-loss-sign copy nit (2026-07-27
+finding, fixed 2026-07-28):** the costly-deviations behavioral-insight
+message read "...with an avg loss of $-150 per trade" — `avg_cost` is
+always negative by construction (the list is pre-filtered to
+`realized_pnl < 0`), so the raw signed value next to the word "loss" read
+oddly. **Fixed** with a one-line `abs()` around the interpolated value.
+Updated the one existing test assertion that had pinned the old (buggy)
+"$-150" text to instead assert the corrected "$150" appears and "$-150"
+does not. Not Opus-reviewed — display-copy only, no gate/scoring change.
+Still 100% covered (67 stmts, 0 missed).
+
+**This clears every item on the flagged-but-not-yet-fixed list accumulated
+across the whole session's test-coverage effort.** Two low-urgency
+non-blocking items remain, both explicitly deferred (not "open bugs"): the
+2 `headless_alert_engine.py` NaN-guard follow-ups from the 2026-07-27 Opus
+review (outside the alert-firing path, no live decision affected), and
+`app.py`'s Max-Drawdown/volatility metric-caption literals that now
+numerically mirror the new `risk_advisor.py` constants but aren't wired to
+them (display-only, never gates).
 
 ### 2026-07-28 — `risk_advisor.py` full hardcoded-threshold sweep (CLAUDE.md hard-rule-#1 fix), 1103/1103 passing
 
