@@ -28112,8 +28112,26 @@ elif page == "🎯 My Edge":
                 _me_flows,
             )
 
-            # Actual portfolio value from session state
-            _me_port_val = float(st.session_state.get("_portfolio_value") or 0.0)
+            # Actual ending value — TOTAL ACCOUNT VALUE (equity + net cash), the
+            # same basis the baseline was set against (💰 Account page's own
+            # "current total account value" default) and the same computation
+            # Account page uses for its own Modified Dietz return (app.py:23430).
+            # Using bare invested-equity here (the old bug) ignores a margin
+            # debit entirely, inflating "gain" by the full margin balance and
+            # then exploding further once annualized.
+            _me_acct_cash_row = _me_db.load_account_cash()
+            _me_cash   = float(_me_acct_cash_row["cash_balance"]) if _me_acct_cash_row else None
+            _me_pf_df  = st.session_state.get("_last_port_df")
+            _me_have_pf = _me_pf_df is not None and hasattr(_me_pf_df, "empty") and not _me_pf_df.empty
+            _me_equity = float(_me_pf_df["Market Value"].sum()) if _me_have_pf else None
+            if _me_have_pf and _me_cash is not None:
+                _me_port_val  = _me_equity + _me_cash
+                _me_val_basis = "total account value (equity + net cash)"
+            else:
+                # No cash tracked this session — fall back to equity-only, same
+                # as the Account page's own fallback when cash isn't set.
+                _me_port_val  = _me_equity or 0.0
+                _me_val_basis = "invested equity only — set cash on 💰 Account for the full basis"
 
             # Actual MWR (reuse account.money_weighted_return)
             _me_actual_mwr = _me_acct.money_weighted_return(
@@ -28203,6 +28221,7 @@ elif page == "🎯 My Edge":
                 "extra risk you took to get it — a portfolio running high beta in a rally can show strong "
                 "raw alpha and near-zero beta-adjusted alpha."
             )
+            st.caption(f"📐 \"Your Return\" is measured on **{_me_val_basis}**.")
 
             st.divider()
 
