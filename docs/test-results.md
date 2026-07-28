@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-ranked-list, batch 11: `comparison.py`)
+## 1. Latest run — 2026-07-28 (post-ranked-list, batch 12: `decision_journal.py`)
 
-**878 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 8.68s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**909 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 10.35s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -51,7 +51,8 @@ active: 8.68s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_tax_advisor.py` | 59 | `tax_advisor.py` (FIFO tax-lot reconstruction, STCG/LTCG classification, harvest/wait action ladder, holding-period + wash-sale awareness helpers) |
 | `test_decision_quality.py` | 68 | `decision_quality.py` (monthly/quarterly Decision Quality grades, Workflow ROI prep-tier classification) |
 | `test_comparison.py` | 57 | `comparison.py` (2-ticker Compare page: per-row winner picking, composite-first/sub-factor-tiebreak verdict, portfolio-fit notes) |
-| **Total** | **878** | |
+| `test_decision_journal.py` | 31 | `decision_journal.py` (signal-followed vs. ignored accuracy, costly-deviation/good-override lists, lessons library, behavioral insight) |
+| **Total** | **909** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -84,18 +85,19 @@ in the tested logic itself. Batch-by-batch scope is in
 | `tax_advisor.py` | 191 | 4 | **98%** |
 | `decision_quality.py` | 231 | 8 | **97%** |
 | `comparison.py` | 147 | 5 | **97%** |
+| `decision_journal.py` | 67 | 0 | **100%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,320 missed, 25%** (up —
-`comparison.py` moving from 0% to 97%, the 2nd fresh-prioritization pick
-from the same Explore-agent survey). ~55 modules remain with zero tests;
-`decision_journal.py` (67 stmts, smallest/most self-contained) is the
-survey's next viable candidate, plus lower-priority `earnings_advisor.py`/
-`perf_advisor.py`/`news_intelligence.py`. Not a target to chase for its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,253 missed, 26%** (up —
+`decision_journal.py` moving from 0% to 100%, the 3rd fresh-prioritization
+pick from the same Explore-agent survey). ~54 modules remain with zero
+tests; lower-priority `earnings_advisor.py`/`perf_advisor.py`/
+`news_intelligence.py` are the survey's remaining candidates. Not a target
+to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -149,6 +151,21 @@ under an already-computed recommendation (the sub-score, grade, and action
 text are all unaffected), not a gate/scoring formula per CLAUDE.md hard
 rule #4.
 
+**`decision_journal.py`'s batch found and fixed a real CRASH bug** (see the
+dated history entry below) — not a subtle one: `compute_patterns()`'s
+`costly`/`good` DataFrames were built by boolean-masking `ignored` with the
+result of a fresh `.apply()` call; when `ignored` has zero rows (i.e. a user
+who has never logged an override — every trade `followed_signal="yes"`),
+`.apply()` on an empty Series can't infer a return dtype and yields an
+`object`-dtype (not `bool`) empty Series, which pandas then can't use as a
+boolean mask — the indexed result collapses to a columnless `(0, 0)`
+DataFrame, and the very next `.sort_values("_pnl")` crashes with
+`KeyError: '_pnl'`. This is reachable for one of the MOST common real
+scenarios (a disciplined user with zero logged overrides), not a contrived
+edge case. Fixed by skipping the `.apply()`-based filter entirely when
+`ignored` is empty. Not Opus-reviewed — a crash fix in retrospective display
+analytics (Lessons Learned page), not a gate/scoring-formula change.
+
 ---
 
 ## 2. History
@@ -156,6 +173,67 @@ rule #4.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `decision_journal.py` backfilled (31 tests, 100% coverage), found + fixed a real crash bug, 909/909 passing
+
+Third fresh-prioritization pick from the same post-ranked-list Explore
+survey. `decision_journal.py`'s `compute_patterns()` powers the Lessons
+Learned / Decision Journal page: signal-followed vs. -ignored win/loss
+accuracy, the costly-deviations and good-overrides lists, the free-text +
+structured-category lessons library, and a one-line behavioral insight. 31
+tests covering the empty/short-circuit paths (`None`/empty `trades_df`, no
+`action` column, no `followed_signal` column, no SELL rows, no valid
+yes/no-tagged rows), the followed/ignored accuracy math (incl. the
+`None`-pnl-counts-as-neither-win-nor-loss case and case/whitespace
+normalization of `followed_signal`), the costly-deviation (worst-first) and
+good-override (best-first) sort orders, the lessons library's free-text-OR-
+category inclusion rule and most-recent-first sort, the lesson-category
+cross-tab's BROADER scope (all SELL rows with a category set, not just
+rows with a valid yes/no `followed_signal` — deliberately wider than the
+"lessons" list and the accuracy stats), and the full behavioral-insight
+branch order (≥2 costly deviations always wins regardless of accuracy;
+otherwise "signals working" / "overrides outperforming" / "similar" based
+on a >10-point accuracy gap; `None` when data is too thin for either
+signal). Most of the initial test run's 13 failures turned out to be
+downstream fallout of the crash bug below (masked until it was fixed), not
+independent test mistakes; the one genuine test-authoring slip that
+remained after the fix — an expectation that didn't account for the
+avg-loss figure always being negative — was corrected before the batch
+finished.
+
+**Found and fixed a real, NOT-subtle bug (not a test-writing mistake):**
+`costly = ignored[ignored["_pnl"].apply(lambda x: x is not None and x < 0)].copy()`
+(and the mirror `good =` line) crashes with `KeyError: '_pnl'` whenever
+`ignored` (the ignored/overridden-signal subset) has zero rows — reproduced
+independently with the simplest possible realistic input: a SINGLE trade
+with `followed_signal="yes"` and nothing else. Root cause: `Series.apply()`
+on a zero-row Series can't infer a return dtype from zero calls, so it
+returns an `object`-dtype (not `bool`) empty Series; pandas then can't
+recognize that as a boolean mask, and indexing a DataFrame with it collapses
+the result to a columnless `(0, 0)` frame instead of the expected
+"0 rows, same columns." The very next `.sort_values("_pnl")` then raises
+`KeyError` because the column is gone. This fires for one of the most
+common real scenarios imaginable — any user who has never logged an
+override (100% `followed_signal="yes"`) — meaning the ENTIRE Decision
+Journal / Lessons Learned page would have crashed with an unhandled
+exception for exactly the kind of disciplined user this feature is meant to
+reward. **Fixed** by skipping the `.apply()`-based filter entirely when
+`ignored.empty` (using `ignored.copy()` directly, which already has zero
+rows and the correct columns). Traced for the identical vulnerability
+elsewhere in the same function: `followed`/`ignored`'s `_wins`/`_losses`
+computations also call `.apply()` on possibly-empty slices, but those
+results are immediately `.sum()`'d rather than used to index a DataFrame —
+`sum()` of an empty Series is `0` regardless of dtype, so those call sites
+are NOT vulnerable and were correctly left unchanged. Not Opus-reviewed per
+CLAUDE.md hard rule #4 — this is a crash fix in retrospective display
+analytics (Lessons Learned page), not a change to any gate, threshold, or
+scoring/recommendation formula. **One minor, pre-existing UI-copy nit
+noticed but NOT fixed** (flagged, not a functional bug): the
+"costly deviations" behavioral-insight message reads "...with an avg loss
+of $-150 per trade" — the negative sign is redundant/awkward next to the
+word "loss" (the value is always negative by construction). A one-line
+`abs()` fix, but out of scope for a test-coverage-plus-crash-fix commit;
+left for a product-copy pass. Now 100% covered (67 stmts, 0 missed).
 
 ### 2026-07-28 — `comparison.py` backfilled (57 tests), 878/878 passing, no bug found
 

@@ -96,7 +96,14 @@ def compute_patterns(trades_df: pd.DataFrame) -> dict:
     i_acc    = round(i_wins / (i_wins + i_losses) * 100, 1) if (i_wins + i_losses) > 0 else None
 
     # ── Costly deviations: ignored AND lost money ─────────────────────────────
-    costly = ignored[ignored["_pnl"].apply(lambda x: x is not None and x < 0)].copy()
+    # ignored.empty guard: Series.apply() on a zero-row slice can't infer a
+    # return dtype and yields an object-dtype (not bool) empty Series; using
+    # that to index ignored then collapses it to a columnless (0, 0) frame,
+    # crashing the .sort_values("_pnl") below with a KeyError. Reachable for
+    # the very common case of a user who has never logged an override (every
+    # trade followed_signal="yes") -- skip the apply entirely when empty.
+    costly = (ignored.copy() if ignored.empty else
+              ignored[ignored["_pnl"].apply(lambda x: x is not None and x < 0)].copy())
     costly_list = []
     for _, row in costly.sort_values("_pnl").iterrows():
         costly_list.append({
@@ -109,7 +116,8 @@ def compute_patterns(trades_df: pd.DataFrame) -> dict:
         })
 
     # ── Good overrides: ignored AND made money ────────────────────────────────
-    good = ignored[ignored["_pnl"].apply(lambda x: x is not None and x > 0)].copy()
+    good = (ignored.copy() if ignored.empty else
+            ignored[ignored["_pnl"].apply(lambda x: x is not None and x > 0)].copy())
     good_list = []
     for _, row in good.sort_values("_pnl", ascending=False).iterrows():
         good_list.append({
