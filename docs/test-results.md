@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 7: `signal_hysteresis.py`)
+## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 8: `position_lifecycle.py`)
 
-**665 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 13.66s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**694 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 8.93s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -47,7 +47,8 @@ active: 13.66s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_portfolio_health.py` | 92 | `portfolio_health.py` (Portfolio Construction Health Score: 5 sub-scores + A-F grade, Portfolio Dynamics tenure/cohort/alignment) |
 | `test_rebalancer.py` | 33 | `rebalancer.py` (drift classification, trim/add urgency + rationale, News Intelligence / Risk Advisor coordination gates) |
 | `test_signal_hysteresis.py` | 32 | `signal_hysteresis.py` (calm-advisor "steady vs yesterday" annotator) |
-| **Total** | **665** | |
+| `test_position_lifecycle.py` | 29 | `position_lifecycle.py` (held-position lifecycle classifier: exit/at_risk/settling/winning/established) |
+| **Total** | **694** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -76,20 +77,17 @@ in the tested logic itself. Batch-by-batch scope is in
 | `portfolio_health.py` | 242 | 11 | **95%** |
 | `rebalancer.py` | 122 | 2 | **98%** |
 | `signal_hysteresis.py` | 46 | 0 | **100%** |
+| `position_lifecycle.py` | 14 | 0 | **100%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,921 missed, 21%** (up
-slightly — `signal_hysteresis.py` is a small module, 46 stmts, now 100%).
-Still dominated by ~59 modules with zero tests at all — ranked remaining
-gaps with real decision/gate logic: `position_lifecycle.py`, `tax_advisor.py`.
-The still-parked deterioration-hysteresis CLAUDE.md queue item is a
-DIFFERENT, unrelated concept from this module despite the similar name — see
-this batch's history entry for the disambiguation. Not a target to chase for
-its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,911 missed, 21%** (up
+slightly — `position_lifecycle.py` is tiny, 14 stmts, now 100%). Still
+dominated by ~58 modules with zero tests at all — ranked remaining gap with
+real decision/gate logic: `tax_advisor.py`. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -150,6 +148,25 @@ rule #4.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `position_lifecycle.py` backfilled (29 tests, 100% coverage), 694/694 passing, no bug found
+
+Continuation of the post-roadmap health check, next module on the ranked
+priority list. `position_lifecycle.py` is pure logic (no I/O) — the
+calm-advisor layer's held-position lifecycle classifier: `classify_
+position_state()` returns one of exit/at_risk/settling/winning/established
+via a strict precedence ladder where danger always beats age (a
+freshly-opened position already breaching its stop is "exit", not
+"settling"), and the critical rule that `age_days=None` (no trade-journal
+history) must NEVER yield "settling" — missing data shouldn't silence
+management. 29 tests covering every precedence interaction (exit beats
+at_risk beats settling beats winning beats established), the exact
+boundary at each of the 3 constants (`POSITION_AT_RISK_GAP_PCT`,
+`POSITION_SETTLING_DAYS`, `POSITION_WINNING_PNL_PCT` — steady/threshold
+value included vs. just past it), the `age_days=None` critical-rule cases,
+and `lifecycle_badge()`'s per-state metadata incl. "established" being
+intentionally un-badged. No production bug found. Now 100% covered
+(14 stmts, 0 missed).
 
 ### 2026-07-28 — `signal_hysteresis.py` backfilled (32 tests, 100% coverage), 665/665 passing, no bug found — plus a naming-collision correction
 
