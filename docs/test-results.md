@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-ranked-list, batch 14: `perf_advisor.py`)
+## 1. Latest run — 2026-07-28 (post-ranked-list, batch 15: `news_intelligence.py`)
 
-**1011 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 13.06s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**1087 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 13.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -54,7 +54,8 @@ active: 13.06s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_decision_journal.py` | 31 | `decision_journal.py` (signal-followed vs. ignored accuracy, costly-deviation/good-override lists, lessons library, behavioral insight) |
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
 | `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
-| **Total** | **1011** | |
+| `test_news_intelligence.py` | 76 | `news_intelligence.py` (significance scoring, negative-news alerts, opportunity detection + Reduce/Exit suppression, sector digest, suppress-only + bidirectional LLM rescore helpers) |
+| **Total** | **1087** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -90,21 +91,23 @@ in the tested logic itself. Batch-by-batch scope is in
 | `decision_journal.py` | 67 | 0 | **100%** |
 | `earnings_advisor.py` | 145 | 3 | **98%** |
 | `perf_advisor.py` | 116 | 0 | **100%** |
+| `news_intelligence.py` | 140 | 0 | **100%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 9,995 missed, 28%** (up —
-`perf_advisor.py` moving from 0% to 100%, the 5th fresh-prioritization pick
-from the same Explore-agent survey). ~52 modules remain with zero tests;
-`news_intelligence.py` is the survey's last remaining lower-priority
-candidate. Not a target to chase for its own sake per
-`docs/plans/test-automation.md`'s "golden-value regression, not
-coverage-chasing" principle. Track this section mainly to notice a SUDDEN
-drop in a targeted module (a signal something broke), not to push the
-whole-package number up for its own sake.
+**Whole-`stock_analyzer/` total: 13,794 stmts, 9,855 missed, 29%** (up —
+`news_intelligence.py` moving from 0% to 100%, the 6th and final
+fresh-prioritization pick from the same Explore-agent survey — the survey
+list is now exhausted). ~51 modules remain with zero tests, none flagged
+by the original survey as having real decision/gate logic worth chasing.
+Not a target to chase for its own sake per `docs/plans/test-automation.md`'s
+"golden-value regression, not coverage-chasing" principle. Track this
+section mainly to notice a SUDDEN drop in a targeted module (a signal
+something broke), not to push the whole-package number up for its own
+sake.
 
 **Correction (2026-07-27):** an earlier same-day audit mislabeled
 `macro_playbook.py` as containing `compute_protective_alerts()`/
@@ -176,6 +179,49 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `news_intelligence.py` backfilled (76 tests, 100% coverage), 1087/1087 passing, no bug found — Explore survey now exhausted
+
+Sixth and final fresh-prioritization pick from the same post-ranked-list
+Explore survey. `news_intelligence.py` powers the News Intelligence
+surface: `_significance()`'s tier×|sentiment|×position-weight×recency
+scoring, `build_news_intelligence()`'s negative-news alert classification
+(critical requires ALL THREE of compound≤-0.25, weight≥8.0, tier≤2 — any
+single gate failing downgrades to warning), positive-news opportunity
+detection gated on `NEWS_OPPORTUNITY_COMPOUND_MIN`/`NEWS_OPPORTUNITY_SCORE_MIN`
+with the Reduce/Exit-ticker suppression split (a name under an active
+trim/exit call is pulled OUT of `opportunities` into
+`opportunities_suppressed` so a green "add on a pullback" card never
+contradicts the Daily Brief's protect-capital directive), the 2+-aligned-
+item sector digest (negative direction wins over positive when a sector
+has both), and the full held-news feed — plus the two LLM-rescore helpers:
+`rescore_news_items_llm()` (suppress-only — a Haiku score is only accepted
+when it moves STRICTLY higher than VADER's, formalized as "equal is also
+rejected, not just lower") and `rescore_headlines_llm()` (fully
+bidirectional, per-headline swing capped at `SENTIMENT_LLM_MAX_SWING` in
+either direction, ticker-aware prompt). Both LLM functions lazily
+`import anthropic` inside a try/except and the dev venv has no `anthropic`
+installed (per CLAUDE.md "never run locally") — so the test file installs
+a fake `anthropic` module into `sys.modules` before each LLM test (a
+minimal fake `Anthropic`/`Timeout`/`messages.create` chain returning a
+scripted response or raising a scripted exception) to exercise the real
+success/parsing/validation logic, not just the except-fallback path;
+separate tests also confirm the genuine "anthropic not installed at all"
+fallback path (no fake module installed) correctly returns the original
+items unchanged / `None` per each function's documented contract. 76
+tests, all passing on the first run except one coverage gap caught on the
+first `--cov` pass (the markdown-code-fence-stripping + idx/score
+validation branches inside `rescore_headlines_llm()` weren't hit by the
+initial test set — added directly, not a source bug). No production bug
+found. Now 100% covered (140 stmts, 0 missed).
+
+**This exhausts the Explore-agent survey's ranked candidate list**
+(`decision_quality.py` → `comparison.py` → `decision_journal.py` →
+`earnings_advisor.py` → `perf_advisor.py` → `news_intelligence.py`, all
+6 backfilled this session). Any further test-coverage work from here is a
+fresh prioritization call over the ~51 remaining zero-coverage modules, none
+of which the original survey flagged as containing real decision/gate
+logic worth the effort.
 
 ### 2026-07-28 — `perf_advisor.py` backfilled (46 tests, 100% coverage), 1011/1011 passing, no bug found
 
