@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 8: `position_lifecycle.py`)
+## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 9: `tax_advisor.py` — ranked list COMPLETE)
 
-**694 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 8.93s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**753 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 8.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -48,7 +48,8 @@ active: 8.93s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_rebalancer.py` | 33 | `rebalancer.py` (drift classification, trim/add urgency + rationale, News Intelligence / Risk Advisor coordination gates) |
 | `test_signal_hysteresis.py` | 32 | `signal_hysteresis.py` (calm-advisor "steady vs yesterday" annotator) |
 | `test_position_lifecycle.py` | 29 | `position_lifecycle.py` (held-position lifecycle classifier: exit/at_risk/settling/winning/established) |
-| **Total** | **694** | |
+| `test_tax_advisor.py` | 59 | `tax_advisor.py` (FIFO tax-lot reconstruction, STCG/LTCG classification, harvest/wait action ladder, holding-period + wash-sale awareness helpers) |
+| **Total** | **753** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -78,16 +79,21 @@ in the tested logic itself. Batch-by-batch scope is in
 | `rebalancer.py` | 122 | 2 | **98%** |
 | `signal_hysteresis.py` | 46 | 0 | **100%** |
 | `position_lifecycle.py` | 14 | 0 | **100%** |
+| `tax_advisor.py` | 191 | 4 | **98%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,911 missed, 21%** (up
-slightly — `position_lifecycle.py` is tiny, 14 stmts, now 100%). Still
-dominated by ~58 modules with zero tests at all — ranked remaining gap with
-real decision/gate logic: `tax_advisor.py`. Not a target to chase for its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,760 missed, 22%** (up —
+`tax_advisor.py` moving from 0% to 98%). **This closes the ranked
+post-roadmap test-coverage priority list** — every module identified with
+real decision/gate logic in the 2026-07-27 post-roadmap audit now has
+regression coverage. ~57 modules remain with zero tests, but none surfaced
+as having real decision/gate logic in that audit; any further backfill from
+here is judgment-call prioritization, not a pre-ranked queue. Not a target
+to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -148,6 +154,42 @@ rule #4.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `tax_advisor.py` backfilled (59 tests), 753/753 passing, no bug found — ranked post-roadmap test-coverage list now COMPLETE
+
+Final module on the ranked post-roadmap test-coverage priority list. The
+Tax Efficiency Advisor: `_build_open_lots()`'s FIFO tax-lot reconstruction
+(BUY accumulation, SELL consuming oldest-lot-first across single/multiple
+lots, SPLIT pro-rata share adjustment that preserves each lot's original
+acquisition date, and the SPLIT-with-no-prior-lots seed-synthesis case),
+`build_tax_analysis()`'s STCG/LTCG/MIXED classification with share-weighted
+apportioned tax estimates, the HARVEST/HOLD_FOR_SIGNAL/WAIT/HOLD_FOR_LTCG/
+LTCG_ELIGIBLE/MONITOR action ladder (incl. the harvest-blocked-by-conviction
+rule — a Buy/Strong-Buy-rated position is never eligible for tax-loss
+harvesting regardless of the unrealized loss), and the sort order; plus the
+two awareness-only helpers used elsewhere on EXIT cards —
+`holding_period_status()`'s near-LTCG flag and `wash_sale_risk()`'s 30-day
+same-ticker-BUY-before-a-SELL check (boundary-inclusive, same-day-inclusive).
+59 tests, all passing on the first run — no fixture-math mistakes this
+time. No production bug found. Now 98% covered (191 stmts, 4 missed — the
+4 lines are `_earliest_buy()`'s all-dates-invalid edge and the `if today is
+None: today = _today_et()` defaulting line in `holding_period_status()`/
+`wash_sale_risk()`, both already exercised in `build_tax_analysis()`'s
+equivalent test and not worth a redundant third copy per the
+"golden-value regression, not coverage-chasing" principle).
+
+**This completes the ranked post-roadmap test-coverage priority list**
+(started 2026-07-27 with `valuation.py`/`watchlist_advisor.py`/
+`decision_bucket.py`, through `risk.py`, `macro_playbook.py`,
+`headless_alert_engine.py`, `portfolio_health.py`, `rebalancer.py`,
+`signal_hysteresis.py`, `position_lifecycle.py`, and now `tax_advisor.py`).
+753 tests total, 3 real production bugs found and fixed along the way
+(`risk.py`'s Sharpe/Sortino zero-volatility check, `headless_alert_
+engine.py`'s NaN stop-breach fabrication, `portfolio_health.py`'s
+concentration-callout duplication). Any further test-coverage work from
+here onward is a fresh prioritization call, not a continuation of a
+pre-ranked queue — see memory `project_test_automation` for the full
+batch history and the still-open flagged (not fixed) findings.
 
 ### 2026-07-28 — `position_lifecycle.py` backfilled (29 tests, 100% coverage), 694/694 passing, no bug found
 
