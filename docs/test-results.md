@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-roadmap health check, batch 9: `tax_advisor.py` — ranked list COMPLETE)
+## 1. Latest run — 2026-07-28 (post-ranked-list, batch 10: `decision_quality.py`)
 
-**753 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 8.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**821 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 7.64s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -49,7 +49,8 @@ active: 8.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_signal_hysteresis.py` | 32 | `signal_hysteresis.py` (calm-advisor "steady vs yesterday" annotator) |
 | `test_position_lifecycle.py` | 29 | `position_lifecycle.py` (held-position lifecycle classifier: exit/at_risk/settling/winning/established) |
 | `test_tax_advisor.py` | 59 | `tax_advisor.py` (FIFO tax-lot reconstruction, STCG/LTCG classification, harvest/wait action ladder, holding-period + wash-sale awareness helpers) |
-| **Total** | **753** | |
+| `test_decision_quality.py` | 68 | `decision_quality.py` (monthly/quarterly Decision Quality grades, Workflow ROI prep-tier classification) |
+| **Total** | **821** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -80,20 +81,22 @@ in the tested logic itself. Batch-by-batch scope is in
 | `signal_hysteresis.py` | 46 | 0 | **100%** |
 | `position_lifecycle.py` | 14 | 0 | **100%** |
 | `tax_advisor.py` | 191 | 4 | **98%** |
+| `decision_quality.py` | 231 | 8 | **97%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,760 missed, 22%** (up —
-`tax_advisor.py` moving from 0% to 98%). **This closes the ranked
-post-roadmap test-coverage priority list** — every module identified with
-real decision/gate logic in the 2026-07-27 post-roadmap audit now has
-regression coverage. ~57 modules remain with zero tests, but none surfaced
-as having real decision/gate logic in that audit; any further backfill from
-here is judgment-call prioritization, not a pre-ranked queue. Not a target
-to chase for its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,462 missed, 24%** (up —
+`decision_quality.py` moving from 0% to 97%, the first module picked via
+fresh prioritization after the original ranked list closed; an Explore-agent
+survey of ~20 remaining zero-coverage candidates flagged it as the richest
+decision-logic surface — grade ladders + prep-tier classification — that's
+also fully pure, no I/O). ~56 modules remain with zero tests, several
+identified in that same survey as viable next candidates (`comparison.py`,
+`decision_journal.py`, plus lower-priority `earnings_advisor.py`/
+`perf_advisor.py`/`news_intelligence.py`). Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -154,6 +157,49 @@ rule #4.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `decision_quality.py` backfilled (68 tests), 821/821 passing, no bug found — first post-ranked-list pick
+
+With the original ranked post-roadmap test-coverage list complete, used an
+Explore-agent survey of ~20 remaining zero-coverage `stock_analyzer/`
+modules to pick the next candidate: `decision_quality.py` ranked #1 —
+richest decision-logic surface of the group (grade ladders, prep-tier
+classification) and fully pure (pandas only, no Streamlit/DB/network at
+module or function level), unlike several other candidates that are
+mostly LLM-prompt builders (`premarket_stance.py`, `earnings_intel.py`,
+`analyst_intel.py`, etc. — poor regression-test targets since their core
+value is the LLM call, not testable branch logic).
+
+Retrospective investor-improvement analytics with two responsibilities:
+Feature B (`build_monthly_grades()`/`build_quarterly_grades()` — A-F grades
+from win-rate + profit-factor + optional alpha-vs-SPY subscores, with an
+overtrading penalty tier) and Feature C (`classify_trade_prep()`/
+`classify_all_buys()`/`build_workflow_roi()` — per-BUY prep-tier
+classification joined to realized outcomes). 68 tests covering the grade
+letter/label/color mappings and boundaries, `_profit_factor()`'s
+all-winner-is-None vs. all-loser-is-zero distinction, `_monthly_overtrading()`'s
+rolling-12-month baseline (first 2 months always `None` — insufficient
+baseline, not "not overtrading"), `_alpha_subscore()`'s clamped ±scale
+mapping, `build_monthly_grades()`'s full assembly (win-rate subscore,
+profit-factor subscore incl. the all-winner full-score case, the
+has-alpha/no-alpha 3-subscore-vs-2-subscore composite, the >=2.0/>=1.5
+overtrading penalty tiers, month sorting, the "Unknown"-month and
+below-`DECISION_QUALITY_MIN_TRADES` exclusions), `build_quarterly_grades()`'s
+trade-count-weighted composite averaging and malformed-month-str skip,
+`build_spy_monthly_returns()`'s first/last-price-per-month return calc,
+and `classify_trade_prep()`'s full tier ladder — including a non-obvious
+rule worth pinning explicitly: thesis is a GATEKEEPER, not one of three
+equally-weighted signals, so a trade with both analyst AND earnings
+research saved but no thesis still classifies as "Cold Entry" (tier 0), not
+"Thorough." Dates use plain `datetime.date` objects throughout (not ISO
+strings) so the module's own ET-localizing `_parse_dt` short-circuits via
+its `isinstance(date, not datetime)` passthrough, avoiding a UTC→ET
+day-shift trap that a string date would otherwise introduce. Two of my own
+early assertions were wrong (a profit-factor arithmetic slip: 200/100=2.0,
+not 1.0; and a `numpy.bool_ is True` identity-comparison mismatch, fixed
+with a `bool()` cast) — both test-authoring mistakes, not source bugs, both
+caught and fixed before the batch finished. No production bug found. Now
+97% covered (231 stmts, 8 missed).
 
 ### 2026-07-28 — `tax_advisor.py` backfilled (59 tests), 753/753 passing, no bug found — ranked post-roadmap test-coverage list now COMPLETE
 
