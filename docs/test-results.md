@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-27 (post-roadmap health check)
+## 1. Latest run — 2026-07-27 (post-roadmap health check, batch 2: `risk.py`)
 
-**327 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 1.36s; with `--cov`
-active: 2.90s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**370 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 1.33s; with `--cov`
+active: 3.13s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -41,9 +41,10 @@ active: 2.90s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_valuation.py` | 31 | `valuation.py` |
 | `test_decision_bucket.py` | 27 | `decision_bucket.py` |
 | `test_watchlist_advisor.py` | 35 | `watchlist_advisor.py` (incl. `_portfolio_risk_gate()`) |
-| **Total** | **327** | |
+| `test_risk.py` | 43 | `risk.py` (position sizing, ATR stops, Sharpe/Sortino/VaR/beta) |
+| **Total** | **370** | |
 
-### Line coverage of the 13 targeted modules
+### Line coverage of the 14 targeted modules
 
 Via `pytest --cov=stock_analyzer --cov-report=term-missing`. **Read this with
 the design principle in mind: the suite targets boundary/golden-value
@@ -64,27 +65,33 @@ in the tested logic itself. Batch-by-batch scope is in
 | `signal_reconciliation.py` | 86 | 4 | **95%** |
 | `decision_bucket.py` | 75 | 2 | **97%** |
 | `risk_advisor.py` | 175 | 13 | **93%** |
+| `risk.py` | 171 | 7 | **96%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,773 stmts, 12,392 missed, 10%** (up from
-7% same day, before this batch). Still dominated by ~65 modules with zero
-tests at all — a same-day audit ranked the highest-priority remaining gaps
-with real decision/gate logic: `risk.py` (position sizing, stops,
-Sharpe/Sortino/VaR), `macro_playbook.py` (pullback-alert thresholds),
-`portfolio_health.py`, `rebalancer.py`, `signal_hysteresis.py` (tied to the
-still-parked deterioration-hysteresis queue item), `position_lifecycle.py`,
+**Whole-`stock_analyzer/` total: 13,774 stmts, 12,212 missed, 11%** (up from
+10% earlier the same day). Still dominated by ~64 modules with zero tests at
+all — ranked remaining gaps with real decision/gate logic:
+`macro_playbook.py` (pullback-alert thresholds), `portfolio_health.py`,
+`rebalancer.py`, `signal_hysteresis.py` (tied to the still-parked
+deterioration-hysteresis queue item), `position_lifecycle.py`,
 `tax_advisor.py`. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
-coverage-chasing" principle — but `watchlist_advisor.py` and `valuation.py`
-were prioritized THIS batch specifically because they contain an actual
-portfolio-risk gate and a live scoring pillar, respectively, and had zero
-coverage despite that. Track this section mainly to notice a SUDDEN drop in
-a targeted module (a signal something broke), not to push the whole-package
-number up for its own sake.
+coverage-chasing" principle. Track this section mainly to notice a SUDDEN
+drop in a targeted module (a signal something broke), not to push the
+whole-package number up for its own sake.
+
+**`risk.py`'s batch found and fixed a real production bug, not just a
+coverage gap** (see the dated history entry below for the full writeup):
+`sharpe_ratio()`/`sortino_ratio()`/`compute_portfolio_risk_metrics()`'s
+"no volatility → 0.0" fallback used an exact `std == 0` check, which missed
+~1e-19-scale floating-point noise from averaging the risk-free-rate constant
+across many identical rows — a flat/halted position could show a Sharpe of
+±3.4e16 instead of 0.0. Fixed with a `_ZERO_VOL_EPS = 1e-9` tolerance check.
+Opus-reviewed: SHIP, 0 blocking.
 
 ---
 
@@ -93,6 +100,54 @@ number up for its own sake.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-27 — `risk.py` backfilled (43 tests), found + fixed a real Sharpe/Sortino bug, 370/370 passing
+
+Continuation of the same-day post-roadmap health check, next module on the
+ranked priority list: `risk.py` (position sizing, ATR stops,
+Sharpe/Sortino/VaR/beta — the highest-priority remaining zero-coverage
+module with real decision logic). While writing the flat-price edge-case
+test, found a genuine production bug, not a test-writing mistake: for a
+truly flat/no-volatility position, `sharpe_ratio()`'s `excess.std()`
+computed a tiny non-zero float (~8e-20, confirmed empirically at
+`n=29/30/50/100` rows — but exactly `0.0` at `n=14/252`, an inconsistent
+floating-point artifact of averaging the repeating-binary-fraction
+risk-free-rate constant across many identical rows) instead of exact
+`0.0`. The code's `if std == 0` exact-equality check missed this noise and
+divided by it, blowing the ratio up to roughly ±3.4e16 instead of the
+clearly-intended "0.0, no signal" fallback. The same root cause also hit
+`sortino_ratio()` and a third, structurally-identical inline check inside
+`compute_portfolio_risk_metrics()` (its own portfolio-level sortino calc)
+— confirmed to reproduce there too before fixing. **Fixed** with a new
+module-level `_ZERO_VOL_EPS = 1e-9` tolerance constant (a floating-point
+numerical-stability guard, not an investment-policy threshold — deliberately
+kept in `risk.py`, not `constants.py`) replacing the three exact
+comparisons. Two similar-looking checks elsewhere in the same file —
+`beta_vs_market()`'s `mkt_var == 0` and `compute_portfolio_risk_metrics()`'s
+`std_ret > 0` — were traced and confirmed NOT vulnerable (they guard
+variance of RAW returns, not `returns - a_repeating_fraction`, so a flat
+price gives them an exact `0.0` with no accumulation noise) and were
+deliberately left unchanged. Per CLAUDE.md hard rule #4 (this touches a
+scoring formula): **Opus reviewer: SHIP, 0 blocking** — confirmed the
+epsilon's bounds (~1e11x above the noise floor, ~4+ orders of magnitude
+below any real volatility including an ultra-short treasury ETF), confirmed
+the fix is complete (grepped the whole repo; `risk.py` is the sole compute
+site, everything else only consumes the already-computed value), and
+confirmed the tests pin the fix for the right reason (not a coincidence —
+two of the new tests' fixtures had to be rewritten mid-review after the
+original smooth-exponential-compounding fixtures turned out to have
+genuinely zero return-variance by construction, coincidentally passing
+pre-fix for the wrong reason: a huge blown-up ratio that still happened to
+have the correct sign). **Bonus, unplanned repair:** this fix also corrects
+a downstream symptom in `risk_advisor.py`'s HIGH/MEDIUM Sharpe alert
+ladder — a flat/halted position's garbage ±3.4e16 pre-fix value could land
+in either risk band at random; post-fix it correctly reads `0.0` and lands
+HIGH ("risk not being rewarded"). **New follow-up item flagged by the
+Opus review, not yet actioned:** `risk_advisor.py:256-257` hardcodes the
+Sharpe alert-ladder thresholds (`< 0.8` MEDIUM / `< 0.4` HIGH) inline
+instead of importing from `constants.py` — a genuine CLAUDE.md hard-rule-#1
+concern, pre-existing and out of scope for this commit, noted for a
+separate follow-up.
 
 ### 2026-07-27 — Post-roadmap health check: 3 zero-coverage modules backfilled, 327/327 passing
 

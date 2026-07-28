@@ -3,6 +3,17 @@ import pandas as pd
 from stock_analyzer.indicators import atr as _atr_series
 from stock_analyzer.constants import ATR_STOP_MULT
 
+# A flat/no-volatility excess-return series (returns - a risk-free daily
+# rate derived from a non-terminating binary fraction, e.g. 0.045/252)
+# should have std() == exactly 0.0, but summing/averaging that repeating
+# fraction across many identical rows can leave ~1e-19-scale floating-point
+# noise instead. An exact `== 0` check misses that noise and then divides
+# by it, blowing the ratio up to +/-quadrillions instead of the intended
+# "no volatility -> no signal" 0.0 fallback. Any REAL volatility signal is
+# many orders of magnitude above this floor (daily vol ~1e-3 to 1e-1), so
+# this tolerance can never suppress a genuine result.
+_ZERO_VOL_EPS = 1e-9
+
 
 def _atr_value(df: pd.DataFrame, length: int = 14) -> float:
     s = _atr_series(df["High"], df["Low"], df["Close"], length).dropna()
@@ -66,7 +77,7 @@ def sharpe_ratio(df: pd.DataFrame, risk_free_annual: float = 0.045) -> float:
     rf_daily = risk_free_annual / 252
     excess = returns - rf_daily
     std = excess.std()
-    if std == 0 or np.isnan(std):
+    if abs(std) < _ZERO_VOL_EPS or np.isnan(std):
         return 0.0
     return round(float((excess.mean() / std) * np.sqrt(252)), 2)
 
@@ -80,7 +91,7 @@ def sortino_ratio(df: pd.DataFrame, risk_free_annual: float = 0.045) -> float:
         # No negative excess-return days: strong uptrend — Sortino is excellent, not zero.
         return 99.0 if excess.mean() > 0 else 0.0
     downside_std = downside.std()
-    if downside_std == 0 or np.isnan(downside_std):
+    if abs(downside_std) < _ZERO_VOL_EPS or np.isnan(downside_std):
         return 0.0
     return round(float((excess.mean() / downside_std) * np.sqrt(252)), 2)
 
@@ -261,7 +272,7 @@ def compute_portfolio_risk_metrics(
     downside_std = excess[excess < 0].std()  # downside deviation on excess returns (standard Sortino)
     sortino = (
         round(float((excess.mean() / downside_std) * np.sqrt(252)), 2)
-        if (downside_std and not np.isnan(downside_std) and downside_std > 0)
+        if (downside_std and not np.isnan(downside_std) and downside_std > _ZERO_VOL_EPS)
         else 0.0
     )
 
