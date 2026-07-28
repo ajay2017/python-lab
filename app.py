@@ -23297,15 +23297,26 @@ elif page == "📊 Predictive Analytics":
                         )
 
                 with st.expander("📋 Exact values", expanded=False):
+                    def _et_cell(alpha_key, n_key, pct_key=None):
+                        def _fmt(b):
+                            a, n = b[alpha_key], b[n_key]
+                            if a is None:
+                                return f"— (n={n})"
+                            pct = f", {b[pct_key]:.0%} red" if pct_key and b.get(pct_key) is not None else ""
+                            return f"{a:+.1f}% (n={n}{pct})"
+                        return _fmt
+
+                    _et_day1_fmt  = _et_cell("day1_alpha", "day1_n", "day1_pct_red")
+                    _et_day5_fmt  = _et_cell("day5_alpha", "day5_n", "day5_pct_red")
+                    _et_day20_fmt = _et_cell("day20_alpha", "day20_n")
+
                     _et_raw_rows = [
                         {
-                            "Divergence band":   _et_band_meta[b["band_label"]]["axis"],
-                            "N (deduped)":       b["n"],
-                            "Day+1 alpha":       (f"{b['day1_alpha']:+.1f}%" if b["day1_alpha"] is not None else "—"),
-                            "Day+1 % red":       (f"{b['day1_pct_red']:.0%}" if b["day1_pct_red"] is not None else "—"),
-                            "Day+5 alpha":       (f"{b['day5_alpha']:+.1f}%" if b["day5_alpha"] is not None else "—"),
-                            "Day+5 % red":       (f"{b['day5_pct_red']:.0%}" if b["day5_pct_red"] is not None else "—"),
-                            "Day+20 alpha":      (f"{b['day20_alpha']:+.1f}%" if b["day20_alpha"] is not None else "—"),
+                            "Divergence band": _et_band_meta[b["band_label"]]["axis"],
+                            "N (deduped)":     b["n"],
+                            "Day+1 alpha (n, % red)":  _et_day1_fmt(b),
+                            "Day+5 alpha (n, % red)":  _et_day5_fmt(b),
+                            "Day+20 alpha (n)":        _et_day20_fmt(b),
                         }
                         for b in _et_bands
                     ]
@@ -23313,11 +23324,14 @@ elif page == "📊 Predictive Analytics":
                         _pa_pd.DataFrame(_et_raw_rows), use_container_width=True, hide_index=True,
                     )
                     st.caption(
-                        f"Bands below n={PREDICTIVE_MIN_BAND_N} minimum are still shown "
-                        f"(same convention as the rest of this page, PREDICTIVE_MIN_BAND_N) "
-                        f"— treat as indicative only. Day+1/Day+5 computed as stock return "
-                        f"minus SPY's own Day+1/Day+5 return — never raw %, to avoid "
-                        f"mistaking a broad market move for an entry-timing signal."
+                        f"n shown per horizon — each horizon's own outcome count can differ from "
+                        f"'N (deduped)' (the band's total divergent picks) since a forward-close "
+                        f"fetch can fail for one horizon and not another, and Day+20 only counts "
+                        f"picks old enough to have matured. Bands/horizons below "
+                        f"n={PREDICTIVE_MIN_BAND_N} (`PREDICTIVE_MIN_BAND_N`) are still shown — "
+                        f"treat as indicative only. Day+1/Day+5 computed as stock return minus "
+                        f"SPY's own Day+1/Day+5 return — never raw %, to avoid mistaking a broad "
+                        f"market move for an entry-timing signal."
                     )
 
                 if _et_illustrating is not None:
