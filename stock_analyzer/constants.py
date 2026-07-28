@@ -866,6 +866,30 @@ PREDICTIVE_MIN_BAND_N = 5
 # too many empty bands on a small history). Safe to tune from observation.
 PREDICTIVE_SCORE_BAND_SIZE = 5
 
+# ── Predictive Analytics — Entry Timing (Phase 1, docs/plans/entry-timing-tab.md) ─
+# All three below are PROVISIONAL — fit to a single anecdote (AMD firing as a
+# new_pick 5x in 2 weeks in 2026-07, composite 69-71 vs momentum 94-100, every
+# firing losing ~9-11% / alpha -7pp to -10pp vs SPY), not yet fit to the real
+# divergence-band distribution. Re-check against production data before
+# treating as tuned. Diagnostic-only measurement knobs — this tab never feeds
+# back into the composite score or the 5-gate new-position pipeline.
+
+# Calendar days a same-ticker new_pick re-firing must fall within a prior kept
+# firing to be treated as the same opportunity (collapsed), not a new one —
+# the daily scanner re-evaluating the whole universe re-fires unbought names
+# repeatedly; that's correct engine behavior, not N independent data points.
+ENTRY_TIMING_DEDUP_WINDOW_DAYS = 5
+
+# Divergence = momentum_score - composite_score at the moment a new_pick fires.
+# Upper bound (inclusive) of the "Aligned" band — momentum roughly tracks the
+# composite consensus.
+ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX = 15
+
+# Upper bound (inclusive) of the "Diverging" band — above this is "Extreme"
+# (momentum running far ahead of a barely-qualifying composite, the AMD
+# pattern this tab was built to surface).
+ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX = 25
+
 # ── My Edge — Decision Quality grading (measurement policy, NOT investment gates) ─
 # Grade thresholds define how the retrospective decision-quality grades are
 # assigned per calendar month. Aligned with Portfolio Health grade bands so

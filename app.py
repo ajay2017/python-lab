@@ -2282,6 +2282,18 @@ def _cached_tlt(period: str = "3mo"):
     return fetch_tlt(period)
 
 
+# Per-ticker forward close for an arbitrary historical date range — Predictive
+# Analytics' Entry Timing tab needs a Day+1/Day+5 close for every divergent
+# pick, which (unlike SPY above) isn't in any dataset already loaded. Cached
+# so opening the tab twice in a session, or two picks sharing a date range,
+# don't re-hit the provider chain. See stock_analyzer.predictive_analytics
+# .forward_alpha_at_horizon, which takes this in as its historical_close_fn.
+@st.cache_data(ttl=1800)
+def _cached_historical_close(ticker: str, start, end):
+    from stock_analyzer.providers.orchestrator import get_historical_close
+    return get_historical_close(ticker, start, end)
+
+
 # VIX latest close (cached) — fear gauge for the risk-off de-risk regime check.
 # One download/day class of call; ttl matches the SPY/RFR window. Returns None on
 # any provider failure so the de-risk overlay degrades to the trend leg alone.
@@ -22310,9 +22322,9 @@ elif page == "📊 Predictive Analytics":
     st.title("📊 Predictive Analytics")
     st.caption(
         "Your personal edge map — built from every recommendation this app has "
-        "surfaced and how each played out. Five live lenses: "
+        "surfaced and how each played out. Six live lenses: "
         "score calibration, decision quality, signal type breakdown, sector alpha, "
-        "and sentiment alignment."
+        "sentiment alignment, and entry timing."
     )
 
     if not db.has_db():
@@ -22340,11 +22352,18 @@ elif page == "📊 Predictive Analytics":
         by_sector_alpha,
         calibration_by_verdict,
         sentiment_alignment_summary,
+        dedupe_repeated_tickers,
+        divergence_at_entry,
+        forward_alpha_at_horizon,
+        by_divergence_band,
     )
     from stock_analyzer.constants import (
         REC_SCORE_MIN_DAYS,
         PREDICTIVE_MIN_BAND_N,
         PREDICTIVE_SCORE_BAND_SIZE,
+        ENTRY_TIMING_DEDUP_WINDOW_DAYS,
+        ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX,
+        ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
     )
     import pandas as _pa_pd
 
@@ -22353,6 +22372,28 @@ elif page == "📊 Predictive Analytics":
     with _pac_refresh_col:
         if st.button("🔄 Refresh data", key="_pac_refresh"):
             st.session_state.pop("_pac_enriched", None)
+            st.session_state.pop("_entry_timing_cache", None)
+
+    # Built on every run (not just the cache-miss branch below) — the Entry
+    # Timing tab's forward-alpha calc needs this SPY dict regardless of
+    # whether _pac_enriched was just (re)computed or served from cache.
+    # _cached_spy is itself @st.cache_data-wrapped, so this is a cache hit
+    # (cheap) on every run after the first.
+    _pac_spy_by_date: dict = {}
+    try:
+        _pac_spy_hist = _cached_spy("1y")
+        if _pac_spy_hist is not None and not _pac_spy_hist.empty \
+                and "Close" in _pac_spy_hist.columns:
+            for _si, _sr in _pac_spy_hist.iterrows():
+                _sd2 = _si.date() if hasattr(_si, "date") else None
+                try:
+                    _sc2 = float(_sr["Close"])
+                except (TypeError, ValueError):
+                    _sc2 = None
+                if _sd2 is not None and _sc2 and _sc2 > 0:
+                    _pac_spy_by_date[_sd2] = _sc2
+    except Exception:
+        _pac_spy_by_date = {}
 
     if st.session_state.get("_pac_enriched") is None:
         with st.spinner("Loading all-time recommendations and pricing data — this may take a moment…"):
@@ -22384,22 +22425,6 @@ elif page == "📊 Predictive Analytics":
                 }
             except Exception:
                 _pac_prices = {}
-
-        _pac_spy_by_date: dict = {}
-        try:
-            _pac_spy_hist = _cached_spy("1y")
-            if _pac_spy_hist is not None and not _pac_spy_hist.empty \
-                    and "Close" in _pac_spy_hist.columns:
-                for _si, _sr in _pac_spy_hist.iterrows():
-                    _sd2 = _si.date() if hasattr(_si, "date") else None
-                    try:
-                        _sc2 = float(_sr["Close"])
-                    except (TypeError, ValueError):
-                        _sc2 = None
-                    if _sd2 is not None and _sc2 and _sc2 > 0:
-                        _pac_spy_by_date[_sd2] = _sc2
-        except Exception:
-            _pac_spy_by_date = {}
 
         _pac_matched  = match_recs_to_trades(_pac_recs_df, _pac_trades_df)
         _pac_enriched = compute_outcomes(
@@ -22483,11 +22508,24 @@ elif page == "📊 Predictive Analytics":
     _pac_by_verdict = calibration_by_verdict(_pac_enriched, min_n=0)
     _pac_sent_align = sentiment_alignment_summary(_pac_by_verdict, min_n=PREDICTIVE_MIN_BAND_N)
 
+    # Entry Timing bands — only present once the user has opened the tab and
+    # clicked "Analyze" at least once this session (heavy per-ticker forward
+    # price fetch, so it's opt-in rather than computed on every page load).
+    _et_cache_for_directive = st.session_state.get("_entry_timing_cache")
+    _pac_entry_timing_bands = (
+        by_divergence_band(
+            _et_cache_for_directive,
+            aligned_max=ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX,
+            diverging_max=ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
+        ) if _et_cache_for_directive is not None else None
+    )
+
     # ── Synthesis — "What This Means For You" ──────────────────────────────────
     _pac_directives = synthesize_directives(
         _pac_bands, _pac_thresh, _pac_avm, _pac_conv, _pac_rtype, _pac_sec_alph,
         _pac_n_graded, min_n=PREDICTIVE_MIN_BAND_N,
         sentiment_alignment=_pac_sent_align,
+        entry_timing_bands=_pac_entry_timing_bands,
     )
     st.divider()
     st.markdown("### 📋 What This Means For You")
@@ -22506,13 +22544,14 @@ elif page == "📊 Predictive Analytics":
             st.caption(f"ℹ️ {_pd['text']}")
     st.divider()
 
-    # ── 4 live tabs ─────────────────────────────────────────────────────────────
-    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5 = st.tabs([
+    # ── 6 live tabs ─────────────────────────────────────────────────────────────
+    _pa_tab1, _pa_tab2, _pa_tab3, _pa_tab4, _pa_tab5, _pa_tab6 = st.tabs([
         "🎯 Score Calibration",
         "⚖️ Decision Quality",
         "🏷️ Signal Breakdown",
         "🌐 Sector Alpha",
         "🧭 Sentiment Alignment",
+        "⏱️ Entry Timing",
     ])
 
     # ── TAB 1 — Score Calibration ─────────────────────────────────────────────
@@ -23065,6 +23104,164 @@ elif page == "📊 Predictive Analytics":
                 )
             else:
                 st.info("No graded outcomes yet.")
+
+    # ── TAB 6 — Entry Timing ───────────────────────────────────────────────────
+    with _pa_tab6:
+        st.caption(
+            "Does technical momentum running far ahead of the composite consensus at "
+            "the moment a New Position pick fires predict a rough first few days — "
+            "even when the pick is right over its real weeks-to-months horizon? "
+            "'Divergence' = momentum score minus composite score at the moment the "
+            "rec fired."
+        )
+        st.info(
+            "🔬 **Diagnostic only.** This tab never changes what the engine "
+            "recommends or gates — it's a lens on entry-day technical conditions, "
+            "separate from every other tab on this page."
+        )
+
+        if st.button("🔍 Analyze Entry Timing", key="_et_load_btn"):
+            with st.spinner(
+                "Fetching forward prices for each divergent pick — this may take a moment…"
+            ):
+                _et_new_picks = [r for r in _pac_enriched if r.get("rec_type") == "new_pick"]
+                _et_deduped = dedupe_repeated_tickers(
+                    _et_new_picks,
+                    window_days=ENTRY_TIMING_DEDUP_WINDOW_DAYS,
+                    rec_types=("new_pick",),
+                )
+                _et_rows = []
+                for _et_r in _et_deduped:
+                    _et_rec = dict(_et_r)
+                    _et_rec["divergence"] = divergence_at_entry(_et_rec)
+                    if _et_rec["divergence"] is not None and _et_rec["divergence"] > 0:
+                        _et_entry_price = _et_rec.get("price_at_surface")
+                        _et_rec["day1_alpha"] = forward_alpha_at_horizon(
+                            _et_rec["ticker"], _et_rec["rec_date"], _et_entry_price, 1,
+                            _pac_spy_by_date, historical_close_fn=_cached_historical_close,
+                        )
+                        _et_rec["day5_alpha"] = forward_alpha_at_horizon(
+                            _et_rec["ticker"], _et_rec["rec_date"], _et_entry_price, 5,
+                            _pac_spy_by_date, historical_close_fn=_cached_historical_close,
+                        )
+                    else:
+                        _et_rec["day1_alpha"] = None
+                        _et_rec["day5_alpha"] = None
+                    _et_rows.append(_et_rec)
+                st.session_state["_entry_timing_cache"] = _et_rows
+                st.rerun()
+
+        _et_cache = st.session_state.get("_entry_timing_cache")
+
+        if _et_cache is None:
+            st.info(
+                "Click **Analyze Entry Timing** to fetch forward prices for every "
+                "divergent New Position pick in your history. This does a live "
+                "per-ticker price fetch, so it runs on demand rather than on every "
+                "page load."
+            )
+        else:
+            _et_bands = by_divergence_band(
+                _et_cache,
+                aligned_max=ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX,
+                diverging_max=ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
+            )
+            if not _et_bands:
+                st.info(
+                    "No New Position picks with positive divergence (momentum ahead "
+                    "of composite) found in your history yet."
+                )
+            else:
+                st.subheader("Avg Alpha by Divergence Band and Horizon")
+                st.caption(
+                    "Height = average alpha (return minus SPY over the same window). "
+                    f"Bands with fewer than {PREDICTIVE_MIN_BAND_N} outcomes at a given "
+                    "horizon are indicative only — check the n in the hover/table below."
+                )
+                _et_horizons = [
+                    ("Day+1",  "day1_alpha",  "day1_n",  "#ff4444"),
+                    ("Day+5",  "day5_alpha",  "day5_n",  "#ffbb33"),
+                    ("Day+20", "day20_alpha", "day20_n", "#00C851"),
+                ]
+                _et_fig = go.Figure()
+                for _h_label, _h_alpha_key, _h_n_key, _h_color in _et_horizons:
+                    _et_fig.add_trace(go.Bar(
+                        name=_h_label,
+                        x=[b["band_label"] for b in _et_bands],
+                        y=[b[_h_alpha_key] if b[_h_alpha_key] is not None else 0 for b in _et_bands],
+                        marker_color=_h_color,
+                        customdata=[[b[_h_n_key]] for b in _et_bands],
+                        hovertemplate=(
+                            "<b>%{x}</b><br>" + _h_label + " avg alpha: %{y:+.2f}pp<br>"
+                            "n: %{customdata[0]}<extra></extra>"
+                        ),
+                    ))
+                _et_fig.add_hline(
+                    y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
+                )
+                _et_fig.update_layout(
+                    template="plotly_dark", height=340, barmode="group",
+                    yaxis_title="Avg Alpha vs SPY (pp)",
+                    xaxis_title="Divergence Band (momentum − composite at entry)",
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(_et_fig, use_container_width=True)
+
+                _et_cols = st.columns(len(_et_bands))
+                for _et_col, _et_b in zip(_et_cols, _et_bands):
+                    with _et_col:
+                        st.markdown(f"#### {_et_b['band_label']}")
+                        if (_et_b["day1_n"] >= PREDICTIVE_MIN_BAND_N
+                                and _et_b["day1_pct_red"] is not None):
+                            st.metric(
+                                "Chance of a red Day+1",
+                                f"{_et_b['day1_pct_red']:.0%}",
+                                help=f"Based on {_et_b['day1_n']} divergent picks.",
+                            )
+                        else:
+                            st.caption(f"Day+1: not enough data yet ({_et_b['day1_n']} picks)")
+                        if (_et_b["day20_n"] >= PREDICTIVE_MIN_BAND_N
+                                and _et_b["day20_alpha"] is not None):
+                            st.caption(
+                                f"Day+20 avg alpha: {_et_b['day20_alpha']:+.1f}pp "
+                                f"({_et_b['day20_n']} outcomes)"
+                            )
+                        else:
+                            st.caption(f"Day+20: not enough data yet ({_et_b['day20_n']} outcomes)")
+
+                with st.expander("📋 Exact values", expanded=False):
+                    _et_raw_rows = [
+                        {
+                            "Band":              b["band_label"],
+                            "Day+1 n":           b["day1_n"],
+                            "Day+1 avg α (pp)":  (f"{b['day1_alpha']:+.1f}" if b["day1_alpha"] is not None else "—"),
+                            "Day+1 % red":       (f"{b['day1_pct_red']:.0%}" if b["day1_pct_red"] is not None else "—"),
+                            "Day+5 n":           b["day5_n"],
+                            "Day+5 avg α (pp)":  (f"{b['day5_alpha']:+.1f}" if b["day5_alpha"] is not None else "—"),
+                            "Day+5 % red":       (f"{b['day5_pct_red']:.0%}" if b["day5_pct_red"] is not None else "—"),
+                            "Day+20 n":          b["day20_n"],
+                            "Day+20 avg α (pp)": (f"{b['day20_alpha']:+.1f}" if b["day20_alpha"] is not None else "—"),
+                        }
+                        for b in _et_bands
+                    ]
+                    st.dataframe(
+                        _pa_pd.DataFrame(_et_raw_rows), use_container_width=True, hide_index=True,
+                    )
+
+                st.caption(
+                    f"Deduped: same-ticker New Position re-firings within "
+                    f"{ENTRY_TIMING_DEDUP_WINDOW_DAYS} calendar days of a prior kept firing "
+                    f"are collapsed to their first occurrence (one opportunity, not N). "
+                    f"Bands — Aligned: divergence ≤ {ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX}. "
+                    f"Diverging: {ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX}–"
+                    f"{ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX}. "
+                    f"Extreme: > {ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX}. "
+                    f"Only positive divergence (momentum ahead of composite) is in scope."
+                )
+                if st.button("🔄 Refresh Entry Timing data", key="_et_refresh_btn"):
+                    st.session_state.pop("_entry_timing_cache", None)
+                    st.rerun()
 
     # ── Alpha Attribution — activates after 180 days of snapshots ───────────
     with st.expander("📊 Alpha Attribution — activates after 180 days of snapshots", expanded=False):
@@ -25259,7 +25456,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
-- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Five live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, and Sentiment Alignment — plus a synthesis panel that turns the data into 2–5 actionable directives. Awareness only; never gates.
+- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.

@@ -8,7 +8,8 @@ Called lazily from the "📊 Predictive Analytics" page in app.py.
 """
 from __future__ import annotations
 
-from typing import Any
+from datetime import date, timedelta
+from typing import Any, Callable
 
 
 # ── Signal Calibration ─────────────────────────────────────────────────────────
@@ -317,6 +318,7 @@ def synthesize_directives(
     n_graded: int,
     min_n: int = 5,
     sentiment_alignment=None,
+    entry_timing_bands: list[dict] | None = None,
 ) -> list[dict]:
     """
     Synthesize 2–5 ranked directives from all model outputs.
@@ -513,6 +515,29 @@ def synthesize_directives(
                 "source_tab": "🧭 Sentiment Alignment",
             })
 
+    # Entry Timing directive (Phase 1) — caution only, never action; gated on
+    # the top (Extreme) divergence band clearing min_n so a 1-2-pick anecdote
+    # isn't narrated as a pattern. This never feeds back into the composite
+    # score or the 5-gate pipeline — awareness only.
+    if entry_timing_bands:
+        _et_extreme = next(
+            (b for b in entry_timing_bands if b.get("band_label") == "Extreme"), None
+        )
+        if (_et_extreme and _et_extreme.get("day1_n", 0) >= min_n
+                and _et_extreme.get("day1_pct_red") is not None):
+            directives.append({
+                "type": "caution",
+                "text": (
+                    f"New Position picks where momentum ran far ahead of the composite "
+                    f"score (Extreme divergence) have opened red on Day+1 "
+                    f"{_et_extreme['day1_pct_red']:.0%} of the time in your history — "
+                    f"though the effect has tended to fade by the time the outcome matures. "
+                    f"Worth a second look before sizing up on a hot-momentum, "
+                    f"barely-qualifying pick."
+                ),
+                "source_tab": "⏱️ Entry Timing",
+            })
+
     _order = {"action": 0, "caution": 1, "watch": 2, "context": 3}
     directives.sort(key=lambda d: _order.get(d["type"], 99))
     return directives
@@ -679,3 +704,237 @@ def by_sector_alpha(enriched: list[dict], min_n: int = 3) -> list[dict]:
         })
     rows.sort(key=lambda x: (x["avg_alpha"] or -999), reverse=True)
     return [r for r in rows if r["n"] >= min_n]
+
+
+# ── Entry Timing (Tab 6) ────────────────────────────────────────────────────
+# Diagnostic only — see docs/plans/entry-timing-tab.md. Never feeds back into
+# the composite score or the 5-gate new-position pipeline.
+
+def dedupe_repeated_tickers(
+    enriched: list[dict],
+    window_days: int = 5,
+    rec_types: tuple = ("new_pick",),
+) -> list[dict]:
+    """
+    Collapse same-ticker firings of `rec_types` that recur within a rolling
+    `window_days` calendar-day window into a single kept row — the daily
+    scanner re-firing an unbought name (e.g. AMD 5x in 2 weeks) is the same
+    opportunity measured repeatedly, not N independent data points.
+
+    For each ticker, sort its scoped firings by rec_date. Walk them in order;
+    a firing is DROPPED (collapsed into the current cluster) if it falls
+    within `window_days` of the last KEPT firing's rec_date, otherwise it is
+    KEPT and becomes the new cluster anchor. This keeps the FIRST firing of
+    each cluster (the moment the pattern first appeared).
+
+    Rows outside `rec_types` pass through untouched. Rows with no rec_date
+    can't be clustered and are kept as-is.
+    """
+    scoped = [r for r in enriched if r.get("rec_type") in rec_types]
+    other  = [r for r in enriched if r.get("rec_type") not in rec_types]
+
+    by_ticker: dict[str, list[dict]] = {}
+    for r in scoped:
+        by_ticker.setdefault(r.get("ticker"), []).append(r)
+
+    kept: list[dict] = []
+    for _ticker, rows in by_ticker.items():
+        dated   = sorted((r for r in rows if r.get("rec_date") is not None),
+                         key=lambda r: r["rec_date"])
+        undated = [r for r in rows if r.get("rec_date") is None]
+        kept.extend(undated)
+
+        last_kept_date = None
+        for r in dated:
+            if last_kept_date is None or (r["rec_date"] - last_kept_date).days > window_days:
+                kept.append(r)
+                last_kept_date = r["rec_date"]
+            # else: within window_days of the cluster anchor — collapsed, dropped.
+
+    return kept + other
+
+
+def divergence_at_entry(rec: dict) -> float | None:
+    """
+    momentum_score minus composite_score at the moment a rec fired — how far
+    technical momentum ran ahead of the overall composite consensus.
+
+    Only positive divergence (momentum outrunning composite) is meaningful
+    for the "hot momentum, thin composite → rough first few days" question
+    this tab answers. Negative divergence (composite > momentum) is a
+    different question (early/unconfirmed setup vs. value trap) and is
+    filtered out downstream by `by_divergence_band`, not here — this function
+    just computes the raw gap.
+    """
+    m, c = rec.get("momentum_score"), rec.get("composite_score")
+    if m is None or c is None:
+        return None
+    try:
+        return float(m) - float(c)
+    except (TypeError, ValueError):
+        return None
+
+
+def _advance_trading_days(start_d: date, n: int) -> date:
+    """Return the NYSE trading day that is `n` sessions after `start_d`.
+
+    Reimplements data.is_trading_day's weekday+holiday check locally (reading
+    constants.NYSE_HOLIDAYS directly) rather than importing stock_analyzer.data
+    — that module pulls in the full providers/db import chain (a hard
+    streamlit dependency), which this module's docstring promises to stay
+    free of. Early-close half-days are still trading days, same as
+    data.is_trading_day.
+    """
+    from stock_analyzer.constants import NYSE_HOLIDAYS
+    d = start_d
+    count = 0
+    while count < n:
+        d = d + timedelta(days=1)
+        if d.weekday() < 5 and d.isoformat() not in NYSE_HOLIDAYS:
+            count += 1
+    return d
+
+
+def forward_alpha_at_horizon(
+    ticker: str,
+    rec_date: date,
+    price_at_entry: float | None,
+    horizon_trading_days: int,
+    spy_close_by_date: dict | None,
+    historical_close_fn: Callable[[str, date, date], float | None] | None = None,
+) -> float | None:
+    """
+    Alpha (stock return minus SPY return) from `rec_date` to `rec_date` +
+    `horizon_trading_days` NYSE trading sessions.
+
+    Needs the stock's forward close, which — unlike the SPY leg — isn't in
+    any dataset this app already loads, so this makes a live fetch via
+    `historical_close_fn(ticker, start, end)`: first close on/after `start`
+    within `[start, end]`, same shape as
+    `providers.orchestrator.get_historical_close` /
+    `analyst_intel.fetch_anchor_price`. Defaults to that orchestrator
+    function directly (lazy-imported to avoid a module-load-time provider
+    dependency), but callers with a caching layer (e.g. app.py's
+    `_cached_historical_close`, mirroring `_cached_spy`) should inject it here
+    so a page load doesn't re-fetch the same ticker/date per row.
+
+    Returns None when price_at_entry is missing/non-positive, the forward
+    close can't be found (delisted, no data, transport failure), or the SPY
+    benchmark series doesn't cover the window — never raises.
+    """
+    if not ticker or rec_date is None or not price_at_entry or price_at_entry <= 0:
+        return None
+
+    if historical_close_fn is None:
+        from stock_analyzer.providers.orchestrator import get_historical_close
+        historical_close_fn = get_historical_close
+
+    target_date = _advance_trading_days(rec_date, horizon_trading_days)
+    try:
+        price_fwd = historical_close_fn(ticker, target_date, target_date + timedelta(days=7))
+    except Exception:
+        return None
+    if price_fwd is None:
+        return None
+    try:
+        price_fwd = float(price_fwd)
+    except (TypeError, ValueError):
+        return None
+    if price_fwd != price_fwd or price_fwd <= 0:   # NaN guard
+        return None
+
+    stock_ret = (price_fwd - price_at_entry) / price_at_entry * 100.0
+
+    from stock_analyzer.recommendations_history import _spy_return_pct
+    spy_ret = _spy_return_pct(spy_close_by_date, rec_date, target_date)
+    if spy_ret is None:
+        return None
+    return round(stock_ret - spy_ret, 2)
+
+
+def by_divergence_band(
+    rows: list[dict],
+    aligned_max: float,
+    diverging_max: float,
+) -> list[dict]:
+    """
+    Group deduped new_pick rows into three positive-divergence bands and
+    report Day+1 / Day+5 / Day+20 alpha per band.
+
+    Each input row is expected to already carry:
+      - `divergence`   (from `divergence_at_entry`) — rows with divergence
+        <= 0 or None are excluded; only momentum-ahead-of-composite is in
+        scope for this analysis.
+      - `day1_alpha` / `day5_alpha` (from `forward_alpha_at_horizon`, may be
+        None where the forward fetch failed).
+      - `alpha_pct` / `outcome_maturing` (already on every row from
+        `compute_outcomes`) — reused as the Day+20/mature-outcome leg.
+
+    Bands (using the ENTRY_TIMING_DIVERGENCE_* constants as aligned_max /
+    diverging_max):
+      Aligned    — divergence <= aligned_max
+      Diverging  — aligned_max < divergence <= diverging_max
+      Extreme    — divergence > diverging_max
+
+    Returns a list of band dicts, Aligned → Diverging → Extreme, each with:
+      band_label, n (rows with any horizon data),
+      day1_alpha, day1_pct_red, day1_n,
+      day5_alpha, day5_pct_red, day5_n,
+      day20_alpha, p_positive_alpha, day20_n
+    Per-horizon stats are None until that horizon has >= 1 data point; the
+    caller is responsible for greying out any horizon whose *_n falls below
+    PREDICTIVE_MIN_BAND_N (same convention as calibration_by_score_band,
+    which also returns thin bands rather than dropping them).
+    """
+    def _band_for(div: float) -> str:
+        if div <= aligned_max:
+            return "Aligned"
+        if div <= diverging_max:
+            return "Diverging"
+        return "Extreme"
+
+    order = ["Aligned", "Diverging", "Extreme"]
+    buckets: dict[str, dict] = {label: {"_n": 0, "_day1": [], "_day5": [], "_day20": []}
+                                 for label in order}
+
+    for r in rows:
+        div = r.get("divergence")
+        if div is None or div <= 0:
+            continue
+        b = buckets[_band_for(div)]
+        b["_n"] += 1
+        if r.get("day1_alpha") is not None:
+            b["_day1"].append(float(r["day1_alpha"]))
+        if r.get("day5_alpha") is not None:
+            b["_day5"].append(float(r["day5_alpha"]))
+        if not r.get("outcome_maturing") and r.get("alpha_pct") is not None:
+            b["_day20"].append(float(r["alpha_pct"]))
+
+    def _stats(vals: list[float]) -> dict:
+        n = len(vals)
+        return {
+            "n":       n,
+            "avg":     round(sum(vals) / n, 2) if n else None,
+            "pct_red": round(sum(1 for v in vals if v < 0) / n, 3) if n else None,
+        }
+
+    out: list[dict] = []
+    for label in order:
+        b = buckets[label]
+        if b["_n"] == 0:
+            continue
+        d1, d5, d20 = _stats(b["_day1"]), _stats(b["_day5"]), _stats(b["_day20"])
+        out.append({
+            "band_label":       label,
+            "n":                b["_n"],
+            "day1_alpha":       d1["avg"],
+            "day1_pct_red":     d1["pct_red"],
+            "day1_n":           d1["n"],
+            "day5_alpha":       d5["avg"],
+            "day5_pct_red":     d5["pct_red"],
+            "day5_n":           d5["n"],
+            "day20_alpha":      d20["avg"],
+            "p_positive_alpha": (round(1 - d20["pct_red"], 3) if d20["pct_red"] is not None else None),
+            "day20_n":          d20["n"],
+        })
+    return out
