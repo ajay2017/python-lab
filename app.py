@@ -22356,6 +22356,8 @@ elif page == "📊 Predictive Analytics":
         divergence_at_entry,
         forward_alpha_at_horizon,
         by_divergence_band,
+        find_illustrating_case,
+        band_narrative,
     )
     from stock_analyzer.constants import (
         REC_SCORE_MIN_DAYS,
@@ -23172,91 +23174,182 @@ elif page == "📊 Predictive Analytics":
                     "of composite) found in your history yet."
                 )
             else:
+                # Same repeated-ticker case that motivated this tab (AMD, in the
+                # design doc) — but computed live off the CURRENT data, un-deduped,
+                # so the callout below never cites a fixed historical example.
+                _et_new_picks_raw = [r for r in _pac_enriched if r.get("rec_type") == "new_pick"]
+                _et_illustrating = find_illustrating_case(
+                    _et_new_picks_raw, diverging_max=ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
+                )
+
+                _et_band_meta = {
+                    "Aligned": {
+                        "axis": f"< {ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX} (aligned)",
+                        "border": "#00C851",
+                    },
+                    "Diverging": {
+                        "axis": (
+                            f"{ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX} – "
+                            f"{ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX} (diverging)"
+                        ),
+                        "border": "#ffbb33",
+                    },
+                    "Extreme": {
+                        "axis": f"{ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX}+ (momentum outrunning composite)",
+                        "border": "#ff4444",
+                    },
+                }
+                _ET_POS, _ET_NEG = "#00C851", "#ff4444"
+
                 st.subheader("Avg Alpha by Divergence Band and Horizon")
                 st.caption(
-                    "Height = average alpha (return minus SPY over the same window). "
-                    f"Bands with fewer than {PREDICTIVE_MIN_BAND_N} outcomes at a given "
-                    "horizon are indicative only — check the n in the hover/table below."
+                    "Bars, left→right per band: Day+1 · Day+5 · Day+20. Green = positive "
+                    "alpha, red = negative. Bands with fewer than "
+                    f"{PREDICTIVE_MIN_BAND_N} outcomes at a given horizon are indicative "
+                    "only — check the n in the hover/table below."
                 )
-                _et_horizons = [
-                    ("Day+1",  "day1_alpha",  "day1_n",  "#ff4444"),
-                    ("Day+5",  "day5_alpha",  "day5_n",  "#ffbb33"),
-                    ("Day+20", "day20_alpha", "day20_n", "#00C851"),
-                ]
-                _et_fig = go.Figure()
-                for _h_label, _h_alpha_key, _h_n_key, _h_color in _et_horizons:
-                    _et_fig.add_trace(go.Bar(
-                        name=_h_label,
-                        x=[b["band_label"] for b in _et_bands],
-                        y=[b[_h_alpha_key] if b[_h_alpha_key] is not None else 0 for b in _et_bands],
-                        marker_color=_h_color,
-                        customdata=[[b[_h_n_key]] for b in _et_bands],
-                        hovertemplate=(
-                            "<b>%{x}</b><br>" + _h_label + " avg alpha: %{y:+.2f}pp<br>"
-                            "n: %{customdata[0]}<extra></extra>"
-                        ),
-                    ))
-                _et_fig.add_hline(
-                    y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
-                )
-                _et_fig.update_layout(
-                    template="plotly_dark", height=340, barmode="group",
-                    yaxis_title="Avg Alpha vs SPY (pp)",
-                    xaxis_title="Divergence Band (momentum − composite at entry)",
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                )
-                st.plotly_chart(_et_fig, use_container_width=True)
 
-                _et_cols = st.columns(len(_et_bands))
-                for _et_col, _et_b in zip(_et_cols, _et_bands):
-                    with _et_col:
-                        st.markdown(f"#### {_et_b['band_label']}")
+                _et_chart_col, _et_cards_col = st.columns([3, 2])
+
+                with _et_chart_col:
+                    _et_horizons = [
+                        ("Day+1", "day1_alpha", "day1_n"),
+                        ("Day+5", "day5_alpha", "day5_n"),
+                        ("Day+20", "day20_alpha", "day20_n"),
+                    ]
+                    _et_x = [
+                        f"{_et_band_meta[b['band_label']]['axis']}<br>n={b['n']}"
+                        for b in _et_bands
+                    ]
+                    _et_fig = go.Figure()
+                    for _h_label, _h_alpha_key, _h_n_key in _et_horizons:
+                        _h_vals = [b[_h_alpha_key] for b in _et_bands]
+                        _et_fig.add_trace(go.Bar(
+                            name=_h_label,
+                            x=_et_x,
+                            y=_h_vals,
+                            marker_color=[
+                                (_ET_POS if (v or 0) >= 0 else _ET_NEG) for v in _h_vals
+                            ],
+                            text=[f"{v:+.1f}%" if v is not None else "—" for v in _h_vals],
+                            textposition="outside",
+                            showlegend=False,
+                            customdata=[[b[_h_n_key]] for b in _et_bands],
+                            hovertemplate=(
+                                "<b>%{x}</b><br>" + _h_label + " avg alpha: %{y:+.2f}pp<br>"
+                                "n: %{customdata[0]}<extra></extra>"
+                            ),
+                        ))
+                    # Dummy legend-only traces — real traces are colored by SIGN, not
+                    # by horizon, so the legend explains sign, not the 3 bars per group.
+                    _et_fig.add_trace(go.Bar(
+                        x=[None], y=[None], marker_color=_ET_POS, name="positive alpha",
+                    ))
+                    _et_fig.add_trace(go.Bar(
+                        x=[None], y=[None], marker_color=_ET_NEG, name="negative alpha",
+                    ))
+                    _et_fig.add_hline(
+                        y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)", line_width=1
+                    )
+                    _et_fig.update_layout(
+                        template="plotly_dark", height=420, barmode="group",
+                        yaxis_title="Avg Alpha vs SPY (pp)", xaxis_title=None,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    st.plotly_chart(_et_fig, use_container_width=True)
+
+                with _et_cards_col:
+                    for _et_b in _et_bands:
+                        _et_meta = _et_band_meta[_et_b["band_label"]]
+                        _et_illust_tk = (
+                            _et_illustrating["ticker"]
+                            if (_et_illustrating and _et_b["band_label"] == "Extreme")
+                            else None
+                        )
                         if (_et_b["day1_n"] >= PREDICTIVE_MIN_BAND_N
                                 and _et_b["day1_pct_red"] is not None):
-                            st.metric(
-                                "Chance of a red Day+1",
-                                f"{_et_b['day1_pct_red']:.0%}",
-                                help=f"Based on {_et_b['day1_n']} divergent picks.",
+                            _et_headline = (
+                                f"<div style='font-size:1.6rem;font-weight:700;"
+                                f"color:{_et_meta['border']}'>{_et_b['day1_pct_red']:.0%}</div>"
+                                f"<div style='color:#9ca3af;font-size:0.72rem;"
+                                f"text-transform:uppercase;letter-spacing:0.04em'>"
+                                f"chance of a red Day+1</div>"
                             )
                         else:
-                            st.caption(f"Day+1: not enough data yet ({_et_b['day1_n']} picks)")
-                        if (_et_b["day20_n"] >= PREDICTIVE_MIN_BAND_N
-                                and _et_b["day20_alpha"] is not None):
-                            st.caption(
-                                f"Day+20 avg alpha: {_et_b['day20_alpha']:+.1f}pp "
-                                f"({_et_b['day20_n']} outcomes)"
+                            _et_headline = (
+                                f"<div style='color:#9ca3af;font-size:0.85rem'>"
+                                f"Not enough data yet ({_et_b['day1_n']} picks)</div>"
                             )
-                        else:
-                            st.caption(f"Day+20: not enough data yet ({_et_b['day20_n']} outcomes)")
+                        _et_narr = band_narrative(_et_b, illustrating_ticker=_et_illust_tk)
+                        st.markdown(
+                            f"<div style='background:#15161a;border:1px solid "
+                            f"rgba(255,255,255,0.10);border-left:4px solid "
+                            f"{_et_meta['border']};border-radius:10px;padding:14px 16px;"
+                            f"margin-bottom:14px'>"
+                            f"<div style='color:#f9fafb;font-weight:600;font-size:0.85rem;"
+                            f"margin-bottom:8px'>{_et_meta['axis']} · n={_et_b['n']}</div>"
+                            f"{_et_headline}"
+                            f"<div style='color:#c3c2b7;font-size:0.82rem;line-height:1.45;"
+                            f"margin-top:8px'>{_et_narr}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with st.expander("📋 Exact values", expanded=False):
                     _et_raw_rows = [
                         {
-                            "Band":              b["band_label"],
-                            "Day+1 n":           b["day1_n"],
-                            "Day+1 avg α (pp)":  (f"{b['day1_alpha']:+.1f}" if b["day1_alpha"] is not None else "—"),
+                            "Divergence band":   _et_band_meta[b["band_label"]]["axis"],
+                            "N (deduped)":       b["n"],
+                            "Day+1 alpha":       (f"{b['day1_alpha']:+.1f}%" if b["day1_alpha"] is not None else "—"),
                             "Day+1 % red":       (f"{b['day1_pct_red']:.0%}" if b["day1_pct_red"] is not None else "—"),
-                            "Day+5 n":           b["day5_n"],
-                            "Day+5 avg α (pp)":  (f"{b['day5_alpha']:+.1f}" if b["day5_alpha"] is not None else "—"),
+                            "Day+5 alpha":       (f"{b['day5_alpha']:+.1f}%" if b["day5_alpha"] is not None else "—"),
                             "Day+5 % red":       (f"{b['day5_pct_red']:.0%}" if b["day5_pct_red"] is not None else "—"),
-                            "Day+20 n":          b["day20_n"],
-                            "Day+20 avg α (pp)": (f"{b['day20_alpha']:+.1f}" if b["day20_alpha"] is not None else "—"),
+                            "Day+20 alpha":      (f"{b['day20_alpha']:+.1f}%" if b["day20_alpha"] is not None else "—"),
                         }
                         for b in _et_bands
                     ]
                     st.dataframe(
                         _pa_pd.DataFrame(_et_raw_rows), use_container_width=True, hide_index=True,
                     )
+                    st.caption(
+                        f"Bands below n={PREDICTIVE_MIN_BAND_N} minimum are still shown "
+                        f"(same convention as the rest of this page, PREDICTIVE_MIN_BAND_N) "
+                        f"— treat as indicative only. Day+1/Day+5 computed as stock return "
+                        f"minus SPY's own Day+1/Day+5 return — never raw %, to avoid "
+                        f"mistaking a broad market move for an entry-timing signal."
+                    )
+
+                if _et_illustrating is not None:
+                    _eti = _et_illustrating
+                    _eti_alpha_note = (
+                        f" — each firing showed {_eti['alpha_min']:+.1f}% to "
+                        f"{_eti['alpha_max']:+.1f}% alpha vs SPY"
+                        if _eti["alpha_min"] is not None and _eti["alpha_max"] is not None
+                        else ""
+                    )
+                    st.markdown(
+                        "<div style='background:#1c1408;border-left:4px solid #ffbb33;"
+                        "border-radius:8px;padding:12px 16px;margin-top:6px'>"
+                        f"<b>📌 Illustrating case:</b> {_eti['ticker']} fired as "
+                        f"<code>new_pick</code> {_eti['n_firings']}× between "
+                        f"{_eti['first_date']} and {_eti['last_date']}, composite "
+                        f"{_eti['composite_min']:.0f}–{_eti['composite_max']:.0f}, momentum "
+                        f"{_eti['momentum_min']:.0f}–{_eti['momentum_max']:.0f} every time "
+                        f"(divergence {_eti['divergence_min']:.0f}–{_eti['divergence_max']:.0f} "
+                        f"— squarely in the top band){_eti_alpha_note}. Counted as ONE deduped "
+                        f"observation, not {_eti['n_firings']}: repeated same-ticker firings "
+                        "within a rolling window are collapsed before banding, so one "
+                        "recurring name can't dominate a bucket's stats the way it would "
+                        "from a naive per-row count."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
 
                 st.caption(
                     f"Deduped: same-ticker New Position re-firings within "
                     f"{ENTRY_TIMING_DEDUP_WINDOW_DAYS} calendar days of a prior kept firing "
                     f"are collapsed to their first occurrence (one opportunity, not N). "
-                    f"Bands — Aligned: divergence ≤ {ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX}. "
-                    f"Diverging: {ENTRY_TIMING_DIVERGENCE_ALIGNED_MAX}–"
-                    f"{ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX}. "
-                    f"Extreme: > {ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX}. "
                     f"Only positive divergence (momentum ahead of composite) is in scope."
                 )
                 if st.button("🔄 Refresh Entry Timing data", key="_et_refresh_btn"):

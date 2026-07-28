@@ -938,3 +938,102 @@ def by_divergence_band(
             "day20_n":          d20["n"],
         })
     return out
+
+
+def find_illustrating_case(
+    new_pick_rows: list[dict],
+    diverging_max: float,
+) -> dict | None:
+    """
+    Finds the ticker that fired as `new_pick` the most times while sitting in
+    the Extreme divergence band (divergence > `diverging_max`), computed on
+    the UN-deduped rows — the "repeated re-firing" pattern this tab was built
+    to surface (e.g. AMD firing 5x in two weeks in 2026-07). Grounds the
+    tab's illustrating-case callout in whatever is actually the current top
+    repeat offender in the live data, so the callout never goes stale as a
+    fixed historical citation would.
+
+    Returns None when no ticker has >= 2 such firings — nothing to
+    illustrate yet is a valid, expected result, never fabricated.
+    """
+    by_ticker: dict[str, list[dict]] = {}
+    for r in new_pick_rows:
+        div = divergence_at_entry(r)
+        if div is not None and div > diverging_max:
+            by_ticker.setdefault(r.get("ticker"), []).append(r)
+
+    candidates = [(tk, rows) for tk, rows in by_ticker.items() if len(rows) >= 2]
+    if not candidates:
+        return None
+
+    def _first_date(rows):
+        dated = [r["rec_date"] for r in rows if r.get("rec_date") is not None]
+        return min(dated) if dated else date.max
+
+    # Most-repeated first; tie-break by earliest first firing for determinism.
+    candidates.sort(key=lambda x: (-len(x[1]), _first_date(x[1])))
+    ticker, rows = candidates[0]
+
+    dated      = [r["rec_date"] for r in rows if r.get("rec_date") is not None]
+    composites = [float(r["composite_score"]) for r in rows if r.get("composite_score") is not None]
+    momenta    = [float(r["momentum_score"]) for r in rows if r.get("momentum_score") is not None]
+    divs       = [d for d in (divergence_at_entry(r) for r in rows) if d is not None]
+    alphas     = [
+        float(r["alpha_pct"]) for r in rows
+        if not r.get("outcome_maturing") and r.get("alpha_pct") is not None
+    ]
+
+    return {
+        "ticker":         ticker,
+        "n_firings":      len(rows),
+        "first_date":     min(dated) if dated else None,
+        "last_date":      max(dated) if dated else None,
+        "composite_min":  min(composites) if composites else None,
+        "composite_max":  max(composites) if composites else None,
+        "momentum_min":   min(momenta) if momenta else None,
+        "momentum_max":   max(momenta) if momenta else None,
+        "divergence_min": min(divs) if divs else None,
+        "divergence_max": max(divs) if divs else None,
+        "alpha_min":      min(alphas) if alphas else None,
+        "alpha_max":      max(alphas) if alphas else None,
+    }
+
+
+def band_narrative(band: dict, illustrating_ticker: str | None = None) -> str:
+    """
+    One-line, rule-based (never LLM) plain-English description of a
+    divergence band's Day+1 -> Day+5 -> Day+20 alpha trajectory shape, for
+    the stat-card sidebar. `illustrating_ticker` (from `find_illustrating_case`)
+    is appended as a callback only when supplied by the caller for the band
+    it actually applies to (e.g. only the Extreme band that ticker sits in).
+    """
+    d1, d5, d20 = band.get("day1_alpha"), band.get("day5_alpha"), band.get("day20_alpha")
+
+    if d1 is None:
+        base = "Not enough Day+1 data yet to describe this band's shape."
+    elif d1 >= 0 and (d5 is None or d5 >= 0) and (d20 is None or d20 >= 0):
+        base = "Stays flat-to-positive across every horizon measured so far."
+    elif d1 < 0 and d5 is not None and d5 >= 0:
+        base = (
+            f"Recovers quickly — alpha is positive again by Day+5"
+            + (f", {d20:+.1f}pp by Day+20." if d20 is not None else ".")
+        )
+    elif d1 < 0 and (d5 is None or d5 < 0) and d20 is not None and d20 >= 0:
+        base = f"Mildly negative through Day+5, turns positive by Day+20 ({d20:+.1f}pp)."
+    elif d1 < 0 and d20 is not None and d20 < 0 and d20 > d1:
+        base = (
+            f"Deepest drawdown of the three ({d1:+.1f}pp Day+1 alpha) — still recovers "
+            f"some of it by Day+20 ({d20:+.1f}pp), but the first few days are the "
+            f"roughest of any band."
+        )
+    elif d1 < 0 and d20 is not None and d20 <= d1:
+        base = (
+            f"Negative at Day+1 ({d1:+.1f}pp) and losses persist through Day+20 "
+            f"({d20:+.1f}pp) — no recovery pattern yet."
+        )
+    else:
+        base = f"Day+1 alpha {d1:+.1f}pp; not enough Day+20 history yet to say whether it recovers."
+
+    if illustrating_ticker:
+        base += f" This is the {illustrating_ticker}-shaped case."
+    return base

@@ -1,14 +1,17 @@
 """Regression tests for the Entry Timing tab's pure functions in
 stock_analyzer/predictive_analytics.py — dedupe_repeated_tickers,
-divergence_at_entry, forward_alpha_at_horizon, by_divergence_band.
+divergence_at_entry, forward_alpha_at_horizon, by_divergence_band,
+find_illustrating_case, band_narrative.
 See docs/plans/entry-timing-tab.md for the design this implements.
 """
 from datetime import date
 
 from stock_analyzer.predictive_analytics import (
+    band_narrative,
     by_divergence_band,
     dedupe_repeated_tickers,
     divergence_at_entry,
+    find_illustrating_case,
     forward_alpha_at_horizon,
 )
 
@@ -181,3 +184,90 @@ def test_by_divergence_band_missing_horizon_data_is_none_not_zero():
     assert aligned["day1_alpha"] is None
     assert aligned["day1_n"] == 0
     assert aligned["day20_alpha"] is None
+
+
+# ── find_illustrating_case ───────────────────────────────────────────────────
+
+def test_find_illustrating_case_amd_style_repeat_offender():
+    rows = [
+        _rec("AMD", date(2026, 7, 9),  composite=69, momentum=95),   # divergence 26
+        _rec("AMD", date(2026, 7, 10), composite=69, momentum=94),   # divergence 25 -- NOT Extreme (not > 25)
+        _rec("AMD", date(2026, 7, 14), composite=71, momentum=100, alpha_pct=-9.0, outcome_maturing=False),   # divergence 29
+        _rec("AMD", date(2026, 7, 15), composite=70, momentum=96, alpha_pct=-11.0, outcome_maturing=False),   # divergence 26
+        _rec("NVDA", date(2026, 7, 9), composite=90, momentum=91),   # divergence 1 -- not Extreme
+    ]
+    case = find_illustrating_case(rows, diverging_max=25)
+    assert case is not None
+    assert case["ticker"] == "AMD"
+    assert case["n_firings"] == 3   # row2 (divergence 25) is Diverging, not Extreme -- excluded
+    assert case["first_date"] == date(2026, 7, 9)
+    assert case["last_date"] == date(2026, 7, 15)
+    assert case["alpha_min"] == -11.0
+    assert case["alpha_max"] == -9.0
+
+
+def test_find_illustrating_case_returns_none_below_two_firings():
+    rows = [_rec("AMD", date(2026, 7, 9), composite=70, momentum=95)]
+    assert find_illustrating_case(rows, diverging_max=25) is None
+
+
+def test_find_illustrating_case_ignores_aligned_and_diverging_rows():
+    rows = [
+        _rec("XYZ", date(2026, 7, 9), composite=70, momentum=75),   # divergence 5 -- Aligned
+        _rec("XYZ", date(2026, 7, 10), composite=70, momentum=75),
+    ]
+    assert find_illustrating_case(rows, diverging_max=25) is None
+
+
+def test_find_illustrating_case_picks_most_repeated_ticker():
+    rows = [
+        _rec("AMD", date(2026, 7, 9), composite=70, momentum=95),
+        _rec("AMD", date(2026, 7, 10), composite=70, momentum=95),
+        _rec("TSLA", date(2026, 7, 9), composite=68, momentum=98),
+        _rec("TSLA", date(2026, 7, 10), composite=68, momentum=98),
+        _rec("TSLA", date(2026, 7, 11), composite=68, momentum=98),
+    ]
+    case = find_illustrating_case(rows, diverging_max=25)
+    assert case["ticker"] == "TSLA"
+    assert case["n_firings"] == 3
+
+
+# ── band_narrative ────────────────────────────────────────────────────────────
+
+def test_band_narrative_missing_day1_data():
+    text = band_narrative({"day1_alpha": None, "day5_alpha": None, "day20_alpha": None})
+    assert "not enough" in text.lower()
+
+
+def test_band_narrative_flat_to_positive():
+    text = band_narrative({"day1_alpha": 0.2, "day5_alpha": 0.9, "day20_alpha": 2.4})
+    assert "flat-to-positive" in text.lower()
+
+
+def test_band_narrative_recovers_by_day5():
+    text = band_narrative({"day1_alpha": -2.0, "day5_alpha": 1.0, "day20_alpha": 3.0})
+    assert "recovers quickly" in text.lower()
+    assert "+3.0pp" in text
+
+
+def test_band_narrative_recovers_by_day20_only():
+    text = band_narrative({"day1_alpha": -1.0, "day5_alpha": -0.5, "day20_alpha": 1.5})
+    assert "turns positive by day+20" in text.lower()
+
+
+def test_band_narrative_deepest_drawdown_partial_recovery():
+    text = band_narrative({"day1_alpha": -8.0, "day5_alpha": -4.0, "day20_alpha": -2.0})
+    assert "deepest drawdown" in text.lower()
+
+
+def test_band_narrative_no_recovery():
+    text = band_narrative({"day1_alpha": -8.0, "day5_alpha": -9.0, "day20_alpha": -10.0})
+    assert "no recovery pattern" in text.lower()
+
+
+def test_band_narrative_appends_illustrating_ticker():
+    text = band_narrative(
+        {"day1_alpha": -8.0, "day5_alpha": -4.0, "day20_alpha": -2.0},
+        illustrating_ticker="AMD",
+    )
+    assert text.endswith("This is the AMD-shaped case.")
