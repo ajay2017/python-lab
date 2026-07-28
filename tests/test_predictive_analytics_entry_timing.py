@@ -244,6 +244,36 @@ def test_band_narrative_flat_to_positive():
     assert "flat-to-positive" in text.lower()
 
 
+def test_band_narrative_late_developing_drawdown_not_masked_by_flat_day1():
+    # Regression: a live screenshot (2026-07-28) showed Day+1 ~0, Day+5 slightly
+    # positive, Day+20 -14pp -- and the narrative wrongly said "not enough
+    # Day+20 history" even though day20_alpha/day20_n were both present. The
+    # "Day+20 is the worst point" branch must fire before the flat/positive
+    # early-day branches, regardless of Day+1's sign.
+    band = {"day1_alpha": -0.04, "day5_alpha": 0.3, "day20_alpha": -14.0, "day20_n": 9}
+    text = band_narrative(band)
+    assert "not enough" not in text.lower()
+    assert "-14.0pp" in text
+    assert "9 outcomes" in text
+    assert "shows up late" in text.lower()
+
+
+def test_band_narrative_late_developing_drawdown_singular_outcome_count():
+    band = {"day1_alpha": 0.0, "day5_alpha": 0.1, "day20_alpha": -5.0, "day20_n": 1}
+    text = band_narrative(band)
+    assert "(1 outcome)" in text
+    assert "1 outcomes" not in text
+
+
+def test_band_narrative_monotonic_worsening_is_not_the_late_blowup_case():
+    # Day+1 is ALREADY clearly negative (not "calm") -- this is a different,
+    # already-covered pattern (consistent worsening), not the surprise-late-
+    # loss case, even though Day+20 is still numerically the worst point.
+    text = band_narrative({"day1_alpha": -8.0, "day5_alpha": -9.0, "day20_alpha": -10.0})
+    assert "looks calm" not in text.lower()
+    assert "no recovery pattern" in text.lower()
+
+
 def test_band_narrative_recovers_by_day5():
     text = band_narrative({"day1_alpha": -2.0, "day5_alpha": 1.0, "day20_alpha": 3.0})
     assert "recovers quickly" in text.lower()

@@ -1006,11 +1006,38 @@ def band_narrative(band: dict, illustrating_ticker: str | None = None) -> str:
     the stat-card sidebar. `illustrating_ticker` (from `find_illustrating_case`)
     is appended as a callback only when supplied by the caller for the band
     it actually applies to (e.g. only the Extreme band that ticker sits in).
+
+    The "Day+20 is the worst point" case is checked first and separately from
+    every other branch, specifically so a near-zero or positive Day+1 value
+    can never mask a real, larger Day+20 loss — a live 2026-07-28 screenshot
+    caught this exact miss (Day+1 ~0, Day+20 -14pp fell through to a generic
+    "not enough Day+20 history" fallback that was simply wrong given data was
+    present).
     """
     d1, d5, d20 = band.get("day1_alpha"), band.get("day5_alpha"), band.get("day20_alpha")
+    d20_n = band.get("day20_n") or 0
+
+    # A day is treated as "calm" at this small a magnitude so a rounding
+    # artifact like -0.04 (displays as "-0.0pp") isn't read as a real signal.
+    _CALM = -0.05
 
     if d1 is None:
         base = "Not enough Day+1 data yet to describe this band's shape."
+    elif (d1 >= _CALM and (d5 is None or d5 >= _CALM)
+            and d20 is not None and d20 < _CALM):
+        # Day+1 AND Day+5 both looked calm/non-negative — nothing here would
+        # have flagged a problem in the first week — yet Day+20 shows a real
+        # loss. Checked BEFORE the "flat-to-positive" branch below so this
+        # specific late-developing pattern (the exact thing this tab exists
+        # to catch) is never masked by a near-zero Day+1 reading. Requires
+        # BOTH early points to be calm — a Day+1 that's already clearly
+        # negative is a different, already-covered case (monotonic
+        # worsening), not a "looked fine, then wasn't" surprise.
+        base = (
+            f"Looks calm through the first few days (Day+1 {d1:+.1f}pp) but fades "
+            f"hard to {d20:+.1f}pp by Day+20 ({d20_n} outcome{'s' if d20_n != 1 else ''}) "
+            f"— the real cost of this pattern shows up late, not at entry."
+        )
     elif d1 >= 0 and (d5 is None or d5 >= 0) and (d20 is None or d20 >= 0):
         base = "Stays flat-to-positive across every horizon measured so far."
     elif d1 < 0 and d5 is not None and d5 >= 0:
