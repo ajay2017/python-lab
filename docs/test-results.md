@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-ranked-list, batch 10: `decision_quality.py`)
+## 1. Latest run — 2026-07-28 (post-ranked-list, batch 11: `comparison.py`)
 
-**821 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 7.64s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**878 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 8.68s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -50,7 +50,8 @@ active: 7.64s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_position_lifecycle.py` | 29 | `position_lifecycle.py` (held-position lifecycle classifier: exit/at_risk/settling/winning/established) |
 | `test_tax_advisor.py` | 59 | `tax_advisor.py` (FIFO tax-lot reconstruction, STCG/LTCG classification, harvest/wait action ladder, holding-period + wash-sale awareness helpers) |
 | `test_decision_quality.py` | 68 | `decision_quality.py` (monthly/quarterly Decision Quality grades, Workflow ROI prep-tier classification) |
-| **Total** | **821** | |
+| `test_comparison.py` | 57 | `comparison.py` (2-ticker Compare page: per-row winner picking, composite-first/sub-factor-tiebreak verdict, portfolio-fit notes) |
+| **Total** | **878** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -82,21 +83,19 @@ in the tested logic itself. Batch-by-batch scope is in
 | `position_lifecycle.py` | 14 | 0 | **100%** |
 | `tax_advisor.py` | 191 | 4 | **98%** |
 | `decision_quality.py` | 231 | 8 | **97%** |
+| `comparison.py` | 147 | 5 | **97%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,462 missed, 24%** (up —
-`decision_quality.py` moving from 0% to 97%, the first module picked via
-fresh prioritization after the original ranked list closed; an Explore-agent
-survey of ~20 remaining zero-coverage candidates flagged it as the richest
-decision-logic surface — grade ladders + prep-tier classification — that's
-also fully pure, no I/O). ~56 modules remain with zero tests, several
-identified in that same survey as viable next candidates (`comparison.py`,
-`decision_journal.py`, plus lower-priority `earnings_advisor.py`/
-`perf_advisor.py`/`news_intelligence.py`). Not a target to chase for its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,320 missed, 25%** (up —
+`comparison.py` moving from 0% to 97%, the 2nd fresh-prioritization pick
+from the same Explore-agent survey). ~55 modules remain with zero tests;
+`decision_journal.py` (67 stmts, smallest/most self-contained) is the
+survey's next viable candidate, plus lower-priority `earnings_advisor.py`/
+`perf_advisor.py`/`news_intelligence.py`. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -157,6 +156,31 @@ rule #4.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `comparison.py` backfilled (57 tests), 878/878 passing, no bug found
+
+Second fresh-prioritization pick from the same post-ranked-list Explore
+survey. `comparison.py` is the 2-ticker side-by-side Compare page engine:
+`_winner()`'s tolerance-banded a/b/tie/None picker (reused across every
+row), `_signal_winner()`/`_trend_winner()`'s label-rank tables, the
+formatting helpers (`_fmt_pct`/`_fmt_money`/`_fmt_num`), `build_comparison()`'s
+8-section assembly (Headline/Overview/Technicals/Business Quality/
+Valuation/Sentiment & Analyst/Risk/Setup, incl. the R:R-ratio computation
+that requires price > stop), `_compute_verdict()`'s composite-gap-first
+logic (a <3-point gap always returns "tie" — with sub-factor tiebreaker
+reasons cited when FCF-yield/beta/Sharpe deltas clear their own thresholds,
+or a plain "decide on portfolio fit" fallback when even those are close;
+confidence is "high" at a ≥10-point gap, "medium" otherwise), and
+`_portfolio_fit()`'s already-held + sector-ceiling/elevated notes (incl.
+the `Gate Weight (%)`-column fallback to `Weight (%)`). One of my own test
+assertions was wrong (picked a 15-point gap and expected "medium"
+confidence, when the code's own `>= 10 -> "high"` rule made it "high") —
+a test-authoring mistake, not a source bug, fixed before the batch
+finished. No production bug found. **One pre-existing, harmless
+observation, not fixed:** `PORTFOLIO_BETA_ELEVATED`/`PORTFOLIO_BETA_CEILING`
+are imported at the top of the file but never referenced anywhere in it —
+dead import, no functional effect, out of scope for a test-coverage
+commit to clean up unrequested. Now 97% covered (147 stmts, 5 missed).
 
 ### 2026-07-28 — `decision_quality.py` backfilled (68 tests), 821/821 passing, no bug found — first post-ranked-list pick
 
