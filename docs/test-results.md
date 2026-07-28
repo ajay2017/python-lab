@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-ranked-list, batch 12: `decision_journal.py`)
+## 1. Latest run — 2026-07-28 (post-ranked-list, batch 13: `earnings_advisor.py`)
 
-**909 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 10.35s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**965 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 10.87s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -52,7 +52,8 @@ active: 10.35s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_decision_quality.py` | 68 | `decision_quality.py` (monthly/quarterly Decision Quality grades, Workflow ROI prep-tier classification) |
 | `test_comparison.py` | 57 | `comparison.py` (2-ticker Compare page: per-row winner picking, composite-first/sub-factor-tiebreak verdict, portfolio-fit notes) |
 | `test_decision_journal.py` | 31 | `decision_journal.py` (signal-followed vs. ignored accuracy, costly-deviation/good-override lists, lessons library, behavioral insight) |
-| **Total** | **909** | |
+| `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
+| **Total** | **965** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -86,18 +87,18 @@ in the tested logic itself. Batch-by-batch scope is in
 | `decision_quality.py` | 231 | 8 | **97%** |
 | `comparison.py` | 147 | 5 | **97%** |
 | `decision_journal.py` | 67 | 0 | **100%** |
+| `earnings_advisor.py` | 145 | 3 | **98%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,794 stmts, 10,253 missed, 26%** (up —
-`decision_journal.py` moving from 0% to 100%, the 3rd fresh-prioritization
-pick from the same Explore-agent survey). ~54 modules remain with zero
-tests; lower-priority `earnings_advisor.py`/`perf_advisor.py`/
-`news_intelligence.py` are the survey's remaining candidates. Not a target
-to chase for its own sake per
+**Whole-`stock_analyzer/` total: 13,794 stmts, 10,111 missed, 27%** (up —
+`earnings_advisor.py` moving from 0% to 98%, the 4th fresh-prioritization
+pick from the same Explore-agent survey). ~53 modules remain with zero
+tests; `perf_advisor.py`/`news_intelligence.py` are the survey's remaining
+lower-priority candidates. Not a target to chase for its own sake per
 `docs/plans/test-automation.md`'s "golden-value regression, not
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
@@ -173,6 +174,34 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `earnings_advisor.py` backfilled (56 tests), 965/965 passing, no bug found
+
+Fourth fresh-prioritization pick from the same post-ranked-list Explore
+survey. `earnings_advisor.py` powers the Pre-Earnings Playbook: for each
+held position with earnings in the next 30 days, `_recommend()`'s
+10-branch priority ladder (EXIT on a Sell/Strong-Sell signal — beats
+everything, even an oversized high-conviction position; REDUCE-oversized
+when weight exceeds `SINGLE_NAME_TRIM_TRIGGER`, trimming back to
+`SINGLE_NAME_CEILING`; REDUCE-weak-fundamentals; REDUCE-negative-revisions
+— checked, and wins, before the poor-beat-rate REDUCE even when both
+conditions hold; REDUCE-poor-beat-rate (CNBC enrichment, requires
+`beat_rate` actually present); REDUCE-bearish-reaction-history;
+MONITOR-stop-unavailable; MONITOR-stop-close-to-estimated-move;
+HOLD_OR_ADD for high-conviction+positive-revisions with optional beat-rate/
+bullish-reaction narrative extras; HOLD fallback), `_estimate_move()`'s
+VaR×3 clamp-with-sector-fallback, `build_earnings_playbook()`'s date-window
+filtering + urgency tiers (IMMINENT/SOON/AHEAD) + sector-specific watch
+lists + the `gap_to_stop=None`-must-stay-None (not defaulted to 0)
+data-integrity guard, and `build_earnings_catalyst_candidates()`'s
+multi-gate watchlist scanner (not held, has CNBC context, beat-rate ≥
+`EARNINGS_MIN_BEAT_RATE_ENTRY`, reaction not bearish, within the lookahead
+window, composite ≥ `COMPOSITE_BUY`) with its bullish-reaction rank-score
+multiplier. All 56 tests passed on the first run — no fixture-math
+mistakes this time. No production bug found. Now 98% covered (145 stmts,
+3 missed — the 3 lines are `_today_et()`'s default-today branch in each of
+the module's 3 public/near-public functions, already exercised via the
+equivalent explicit-`today=` pattern used throughout the rest of the batch).
 
 ### 2026-07-28 — `decision_journal.py` backfilled (31 tests, 100% coverage), found + fixed a real crash bug, 909/909 passing
 
