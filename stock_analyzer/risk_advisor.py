@@ -18,6 +18,9 @@ from stock_analyzer.constants import (
     PORTFOLIO_BETA_TARGET,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
+    SHARPE_HIGH_RISK_MAX,
+    SHARPE_MEDIUM_RISK_MAX,
+    SHARPE_STRONG_MIN,
     SINGLE_NAME_CEILING,
     WEAK_CONVICTION_SCORE,
     UNCLASSIFIED_SECTOR,
@@ -253,8 +256,8 @@ def build_risk_advisor_recommendations(
             })
 
     # ── 2. SHARPE / RISK-ADJUSTED RETURN ─────────────────────────────────────
-    if sharpe is not None and sharpe < 0.8:
-        sh_priority = "HIGH" if sharpe < 0.4 else "MEDIUM"
+    if sharpe is not None and sharpe < SHARPE_MEDIUM_RISK_MAX:
+        sh_priority = "HIGH" if sharpe < SHARPE_HIGH_RISK_MAX else "MEDIUM"
 
         drags = []
         for t, tr in tr_map.items():
@@ -315,7 +318,7 @@ def build_risk_advisor_recommendations(
                 "a position's value to the portfolio. This is the mindset shift from retail to professional."
             ),
         })
-    elif sharpe is not None and sharpe >= 1.0:
+    elif sharpe is not None and sharpe >= SHARPE_STRONG_MIN:
         recs.append({
             "priority": "OK",
             "type":     "ok_sharpe",

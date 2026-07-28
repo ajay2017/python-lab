@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (post-ranked-list, batch 15: `news_intelligence.py`)
+## 1. Latest run — 2026-07-28 (`risk_advisor.py` Sharpe-threshold hard-rule-#1 fix)
 
-**1087 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 13.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**1091 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 8.05s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -33,7 +33,7 @@ active: 13.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_concentration.py` | 16 | `concentration.py` |
 | `test_exit_advisor.py` | 32 | `exit_advisor.py` |
 | `test_portfolio.py` | 28 | `portfolio.py` |
-| `test_risk_advisor.py` | 28 | `risk_advisor.py` |
+| `test_risk_advisor.py` | 32 | `risk_advisor.py` (incl. 4 boundary-exact regression pins for the Sharpe alert-ladder constants) |
 | `test_daily_briefing.py` | 35 | `daily_briefing.py` (incl. `_cross_reference()`) |
 | `test_signal_reconciliation.py` | 26 | `signal_reconciliation.py` |
 | `test_structural_scanner.py` | 19 | `structural_scanner.py` (incl. `blast_radius()` backfill) |
@@ -55,7 +55,7 @@ active: 13.79s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
 | `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
 | `test_news_intelligence.py` | 76 | `news_intelligence.py` (significance scoring, negative-news alerts, opportunity detection + Reduce/Exit suppression, sector digest, suppress-only + bidirectional LLM rescore helpers) |
-| **Total** | **1087** | |
+| **Total** | **1091** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -179,6 +179,42 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `risk_advisor.py` Sharpe alert-ladder thresholds extracted to `constants.py` (CLAUDE.md hard-rule-#1 fix), 1091/1091 passing
+
+Not a coverage-backfill batch — closes an open finding flagged by the
+2026-07-27 Opus review of the `risk.py` Sharpe/Sortino bug fix:
+`risk_advisor.py:256-257` hardcoded the Sharpe alert-ladder thresholds
+(`< 0.8` → an action fires; `< 0.4` → HIGH vs MEDIUM) as inline literals
+instead of importing them from `constants.py`, a direct CLAUDE.md hard-rule-#1
+gap. Added three new constants to `constants.py`: `SHARPE_HIGH_RISK_MAX = 0.4`,
+`SHARPE_MEDIUM_RISK_MAX = 0.8`, `SHARPE_STRONG_MIN = 1.0` (the third closes
+the same ladder's OK-card threshold at `:318`, previously also an inline
+`>= 1.0` literal). Replaced all three call sites 1:1 in `risk_advisor.py` —
+values unchanged, this is a pure refactor with NO behavior change, not a
+policy change. Documented the 3 new constants in `docs/architecture.md`'s
+constants table. Added 4 new boundary-exact regression tests to
+`tests/test_risk_advisor.py`, importing the real constants (not
+re-hardcoding the literals) to pin: just-below-`SHARPE_HIGH_RISK_MAX` → HIGH,
+exactly-at-`SHARPE_HIGH_RISK_MAX` → MEDIUM, exactly-at-`SHARPE_MEDIUM_RISK_MAX`
+→ no rec (dead-zone floor), exactly-at-`SHARPE_STRONG_MIN` → OK card. Per
+CLAUDE.md hard rule #4 (touches a scoring/recommendation gate file):
+**Opus reviewer: SHIP, 0 blocking** — verified the 1:1 value match, grepped
+the whole repo confirming no sibling Sharpe-ladder check was missed
+elsewhere, confirmed the per-ticker "drag" selection logic just below
+(`sharpe * 0.7`, `w >= 3.0`) reads the still-local `sharpe` variable and was
+correctly untouched, and endorsed the naming (`_MAX`/`_MIN` suffixes read
+more clearly than mirroring the `PORTFOLIO_BETA_*` triplet's naming, since
+Sharpe is lower-is-worse — the inverse direction from beta). **New
+follow-up flagged by the review, not yet actioned:** `risk_advisor.py:266`'s
+per-ticker drag-selection literals (`0.7` relative-Sharpe multiplier, `3.0`
+min-weight-to-be-named-a-drag) are themselves genuine hard-rule-#1
+candidates, deliberately left out of this change's scope (a separate ladder
+with its own boundary tests, bundling would obscure the "pure refactor, no
+behavior change" guarantee this commit rests on) — belongs in the same
+eventual sweep as the still-open volatility (30/25), drawdown (-20/-30/-10),
+and tail-risk (1.7/2.2) literals in the same file, none of which are fixed
+yet.
 
 ### 2026-07-28 — `news_intelligence.py` backfilled (76 tests, 100% coverage), 1087/1087 passing, no bug found — Explore survey now exhausted
 

@@ -13,6 +13,18 @@ PORTFOLIO_BETA_TARGET   = 1.0    # baseline equity-portfolio target
 PORTFOLIO_BETA_ELEVATED = 1.3    # soft warning above this
 PORTFOLIO_BETA_CEILING  = 1.4    # hard breach above this — institutional ceiling
 
+# ── Portfolio Sharpe (risk-adjusted return) ──────────────────────────────────
+# Below SHARPE_MEDIUM_RISK_MAX an action recommendation fires (MEDIUM, or HIGH
+# if also below SHARPE_HIGH_RISK_MAX); at/above SHARPE_STRONG_MIN a congratulatory
+# OK card fires instead. [SHARPE_MEDIUM_RISK_MAX, SHARPE_STRONG_MIN) is a
+# deliberate dead zone — "acceptable but not strong" earns no card either way.
+# Extracted 2026-07-28 from risk_advisor.py's previously-inline 0.4/0.8/1.0
+# literals — a CLAUDE.md hard-rule-#1 gap flagged during the 2026-07-27
+# risk.py Sharpe/Sortino Opus review (see project_test_automation memory).
+SHARPE_HIGH_RISK_MAX   = 0.4     # below this -> HIGH priority ("risk not rewarded")
+SHARPE_MEDIUM_RISK_MAX = 0.8     # below this -> an action fires (HIGH or MEDIUM)
+SHARPE_STRONG_MIN      = 1.0     # at/above this -> OK, "strong risk-adjusted returns"
+
 # Concept D — regime-conditional position targets (Wave 3, 2026-07-17 policy
 # conversation with user). Anchored to the existing regime-agnostic
 # PORTFOLIO_BETA_TARGET/_ELEVATED/_CEILING baseline above: tightens in

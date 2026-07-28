@@ -168,6 +168,9 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `PORTFOLIO_BETA_TARGET` | 1.0 | Baseline equity-portfolio target |
 | `PORTFOLIO_BETA_ELEVATED` | 1.3 | Soft warn above this |
 | `PORTFOLIO_BETA_CEILING` | 1.4 | Hard breach — institutional managed-equity ceiling |
+| `SHARPE_HIGH_RISK_MAX` | 0.4 | Risk Advisor: portfolio Sharpe below this → HIGH priority ("risk not rewarded") |
+| `SHARPE_MEDIUM_RISK_MAX` | 0.8 | Risk Advisor: portfolio Sharpe below this → an action recommendation fires (HIGH or MEDIUM per `SHARPE_HIGH_RISK_MAX`) |
+| `SHARPE_STRONG_MIN` | 1.0 | Risk Advisor: portfolio Sharpe at/above this → OK card ("strong risk-adjusted returns"). `[SHARPE_MEDIUM_RISK_MAX, SHARPE_STRONG_MIN)` is a deliberate dead zone — no card either way. Extracted 2026-07-28 from previously-inline 0.4/0.8/1.0 literals in `risk_advisor.py` (a hard-rule-#1 gap flagged during the `risk.py` Sharpe/Sortino Opus review). |
 | `REGIME_BETA_CEILING` | dict: rate_cut=1.25, neutral=1.10, inflation_fight=1.00, recession_fear=0.90, stagflation_risk=0.85 | **Concept D (Wave 3).** Regime-conditional beta target shown on the 🔗 Risk Analysis "Regime Fit" diagnostic. Keyed by the 5 real regime ids from `macro_calendar.detect_macro_regime`. Anchored to (tighter/looser than) the regime-agnostic `PORTFOLIO_BETA_*` baseline above. Diagnostic only — never gates/resizes. |
 | `REGIME_CASH_FLOOR_PCT` | dict: rate_cut=5.0, neutral=5.0, inflation_fight=10.0, recession_fear=15.0, stagflation_risk=20.0 | **Concept D (Wave 3).** Regime-conditional cash-cushion floor shown alongside the beta read on the same diagnostic. Same regime keys as `REGIME_BETA_CEILING`. Diagnostic only. |
 | `REGIME_CONFIDENCE_MIN_DISPLAY` | 40 | Below this regime-detection confidence, the Regime Fit diagnostic flags the read as low-confidence/estimated. Display-only — never gates. |

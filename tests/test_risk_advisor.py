@@ -15,6 +15,9 @@ import pandas as pd
 from stock_analyzer.constants import (
     SECTOR_CEILING,
     SECTOR_ELEVATED,
+    SHARPE_HIGH_RISK_MAX,
+    SHARPE_MEDIUM_RISK_MAX,
+    SHARPE_STRONG_MIN,
     SINGLE_NAME_CEILING,
     WEAK_CONVICTION_SCORE,
 )
@@ -107,6 +110,31 @@ def test_sharpe_dead_zone_produces_no_rec():
     recs = _recs(_ONE_ROW, sharpe=0.9)
     assert find_rec(recs, "sharpe") is None
     assert find_rec(recs, "ok_sharpe") is None
+
+
+def test_sharpe_high_priority_boundary_pinned_to_constant():
+    # Just below SHARPE_HIGH_RISK_MAX -> HIGH; regression pin for the
+    # constants.py extraction (was an inline 0.4 literal).
+    recs = _recs(_ONE_ROW, sharpe=SHARPE_HIGH_RISK_MAX - 0.01)
+    assert find_rec(recs, "sharpe")["priority"] == "HIGH"
+
+
+def test_sharpe_medium_priority_boundary_pinned_to_constant():
+    # At exactly SHARPE_HIGH_RISK_MAX -> MEDIUM (the HIGH branch is a strict <).
+    recs = _recs(_ONE_ROW, sharpe=SHARPE_HIGH_RISK_MAX)
+    assert find_rec(recs, "sharpe")["priority"] == "MEDIUM"
+
+
+def test_sharpe_action_ladder_boundary_pinned_to_constant():
+    # At exactly SHARPE_MEDIUM_RISK_MAX, the action ladder no longer fires
+    # (strict < gate) -- regression pin for the constants.py extraction.
+    recs = _recs(_ONE_ROW, sharpe=SHARPE_MEDIUM_RISK_MAX)
+    assert find_rec(recs, "sharpe") is None
+
+
+def test_sharpe_ok_boundary_pinned_to_constant():
+    recs = _recs(_ONE_ROW, sharpe=SHARPE_STRONG_MIN)
+    assert find_rec(recs, "ok_sharpe") is not None
 
 
 # ── volatility ────────────────────────────────────────────────────────────────
