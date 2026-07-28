@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-27 (post-roadmap health check, batch 2: `risk.py`)
+## 1. Latest run — 2026-07-27 (post-roadmap health check, batch 3: `macro_playbook.py`)
 
-**370 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 1.33s; with `--cov`
-active: 3.13s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**437 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 3.58s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -42,9 +42,10 @@ active: 3.13s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_decision_bucket.py` | 27 | `decision_bucket.py` |
 | `test_watchlist_advisor.py` | 35 | `watchlist_advisor.py` (incl. `_portfolio_risk_gate()`) |
 | `test_risk.py` | 43 | `risk.py` (position sizing, ATR stops, Sharpe/Sortino/VaR/beta) |
-| **Total** | **370** | |
+| `test_macro_playbook.py` | 67 | `macro_playbook.py` (Pre-Event Macro Playbook: PROTECT/WATCH/HOLD/OPPORTUNITY action classifier, post-event scenario classification) |
+| **Total** | **437** | |
 
-### Line coverage of the 14 targeted modules
+### Line coverage of the 15 targeted modules
 
 Via `pytest --cov=stock_analyzer --cov-report=term-missing`. **Read this with
 the design principle in mind: the suite targets boundary/golden-value
@@ -66,16 +67,16 @@ in the tested logic itself. Batch-by-batch scope is in
 | `decision_bucket.py` | 75 | 2 | **97%** |
 | `risk_advisor.py` | 175 | 13 | **93%** |
 | `risk.py` | 171 | 7 | **96%** |
+| `macro_playbook.py` | 252 | 13 | **95%** |
 | `thesis_red_team.py` | 84 | 11 | 87% |
 | `structural_scanner.py` | 144 | 62 | 57% |
 | `exit_advisor.py` | 191 | 131 | 31% |
 | `portfolio.py` | 427 | 300 | 30% |
 | `daily_briefing.py` | 773 | 546 | 29% |
 
-**Whole-`stock_analyzer/` total: 13,774 stmts, 12,212 missed, 11%** (up from
-10% earlier the same day). Still dominated by ~64 modules with zero tests at
-all — ranked remaining gaps with real decision/gate logic:
-`macro_playbook.py` (pullback-alert thresholds), `portfolio_health.py`,
+**Whole-`stock_analyzer/` total: 13,774 stmts, 11,973 missed, 13%** (up from
+11% earlier the same day). Still dominated by ~63 modules with zero tests at
+all — ranked remaining gaps with real decision/gate logic: `portfolio_health.py`,
 `rebalancer.py`, `signal_hysteresis.py` (tied to the still-parked
 deterioration-hysteresis queue item), `position_lifecycle.py`,
 `tax_advisor.py`. Not a target to chase for its own sake per
@@ -83,6 +84,18 @@ deterioration-hysteresis queue item), `position_lifecycle.py`,
 coverage-chasing" principle. Track this section mainly to notice a SUDDEN
 drop in a targeted module (a signal something broke), not to push the
 whole-package number up for its own sake.
+
+**Correction (2026-07-27):** an earlier same-day audit mislabeled
+`macro_playbook.py` as containing `compute_protective_alerts()`/
+`_assess_pullback()`/`PULLBACK_ALERT_INDEX_PCT` (the pullback-awareness
+feature's threshold logic). Verified against source before writing this
+batch's tests: those actually live in `headless_alert_engine.py`, a
+DIFFERENT and still zero-coverage module. `macro_playbook.py` is the
+Pre-Event Macro Playbook (NFP/CPI/FOMC/GDP/PPI/Retail-Sales scenario
+analysis with its own real PROTECT/WATCH/OPPORTUNITY thresholds, several
+explicitly reconciled against `constants.py`'s `SINGLE_NAME_CEILING`/
+`COMPOSITE_HOLD`) — a different, equally-real decision-adjacent module,
+tested as found. `headless_alert_engine.py` remains an open gap.
 
 **`risk.py`'s batch found and fixed a real production bug, not just a
 coverage gap** (see the dated history entry below for the full writeup):
@@ -100,6 +113,43 @@ Opus-reviewed: SHIP, 0 blocking.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-27 — `macro_playbook.py` backfilled (67 tests), 437/437 passing
+
+Continuation of the same-day post-roadmap health check, next module on the
+ranked priority list. **Correction found before writing any tests:** the
+originating audit described this module as containing the
+pullback-awareness feature's `compute_protective_alerts()`/
+`_assess_pullback()`/`PULLBACK_ALERT_INDEX_PCT` — verified against actual
+source first (reading the whole file, not trusting the prior description)
+and found that's wrong; those live in `headless_alert_engine.py`, a
+different, still-untested module. `macro_playbook.py` is actually the
+Pre-Event Macro Playbook: for each upcoming HIGH-impact macro event
+(NFP/CPI/FOMC/GDP/PPI/Retail Sales), classifies each held position into
+PROTECT/WATCH/HOLD/OPPORTUNITY via `_pre_event_action()`, using thresholds
+several of which are explicitly imported from `constants.py`
+(`SINGLE_NAME_CEILING`, `COMPOSITE_HOLD`, `COMPOSITE_BUY`) rather than
+duplicated as literals — real, decision-adjacent logic, tested as found.
+67 tests covering the action classifier's full branch order (Sell/Strong
+Sell always PROTECT-HIGH regardless of other fields; low-score+bear-exposure
+and oversized-position+bear-exposure PROTECT-HIGH; deep-loss-near-event
+PROTECT-MEDIUM gated on a ≤7-day window; OPPORTUNITY gated on score+Buy
+signal+bull-exposure+≤14-day window; the WATCH-MEDIUM vs WATCH-LOW split;
+the HOLD fallback), `_build_rationale()`/`_action_detail()`/
+`_post_event_rules()`'s narrative branches, `classify_scenario()`'s
+higher-is-bull vs lower-is-bull post-event classification (including the
+FRED-string parsing via `_parse_number()` and the `implied_base` fallback),
+and `build_event_playbooks()`/`build_post_event_analysis()`'s event
+filtering (HIGH-impact only, future-dated only, known-scenario only),
+per-position sector-exposure filtering, exposure-level bucketing, and
+sort ordering. 3 of the initially-written tests failed on the first run —
+all 3 were the AUTHOR's (this session's) own fixture-math errors (picked a
+sector/event combination whose actual bear-move value didn't land in the
+threshold band the test intended), not bugs in the source; corrected
+against the real `_SCENARIOS` dict values and re-verified. No production
+bug found this batch (unlike the `risk.py` batch immediately before it).
+Now 95% covered. `risk.py`'s test coverage brought forward from the
+previous history entry: 96%.
 
 ### 2026-07-27 — `risk.py` backfilled (43 tests), found + fixed a real Sharpe/Sortino bug, 370/370 passing
 
