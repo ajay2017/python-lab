@@ -25,6 +25,45 @@ SHARPE_HIGH_RISK_MAX   = 0.4     # below this -> HIGH priority ("risk not reward
 SHARPE_MEDIUM_RISK_MAX = 0.8     # below this -> an action fires (HIGH or MEDIUM)
 SHARPE_STRONG_MIN      = 1.0     # at/above this -> OK, "strong risk-adjusted returns"
 
+# Selection-only (does NOT gate whether the Sharpe rec above fires at all) —
+# a ticker is named as a "Sharpe drag" contributor in the rec's root_cause
+# when its own Sharpe trails the portfolio Sharpe by this relative fraction
+# AND its weight clears the floor (too small a position isn't worth naming).
+# Extracted 2026-07-28 alongside the ladder above — same hard-rule-#1 gap.
+SHARPE_DRAG_RELATIVE_MAX   = 0.7   # ticker sharpe < portfolio sharpe * this -> named a drag
+SHARPE_DRAG_MIN_WEIGHT_PCT = 3.0   # minimum position weight to be named a drag
+
+# ── Portfolio annualised volatility ──────────────────────────────────────────
+# risk_advisor.py's volatility rec: above VOL_HIGH_PCT -> HIGH priority; above
+# VOL_MEDIUM_PCT (but not HIGH) -> MEDIUM; at/below VOL_MEDIUM_PCT -> no rec
+# (there's no "OK" congratulatory card for volatility, unlike beta/Sharpe/
+# drawdown — just silence). Extracted 2026-07-28, same hard-rule-#1 sweep as
+# the Sharpe ladder above.
+PORTFOLIO_VOL_HIGH_PCT   = 30.0    # above this -> HIGH priority
+PORTFOLIO_VOL_MEDIUM_PCT = 25.0    # above this -> MEDIUM priority
+
+# ── Portfolio max drawdown (values are negative %) ───────────────────────────
+# risk_advisor.py's drawdown rec: below (more negative than) DRAWDOWN_ACTION_MAX
+# an action fires (HIGH if also below DRAWDOWN_HIGH_MAX, else MEDIUM); above
+# (less negative than) DRAWDOWN_OK_MIN a congratulatory OK card fires instead.
+# (DRAWDOWN_HIGH_MAX, DRAWDOWN_OK_MIN) — i.e. -20% to -10% — is a deliberate
+# dead zone, same pattern as the Sharpe ladder. DRAWDOWN_CONTRIB_MAX is
+# selection-only: a per-ticker cutoff to be named a drawdown contributor in
+# the rec's root_cause, doesn't gate whether the rec fires. Extracted
+# 2026-07-28, same hard-rule-#1 sweep.
+PORTFOLIO_DRAWDOWN_ACTION_MAX = -20.0   # below this -> an action fires
+PORTFOLIO_DRAWDOWN_HIGH_MAX   = -30.0   # below this -> HIGH (else MEDIUM)
+PORTFOLIO_DRAWDOWN_OK_MIN     = -10.0   # above this -> OK card
+DRAWDOWN_CONTRIB_MAX          = -15.0   # per-ticker cutoff to be named a contributor
+
+# ── Tail risk (CVaR / VaR ratio) ─────────────────────────────────────────────
+# risk_advisor.py's tail-risk rec: above TAIL_RATIO_ACTION_MIN an action fires
+# (HIGH if also above TAIL_RATIO_HIGH_MIN, else MEDIUM); at/below
+# TAIL_RATIO_ACTION_MIN, no rec (no "OK" card for tail risk, same pattern as
+# volatility). Extracted 2026-07-28, same hard-rule-#1 sweep.
+TAIL_RATIO_ACTION_MIN = 1.7    # above this -> an action fires
+TAIL_RATIO_HIGH_MIN   = 2.2    # above this -> HIGH (else MEDIUM)
+
 # Concept D — regime-conditional position targets (Wave 3, 2026-07-17 policy
 # conversation with user). Anchored to the existing regime-agnostic
 # PORTFOLIO_BETA_TARGET/_ELEVATED/_CEILING baseline above: tightens in

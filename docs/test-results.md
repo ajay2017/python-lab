@@ -18,10 +18,10 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (`risk_advisor.py` Sharpe-threshold hard-rule-#1 fix)
+## 1. Latest run — 2026-07-28 (`risk_advisor.py` full hardcoded-threshold sweep)
 
-**1091 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 8.05s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
+**1103 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
+active: 12.17s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 `.venv`.
 
 ### Per-file breakdown
@@ -33,7 +33,7 @@ active: 8.05s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_concentration.py` | 16 | `concentration.py` |
 | `test_exit_advisor.py` | 32 | `exit_advisor.py` |
 | `test_portfolio.py` | 28 | `portfolio.py` |
-| `test_risk_advisor.py` | 32 | `risk_advisor.py` (incl. 4 boundary-exact regression pins for the Sharpe alert-ladder constants) |
+| `test_risk_advisor.py` | 44 | `risk_advisor.py` (incl. 16 boundary-exact regression pins across the Sharpe/volatility/drawdown/tail-risk alert ladders and their per-ticker selection cutoffs) |
 | `test_daily_briefing.py` | 35 | `daily_briefing.py` (incl. `_cross_reference()`) |
 | `test_signal_reconciliation.py` | 26 | `signal_reconciliation.py` |
 | `test_structural_scanner.py` | 19 | `structural_scanner.py` (incl. `blast_radius()` backfill) |
@@ -55,7 +55,7 @@ active: 8.05s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
 | `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
 | `test_news_intelligence.py` | 76 | `news_intelligence.py` (significance scoring, negative-news alerts, opportunity detection + Reduce/Exit suppression, sector digest, suppress-only + bidirectional LLM rescore helpers) |
-| **Total** | **1091** | |
+| **Total** | **1103** | |
 
 ### Line coverage of the 15 targeted modules
 
@@ -179,6 +179,53 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-28 — `risk_advisor.py` full hardcoded-threshold sweep (CLAUDE.md hard-rule-#1 fix), 1103/1103 passing
+
+Follow-up to the Sharpe-only fix immediately below: the prior review had
+flagged that `risk_advisor.py` still had more hardcoded thresholds outside
+its scope, and the user asked to close all of them in one pass. Extracted
+10 more constants to `constants.py`, all pure 1:1 extractions of
+previously-inline literals — values and comparison operators unchanged, no
+behavior change: `SHARPE_DRAG_RELATIVE_MAX = 0.7` /
+`SHARPE_DRAG_MIN_WEIGHT_PCT = 3.0` (the per-ticker Sharpe-drag root_cause
+selection cutoffs — selection-only, don't gate whether the Sharpe rec
+fires), `PORTFOLIO_VOL_HIGH_PCT = 30.0` / `PORTFOLIO_VOL_MEDIUM_PCT = 25.0`
+(the volatility priority ladder), `PORTFOLIO_DRAWDOWN_ACTION_MAX = -20.0` /
+`PORTFOLIO_DRAWDOWN_HIGH_MAX = -30.0` / `PORTFOLIO_DRAWDOWN_OK_MIN = -10.0`
+(the drawdown priority ladder) plus `DRAWDOWN_CONTRIB_MAX = -15.0` (the
+per-ticker drawdown-contributor selection cutoff, same selection-only
+pattern as the Sharpe-drag one), and `TAIL_RATIO_ACTION_MIN = 1.7` /
+`TAIL_RATIO_HIGH_MIN = 2.2` (the tail-risk priority ladder). Documented all
+10 in `docs/architecture.md`'s constants table. Added 12 new boundary-exact
+regression tests to `tests/test_risk_advisor.py` (44 total now), importing
+the real constants rather than re-hardcoding the literals — including a
+dual-gate test for the Sharpe-drag selection (weight floor AND relative
+Sharpe floor both required; neither alone is sufficient) and a
+per-ticker-contributor-selection boundary test for drawdown. Per CLAUDE.md
+hard rule #4: **Opus reviewer: SHIP, 0 blocking** — verified all 10 values
+and all 8 changed comparison operators are exact 1:1 matches with no
+`<`→`<=`/`>`→`>=` flip anywhere, grepped the repo confirming the only other
+vol/drawdown/sharpe/tail classification logic (`app.py`'s metric-card
+captions) is cosmetic display text with different boundaries that never
+gates a recommendation — not a missed sibling ladder, traced each new
+boundary test against the actual source's strict-inequality direction
+(not just trusting test names) and confirmed each lands on the correct
+side, and endorsed leaving the beta-trim simulation math (`0.50` sell
+fraction, `0.3` new-beta floor, `0.85` fallback factor) and narrative-copy
+percentages out of scope since those are recommendation-body math/copy
+that runs only after a ladder has already decided to fire, not the
+priority-gating class of literal this sweep targeted. **New non-blocking
+follow-up flagged, not yet actioned:** `app.py`'s Max-Drawdown/volatility
+metric-caption thresholds are bare literals that now numerically mirror
+several of today's new constants (display-only, never gate) — a future
+constant retune could silently drift the caption out of sync with the
+actual gate; worth sourcing from `constants.py` in a later pass.
+
+**This closes the entire class of finding** first surfaced during the
+2026-07-27 `risk.py` Sharpe/Sortino review — every hardcoded priority-ladder
+and selection-cutoff threshold in `risk_advisor.py` now lives in
+`constants.py`.
 
 ### 2026-07-28 — `risk_advisor.py` Sharpe alert-ladder thresholds extracted to `constants.py` (CLAUDE.md hard-rule-#1 fix), 1091/1091 passing
 

@@ -13,12 +13,22 @@ relevant to the branch under test.
 import pandas as pd
 
 from stock_analyzer.constants import (
+    DRAWDOWN_CONTRIB_MAX,
+    PORTFOLIO_DRAWDOWN_ACTION_MAX,
+    PORTFOLIO_DRAWDOWN_HIGH_MAX,
+    PORTFOLIO_DRAWDOWN_OK_MIN,
+    PORTFOLIO_VOL_HIGH_PCT,
+    PORTFOLIO_VOL_MEDIUM_PCT,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
+    SHARPE_DRAG_MIN_WEIGHT_PCT,
+    SHARPE_DRAG_RELATIVE_MAX,
     SHARPE_HIGH_RISK_MAX,
     SHARPE_MEDIUM_RISK_MAX,
     SHARPE_STRONG_MIN,
     SINGLE_NAME_CEILING,
+    TAIL_RATIO_ACTION_MIN,
+    TAIL_RATIO_HIGH_MIN,
     WEAK_CONVICTION_SCORE,
 )
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
@@ -137,6 +147,33 @@ def test_sharpe_ok_boundary_pinned_to_constant():
     assert find_rec(recs, "ok_sharpe") is not None
 
 
+def test_sharpe_drag_selection_requires_both_relative_and_weight_floor():
+    # A ticker only gets named as a "drag" when its own Sharpe trails the
+    # portfolio Sharpe by SHARPE_DRAG_RELATIVE_MAX AND its weight clears
+    # SHARPE_DRAG_MIN_WEIGHT_PCT -- regression pin for the constants.py
+    # extraction (was inline 0.7 / 3.0 literals).
+    port_sharpe = 0.5
+    rows = [
+        {  # trails enough, but weight is below the floor -> NOT named
+            "ticker": "TOO_SMALL", "weight": SHARPE_DRAG_MIN_WEIGHT_PCT - 1,
+            "market_value": 1_000.0, "sharpe": port_sharpe * SHARPE_DRAG_RELATIVE_MAX - 0.01,
+        },
+        {  # big enough weight, but doesn't trail enough -> NOT named
+            "ticker": "NOT_LAGGING", "weight": SHARPE_DRAG_MIN_WEIGHT_PCT + 5,
+            "market_value": 10_000.0, "sharpe": port_sharpe * SHARPE_DRAG_RELATIVE_MAX + 0.01,
+        },
+        {  # both conditions clear -> named as a drag
+            "ticker": "REAL_DRAG", "weight": SHARPE_DRAG_MIN_WEIGHT_PCT + 5,
+            "market_value": 10_000.0, "sharpe": port_sharpe * SHARPE_DRAG_RELATIVE_MAX - 0.01,
+        },
+    ]
+    recs = _recs(rows, sharpe=port_sharpe)
+    rec = find_rec(recs, "sharpe")
+    assert rec is not None
+    drag_tickers = [t["ticker"] for t in rec["root_tickers"]]
+    assert drag_tickers == ["REAL_DRAG"]
+
+
 # ── volatility ────────────────────────────────────────────────────────────────
 
 def test_volatility_high_above_30():
@@ -156,6 +193,23 @@ def test_volatility_medium_between_25_and_30():
 def test_volatility_no_rec_at_or_below_25():
     # Volatility has no "OK" sub-type, unlike beta/sharpe/drawdown -- just silence.
     recs = _recs(_ONE_ROW, ann_volatility=20.0)
+    assert find_rec(recs, "volatility") is None
+
+
+def test_volatility_high_boundary_pinned_to_constant():
+    recs = _recs(_ONE_ROW, ann_volatility=PORTFOLIO_VOL_HIGH_PCT + 0.01)
+    assert find_rec(recs, "volatility")["priority"] == "HIGH"
+
+
+def test_volatility_medium_boundary_pinned_to_constant():
+    # At exactly PORTFOLIO_VOL_HIGH_PCT, HIGH's strict > gate doesn't fire.
+    recs = _recs(_ONE_ROW, ann_volatility=PORTFOLIO_VOL_HIGH_PCT)
+    assert find_rec(recs, "volatility")["priority"] == "MEDIUM"
+
+
+def test_volatility_no_rec_boundary_pinned_to_constant():
+    # At exactly PORTFOLIO_VOL_MEDIUM_PCT, no rec fires (strict > gate).
+    recs = _recs(_ONE_ROW, ann_volatility=PORTFOLIO_VOL_MEDIUM_PCT)
     assert find_rec(recs, "volatility") is None
 
 
@@ -188,6 +242,43 @@ def test_drawdown_dead_zone_produces_no_rec():
     assert find_rec(recs, "ok_drawdown") is None
 
 
+def test_drawdown_high_boundary_pinned_to_constant():
+    recs = _recs(_ONE_ROW, max_drawdown=PORTFOLIO_DRAWDOWN_HIGH_MAX - 0.01)
+    assert find_rec(recs, "drawdown")["priority"] == "HIGH"
+
+
+def test_drawdown_medium_boundary_pinned_to_constant():
+    # At exactly PORTFOLIO_DRAWDOWN_HIGH_MAX, HIGH's strict < gate doesn't fire.
+    recs = _recs(_ONE_ROW, max_drawdown=PORTFOLIO_DRAWDOWN_HIGH_MAX)
+    assert find_rec(recs, "drawdown")["priority"] == "MEDIUM"
+
+
+def test_drawdown_action_ladder_boundary_pinned_to_constant():
+    # At exactly PORTFOLIO_DRAWDOWN_ACTION_MAX, the action ladder no longer
+    # fires (strict < gate).
+    recs = _recs(_ONE_ROW, max_drawdown=PORTFOLIO_DRAWDOWN_ACTION_MAX)
+    assert find_rec(recs, "drawdown") is None
+
+
+def test_drawdown_ok_boundary_pinned_to_constant():
+    recs = _recs(_ONE_ROW, max_drawdown=PORTFOLIO_DRAWDOWN_OK_MIN + 0.01)
+    assert find_rec(recs, "ok_drawdown") is not None
+
+
+def test_drawdown_contributor_selection_boundary_pinned_to_constant():
+    # A per-ticker drawdown just at DRAWDOWN_CONTRIB_MAX is NOT named as a
+    # contributor (strict < gate) -- regression pin for the constants.py
+    # extraction (was an inline -15 literal).
+    rows = [{
+        "ticker": "AAA", "weight": 20.0, "market_value": 20_000.0,
+        "max_drawdown": DRAWDOWN_CONTRIB_MAX,
+    }]
+    recs = _recs(rows, max_drawdown=-35.0)
+    rec = find_rec(recs, "drawdown")
+    assert rec is not None
+    assert rec["root_tickers"] == []
+
+
 # ── tail risk ─────────────────────────────────────────────────────────────────
 
 def test_tail_risk_high_above_2_2_ratio():
@@ -211,6 +302,26 @@ def test_tail_risk_no_rec_at_or_below_1_7():
 
 def test_tail_risk_requires_both_metrics_present():
     recs = _recs(_ONE_ROW, var_95_pct=-2.0, cvar_95_pct=None)
+    assert find_rec(recs, "tail_risk") is None
+
+
+def test_tail_risk_high_boundary_pinned_to_constant():
+    var = -2.0
+    recs = _recs(_ONE_ROW, var_95_pct=var, cvar_95_pct=var * (TAIL_RATIO_HIGH_MIN + 0.01))
+    assert find_rec(recs, "tail_risk")["priority"] == "HIGH"
+
+
+def test_tail_risk_medium_boundary_pinned_to_constant():
+    # Ratio exactly at TAIL_RATIO_HIGH_MIN -> HIGH's strict > gate doesn't fire.
+    var = -2.0
+    recs = _recs(_ONE_ROW, var_95_pct=var, cvar_95_pct=var * TAIL_RATIO_HIGH_MIN)
+    assert find_rec(recs, "tail_risk")["priority"] == "MEDIUM"
+
+
+def test_tail_risk_no_rec_boundary_pinned_to_constant():
+    # Ratio exactly at TAIL_RATIO_ACTION_MIN -> no rec (strict > gate).
+    var = -2.0
+    recs = _recs(_ONE_ROW, var_95_pct=var, cvar_95_pct=var * TAIL_RATIO_ACTION_MIN)
     assert find_rec(recs, "tail_risk") is None
 
 

@@ -13,15 +13,25 @@ import pandas as pd
 from collections import defaultdict
 
 from stock_analyzer.constants import (
+    DRAWDOWN_CONTRIB_MAX,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_BETA_TARGET,
+    PORTFOLIO_DRAWDOWN_ACTION_MAX,
+    PORTFOLIO_DRAWDOWN_HIGH_MAX,
+    PORTFOLIO_DRAWDOWN_OK_MIN,
+    PORTFOLIO_VOL_HIGH_PCT,
+    PORTFOLIO_VOL_MEDIUM_PCT,
     SECTOR_CEILING,
     SECTOR_ELEVATED,
+    SHARPE_DRAG_MIN_WEIGHT_PCT,
+    SHARPE_DRAG_RELATIVE_MAX,
     SHARPE_HIGH_RISK_MAX,
     SHARPE_MEDIUM_RISK_MAX,
     SHARPE_STRONG_MIN,
     SINGLE_NAME_CEILING,
+    TAIL_RATIO_ACTION_MIN,
+    TAIL_RATIO_HIGH_MIN,
     WEAK_CONVICTION_SCORE,
     UNCLASSIFIED_SECTOR,
 )
@@ -263,7 +273,7 @@ def build_risk_advisor_recommendations(
         for t, tr in tr_map.items():
             ts = tr["sharpe"]
             w  = tr["weight"]
-            if ts < sharpe * 0.7 and w >= 3.0:
+            if ts < sharpe * SHARPE_DRAG_RELATIVE_MAX and w >= SHARPE_DRAG_MIN_WEIGHT_PCT:
                 drags.append({
                     "ticker": t,
                     "value":  round(ts, 2),
@@ -336,9 +346,9 @@ def build_risk_advisor_recommendations(
     # ── 3. PORTFOLIO VOLATILITY ───────────────────────────────────────────────
     if ann_vol is None:
         vol_priority = None
-    elif ann_vol > 30:
+    elif ann_vol > PORTFOLIO_VOL_HIGH_PCT:
         vol_priority = "HIGH"
-    elif ann_vol > 25:
+    elif ann_vol > PORTFOLIO_VOL_MEDIUM_PCT:
         vol_priority = "MEDIUM"
     else:
         vol_priority = None
@@ -403,14 +413,14 @@ def build_risk_advisor_recommendations(
         })
 
     # ── 4. MAX DRAWDOWN ───────────────────────────────────────────────────────
-    if max_dd is not None and max_dd < -20:
-        dd_priority = "HIGH" if max_dd < -30 else "MEDIUM"
+    if max_dd is not None and max_dd < PORTFOLIO_DRAWDOWN_ACTION_MAX:
+        dd_priority = "HIGH" if max_dd < PORTFOLIO_DRAWDOWN_HIGH_MAX else "MEDIUM"
 
         dd_contribs = []
         for t, tr in tr_map.items():
             d = tr["max_drawdown"]
             w = tr["weight"]
-            if d < -15 and w > 0:
+            if d < DRAWDOWN_CONTRIB_MAX and w > 0:
                 dd_contribs.append({
                     "ticker": t,
                     "value":  round(d, 1),
@@ -464,7 +474,7 @@ def build_risk_advisor_recommendations(
                 "mistake in portfolio management."
             ),
         })
-    elif max_dd is not None and max_dd > -10:
+    elif max_dd is not None and max_dd > PORTFOLIO_DRAWDOWN_OK_MIN:
         recs.append({
             "priority": "OK",
             "type":     "ok_drawdown",
@@ -485,8 +495,8 @@ def build_risk_advisor_recommendations(
         var_dollar  = abs(var_pct  / 100 * pv)
         cvar_dollar = abs(cvar_pct / 100 * pv)
 
-        if tail_ratio > 1.7:
-            tail_priority = "HIGH" if tail_ratio > 2.2 else "MEDIUM"
+        if tail_ratio > TAIL_RATIO_ACTION_MIN:
+            tail_priority = "HIGH" if tail_ratio > TAIL_RATIO_HIGH_MIN else "MEDIUM"
             recs.append({
                 "priority": tail_priority,
                 "type":     "tail_risk",
