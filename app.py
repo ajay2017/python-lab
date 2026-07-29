@@ -14944,7 +14944,7 @@ elif page == "🔍 Market Scanner":
         # Compute cache key early so Top 5 cards can show earnings badges
         # when Signal Evidence has already been loaded
         _top10 = filtered.head(10)
-        _ev_cache_key = f"_scanner_ev_{','.join(_top10['Ticker'].tolist())}"
+        _ev_cache_key = f"_scanner_ev_{_today_et().isoformat()}_{','.join(_top10['Ticker'].tolist())}"
         _ev_bundle_map = st.session_state.get(_ev_cache_key, {})
 
         # Top 5 picks callout
