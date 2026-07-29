@@ -7788,8 +7788,14 @@ if page == "🏠 Home":
             _tup_dbmod._ticker(_i) for _i in (_act_bucket + _aware_bucket)
         } - {""}
         _tup_flags = []
+        # Batched (one round-trip for every held ticker's today-row) rather than
+        # one call per ticker per rerun — this ran on every Home rerun before the
+        # 2026-07-29 audit (H9) flagged it as an un-memoized N-call loop.
+        _tup_today_rows = db.load_thesis_erosion_cache_batch(
+            sorted(set(held_tickers) - _tup_already_flagged), _tup_today_str
+        )
         for _tup_tk in sorted(set(held_tickers) - _tup_already_flagged):
-            _tup_row = db.load_thesis_erosion_cache(_tup_tk, _tup_today_str)
+            _tup_row = _tup_today_rows.get(_tup_tk)
             if not _tup_row or _tup_row.get("erosion_score") is None:
                 continue  # Red Team hasn't scored this ticker today — skip, never compute from here
 

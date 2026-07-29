@@ -2452,6 +2452,33 @@ def load_thesis_erosion_cache(ticker: str, score_date: str) -> dict | None:
         return None
 
 
+def load_thesis_erosion_cache_batch(tickers: list[str], score_date: str) -> dict[str, dict]:
+    """Return {ticker: cached_row} for every ticker with a scored row on score_date.
+
+    Batched sibling of load_thesis_erosion_cache() — one round-trip instead of one
+    per ticker. Added 2026-07-29 (audit H9) to close an N-Supabase-calls-per-Home-
+    rerun loop in the "Thesis Under Pressure" Daily Brief annotation (F-196 Phase 3).
+    Tickers with no scored row today are simply absent from the returned dict.
+    Never raises; returns {} on any failure or if the DB is offline.
+    """
+    ts = sorted({str(t or "").upper().strip() for t in (tickers or []) if str(t or "").strip()})
+    if not ts or not has_db():
+        return {}
+    try:
+        rows = (
+            _client()
+            .table("thesis_erosion_cache")
+            .select("ticker,erosion_score,erosion_label,counter_evidence,signals_snapshot")
+            .in_("ticker", ts)
+            .eq("score_date", score_date)
+            .execute()
+            .data
+        )
+        return {r["ticker"]: r for r in (rows or []) if r.get("ticker")}
+    except Exception:
+        return {}
+
+
 def save_thesis_erosion_cache(
     ticker, score_date, erosion_score, erosion_label, signals_snapshot,
     counter_evidence=None
