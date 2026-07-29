@@ -344,7 +344,7 @@ One-line format: "NVDA thesis erosion jumped to 62 (Eroding) — see Red Team ta
 |---|---|---|---|
 | **Phase 1** | **SHIPPED 2026-07-23** | `1fa4fa6` (main build), `5fccfb6` (is_trading_day fix), `d26fd05` (label fix), `bae1ba0` (UX clarity) | 3 post-ship fixes in same session; all minor |
 | **Phase 2** | **SHIPPED 2026-07-27** | `78a6adc` | Haiku counter-evidence + Pre-Mortem loop; see `docs/plans/thesis-red-team-phase2.md` for the 6 review rounds |
-| **Phase 3** | **SHIPPED 2026-07-28** | see `docs/shipped-log.md` for the hash (cited post-commit) | Daily Brief "Thesis Under Pressure" annotation; Opus review FIX-FIRST (2 blocking: calendar-yesterday baseline noise, deterioration-card double-surface) → fixed → SHIP |
+| **Phase 3** | **SHIPPED 2026-07-28** | `0aa1349` | Daily Brief "Thesis Under Pressure" annotation; Opus review FIX-FIRST (2 blocking: calendar-yesterday baseline noise, deterioration-card double-surface) → fixed → SHIP |
 
 ## Phase 1 — what shipped
 
@@ -369,7 +369,7 @@ One-line format: "NVDA thesis erosion jumped to 62 (Eroding) — see Red Team ta
 |---|---|---|---|
 | **Phase 1** | Erosion score, "⚠️ Red Team" tab, signal breakdown with plain-English labels | **SHIPPED 2026-07-23** | Passed same day |
 | **Phase 2** | Haiku counter-evidence narrative. Pre-mortem loop (reads `premortem_commitment` as context). Counter-evidence bullets in Red Team tab + Exit Advisor card expanders. | **SHIPPED 2026-07-27** (commit `78a6adc`) | Built ahead of the original ~2026-07-30 observation gate per explicit user decision — see `docs/plans/thesis-red-team-phase2.md` |
-| **Phase 3** | Daily Brief "Thesis Under Pressure" annotation. Cross-day delta detection. | **SHIPPED 2026-07-28** | Baseline redefined mid-review from literal calendar-yesterday to "most recent prior day with a scored row" (`THESIS_EROSION_BASELINE_LOOKBACK_DAYS`=10) after Opus review caught weekly false-positive noise; deduped against same-run deterioration cards via `decision_bucket._ticker()` |
+| **Phase 3** | Daily Brief "Thesis Under Pressure" annotation. Cross-day delta detection. | **SHIPPED 2026-07-28** (commit `0aa1349`) | Baseline redefined mid-review from literal calendar-yesterday to "most recent prior day with a scored row" (`THESIS_EROSION_BASELINE_LOOKBACK_DAYS`=10) after Opus review caught weekly false-positive noise; deduped against same-run deterioration cards via `decision_bucket._ticker()` |
 
 **Phase 2 gate criteria (observe before building):**
 - Composite delta component shows real session-over-session values (not the bootstrap +80 artifact) — confirms 5-session cache has accumulated
