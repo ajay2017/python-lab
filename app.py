@@ -23750,21 +23750,21 @@ elif page == "📊 Predictive Analytics":
                         width='stretch', hide_index=True,
                     )
 
-            st.warning(
-                "**Exit-side signals (TRIM / EXIT / Risk Advisor recommendations) have "
-                "no historical record.** These signals are computed live each session and "
-                "not persisted — there is no record of which signal fired on which date "
-                "or whether you acted on it. Behavioral Fingerprint patterns tied to exit "
-                "timing (disposition effect, loss-aversion) cannot be built from history "
-                "and will need to accumulate forward from here."
+            st.info(
+                "ℹ️ **Exit-side signals (TRIM / EXIT / WATCH / RISK_OFF) have been "
+                "persisted to a historical record since 2026-07-18** (the `exit_signals` "
+                "table). The Exit Signal Response section below builds its response-rate, "
+                "response-lag, and escalation-ignored patterns forward from that date — "
+                "each card is sample-gated and reads \"insufficient data\" until enough "
+                "signal history accumulates."
             )
 
             _bfa_rate = _bfa_all["action_rate"] or 0.0
             if _bfa_rate >= 80:
                 st.success(
                     "✅ Enough historical Buy-side data exists to power Behavioral "
-                    "Fingerprint patterns from history. Exit-side patterns still need "
-                    "to accumulate forward — see the note above."
+                    "Fingerprint patterns from history. Exit-side patterns build forward "
+                    "from 2026-07-18 — see the Exit Signal Response section below."
                 )
             else:
                 st.info(
@@ -25772,7 +25772,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, and Analytics (relative strength, sector rotation, rankings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
-- **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
+- **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Diagnostic only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it. Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
@@ -25972,7 +25972,7 @@ Directional, sample-gated observations over your own Buy-side decisions (new_pic
 - **Conviction-tier follow-through** — do you actually act more on Strong Buy calls than plain Buy calls, as you'd rationally expect?
 - **Opening-window entry timing** — do trades entered right at the market open have a different track record than ones entered later in the day? (Needs graded outcome data from 📊 Predictive Analytics — visit that page first to unlock this card.)
 
-Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Exit-side patterns (how you react to TRIM/EXIT signals) aren't covered yet — the app doesn't keep a historical record of those signals to learn from.
+Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Below the three Buy-side cards, an **Exit Signal Response** section covers how you react to TRIM/EXIT/WATCH/RISK_OFF signals: response rate (how often a signal is followed by a SELL within a window), response lag (median days to act), and escalation-ignored (holding through a WATCH→TRIM/EXIT or TRIM→EXIT escalation without selling) — built from the `exit_signals` history persisted since 2026-07-18, forward-only from that date.
 
 ---
 
