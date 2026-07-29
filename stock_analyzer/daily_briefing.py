@@ -2248,13 +2248,15 @@ def build_daily_briefing(
     # are the lowest-priority reduce, so they append to the end of Act Today.
     # _buy_candidates runs after this block so it sees the complete act list and
     # cannot surface an ADD for a ticker that risk-off just flagged for TRIM.
+    # Exclude every ticker carrying ANY review card (not just the 3 TRIM types) —
+    # a WATCH-type review card ("not an action yet") must never coexist with a
+    # same-render risk-off "Trim now" Act Today card for the same name (2026-07-29
+    # audit H6; the prior narrower TRIM-only filter let that contradiction through).
     _reduced = {str(it.get("ticker")).upper() for it in act if it.get("ticker")}
     for _it in review:
-        _at = str((_it.get("action") or {}).get("type", ""))
-        if _at in ("TRIM_AND_TIGHTEN", "TRIM_TO_TARGET", "PROTECTIVE_TRIM"):
-            _rt = _it.get("ticker") or (_it.get("action") or {}).get("trim_ticker")
-            if _rt:
-                _reduced.add(str(_rt).upper())
+        _rt = _it.get("ticker") or (_it.get("action") or {}).get("trim_ticker")
+        if _rt:
+            _reduced.add(str(_rt).upper())
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
