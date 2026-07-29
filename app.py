@@ -1544,7 +1544,8 @@ def _render_trade_button(
     """
     _label = label or f"📒 Trade {ticker}"
     _key   = f"_trade_btn_{ticker}_{key_suffix or 'default'}"
-    if st.button(_label, key=_key, use_container_width=use_container_width):
+    if st.button(_label, key=_key, use_container_width=use_container_width,
+                 disabled=st.session_state.get("_readonly", False)):
         _prefill: dict = {
             "ticker":  ticker.upper(),
             "action":  suggested_action.upper(),
@@ -17602,7 +17603,8 @@ elif page == "📋 Watchlist":
                 st.warning(f"Remove **{_wl_confirm_label}** from watchlist?")
                 _wbc1, _wbc2 = st.columns(2)
                 with _wbc1:
-                    if st.button("Yes, remove", key="_wl_bulk_confirm_yes", type="primary"):
+                    if st.button("Yes, remove", key="_wl_bulk_confirm_yes", type="primary",
+                                  disabled=st.session_state.get("_readonly", False)):
                         for _rt in _wl_bulk_confirm:
                             if _rt in st.session_state.watchlist:
                                 st.session_state.watchlist.remove(_rt)
@@ -18111,7 +18113,8 @@ elif page == "📋 Watchlist":
                         st.warning(f"Remove **{_ticker}** from watchlist?")
                         _dc1, _dc2 = st.columns(2)
                         with _dc1:
-                            if st.button("Yes, remove", key=f"_wl_del_yes_{_ticker}", type="primary"):
+                            if st.button("Yes, remove", key=f"_wl_del_yes_{_ticker}", type="primary",
+                                         disabled=st.session_state.get("_readonly", False)):
                                 st.session_state.pop(_del_key, None)
                                 if _ticker in st.session_state.watchlist:
                                     st.session_state.watchlist.remove(_ticker)
@@ -18474,7 +18477,8 @@ elif page == "📒 Trade Journal":
                     unsafe_allow_html=True,
                 )
         _ps_c1, _ps_c2 = st.columns([1, 1])
-        if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", use_container_width=True):
+        if _ps_c1.button("✅ Confirm SELL", type="primary", key="_tj_confirm_sell", use_container_width=True,
+                          disabled=st.session_state.get("_readonly", False)):
             _ps_saved = db.save_trade(_pending_sell)
             if _ps_saved or not db.has_db():
                 if not db.has_db():
@@ -20268,7 +20272,8 @@ elif page == "📒 Trade Journal":
                     )
                     _dc1, _dc2 = st.columns(2)
                     with _dc1:
-                        if st.button("Yes, delete", key="_tj_delete_confirm_yes", type="primary"):
+                        if st.button("Yes, delete", key="_tj_delete_confirm_yes", type="primary",
+                                     disabled=st.session_state.get("_readonly", False)):
                             st.session_state.pop("_tj_delete_confirm_pending", None)
                             failed = 0
                             for tid in _pending_ids:
