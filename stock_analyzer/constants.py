@@ -978,6 +978,7 @@ PREMATURE_EXIT_MIN_LOTS         = 5     # min winning lots per quick/patient buc
 THESIS_EROSION_HAIKU_MIN  = 30   # min erosion score to trigger Haiku counter-evidence (Phase 2)
 THESIS_EROSION_BRIEF_MIN  = 50   # erosion score threshold for Daily Brief annotation (Phase 3)
 THESIS_EROSION_BRIEF_JUMP = 15   # same-day score jump that triggers Brief annotation (Phase 3)
+THESIS_EROSION_BASELINE_LOOKBACK_DAYS = 10   # calendar days to walk back for the Phase 3 baseline row before treating a ticker as a first-ever observation
 
 # ── Day Shock awareness banner (Home) ─────────────────────────────────────────
 # Flags any held position moving ≥ this % (up or down) same-day, independent of

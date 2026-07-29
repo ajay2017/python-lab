@@ -7760,6 +7760,99 @@ if page == "🏠 Home":
                     st.session_state["_analysis_ticker"] = _db_buy["ticker"]
                     st.rerun()
 
+    # ── Thesis Under Pressure — Daily Brief annotation (Thesis Red Team
+    # Phase 3, F-196). Pure cache read from thesis_erosion_cache — never
+    # triggers a compute (that only happens when AI Insights -> Red Team is
+    # visited), so this is usually empty on the day's first Home load and
+    # only populates once the user has visited that tab today. Awareness
+    # only: never gates, never modifies act_today / buy_candidates /
+    # review_list. Dedupes against tickers already shown as deterioration
+    # cards above in this same Brief run — erosion_score's tier component is
+    # sourced from the same exit_signals detector that fires those cards
+    # (see Surface 2's circularity note in the plan), so re-flagging an
+    # already WATCH/TRIM/EXIT ticker here would restate, not add, information.
+    # See docs/plans/thesis-red-team-agent.md lines 327-337.
+    if held_tickers and is_trading_day(_today_et()):
+        from stock_analyzer.constants import (
+            THESIS_EROSION_BRIEF_MIN, THESIS_EROSION_BRIEF_JUMP,
+            THESIS_EROSION_BASELINE_LOOKBACK_DAYS,
+        )
+        from stock_analyzer import decision_bucket as _tup_dbmod
+        _tup_today_str = str(_today_et())
+        # Use the canonical ticker resolver, not a raw `.get("ticker")` — macro
+        # PROTECTIVE_TRIM / WATCH items carry ticker=None with the real subject
+        # in action["trim_ticker"] (decision_bucket._ticker's own docstring);
+        # reading the raw key would leave those names undeduped and double-
+        # surface them here alongside their Act/Aware card.
+        _tup_already_flagged = {
+            _tup_dbmod._ticker(_i) for _i in (_act_bucket + _aware_bucket)
+        } - {""}
+        _tup_flags = []
+        for _tup_tk in sorted(set(held_tickers) - _tup_already_flagged):
+            _tup_row = db.load_thesis_erosion_cache(_tup_tk, _tup_today_str)
+            if not _tup_row or _tup_row.get("erosion_score") is None:
+                continue  # Red Team hasn't scored this ticker today — skip, never compute from here
+
+            _tup_score = float(_tup_row["erosion_score"])
+
+            # Baseline = most recent PRIOR trading day that actually has a scored
+            # row — NOT literal calendar-yesterday. A cache row only exists on a
+            # day the user visited the Red Team tab, so "yesterday" is frequently
+            # blank even on a trading day (e.g. every Monday, whose calendar-
+            # yesterday is Sunday). Walk back up to THESIS_EROSION_BASELINE_LOOKBACK_DAYS
+            # calendar days; if nothing is found, this is a first-ever observation.
+            _tup_baseline = None
+            _tup_probe = _today_et() - timedelta(days=1)
+            for _ in range(THESIS_EROSION_BASELINE_LOOKBACK_DAYS):
+                if is_trading_day(_tup_probe):
+                    _tup_probe_row = db.load_thesis_erosion_cache(_tup_tk, str(_tup_probe))
+                    if _tup_probe_row and _tup_probe_row.get("erosion_score") is not None:
+                        _tup_baseline = float(_tup_probe_row["erosion_score"])
+                        break
+                _tup_probe -= timedelta(days=1)
+
+            _tup_flag = False
+            if _tup_baseline is not None:
+                _tup_crossed_up = (_tup_score >= THESIS_EROSION_BRIEF_MIN
+                                    and _tup_baseline < THESIS_EROSION_BRIEF_MIN)
+                _tup_jumped = (_tup_score - _tup_baseline) >= THESIS_EROSION_BRIEF_JUMP
+                _tup_flag = _tup_crossed_up or _tup_jumped
+            elif _tup_score >= THESIS_EROSION_BRIEF_MIN:
+                _tup_flag = True  # first-ever observation — only the absolute threshold can fire
+
+            if _tup_flag:
+                _tup_flags.append({
+                    "ticker": _tup_tk,
+                    "score":  _tup_score,
+                    "label":  _tup_row.get("erosion_label") or "",
+                })
+
+        if _tup_flags:
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='background:#1e293b;border-left:4px solid #f59e0b;"
+                f"border-radius:8px;padding:10px 16px;margin-bottom:8px'>"
+                f"<span style='font-size:1em;font-weight:700;color:#e2e8f0'>"
+                f"⚠️ Thesis Under Pressure ({len(_tup_flags)})</span>"
+                f"<span style='color:#94a3b8;font-size:0.82em'>"
+                f" · adversarial review flagged new pressure today</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            for _tf in sorted(_tup_flags, key=lambda r: r["score"], reverse=True):
+                _tf_label = f" ({_tf['label']})" if _tf["label"] else ""
+                st.markdown(
+                    f"<div style='background:#0f172a;border:1px solid #78350f;"
+                    f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
+                    f"<div style='color:#fbbf24;font-weight:700;font-size:0.86em'>"
+                    f"{_tf['ticker']} thesis erosion at {_tf['score']:.0f}/100{_tf_label}</div>"
+                    f"<div style='color:#94a3b8;font-size:0.8em;margin-top:4px'>"
+                    f"See 🧠 AI Insights → ⚠️ Red Team tab for the signal breakdown and "
+                    f"counter-evidence.</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
     st.divider()
 
     st.subheader("🌙 Evening Debrief")
@@ -25588,7 +25681,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. **Strictly display-only: neither the score nor the counter-evidence ever feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Strictly display-only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
