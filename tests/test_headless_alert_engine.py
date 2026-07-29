@@ -12,6 +12,7 @@ compute_protective_alerts, the market-tone/diagnostic assembly in
 compute_morning_picks, and the snapshot-row filtering + pullback framing in
 compute_eod/_assess_pullback. See docs/plans/test-automation.md for scope.
 """
+import importlib
 import sys
 from datetime import date
 from unittest.mock import patch, MagicMock
@@ -21,14 +22,23 @@ import pytest
 
 # stock_analyzer.db and .sentiment (imported transitively via
 # headless_alert_engine -> db / bundle_loader -> sentiment) hard-import
-# streamlit / vaderSentiment at module load time. The dev venv is intentionally
+# streamlit / vaderSentiment at module load time. The dev venv was originally
 # bare of these (app only ever runs on Streamlit Cloud/Railway — see CLAUDE.md
-# "never run locally"), so stub them out for collection; every call into them
-# this module makes is mocked directly in the tests below, so their real
-# behaviour is never exercised.
+# "never run locally"), so fall back to a stub for collection when they're
+# genuinely not installed; every call into them this module makes is mocked
+# directly in the tests below, so their real behaviour is never exercised
+# here regardless. Try a real import first (rather than checking sys.modules
+# membership) so that other test files needing the REAL vaderSentiment
+# library (test_sentiment.py, test_sentiment_velocity.py) aren't broken by
+# collection-order — a bare sys.modules check would permanently clobber the
+# real, now-installed module with a MagicMock the first time this file
+# happens to collect before those do.
 for _mod in ("streamlit", "vaderSentiment", "vaderSentiment.vaderSentiment"):
     if _mod not in sys.modules:
-        sys.modules[_mod] = MagicMock()
+        try:
+            importlib.import_module(_mod)
+        except ImportError:
+            sys.modules[_mod] = MagicMock()
 
 from stock_analyzer import headless_alert_engine as hae
 
