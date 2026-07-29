@@ -12,6 +12,13 @@ Proxies used:
 
 import pandas as pd
 
+from stock_analyzer.constants import (
+    RISK_OFF_VIX_LEVEL,
+    RISK_ON_VIX_LEVEL,
+    MACRO_LEGACY_TLT_RET_PCT,
+    MACRO_LEGACY_SPY_RET_PCT,
+)
+
 # ── Rate sensitivity per sector ───────────────────────────────────────────────
 # +1.0 = big rate beneficiary, -1.0 = big rate victim
 # Based on duration / earnings-growth dependency / credit exposure
@@ -101,10 +108,10 @@ def detect_macro_regime_legacy(
     signals = {}
 
     # Rate direction: TLT price falls when rates rise
-    if tlt_ret < -3:
+    if tlt_ret < -MACRO_LEGACY_TLT_RET_PCT:
         rate_env = "rising_rates"
         signals["Rates (TLT)"] = f"{tlt_ret:+.1f}% (3mo) — bond prices falling · rates rising"
-    elif tlt_ret > 3:
+    elif tlt_ret > MACRO_LEGACY_TLT_RET_PCT:
         rate_env = "falling_rates"
         signals["Rates (TLT)"] = f"{tlt_ret:+.1f}% (3mo) — bond prices rising · rates falling"
     else:
@@ -112,10 +119,10 @@ def detect_macro_regime_legacy(
         signals["Rates (TLT)"] = f"{tlt_ret:+.1f}% (3mo) — rates range-bound"
 
     # Risk appetite: VIX level
-    if vix >= 25:
+    if vix >= RISK_OFF_VIX_LEVEL:
         risk_env = "risk_off"
         signals["Volatility (VIX)"] = f"{vix:.0f} — elevated fear · risk-off"
-    elif vix <= 15:
+    elif vix <= RISK_ON_VIX_LEVEL:
         risk_env = "risk_on"
         signals["Volatility (VIX)"] = f"{vix:.0f} — low volatility · risk-on"
     else:
@@ -123,9 +130,9 @@ def detect_macro_regime_legacy(
         signals["Volatility (VIX)"] = f"{vix:.0f} — moderate volatility"
 
     # Market trend signal
-    if spy_ret >= 5:
+    if spy_ret >= MACRO_LEGACY_SPY_RET_PCT:
         signals["Market (SPY)"] = f"{spy_ret:+.1f}% (3mo) — bull trend"
-    elif spy_ret <= -5:
+    elif spy_ret <= -MACRO_LEGACY_SPY_RET_PCT:
         signals["Market (SPY)"] = f"{spy_ret:+.1f}% (3mo) — bear trend"
     else:
         signals["Market (SPY)"] = f"{spy_ret:+.1f}% (3mo) — sideways"

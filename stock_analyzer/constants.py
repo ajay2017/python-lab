@@ -417,6 +417,15 @@ RISK_OFF_VIX_LEVEL      = 25.0   # VIX ≥ this = high-vol regime. Basis: regime
 RISK_ON_VIX_LEVEL       = 15.0   # VIX ≤ this = complacent/risk-on regime. Same regime-literature basis as RISK_OFF_VIX_LEVEL above (<15 complacent).
 RISK_OFF_NAME_MIN_BETA  = 1.2    # only trim genuinely high-beta drivers (β ≥ this); leaves defensives alone.
 RISK_OFF_TRIM_TOP_N     = 3      # act on the top-N beta contributors (β × weight), not the whole book.
+
+# ── Legacy ETF-proxy regime classifier (macro.detect_macro_regime_legacy) ────
+# Named per 2026-07-29 audit Medium finding (were bare literals). VIX reuses
+# RISK_OFF_VIX_LEVEL/RISK_ON_VIX_LEVEL above (same values already, just not
+# imported before — this also closes the app.py Macro Signals panel's
+# internal inconsistency, where the regime banner used these bare literals
+# while the adjacent VIX delta badge already read the real constants).
+MACRO_LEGACY_TLT_RET_PCT = 3.0   # |TLT 3mo return| beyond this = rising/falling rates signal
+MACRO_LEGACY_SPY_RET_PCT = 5.0   # |SPY 3mo return| beyond this = bull/bear trend signal
 RISK_OFF_TRIM_PCT       = 25.0   # suggested modest reduction per named position (or tighten the stop instead).
 
 # Cross-asset regime signals — thresholds for the Cross-Asset Pulse card (Risk tab).

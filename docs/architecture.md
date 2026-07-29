@@ -192,11 +192,14 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `SECTOR_CEILING` | 35.0 | Hard cap — no entries when sector at this weight |
 | `SECTOR_ELEVATED` | 25.0 | Soft warn — consider half-size |
 | `SINGLE_NAME_CEILING` | 15.0 | Hard cap — no add-to-winner above this weight |
+| `DIVERSIFY_REDUCE_HIGH_URGENCY_PCT` | 30.0 | `portfolio.diversification_recommendations()`: sector REDUCE rec above this pct = "high" urgency (else "medium") |
+| `DIVERSIFY_ADD_SKIP_PCT` / `DIVERSIFY_ADD_TARGET_PCT` | 8.0 / 10.0 | `diversification_recommendations()`: a diversifying sector already at/above SKIP is not flagged underweight; ADD recs size their gap toward TARGET |
 | `CONCENTRATION_HIGHBETA_SHARE_WARN` | 60.0 | High-beta cluster line warn color; display-only, not a decision gate |
 | `RISK_OFF_TREND_MA` | 200 | Risk-off trend leg — SPY below this SMA = de-risk (Faber 200-DMA) |
 | `RISK_OFF_VIX_LEVEL` | 25.0 | Risk-off vol leg — VIX ≥ this = high-vol regime |
 | `RISK_OFF_NAME_MIN_BETA` | 1.2 | Risk-off de-risk only trims names with β ≥ this |
 | `RISK_OFF_TRIM_TOP_N` | 3 | Risk-off de-risk acts on the top-N beta contributors |
+| `MACRO_LEGACY_TLT_RET_PCT` / `MACRO_LEGACY_SPY_RET_PCT` | 3.0 / 5.0 | `macro.detect_macro_regime_legacy()`'s ETF-proxy thresholds (|TLT 3mo return| / |SPY 3mo return| beyond these = rate/trend signals). Also reuses `RISK_OFF_VIX_LEVEL`/`RISK_ON_VIX_LEVEL` above for its VIX leg |
 | `RISK_OFF_TRIM_PCT` | 25.0 | Risk-off de-risk suggested trim % (or tighten the stop instead) |
 | `PULLBACK_ALERT_INDEX_PCT` | -3.0 | EOD reactive pullback email fires when SPY closes ≤ this %; operational alert knob, not a gate |
 | `PULLBACK_ENTRY_DIP_PCT` | 1.5 | Intraday drop from open (%) that triggers the intraday pullback entry email in the new intraday cron lane. Email-presentation only; never gates recommendations. |
