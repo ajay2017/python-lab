@@ -72,7 +72,7 @@ Rules:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _pct(v) -> str:
-    if v is None:
+    if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
         return "N/A"
     try:
         return f"{float(v):+.1f}%"
