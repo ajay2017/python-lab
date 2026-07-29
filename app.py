@@ -14634,8 +14634,6 @@ elif page == "🏆 Health":
 
         _ph_total = len(_ph_positions)
 
-        _ph_total = len(_ph_positions)
-
         def _ph_eff_row(p: dict) -> str:
             _pnl_color  = "#16a34a" if p["pnl_pct"] and p["pnl_pct"] >= 0 else "#dc2626"
             _rate_color = "#16a34a" if p["_period_rate"] and p["_period_rate"] >= 0 else "#dc2626"
