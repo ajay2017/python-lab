@@ -645,6 +645,26 @@ REGIME_CPI_CONTROLLED_MAX = 2.5   # ≤ this = controlled inflation (rate-cut su
 REGIME_CPI_ELEVATED_MIN   = 3.0   # ≥ this (and ≤ HOT) = mild inflation-fight pressure
 REGIME_CPI_HOT_MIN        = 4.0   # > this = strong inflation-fight / stagflation signal
 
+# ── Regime-classifier remaining 6 signal families (macro_calendar.detect_macro_regime) ─
+# Named per 2026-07-29 audit H2 — these were bare literals (only the CPI ladder
+# above was already centralized). No value changes; pure extraction so this
+# gate boundary is documented and reviewable like every other in this file.
+REGIME_FEDFUNDS_TREND_PP   = 0.05   # |3mo Fed Funds change| above this = cutting/hiking; else "holding"
+REGIME_2S10S_INVERTED_PP   = -0.25  # 10y-2y spread below this = inverted (strong recession-fear signal)
+REGIME_2S10S_FLAT_PP       = 0.0    # spread below this (and above INVERTED) = flat/mild recession-fear signal
+REGIME_2S10S_STEEP_PP      = 0.75   # spread above this = steep curve (rate-cut supportive)
+REGIME_UNEMP_DELTA_UP_PP   = 0.3    # 3mo unemployment rise above this = recession-fear signal
+REGIME_UNEMP_DELTA_DOWN_PP = -0.2   # 3mo unemployment fall below this = rate-cut supportive signal
+REGIME_HY_SPREAD_STRESS_BP   = 600  # HY credit spread (bps) above this = strong recession-fear signal
+REGIME_HY_SPREAD_ELEVATED_BP = 450  # spread above this (and below STRESS) = mild recession-fear signal
+REGIME_HY_SPREAD_CALM_BP     = 300  # spread below this = rate-cut supportive (credit markets calm)
+REGIME_SPY_20D_BULL_PCT    = 5.0    # SPY 20-trading-day return above this = rate-cut supportive
+REGIME_SPY_20D_BEAR_PCT    = -5.0   # SPY 20-trading-day return below this = recession-fear signal
+REGIME_VIX_STRESS          = 30     # VIX above this = strong recession-fear signal
+REGIME_VIX_ELEVATED        = 20     # VIX above this (and below STRESS) = mild recession-fear signal
+REGIME_VIX_CALM            = 15     # VIX below this = rate-cut supportive (fear gauge calm)
+REGIME_WINNING_SCORE_MIN   = 1      # winning regime's score must exceed this, else fall back to "neutral"
+
 # ── Multi-source market-data layer (providers/ + data.py orchestrator) ───────
 # The app was historically single-sourced on yfinance (unofficial, no SLA). The
 # provider seam + orchestrator add failover + a price cross-check so right-data-

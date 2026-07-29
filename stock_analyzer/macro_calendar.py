@@ -23,6 +23,21 @@ from stock_analyzer.constants import (
     REGIME_CPI_CONTROLLED_MAX,
     REGIME_CPI_ELEVATED_MIN,
     REGIME_CPI_HOT_MIN,
+    REGIME_FEDFUNDS_TREND_PP,
+    REGIME_2S10S_INVERTED_PP,
+    REGIME_2S10S_FLAT_PP,
+    REGIME_2S10S_STEEP_PP,
+    REGIME_UNEMP_DELTA_UP_PP,
+    REGIME_UNEMP_DELTA_DOWN_PP,
+    REGIME_HY_SPREAD_STRESS_BP,
+    REGIME_HY_SPREAD_ELEVATED_BP,
+    REGIME_HY_SPREAD_CALM_BP,
+    REGIME_SPY_20D_BULL_PCT,
+    REGIME_SPY_20D_BEAR_PCT,
+    REGIME_VIX_STRESS,
+    REGIME_VIX_ELEVATED,
+    REGIME_VIX_CALM,
+    REGIME_WINNING_SCORE_MIN,
 )
 
 def _today_et() -> _date:
@@ -780,11 +795,11 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
         if len(fed_obs) >= 3:
             any_success = True
             diff = fed_obs[0] - fed_obs[2]
-            if diff < -0.05:
+            if diff < -REGIME_FEDFUNDS_TREND_PP:
                 fed_trend = "cutting"
                 scores["rate_cut"] += 3
                 signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (cutting)", "✂️", "rate_cut"))
-            elif diff > 0.05:
+            elif diff > REGIME_FEDFUNDS_TREND_PP:
                 fed_trend = "hiking"
                 scores["inflation_fight"] += 3
                 signals.append(("Fed Funds", f"{fed_obs[0]:.2f}% (hiking)", "🔺", "inflation_fight"))
@@ -826,14 +841,14 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
             any_success = True
             spread = dgs10_obs[0] - dgs2_obs[0]
             spread_str = f"{spread:+.2f}%"
-            if spread < -0.25:
+            if spread < REGIME_2S10S_INVERTED_PP:
                 scores["recession_fear"] += 3
                 scores["rate_cut"] -= 1
                 signals.append(("2s10s Spread", spread_str + " (inverted)", "🔴", "recession_fear"))
-            elif spread < 0.0:
+            elif spread < REGIME_2S10S_FLAT_PP:
                 scores["recession_fear"] += 1
                 signals.append(("2s10s Spread", spread_str + " (flat/inv)", "⚠️", "recession_fear"))
-            elif spread > 0.75:
+            elif spread > REGIME_2S10S_STEEP_PP:
                 scores["rate_cut"] += 1
                 scores["recession_fear"] -= 1
                 signals.append(("2s10s Spread", spread_str + " (steep)", "🟢", "rate_cut"))
@@ -849,11 +864,11 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
             any_success = True
             unemp_delta = unrate_obs[0] - unrate_obs[3]
             delta_str = f"{unemp_delta:+.1f}pp"
-            if unemp_delta > 0.3:
+            if unemp_delta > REGIME_UNEMP_DELTA_UP_PP:
                 scores["recession_fear"] += 2
                 scores["stagflation_risk"] += 1
                 signals.append(("Unemployment Δ3m", delta_str, "⚠️", "recession_fear"))
-            elif unemp_delta < -0.2:
+            elif unemp_delta < REGIME_UNEMP_DELTA_DOWN_PP:
                 scores["rate_cut"] -= 1
                 scores["inflation_fight"] += 1
                 scores["recession_fear"] -= 1
@@ -872,15 +887,15 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
             # BAMLH0A0HYM2 is reported as a percent (e.g. 4.5 = 450 bps)
             hy_bps = hy_spread * 100
             hy_str = f"{hy_bps:.0f}bps"
-            if hy_bps > 600:
+            if hy_bps > REGIME_HY_SPREAD_STRESS_BP:
                 scores["recession_fear"] += 3
                 scores["rate_cut"] -= 2
                 signals.append(("HY Spread", hy_str, "🔴", "recession_fear"))
-            elif hy_bps >= 450:
+            elif hy_bps >= REGIME_HY_SPREAD_ELEVATED_BP:
                 scores["recession_fear"] += 1
                 scores["stagflation_risk"] += 1
                 signals.append(("HY Spread", hy_str, "⚠️", "recession_fear"))
-            elif hy_bps < 300:
+            elif hy_bps < REGIME_HY_SPREAD_CALM_BP:
                 scores["rate_cut"] += 2
                 scores["recession_fear"] -= 2
                 signals.append(("HY Spread", hy_str, "🟢", "rate_cut"))
@@ -906,11 +921,11 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
             any_success = True
             _spy_ret = (_spy_close.iloc[-1] - _spy_close.iloc[0]) / _spy_close.iloc[0] * 100
             _spy_str = f"{_spy_ret:+.1f}%"
-            if _spy_ret > 5.0:
+            if _spy_ret > REGIME_SPY_20D_BULL_PCT:
                 scores["rate_cut"] += 2
                 scores["recession_fear"] -= 2
                 signals.append(("SPY 20d Return", _spy_str, "🟢", "rate_cut"))
-            elif _spy_ret < -5.0:
+            elif _spy_ret < REGIME_SPY_20D_BEAR_PCT:
                 scores["recession_fear"] += 1
                 signals.append(("SPY 20d Return", _spy_str, "🔴", "recession_fear"))
             else:
@@ -921,14 +936,14 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
             any_success = True
             _vix = float(_vix_close.iloc[-1])
             _vix_str = f"{_vix:.1f}"
-            if _vix > 30:
+            if _vix > REGIME_VIX_STRESS:
                 scores["recession_fear"] += 2
                 scores["rate_cut"] -= 1
                 signals.append(("VIX", _vix_str, "🔴", "recession_fear"))
-            elif _vix >= 20:
+            elif _vix >= REGIME_VIX_ELEVATED:
                 scores["recession_fear"] += 1
                 signals.append(("VIX", _vix_str, "⚠️", "recession_fear"))
-            elif _vix < 15:
+            elif _vix < REGIME_VIX_CALM:
                 scores["rate_cut"] += 1
                 scores["recession_fear"] -= 1
                 signals.append(("VIX", _vix_str, "🟢", "rate_cut"))
@@ -965,7 +980,7 @@ def detect_macro_regime(fred_key: str | None = None) -> dict:
     confidence = round(scores[winner] / pos_total * 100) if pos_total > 0 else 0
 
     # Fall back to neutral if signal is too weak
-    if winning_score <= 1:
+    if winning_score <= REGIME_WINNING_SCORE_MIN:
         winner = "neutral"
 
     source = "fred+market" if any_success else "fallback"
