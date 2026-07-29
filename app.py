@@ -22586,16 +22586,55 @@ elif page == "📊 Predictive Analytics":
     st.caption(
         "Synthesized from all four models. Click a tab to see the evidence behind each directive."
     )
-    for _pd in _pac_directives:
-        _src_note = f"  *(evidence → {_pd['source_tab']})*" if _pd["source_tab"] != "all models" else ""
-        if _pd["type"] == "action":
-            st.success(f"**Action:** {_pd['text']}{_src_note}")
-        elif _pd["type"] == "caution":
-            st.warning(f"**Caution:** {_pd['text']}{_src_note}")
-        elif _pd["type"] == "watch":
-            st.info(f"**Watch:** {_pd['text']}{_src_note}")
-        else:
-            st.caption(f"ℹ️ {_pd['text']}")
+
+    def _pac_src_note(_pd: dict) -> str:
+        return f"  *(evidence → {_pd['source_tab']})*" if _pd["source_tab"] != "all models" else ""
+
+    def _pac_render_action_card(_pd: dict) -> None:
+        st.markdown(
+            "<div style='background:#052e16;border-left:4px solid #4ade80;border-radius:8px;"
+            "padding:14px 16px;margin-bottom:8px;display:flex;flex-direction:column;"
+            "min-height:150px;font-size:0.92em;line-height:1.5;color:#dcfce7'>"
+            f"<div><b style='color:#fff'>Action:</b> {_pd['text']}</div>"
+            f"<div style='margin-top:auto;padding-top:10px;font-style:italic;opacity:0.85'>"
+            f"{_pac_src_note(_pd).strip()}</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Partition: actions get the prominent side-by-side treatment; the final
+    # "Based on N graded outcomes" context line (source_tab == "all models",
+    # always last per synthesize_directives' sort) stays a plain footnote as
+    # before; everything else (caution/watch/other context) collapses into a
+    # single expander so 5+ same-weight colored bars don't read as one flat list.
+    _pac_actions  = [d for d in _pac_directives if d["type"] == "action"]
+    _pac_footnote = next((d for d in _pac_directives if d["source_tab"] == "all models"), None)
+    _pac_others   = [
+        d for d in _pac_directives
+        if d["type"] != "action" and d is not _pac_footnote
+    ]
+
+    for _row_start in range(0, len(_pac_actions), 3):
+        _row = _pac_actions[_row_start:_row_start + 3]
+        _pac_cols = st.columns(len(_row))
+        for _col, _pd in zip(_pac_cols, _row):
+            with _col:
+                _pac_render_action_card(_pd)
+
+    if _pac_others:
+        with st.expander(f"📎 Also worth noting ({len(_pac_others)})", expanded=False):
+            for _pd in _pac_others:
+                _src_note = _pac_src_note(_pd)
+                if _pd["type"] == "caution":
+                    st.warning(f"**Caution:** {_pd['text']}{_src_note}")
+                elif _pd["type"] == "watch":
+                    st.info(f"**Watch:** {_pd['text']}{_src_note}")
+                else:
+                    st.caption(f"ℹ️ {_pd['text']}{_src_note}")
+
+    if _pac_footnote:
+        st.caption(f"ℹ️ {_pac_footnote['text']}")
+
     st.divider()
 
     # ── 6 live tabs ─────────────────────────────────────────────────────────────
