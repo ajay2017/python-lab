@@ -14,14 +14,16 @@ THREE modes (one per ET trading day each):
     pullback email if the market actually fell ≥ threshold today. (pullback P2 +
     Today's-P&L EOD)
 
-Mode = $ALERT_RUN_MODE if set (workflow_dispatch input, OR the scan schedule slot
-maps its cron expression to mode=scan), else derived from the ET hour (≥12:00 ET
-⇒ eod, else premarket). All output → stdout (the Actions log). Ships INERT: no
-RESEND_API_KEY ⇒ compute + log, send nothing. Always exits 0.
+Mode = $ALERT_RUN_MODE if it's one of scan|intraday|thesis|debrief|monthly
+(workflow_dispatch input selects one of these directly), else derived from the
+ET hour (≥12:00 ET ⇒ eod, else premarket) — premarket/eod are never taken as a
+direct override value, only ever hour-derived. All output → stdout (the
+Actions log). Ships INERT: no RESEND_API_KEY ⇒ compute + log, send nothing.
+Always exits 0.
 
 Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
 FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_FROM
-· ALERT_RUN_MODE (premarket|eod) · ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1
+· ALERT_RUN_MODE (scan|intraday|thesis|debrief|monthly) · ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1
 (synthetic delivery test) · ALERT_PROTECTIVE_ROW=1 / EOD lane uses row 2 in alert_state.
   • thesis (~18:00 ET Sunday) — AI thesis reviews for all open positions that
     have a user_thesis written at BUY entry. One LLM call per position, saves to

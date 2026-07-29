@@ -13431,7 +13431,7 @@ elif page == "🥧 Portfolio Overview":
             st.warning(f"Performance Diagnostics unavailable: {_de}")
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 4 — P&L ATTRIBUTION WATERFALL
+    # P&L ATTRIBUTION WATERFALL (Performance tab)
     # ═══════════════════════════════════════════════════════════════════════════
 
         st.caption(
@@ -13697,7 +13697,7 @@ elif page == "🥧 Portfolio Overview":
                         )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 6 — SECTOR ROTATION HEATMAP
+    # SECTOR ROTATION HEATMAP (Performance tab)
     # ═══════════════════════════════════════════════════════════════════════════
 
         st.caption(
@@ -13853,7 +13853,7 @@ elif page == "🥧 Portfolio Overview":
         elif _sr_df is None:
             st.info("Click **Load Sector Heatmap** to fetch live sector ETF performance.")
 
-    # TAB 7 — RANKINGS
+    # RANKINGS (Performance tab)
     # ═══════════════════════════════════════════════════════════════════════════
 
         st.caption(
@@ -23805,7 +23805,7 @@ elif page == "📊 Predictive Analytics":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PAGE — CATALYST WATCH (forward earnings awareness)
+# PAGE — ACCOUNT (account-baseline: equity + signed net cash)
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "💰 Account":
     # Account-level view (account-baseline v1) — own page so it stays out of the

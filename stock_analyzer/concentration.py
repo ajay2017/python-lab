@@ -122,6 +122,10 @@ def gating_denominator(
     if acct >= eq:
         return eq, "equity"               # cash never loosens the gate
     if acct <= 0:
+        # Degenerate floor, not a tuned threshold: account_total <= 0 means the
+        # account is underwater on margin, so any positive gating denominator
+        # is intentionally tiny (1% of equity, floored at $1) to make the
+        # concentration gate maximally strict rather than divide-by-zero/negative.
         return max(eq * 0.01, 1.0), "over-levered"
     return acct, "account"                # margin: tighter denominator
 

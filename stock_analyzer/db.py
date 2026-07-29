@@ -2366,7 +2366,7 @@ def save_sector_cache(ticker: str, sector: str) -> bool:
 # Persists the bidirectional LLM-rescored headlines and their avg_sent so the
 # Streamlit app and the headless cron runner always read the same composite
 # for a given ticker on a given UTC day. System cache → NOT _READONLY-gated
-# (mirrors sector_cache / bundle_cache). One row per (ticker, score_date).
+# (mirrors sector_cache). One row per (ticker, score_date).
 
 def load_sentiment_llm_cache(ticker: str, score_date: str) -> dict | None:
     """Return {"headlines": [...], "avg_sent": float} for ticker/date, or None.
@@ -2428,7 +2428,7 @@ def save_sentiment_llm_cache(
 # ── Thesis Red Team Agent — erosion score day-cache (ticker × date) ──────────
 # Persists the daily quantitative erosion score (Phase 1) and — in Phase 2 —
 # optional Haiku counter-evidence bullets. System cache → NOT _READONLY-gated
-# (same classification as sentiment_llm_cache / bundle_cache). One row per
+# (same classification as sentiment_llm_cache / sector_cache). One row per
 # (ticker, score_date); score_date is the ET date string from _today_et().
 # signals_snapshot MUST include composite_today for the 5-session-ago delta
 # lookback used in future rows. Degrades gracefully when table is absent.
@@ -2673,7 +2673,7 @@ def delete_account_flow(flow_id) -> bool:
 # (ticker, debate_type, debate_date). debate_type = 'entry' (Phase 1, Grow
 # Today) | 'exit' (Phase 2, Exit Advisor). debate_date is the ET ISO date
 # string from _today_et(). System cache → NOT _READONLY-gated (same
-# classification as sentiment_llm_cache / bundle_cache). Degrades gracefully
+# classification as sentiment_llm_cache / sector_cache). Degrades gracefully
 # when table is absent: load returns None, save no-ops.
 
 def load_debate_cache(ticker: str, debate_type: str, debate_date: str) -> dict | None:
