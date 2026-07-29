@@ -706,6 +706,8 @@ def render_intelligence_email(report: dict) -> str:
 
     # Headline metric strip — engine alpha (Q0) + acted/missed (Q1)
     def _alpha_html(v) -> str:
+        if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
+            v = None
         if v is None:
             return "<span style='color:#6b7280'>N/A</span>"
         colour = "#16a34a" if v >= 0 else "#dc2626"
