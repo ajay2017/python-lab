@@ -3977,7 +3977,12 @@ if page == "🏠 Home":
                     import logging
                     logging.warning("Composite freshness rebuild failed: %s", _e)
     else:
-        alert_list = alerts(port_df, held_data)
+        # Computed once, pure/no-LLM — annotates alerts()/rebalance_actions()'s
+        # independent bearish-signal heuristics with the ticker's canonical
+        # WATCH/TRIM/EXIT tier (if any) so the two never silently disagree with
+        # exit_advisor's read of the same position (2026-07-29 audit H4).
+        _det_signals = deterioration_signals(port_df, held_data, _cached_spy("6mo"))
+        alert_list = alerts(port_df, held_data, deterioration=_det_signals)
         # Append signal-change alerts
         for _sc in _signal_changes:
             _icon = "📉" if _sc["degraded"] else "📈" if _sc["improved"] else "↔️"
@@ -3993,7 +3998,7 @@ if page == "🏠 Home":
         st.session_state["_n_danger_cache"]   = n_danger
         st.session_state["_n_warning_cache"]  = n_warning
 
-        actions = rebalance_actions(port_df)
+        actions = rebalance_actions(port_df, deterioration=_det_signals)
         st.session_state["_actions_cache"] = actions
 
         try:

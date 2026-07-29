@@ -328,6 +328,19 @@ POSITION_SETTLING_DAYS   = 10    # held < this = "settling": suppress ROUTINE mg
 POSITION_AT_RISK_GAP_PCT = 3.0   # gap-to-stop ≤ this = "at_risk" (same critical band; always surfaces)
 POSITION_WINNING_PNL_PCT = 8.0   # P&L ≥ this (and healthy) = "winning"; aligns with STOP_TIGHTEN_MIN_GAIN_PCT
 
+# ── Signals & Advice — portfolio.alerts()/rebalance_actions() thresholds ─────
+# Named per 2026-07-29 audit H3 (were bare literals, one already drifted from
+# APPROACHING_STOP_GAP_PCT above — see that fix at the alerts() call site).
+ALERT_PNL_PROFIT_TAKE_PCT      = 15.0  # bearish signal + P&L above this = "consider partial profits"
+ALERT_PNL_STOP_LOSS_PCT        = -8.0  # bearish signal + P&L below this = danger-level alert
+REBALANCE_TRIM_PNL_PCT         = 20.0  # oversized position (SINGLE_NAME_TRIM_TRIGGER) + gain above this = trim candidate
+REBALANCE_ADD_MIN_SCORE        = 70    # Strong Buy + undersized (<5% weight) + composite above this = add candidate
+                                        # (kept as-is; adjacent code already requires "Strong Buy" in signal, which
+                                        # implies composite ≥ COMPOSITE_STRONG_BUY=75, making this sub-condition
+                                        # likely redundant today — named rather than silently changed, see audit H3)
+REBALANCE_ADD_TARGET_WEIGHT_PCT = 8.0  # target weight used to size the "add" action's suggested dollar amount
+REBALANCE_REVIEW_GAP_PCT       = 5.0   # bearish signal + profitable + gap below this (or unknown) = high urgency
+
 # ── Brief Act-vs-Awareness split (decision_bucket.classify_bucket) ───────────
 # The defensive column is split into "Act Today" (a genuine trade decision today)
 # and "Monitoring / Awareness" (FYI). These two flags govern the borderline

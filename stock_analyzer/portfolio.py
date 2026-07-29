@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -375,13 +375,25 @@ def sector_exposure(portfolio_df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[dict]:
+def alerts(
+    portfolio_df: pd.DataFrame,
+    held_data: dict | None = None,
+    deterioration: list[dict] | None = None,
+) -> list[dict]:
     """
     Returns list of alert dicts with keys: level, msg, category.
     Levels: danger, warning, info.
     Categories: stop, signal, concentration, earnings, revisions.
+
+    `deterioration` (optional): the same exit_advisor.assess_holding payload list
+    daily_briefing.deterioration_signals() computes for the Daily Brief — passed in
+    so bearish-signal alerts can be annotated with the ticker's current WATCH/TRIM/
+    EXIT tier (if any), rather than computing a fourth, independent "should this be
+    trimmed" read (2026-07-29 audit H4).
     """
     from datetime import date as _date, datetime as _datetime
+
+    _det_tier = {d["ticker"]: d["tier"] for d in (deterioration or []) if d.get("ticker")}
 
     result = []
     if portfolio_df.empty:
@@ -402,12 +414,12 @@ def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[di
                 "level": "warning", "category": "stop",
                 "msg": f"🟡 **{ticker}** — stop data unavailable; set a manual stop in your broker",
             })
-        elif gap < 3:
+        elif gap < POSITION_AT_RISK_GAP_PCT:
             result.append({
                 "level": "danger", "category": "stop",
                 "msg": f"🔴 **{ticker}** is within {gap:.1f}% of stop ${row['Stop']:.2f} — review immediately",
             })
-        elif gap < 7:
+        elif gap < APPROACHING_STOP_GAP_PCT:
             result.append({
                 "level": "warning", "category": "stop",
                 "msg": f"🟡 **{ticker}** is {gap:.1f}% above stop ${row['Stop']:.2f} — monitor closely",
@@ -421,15 +433,16 @@ def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[di
             })
 
         # Bearish signal on profitable or losing position
-        if "Sell" in signal and pnl > 15:
+        _tier_note = f" (deterioration tier: {_det_tier[ticker]})" if ticker in _det_tier else ""
+        if "Sell" in signal and pnl > ALERT_PNL_PROFIT_TAKE_PCT:
             result.append({
                 "level": "warning", "category": "signal",
-                "msg": f"📉 **{ticker}** signal turned bearish with {pnl:.1f}% gain — consider taking partial profits",
+                "msg": f"📉 **{ticker}** signal turned bearish with {pnl:.1f}% gain — consider taking partial profits{_tier_note}",
             })
-        if "Sell" in signal and pnl < -8:
+        if "Sell" in signal and pnl < ALERT_PNL_STOP_LOSS_PCT:
             result.append({
                 "level": "danger", "category": "signal",
-                "msg": f"⛔ **{ticker}** bearish signal with {pnl:.1f}% loss — stop at ${row['Stop']:.2f}",
+                "msg": f"⛔ **{ticker}** bearish signal with {pnl:.1f}% loss — stop at ${row['Stop']:.2f}{_tier_note}",
             })
 
     # Sector concentration
@@ -494,12 +507,19 @@ def alerts(portfolio_df: pd.DataFrame, held_data: dict | None = None) -> list[di
     return result
 
 
-def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
+def rebalance_actions(
+    portfolio_df: pd.DataFrame,
+    deterioration: list[dict] | None = None,
+) -> list[dict]:
     """
     Returns structured recommendation dicts instead of plain strings.
     Each dict carries the trigger condition and all data needed for the
     evidence panel in app.py (which also injects score breakdowns from held_data).
+
+    `deterioration` (optional): see `alerts()`'s docstring — same annotation-only
+    pattern, applied to the "review" (bearish-signal) action type here.
     """
+    _det_tier = {d["ticker"]: d["tier"] for d in (deterioration or []) if d.get("ticker")}
     actions = []
     if portfolio_df.empty:
         return actions
@@ -516,7 +536,7 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
         mval   = row["Market Value"]
         avg_cost = row["Avg Cost"]
 
-        if w > SINGLE_NAME_TRIM_TRIGGER and pnl > 20:
+        if w > SINGLE_NAME_TRIM_TRIGGER and pnl > REBALANCE_TRIM_PNL_PCT:
             trim_val    = mval * (w - SINGLE_NAME_CEILING) / 100
             trim_shares = max(1, int(trim_val / price))
             actions.append({
@@ -540,8 +560,8 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
                 "avg_cost": avg_cost,
             })
 
-        if "Strong Buy" in signal and w < 5 and score > 70:
-            add_val = mval * (8 - w) / 100  # rough cost to reach 8% weight
+        if "Strong Buy" in signal and w < 5 and score > REBALANCE_ADD_MIN_SCORE:
+            add_val = mval * (REBALANCE_ADD_TARGET_WEIGHT_PCT - w) / 100  # rough cost to reach target weight
             actions.append({
                 "type":    "add",
                 "urgency": "low",
@@ -564,15 +584,19 @@ def rebalance_actions(portfolio_df: pd.DataFrame) -> list[dict]:
         if "Sell" in signal and pnl > 0:
             # Treat unknown gap as elevated urgency — without a stop in place,
             # a profitable Sell signal needs manual review now, not later.
-            _gap_close = (gap is None) or (gap < 5)
+            _gap_close = (gap is None) or (gap < REBALANCE_REVIEW_GAP_PCT)
             urgency = "high" if (score < COMPOSITE_SELL or _gap_close) else "medium"
             half_shares = max(1, shares // 2)
+            _tier = _det_tier.get(ticker)
+            _trigger = f"Composite score {score:.0f}/100 ({signal.split()[-1]}) while position is +{pnl:.1f}% profitable"
+            if _tier:
+                _trigger += f" (deterioration tier: {_tier})"
             actions.append({
                 "type":       "review",
                 "urgency":    urgency,
                 "ticker":     ticker,
                 "title":      "Bearish Signal on Profitable Position",
-                "trigger":    f"Composite score {score:.0f}/100 ({signal.split()[-1]}) while position is +{pnl:.1f}% profitable",
+                "trigger":    _trigger,
                 "half_shares": half_shares,
                 "weight":     w,
                 "pnl":        pnl,
