@@ -458,6 +458,17 @@ ANALYST_MIN_UPSIDE_PCT      = 15   # Phase-2 Brief-chip threshold (avg-PT upside
 ANALYST_CONSENSUS_STRONG_BUY_FRAC = 0.80
 ANALYST_CONSENSUS_BUY_FRAC        = 0.50
 ANALYST_CONSENSUS_SELL_FRAC       = 0.50
+
+# ── Universe-ranking tier bands (ranking.tier_label) ─────────────────────────
+# Percentile bands classifying a holding's rank vs the scanned universe.
+# Display classification only — never gates or scores. Named per 2026-07-29
+# audit Medium finding (were bare literals).
+RANK_TIER_TOP_DECILE_PCTL      = 90   # >= this = "Top Decile"
+RANK_TIER_TOP_QUARTILE_PCTL    = 75   # >= this (and < TOP_DECILE) = "Top Quartile"
+RANK_TIER_ABOVE_MEDIAN_PCTL    = 50   # >= this (and < TOP_QUARTILE) = "Above Median"
+RANK_TIER_BELOW_MEDIAN_PCTL    = 25   # >= this (and < ABOVE_MEDIAN) = "Below Median"
+RANK_TIER_BOTTOM_QUARTILE_PCTL = 10   # >= this (and < BELOW_MEDIAN) = "Bottom Quartile"; else "Bottom Decile"
+
 # Research Scorecard (accuracy tracking — display-only, never gates/scores).
 ANALYST_ACCURACY_DIRECTION_DAYS = 30   # days after article_date to measure Buy/Sell directional accuracy
 ANALYST_ACCURACY_PT_HIT_PCT     = 0.75 # fraction of avg_pt the window's intra-period HIGH must reach to count as a PT "hit" (not the endpoint close)

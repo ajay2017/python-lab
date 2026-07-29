@@ -7,18 +7,26 @@ then computes each holding's rank, percentile, and tier vs every scanned ticker.
 
 import pandas as pd
 
+from stock_analyzer.constants import (
+    RANK_TIER_TOP_DECILE_PCTL,
+    RANK_TIER_TOP_QUARTILE_PCTL,
+    RANK_TIER_ABOVE_MEDIAN_PCTL,
+    RANK_TIER_BELOW_MEDIAN_PCTL,
+    RANK_TIER_BOTTOM_QUARTILE_PCTL,
+)
+
 
 def tier_label(percentile: float) -> tuple[str, str]:
     """(label, hex_color) for a given percentile (0 = worst, 100 = best)."""
-    if percentile >= 90:
+    if percentile >= RANK_TIER_TOP_DECILE_PCTL:
         return "Top Decile 🏆", "#00C851"
-    elif percentile >= 75:
+    elif percentile >= RANK_TIER_TOP_QUARTILE_PCTL:
         return "Top Quartile", "#4CAF50"
-    elif percentile >= 50:
+    elif percentile >= RANK_TIER_ABOVE_MEDIAN_PCTL:
         return "Above Median", "#aaaaaa"
-    elif percentile >= 25:
+    elif percentile >= RANK_TIER_BELOW_MEDIAN_PCTL:
         return "Below Median", "#ffbb33"
-    elif percentile >= 10:
+    elif percentile >= RANK_TIER_BOTTOM_QUARTILE_PCTL:
         return "Bottom Quartile", "#ff8800"
     else:
         return "Bottom Decile ⚠️", "#ff4444"
