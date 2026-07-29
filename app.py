@@ -21946,29 +21946,38 @@ elif page == "📜 Recommendations History":
         )
         st.stop()
 
+    # ── Match against trades + compute outcomes ─────────────────────────────
+    # Fetch live prices once per date-range selection, cached in session_state
+    # (mirrors Predictive Analytics' _pac_enriched gating pattern) — this
+    # previously ran unconditionally on every rerun, including reruns
+    # triggered by unrelated widget changes on this page (2026-07-29 audit
+    # Medium finding). Cached on the full pre-type-filter ticker set so a
+    # later type-filter change never needs a new fetch — only a new date
+    # range does.
+    _rh_prices_cache_key = f"_rh_prices_cache_{_rh_start.isoformat()}_{_rh_end.isoformat()}"
+    if st.session_state.get(_rh_prices_cache_key) is None:
+        _rh_all_tickers = sorted({
+            str(t).strip().upper()
+            for t in _rh_recs_df["ticker"].dropna().tolist()
+            if str(t).strip()
+        })
+        _rh_prices_fresh: dict = {}
+        if _rh_all_tickers:
+            try:
+                _px = fetch_live_prices(_rh_all_tickers)
+                _rh_prices_fresh = {
+                    t: float(d.get("price", 0))
+                    for t, d in (_px or {}).items()
+                    if d and d.get("price")
+                }
+            except Exception:
+                _rh_prices_fresh = {}
+        st.session_state[_rh_prices_cache_key] = _rh_prices_fresh
+    _rh_prices = st.session_state[_rh_prices_cache_key]
+
     # Apply type filter at the DataFrame level for efficiency
     if _rh_type_filter:
         _rh_recs_df = _rh_recs_df[_rh_recs_df["rec_type"].isin(_rh_type_filter)]
-
-    # ── Match against trades + compute outcomes ─────────────────────────────
-    # Fetch live prices for every ticker in the filtered set so missed-rec
-    # would-have-gained math has data to work with.
-    _rh_tickers = sorted({
-        str(t).strip().upper()
-        for t in _rh_recs_df["ticker"].dropna().tolist()
-        if str(t).strip()
-    })
-    _rh_prices: dict = {}
-    if _rh_tickers:
-        try:
-            _px = fetch_live_prices(_rh_tickers)
-            _rh_prices = {
-                t: float(d.get("price", 0))
-                for t, d in (_px or {}).items()
-                if d and d.get("price")
-            }
-        except Exception:
-            _rh_prices = {}
 
     # SPY close-by-date series for the regime benchmark (alpha = rec return −
     # SPY over the same window). Cached at the data layer; {date: close}.
