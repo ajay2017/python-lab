@@ -6291,7 +6291,8 @@ if page == "🏠 Home":
                         "Run a Bull vs Bear structured debate on this candidate (~15 seconds, 5 Haiku calls)"
                     )
                     if st.button("⚔️ Debate", key=f"debate_entry_{_deb_ticker}",
-                                 disabled=_deb_btn_disabled, help=_deb_btn_help):
+                                 disabled=_deb_btn_disabled or st.session_state.get("_readonly", False),
+                                 help=_deb_btn_help):
                         with st.spinner(f"Running debate for {_deb_ticker} — 5 Haiku calls, ~15 seconds…"):
                             _api_key_deb = (st.secrets.get("anthropic") or {}).get("api_key", "")
                             _deb_bundle  = _gc_map.get(_deb_ticker, {})
@@ -6796,7 +6797,8 @@ if page == "🏠 Home":
                         )
                         if st.button("⚔️ Challenge This Exit",
                                      key=f"debate_exit_{_db_ticker}_{_db_item['action'][:10]}",
-                                     disabled=_dbx_disabled, help=_dbx_help):
+                                     disabled=_dbx_disabled or st.session_state.get("_readonly", False),
+                                     help=_dbx_help):
                             with st.spinner(f"Challenging the exit for {_db_ticker} — 5 Haiku calls, ~15 seconds…"):
                                 _api_key_x = (st.secrets.get("anthropic") or {}).get("api_key", "")
                                 _x_pdf = st.session_state.get("_port_df_enriched")
@@ -8307,7 +8309,7 @@ if page == "🏠 Home":
             key="_gen_brief_btn",
             use_container_width=True,
             type="primary",
-            disabled=not _active_key,
+            disabled=not _active_key or st.session_state.get("_readonly", False),
         )
 
     if not _active_key:
@@ -9106,7 +9108,8 @@ elif page == "📡 Signals & Advice":
                     label_visibility="collapsed",
                 )
 
-            if st.button("💾 Save price alerts", key="_pa_save"):
+            if st.button("💾 Save price alerts", key="_pa_save",
+                         disabled=st.session_state.get("_readonly", False)):
                 for _t in port_df["Ticker"]:
                     _pa_store[_t] = {
                         "target": float(st.session_state.get(f"_pa_tgt_{_t}") or 0.0),
@@ -11017,7 +11020,8 @@ elif page == "🔗 Risk Analysis":
                                     st.markdown(f"- {_rs_ind}")
                             st.caption(f"Computed {_rs_scan_date} ET.")
                         else:
-                            if st.button("🎯 Generate regime-aware scenario", key="_rs_gen_btn"):
+                            if st.button("🎯 Generate regime-aware scenario", key="_rs_gen_btn",
+                                         disabled=st.session_state.get("_readonly", False)):
                                 with st.spinner("Synthesizing regime-aware scenario…"):
                                     _rs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                                     _rs_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
@@ -11105,7 +11109,8 @@ elif page == "🔗 Risk Analysis":
                                 "current structural weak points."
                             )
                         else:
-                            if st.button("📅 Generate catalyst-specific stress", key="_cs_gen_btn"):
+                            if st.button("📅 Generate catalyst-specific stress", key="_cs_gen_btn",
+                                         disabled=st.session_state.get("_readonly", False)):
                                 with st.spinner("Synthesizing catalyst-specific stress…"):
                                     _cs_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                                     _cs_evidence = catalyst_stress.build_catalyst_stress_inputs(
@@ -11427,7 +11432,8 @@ elif page == "🧩 Intelligence":
                     st.markdown(_ss_cached["narrative"])
                     st.caption(f"Computed {_ss_scan_date} ET — quantitative panels above are always live.")
                 else:
-                    if st.button("🧬 Generate structural narrative", key="_ss_gen_narrative_btn"):
+                    if st.button("🧬 Generate structural narrative", key="_ss_gen_narrative_btn",
+                                 disabled=st.session_state.get("_readonly", False)):
                         with st.spinner("Synthesizing structural narrative…"):
                             _ss_api_key = (st.secrets.get("anthropic") or {}).get("api_key", "")
                             _ss_factor_cache = st.session_state.get("_pi_factor_tilt_cache")
@@ -20671,6 +20677,7 @@ elif page == "📒 Trade Journal":
                     if st.button(
                         "🔍 Parse trades",
                         key="_ss_extract_btn",
+                        disabled=st.session_state.get("_readonly", False),
                     ):
                         with st.spinner("Parsing trade history…"):
                             _ss_parsed = _bscr.parse_robinhood_text(
