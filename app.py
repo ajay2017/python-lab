@@ -4032,7 +4032,7 @@ if page == "🏠 Home":
         try:
             div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
         except Exception:
-            div_recs = []
+            div_recs = None  # offline sentinel, not [] — matches sibling cache contract
         st.session_state["_div_recs_cache"] = div_recs
 
         h_rets = holding_returns(held_data)
@@ -4042,7 +4042,7 @@ if page == "🏠 Home":
             _spy_for_risk = _cached_spy("6mo")
             _port_risk = compute_portfolio_risk_metrics(port_df, held_data, _spy_for_risk, _get_rfr())
         except Exception:
-            _port_risk = {}
+            _port_risk = None  # offline sentinel, not {} — matches sibling cache contract
         st.session_state["_port_risk_cache"] = _port_risk  # available to Analysis page
 
         # Fragility gauge — how a ROUTINE pullback would hit THIS book. Pre-emptive
@@ -5716,7 +5716,7 @@ if page == "🏠 Home":
                     "held_signal":       str(_qr_held_row["Signal"].iloc[0])     if _qr_is_held else None,
                     "sector_of_ticker":  _qr_sector,
                     "sector_weight_pct": _qr_sec_wt,
-                    "portfolio_beta":    _port_risk.get("beta"),
+                    "portfolio_beta":    (_port_risk or {}).get("beta"),
                     "ticker_beta":       (_qr_raw.get("risk_metrics") or {}).get("beta"),
                     "act_today_flags":   [a for a in _daily_brief.get("act_today", [])
                                           if a.get("ticker") == _t],
@@ -16769,7 +16769,7 @@ elif page == "📈 Analysis":
 
                         # Beta envelope check — warn when adding this position would push
                         # an already-elevated portfolio beta materially higher
-                        _sa_port_risk = st.session_state.get("_port_risk_cache", {})
+                        _sa_port_risk = st.session_state.get("_port_risk_cache") or {}
                         if not _sa_port_risk:
                             st.info(
                                 "ℹ️ **Portfolio context unavailable** — visit the Portfolio page first "

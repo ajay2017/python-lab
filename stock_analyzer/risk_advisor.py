@@ -121,6 +121,7 @@ def build_risk_advisor_recommendations(
     # Coercing missing data to 0.0 produces confidently-wrong HIGH-priority
     # panels (e.g. "Sharpe 0.00 — Risk Taken Is Not Being Rewarded" when the
     # cache is cold). Each downstream branch now gates on `is not None`.
+    port_risk = port_risk or {}  # caller may publish None on a producer failure
     beta    = _beta_ok(port_risk.get("beta"))
     ann_vol = _beta_ok(port_risk.get("ann_volatility"))
     sharpe  = _beta_ok(port_risk.get("sharpe"))

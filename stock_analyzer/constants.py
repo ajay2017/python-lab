@@ -184,7 +184,8 @@ FACTOR_TILT_WINDOW_DAYS = 126   # ~6 trading months
 # flat/bear days (capital-preservation posture). Investment-policy values —
 # changing them is a policy decision, not tuning.
 GROW_MAX_PICKS_BULL      = 3      # bull-day new-position cap
-GROW_MAX_PICKS_DEFAULT   = 1      # flat / bear-day new-position cap
+GROW_MAX_PICKS_DEFAULT   = 1      # flat-day new-position cap (bear days return
+                                   # empty new_picks before this is ever read)
 # Over-fetch headroom: composite-score this many × the pick cap so enough
 # candidates survive the composite/macro/sector/cap gates to fill the slots.
 # Coverage/perf knob (NOT a policy threshold): bigger = wider net scored, but a
