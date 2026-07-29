@@ -950,9 +950,9 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     deterioration_blocked_adds: list[dict] = []  # adds suppressed — active early-deterioration WATCH
     # Deterioration WATCH — SUPPRESS add-to-winner (see docstring; changed
     # 2026-07-21 from annotate-only). Same map shape/intent as _buy_candidates's
-    # own copy. NOTE: _buy_candidates still ANNOTATES its WATCH names — that's a
-    # different lane (awareness feed, never a gated add), so the asymmetry is
-    # intentional; do not "unify" them without a policy discussion.
+    # own copy — as of 2026-07-23 (936dff9) _buy_candidates ALSO suppresses at
+    # source rather than annotating, so both add lanes are symmetric: a WATCH
+    # name cannot appear as an add candidate anywhere in the Brief.
     _watch_by_ticker: dict = {
         str(d["ticker"]).upper(): d for d in (deterioration or []) if d.get("tier") == "WATCH"
     }
