@@ -73,13 +73,19 @@ REGIME_FAVORED = {
 }
 
 
-def detect_macro_regime(
+def detect_macro_regime_legacy(
     tlt_ret: float,
     spy_ret: float,
     vix: float,
 ) -> dict:
     """
     Infer the current macro regime from three ETF proxies.
+
+    Renamed from `detect_macro_regime` (2026-07-29 audit H1) to avoid import-name
+    collision with `macro_calendar.detect_macro_regime` (the FRED-based, 7-signal
+    successor used by Home/Risk Analysis/Regime Fit). This ETF-proxy read is kept as
+    a deliberate independent secondary read on the manual "Macro Signals" panel — see
+    the on-screen disclaimer at that panel's render site.
 
     tlt_ret : TLT 3-month price return (%)  — negative = rates rising
     spy_ret : SPY 3-month price return (%)  — direction of equities

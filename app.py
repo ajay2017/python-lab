@@ -190,7 +190,7 @@ from stock_analyzer.concentration import assess_add_concentration, high_beta_sha
 from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
 from stock_analyzer.discovery_universe import discovery_tickers
 from stock_analyzer.macro import (
-    RATE_SENSITIVITY, REGIME_FAVORED, detect_macro_regime, portfolio_macro_exposure,
+    RATE_SENSITIVITY, REGIME_FAVORED, detect_macro_regime_legacy, portfolio_macro_exposure,
 )
 from stock_analyzer.ranking import rank_holdings_in_universe, sector_alternatives, tier_label
 from stock_analyzer.trades import performance_stats, compute_realized_pnl
@@ -14704,7 +14704,7 @@ elif page == "🌐 Macro":
             _tlt = _mr.get("tlt_ret", 0.0)
             _spy = _mr.get("spy_ret", 0.0)
             _vix = _mr.get("vix", 18.0)
-            regime = detect_macro_regime(_tlt, _spy, _vix)
+            regime = detect_macro_regime_legacy(_tlt, _spy, _vix)
 
             _regime_colors = {
                 "rising_rates":  "#ffbb33",
@@ -14720,6 +14720,12 @@ elif page == "🌐 Macro":
                 f"<b style='color:{_rc};font-size:1.1em'>Current Regime: {regime['label']}</b>"
                 f"</div>",
                 unsafe_allow_html=True,
+            )
+            st.caption(
+                "ℹ️ This is an independent ETF-proxy read (TLT/SPY/VIX only) — a "
+                "deliberate secondary lens, not the same regime signal shown on "
+                "🏠 Home, Risk Analysis, or Regime Fit (which use a separate, "
+                "FRED-based 7-signal classifier). The two can legitimately disagree."
             )
 
             _s1, _s2, _s3 = st.columns(3)
