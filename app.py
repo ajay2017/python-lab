@@ -22588,19 +22588,16 @@ elif page == "📊 Predictive Analytics":
     )
 
     def _pac_src_note(_pd: dict) -> str:
+        # For plain st.warning/st.info calls, which DO run markdown -- keep
+        # the original "*...*" emphasis syntax.
         return f"  *(evidence → {_pd['source_tab']})*" if _pd["source_tab"] != "all models" else ""
 
-    def _pac_render_action_card(_pd: dict) -> None:
-        st.markdown(
-            "<div style='background:#052e16;border-left:4px solid #4ade80;border-radius:8px;"
-            "padding:14px 16px;margin-bottom:8px;display:flex;flex-direction:column;"
-            "min-height:150px;font-size:0.92em;line-height:1.5;color:#dcfce7'>"
-            f"<div><b style='color:#fff'>Action:</b> {_pd['text']}</div>"
-            f"<div style='margin-top:auto;padding-top:10px;font-style:italic;opacity:0.85'>"
-            f"{_pac_src_note(_pd).strip()}</div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+    def _pac_src_note_html(_pd: dict) -> str:
+        # For the raw HTML action card below: CommonMark does not re-run
+        # inline markdown emphasis on text inside an HTML block, so "*...*"
+        # would render as literal asterisks instead of italics -- plain text,
+        # italicized via the wrapping div's CSS font-style instead.
+        return f"(evidence → {_pd['source_tab']})" if _pd["source_tab"] != "all models" else ""
 
     # Partition: actions get the prominent side-by-side treatment; the final
     # "Based on N graded outcomes" context line (source_tab == "all models",
@@ -22614,12 +22611,27 @@ elif page == "📊 Predictive Analytics":
         if d["type"] != "action" and d is not _pac_footnote
     ]
 
-    for _row_start in range(0, len(_pac_actions), 3):
-        _row = _pac_actions[_row_start:_row_start + 3]
-        _pac_cols = st.columns(len(_row))
-        for _col, _pd in zip(_pac_cols, _row):
-            with _col:
-                _pac_render_action_card(_pd)
+    if _pac_actions:
+        # A single CSS-grid block (not st.columns, which puts each column in
+        # its own independent DOM node and can't equalize height across them)
+        # so cards in the same row genuinely share a height, matching the
+        # approved mockup instead of drifting per-card with text length.
+        _pac_ncols = min(len(_pac_actions), 3)
+        _pac_cards_html = "".join(
+            "<div style='background:#052e16;border-left:4px solid #4ade80;border-radius:8px;"
+            "padding:14px 16px;display:flex;flex-direction:column;"
+            "font-size:0.92em;line-height:1.5;color:#dcfce7'>"
+            f"<div><b style='color:#fff'>Action:</b> {_pd['text']}</div>"
+            f"<div style='margin-top:auto;padding-top:10px;font-style:italic;opacity:0.85'>"
+            f"{_pac_src_note_html(_pd)}</div>"
+            "</div>"
+            for _pd in _pac_actions
+        )
+        st.markdown(
+            f"<div style='display:grid;grid-template-columns:repeat({_pac_ncols},1fr);"
+            f"gap:10px;margin-bottom:8px'>{_pac_cards_html}</div>",
+            unsafe_allow_html=True,
+        )
 
     if _pac_others:
         with st.expander(f"📎 Also worth noting ({len(_pac_others)})", expanded=False):
