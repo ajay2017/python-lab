@@ -6655,9 +6655,13 @@ if page == "🏠 Home":
             _alts.sort(key=lambda x: -(x[1] or 0))
             return [f"{t} (composite {s:.0f})" for t, s in _alts[:3]]
 
-        # Load BROKEN thesis tickers once per render — additive only; no-ops
-        # if AI Insights has never been used or the table doesn't exist yet.
-        if "_broken_thesis_tickers" not in st.session_state:
+        # Load BROKEN thesis tickers once per day — additive only; no-ops if AI
+        # Insights has never been used or the table doesn't exist yet. Date-keyed
+        # (not just "once per session") to match every sibling Home cache — a
+        # thesis marked BROKEN today is picked up on the next Home render after
+        # the ET date rolls over, not just after an app restart (audit Low nit).
+        if st.session_state.get("_broken_thesis_tickers_date") != _today_et().isoformat():
+            st.session_state["_broken_thesis_tickers_date"] = _today_et().isoformat()
             try:
                 _rv_df = db.load_thesis_reviews()
                 if not _rv_df.empty:
