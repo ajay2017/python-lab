@@ -16,4 +16,4 @@
 #     decisions — name the constant + old→new value in the body.
 #   • Claude-authored commits end with:
 #       Co-Authored-By: Ajay with <claude model> <ajay.x.ku@accenture.com>
-#     (use the actual model from the session — Sonnet 4.6, Opus 4.8, etc.)
+#     (use the actual model from the session — Sonnet 5, Opus 4.8, etc.)
