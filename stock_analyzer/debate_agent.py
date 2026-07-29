@@ -68,11 +68,11 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
         lines = [f"Debate context: {_ctx}"]
         if corpus.get("ticker"):
             lines.append(f"Ticker: {corpus['ticker']}")
-        if corpus.get("current_price") is not None:
+        if corpus.get("current_price") is not None and math.isfinite(corpus["current_price"]):
             lines.append(f"Current price: ${corpus['current_price']:.2f}")
         comp = corpus.get("composite_score")
         lbl  = corpus.get("composite_label", "")
-        if comp is not None:
+        if comp is not None and math.isfinite(comp):
             _comp_line = f"Composite score: {round(comp, 1)}/100"
             if lbl:
                 _comp_line += f" ({lbl})"
@@ -81,7 +81,7 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
         for key, name in (("t_score", "Technical"), ("bq_score", "Fundamentals"),
                           ("val_score", "Valuation"), ("s_score", "Sentiment")):
             v = corpus.get(key)
-            if v is not None:
+            if v is not None and math.isfinite(v):
                 _pillar_parts.append(f"{name}: {round(v, 1)}")
         if _pillar_parts:
             lines.append("Pillar scores — " + ", ".join(_pillar_parts))
@@ -90,14 +90,14 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
         m5 = corpus.get("momentum_5d_pct")
         m20 = corpus.get("momentum_20d_pct")
         _mom_parts = []
-        if m5 is not None:
+        if m5 is not None and math.isfinite(m5):
             _mom_parts.append(f"Momentum (5d): {m5:+.1f}%")
-        if m20 is not None:
+        if m20 is not None and math.isfinite(m20):
             _mom_parts.append(f"Momentum (20d): {m20:+.1f}%")
         if _mom_parts:
             lines.append(" | ".join(_mom_parts))
         rs = corpus.get("rs_vs_spy_20d_pp")
-        if rs is not None:
+        if rs is not None and math.isfinite(rs):
             lines.append(f"Relative strength vs SPY (20d): {rs:+.1f} pp")
         conv = corpus.get("conviction")
         if conv:
@@ -105,7 +105,7 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
         # Exit-debate evidence (rendered only when present; entry corpus omits
         # these keys, so this block is a no-op for entry debates).
         pnl = corpus.get("unrealized_pnl_pct")
-        if pnl is not None:
+        if pnl is not None and math.isfinite(pnl):
             lines.append(f"Unrealized P&L: {pnl:+.1f}%")
         tier = corpus.get("deterioration_tier")
         if tier:
@@ -114,13 +114,13 @@ def _format_corpus(corpus: dict, debate_type: str) -> str:
         if dsig:
             lines.append(f"Deterioration signals — {dsig}")
         ero = corpus.get("thesis_erosion_score")
-        if ero is not None:
+        if ero is not None and math.isfinite(float(ero)):
             lines.append(f"Thesis erosion score: {round(float(ero))}/100")
         dh = corpus.get("days_held")
         if dh is not None:
             lines.append(f"Days held: {dh}")
         sd = corpus.get("stop_distance_pct")
-        if sd is not None:
+        if sd is not None and math.isfinite(sd):
             lines.append(f"Distance above protective stop: {sd:+.1f}%")
         thesis = corpus.get("user_thesis")
         if thesis:
@@ -189,9 +189,9 @@ def build_entry_corpus(ticker, grow_candidate_row, grow_bundle, spy_close_series
     corpus: dict = {"ticker": str(ticker).upper().strip(), "debate_type": "entry"}
 
     try:
-        corpus["current_price"] = round(
-            float(grow_bundle["history"]["Close"].iloc[-1]), 2
-        )
+        _cur_price = float(grow_bundle["history"]["Close"].iloc[-1])
+        if math.isfinite(_cur_price):
+            corpus["current_price"] = round(_cur_price, 2)
     except Exception:
         pass
 
@@ -237,16 +237,16 @@ def build_entry_corpus(ticker, grow_candidate_row, grow_bundle, spy_close_series
         pass
 
     try:
-        corpus["momentum_5d_pct"] = round(
-            float(grow_bundle["history"]["Close"].pct_change(5).iloc[-1] * 100), 1
-        )
+        _m5 = float(grow_bundle["history"]["Close"].pct_change(5).iloc[-1] * 100)
+        if math.isfinite(_m5):
+            corpus["momentum_5d_pct"] = round(_m5, 1)
     except Exception:
         pass
 
     try:
-        corpus["momentum_20d_pct"] = round(
-            float(grow_bundle["history"]["Close"].pct_change(20).iloc[-1] * 100), 1
-        )
+        _m20 = float(grow_bundle["history"]["Close"].pct_change(20).iloc[-1] * 100)
+        if math.isfinite(_m20):
+            corpus["momentum_20d_pct"] = round(_m20, 1)
     except Exception:
         pass
 
@@ -374,7 +374,7 @@ def build_exit_corpus(ticker, port_df_row, held_data_bundle, erosion_cache_row,
     try:
         if _hist is not None and not _hist.empty and "Close" in _hist.columns:
             _m5 = float(_hist["Close"].pct_change(5).iloc[-1] * 100)
-            if not math.isnan(_m5):
+            if math.isfinite(_m5):
                 corpus["momentum_5d_pct"] = round(_m5, 1)
     except Exception:
         pass
@@ -382,7 +382,7 @@ def build_exit_corpus(ticker, port_df_row, held_data_bundle, erosion_cache_row,
     try:
         if _hist is not None and not _hist.empty and "Close" in _hist.columns:
             _m20 = float(_hist["Close"].pct_change(20).iloc[-1] * 100)
-            if not math.isnan(_m20):
+            if math.isfinite(_m20):
                 corpus["momentum_20d_pct"] = round(_m20, 1)
     except Exception:
         pass
