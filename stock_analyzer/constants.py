@@ -107,6 +107,11 @@ SECTOR_ELEVATED   = 25.0         # soft warn above this
 SINGLE_NAME_CEILING = 15.0       # hard single-name cap — no add-to-winner above this
 SINGLE_NAME_TRIM_TRIGGER = 18.0  # soft trim trigger — position that grew past ceiling (price appreciation after entry)
 SECTOR_REDUCE_TRIGGER = 20.0     # sector diversification reduce trigger — recommend reducing to SINGLE_NAME_CEILING
+# diversification_recommendations() literals, named per 2026-07-29 audit
+# Medium finding (sat near-but-not-matching the ladder above with no comment).
+DIVERSIFY_REDUCE_HIGH_URGENCY_PCT = 30.0  # sector REDUCE rec above this pct = "high" urgency (else "medium")
+DIVERSIFY_ADD_SKIP_PCT   = 8.0   # a diversifying sector already at/above this pct is skipped as not-underweight
+DIVERSIFY_ADD_TARGET_PCT = 10.0  # target allocation an ADD rec sizes its gap toward
 # High-beta cluster share — the standing "correlated exposure" read under the
 # fragility gauge: when this fraction of the book sits in high-beta (β ≥
 # PORTFOLIO_BETA_ELEVATED) names, they tend to fall TOGETHER on risk-off days, so

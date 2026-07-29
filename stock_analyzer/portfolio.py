@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -1053,7 +1053,7 @@ def diversification_recommendations(
             ]
             recs.append({
                 "type":            "REDUCE",
-                "urgency":         "high" if pct > 30 else "medium",
+                "urgency":         "high" if pct > DIVERSIFY_REDUCE_HIGH_URGENCY_PCT else "medium",
                 "sector":          sector,
                 "current_pct":     round(pct, 1),
                 "target_pct":      target_pct,
@@ -1099,13 +1099,13 @@ def diversification_recommendations(
     # ── ADD: underweight diversifying sectors ────────────────────────────────
     for sector in _DIVERSIFYING_SECTORS:
         current_pct = sector_pcts.get(sector, 0.0)
-        if current_pct >= 8.0:
+        if current_pct >= DIVERSIFY_ADD_SKIP_PCT:
             continue
         candidates = diversifying_candidate_pool(sector, held_tickers)
         if not candidates:
             continue
         profile    = _SECTOR_PROFILES.get(sector, {"corr": 0.30, "why": ""})
-        target_pct = 10.0
+        target_pct = DIVERSIFY_ADD_TARGET_PCT
         gap_pct    = round(target_pct - current_pct, 1)
         recs.append({
             "type":         "ADD",
