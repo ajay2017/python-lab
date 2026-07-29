@@ -37,6 +37,7 @@ def regime_position_gap(
         "top_contributors": list[dict],
       }
     """
+    held_data = held_data or {}
     ceiling = REGIME_BETA_CEILING.get(regime_id, REGIME_BETA_CEILING["neutral"])
     floor = REGIME_CASH_FLOOR_PCT.get(regime_id, REGIME_CASH_FLOOR_PCT["neutral"])
 

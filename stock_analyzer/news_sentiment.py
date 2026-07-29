@@ -12,7 +12,9 @@ def fetch_sentiment_for_tickers(tickers: list[str]) -> dict[str, dict]:
 
     Returns {ticker: sentiment_dict} for tickers where data is available.
     Tickers that fail or return None are omitted from the result.
-    Returns {} if Finnhub is not configured or tickers is empty.
+    Returns {} if Finnhub is not configured, tickers is empty, or every
+    per-ticker fetch failed/raised — these three cases are intentionally
+    indistinguishable to the caller (all mean "no sentiment data available").
     """
     provider = FinnhubProvider()
     if not provider.is_configured():
