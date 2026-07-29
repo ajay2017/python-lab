@@ -1,5 +1,20 @@
 import pandas as pd
 from stock_analyzer.indicators import atr as _atr_series
+from stock_analyzer.constants import (
+    TARGETS_ENTRY_ZONE_LOW_ATR_FRAC,
+    TARGETS_ENTRY_ZONE_HIGH_ATR_FRAC,
+    TARGETS_52W_HIGH_FALLBACK_MULT,
+    TARGETS_52W_LOW_FALLBACK_MULT,
+    TARGETS_SUPPORT_FALLBACK_MULT,
+    TARGETS_MODEST_UPSIDE_MULT,
+    TARGETS_BASE_FALLBACK_MULT,
+    TARGETS_BULL_ANALYST_MULT,
+    TARGETS_BULL_52W_HIGH_MULT,
+    TARGETS_BULL_FLAT_MULT,
+    TARGETS_BEAR_ATR_MULT,
+    TARGETS_BEAR_SUPPORT_CUSHION_MULT,
+    TARGETS_BEAR_52W_LOW_CUSHION_MULT,
+)
 
 
 def _atr_val(df: pd.DataFrame, length: int = 14) -> float:
@@ -32,8 +47,8 @@ def support_resistance(df: pd.DataFrame, lookback: int = 60) -> dict:
 
 def entry_zone(current_price: float, atr_val: float) -> tuple[float, float]:
     """Ideal entry band: current price ± fraction of ATR."""
-    low = round(current_price - 0.25 * atr_val, 2)
-    high = round(current_price + 0.10 * atr_val, 2)
+    low = round(current_price - TARGETS_ENTRY_ZONE_LOW_ATR_FRAC * atr_val, 2)
+    high = round(current_price + TARGETS_ENTRY_ZONE_HIGH_ATR_FRAC * atr_val, 2)
     return low, high
 
 
@@ -42,13 +57,13 @@ def compute_price_targets(
 ) -> dict:
     analyst_target = financials.get("analyst_target")
     _w52h = financials.get("52_week_high")
-    week52_high = _w52h if _w52h is not None else current_price * 1.3
+    week52_high = _w52h if _w52h is not None else current_price * TARGETS_52W_HIGH_FALLBACK_MULT
     _w52l = financials.get("52_week_low")
-    week52_low = _w52l if _w52l is not None else current_price * 0.7
+    week52_low = _w52l if _w52l is not None else current_price * TARGETS_52W_LOW_FALLBACK_MULT
 
     sr = support_resistance(df)
     _sup = sr["nearest_support"]
-    nearest_support = _sup if _sup is not None else current_price * 0.88
+    nearest_support = _sup if _sup is not None else current_price * TARGETS_SUPPORT_FALLBACK_MULT
     nearest_resistance = sr["nearest_resistance"]
 
     # Momentum-based upside: 6-month price trend extrapolated
@@ -61,29 +76,30 @@ def compute_price_targets(
         base = round(analyst_target, 2)
     else:
         # Stock has surpassed consensus — use nearest resistance or momentum
-        candidates = [t for t in [nearest_resistance, momentum_target, current_price * 1.10] if t and t > current_price]
-        base = round(min(candidates) if candidates else current_price * 1.08, 2)
+        candidates = [t for t in [nearest_resistance, momentum_target, current_price * TARGETS_MODEST_UPSIDE_MULT] if t and t > current_price]
+        base = round(min(candidates) if candidates else current_price * TARGETS_BASE_FALLBACK_MULT, 2)
 
     # Bull: highest credible upside — extended analyst or 52w high breakout
     bull_candidates = [
-        analyst_target * 1.20 if analyst_target else 0,
-        week52_high * 1.12,
-        current_price * 1.25,
+        analyst_target * TARGETS_BULL_ANALYST_MULT if analyst_target else 0,
+        week52_high * TARGETS_BULL_52W_HIGH_MULT,
+        current_price * TARGETS_BULL_FLAT_MULT,
     ]
     # default= guards the empty case: when NO candidate exceeds current_price
     # (price at/above every projected ceiling, OR a NaN/degraded current_price),
     # max() of the empty generator would raise ValueError and crash the whole
     # load_all → "Could not load". Fall back to a modest 10% upside.
     bull = round(max((c for c in bull_candidates if c > current_price),
-                     default=current_price * 1.10), 2)
+                     default=current_price * TARGETS_MODEST_UPSIDE_MULT), 2)
 
     # Bear: strongest support floor below current price.
     # ATR-based floor replaces the old flat 0.78× multiplier so that volatile
     # stocks get a deeper bear scenario and stable stocks a shallower one.
     # 6× ATR ≈ 1.5 monthly adverse moves — a meaningful but not extreme bear case.
     atr = _atr_val(df)
-    atr_bear = current_price - 6.0 * atr
-    bear = round(max(nearest_support * 0.98, week52_low * 1.03, atr_bear), 2)
+    atr_bear = current_price - TARGETS_BEAR_ATR_MULT * atr
+    bear = round(max(nearest_support * TARGETS_BEAR_SUPPORT_CUSHION_MULT,
+                      week52_low * TARGETS_BEAR_52W_LOW_CUSHION_MULT, atr_bear), 2)
 
     def pct(t: float) -> float:
         return round((t - current_price) / current_price * 100, 1)

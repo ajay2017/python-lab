@@ -242,6 +242,25 @@ PERF_ALPHA_BAND_PCT = 5.0
 # the Analysis page is a research/judgement surface, so the user decides).
 RR_ENTRY_MIN = 2.0
 
+# ── Price-target construction heuristics (targets.compute_price_targets) ────
+# One level upstream of RR_ENTRY_MIN above (which IS the actual entry gate) —
+# these size the bull/base/bear price levels R:R is computed from. Named per
+# 2026-07-29 audit Medium finding for tunability/documentation; pure
+# extraction, no value changes, not a Hard Rule #1 gate boundary itself.
+TARGETS_ENTRY_ZONE_LOW_ATR_FRAC  = 0.25  # entry-zone lower bound = price − this × ATR
+TARGETS_ENTRY_ZONE_HIGH_ATR_FRAC = 0.10  # entry-zone upper bound = price + this × ATR
+TARGETS_52W_HIGH_FALLBACK_MULT = 1.3   # fallback 52w-high (× current price) when financials data missing
+TARGETS_52W_LOW_FALLBACK_MULT  = 0.7   # fallback 52w-low (× current price) when financials data missing
+TARGETS_SUPPORT_FALLBACK_MULT  = 0.88  # fallback nearest-support (× current price) when no local low found
+TARGETS_MODEST_UPSIDE_MULT = 1.10  # generic "modest 10% upside" placeholder — base-target candidate AND bull-fallback default
+TARGETS_BASE_FALLBACK_MULT = 1.08  # base-target fallback (× current price) when no candidate qualifies
+TARGETS_BULL_ANALYST_MULT  = 1.20  # bull candidate: extended analyst target
+TARGETS_BULL_52W_HIGH_MULT = 1.12  # bull candidate: 52w-high breakout multiple
+TARGETS_BULL_FLAT_MULT     = 1.25  # bull candidate: flat upside from current price
+TARGETS_BEAR_ATR_MULT = 6.0   # bear floor = price − this × ATR (~1.5 monthly adverse moves)
+TARGETS_BEAR_SUPPORT_CUSHION_MULT  = 0.98  # bear floor candidate: nearest support with a 2% cushion
+TARGETS_BEAR_52W_LOW_CUSHION_MULT  = 1.03  # bear floor candidate: 52w-low with a 3% cushion
+
 # Watchlist Resurrection (O4, Agentic Intelligence Roadmap v2, 2026-07-26). A
 # watchlist ticker added at least this many days ago that is now ENTER_NOW/
 # NEAR_ENTRY is flagged as plausibly forgotten — a memory jog, never a gate.
