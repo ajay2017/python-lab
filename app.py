@@ -984,7 +984,7 @@ def _render_debate_result(row: dict, debate_type: str) -> None:
             _ag = (_tr.get("agent") or "").title()
             _ag_color = "#22c55e" if _tr.get("agent") == "bull" else "#ef4444"
             st.markdown(
-                f"<span style='color:{_ag_color}'>**Round {_tr.get('round')} — {_ag}:**</span> {_tr.get('text', '')}",
+                f"<span style='color:{_ag_color}'>**Round {_tr.get('round')} — {_ag}:**</span> {_html.escape(str(_tr.get('text', '')))}",
                 unsafe_allow_html=True,
             )
 
@@ -5265,7 +5265,7 @@ if page == "🏠 Home":
                         f"border-left:5px solid {_stance_color};border-radius:8px;"
                         f"padding:14px 18px;margin-bottom:12px'>"
                         f"<div style='color:#e5e7eb;font-size:0.95em;line-height:1.55'>"
-                        f"{_narrative}</div>"
+                        f"{_html.escape(str(_narrative))}</div>"
                         f"<div style='margin-top:10px;padding-top:10px;"
                         f"border-top:1px solid #1f2937'>"
                         f"<span style='color:{_stance_color};font-weight:800;"
@@ -26355,7 +26355,7 @@ elif page == "🧠 AI Insights":
                         st.markdown(
                             f"<div style='background:#1e293b;border-left:3px solid #3b82f6;"
                             f"padding:8px 12px;border-radius:4px;color:#cbd5e1;"
-                            f"font-style:italic;margin:4px 0 12px'>{_thesis}</div>",
+                            f"font-style:italic;margin:4px 0 12px'>{_html.escape(str(_thesis))}</div>",
                             unsafe_allow_html=True,
                         )
 
@@ -27722,7 +27722,7 @@ elif page == "🧠 AI Insights":
 
                 # Card header
                 st.markdown(
-                    f"**{_ac_t}** — {_ac_co} &nbsp;·&nbsp; {_ac_rt} &nbsp;·&nbsp; "
+                    f"**{_ac_t}** — {_html.escape(str(_ac_co))} &nbsp;·&nbsp; {_ac_rt} &nbsp;·&nbsp; "
                     f"{_ac_rdate} &nbsp;&nbsp; _{_ac_badge}_",
                     unsafe_allow_html=True,
                 )
