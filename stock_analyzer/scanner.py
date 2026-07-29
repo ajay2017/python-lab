@@ -18,6 +18,61 @@ SECTOR_UNIVERSE = {
 }
 
 
+# ── Score-component point buckets ────────────────────────────────────────────
+# Extracted 2026-07-29 (audit Medium finding) so app.py's Market Scanner
+# "Signal Evidence" transparency panel can call these directly instead of
+# hand-copying the thresholds — a prior copy had already silently duplicated
+# them with no shared source to keep the two in sync.
+
+def _rsi_points(rsi: float) -> int:
+    """RSI component (30 pts) — reward the sweet spot 40-65, slightly oversold is also good."""
+    if 40 <= rsi <= 65:
+        return 30
+    elif rsi < 40:
+        return 22
+    elif rsi < 75:
+        return 12
+    return 2
+
+
+def _trend_points(trend_label: str) -> int:
+    """Trend-alignment component (35 pts), keyed off the trend label _quick_score()
+    itself produces from the identical price/SMA brackets — the label is a
+    lossless encoding of which bracket fired, so this never needs the raw
+    price/SMA values to stay in sync with the scoring."""
+    if "Strong Uptrend" in trend_label:
+        return 35
+    elif "Uptrend" in trend_label:
+        return 20
+    elif "Mixed" in trend_label:
+        return 10
+    return 0
+
+
+def _momentum_1m_points(mom_1m: float) -> int:
+    """1-month momentum component (20 pts)."""
+    if mom_1m > 8:
+        return 20
+    elif mom_1m > 3:
+        return 14
+    elif mom_1m > 0:
+        return 7
+    elif mom_1m > -5:
+        return 2
+    return 0
+
+
+def _momentum_3m_points(mom_3m: float) -> int:
+    """3-month momentum component (15 pts)."""
+    if mom_3m > 15:
+        return 15
+    elif mom_3m > 5:
+        return 10
+    elif mom_3m > 0:
+        return 5
+    return 0
+
+
 def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
     try:
         close = df["Close"].dropna()
@@ -37,45 +92,9 @@ def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
         mom_1m = (price / float(close.iloc[-21]) - 1) * 100 if len(close) > 21 else 0.0
         mom_3m = (price / float(close.iloc[-63]) - 1) * 100 if len(close) > 63 else 0.0
 
-        score = 0
-
-        # RSI (30 pts) — reward the sweet spot 40–65, slightly oversold is also good
-        if 40 <= rsi <= 65:
-            score += 30
-        elif rsi < 40:
-            score += 22
-        elif rsi < 75:
-            score += 12
-        else:
-            score += 2
-
-        # Trend alignment (35 pts)
-        if price > sma20 > sma50:
-            score += 35
-        elif price > sma20:
-            score += 20
-        elif price > sma50:
-            score += 10
-
-        # 1-month momentum (20 pts)
-        if mom_1m > 8:
-            score += 20
-        elif mom_1m > 3:
-            score += 14
-        elif mom_1m > 0:
-            score += 7
-        elif mom_1m > -5:
-            score += 2
-
-        # 3-month momentum (15 pts)
-        if mom_3m > 15:
-            score += 15
-        elif mom_3m > 5:
-            score += 10
-        elif mom_3m > 0:
-            score += 5
-
-        # Trend label
+        # Trend label (computed first — trend_pts is derived from this label,
+        # a lossless encoding of the same price/SMA brackets, so there is only
+        # one place these brackets are evaluated).
         if price > sma20 > sma50:
             trend = "⬆⬆ Strong Uptrend"
         elif price > sma20:
@@ -84,6 +103,13 @@ def _quick_score(ticker: str, df: pd.DataFrame) -> dict | None:
             trend = "↔ Mixed"
         else:
             trend = "⬇ Downtrend"
+
+        score = (
+            _rsi_points(rsi)
+            + _trend_points(trend)
+            + _momentum_1m_points(mom_1m)
+            + _momentum_3m_points(mom_3m)
+        )
 
         # Volume ratio (recent vs 20-day avg)
         vol_ratio = (

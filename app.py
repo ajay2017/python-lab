@@ -187,7 +187,13 @@ from stock_analyzer.portfolio import (
     trailing_return, trim_allocation,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share
-from stock_analyzer.scanner import SECTOR_UNIVERSE, scan_sectors, scan_movers
+from stock_analyzer.scanner import (
+    SECTOR_UNIVERSE, scan_sectors, scan_movers,
+    _rsi_points as _scanner_rsi_points,
+    _trend_points as _scanner_trend_points,
+    _momentum_1m_points as _scanner_mom_1m_points,
+    _momentum_3m_points as _scanner_mom_3m_points,
+)
 from stock_analyzer.discovery_universe import discovery_tickers
 from stock_analyzer.macro import (
     RATE_SENSITIVITY, REGIME_FAVORED, detect_macro_regime_legacy, portfolio_macro_exposure,
@@ -15077,17 +15083,14 @@ elif page == "🔍 Market Scanner":
                 _ev_m3m    = float(_ev_srow.get("3M Momentum")  or 0)
                 _ev_trend  = str(_ev_srow.get("Trend")          or "")
 
-                # Reproduce _quick_score() component points for transparency
-                _ev_rsi_pts = (30 if 40 <= _ev_rsi <= 65 else
-                               22 if _ev_rsi < 40 else
-                               12 if _ev_rsi < 75 else 2)
-                _ev_trend_pts = (35 if "Strong Uptrend" in _ev_trend else
-                                 20 if "Uptrend" in _ev_trend else
-                                 10 if "Mixed" in _ev_trend else 0)
-                _ev_m1m_pts = (20 if _ev_m1m > 8 else 14 if _ev_m1m > 3 else
-                               7  if _ev_m1m > 0 else 2  if _ev_m1m > -5 else 0)
-                _ev_m3m_pts = (15 if _ev_m3m > 15 else 10 if _ev_m3m > 5 else
-                               5  if _ev_m3m > 0  else 0)
+                # Score-component points — reuse scanner._quick_score()'s own
+                # bucket functions rather than a hand-copied second set of
+                # thresholds (2026-07-29 audit Medium finding: the previous
+                # inline copy had no shared source with the real scoring).
+                _ev_rsi_pts   = _scanner_rsi_points(_ev_rsi)
+                _ev_trend_pts = _scanner_trend_points(_ev_trend)
+                _ev_m1m_pts   = _scanner_mom_1m_points(_ev_m1m)
+                _ev_m3m_pts   = _scanner_mom_3m_points(_ev_m3m)
 
                 # Composite score from pre-fetched data (may be None)
                 _ev_comp_data  = _ev_composites.get(_ev_t, {})
