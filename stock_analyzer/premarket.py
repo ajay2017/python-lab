@@ -134,7 +134,9 @@ def fetch_premarket_movers(
         # Prefer the known close from already-loaded history
         prev = None
         hd = held_data.get(sym, {})
-        df = hd.get("df") or hd.get("history")
+        df = hd.get("df")
+        if df is None:
+            df = hd.get("history")
         if df is not None and not df.empty and "Close" in df.columns:
             prev = float(df["Close"].iloc[-1])
         if prev is None:
