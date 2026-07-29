@@ -2018,6 +2018,8 @@ def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
     on success, or an empty DataFrame on any exception.
     Uses the same date-filter pattern as load_recommendations().
     """
+    if not has_db():
+        return pd.DataFrame()
     try:
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=days_back)).isoformat()
@@ -2082,6 +2084,13 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# ── Price cross-check history (ticker × date) ────────────────────────────────
+# System cache → NOT _READONLY-gated (mirrors sector_cache / sentiment_llm_cache).
+# A viewer-only session still benefits from a warm cross-check history rather
+# than silently losing that day's row (2026-07-29 audit Medium finding — this
+# was gated with no documented rationale, unlike every sibling recomputable
+# cache in this file).
+
 def save_price_xcheck_history_batch(rows: list[dict]) -> None:
     """Persist today's price cross-check result per held ticker.
 
@@ -2089,8 +2098,6 @@ def save_price_xcheck_history_batch(rows: list[dict]) -> None:
     are no-ops in effect (overwrite with the same day's latest value).
     Never raises.
     """
-    if _READONLY:
-        return
     if not rows:
         return
     if not has_db():
