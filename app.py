@@ -29720,9 +29720,9 @@ elif page == "🎯 My Edge":
         st.caption(
             "Directional, sample-gated observations over your own actionable Buy-side "
             "decisions (new_pick / add_winner recs only — the awareness-only "
-            "'More Buy Candidates' feed is excluded). Exit-side TRIM/EXIT patterns need a "
-            "separate forward-capture mechanism that doesn't exist yet, so this is Buy-side "
-            "only for v1 (see docs/plans/next-evolution-strategy.md, Concept A). "
+            "'More Buy Candidates' feed is excluded). Exit-side TRIM/EXIT/WATCH/RISK_OFF "
+            "patterns are covered separately below (Exit Signal Response), built forward "
+            "from the exit_signals history persisted since 2026-07-18. "
             "**These are observed correlations in your own past decisions — not verdicts, "
             "not biases you're being accused of, and never something the engine acts on.**"
         )
