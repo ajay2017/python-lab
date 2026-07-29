@@ -11,7 +11,8 @@ from __future__ import annotations
 
 def _safe_float(value, default=None):
     try:
-        return float(value)
+        v = float(value)
+        return default if v != v else v   # NaN != NaN
     except (TypeError, ValueError):
         return default
 
