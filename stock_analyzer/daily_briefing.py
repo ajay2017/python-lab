@@ -73,6 +73,7 @@ from stock_analyzer.signal_reconciliation import (
 from stock_analyzer.position_lifecycle import classify_position_state
 from stock_analyzer.portfolio import resolve_sector
 from stock_analyzer import exit_advisor
+from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
 
 
@@ -2252,11 +2253,7 @@ def build_daily_briefing(
     # a WATCH-type review card ("not an action yet") must never coexist with a
     # same-render risk-off "Trim now" Act Today card for the same name (2026-07-29
     # audit H6; the prior narrower TRIM-only filter let that contradiction through).
-    _reduced = {str(it.get("ticker")).upper() for it in act if it.get("ticker")}
-    for _it in review:
-        _rt = _it.get("ticker") or (_it.get("action") or {}).get("trim_ticker")
-        if _rt:
-            _reduced.add(str(_rt).upper())
+    _reduced = {decision_bucket._ticker(it) for it in (act + review)} - {""}
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,
