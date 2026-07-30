@@ -1390,6 +1390,13 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             ),
             "weight":  None,
             "pnl_pct": None,
+            # Raw list + category kept so the outer builder can re-filter "Affected"
+            # against tickers already carrying an Act Today reduce call (2026-07-29
+            # audit follow-up: this card's own "Affected: GD, CRWD" list otherwise
+            # restates names that already have their own SELL/TRIM card, reading
+            # like a contradictory second opinion rather than the same call).
+            "_affected_all": list(ev.get("affected_tickers", [])),
+            "_event_category": ev.get("category", "Economic"),
         })
 
     # 5 — HIGH-priority risk advisor flags
@@ -2189,6 +2196,50 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
     return items
 
 
+def _rewrite_macro_affected(act: list[dict], reduced: set[str]) -> None:
+    """Strip tickers already carrying an Act Today reduce card out of every
+    macro item's "Affected" list, in place.
+
+    A macro card's "Affected: GD, CRWD" restates names that already have their
+    own SELL/TRIM card elsewhere in Act Today — read together, "hold through
+    the print" for a ticker with a same-day mechanical stop-breach SELL looks
+    like a contradictory second opinion rather than the same call (2026-07-29
+    audit follow-up). `reduced` is the act+review reduce-ticker set computed by
+    the caller via `decision_bucket._ticker()`.
+
+    This is a deliberate enumeration-level trim, not a full single-surface
+    dedup (memory feedback_single_surface_priority): macro exposure and a
+    stock-specific stop-breach/trim are genuinely different dimensions, and a
+    partially-trimmed name (e.g. review-origin TRIM_TO_TARGET) still holds a
+    residual position that IS exposed to today's print. We drop it from the
+    enumeration anyway because the card's own directive — "no new entries" —
+    is moot for a name already being sold/trimmed, and the reduce card itself
+    already carries the caution; the macro event's existence still surfaces
+    via the card itself, only the restated ticker name is removed.
+    """
+    for it in act:
+        if it.get("kind") != "macro":
+            continue
+        affected_all = it.get("_affected_all", [])
+        if not affected_all:
+            continue  # broad-market card ("Affected: broad market.") — nothing to filter
+        remaining = [t for t in affected_all if str(t).upper() not in reduced]
+        category = it.get("_event_category", "Economic")
+        if remaining:
+            it["why"] = f"{category} release today. Affected: {', '.join(remaining[:5])}."
+        else:
+            it["why"] = (
+                f"{category} release today. "
+                "Other affected names already carry today's own Act Today calls."
+            )
+        # `_act_today()`'s consolidation step already synthesized `reason` from
+        # the original (unfiltered) directive+why for back-compat consumers
+        # (quick_research, premarket movers) — keep it in sync so it can't
+        # silently carry the stale, unfiltered ticker list.
+        if it.get("reason"):
+            it["reason"] = f"{it.get('directive', '')} {it['why']}".strip()
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def build_daily_briefing(
@@ -2254,6 +2305,7 @@ def build_daily_briefing(
     # same-render risk-off "Trim now" Act Today card for the same name (2026-07-29
     # audit H6; the prior narrower TRIM-only filter let that contradiction through).
     _reduced = {decision_bucket._ticker(it) for it in (act + review)} - {""}
+    _rewrite_macro_affected(act, _reduced)
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
         fragility=fragility, spy_trend_df=spy_trend_df, vix_level=vix_level,

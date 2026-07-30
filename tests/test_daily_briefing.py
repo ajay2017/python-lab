@@ -34,6 +34,7 @@ from stock_analyzer.daily_briefing import (
     _grow_today,
     _recently_added,
     _review_list,
+    _rewrite_macro_affected,
     _trim_targets,
 )
 from tests.conftest import find_item, make_port_df
@@ -566,3 +567,69 @@ def test_cross_reference_legacy_and_reconciled_verdicts_can_diverge():
     result = _cross_reference("AAA", _scanner_row(), port_df, [], held_data, _TODAY)
     assert result["verdict"] == "mixed"
     assert result["verdict_reconciled"]["verdict"] == "go"
+
+
+# ── _rewrite_macro_affected ────────────────────────────────────────────────────
+
+
+def _macro_item(affected):
+    return {
+        "kind": "macro",
+        "why": "stale placeholder",
+        "_affected_all": affected,
+        "_event_category": "Economic",
+    }
+
+
+def test_rewrite_macro_affected_drops_tickers_already_under_a_reduce_call():
+    # GD has its own stop-breach SELL card elsewhere in Act Today; the macro
+    # card's "Affected" list must not also list it under "hold through the
+    # print" -- that reads as a contradictory second opinion on the same name.
+    act = [_macro_item(["BKNG", "CRWD", "GD", "LLY", "SHOP"])]
+    _rewrite_macro_affected(act, reduced={"GD"})
+    assert act[0]["why"] == "Economic release today. Affected: BKNG, CRWD, LLY, SHOP."
+
+
+def test_rewrite_macro_affected_falls_back_when_every_ticker_is_already_reduced():
+    act = [_macro_item(["GD", "CRWD"])]
+    _rewrite_macro_affected(act, reduced={"GD", "CRWD"})
+    assert "already carry today's own Act Today calls" in act[0]["why"]
+    assert "GD" not in act[0]["why"]
+
+
+def test_rewrite_macro_affected_leaves_non_macro_items_untouched():
+    act = [{"kind": "stop_breach", "why": "unchanged"}]
+    _rewrite_macro_affected(act, reduced={"GD"})
+    assert act[0]["why"] == "unchanged"
+
+
+def test_rewrite_macro_affected_is_case_insensitive_against_reduced_set():
+    act = [_macro_item(["gd", "CRWD"])]
+    _rewrite_macro_affected(act, reduced={"GD"})
+    assert act[0]["why"] == "Economic release today. Affected: CRWD."
+
+
+def test_rewrite_macro_affected_leaves_broad_market_card_untouched():
+    # No held ticker was affected at construction time (_affected_all is
+    # empty) -- the original "Affected: broad market." why must survive
+    # untouched, not get rewritten into a false "already carry today's own
+    # calls" claim (there's nothing to have been filtered out).
+    item = _macro_item([])
+    item["why"] = "Economic release today. Affected: broad market."
+    act = [item]
+    _rewrite_macro_affected(act, reduced={"GD"})
+    assert act[0]["why"] == "Economic release today. Affected: broad market."
+
+
+def test_rewrite_macro_affected_keeps_reason_in_sync_with_filtered_why():
+    # `_act_today()`'s consolidation step synthesizes `reason` from the
+    # original (unfiltered) directive+why before this rewrite runs -- back-
+    # compat consumers (quick_research, premarket movers) read `reason`
+    # directly, so it must not keep the stale, unfiltered ticker list.
+    item = _macro_item(["BKNG", "GD"])
+    item["directive"] = "Hold through the print."
+    item["reason"] = "Hold through the print. Economic release today. Affected: BKNG, GD."
+    act = [item]
+    _rewrite_macro_affected(act, reduced={"GD"})
+    assert act[0]["why"] == "Economic release today. Affected: BKNG."
+    assert act[0]["reason"] == "Hold through the print. Economic release today. Affected: BKNG."
