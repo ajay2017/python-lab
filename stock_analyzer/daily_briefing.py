@@ -1259,6 +1259,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 "trigger": "Already breached — this is the exit signal, not a watch.",
                 "weight":  _f(row.get("Weight (%)")),
                 "pnl_pct": _f(row.get("P&L (%)")),
+                "shares":  _shares,
             })
 
     # 2 — Sell / Avoid signals on held positions

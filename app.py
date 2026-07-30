@@ -6766,10 +6766,31 @@ if page == "🏠 Home":
                         st.session_state["_pending_page"]    = "📈 Analysis"
                         st.session_state["_analysis_ticker"] = _db_ticker
                         st.rerun()
+                # Stop breach is a mechanical, unambiguous exit (Gap to Stop ≤ 0) —
+                # unlike sell_signal/deterioration cards, there's no judgment call
+                # that benefits from an Analysis detour, so offer a direct sell
+                # log alongside Analyze rather than instead of it (same
+                # log-the-trade pattern as the review card's "Log this trim").
+                _db_stop_shares = _db_item.get("shares") if _db_item.get("kind") == "stop_breach" else None
+                if _db_stop_shares:
+                    with _act_cols[1]:
+                        _db_stop_px = (st.session_state.get("_live_prices", {}).get(_db_ticker, {}) or {}).get("price")
+                        _render_trade_button(
+                            ticker=_db_ticker,
+                            suggested_action="SELL",
+                            shares=float(_db_stop_shares),
+                            price=float(_db_stop_px) if _db_stop_px else None,
+                            trigger="RECOMMENDATION",
+                            signal_context=_db_item.get("directive", "")[:140],
+                            followed_intent="yes",
+                            notes=(f"Stop breached — {_db_item.get('why', '')}")[:240],
+                            key_suffix="stopsell",
+                            label=f"📒 Log this sell ({int(_db_stop_shares)} sh {_db_ticker})",
+                        )
                 # Combined elevated card: when BROKEN thesis + TRIM/EXIT coincide,
                 # show a lightweight AI note link (core card is complete without it).
                 if str(_db_ticker).upper() in _broken_thesis_tickers:
-                    with _act_cols[1]:
+                    with _act_cols[2 if _db_stop_shares else 1]:
                         if st.button(
                             "🔴 Thesis broken — view AI note →",
                             key=f"_db_act_ainote_{_db_ticker}_{_db_item['action'][:10]}",
