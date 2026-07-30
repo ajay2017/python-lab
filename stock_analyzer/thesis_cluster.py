@@ -80,7 +80,16 @@ def build_thesis_corpus(port_df, trades_df) -> list[dict]:
             thesis = None
             for _, row in t_buys.iterrows():
                 _thesis_val = row.get("user_thesis")
-                if _thesis_val and str(_thesis_val).strip():
+                # None-safe AND NaN-safe: a legacy row with no saved thesis can
+                # surface here as either None or a pandas float NaN (`x != x`
+                # is the NaN self-inequality check already used elsewhere in
+                # this codebase, e.g. analyst_intel.classify_call/
+                # fetch_anchor_price) — bool(nan) is True in Python, so an
+                # unguarded truthy check would wrongly treat a missing thesis
+                # as the literal string "nan".
+                if _thesis_val is None or _thesis_val != _thesis_val:
+                    continue
+                if str(_thesis_val).strip():
                     thesis = str(_thesis_val).strip()
                     break
             if not thesis:

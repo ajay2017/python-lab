@@ -119,11 +119,18 @@ def extract_report(
             if cleaned.endswith("```"):
                 cleaned = cleaned[: cleaned.rfind("```")]
             cleaned = cleaned.strip()
-        if not cleaned.startswith("{"):
-            start = cleaned.find("{")
-            end   = cleaned.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                cleaned = cleaned[start : end + 1]
+        # Slice to the outermost JSON container. Must also recognize a bare
+        # "[" opener (shape 3 below is a documented raw-array response) — an
+        # object-only check here would find the FIRST "{" inside the array's
+        # own elements and corrupt a well-formed multi-item array into
+        # invalid, comma-joined fragments before json.loads ever sees it.
+        if not cleaned.startswith(("{", "[")):
+            start = min((i for i in (cleaned.find("{"), cleaned.find("[")) if i != -1), default=-1)
+            if start != -1:
+                closer = "}" if cleaned[start] == "{" else "]"
+                end = cleaned.rfind(closer)
+                if end > start:
+                    cleaned = cleaned[start : end + 1]
         parsed = json.loads(cleaned)
 
         # Normalize into a list of self-contained per-stock records.
