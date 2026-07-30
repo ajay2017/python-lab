@@ -161,7 +161,7 @@ from stock_analyzer.thesis_red_team import (
 )
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
-    split_defensive, reduce_call_items,
+    split_defensive, reduce_call_items, suppress_orphans_under_reduce_call,
 )
 from stock_analyzer.signal_hysteresis import apply_hysteresis
 from stock_analyzer.split_detector import detect_portfolio_splits
@@ -28627,7 +28627,18 @@ elif page == "🎯 My Edge":
             _mi_pub_port, min_positions=INVESTOR_MIRROR_MIN_POSITIONS
         )
         if _mi_pub_align is not None:
-            st.session_state["_mirror_orphans"]   = _mi_pub_align["orphan_convictions"]
+            # Exclude tickers already under an active Act Today reduce call —
+            # an orphan (undersized, high conviction -> "size up") that's also
+            # flagged to trim/exit is a direct contradiction (2026-07-30
+            # coordination-gap fix, the BKNG incident). This filters the
+            # published cache so the Analysis page's own Mirror banner (which
+            # reads _mirror_orphans) can't ALSO contradict the "Under a Reduce/
+            # Exit call" banner it already shows for the same ticker.
+            _mi_pub_orphans_ok, _ = suppress_orphans_under_reduce_call(
+                _mi_pub_align["orphan_convictions"],
+                st.session_state.get("_reduce_calls") or {},
+            )
+            st.session_state["_mirror_orphans"]   = _mi_pub_orphans_ok
             st.session_state["_mirror_overexp"]   = _mi_pub_align["accidental_overexposures"]
             st.session_state["_mirror_overhangs"] = _mi_pub_align["legacy_overhangs"]
         else:
@@ -30157,7 +30168,16 @@ elif page == "🎯 My Edge":
                     st.plotly_chart(_mi_fig, use_container_width=True)
 
                 # Misalignment callout columns
-                _mi_orphans  = _mi_align["orphan_convictions"]
+                # Orphan Conviction ("size up") vs. an active Act Today reduce
+                # call ("size down") is a direct contradiction — exclude those
+                # tickers from the actionable list and show why instead of
+                # silently dropping them (2026-07-30 coordination-gap fix, the
+                # BKNG incident: buying on this cue pushed BKNG's weight over
+                # the earnings-overweight-trim threshold the same week).
+                _mi_orphans, _mi_orphans_suppressed = suppress_orphans_under_reduce_call(
+                    _mi_align["orphan_convictions"],
+                    st.session_state.get("_reduce_calls") or {},
+                )
                 _mi_overexp  = _mi_align["accidental_overexposures"]
                 _mi_overhangs = _mi_align["legacy_overhangs"]
 
@@ -30185,13 +30205,19 @@ elif page == "🎯 My Edge":
                         _mi_orphan_body = (
                             "\n".join(_mi_ticker_line(_p) for _p in _mi_orphans)
                             + f"\n\n**→ Next step:** Open Analysis for {_tickers_str}. "
-                            "If gate checks pass and timing is right (no imminent earnings), "
-                            "this is a sizing opportunity — add shares to align weight with your conviction."
+                            "If gate checks pass, this is a sizing opportunity — add shares "
+                            "to align weight with your conviction. (Names under an active "
+                            "Act Today reduce call are excluded above.)"
                         )
+                    elif _mi_orphans_suppressed:
+                        _mi_orphan_body = "None currently actionable — see excluded names below."
                     else:
                         _mi_orphan_body = "None — high-conviction names are well-sized."
+                    _mi_orphan_hdr = f"**🌱 Orphan Conviction ({len(_mi_orphans)})**"
+                    if _mi_orphans_suppressed:
+                        _mi_orphan_hdr += f" · {len(_mi_orphans_suppressed)} excluded"
                     st.info(
-                        f"**🌱 Orphan Conviction ({len(_mi_orphans)})**\n\n"
+                        f"{_mi_orphan_hdr}\n\n"
                         f"Score ≥ {COMPOSITE_STRONG_BUY}, weight below median — "
                         f"high conviction, undersized position.\n\n{_mi_orphan_body}"
                     )
@@ -30204,6 +30230,24 @@ elif page == "🎯 My Edge":
                             st.session_state["_analysis_ticker"] = _p["Ticker"]
                             st.session_state["_pending_page"] = "📈 Analysis"
                             st.rerun()
+                    # Never silently filter (CLAUDE.md UI-suppression rule): show
+                    # why each excluded ticker isn't listed as a sizing opportunity.
+                    for _p in _mi_orphans_suppressed:
+                        _rc = _p["_reduce_call"]
+                        _rc_action = _rc.get("action")
+                        if isinstance(_rc_action, str):
+                            _rc_label = _rc_action
+                        elif isinstance(_rc_action, dict):
+                            _rc_label = _rc_action.get("type", "Reduce / Exit")
+                        else:
+                            _rc_label = "Reduce / Exit"
+                        st.warning(
+                            f"⛔ **{_p['Ticker']}** — score {_p['Score']:.0f}, weight "
+                            f"{_p['Weight (%)']:.1f}% — high conviction, but excluded: has "
+                            f"an active **{_rc_label}** call on today's Act Today list. "
+                            "Resolve that first — sizing up now would fight your own exit "
+                            "discipline."
+                        )
 
                 with _mi_c2:
                     if _mi_overexp:

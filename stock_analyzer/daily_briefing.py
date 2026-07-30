@@ -469,6 +469,7 @@ def _recently_added(ticker, held_data, cooldown: int = ADD_WINNER_COOLDOWN_DAYS)
 def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 portfolio_value: float, market_context: dict,
                 act_today: list | None = None,
+                review_list: list | None = None,
                 composites: dict | None = None,
                 risk_recs: list | None = None,
                 earnings_lookup: dict | None = None,
@@ -481,6 +482,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     market_context keys: sp500_pct, nasdaq_pct, tone ('bull'|'bear'|'flat'),
                          leading_sectors [{"sector", "etf", "return_1w"}]
     act_today  : output of _act_today — tickers flagged here are excluded.
+    review_list: output of _review_list — tickers flagged here (e.g. earnings-
+                 overweight or weak-large-position TRIM_TO_TARGET) are ALSO
+                 excluded. Without this, a review-origin trim never suppressed
+                 a same-day add-to-winner pick on the same ticker (2026-07-30
+                 coordination-gap fix; earnings-overweight-trim is review-origin,
+                 not act_today-origin, so it silently slipped past the earlier
+                 act_today-only check).
     composites : {ticker: load_all() result} for top scanner picks — used to
                  validate conviction using the full composite score so the label
                  reflects more than just momentum.
@@ -503,14 +511,16 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     lead_names  = {ls.get("sector", "") for ls in lead_secs}
     held_tickers = set(port_df["Ticker"].tolist()) if port_df is not None else set()
 
-    # ── Cross-reference Act Today to block conflicting picks ─────────────────
-    # Any ticker already flagged in Act Today (sell, stop, risk reduce) must not
-    # appear in Grow Today — contradicting signals in the same briefing is dangerous.
-    _act_blocked: set = set()
+    # ── Cross-reference the Brief to block conflicting picks ──────────────────
+    # Any ticker already flagged ANYWHERE in today's Brief (act_today OR
+    # review_list — sell, stop, risk reduce, or a review-origin trim) must not
+    # appear in Grow Today — contradicting signals in the same briefing is
+    # dangerous. decision_bucket.all_flagged_tickers() is the canonical broad
+    # set (2026-07-29 audit H6) and resolves ticker=None/action.trim_ticker
+    # macro-card shapes correctly, which a naive `.get("ticker")` loop misses.
+    _act_blocked: set = decision_bucket.all_flagged_tickers(act_today, review_list)
     _act_risk_flags: list[str] = []
     for _ai in (act_today or []):
-        if _ai.get("ticker"):
-            _act_blocked.add(str(_ai["ticker"]).upper())
         _action = str(_ai.get("action", ""))
         if "RISK —" in _action:
             _act_risk_flags.append(_action.replace("RISK — ", ""))
@@ -1559,6 +1569,7 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
 
 def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
                     act_today: list | None = None,
+                    review_list: list | None = None,
                     risk_recs: list | None = None,
                     earnings_lookup: dict | None = None,
                     composites: dict | None = None,
@@ -1566,6 +1577,12 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
     """
     Build buy candidate list with multi-signal confidence verdict for each pick.
     act_today: output of _act_today — tickers already flagged are excluded.
+    review_list: output of _review_list — tickers flagged here (e.g. earnings-
+               overweight or weak-large-position TRIM_TO_TARGET) are ALSO
+               excluded from add-to-winner, same as act_today (2026-07-30
+               coordination-gap fix — a review-origin trim wasn't blocking this
+               surface's own independent add-to-winner block, a second instance
+               of the same gap already fixed in _grow_today).
     risk_recs: Risk Advisor recs — tickers flagged for trim are suppressed from
                the add-to-winner block to avoid same-ticker capital conflicts.
     deterioration: output of deterioration_signals() — a held ticker carrying an
@@ -1576,11 +1593,9 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
     items: list[dict] = []
     held_tickers = set(port_df["Ticker"].tolist())
 
-    # Block any ticker already flagged in Act Today
-    _act_blocked: set = set()
-    for _ai in (act_today or []):
-        if _ai.get("ticker"):
-            _act_blocked.add(str(_ai["ticker"]).upper())
+    # Block any ticker already flagged ANYWHERE in today's Brief (act_today OR
+    # review_list) — same canonical set as _grow_today's gate.
+    _act_blocked: set = decision_bucket.all_flagged_tickers(act_today, review_list)
 
     # Risk Advisor trim targets — suppress same-ticker add-to-winner conflicts.
     _trim_set = _trim_targets(risk_recs)
@@ -1668,7 +1683,8 @@ def _buy_candidates(port_df, scanner_results, news_items, held_data, today,
         scr = _f(row.get("Score"), 0)
         if "Strong Buy" in sig and scr >= COMPOSITE_BUY and gap >= ADD_WINNER_MIN_GAP_PCT:
             ticker = str(row["Ticker"])
-            # Skip if Act Today already flags this ticker for any action
+            # Skip if the Brief already flags this ticker anywhere (Act Today
+            # or Review) for any action
             if ticker in _act_blocked:
                 continue
             # Post-add cooldown — already acted on this add recently (anti-churn,
@@ -2311,7 +2327,7 @@ def build_daily_briefing(
     # a WATCH-type review card ("not an action yet") must never coexist with a
     # same-render risk-off "Trim now" Act Today card for the same name (2026-07-29
     # audit H6; the prior narrower TRIM-only filter let that contradiction through).
-    _reduced = {decision_bucket._ticker(it) for it in (act + review)} - {""}
+    _reduced = decision_bucket.all_flagged_tickers(act, review)
     _rewrite_macro_affected(act, _reduced)
     _risk_off = exit_advisor.assess_risk_off_derisk(
         port_df, held_data,
@@ -2321,12 +2337,13 @@ def build_daily_briefing(
     if _risk_off:
         act = act + _risk_off
     buys   = _buy_candidates(port_df, scanner_results, news_items, held_data, today,
-                             act_today=act, risk_recs=risk_recs,
+                             act_today=act, review_list=review, risk_recs=risk_recs,
                              earnings_lookup=earnings_lookup,
                              composites=grow_composites or {},
                              deterioration=deterioration)
     grow   = _grow_today(port_df, scanner_results, news_items, held_data, today, portfolio_value, ctx,
-                         act_today=act, composites=grow_composites or {}, risk_recs=risk_recs,
+                         act_today=act, review_list=review, composites=grow_composites or {},
+                         risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
                          deterioration=deterioration,
                          movers=movers)

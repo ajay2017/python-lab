@@ -9,6 +9,8 @@ from stock_analyzer.decision_bucket import (
     split_defensive,
     reduce_call_items,
     reduce_call_tickers,
+    all_flagged_tickers,
+    suppress_orphans_under_reduce_call,
 )
 
 
@@ -209,3 +211,64 @@ def test_reduce_call_items_empty_on_no_reduce_signals():
 def test_reduce_call_items_safe_on_none_and_empty():
     assert reduce_call_items(None, None) == {}
     assert reduce_call_items([], []) == {}
+
+
+# ─── all_flagged_tickers ───────────────────────────────────────────────────────
+# The broader "any card, either lane" set (2026-07-29 audit H6), reused to close
+# the Orphan Conviction / Grow Today / add-to-winner coordination gaps (2026-07-30).
+
+def test_all_flagged_tickers_includes_act_and_review():
+    act_today = [{"ticker": "AAA", "kind": "stop_breach"}]
+    review_list = [{"ticker": "BBB", "action": {"type": "TRIM_TO_TARGET"}}]
+    assert all_flagged_tickers(act_today, review_list) == {"AAA", "BBB"}
+
+
+def test_all_flagged_tickers_includes_non_reduce_kinds_too():
+    # Broader than reduce_call_tickers: a WATCH-type / macro card still counts.
+    act_today = [{"ticker": "CCC", "kind": "macro"}]
+    assert all_flagged_tickers(act_today, None) == {"CCC"}
+    assert reduce_call_tickers(act_today, None) == set()
+
+
+def test_all_flagged_tickers_resolves_trim_ticker_fallback():
+    review_list = [{"ticker": None, "action": {"type": "PROTECTIVE_TRIM", "trim_ticker": "DDD"}}]
+    assert all_flagged_tickers(None, review_list) == {"DDD"}
+
+
+def test_all_flagged_tickers_safe_on_none_and_empty():
+    assert all_flagged_tickers(None, None) == set()
+    assert all_flagged_tickers([], []) == set()
+
+
+# ─── suppress_orphans_under_reduce_call ─────────────────────────────────────────
+# Closes the Orphan Conviction / Act Today reduce-call collision (BKNG incident,
+# 2026-07-30): a "size up" candidate that's also under an active reduce call must
+# be excluded, not silently — the caller renders the reduce call from _reduce_call.
+
+def test_suppress_orphans_excludes_ticker_with_active_reduce_call():
+    orphans = [{"Ticker": "BKNG", "Score": 80.0, "Weight (%)": 21.4}]
+    reduce_calls = {"BKNG": {"action": "TRIM_TO_TARGET", "why": "earnings overweight"}}
+    actionable, suppressed = suppress_orphans_under_reduce_call(orphans, reduce_calls)
+    assert actionable == []
+    assert len(suppressed) == 1
+    assert suppressed[0]["_reduce_call"] == reduce_calls["BKNG"]
+
+
+def test_suppress_orphans_keeps_ticker_with_no_reduce_call():
+    orphans = [{"Ticker": "AAPL", "Score": 80.0, "Weight (%)": 3.0}]
+    actionable, suppressed = suppress_orphans_under_reduce_call(orphans, {})
+    assert actionable == orphans
+    assert suppressed == []
+
+
+def test_suppress_orphans_ticker_match_is_case_insensitive():
+    orphans = [{"Ticker": "msft", "Score": 80.0, "Weight (%)": 3.0}]
+    reduce_calls = {"MSFT": {"action": "stop_breach"}}
+    actionable, suppressed = suppress_orphans_under_reduce_call(orphans, reduce_calls)
+    assert actionable == []
+    assert len(suppressed) == 1
+
+
+def test_suppress_orphans_safe_on_none_and_empty():
+    assert suppress_orphans_under_reduce_call(None, None) == ([], [])
+    assert suppress_orphans_under_reduce_call([], {}) == ([], [])

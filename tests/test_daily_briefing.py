@@ -132,6 +132,17 @@ def test_scanner_pick_excluded_when_act_blocked():
     assert find_item(items, "NEW") is None
 
 
+def test_scanner_pick_excluded_when_review_blocked():
+    # 2026-07-30 coordination-gap fix: a review-origin call (e.g. earnings-
+    # overweight TRIM_TO_TARGET) must suppress a new_pick the same way an
+    # act_today card does — previously only act_today was checked here.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 80.0}])
+    review_list = [{"ticker": "NEW", "action": {"type": "TRIM_TO_TARGET"}}]
+    items = _buy_candidates(port_df, scanner, [], {}, _TODAY, review_list=review_list)
+    assert find_item(items, "NEW") is None
+
+
 def test_scanner_pick_excluded_below_composite_buy():
     port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
     scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY - 1}])
@@ -173,6 +184,17 @@ def test_add_to_winner_suppressed_when_signal_not_strong_buy():
 def test_add_to_winner_suppressed_when_act_blocked():
     port_df = make_port_df([_winner_row()])
     items = _buy_candidates(port_df, None, [], {}, _TODAY, act_today=[{"ticker": "AAA"}])
+    assert find_item(items, "AAA") is None
+
+
+def test_add_to_winner_suppressed_when_review_blocked():
+    # 2026-07-30 coordination-gap fix (BKNG incident): _buy_candidates() has its
+    # own independent add-to-winner block with its own _act_blocked set, which
+    # previously only read act_today — a review-origin earnings-overweight-trim
+    # never suppressed this surface's own "ADD — Winning Position" pick.
+    port_df = make_port_df([_winner_row()])
+    review_list = [{"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}}]
+    items = _buy_candidates(port_df, None, [], {}, _TODAY, review_list=review_list)
     assert find_item(items, "AAA") is None
 
 
@@ -295,6 +317,27 @@ def test_grow_today_new_pick_no_warning_below_elevated_band():
     pick = find_item(grow["new_picks"], "NEW")
     assert pick is not None
     assert pick["sector_elevated_warning"] is None
+
+
+def test_grow_today_add_position_suppressed_when_review_blocked():
+    # 2026-07-30 coordination-gap fix (BKNG incident): _grow_today's own
+    # add_positions block only checked act_today for a conflicting Brief call —
+    # a review-origin earnings-overweight-trim never suppressed a same-day
+    # "add to this position" pick here either.
+    port_df = make_port_df([_winner_row()])
+    review_list = [{"ticker": "AAA", "action": {"type": "TRIM_TO_TARGET"}}]
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       review_list=review_list)
+    assert find_item(grow["add_positions"], "AAA") is None
+
+
+def test_grow_today_add_position_included_when_no_brief_conflict():
+    # Regression guard: nothing over-suppressed when review_list has no match.
+    port_df = make_port_df([_winner_row()])
+    review_list = [{"ticker": "ZZZ", "action": {"type": "TRIM_TO_TARGET"}}]
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       review_list=review_list)
+    assert find_item(grow["add_positions"], "AAA") is not None
 
 
 # ── Review Before Close: weak-large position flag ────────────────────────────

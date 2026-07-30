@@ -184,3 +184,39 @@ def reduce_call_tickers(act_today: list | None, review_list: list | None) -> set
     (scans both act + aware). Pure; safe on None/empty.
     """
     return set(reduce_call_items(act_today, review_list).keys())
+
+
+def all_flagged_tickers(act_today: list | None, review_list: list | None) -> set[str]:
+    """Every ticker carrying ANY card in either Brief lane — not just reduce cards.
+
+    Broader than `reduce_call_tickers` by design (2026-07-29 audit finding H6,
+    originally for the risk-off de-risk exclusion set): a WATCH-type review card
+    ("not an action yet") must still block a same-render contradictory "add to
+    this position" pick, not just a TRIM/EXIT. Uses `_ticker()` so ticker=None /
+    action.trim_ticker items (macro cards) resolve correctly. Pure; safe on
+    None/empty.
+    """
+    return {_ticker(it) for it in (act_today or []) + (review_list or [])} - {""}
+
+
+def suppress_orphans_under_reduce_call(
+    orphans: list[dict] | None, reduce_calls: dict[str, dict] | None
+) -> tuple[list[dict], list[dict]]:
+    """Split Orphan Conviction candidates into (actionable, suppressed).
+
+    An orphan (high conviction, underweight -> "size up") that also carries an
+    active Reduce/Exit call from today's Brief is a direct contradiction — same
+    ticker-matching canon as `reduce_call_items`. Suppressed items carry the
+    reduce call under "_reduce_call" so the caller can render an explanation
+    (never silently filter — CLAUDE.md UI-suppression rule). Pure; safe on
+    None/empty.
+    """
+    actionable: list[dict] = []
+    suppressed: list[dict] = []
+    for o in orphans or []:
+        rc = (reduce_calls or {}).get(str(o.get("Ticker", "")).upper())
+        if rc:
+            suppressed.append({**o, "_reduce_call": rc})
+        else:
+            actionable.append(o)
+    return actionable, suppressed
