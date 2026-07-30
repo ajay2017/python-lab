@@ -260,7 +260,7 @@ def _parse_json_response(text: str, list_key: str) -> list[dict] | None:
         if cleaned.endswith("```"):
             cleaned = cleaned[: cleaned.rfind("```")]
         cleaned = cleaned.strip()
-    if not cleaned.startswith("{"):
+    if not cleaned.startswith(("{", "[")):
         start = cleaned.find("{")
         end   = cleaned.rfind("}")
         if start != -1 and end != -1 and end > start:

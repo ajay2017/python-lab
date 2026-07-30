@@ -406,9 +406,9 @@ def _format_prompt(package: dict) -> str:
         lines.append("")
         lines.append("Behavioral pattern — momentum tendency (all-time buy-side signal history):")
         lines.append(f"  High-momentum signals: {h.get('n', 0)} surfaced, "
-                     f"{h.get('n_acted', 0)} acted on ({h.get('action_rate', 0)*100:.0f}% rate)")
+                     f"{h.get('n_acted', 0)} acted on ({h.get('action_rate', 0):.0f}% rate)")
         lines.append(f"  Low-momentum signals:  {lo.get('n', 0)} surfaced, "
-                     f"{lo.get('n_acted', 0)} acted on ({lo.get('action_rate', 0)*100:.0f}% rate)")
+                     f"{lo.get('n_acted', 0)} acted on ({lo.get('action_rate', 0):.0f}% rate)")
         lines.append(f"  Pattern direction: {mp.get('direction', 'flat')} "
                      f"(delta {mp.get('delta_pp', 0):+.1f}pp, "
                      f"positive = chases momentum, negative = contrarian/fades)")
@@ -420,9 +420,9 @@ def _format_prompt(package: dict) -> str:
         lines.append("")
         lines.append("Behavioral pattern — conviction tier (all-time buy-side signal history):")
         lines.append(f"  Strong Buy signals: {sb.get('n', 0)} surfaced, "
-                     f"{sb.get('n_acted', 0)} acted on ({sb.get('action_rate', 0)*100:.0f}% rate)")
+                     f"{sb.get('n_acted', 0)} acted on ({sb.get('action_rate', 0):.0f}% rate)")
         lines.append(f"  Buy signals:        {b.get('n', 0)} surfaced, "
-                     f"{b.get('n_acted', 0)} acted on ({b.get('action_rate', 0)*100:.0f}% rate)")
+                     f"{b.get('n_acted', 0)} acted on ({b.get('action_rate', 0):.0f}% rate)")
         lines.append(f"  Delta: {cp.get('delta_pp', 0):+.1f}pp "
                      f"(positive = higher action rate on Strong Buy, negative = reverse)")
 
