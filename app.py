@@ -14058,6 +14058,8 @@ elif page == "🥧 Portfolio Overview":
                 ))
                 pct_fig.add_hline(y=75, line_dash="dash", line_color="#4CAF50",
                                   annotation_text="Top quartile", annotation_position="right")
+                pct_fig.add_hline(y=50, line_dash="dot", line_color="#aaaaaa",
+                                  annotation_text="Median", annotation_position="right")
                 pct_fig.add_hline(y=25, line_dash="dash", line_color="#ff8800",
                                   annotation_text="Bottom quartile", annotation_position="right")
                 pct_fig.update_layout(
