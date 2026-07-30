@@ -9006,6 +9006,13 @@ elif page == "📡 Signals & Advice":
         st.stop()
     _render_portfolio_stale_banner(key_suffix="aa")
 
+    # Streamlit's st.tabs has no session-state binding, so a nav jump from
+    # elsewhere (e.g. Portfolio Overview's Sector Gaps pointer) always lands
+    # on the first tab — this one-shot hint tells the user to click the
+    # second tab rather than silently landing them on the wrong content.
+    if st.session_state.pop("_sg_jump_hint", False):
+        st.info("👆 Click the **🧩 Diversification** tab below to see sector-gap candidates.")
+
     port_df    = _aa_pdf
     held_data  = _aa_hd
     alert_list = st.session_state.get("_alert_list_cache") or []
@@ -11907,6 +11914,7 @@ elif page == "🥧 Portfolio Overview":
                         f"(target {rec['target_pct']:.0f}%) — {rec['why']}"
                     )
                 if st.button("See candidates in Diversification Advisor →", key="_sg_jump_sa"):
+                    st.session_state["_sg_jump_hint"] = True
                     st.session_state["_pending_page"] = "📡 Signals & Advice"
                     st.rerun()
 
