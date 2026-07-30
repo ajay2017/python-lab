@@ -9658,7 +9658,7 @@ elif page == "📡 Signals & Advice":
                             )
                             st.caption(rec["reason"])
                             st.markdown(
-                                f"Avg correlation to your existing book: "
+                                f"Typical correlation to a growth/tech-heavy portfolio: "
                                 f"**{rec['corr_to_tech']:.2f}** — lower = genuine diversification"
                             )
                         with ac2:
@@ -11888,6 +11888,27 @@ elif page == "🥧 Portfolio Overview":
                     f"when over): a red bar's sector is blocked for new buys in Grow Today. "
                     f"See 💰 Account for the full account-weight view."
                 )
+
+        # ── Sector Gaps — awareness pointer only ──────────────────────────────
+        # diversification_recommendations() (Diversification Advisor, 📡 Signals
+        # & Advice) already computes ADD recs for underweight/zero-held sectors.
+        # This surfaces the same data as a lightweight pointer here — NOT a
+        # duplicate full card — per single-surface-priority: the actionable
+        # card (candidates, $ sizing) stays on Signals & Advice only.
+        _sg_recs = st.session_state.get("_div_recs_cache")
+        if _sg_recs:
+            _sg_adds = [r for r in _sg_recs if r["type"] == "ADD"]
+            if _sg_adds:
+                st.subheader("🧭 Sector Gaps")
+                st.caption("Sectors that could genuinely diversify this portfolio but are underweight or unheld.")
+                for rec in _sg_adds:
+                    st.markdown(
+                        f"🟢 **{rec['sector']}** — {rec['current_pct']:.0f}% held "
+                        f"(target {rec['target_pct']:.0f}%) — {rec['why']}"
+                    )
+                if st.button("See candidates in Diversification Advisor →", key="_sg_jump_sa"):
+                    st.session_state["_pending_page"] = "📡 Signals & Advice"
+                    st.rerun()
 
         # ── Composition Sankey — Portfolio → Sector → Position ───────────────
         # One view of where the money sits and how concentrated it is. Band width

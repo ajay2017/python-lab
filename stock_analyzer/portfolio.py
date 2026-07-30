@@ -948,16 +948,19 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
 # (always unioned in FIRST so well-known names are never dropped by the scan
 # cap), and as the sole source if the discovery-universe bucket is unavailable.
 _SECTOR_CANDIDATES = {
-    "Healthcare":    ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
-    "Energy":        ["XOM", "CVX", "COP", "OXY"],
-    "Defense":       ["LMT", "RTX", "NOC", "GD"],
-    "Financials":    ["JPM", "V", "MA", "GS"],
-    "Clean Energy":  ["NEE", "ENPH", "FSLR", "BEP"],
-    "Consumer Tech": ["AAPL", "AMZN", "NFLX", "SHOP"],
-    "AI & Cloud":    ["MSFT", "GOOGL", "META", "CRM"],
-    "AI & Data":     ["PLTR", "SNOW", "MDB", "IONQ"],
-    "Cybersecurity": ["CRWD", "PANW", "NET", "ZS", "FTNT"],
-    "Semiconductors":["NVDA", "AVGO", "AMD", "MU", "QCOM"],
+    "Healthcare":      ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
+    "Energy":          ["XOM", "CVX", "COP", "OXY"],
+    "Defense":         ["LMT", "RTX", "NOC", "GD"],
+    "Financials":      ["JPM", "V", "MA", "GS"],
+    "Clean Energy":    ["NEE", "ENPH", "FSLR", "BEP"],
+    "Consumer Tech":   ["AAPL", "AMZN", "NFLX", "SHOP"],
+    "AI & Cloud":      ["MSFT", "GOOGL", "META", "CRM"],
+    "AI & Data":       ["PLTR", "SNOW", "MDB", "IONQ"],
+    "Cybersecurity":   ["CRWD", "PANW", "NET", "ZS", "FTNT"],
+    "Semiconductors":  ["NVDA", "AVGO", "AMD", "MU", "QCOM"],
+    "Communications":  ["T", "VZ", "TMUS"],
+    "EV & Auto":       ["TSLA", "RIVN", "LCID", "F", "GM"],
+    "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP"],
 }
 
 # Maps a Diversification-Advisor sector to the broad discovery-universe bucket
@@ -967,11 +970,17 @@ _SECTOR_CANDIDATES = {
 # the runtime risk of a live market scrape (the universe is curated, refreshed
 # quarterly). A sector with no mapping falls back to its roster only.
 _DIVERSIFY_TO_DISCOVERY = {
-    "Healthcare":   "Healthcare & Biotech",
-    "Energy":       "Energy & Materials",
-    "Defense":      "Industrials & Defense",
-    "Financials":   "Financials",
-    "Clean Energy": "Clean Energy & Utilities",
+    "Healthcare":     "Healthcare & Biotech",
+    "Energy":         "Energy & Materials",
+    "Defense":        "Industrials & Defense",
+    "Financials":     "Financials",
+    "Clean Energy":   "Clean Energy & Utilities",
+    "Semiconductors": "Semiconductors",
+    "Communications": "Communications & Telecom",
+    # EV & Auto and Enterprise Tech have no clean 1:1 discovery-universe bucket
+    # (EV names are split across Mega-cap Tech/Consumer & Retail; Enterprise
+    # Tech only partially overlaps Software & Cloud) — roster-only is fine,
+    # diversifying_candidate_pool() falls back gracefully when unmapped.
 }
 
 
@@ -1003,18 +1012,28 @@ def diversifying_candidate_pool(
 
 # How correlated each sector is to a typical tech-heavy portfolio (lower = better diversifier)
 _SECTOR_PROFILES = {
-    "Healthcare":    {"corr": 0.15, "why": "counter-cyclical, FDA/drug-cycle driven — moves independently of tech"},
-    "Energy":        {"corr": 0.10, "why": "oil-price and geopolitics driven — near-zero correlation to semiconductors"},
-    "Defense":       {"corr": 0.12, "why": "government budget driven — orthogonal to rate-sensitive tech growth stocks"},
-    "Financials":    {"corr": 0.35, "why": "benefits when rates rise — inverse to your growth-tech book"},
-    "Clean Energy":  {"corr": 0.28, "why": "policy/subsidy driven — moderate diversification from pure tech"},
-    "Consumer Tech": {"corr": 0.58, "why": "still tech but consumer-facing — partial diversification"},
-    "AI & Cloud":    {"corr": 0.72, "why": "highly correlated to existing tech — limited diversification benefit"},
-    "AI & Data":     {"corr": 0.68, "why": "correlated to AI/semiconductor cycle — limited benefit if already tech-heavy"},
+    "Healthcare":      {"corr": 0.15, "why": "counter-cyclical, FDA/drug-cycle driven — moves independently of tech"},
+    "Energy":          {"corr": 0.10, "why": "oil-price and geopolitics driven — near-zero correlation to semiconductors"},
+    "Defense":         {"corr": 0.12, "why": "government budget driven — orthogonal to rate-sensitive tech growth stocks"},
+    "Communications":  {"corr": 0.20, "why": "rate-sensitive, dividend-defensive telecom — closer to utilities than growth tech"},
+    "Financials":      {"corr": 0.35, "why": "benefits when rates rise — inverse to your growth-tech book"},
+    "EV & Auto":       {"corr": 0.40, "why": "rate- and commodity-cycle driven, consumer-discretionary — distinct from the software/AI cycle"},
+    "Enterprise Tech": {"corr": 0.45, "why": "legacy enterprise IT/capex cycle — more value-oriented than AI/Cloud growth names"},
+    "Clean Energy":    {"corr": 0.28, "why": "policy/subsidy driven — moderate diversification from pure tech"},
+    "Consumer Tech":   {"corr": 0.58, "why": "still tech but consumer-facing — partial diversification"},
+    "Semiconductors":  {"corr": 0.65, "why": "same AI/compute cycle as AI & Cloud / AI & Data — not a genuine diversifier"},
+    "Cybersecurity":   {"corr": 0.65, "why": "SaaS/enterprise-software spend cycle — correlated with the AI & Cloud / AI & Data cluster"},
+    "AI & Cloud":      {"corr": 0.72, "why": "highly correlated to existing tech — limited diversification benefit"},
+    "AI & Data":       {"corr": 0.68, "why": "correlated to AI/semiconductor cycle — limited benefit if already tech-heavy"},
 }
 
-# Sectors that genuinely diversify a tech-heavy portfolio, in priority order
-_DIVERSIFYING_SECTORS = ["Healthcare", "Energy", "Defense", "Financials", "Clean Energy"]
+# Sectors that genuinely diversify a tech-heavy portfolio, in priority order.
+# Semiconductors and Cybersecurity are deliberately excluded (see _SECTOR_PROFILES
+# "why") despite having a profile — same treatment as Consumer Tech/AI & Cloud/AI & Data.
+_DIVERSIFYING_SECTORS = [
+    "Healthcare", "Energy", "Defense", "Communications",
+    "Financials", "EV & Auto", "Enterprise Tech", "Clean Energy",
+]
 
 
 def diversification_recommendations(
