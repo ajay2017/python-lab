@@ -13985,6 +13985,10 @@ elif page == "🥧 Portfolio Overview":
             st.dataframe(
                 _tilt_df.rename(columns={"Tilt": "Tilt (pp)"}),
                 width='stretch', hide_index=True,
+                # Explicit height: default st.dataframe sizing clips to ~10 rows
+                # with an internal scrollbar, hiding the top (highest-tilt) row
+                # for the full 11-sector table — always show every row.
+                height=(len(_tilt_df) + 1) * 35 + 3,
             )
 
     # RANKINGS (Performance tab)
