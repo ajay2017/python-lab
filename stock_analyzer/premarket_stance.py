@@ -24,6 +24,10 @@ Rules:
 - Name SPECIFIC portfolio positions when relevant to today's setup — don't talk in abstractions when concrete names are in the data.
 - Flag the one macro event or catalyst that matters most today.
 - Distinguish between "what happened overnight" and "what to do at the open."
+- If a mover is marked "(⚠ unverified)", its data disagrees with an independent
+  price source beyond tolerance — don't assert its direction/magnitude as
+  settled fact; note the uncertainty or omit it rather than building the
+  narrative around a possibly-wrong number.
 - End with a verdict line on its own — EXACTLY one of:
     Stance: Defensive at open
     Stance: Neutral at open
@@ -114,6 +118,7 @@ def format_user_prompt(inputs: dict) -> str:
         parts.append(
             "Pre-market movers in portfolio + watchlist: " + " · ".join(
                 f"{m.get('ticker','?')} {m.get('chg_pct', 0):+.2f}%"
+                + (" (⚠ unverified)" if m.get("xcheck_ok") is False else "")
                 for m in inputs["movers"]
             )
         )

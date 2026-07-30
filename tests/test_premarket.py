@@ -189,6 +189,122 @@ def test_fetch_premarket_movers_is_held_flag(monkeypatch):
     assert by_ticker["MSFT"]["is_held"] is False
 
 
+# ─── fetch_premarket_movers — deliberate cross-check annotation ─────────────
+# Regression coverage for the 2026-07-30 incident: the Pre-Market Stance
+# narrative asserted MSFT/META moves that were the OPPOSITE sign of what
+# actually happened. fast_info stays the primary read (it's the only source
+# with real pre-market ticks), but each qualifying mover is now cross-checked
+# against an independent source so a stale/wrong fast_info print surfaces as
+# "unverified" instead of reaching the narrative unchallenged.
+
+def test_fetch_premarket_movers_tags_xcheck_ok_true(monkeypatch):
+    monkeypatch.setattr(premarket, "_fast", lambda sym: (105.0, 100.0))
+    monkeypatch.setattr(
+        premarket._data, "crosscheck_against",
+        lambda source, ticker, price, prev: {"ok": True, "source": source, "other_price": 105.1},
+    )
+    rows = premarket.fetch_premarket_movers(["AAPL"], {})
+    assert rows[0]["xcheck_ok"] is True
+    assert rows[0]["xcheck_source"] == "finnhub"
+    assert rows[0]["xcheck_other_price"] == 105.1
+
+
+def test_fetch_premarket_movers_tags_xcheck_ok_false_on_divergence(monkeypatch):
+    monkeypatch.setattr(premarket, "_fast", lambda sym: (91.89, 100.0))
+    monkeypatch.setattr(
+        premarket._data, "crosscheck_against",
+        lambda source, ticker, price, prev: {"ok": False, "source": source, "other_price": 109.0},
+    )
+    rows = premarket.fetch_premarket_movers(["MSFT"], {})
+    assert rows[0]["chg_pct"] == pytest.approx(-8.11)
+    assert rows[0]["xcheck_ok"] is False
+
+
+def test_fetch_premarket_movers_xcheck_none_when_no_independent_source(monkeypatch):
+    monkeypatch.setattr(premarket, "_fast", lambda sym: (105.0, 100.0))
+    monkeypatch.setattr(premarket._data, "crosscheck_against", lambda source, ticker, price, prev: None)
+    rows = premarket.fetch_premarket_movers(["AAPL"], {})
+    assert rows[0]["xcheck_ok"] is None
+    assert rows[0]["xcheck_source"] is None
+
+
+def test_fetch_premarket_movers_never_drops_mover_on_crosscheck_exception(monkeypatch):
+    # The cross-check is additive/deliberate, never gating -- a crash in it
+    # must not remove a genuine mover from the list (never silently filter).
+    def _boom(source, ticker, price, prev):
+        raise RuntimeError("network blip")
+    monkeypatch.setattr(premarket, "_fast", lambda sym: (105.0, 100.0))
+    monkeypatch.setattr(premarket._data, "crosscheck_against", _boom)
+    rows = premarket.fetch_premarket_movers(["AAPL"], {})
+    assert len(rows) == 1
+    assert rows[0]["xcheck_ok"] is None
+
+
+def test_fetch_premarket_movers_crosschecks_against_finnhub_by_name(monkeypatch):
+    # Regression for the reviewer-caught self-comparison bug: the generic
+    # data.crosscheck_price() auto-picks "whichever provider isn't the
+    # configured chain's primary" -- and since Finnhub IS that primary, it
+    # would skip Finnhub and validate Yahoo fast_info against Yahoo's own
+    # daily-bar path (a same-vendor near-no-op). Assert the mover call names
+    # "finnhub" explicitly via crosscheck_against, not crosscheck_price.
+    captured = {}
+
+    def _fake_crosscheck_against(source, ticker, price, prev):
+        captured["source"] = source
+        captured["ticker"] = ticker
+        return {"ok": True, "source": source, "other_price": price}
+
+    monkeypatch.setattr(premarket, "_fast", lambda sym: (105.0, 100.0))
+    monkeypatch.setattr(premarket._data, "crosscheck_against", _fake_crosscheck_against)
+    premarket.fetch_premarket_movers(["AAPL"], {})
+    assert captured == {"source": "finnhub", "ticker": "AAPL"}
+
+
+# ─── orchestrator.crosscheck_against — real wiring, not fully mocked ───────
+# Exercises the actual provider-selection/compare logic (not a hand-built
+# result dict) to prove the named-source lookup really consults Finnhub and
+# not "whichever provider happens to be configured first."
+
+class _StubProvider:
+    def __init__(self, name, records):
+        self.name = name
+        self._records = records
+
+    def live_prices(self, tickers):
+        return {t: self._records[t] for t in tickers if t in self._records}
+
+
+def test_orchestrator_crosscheck_against_consults_named_source(monkeypatch):
+    from stock_analyzer.providers import orchestrator as orch
+    from stock_analyzer import constants as C
+
+    finnhub_stub  = _StubProvider("finnhub", {"MSFT": {"price": 447.0, "prev_close": 425.0}})
+    yahoo_stub    = _StubProvider("yahoo_finance", {"MSFT": {"price": 300.0, "prev_close": 300.0}})
+    monkeypatch.setattr(orch, "_live_price_providers", lambda: [finnhub_stub, yahoo_stub])
+    monkeypatch.setattr(orch, "_is_red", lambda source: False)
+    monkeypatch.setattr(C, "DATA_XCHECK_FIELDS", {"price"})
+
+    result = orch.crosscheck_against("finnhub", "MSFT", 447.06, 425.01)
+    assert result is not None
+    assert result["source"] == "finnhub"
+    # Validated against Finnhub's reading (447.0), NOT the yahoo_stub's (300.0)
+    assert result["other_price"] == pytest.approx(447.0)
+    assert result["ok"] is True
+
+
+def test_orchestrator_crosscheck_against_unconfigured_source_returns_none(monkeypatch):
+    from stock_analyzer.providers import orchestrator as orch
+    from stock_analyzer import constants as C
+
+    yahoo_stub = _StubProvider("yahoo_finance", {"MSFT": {"price": 447.0, "prev_close": 425.0}})
+    monkeypatch.setattr(orch, "_live_price_providers", lambda: [yahoo_stub])
+    monkeypatch.setattr(C, "DATA_XCHECK_FIELDS", {"price"})
+
+    # "finnhub" isn't in the (stubbed) chain -- must return None, not crash
+    # or silently fall back to a different source.
+    assert orch.crosscheck_against("finnhub", "MSFT", 447.06, 425.01) is None
+
+
 # ─── build_premarket_brief — orchestration ──────────────────────────────────
 
 def test_build_premarket_brief_shape_and_events_filter(monkeypatch):

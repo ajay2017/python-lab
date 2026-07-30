@@ -4,6 +4,19 @@ Pre-market intelligence: US futures, global indices, stock movers, economic even
 Designed to run during 4:00–9:29 AM ET on weekdays.  All fetches use yfinance
 fast_info (single HTTP request per ticker) to stay within free-tier rate limits.
 Results are meant to be cached by the caller for ~5 minutes (ttl=300).
+
+fast_info stays the primary read for movers/futures deliberately — it's the
+only source in the chain with real pre/post-market ticks (the multi-source
+orchestrator's yfinance leg reads settled daily bars via yf.download, which
+has no "today" row before the open, so swapping the source would go BLIND
+pre-market, not more correct). Movers instead get a deliberate cross-check
+via data.crosscheck_against("finnhub", ...) — validates fast_info's read
+against Finnhub's real-time quote specifically (named explicitly, NOT the
+generic data.crosscheck_price(), which auto-picks "whichever provider isn't
+the configured chain's primary" and — since Finnhub IS that primary — would
+skip Finnhub and validate Yahoo fast_info against Yahoo's own daily-bar path,
+a same-vendor near-no-op). A disagreement never drops the mover; it surfaces
+as "unverified" instead of reaching the Pre-Market Stance narrative unchallenged.
 """
 import pytz
 from datetime import datetime
@@ -12,6 +25,7 @@ import pandas as pd
 import yfinance as yf
 
 from stock_analyzer import api_health as _ah
+from stock_analyzer import data as _data
 
 _ET = pytz.timezone("America/New_York")
 
@@ -125,6 +139,13 @@ def fetch_premarket_movers(
     Uses the last Close from held_data as the prior close baseline (most accurate),
     falls back to fast_info.previous_close.
     Only returns movers with |chg| >= 0.5%.
+
+    Each qualifying mover is passed through data.crosscheck_against("finnhub", ...)
+    (deliberate, not auto-run on every ticker — only the ones we're about to
+    show) against Finnhub's real-time quote specifically. A disagreement never
+    drops the mover — never silently filter — it's tagged xcheck_ok=False so
+    the UI/narrative can flag it as unverified instead of asserting a
+    possibly-wrong move as fact.
     """
     movers = []
     for sym in tickers:
@@ -143,12 +164,19 @@ def fetch_premarket_movers(
             prev = fi_prev
         chg = _pct(price, prev)
         if chg is not None and abs(chg) >= 0.5:
+            try:
+                xcheck = _data.crosscheck_against("finnhub", sym, price, prev)
+            except Exception:
+                xcheck = None
             movers.append({
-                "ticker":     sym,
-                "pre_price":  round(price, 2),
-                "prev_close": round(float(prev), 2) if prev else None,
-                "chg_pct":    chg,
-                "is_held":    sym in held_data,
+                "ticker":             sym,
+                "pre_price":          round(price, 2),
+                "prev_close":         round(float(prev), 2) if prev else None,
+                "chg_pct":            chg,
+                "is_held":            sym in held_data,
+                "xcheck_ok":          xcheck.get("ok") if xcheck else None,
+                "xcheck_source":      xcheck.get("source") if xcheck else None,
+                "xcheck_other_price": xcheck.get("other_price") if xcheck else None,
             })
     return sorted(movers, key=lambda x: abs(x["chg_pct"]), reverse=True)[:12]
 

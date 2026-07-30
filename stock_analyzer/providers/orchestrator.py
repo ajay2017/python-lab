@@ -343,6 +343,39 @@ def crosscheck_price(ticker: str, primary_price: float,
     return None
 
 
+def crosscheck_against(source: str, ticker: str, primary_price: float,
+                        primary_prev_close: float | None = None) -> dict | None:
+    """Like crosscheck_price(), but the caller names the independent source
+    explicitly instead of "whichever provider isn't index 0 of the configured
+    live-price chain." crosscheck_price() assumes the caller's own primary
+    reading IS the chain's configured primary (index 0) and skips that name
+    looking for a validator — correct for the 60s live-price strip, but wrong
+    for a caller like premarket.py whose primary read (yfinance fast_info,
+    for its real pre/post-market ticks) is NOT the chain's primary (Finnhub).
+    Using crosscheck_price() there silently validated Yahoo fast_info against
+    Yahoo's own yf.download() daily-bar path — a same-vendor near-no-op that
+    also compares mismatched prior sessions pre-market (yfinance's daily bars
+    have no "today" row before the open, so its prev_close is two sessions
+    back, not yesterday's). Naming the source skips that trap. Returns None
+    when disabled / source unconfigured or degraded / no comparable data."""
+    if "price" not in C.DATA_XCHECK_FIELDS or not primary_price:
+        return None
+    prov = next((p for p in _live_price_providers() if p.name == source), None)
+    if prov is None or _is_red(prov.name):
+        return None
+    try:
+        rec = (prov.live_prices([ticker]) or {}).get(ticker)
+    except Exception:
+        return None
+    if not rec:
+        return None
+    result = _compare(primary_price, primary_prev_close, rec.get("price"), rec.get("prev_close"))
+    if result is None:
+        return None
+    result["source"] = prov.name
+    return result
+
+
 def _compare(primary_price, primary_pc, other_price, other_pc) -> dict | None:
     """Build a cross-check result comparing one ticker's primary vs validator
     readings. prev_close strict, live loose. None if nothing comparable."""

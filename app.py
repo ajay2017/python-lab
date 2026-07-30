@@ -5390,6 +5390,16 @@ if page == "🏠 Home":
                         "⚡ PRE-MARKET MOVERS (YOUR STOCKS)</div>",
                         unsafe_allow_html=True,
                     )
+                    _pm_unverified_ct = sum(
+                        1 for _mv in _pm["movers"][:8] if _mv.get("xcheck_ok") is False
+                    )
+                    if _pm_unverified_ct:
+                        st.caption(
+                            f"⚠ {_pm_unverified_ct} mover"
+                            f"{'s' if _pm_unverified_ct != 1 else ''} below disagree with "
+                            "an independent price source beyond tolerance — treat "
+                            "direction/magnitude as unconfirmed until the open."
+                        )
                     for _mv in _pm["movers"][:8]:
                         _mc = "#22c55e" if _mv["chg_pct"] >= 0 else "#ef4444"
                         _marrow = "▲" if _mv["chg_pct"] >= 0 else "▼"
@@ -5399,6 +5409,13 @@ if page == "🏠 Home":
                             "<span style='background:#1e3a5f;color:#60a5fa;"
                             "padding:0 5px;border-radius:4px;font-size:0.7em'>held</span> "
                             if _mv["is_held"] else ""
+                        )
+                        _xcheck_badge = (
+                            "<span style='background:#422006;color:#fca5a5;padding:0 5px;"
+                            "border-radius:4px;font-size:0.7em;font-weight:700' "
+                            "title='Disagrees with an independent price source beyond tolerance'>"
+                            "⚠ unverified</span> "
+                            if _mv.get("xcheck_ok") is False else ""
                         )
                         # Alert badge when Act Today has an action on this mover
                         _act_badge = ""
@@ -5421,7 +5438,7 @@ if page == "🏠 Home":
                             f"<div style='display:flex;justify-content:space-between;"
                             f"align-items:center;padding:3px 0;font-size:0.82em'>"
                             f"<span style='color:#f9fafb;font-weight:600'>{_mv['ticker']}</span>"
-                            f"<span>{_held_badge}{_act_badge}"
+                            f"<span>{_held_badge}{_xcheck_badge}{_act_badge}"
                             f"<span style='color:#9ca3af;margin-right:6px'>"
                             f"${_mv['pre_price']:.2f}</span>"
                             f"<span style='color:{_mc};font-weight:700'>"

@@ -28,6 +28,17 @@ def crosscheck_price(ticker: str, primary_price: float,
     return _orch.crosscheck_price(ticker, primary_price, primary_prev_close)
 
 
+def crosscheck_against(source: str, ticker: str, primary_price: float,
+                       primary_prev_close: float | None = None) -> dict | None:
+    """Deliberate single-ticker price cross-check against a NAMED independent
+    source (see orchestrator.crosscheck_against) — for callers whose own
+    primary reading isn't the live-price chain's configured primary (e.g.
+    premarket.py's fast_info). Returns None when the layer is off."""
+    if not _C.DATA_MULTISOURCE_ENABLED:
+        return None
+    return _orch.crosscheck_against(source, ticker, primary_price, primary_prev_close)
+
+
 def crosscheck_prices(tickers: list[str]) -> dict[str, dict]:
     """Batch price cross-check for held positions (see orchestrator.crosscheck_batch).
     Returns {} when the layer is off."""

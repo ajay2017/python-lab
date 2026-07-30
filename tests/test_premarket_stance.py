@@ -113,6 +113,38 @@ def test_format_user_prompt_futures_section_formatting():
     assert "US futures: S&P 500 +0.35% · Nasdaq 100 -1.20%" in prompt
 
 
+def test_format_user_prompt_flags_unverified_mover():
+    inputs = {
+        "futures": [], "global_markets": [],
+        "movers": [
+            {"ticker": "MSFT", "chg_pct": -8.11, "xcheck_ok": False},
+            {"ticker": "LLY", "chg_pct": 1.2, "xcheck_ok": True},
+        ],
+        "events": [],
+        "regime_label": "—", "regime_rationale": "",
+        "top_holdings": [], "news_headlines": [],
+    }
+    prompt = ps.format_user_prompt(inputs)
+    assert "MSFT -8.11% (⚠ unverified)" in prompt
+    assert "LLY +1.20%" in prompt
+    assert "LLY +1.20% (⚠ unverified)" not in prompt
+
+
+def test_format_user_prompt_mover_without_xcheck_key_not_flagged():
+    # xcheck_ok absent (e.g. cross-check disabled/no independent source) must
+    # not be treated as a divergence -- only an explicit False flags it.
+    inputs = {
+        "futures": [], "global_markets": [],
+        "movers": [{"ticker": "AAPL", "chg_pct": 1.0}],
+        "events": [],
+        "regime_label": "—", "regime_rationale": "",
+        "top_holdings": [], "news_headlines": [],
+    }
+    prompt = ps.format_user_prompt(inputs)
+    assert "AAPL +1.00%" in prompt
+    assert "unverified" not in prompt
+
+
 def test_format_user_prompt_sections_only_appear_when_truthy():
     inputs = {
         "futures": [], "global_markets": [], "movers": [],
