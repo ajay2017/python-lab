@@ -249,10 +249,14 @@ def test_build_hold_time_stats_happy_path():
 # ─── _build_overtrading_stats ────────────────────────────────────────────────
 
 def _months_ago(n_months, day=15):
-    """Return an ISO date string roughly n_months before utcnow(), using
-    30-day steps so tests don't break on future runs."""
-    dt = datetime.utcnow() - timedelta(days=30 * n_months)
-    return dt.replace(day=min(day, 28)).strftime("%Y-%m-%d")
+    """Return an ISO date string exactly n_months before utcnow()'s calendar
+    month (day fixed at the 15th to dodge month-length edge cases), using
+    real month arithmetic via pd.DateOffset — NOT a 30-day approximation,
+    which drifts a full calendar month off near month boundaries (e.g. 90
+    days before day 29 of a month lands one month short), corrupting the
+    "1 distinct trade per prior month" fixture this helper exists to build."""
+    dt = pd.Timestamp.utcnow().replace(day=min(day, 28)) - pd.DateOffset(months=n_months)
+    return dt.strftime("%Y-%m-%d")
 
 
 def test_build_overtrading_stats_insufficient_history_returns_empty():
