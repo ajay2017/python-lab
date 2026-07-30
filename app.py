@@ -184,7 +184,7 @@ from stock_analyzer.portfolio import (
     annotate_add_candidates, resolve_sector, stop_ladder, protective_stop,
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
-    trailing_return, trim_allocation,
+    trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share
 from stock_analyzer.scanner import (
@@ -13935,6 +13935,57 @@ elif page == "🥧 Portfolio Overview":
             )
         elif _sr_df is None:
             st.info("Click **Load Sector Heatmap** to fetch live sector ETF performance.")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # REAL-SECTOR BENCHMARK TILT vs S&P 500 (Analytics tab)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+        st.subheader("🏛️ Portfolio vs. S&P 500 (Real Sector)")
+        st.caption(
+            "Uses each holding's REAL market sector (Technology, Financials, Health Care, "
+            "etc.) — not this app's thematic groupings (Consumer Tech, AI & Cloud, "
+            "Cybersecurity, etc.) used on the Sector Exposure / Sector Gaps charts "
+            "elsewhere on this page. The two taxonomies won't sum the same way; this view "
+            "answers a different question — \"are we over/underweight the actual market,\" "
+            "not \"which thematic sectors are we diversified across.\""
+        )
+        _rsx_df = real_sector_exposure(port_df, held_data)
+        if _rsx_df.empty:
+            st.info("No holdings with a resolvable sector.")
+        else:
+            _tilt_df = sector_benchmark_tilt(_rsx_df)
+            _tilt_colors = ["#00C851" if t > 0 else "#ff4444" if t < 0 else "#888888" for t in _tilt_df["Tilt"]]
+            _tilt_fig = go.Figure(go.Bar(
+                x=_tilt_df["Sector"], y=_tilt_df["Tilt"],
+                marker_color=_tilt_colors,
+                text=[f"{t:+.1f}pp" for t in _tilt_df["Tilt"]],
+                textposition="outside",
+                customdata=list(zip(_tilt_df["Portfolio Pct"], _tilt_df["Benchmark Pct"])),
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    "Portfolio: %{customdata[0]:.1f}%<br>"
+                    "S&P 500: %{customdata[1]:.1f}%<br>"
+                    "Tilt: %{y:+.1f}pp<extra></extra>"
+                ),
+            ))
+            _tilt_fig.add_hline(y=0, line_color="white", line_dash="dot", line_width=1)
+            _tilt_fig.update_layout(
+                title="Sector Tilt vs. S&P 500 (percentage points)",
+                template="plotly_dark", height=320,
+                yaxis_title="Portfolio − S&P 500 (pp)",
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(_tilt_fig, use_container_width=True)
+            st.caption(
+                "🟢 Green = overweight this real sector vs. the S&P 500  |  "
+                "🔴 Red = underweight  |  "
+                "S&P 500 GICS weights: Wikipedia \"S&P 500\" article, as of 2026-07-01 "
+                "(static reference — refresh periodically)."
+            )
+            st.dataframe(
+                _tilt_df.rename(columns={"Tilt": "Tilt (pp)"}),
+                width='stretch', hide_index=True,
+            )
 
     # RANKINGS (Performance tab)
     # ═══════════════════════════════════════════════════════════════════════════

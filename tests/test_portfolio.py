@@ -11,12 +11,15 @@ silently return.
 """
 import numpy as np
 import pandas as pd
+import pytest
 
 from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD, CORR_HIGH_PAIRS_THRESHOLD
 from stock_analyzer.portfolio import (
     diversification_score,
     manual_stop_wins,
     protective_stop,
+    real_sector_exposure,
+    sector_benchmark_tilt,
     stop_ladder,
     trim_allocation,
 )
@@ -265,3 +268,51 @@ def test_diversification_score_ignores_nan_pairs():
     # No valid pair to average -> weight_sum is 0 -> avg_corr falls back to 0.0.
     assert result["avg_correlation"] == 0.0
     assert result["risk_pairs"] == []
+
+
+# ── real_sector_exposure / sector_benchmark_tilt ──────────────────────────────
+
+def test_real_sector_exposure_normalizes_provider_aliases():
+    port_df = pd.DataFrame([
+        {"Ticker": "V", "Market Value": 1000.0},
+        {"Ticker": "LLY", "Market Value": 500.0},
+    ])
+    held_data = {
+        "V":   {"sector": "Financial Services"},  # provider alias -> "Financials"
+        "LLY": {"sector": "Healthcare"},           # provider alias -> "Health Care"
+    }
+    result = real_sector_exposure(port_df, held_data)
+    sectors = dict(zip(result["Sector"], result["Pct"]))
+    assert sectors == {"Financials": pytest.approx(66.7), "Health Care": pytest.approx(33.3)}
+
+
+def test_real_sector_exposure_unmapped_sector_falls_back_to_other():
+    port_df = pd.DataFrame([{"Ticker": "WEIRD", "Market Value": 100.0}])
+    held_data = {"WEIRD": {"sector": "Some Nonsense Category"}}
+    result = real_sector_exposure(port_df, held_data)
+    assert result["Sector"].tolist() == ["Other"]
+
+
+def test_real_sector_exposure_missing_sector_field_falls_back_to_other():
+    port_df = pd.DataFrame([{"Ticker": "NOPE", "Market Value": 100.0}])
+    result = real_sector_exposure(port_df, {})
+    assert result["Sector"].tolist() == ["Other"]
+
+
+def test_real_sector_exposure_empty_portfolio_returns_empty_df():
+    assert real_sector_exposure(pd.DataFrame(), {}).empty
+
+
+def test_sector_benchmark_tilt_unheld_benchmark_sector_shows_negative_tilt():
+    real_sector_df = pd.DataFrame([{"Sector": "Financials", "Pct": 100.0}])
+    tilt_df = sector_benchmark_tilt(real_sector_df)
+    row = tilt_df[tilt_df["Sector"] == "Information Technology"].iloc[0]
+    assert row["Portfolio Pct"] == 0.0
+    assert row["Tilt"] < 0
+
+
+def test_sector_benchmark_tilt_matches_portfolio_minus_benchmark():
+    real_sector_df = pd.DataFrame([{"Sector": "Financials", "Pct": 20.0}])
+    tilt_df = sector_benchmark_tilt(real_sector_df)
+    row = tilt_df[tilt_df["Sector"] == "Financials"].iloc[0]
+    assert row["Tilt"] == pytest.approx(row["Portfolio Pct"] - row["Benchmark Pct"], abs=0.05)

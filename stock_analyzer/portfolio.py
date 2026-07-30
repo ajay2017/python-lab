@@ -692,6 +692,112 @@ def relative_strength_table(
     return pd.DataFrame(rows)
 
 
+# ── Real-Sector Benchmark Tilt (vs. S&P 500) ──────────────────────────────────
+# Separate, parallel taxonomy from TICKER_SECTORS above. TICKER_SECTORS's 13
+# thematic labels (Consumer Tech, AI & Cloud, ...) don't map 1:1 onto real
+# GICS sectors — e.g. "Consumer Tech" mixes AAPL (real: Technology), AMZN
+# (Consumer Discretionary), NFLX (Communication Services) — so comparing
+# against a real market benchmark needs each ticker's actual provider-reported
+# sector, not the curated thematic bucket. That real sector is already fetched
+# for every held ticker (bundle_loader.py sets loaded_data[ticker]["sector"]
+# from the provider's raw .info["sector"]) but normally discarded in favor of
+# TICKER_SECTORS by resolve_sector() — reused here for free, zero new fetches.
+
+# S&P 500 GICS sector weights. Source: English Wikipedia, "S&P 500" article,
+# GICS sector weighting table, as of 2026-07-01. Static reference data (no
+# live benchmark-weight source exists in the provider layer) — refresh
+# periodically (every 6-12 months) since it will silently drift stale
+# otherwise. NOT a decision threshold (never gates), so it stays here next to
+# SECTOR_ETF rather than in constants.py, matching the _SECTOR_PROFILES
+# precedent above.
+SP500_SECTOR_WEIGHTS = {
+    "Information Technology":  37.4,
+    "Financials":              12.0,
+    "Communication Services":   9.96,
+    "Consumer Discretionary":   9.41,
+    "Health Care":              8.96,
+    "Industrials":              8.86,
+    "Consumer Staples":         4.57,
+    "Energy":                   2.97,
+    "Utilities":                2.17,
+    "Materials":                1.84,
+    "Real Estate":              1.84,
+    # Materials == Real Estate is not a transcription error — independently
+    # re-verified against the same source with a second, targeted fetch.
+}
+
+# Normalizes a provider's raw .info["sector"] string (Yahoo/Morningstar-style
+# naming differs from GICS-11 naming in several cases) onto the GICS-11 keys
+# above. Verify against this app's actual live sector_cache/_last_held_data
+# values post-deploy — anything not covered here falls through to "Other"
+# (visible, never silently miscounted), so an incomplete alias list degrades
+# gracefully rather than producing a wrong bucket.
+_PROVIDER_SECTOR_ALIASES = {
+    "technology":              "Information Technology",
+    "information technology":  "Information Technology",
+    "financial services":      "Financials",
+    "financials":              "Financials",
+    "communication services":  "Communication Services",
+    "consumer cyclical":       "Consumer Discretionary",
+    "consumer discretionary":  "Consumer Discretionary",
+    "healthcare":              "Health Care",
+    "health care":             "Health Care",
+    "industrials":             "Industrials",
+    "consumer defensive":      "Consumer Staples",
+    "consumer staples":        "Consumer Staples",
+    "energy":                  "Energy",
+    "utilities":               "Utilities",
+    "basic materials":         "Materials",
+    "materials":               "Materials",
+    "real estate":             "Real Estate",
+}
+
+
+def _normalize_provider_sector(raw: str | None) -> str:
+    """Maps a raw provider sector string onto a GICS-11 key, or 'Other' when
+    unmapped/blank — mirrors the UNCLASSIFIED_SECTOR catch-all convention."""
+    key = str(raw or "").strip().lower()
+    return _PROVIDER_SECTOR_ALIASES.get(key, UNCLASSIFIED_SECTOR)
+
+
+def real_sector_exposure(port_df: pd.DataFrame, loaded_data: dict) -> pd.DataFrame:
+    """Sector exposure keyed by each ticker's REAL provider-reported sector
+    (GICS-11-normalized), not the curated TICKER_SECTORS thematic label used
+    by sector_exposure(). Same output shape as sector_exposure()."""
+    if port_df.empty:
+        return pd.DataFrame()
+    df = port_df[["Ticker", "Market Value"]].copy()
+    df["Sector"] = df["Ticker"].map(
+        lambda t: _normalize_provider_sector((loaded_data.get(t) or {}).get("sector"))
+    )
+    return (
+        df.groupby("Sector")["Market Value"]
+        .sum()
+        .reset_index()
+        .rename(columns={"Market Value": "Value"})
+        .assign(Pct=lambda d: (d["Value"] / d["Value"].sum() * 100).round(1))
+        .sort_values("Pct", ascending=False)
+    )
+
+
+def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
+    """Portfolio real-sector % vs. SP500_SECTOR_WEIGHTS, outer-joined so a
+    benchmark sector held at 0% still shows a negative tilt. Tilt = portfolio
+    pct − benchmark pct. Diagnostic only — never gates."""
+    port_pcts = dict(zip(real_sector_df.get("Sector", []), real_sector_df.get("Pct", [])))
+    sectors = sorted(set(port_pcts) | set(SP500_SECTOR_WEIGHTS))
+    rows = [
+        {
+            "Sector":         s,
+            "Portfolio Pct":  round(port_pcts.get(s, 0.0), 1),
+            "Benchmark Pct":  round(SP500_SECTOR_WEIGHTS.get(s, 0.0), 2),
+            "Tilt":           round(port_pcts.get(s, 0.0) - SP500_SECTOR_WEIGHTS.get(s, 0.0), 1),
+        }
+        for s in sectors
+    ]
+    return pd.DataFrame(rows).sort_values("Tilt", ascending=False)
+
+
 # ── Correlation & Diversification ─────────────────────────────────────────────
 
 def correlation_matrix(held_data: dict) -> pd.DataFrame:
