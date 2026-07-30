@@ -1324,6 +1324,12 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             "weight":  d.get("weight_pct"),
             "pnl_pct": d.get("pnl_pct"),
             "dollar_risk": d.get("dollar_risk"),
+            # Only meaningful for the EXIT tier — a full-position quantity the
+            # directive already names ("exit most/all of N shares"). TRIM has no
+            # equivalent computed quantity (its directive is qualitative, "trim
+            # into the weakness"), so the UI must gate any sell-log button on
+            # kind == "deterioration_exit", not just this field's presence.
+            "shares": d.get("shares") if _is_exit else None,
         })
 
     # 3 — Critical news on held positions (compound ≤ NEWS_SENTIMENT_CRITICAL, tier ≤ 2,
