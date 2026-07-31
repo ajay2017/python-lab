@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -379,6 +379,7 @@ def alerts(
     portfolio_df: pd.DataFrame,
     held_data: dict | None = None,
     deterioration: list[dict] | None = None,
+    pt_cut_signals: dict[str, dict] | None = None,   # ticker -> analyst_targets.detect_pt_cut() output
 ) -> list[dict]:
     """
     Returns list of alert dicts with keys: level, msg, category.
@@ -390,6 +391,11 @@ def alerts(
     so bearish-signal alerts can be annotated with the ticker's current WATCH/TRIM/
     EXIT tier (if any), rather than computing a fourth, independent "should this be
     trimmed" read (2026-07-29 audit H4).
+
+    `pt_cut_signals` (optional): ticker -> analyst_targets.detect_pt_cut() output,
+    fires an independent "revisions" alert on a consensus price-target cut even
+    without an accompanying rating action (F-169 Phase 2 — closes the gap the
+    rating-based "Analyst revision spike" branch below cannot see).
     """
     from datetime import date as _date, datetime as _datetime
 
@@ -487,6 +493,7 @@ def alerts(
             dns = rev.get("downgrades_90d", 0)
             ups = rev.get("upgrades_90d", 0)
             net = rev.get("net", 0)
+            _rating_fired = False
             if dns >= 3 and net <= -2:
                 result.append({
                     "level": "danger", "category": "revisions",
@@ -495,12 +502,40 @@ def alerts(
                         f"(net {net}) — institutional conviction fading"
                     ),
                 })
+                _rating_fired = True
             elif dns >= 2 and net < 0:
                 result.append({
                     "level": "warning", "category": "revisions",
                     "msg": (
                         f"⚠️ **{ticker}** has {dns} downgrades vs {ups} upgrades in 90 days "
                         f"— monitor for further deterioration"
+                    ),
+                })
+                _rating_fired = True
+
+            # Analyst price-target cut (F-169 Phase 2 — independent of rating
+            # action; see docs/architecture.md §6.23). Skipped when the rating
+            # branch above already fired for this ticker — both are bearish
+            # "revisions" reads on the same name, so surfacing the PT cut too
+            # would stack two alerts in one category rather than add a
+            # genuinely new one (Opus review, 2026-07-31).
+            pt = {} if _rating_fired else ((pt_cut_signals or {}).get(ticker) or {})
+            if pt.get("level") == "danger":
+                result.append({
+                    "level": "danger", "category": "revisions",
+                    "msg": (
+                        f"🎯 **{ticker}** consensus price target cut {pt['pct_change'] * 100:.1f}% "
+                        f"over {PT_TARGET_LOOKBACK_DAYS} trading days "
+                        f"(${pt['compare_target']:.2f} → ${pt['newest_target']:.2f}) — no rating change, "
+                        f"but analysts are marking down the outlook"
+                    ),
+                })
+            elif pt.get("level") == "warning":
+                result.append({
+                    "level": "warning", "category": "revisions",
+                    "msg": (
+                        f"🎯 **{ticker}** consensus price target down {pt['pct_change'] * 100:.1f}% "
+                        f"over {PT_TARGET_LOOKBACK_DAYS} trading days — monitor"
                     ),
                 })
 

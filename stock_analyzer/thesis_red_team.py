@@ -9,7 +9,11 @@
 
 import json
 
-from stock_analyzer.constants import LLM_REQUEST_TIMEOUT_SEC
+from stock_analyzer.constants import (
+    LLM_REQUEST_TIMEOUT_SEC,
+    PT_TARGET_CUT_WARN_PCT,
+    PT_TARGET_CUT_DANGER_PCT,
+)
 
 _TIER_SCORES = {"WATCH": 10, "TRIM": 22, "EXIT": 30}
 
@@ -19,6 +23,31 @@ _WEIGHTS = {
     "composite":  25,
     "pt":         15,
 }
+
+
+def pt_points_from_signal(signal: dict | None) -> float:
+    """Map an analyst_targets.detect_pt_cut() result onto
+    compute_erosion_score()'s 0-15 pt_revision_pts scale (7=flat/up/no-
+    signal, 15=severe cut). An upward revision deliberately still returns 7.0,
+    not a lower "good news" value — a raised PT shouldn't pull a genuinely
+    eroding position (e.g. EXIT tier + underperforming) back toward "Intact,"
+    and it preserves the pre-Phase-2 inert-7.0 floor so nothing scores lower
+    than before. Withheld/missing -> 7.0 likewise, so behaviour is UNCHANGED
+    for any ticker without enough snapshot history yet (F-169 Phase 2 —
+    docs/architecture.md §6.23)."""
+    if not signal or signal.get("direction") is None:
+        return 7.0
+    pct = signal.get("pct_change")
+    if pct is None or pct >= 0:
+        return 7.0
+    pct_pts = pct * 100
+    if pct_pts <= PT_TARGET_CUT_DANGER_PCT:
+        return float(_WEIGHTS["pt"])
+    if pct_pts <= PT_TARGET_CUT_WARN_PCT:
+        span = PT_TARGET_CUT_WARN_PCT - PT_TARGET_CUT_DANGER_PCT  # 8.0
+        frac = (PT_TARGET_CUT_WARN_PCT - pct_pts) / span  # 0 at -7%, 1 at -15%
+        return 7.0 + frac * (float(_WEIGHTS["pt"]) - 7.0)
+    return 7.0  # real but sub-warning cut — not alarming enough to move the needle
 
 # Display-band thresholds (score → label). Checked in descending order;
 # first threshold the score meets wins.  These are display-copy tuning

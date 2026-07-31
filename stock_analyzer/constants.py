@@ -465,6 +465,15 @@ ANALYST_CONSENSUS_STRONG_BUY_FRAC = 0.80
 ANALYST_CONSENSUS_BUY_FRAC        = 0.50
 ANALYST_CONSENSUS_SELL_FRAC       = 0.50
 
+# Analyst price-target (PT) cut alert — F-169 Phase 2 (analyst_targets.py).
+# Fires a "revisions" alert on a consensus target_mean drop even without an
+# accompanying rating action (closes the gap at docs/architecture.md §6.23).
+# Investment-policy values — Opus review required per CLAUDE.md hard rule #4;
+# do not retune without a fresh review.
+PT_TARGET_LOOKBACK_DAYS   = 5      # trading-day window for the comparison
+PT_TARGET_CUT_WARN_PCT    = -7.0   # consensus target_mean drop over the window = warning
+PT_TARGET_CUT_DANGER_PCT  = -15.0  # consensus target_mean drop over the window = danger
+
 # ── Universe-ranking tier bands (ranking.tier_label) ─────────────────────────
 # Percentile bands classifying a holding's rank vs the scanned universe.
 # Display classification only — never gates or scores. Named per 2026-07-29

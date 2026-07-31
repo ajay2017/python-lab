@@ -11,11 +11,14 @@ docs/plans/thesis-red-team-phase2.md.
 """
 import json
 
+import pytest
+
 from stock_analyzer.thesis_red_team import (
     compute_erosion_score,
     build_counter_evidence_inputs,
     parse_counter_evidence_response,
     generate_counter_evidence,
+    pt_points_from_signal,
 )
 
 
@@ -82,6 +85,42 @@ def test_compute_erosion_score_never_raises_on_none_tier():
     # None tier is the documented "intact" case, not a missing-data error
     result = compute_erosion_score(None, 0.0, 0.0, 0.0)
     assert isinstance(result["score"], float)
+
+
+# ─── F-169 Phase 2: pt_points_from_signal ────────────────────────────────────
+
+def test_pt_points_from_signal_none_input_falls_back_to_inert_flat():
+    assert pt_points_from_signal(None) == 7.0
+
+
+def test_pt_points_from_signal_withheld_signal_falls_back_to_inert_flat():
+    withheld = {"direction": None, "pct_change": None}
+    assert pt_points_from_signal(withheld) == 7.0
+
+
+def test_pt_points_from_signal_flat_direction_is_inert_flat():
+    flat = {"direction": "flat", "pct_change": 0.0}
+    assert pt_points_from_signal(flat) == 7.0
+
+
+def test_pt_points_from_signal_up_direction_is_inert_flat():
+    up = {"direction": "up", "pct_change": 0.10}
+    assert pt_points_from_signal(up) == 7.0
+
+
+def test_pt_points_from_signal_warn_boundary_is_exactly_seven():
+    warn = {"direction": "cut", "pct_change": -0.07}
+    assert pt_points_from_signal(warn) == pytest.approx(7.0)
+
+
+def test_pt_points_from_signal_danger_boundary_is_exactly_fifteen():
+    danger = {"direction": "cut", "pct_change": -0.15}
+    assert pt_points_from_signal(danger) == pytest.approx(15.0)
+
+
+def test_pt_points_from_signal_midpoint_interpolates_exactly():
+    midpoint = {"direction": "cut", "pct_change": -0.11}  # halfway between -7% and -15%
+    assert pt_points_from_signal(midpoint) == pytest.approx(11.0)
 
 
 # ─── Phase 2: build_counter_evidence_inputs ──────────────────────────────────

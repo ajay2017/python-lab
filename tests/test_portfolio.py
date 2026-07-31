@@ -15,6 +15,7 @@ import pytest
 
 from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD, CORR_HIGH_PAIRS_THRESHOLD
 from stock_analyzer.portfolio import (
+    alerts,
     diversification_score,
     manual_stop_wins,
     protective_stop,
@@ -316,3 +317,74 @@ def test_sector_benchmark_tilt_matches_portfolio_minus_benchmark():
     tilt_df = sector_benchmark_tilt(real_sector_df)
     row = tilt_df[tilt_df["Sector"] == "Financials"].iloc[0]
     assert row["Tilt"] == pytest.approx(row["Portfolio Pct"] - row["Benchmark Pct"], abs=0.05)
+
+
+# ── alerts() — F-169 Phase 2 price-target-cut branch ──────────────────────────
+# alerts()'s "revisions" category had zero direct test coverage before this
+# (2026-07-29 audit H4 note) -- closing that gap alongside the new PT-cut
+# branch rather than adding an untested branch to an already-untested function.
+
+def _one_holding_port_df(ticker="AAA"):
+    # Values chosen to be inert for every OTHER alert branch in alerts() so
+    # these tests isolate the "revisions" / PT-cut branch specifically.
+    return pd.DataFrame([{
+        "Ticker": ticker,
+        "Weight (%)": 5.0,             # well below SINGLE_NAME_CEILING
+        "Gap to Stop (%)": 20.0,       # well above APPROACHING_STOP_GAP_PCT
+        "P&L (%)": 5.0,
+        "Signal": "Hold",              # no "Sell" substring -> no signal alert
+        "Sector": "Technology",
+        "Market Value": 1000.0,
+        "Stop": 90.0,
+    }])
+
+
+def _pt_alerts(alert_list):
+    return [a for a in alert_list if a["category"] == "revisions" and "🎯" in a["msg"]]
+
+
+def test_alerts_pt_cut_danger_fires_revisions_alert():
+    ticker = "AAA"
+    port_df = _one_holding_port_df(ticker)
+    held_data = {ticker: {}}
+    pt_cut_signals = {ticker: {
+        "level": "danger", "pct_change": -0.18,
+        "compare_target": 100.0, "newest_target": 82.0,
+    }}
+    result = alerts(port_df, held_data, pt_cut_signals=pt_cut_signals)
+    pt_hits = _pt_alerts(result)
+    assert len(pt_hits) == 1
+    assert pt_hits[0]["level"] == "danger"
+    assert "-18.0%" in pt_hits[0]["msg"]
+
+
+def test_alerts_pt_cut_warning_fires_revisions_alert():
+    ticker = "AAA"
+    port_df = _one_holding_port_df(ticker)
+    held_data = {ticker: {}}
+    pt_cut_signals = {ticker: {
+        "level": "warning", "pct_change": -0.09,
+        "compare_target": 100.0, "newest_target": 91.0,
+    }}
+    result = alerts(port_df, held_data, pt_cut_signals=pt_cut_signals)
+    pt_hits = _pt_alerts(result)
+    assert len(pt_hits) == 1
+    assert pt_hits[0]["level"] == "warning"
+    assert "-9.0%" in pt_hits[0]["msg"]
+
+
+def test_alerts_pt_cut_no_signal_produces_no_pt_alert():
+    ticker = "AAA"
+    port_df = _one_holding_port_df(ticker)
+    held_data = {ticker: {}}
+    # No pt_cut_signals passed at all -- must not crash or fabricate an alert.
+    result = alerts(port_df, held_data)
+    assert _pt_alerts(result) == []
+
+    # Also: a withheld/insufficient-history signal (level=None) must not fire.
+    pt_cut_signals = {ticker: {
+        "level": None, "pct_change": None,
+        "compare_target": None, "newest_target": None,
+    }}
+    result2 = alerts(port_df, held_data, pt_cut_signals=pt_cut_signals)
+    assert _pt_alerts(result2) == []

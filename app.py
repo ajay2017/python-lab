@@ -158,7 +158,9 @@ from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
     compute_erosion_score, build_counter_evidence_inputs, generate_counter_evidence,
+    pt_points_from_signal,
 )
+from stock_analyzer.analyst_targets import detect_pt_cut
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
     split_defensive, reduce_call_items, suppress_orphans_under_reduce_call,
@@ -3989,7 +3991,13 @@ if page == "🏠 Home":
         # WATCH/TRIM/EXIT tier (if any) so the two never silently disagree with
         # exit_advisor's read of the same position (2026-07-29 audit H4).
         _det_signals = deterioration_signals(port_df, held_data, _cached_spy("6mo"))
-        alert_list = alerts(port_df, held_data, deterioration=_det_signals)
+        # F-169 Phase 2 — consensus PT-cut signal per held ticker (independent
+        # of rating action; see docs/architecture.md §6.23). days_back=15 is
+        # plenty of buffer for the 5-trading-day comparison window past
+        # weekends/holidays while keeping the query small.
+        _pt_snapshots_df = db.load_analyst_target_snapshots(days_back=15)
+        _pt_cut_signals = {t: detect_pt_cut(_pt_snapshots_df, t) for t in held_data.keys()} if held_data else {}
+        alert_list = alerts(port_df, held_data, deterioration=_det_signals, pt_cut_signals=_pt_cut_signals)
         # Append signal-change alerts
         for _sc in _signal_changes:
             _icon = "📉" if _sc["degraded"] else "📈" if _sc["improved"] else "↔️"
@@ -28389,8 +28397,13 @@ elif page == "🧠 AI Insights":
                             break
                 _rt_comp_delta = _rt_comp_today - _rt_comp_lag  # positive = rising (good)
 
-                # PT revision: inert (7=flat) until analyst_target_snapshots accumulates
-                _rt_pt_pts = 7.0
+                # PT revision: real signal once analyst_target_snapshots has
+                # >=6 days for this ticker; falls back to the inert 7.0=flat
+                # placeholder otherwise (F-169 Phase 2 —
+                # docs/architecture.md §6.23).
+                _rt_pt_snapshots_df = db.load_analyst_target_snapshots(days_back=15)
+                _rt_pt_signal = detect_pt_cut(_rt_pt_snapshots_df, _rt_ticker)
+                _rt_pt_pts = pt_points_from_signal(_rt_pt_signal)
 
                 # 3. Compute erosion score
                 _rt_erosion = compute_erosion_score(
