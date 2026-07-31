@@ -1785,6 +1785,44 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
         st.rerun()
 
 
+def _refresh_portfolio_cache_after_trade(h_df: pd.DataFrame) -> None:
+    """
+    Rebuild _port_df_enriched/_last_port_df/_holdings_sig_at_home_build right
+    after a trade write, mirroring Home's build_portfolio_df call (~app.py:3472)
+    so every page reading the cached snapshot reflects the trade immediately
+    instead of only after the user happens to revisit Home. Reuses
+    _last_held_data for tickers already loaded this session and only fetches
+    the tickers newly appearing in holdings (a brand-new BUY) — cheap, unlike
+    Home's full held-tickers reload. Best-effort: on any failure this leaves
+    the prior cache untouched, and _portfolio_snapshot_stale()'s warning
+    banner still catches staleness as a fallback.
+    """
+    try:
+        held_data = dict(st.session_state.get("_last_held_data") or {})
+        holdings = h_df.to_dict("records")
+        tickers = {str(h.get("Ticker") or "").upper() for h in holdings if h.get("Ticker")}
+        missing = [t for t in tickers if t not in held_data]
+        if missing:
+            for t, bundle in _parallel_load_all(missing).items():
+                if bundle is not None:
+                    held_data[t] = bundle
+        manual_stops = db.load_manual_stops()
+        port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
+        st.session_state["_last_port_df"]      = port_df
+        st.session_state["_last_held_data"]    = held_data
+        st.session_state["_last_held_tickers"] = sorted(tickers)
+        st.session_state["_manual_stops"]      = manual_stops
+        st.session_state["_holdings_sig_at_home_build"] = frozenset(
+            (str(h.get("Ticker") or "").upper(), float(h.get("Shares") or 0))
+            for h in holdings
+        )
+        st.session_state["_port_df_enriched"] = port_df
+        if not port_df.empty:
+            st.session_state["_portfolio_value"] = float(port_df["Market Value"].sum())
+    except Exception:
+        pass
+
+
 def _fill_news_slot(slot, items: list) -> None:
     """Render curated news items into a sidebar container slot."""
     with slot:
@@ -18658,6 +18696,7 @@ elif page == "📒 Trade Journal":
                         )
                     db.save_holdings(_ps_h_df)
                     st.session_state.holdings_df = _ps_h_df
+                    _refresh_portfolio_cache_after_trade(_ps_h_df)
                 else:
                     st.success(
                         f"✅ SELL recorded for **{_ps_ticker}** "
@@ -19532,6 +19571,7 @@ elif page == "📒 Trade Journal":
                                 )
                             db.save_holdings(h_df)
                             st.session_state.holdings_df = h_df
+                            _refresh_portfolio_cache_after_trade(h_df)
                         else:
                             st.success(
                                 f"✅ SELL recorded for **{ticker_input}** "
@@ -19580,6 +19620,12 @@ elif page == "📒 Trade Journal":
                         # is visible at the moment it's breached. Enforcement was
                         # previously asymmetric (recommendations gated, manual
                         # buys unchecked). See concentration.assess_add_concentration.
+                        #
+                        # MUST run before _refresh_portfolio_cache_after_trade below:
+                        # assess_add_concentration takes PRE-trade existing_name_mv/
+                        # sector_mv/portfolio_value and adds this buy itself — reading
+                        # _last_port_df/_portfolio_value after they've been refreshed
+                        # to post-trade values would double-count the shares just bought.
                         try:
                             _cc_pdf = st.session_state.get("_last_port_df")
                             _cc_pv  = _f(st.session_state.get("_portfolio_value"), 0.0)
@@ -19644,6 +19690,8 @@ elif page == "📒 Trade Journal":
                                         )
                         except Exception:
                             pass
+
+                        _refresh_portfolio_cache_after_trade(h_df)
 
                     # Consume the prefill now that the trade was recorded —
                     # any future visit to this page should start with a clean
@@ -20442,6 +20490,7 @@ elif page == "📒 Trade Journal":
                             recalc = db.recalculate_from_trades(fresh_trades)
                             db.save_holdings(recalc["holdings_df"])
                             st.session_state.holdings_df = recalc["holdings_df"]
+                            _refresh_portfolio_cache_after_trade(recalc["holdings_df"])
                             _n_corrected = 0
                             for _tid, _c in recalc["realized_pnl_corrections"].items():
                                 if db.update_trade_realized_pnl(
@@ -20519,6 +20568,7 @@ elif page == "📒 Trade Journal":
                         # Apply
                         if db.save_holdings(new_h):
                             st.session_state.holdings_df = new_h
+                            _refresh_portfolio_cache_after_trade(new_h)
                             _applied = 0
                             for _tid, _c in corrs.items():
                                 if db.update_trade_realized_pnl(
@@ -20727,6 +20777,7 @@ elif page == "📒 Trade Journal":
                                         st.session_state["holdings_df"] = (
                                             _bi_recalc["holdings_df"]
                                         )
+                                        _refresh_portfolio_cache_after_trade(_bi_recalc["holdings_df"])
                                         _bi_n_corrected = 0
                                         for _bi_tid, _bi_c in (
                                             _bi_recalc["realized_pnl_corrections"].items()
@@ -21047,6 +21098,7 @@ elif page == "📒 Trade Journal":
                                         st.session_state["holdings_df"] = (
                                             _ss_recalc["holdings_df"]
                                         )
+                                        _refresh_portfolio_cache_after_trade(_ss_recalc["holdings_df"])
                                         _ss_n_corrected = 0
                                         for _ss_tid, _ss_c in (
                                             _ss_recalc["realized_pnl_corrections"].items()
