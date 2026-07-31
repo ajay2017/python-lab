@@ -28485,7 +28485,10 @@ elif page == "🧠 AI Insights":
             st.caption(
                 "**How to read this:** Higher score = more pressure on the thesis. "
                 "0–24 Intact · 25–49 Softening · 50–74 Eroding · 75–100 Breaking. "
-                "Signals that push the score up are shown in red; signals holding the thesis are neutral."
+                "Signals that push the score up are shown in red; signals holding the thesis are neutral. "
+                "**Analyst PT revision** tracks only the numeric consensus price target — it's independent "
+                "from the rating-action alert on 📡 Signals & Advice, so a rating downgrade there doesn't "
+                "necessarily mean a target cut here, or vice versa; the two can move separately."
             )
             st.divider()
 
@@ -28540,9 +28543,13 @@ elif page == "🧠 AI Insights":
                     return f"{delta:+.1f} pts — composite score stable", False
 
                 def _rt_pt_text(pt_pts):
-                    if pt_pts == 15:
-                        return "Analyst price target cut — bearish revision", True
-                    if pt_pts == 0:
+                    # pt_pts is a continuous 7-15 ramp (F-169 Phase 2), not the
+                    # old 3-value {0, 7, 15} placeholder — > 7 must catch every
+                    # real cut, not just the exact -15% danger endpoint, or a
+                    # genuine warning-tier cut silently shows as "no revision".
+                    if pt_pts > 7:
+                        return f"Analyst price target cut — bearish revision ({pt_pts:.0f}/15 pressure)", True
+                    if pt_pts < 7:
                         return "Analyst price target raised — bullish revision", False
                     return "No analyst price target revision", False
 
