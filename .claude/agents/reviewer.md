@@ -59,9 +59,18 @@ in priority order:
 
 ## Output
 
+Your `model:` frontmatter pin is the generic alias `opus`, not a fixed version
+— it auto-follows whatever Opus release the account currently resolves that
+alias to (see `feedback_commit_model_attribution`, `project_model_routing_drift_2026_07`
+memories). Always start your reply with the specific model you were actually
+invoked as (from your own system prompt / self-identification), so the caller
+can cite it accurately in the commit body per CLAUDE.md hard rule #4 — never
+assume or hardcode a version like "Opus 4.8".
+
 Return a short verdict in this shape:
 
 ```
+MODEL: <the specific Opus version you are running as, e.g. Opus 5>
 VERDICT: SHIP  |  FIX-FIRST
 BLOCKING:
   - <file:line> — <what's wrong> — <the fix>

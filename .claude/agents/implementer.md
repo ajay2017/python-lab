@@ -51,6 +51,12 @@ minimal edit that matches the surrounding code.
 
 ## Output
 
+Your `model:` frontmatter pin is the generic alias `sonnet`, not a fixed
+version — it auto-follows whatever Sonnet release the account currently
+resolves that alias to. Start your reply with `MODEL: <the specific Sonnet
+version you are running as, e.g. Sonnet 5>` so the caller can cite it
+accurately rather than assuming a version from memory.
+
 Report concisely:
 - Files changed and the one-line purpose of each edit.
 - The exact compile/unit-check commands you ran and their result.
