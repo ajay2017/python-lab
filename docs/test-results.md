@@ -18,11 +18,28 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-28 (clearing the last 2 low-urgency follow-ups)
+## 1. Latest run — 2026-07-30 (sector-diversification feature session)
 
-**1108 passed, 0 failed, 0 skipped** (`pytest tests/ -v`; with `--cov`
-active: 10.47s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
-`.venv`.
+**2909 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 24.54s; `pytest
+tests/ --cov=stock_analyzer --cov-report=term-missing -q`: 30.37s — TOTAL
+14148 stmts, 3739 missed, **74%** overall coverage). Python (local `.venv`).
+
+**Note on the jump from 1108 (2026-07-28) to 2909:** the large majority of
+this growth is from the test-coverage-backlog project (memory
+`project_test_coverage_backlog` — all ~46 modules backfilled across 8
+batches, closed 2026-07-30 in a session prior to this one) whose individual
+runs were never logged here as they landed. This entry is the first to
+capture the resulting total. **This session's own, precisely-known
+contribution is 6 new tests in `test_portfolio.py`** (28 → 34, covering the
+new `real_sector_exposure()`/`sector_benchmark_tilt()` functions — see the
+dated entry below). The per-file table and the "15 targeted modules"
+coverage table immediately below predate the backlog project's closure and
+are now stale for everything outside `test_portfolio.py` — treat the
+per-file counts and the 30%-ish `portfolio.py`/`daily_briefing.py`/etc.
+coverage figures below as **outdated pending a fuller refresh**, not as
+current fact. Don't extend or hand-edit them further without re-running
+the full per-file collection (`pytest tests/ --collect-only -q`) and a
+fresh coverage pass first.
 
 ### Per-file breakdown
 
@@ -32,7 +49,7 @@ active: 10.47s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_scoring.py` | 8 | `scoring.py` |
 | `test_concentration.py` | 16 | `concentration.py` |
 | `test_exit_advisor.py` | 32 | `exit_advisor.py` |
-| `test_portfolio.py` | 28 | `portfolio.py` |
+| `test_portfolio.py` | 34 | `portfolio.py` (incl. 6 new tests for `real_sector_exposure()`/`sector_benchmark_tilt()`, 2026-07-30) |
 | `test_risk_advisor.py` | 44 | `risk_advisor.py` (incl. 16 boundary-exact regression pins across the Sharpe/volatility/drawdown/tail-risk alert ladders and their per-ticker selection cutoffs) |
 | `test_daily_briefing.py` | 35 | `daily_briefing.py` (incl. `_cross_reference()`) |
 | `test_signal_reconciliation.py` | 26 | `signal_reconciliation.py` |
@@ -55,7 +72,7 @@ active: 10.47s). Python 3.14.6, pytest 8.4.2, pytest-cov 5.0.0, in the local
 | `test_earnings_advisor.py` | 56 | `earnings_advisor.py` (Pre-Earnings Playbook: EXIT/REDUCE/MONITOR/HOLD/HOLD_OR_ADD ladder, watchlist earnings-catalyst scanner) |
 | `test_perf_advisor.py` | 46 | `perf_advisor.py` (per-position performance attribution vs SPY/sector ETF, Alpha Generator/Sector Rider/Alpha Destroyer recommendation ladder) |
 | `test_news_intelligence.py` | 76 | `news_intelligence.py` (significance scoring, negative-news alerts, opportunity detection + Reduce/Exit suppression, sector digest, suppress-only + bidirectional LLM rescore helpers) |
-| **Total** | **1108** | |
+| **Total** | **1114** | *(this table's original ~28-file scope only — see the note above §1; full current suite is 2909)* |
 
 ### Line coverage of the 15 targeted modules
 
@@ -178,6 +195,33 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-07-30 — Sector-diversification feature (F-222/F-223): 6 new tests, full suite re-run at 2909/2909 passing
+
+Session shipped the 3-phase sector-diversification feature (Sector Gaps
+pointer + widened diversifier coverage, F-222; real-sector S&P 500
+benchmark tilt, F-223 — see `docs/shipped-log.md`). Added 6 regression
+tests to `tests/test_portfolio.py` (28 → 34) for the two new pure functions
+`real_sector_exposure()` and `sector_benchmark_tilt()`: provider-sector
+alias normalization, unmapped-sector fallback to `"Other"`, missing-sector
+fallback, empty-portfolio handling, and outer-join tilt-sign correctness
+for a benchmark sector held at 0%. Opus pre-ship review: SHIP, 0 blocking.
+
+Also caught and fixed a self-inflicted mid-session bug: an `Edit` call
+meant to insert the new tests matched a shorter substring than intended and
+silently split an existing test (`test_diversification_score_ignores_nan_pairs`)
+into two, orphaning its second assertion at module scope. Caught via a
+stray "`result` is not defined" Pyright diagnostic, fixed before commit, and
+independently re-verified by the Opus reviewer as fully repaired (single
+correct definition, no orphaned/duplicated lines).
+
+Ran the FULL suite (not just the new file) as part of this wrap-up:
+**2909 passed, 0 failed, 0 skipped**, 74% overall `stock_analyzer/`
+coverage (14148 stmts, 3739 missed) — see the note in §1 above for why this
+total is much larger than the last-logged 1108 (2026-07-28): almost all of
+the growth is from the separately-tracked test-coverage-backlog project
+(closed 2026-07-30, prior session), not from this session's own 6-test
+addition.
 
 ### 2026-07-28 — Closed the last 2 low-urgency follow-ups: `headless_alert_engine.py` NaN guards, `app.py` Max-Drawdown caption constant-wiring, 1108/1108 passing
 
