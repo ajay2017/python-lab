@@ -49,9 +49,14 @@ in priority order:
 
 ## How to work
 
-- `git diff`, `git status`, and reading files are your tools. You may run
-  `python -m py_compile <files>` and any existing unit checks to confirm it at
-  least loads — but you do NOT run the app and you do NOT edit code.
+- `git diff`, `git status`, and reading files are your tools — but you do NOT
+  run the app and you do NOT edit code.
+- **Don't re-run pytest yourself.** The `test-runner` agent (or the lead) has
+  already independently verified pass/fail before you're invoked — you'll be
+  handed that report. Trust it and spend your budget on policy/logic
+  correctness instead of re-executing a suite someone else already ran; that's
+  a redundant cost, not extra rigor. If no test-runner report was provided,
+  say so explicitly in NOTES rather than silently running the suite yourself.
 - Be specific: cite `file:line`, name the rule or the failure mode, and say
   exactly what to change. Vague "looks fine" is a failed review.
 - Distinguish **blocking** (ship-stopper: hardcoded threshold, broken gate,
@@ -76,7 +81,7 @@ BLOCKING:
   - <file:line> — <what's wrong> — <the fix>
 NON-BLOCKING:
   - <file:line> — <suggestion>
-NOTES: <one line on what you verified — compile, gate trace, etc.>
+NOTES: <one line — the test-runner result you were handed (pass/fail, or "none provided"), plus what you traced (gate logic, data path, etc.)>
 ```
 
 If you find nothing blocking, say so plainly and state what you actually checked

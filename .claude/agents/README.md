@@ -18,12 +18,13 @@ while the lead orchestrates and the Opus reviewer guards the decision logic.
 | `Plan` | **plan** (built-in) | Read-only architectural scaffolding: structural layout of a new page, DB table design, session-state wiring, non-gate feature scaffolding. Returns a spec; the lead decides on any policy content inside it. Use for non-trivial structural questions separable from gate/threshold policy. |
 | `reviewer` | **opus** | A focused review pass on changes touching decision logic / constants — read-only, returns SHIP / FIX-FIRST. This is a correctness premium (~67% cost uplift over the Sonnet 5 lead) that is always worth paying before committing anything that moves money. |
 | `implementer` | **sonnet** | A scoped, already-decided edit: wire a constant, add a render block, mechanical refactor, clear-repro fix. Same tier as lead — value is scope isolation and context hygiene, not dollar savings. |
+| `test-runner` | **haiku** | Independent verification gate, run after `implementer` and before `reviewer`: `py_compile` → targeted pytest → `check_constants_documented.py` → full suite, always all four, report-only (no diagnosis, no fixing). Strong-saving lane — mechanical, not judgment work. |
 | `doc-writer` | **haiku** | Cheap mechanical write-ups: a constants-table row, a Known-Behaviours row, an F/gate row, a code comment. Strong-saving lane (~67% vs Sonnet 5 lead at list price). |
 
 Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
 `haiku`). The lead can also override it per-invocation when needed.
 
-## The workflow: PLAN → ROUTE → BUILD → REVIEW → COMMIT
+## The workflow: PLAN → ROUTE → BUILD → VERIFY → REVIEW → COMMIT
 
 1. **PLAN (Sonnet 5 lead).** Decide *whether* to do it and *exactly how* —
    especially any constant/threshold/coordination call. Output: a precise spec
@@ -37,14 +38,25 @@ Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
    - doc/comment write-up → delegate to **`doc-writer`** (haiku — strong-saving lane)
    - broad code search ("find every place that gates on sector") → **`Explore`**
      (built-in, fast read-only fan-out)
-3. **BUILD.** Workers make the edit and compile-check. They do **not** commit and
-   do **not** invent thresholds — if a worker hits a decision it isn't
-   authorized to make, it reports back instead of guessing.
-4. **REVIEW (Opus `reviewer`).** Before committing anything that can affect a
-   recommendation or a gate, run the `reviewer`. It traces the data path against
-   the hard rules and the calm-advisor posture and returns SHIP / FIX-FIRST.
-   This step is mandatory regardless of which model is running the lead session.
-5. **COMMIT (lead).** The lead commits/pushes once the review passes. Commit
+3. **BUILD.** Workers make the edit and `py_compile`-check. They do **not**
+   commit, do **not** invent thresholds, and do **not** self-certify with
+   pytest — if a worker hits a decision it isn't authorized to make, it
+   reports back instead of guessing.
+4. **VERIFY (Haiku `test-runner`).** Before `reviewer` is invoked, run
+   `test-runner` — an independent agent that didn't write the code — against
+   the touched files: `py_compile` → targeted pytest →
+   `check_constants_documented.py` → full suite, always all four. Report-only;
+   a failure gets routed back to `implementer`, not fixed by `test-runner`
+   itself. This exists because Streamlit Cloud auto-redeploys from `main`
+   regardless of CI status, so the local pre-push test run — not CI — is the
+   real safety gate and has to run the same way every time.
+5. **REVIEW (Opus `reviewer`).** Before committing anything that can affect a
+   recommendation or a gate, run the `reviewer`, handing it `test-runner`'s
+   report. It trusts that report rather than re-running tests itself, and
+   spends its budget tracing the data path against the hard rules and the
+   calm-advisor posture, returning SHIP / FIX-FIRST. This step is mandatory
+   regardless of which model is running the lead session.
+6. **COMMIT (lead).** The lead commits/pushes once the review passes. Commit
    authority stays with the lead so the Opus review gate is never skipped on
    decision logic.
 
@@ -76,7 +88,7 @@ Model is set per agent via the `model:` frontmatter (`opus` / `sonnet` /
 
 - Natural language: *"Route this to the implementer, then have the reviewer
   check it before we commit."*
-- Explicit: `@agent-implementer` / `@agent-reviewer` / `@agent-doc-writer`.
+- Explicit: `@agent-implementer` / `@agent-test-runner` / `@agent-reviewer` / `@agent-doc-writer`.
 - Defaults & precedence: project agents in `.claude/agents/` (version-controlled,
   shared) override `~/.claude/agents/`. Filename is cosmetic; identity is the
   `name:` field.
@@ -91,8 +103,9 @@ the Anthropic Console / subscription usage view.
 
 ## TL;DR
 
-Sonnet 5 leads and orchestrates; Opus reviews every gate/decision-logic change
-before it ships; Haiku writes up the docs (the strong-saving lane). The Plan
-agent handles structural scaffolding so the lead's context stays clean. The
-calls that move money always pass through the Opus gate — regardless of what
-model is running the session.
+Sonnet 5 leads and orchestrates; Haiku `test-runner` independently verifies
+every change before Opus ever looks at it; Opus reviews every gate/decision-
+logic change before it ships; Haiku `doc-writer` writes up the docs (the
+strong-saving lane). The Plan agent handles structural scaffolding so the
+lead's context stays clean. The calls that move money always pass through the
+Opus gate — regardless of what model is running the session.

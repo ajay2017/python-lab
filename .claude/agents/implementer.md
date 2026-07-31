@@ -26,9 +26,14 @@ minimal edit that matches the surrounding code.
   constant is an investment-policy decision the lead/user makes, not you.
 - **Pure logic in `stock_analyzer/`; UI/orchestration in `app.py`.** Don't move
   domain logic into `app.py`.
-- **Never disable RLS. Never run the app locally.** Verification is
-  `python -m py_compile` (and any pure-function unit check you can run with
-  `python -c`), then report — the user validates on Streamlit Cloud.
+- **Never disable RLS. Never run the app locally.** Your own verification is
+  `python -m py_compile` on every file you touched (including test files you
+  wrote) — a syntax/import sanity check only. **Do not run pytest yourself to
+  self-certify pass/fail** — a separate `test-runner` agent (or the lead) does
+  that independently, so a change is never graded only by the agent that wrote
+  it. If you wrote or changed a pure helper, you may still sanity-check the
+  logic with an ad hoc `python -c` one-liner, but that's for your own
+  confidence while working, not a substitute for the real test run.
 - **`st.session_state.nav_page` is never assigned directly** — use the
   `_pending_page` indirection.
 - New DB columns must be backward-compatible (None-safe `.get`); date math uses
@@ -44,7 +49,8 @@ minimal edit that matches the surrounding code.
 2. Make the smallest edit that fully does the task. Don't refactor adjacent code
    "while you're there" unless the task says so.
 3. **Compile-check** every file you touched: `python -m py_compile <files>`.
-   If you wrote or changed a pure helper, add a quick `python -c` sanity check.
+   That's the extent of your own verification — hand off to `test-runner` (or
+   the lead) for the actual pytest run.
 4. **Do NOT `git commit` or `git push`.** Leave the working tree staged-or-clean
    for the lead to review and commit (the Opus review gate runs before commits
    that touch decision logic).
@@ -59,7 +65,10 @@ accurately rather than assuming a version from memory.
 
 Report concisely:
 - Files changed and the one-line purpose of each edit.
-- The exact compile/unit-check commands you ran and their result.
+- The exact `py_compile` command you ran and its result.
+- Any test files you wrote or extended, by name — so the lead knows what to
+  hand `test-runner` next. Don't report pytest pass/fail yourself; you didn't
+  run it.
 - Anything you hit that needed a decision you were NOT authorized to make
   (a missing constant, an ambiguous spec, a coordination overlap you noticed) —
   surface it, don't guess.

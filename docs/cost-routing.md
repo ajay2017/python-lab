@@ -45,6 +45,7 @@ dashboard. Read the scope notes before trusting a number.
 | Review gate | `reviewer` agent — SHIP/FIX-FIRST | Opus 4.8 | $5 | $25 | **1.67× — correctness premium** |
 | Build | `implementer` agent — decided edits | Sonnet 5 | $3 ($2 intro) | $15 ($10 intro) | 1× — context hygiene, not savings |
 | Scaffold | `Plan` agent — structural read-only | Sonnet 5 | $3 ($2 intro) | $15 ($10 intro) | 1× — context hygiene |
+| Verify | `test-runner` agent — independent pytest gate | Haiku 4.5 | $1 | $5 | **0.33× (saves ~67%)** |
 | Docs | `doc-writer` agent — doc/comment rows | Haiku 4.5 | $1 | $5 | **0.33× (saves ~67%)** |
 
 > **Intro pricing reminder:** Sonnet 5 intro rates ($2/$10) expire **2026-08-31**.
@@ -62,6 +63,14 @@ dashboard. Read the scope notes before trusting a number.
 - **`doc-writer`** (Haiku): **~67% cheaper** than Sonnet 5 lead at list / **~50%
   cheaper** during intro window. The strong-saving lane; route all mechanical
   doc rows here.
+- **`test-runner`** (Haiku, added 2026-07-31): same strong-saving lane as
+  `doc-writer` — running a fixed checklist and reporting pass/fail is
+  mechanical, not judgment work. Introduced to give every change an
+  independent verification pass (compile → targeted pytest → constants-doc
+  check → full suite) before the Opus `reviewer` is invoked, so `reviewer` can
+  stop re-running tests itself and `implementer` stops self-certifying its own
+  work. Read-only besides execution — never edits a test, never diagnoses a
+  failure's root cause.
 - **`Plan`**: same tier as lead, used for read-only architectural scaffolding
   (new page structure, DB table schema, session-state wiring) that has no gate
   or policy content. Value is a clean spec returned without consuming lead context.
