@@ -12597,10 +12597,17 @@ elif page == "🥧 Portfolio Overview":
                 if _tk:
                     _rb_risk_trim_set.add(str(_tk).upper())
 
+        # Read the reduce-call set published by the Brief (CLAUDE.md coordination:
+        # downstream features read, don't recompute). Fail-open idiom matching
+        # every other _reduce_calls consumer: Home may not have run yet this
+        # session, in which case this is {} — no gate, never a crash.
+        _rb_reduce_set = set((st.session_state.get("_reduce_calls") or {}).keys())
+
         _rb_plan  = build_rebalance_plan(
             _drift_df, total_val,
             news_flags=_rb_news_flags,
             risk_trim_set=_rb_risk_trim_set,
+            reduce_call_set=_rb_reduce_set,
         )
 
         # KPI summary
@@ -12708,6 +12715,32 @@ elif page == "🥧 Portfolio Overview":
                     )
                     with st.expander("Why this matters"):
                         st.markdown(_tr['institutional_lens'])
+
+        # Daily Brief reduce-call suppression — show before the Risk Advisor
+        # conflict banner, since a Brief-driven call is more specific and
+        # time-sensitive than the portfolio-level beta/Sharpe metric.
+        _rb_reduce_blocked = _rb_plan.get("reduce_blocked_adds") or []
+        if _rb_reduce_blocked:
+            _rbc_rows = "".join(
+                f"<div style='color:#fcd34d;font-size:0.82em'>• <b>{a['ticker']}</b> "
+                f"(currently {a.get('current_pct',0):.1f}% → target {a.get('target_pct',0):.1f}%, "
+                f"drift {a.get('drift_pp',0):+.1f}pp, Score {a.get('score',0):.0f}) — "
+                f"{a.get('reason','')}</div>"
+                for a in _rb_reduce_blocked[:5]
+            )
+            st.markdown(
+                "<div style='background:#422006;border:1px solid #f59e0b;"
+                "border-radius:8px;padding:8px 14px;margin:10px 0'>"
+                "<div style='color:#fbbf24;font-weight:700;font-size:0.88em;margin-bottom:4px'>"
+                "🔒 Rebalance ADD Suppressed — Active Reduce/Exit Call</div>"
+                + _rbc_rows
+                + "<div style='color:#fde68a;font-size:0.78em;margin-top:6px;font-style:italic'>"
+                "Adding to a position today's Brief is telling you to reduce or exit is a "
+                "direct contradiction. Resolve the Brief's call first — see Today's Brief for "
+                "the full directive."
+                "</div></div>",
+                unsafe_allow_html=True,
+            )
 
         # Risk Advisor TRIM suppression — show before adds so the user sees
         # the conflict before the un-suppressed adds.

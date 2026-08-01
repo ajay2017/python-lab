@@ -95,6 +95,7 @@ def build_rebalance_plan(
     total_val: float,
     news_flags: dict | None = None,
     risk_trim_set: set | None = None,
+    reduce_call_set: set | None = None,
 ) -> dict:
     """
     Generates trim and add action lists with specific share counts,
@@ -111,21 +112,32 @@ def build_rebalance_plan(
        suppressed entirely — drift-driven sizing must not override an active
        investment-level recommendation to reduce exposure.
 
+    reduce_call_set (optional): set of tickers under an active Reduce/Exit call
+       from today's Daily Brief (stop breach, sell signal, deterioration exit,
+       or review-list trim). ADD actions on these tickers are suppressed
+       entirely — checked BEFORE risk_trim_set, since a Brief-driven reduce
+       call is a more specific, time-sensitive signal than the portfolio-level
+       beta/Sharpe metric.
+
     Returns dict with:
       trims, adds, ok, total_trim_value, total_add_value, rebalance_pct,
-      news_blocked_adds, risk_blocked_adds_count
+      news_blocked_adds, risk_blocked_adds_count, reduce_blocked_adds,
+      reduce_blocked_adds_count
     """
     if drift_df.empty:
         return {"trims": [], "adds": [], "ok": [], "total_trim_value": 0,
                 "total_add_value": 0, "rebalance_pct": 0,
                 "news_blocked_adds": 0, "risk_blocked_adds_count": 0,
-                "risk_blocked_adds": []}
+                "risk_blocked_adds": [],
+                "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0}
 
-    news_flags    = news_flags or {}
-    risk_trim_set = {str(t).upper() for t in (risk_trim_set or set())}
+    news_flags      = news_flags or {}
+    risk_trim_set   = {str(t).upper() for t in (risk_trim_set or set())}
+    reduce_call_set = {str(t).upper() for t in (reduce_call_set or set())}
 
     trims, adds, ok_list = [], [], []
     risk_blocked_adds_list: list[dict] = []
+    reduce_blocked_adds_list: list[dict] = []
 
     for _, row in drift_df.iterrows():
         ticker    = row["Ticker"]
@@ -226,6 +238,28 @@ def build_rebalance_plan(
             })
 
         else:  # underweight → ADD
+            # Daily Brief reduce-call gate: suppress ADD entirely if today's
+            # Brief has an active Reduce/Exit call on this ticker (stop breach,
+            # sell signal, deterioration exit, review-list trim). Checked BEFORE
+            # the Risk Advisor gate below — a Brief-driven call is more specific
+            # and time-sensitive than the portfolio-level beta/Sharpe metric, so
+            # if a ticker is in both sets it should report here only (no
+            # double-report — this project's "each risk surfaces once" rule).
+            if str(ticker).upper() in reduce_call_set:
+                reduce_blocked_adds_list.append({
+                    "ticker":      ticker,
+                    "current_pct": current,
+                    "target_pct":  target,
+                    "drift_pp":    drift_pp,
+                    "score":       score,
+                    "signal":      signal,
+                    "reason": (
+                        f"Today's Brief has an active Reduce/Exit call on **{ticker}**. "
+                        "Rebalance ADD suppressed — resolve that call first."
+                    ),
+                })
+                continue
+
             # Risk Advisor TRIM gate: suppress ADD entirely if Risk Advisor is
             # recommending the user reduce exposure to this ticker. Drift-driven
             # sizing must not override an active investment-level reduce signal.
@@ -361,4 +395,6 @@ def build_rebalance_plan(
         "news_blocked_adds":       sum(1 for a in adds if a.get("news_warning")),
         "risk_blocked_adds":       risk_blocked_adds_list,
         "risk_blocked_adds_count": len(risk_blocked_adds_list),
+        "reduce_blocked_adds":       reduce_blocked_adds_list,
+        "reduce_blocked_adds_count": len(reduce_blocked_adds_list),
     }

@@ -129,6 +129,7 @@ def test_build_rebalance_plan_empty_drift_df():
         "total_add_value": 0, "rebalance_pct": 0,
         "news_blocked_adds": 0, "risk_blocked_adds_count": 0,
         "risk_blocked_adds": [],
+        "reduce_blocked_adds": [], "reduce_blocked_adds_count": 0,
     }
 
 
@@ -222,6 +223,35 @@ def test_build_rebalance_plan_add_risk_trim_set_case_insensitive():
     result = reb.build_rebalance_plan(df, total_val=100_000.0, risk_trim_set={"AAPL"})
     assert result["adds"] == []
     assert result["risk_blocked_adds_count"] == 1
+
+
+def test_build_rebalance_plan_add_suppressed_by_reduce_call_set():
+    df = pd.DataFrame([_drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Buy", score=70.0)])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0, reduce_call_set={"AAPL"})
+    assert result["adds"] == []
+    assert result["reduce_blocked_adds_count"] == 1
+    assert result["reduce_blocked_adds"][0]["ticker"] == "AAPL"
+    assert "Reduce/Exit call" in result["reduce_blocked_adds"][0]["reason"]
+
+
+def test_build_rebalance_plan_add_reduce_call_set_case_insensitive():
+    df = pd.DataFrame([_drift_row("aapl", "ADD", -8.0, -8000.0)])
+    result = reb.build_rebalance_plan(df, total_val=100_000.0, reduce_call_set={"AAPL"})
+    assert result["adds"] == []
+    assert result["reduce_blocked_adds_count"] == 1
+
+
+def test_build_rebalance_plan_reduce_call_takes_priority_over_risk_trim():
+    df = pd.DataFrame([_drift_row("AAPL", "ADD", -8.0, -8000.0, signal="Buy", score=70.0)])
+    result = reb.build_rebalance_plan(
+        df, total_val=100_000.0,
+        reduce_call_set={"AAPL"}, risk_trim_set={"AAPL"},
+    )
+    assert result["adds"] == []
+    assert result["reduce_blocked_adds_count"] == 1
+    assert result["reduce_blocked_adds"][0]["ticker"] == "AAPL"
+    assert result["risk_blocked_adds_count"] == 0
+    assert result["risk_blocked_adds"] == []
 
 
 def test_build_rebalance_plan_add_critical_news_suppresses_urgency_and_flags():
