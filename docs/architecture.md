@@ -371,6 +371,12 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 
 Simulation-method parameters, not investment-policy thresholds — the Outcome Range tab is diagnostic/awareness-only (same class as Stress Testing and Regime Fit) and never gates a recommendation. It deliberately does NOT attach a probability to any macro regime — it resamples real historical daily returns instead, sidestepping the same thin-data problem (`daily_regime` has only ~3 days of history) that made F-200 drop a regime-probability framing.
 
+| `QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS` | 5 | 💬 Ask (Portfolio Q&A, `stock_analyzer/portfolio_qa.py`) — trading days after a recommendation's surfacing to check the price outcome, used when the parsed question doesn't specify one. |
+| `QA_MAX_RANGE_DAYS` | 365 | Portfolio Q&A — widest date range a "trades in range" question may query, so an open-ended range can't fan out into an unbounded price-history fetch. |
+| `QA_REC_OUTCOME_WIDE_FETCH_DAYS` | 330 | Portfolio Q&A — rec age (calendar days) past which the `rec_outcome` price-history fetch widens from `"1y"` to `"2y"`, so a recommendation old enough that a 1-year fetch wouldn't cover `rec_date + horizon_days` gets an honest outcome instead of misreporting "not enough forward history" when the real cause was a too-short fetch window. |
+
+Query-scoping parameters, not investment-policy thresholds — Portfolio Q&A is a retrospective narration layer over trade/recommendation history (see F-225 in requirements.md); it never gates or issues a recommendation.
+
 ### 4.0.2 Cross-feature coordination caches
 
 Features publish to `st.session_state` when they own a piece of decision state; downstream features read it. When the producer fails, the consumer treats the absence as an "offline" state — not as "no constraint."
@@ -908,6 +914,8 @@ CREATE TABLE recommendations (
 ```
 
 **The recommendation audit log (scorecard substrate).** Every pick Today's Brief surfaces is logged once per `(ticker, rec_date, rec_type)` — `save_recommendations` upserts with `ignore_duplicates`, so the first-seen row (and its `surfaced_at` + `price_at_surface`) is authoritative and never overwritten. `rec_type` separates the **actionable** `new_pick` / `add_winner` from the awareness-only `buy_candidate` feed. Read by `recommendations_history.py` (the scorecard) and the F-4 monthly report. `db.save_recommendations()` (read-only-viewer no-op) / `load_recommendations(start_date, end_date)`. Optional — inert until the DDL is applied. RLS: `FOR ALL TO service_role`.
+
+**Optional columns beyond the original `CREATE TABLE` above** (each additive, each dropped-and-retried by `save_recommendations` until its DDL is applied — see `db.py`'s header docstring for the exact `ALTER TABLE` statements): `s_score`, `avg_sent` (sentiment, feeds the composite) and, added 2026-08-01 for F-225 Portfolio Q&A, `t_score`, `bq_score`, `val_score` (the 4-pillar breakdown, forward-only — rows saved before this date have these `NULL`).
 
 ### 6.13 `scanner_cache` table
 

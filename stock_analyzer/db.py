@@ -150,6 +150,19 @@ this once to add the price_at_surface column for the History page:
     alter table public.recommendations
         add column if not exists price_at_surface numeric;
 
+Pillar-score capture (added 2026-08-01, feeds Portfolio Q&A's rec-outcome
+"why" answers — see docs/plans/portfolio-qa.md). Before this, only the bare
+composite_score was persisted; the 4-pillar breakdown that explains WHY a
+score landed where it did was computed in memory at brief-build time
+(app.py's t_score/bq_score/val_score/s_score) and discarded. Optional: until
+these columns exist, save_recommendations drops them and retries, so the
+recommendation log keeps working exactly as before (inert until DDL is
+applied). Forward-only — existing rows stay NULL, nothing is backfilled.
+
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS t_score  numeric;
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS bq_score numeric;
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS val_score numeric;
+
 Manual stops (added 2026-05-29 — user-set stop overrides recorded when
 the Brief's "raise stop" recommendation is actioned. Without this the
 recommendation re-fires every render because the system has no record
@@ -1889,14 +1902,24 @@ def save_recommendations(records: list[dict]) -> dict:
             "thesis":           (str(r.get("thesis") or "")[:600]) or None,
             "s_score":          r.get("s_score"),
             "avg_sent":         r.get("avg_sent"),
+            "t_score":          r.get("t_score"),
+            "bq_score":         r.get("bq_score"),
+            "val_score":        r.get("val_score"),
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
 
-    # Columns that require the F-179 ALTER TABLE DDL before they exist.
-    # If Supabase returns a column-not-found error we strip them and retry so
-    # the existing recommendation log keeps working until the DDL is applied.
-    _F179_COLS = frozenset(("s_score", "avg_sent"))
+    # Columns that require an ALTER TABLE DDL before they exist. Two GENERATIONS,
+    # stripped in order — s_score/avg_sent (F-179) already exist in production;
+    # only the 2026-08-01 pillar-score cols are actually pending its DDL. A
+    # column-missing error must strip ONLY the columns actually still missing —
+    # stripping s_score/avg_sent too on a t_score-missing error would silently
+    # stop persisting sentiment (already-working, unrelated data) for the
+    # entire window until the pillar-score DDL is applied, with no error
+    # surfaced (saved=N, error=None) to reveal the loss.
+    _QA_PILLAR_COLS = frozenset(("t_score", "bq_score", "val_score"))
+    _F179_COLS      = frozenset(("s_score", "avg_sent"))
+    _OPTIONAL_COLS  = _QA_PILLAR_COLS | _F179_COLS
 
     def _upsert(rows):
         try:
@@ -1918,44 +1941,44 @@ def save_recommendations(records: list[dict]) -> dict:
         except Exception as exc:
             return False, str(exc)
 
-    def _strip_f179(rows):
-        return [{k: v for k, v in row.items() if k not in _F179_COLS} for row in rows]
+    def _strip(rows, cols):
+        return [{k: v for k, v in row.items() if k not in cols} for row in rows]
 
     def _col_missing(err_str):
         low = (err_str or "").lower()
         return ("does not exist" in low or "unknown column" in low) and \
-               any(c in low for c in _F179_COLS)
+               any(c in low for c in _OPTIONAL_COLS)
 
-    ok, err = _upsert(payload)
+    def _with_retry(call_fn, rows):
+        """call_fn(rows); on a column-missing error, strip ONLY the newer
+        pillar-score columns and retry — strip the older F-179 columns too
+        only if THAT retry itself still reports a missing column (e.g. a
+        fresh DB with neither DDL applied). Returns (ok, err, rows_used)."""
+        ok, err = call_fn(rows)
+        if ok is not False or not _col_missing(err):
+            return ok, err, rows
+        stage1 = _strip(rows, _QA_PILLAR_COLS)
+        ok1, err1 = call_fn(stage1)
+        if ok1 is not False or not _col_missing(err1):
+            return ok1, err1, stage1
+        stage2 = _strip(rows, _OPTIONAL_COLS)
+        ok2, err2 = call_fn(stage2)
+        return ok2, err2, stage2
+
+    # ignore_duplicates compat (TypeError) is a client-library signature issue,
+    # independent of which columns are present — it would raise on the very
+    # first attempt below, before any stripping, so it's detected once here.
+    ok, err, used = _with_retry(_upsert, payload)
     if ok is True:
-        return {"attempted": len(payload), "saved": len(payload), "error": None}
+        return {"attempted": len(used), "saved": len(used), "error": None}
     if ok is None:                  # TypeError compat path — fall through to insert
-        ok2, err2 = _insert(payload)
+        ok2, err2, used2 = _with_retry(_insert, used)
         if ok2 is True:
-            return {"attempted": len(payload), "saved": len(payload), "error": None}
-        # column-not-found on the insert fallback?
-        if _col_missing(err2):
-            base = _strip_f179(payload)
-            ok3, err3 = _insert(base)
-            if ok3 is True:
-                return {"attempted": len(base), "saved": len(base), "error": None}
-            err2 = err3 or err2
+            return {"attempted": len(used2), "saved": len(used2), "error": None}
         from stock_analyzer import api_health as _ah
         _ah.record("supabase", "error", msg=f"rec_log_insert: {(err2 or '')[:100]}")
         return {"attempted": len(payload), "saved": 0, "error": (err2 or "")[:200]}
-    # ok is False — upsert errored; if column-missing, retry without F-179 cols
-    if _col_missing(err):
-        base = _strip_f179(payload)
-        ok2, err2 = _upsert(base)
-        if ok2 is True:
-            return {"attempted": len(base), "saved": len(base), "error": None}
-        if ok2 is None:             # compat retry
-            ok3, err3 = _insert(base)
-            if ok3 is True:
-                return {"attempted": len(base), "saved": len(base), "error": None}
-            err = err3 or err
-        else:
-            err = err2 or err
+    # ok is False — upsert (including the missing-column retry cascade) still errored
     from stock_analyzer import api_health as _ah
     _ah.record("supabase", "error", msg=f"rec_log_upsert: {(err or '')[:100]}")
     return {"attempted": len(payload), "saved": 0, "error": (err or "")[:200]}

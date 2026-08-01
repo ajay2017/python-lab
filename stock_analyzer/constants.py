@@ -1090,3 +1090,12 @@ MC_TRIALS              = 2000   # number of bootstrap trials
 MC_BLOCK_DAYS          = 20     # contiguous block length (trading days, ~1 month) sampled together across ALL tickers to preserve realized cross-ticker correlation
 MC_HORIZON_OPTIONS_DAYS = [21, 63, 252]   # selectable simulation horizons (~1mo/1qtr/1yr, trading days)
 MC_HORIZON_DEFAULT_DAYS = 63    # default horizon selection
+
+# ── Portfolio Q&A (portfolio_qa.py, 💬 Ask tab on AI Insights) ────────────────
+# Retrospective natural-language Q&A over trade history + past recommendations
+# (NOT a live session_state reader — see docs/plans/portfolio-qa.md). These are
+# query-scoping parameters, not investment-policy thresholds, but still live
+# here per the no-hardcoded-values rule.
+QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS = 5     # trading days after surfacing to check price outcome, when the question doesn't specify one
+QA_MAX_RANGE_DAYS                   = 365   # widest date range a "trades in range" question may query, so an open-ended range can't fan out into an unbounded price-history fetch
+QA_REC_OUTCOME_WIDE_FETCH_DAYS      = 330   # rec age (calendar days) past which the price-history fetch widens from 1y to 2y, so an old recommendation gets an honest outcome instead of misreporting "not enough forward history" when the real cause was a too-short fetch window

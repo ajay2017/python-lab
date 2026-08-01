@@ -1,0 +1,400 @@
+"""
+Portfolio Q&A — retrospective natural-language Q&A over trade history and
+past recommendations, for the 💬 Ask tab on 🧠 AI Insights.
+
+This is NOT a live session_state reader: the user's actual use cases are
+retrospective ("how many trades did I make last week and what was the
+gain/loss on each", "why did the stock I bought at composite 75 still lose
+money over the next 5 days") — questions over history, not the current page's
+caches. See docs/plans/portfolio-qa.md.
+
+Two-step LLM pattern, not an agentic tool-loop (the query shapes are fixed
+and few, so a tool-calling loop would add cost/failure surface for no
+benefit): parse_question() turns free text into a structured query, a plain
+Python function runs the deterministic lookup, narrate_answer() turns the
+result into plain English. Every LLM call fails open (None on any error) and
+every narration is instructed to use ONLY the facts it's given — same
+"no invented specifics" discipline as thesis_red_team.py.
+
+Pure logic — no Streamlit imports, no app.py imports.
+"""
+
+import json
+
+import pandas as pd
+
+from stock_analyzer.constants import (
+    LLM_REQUEST_TIMEOUT_SEC,
+    QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS,
+    QA_MAX_RANGE_DAYS,
+)
+
+_MODEL = "claude-haiku-4-5-20251001"
+
+_VALID_INTENTS = ("trades_in_range", "rec_outcome", "unsupported")
+
+
+def _f(val, default: float = 0.0) -> float:
+    if val is None:
+        return default
+    try:
+        v = float(val)
+        return default if (v != v) else v  # NaN check
+    except (TypeError, ValueError):
+        return default
+
+
+# ─── Step 1: parse the free-text question into a structured query ──────────
+
+_PARSE_SYSTEM_PROMPT_TEMPLATE = (
+    "You convert a portfolio question into a structured query. Today's date "
+    "is {today} — resolve any relative phrase (\"last week\", \"today\", "
+    "\"5 trading days ago\") against this date, never your own guess of the "
+    "current date.\n\n"
+    "Respond with ONLY a JSON object, no other text before or after:\n"
+    '{"intent": "trades_in_range" | "rec_outcome" | "unsupported", '
+    '"ticker": "<UPPERCASE TICKER>" or null, '
+    '"start_date": "YYYY-MM-DD" or null, '
+    '"end_date": "YYYY-MM-DD" or null, '
+    '"horizon_days": <int> or null}\n\n'
+    "Rules:\n"
+    "- \"trades_in_range\" = a question about trades/gain-loss over a date "
+    "range. Requires start_date and end_date.\n"
+    "- \"rec_outcome\" = a question about why a past recommendation did or "
+    "didn't work out. Requires ticker; start_date is the date the "
+    "recommendation was made if given, else null; horizon_days is the "
+    "number of trading days after that the user is asking about, if given, "
+    "else null.\n"
+    "- Only extract a ticker if one is explicitly named as a stock symbol or "
+    "unambiguous company name — never guess one.\n"
+    "- If the question doesn't fit either shape, or needs a ticker that "
+    "isn't given, return intent \"unsupported\" with every other field null."
+)
+
+
+def build_parse_prompt(today_et) -> str:
+    """today_et: a date/str already resolved by the caller (app.py's _today_et())."""
+    today_str = today_et.isoformat() if hasattr(today_et, "isoformat") else str(today_et)[:10]
+    # .replace(), not .format() — the template's JSON example is full of
+    # literal { } that .format() would misparse as fields.
+    return _PARSE_SYSTEM_PROMPT_TEMPLATE.replace("{today}", today_str)
+
+
+def parse_parsed_query(text) -> dict | None:
+    """Validate a raw Haiku response into the structured query dict, or None
+    on any failure. Never raises."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[: cleaned.rfind("```")]
+        cleaned = cleaned.strip()
+    if not cleaned.startswith("{"):
+        start = cleaned.find("{")
+        end   = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+    try:
+        parsed = json.loads(cleaned)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    intent = str(parsed.get("intent", "")).strip()
+    if intent not in _VALID_INTENTS:
+        return None
+
+    ticker = parsed.get("ticker")
+    ticker = str(ticker).strip().upper() if ticker else None
+
+    def _valid_date(v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        try:
+            pd.Timestamp(s)
+        except Exception:
+            return None
+        return s[:10]
+
+    start_date = _valid_date(parsed.get("start_date"))
+    end_date   = _valid_date(parsed.get("end_date"))
+
+    horizon = parsed.get("horizon_days")
+    try:
+        horizon = int(horizon) if horizon is not None else None
+        if horizon is not None and horizon <= 0:
+            horizon = None
+    except (TypeError, ValueError):
+        horizon = None
+
+    if intent == "trades_in_range" and not (start_date and end_date):
+        return {"intent": "unsupported", "ticker": None, "start_date": None,
+                "end_date": None, "range_clamped": False, "horizon_days": None}
+    if intent == "rec_outcome" and not ticker:
+        return {"intent": "unsupported", "ticker": None, "start_date": None,
+                "end_date": None, "range_clamped": False, "horizon_days": None}
+
+    range_clamped = False
+    if intent == "trades_in_range" and start_date and end_date:
+        span_days = (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days
+        if span_days > QA_MAX_RANGE_DAYS:
+            # Clamp, don't reject — visible truncation (surfaced via
+            # range_clamped, shown to the user before answering), not a
+            # silent "can't answer" or a silently-wrong wide fetch.
+            start_date = (pd.Timestamp(end_date) - pd.Timedelta(days=QA_MAX_RANGE_DAYS)).date().isoformat()
+            range_clamped = True
+
+    return {
+        "intent": intent,
+        "ticker": ticker,
+        "start_date": start_date,
+        "end_date": end_date,
+        "range_clamped": range_clamped,
+        "horizon_days": horizon,
+    }
+
+
+def parse_question(question: str, api_key: str, today_et,
+                    model: str = _MODEL, max_tokens: int = 300) -> dict | None:
+    """Returns the validated structured query dict, or None on ANY failure
+    (no key, API error, malformed response). Fail-open — never raises."""
+    if not api_key or not question or not str(question).strip():
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0,
+            system=build_parse_prompt(today_et),
+            messages=[{"role": "user", "content": str(question).strip()}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
+        )
+        text = response.content[0].text.strip() if response.content else ""
+        return parse_parsed_query(text)
+    except Exception:
+        return None
+
+
+# ─── Step 2: deterministic queries (zero LLM) ───────────────────────────────
+
+def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None = None) -> list[dict]:
+    """
+    Every real (non-SPLIT) trade between start_date and end_date inclusive,
+    each with its gain/loss.
+
+    SELLs report the already-stored realized_pnl directly (no recomputation).
+    BUYs report unrealized P&L against current_prices (caller-supplied —
+    e.g. from the session's _port_df_enriched, so this stays a pure function
+    with no data-fetch of its own) when the ticker is still held; a BUY whose
+    position has since been fully sold is labeled "position_closed" rather
+    than attempting new FIFO-lot matching — its realized P&L lives on the
+    matching SELL row instead.
+
+    Returns list of {"ticker", "action", "shares", "price", "traded_at",
+    "pnl": float|None, "pnl_label": "realized"|"unrealized"|"position_closed"|"unknown"}.
+    """
+    current_prices = current_prices or {}
+    if trades_df is None or trades_df.empty:
+        return []
+
+    df = trades_df.copy()
+    df["traded_at"] = pd.to_datetime(df["traded_at"], utc=True, errors="coerce")
+    df = df[~df["action"].astype(str).str.upper().str.contains("SPLIT", na=False)]
+
+    try:
+        sd = pd.Timestamp(str(start_date)[:10], tz="UTC")
+        ed = pd.Timestamp(str(end_date)[:10], tz="UTC") + pd.Timedelta(days=1)
+    except Exception:
+        return []
+    df = df[(df["traded_at"] >= sd) & (df["traded_at"] < ed)]
+
+    out = []
+    for _, r in df.sort_values("traded_at").iterrows():
+        ticker = str(r.get("ticker", "")).upper()
+        action = str(r.get("action", "")).upper()
+        shares = _f(r.get("shares"))
+        price  = _f(r.get("price"))
+        row = {
+            "ticker": ticker, "action": action, "shares": shares, "price": price,
+            "traded_at": str(r.get("traded_at"))[:10],
+            "pnl": None, "pnl_label": "unknown",
+        }
+        if action == "SELL":
+            rp = r.get("realized_pnl")
+            if rp is not None:
+                try:
+                    rp_f = float(rp)
+                    if rp_f == rp_f:  # not NaN
+                        row["pnl"] = round(rp_f, 2)
+                        row["pnl_label"] = "realized"
+                except (TypeError, ValueError):
+                    pass
+        elif action == "BUY":
+            cur = current_prices.get(ticker)
+            if cur is not None and price > 0:
+                row["pnl"] = round((_f(cur) - price) * shares, 2)
+                row["pnl_label"] = "unrealized"
+            else:
+                row["pnl_label"] = "position_closed"
+        out.append(row)
+    return out
+
+
+def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None,
+                            horizon_days: int | None = None) -> dict:
+    """
+    Look up the recommendation surfaced for `ticker` on `rec_date` (exact-date
+    match — no "nearest recommendation" guessing) and, if given a price
+    history DataFrame spanning that date forward, the price move over the
+    next `horizon_days` trading days.
+
+    recs_df: caller-loaded via db.load_recommendations() for a range covering
+    rec_date (pure function — no DB access here).
+    price_history_df: caller-fetched via data.fetch_price_history(ticker, ...)
+    with enough forward history past rec_date to cover horizon_days.
+
+    Returns {"found": False, "reason": str} when no matching recommendation
+    exists — never guesses. On a match, t_score/bq_score/val_score are None
+    for recommendations surfaced before pillar-score persistence shipped —
+    the caller/narration must say so plainly, not infer a reason.
+    """
+    horizon_days = horizon_days or QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS
+    ticker = str(ticker).upper().strip()
+    rd_str = rec_date.isoformat() if hasattr(rec_date, "isoformat") else str(rec_date)[:10]
+
+    if recs_df is None or recs_df.empty or not ticker:
+        return {"found": False, "reason": "no recommendation on record for that ticker/date"}
+
+    matches = recs_df[
+        (recs_df["ticker"].astype(str).str.upper() == ticker) &
+        (recs_df["rec_date"].astype(str).str[:10] == rd_str)
+    ]
+    if matches.empty:
+        return {"found": False, "reason": "no recommendation on record for that ticker/date"}
+
+    rec = matches.iloc[0].to_dict()
+    result = {
+        "found": True,
+        "ticker": ticker,
+        "rec_date": rd_str,
+        "rec_type": rec.get("rec_type"),
+        "composite_score": rec.get("composite_score"),
+        "conviction": rec.get("conviction"),
+        "thesis": rec.get("thesis") or None,
+        "t_score": rec.get("t_score"),
+        "bq_score": rec.get("bq_score"),
+        "val_score": rec.get("val_score"),
+        "price_at_surface": rec.get("price_at_surface"),
+        "horizon_days": horizon_days,
+        "price_at_horizon": None,
+        "pct_move": None,
+    }
+
+    if price_history_df is None or price_history_df.empty or "Close" not in price_history_df.columns:
+        return result
+
+    try:
+        hist = price_history_df.copy()
+        hist.index = pd.to_datetime(hist.index)
+        rd_ts = pd.Timestamp(rd_str)
+        on_or_after = hist[hist.index.normalize() >= rd_ts]
+        if len(on_or_after) <= horizon_days:
+            return result  # not enough forward history yet to answer
+        price_at_horizon = float(on_or_after["Close"].iloc[horizon_days])
+    except Exception:
+        return result
+
+    result["price_at_horizon"] = round(price_at_horizon, 2)
+    pas = result.get("price_at_surface")
+    if pas is not None:
+        try:
+            pas_f = float(pas)
+            if pas_f > 0:
+                result["pct_move"] = round((price_at_horizon - pas_f) / pas_f * 100.0, 2)
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+# ─── Step 3: narrate the facts in plain English ─────────────────────────────
+
+_NARRATE_SYSTEM_PROMPT = (
+    "You explain a portfolio query result to the investor who asked it. "
+    "Use ONLY the facts given below — never invent a number, a reason, or a "
+    "pillar score that isn't present. If a value is missing or null "
+    "(especially a pillar sub-score), say plainly that it wasn't recorded "
+    "rather than guessing why. Do not recommend any future action and do "
+    "not restate a threshold — just explain what already happened. Keep it "
+    "to 2-4 short sentences."
+)
+
+
+def facts_to_text(intent: str, facts) -> str:
+    if intent == "trades_in_range":
+        if not facts:
+            return "No trades were recorded in this date range."
+        lines = ["Trades in range:"]
+        for t in facts:
+            pnl = f"{t['pnl']:+.2f}" if t.get("pnl") is not None else "n/a"
+            lines.append(
+                f"- {t['traded_at']}: {t['action']} {t['shares']:g} {t['ticker']} "
+                f"@ ${t['price']:.2f} — P&L {pnl} ({t['pnl_label']})"
+            )
+        return "\n".join(lines)
+
+    if intent == "rec_outcome":
+        if not facts.get("found"):
+            return f"No recommendation on record: {facts.get('reason')}"
+        lines = [
+            f"Ticker: {facts['ticker']}",
+            f"Recommendation date: {facts['rec_date']} (type: {facts.get('rec_type')})",
+            f"Composite score at surfacing: {facts.get('composite_score')}",
+            f"Conviction: {facts.get('conviction')}",
+            f"Thesis note recorded at the time: {facts.get('thesis') or 'none recorded'}",
+        ]
+        for label, key in (("Technical pillar", "t_score"),
+                           ("Business-quality pillar", "bq_score"),
+                           ("Valuation pillar", "val_score")):
+            v = facts.get(key)
+            lines.append(f"{label}: {v if v is not None else 'not recorded for this recommendation'}")
+        if facts.get("price_at_horizon") is not None:
+            lines.append(
+                f"Price at surfacing: ${facts.get('price_at_surface')}; "
+                f"price {facts['horizon_days']} trading days later: ${facts['price_at_horizon']} "
+                f"({facts['pct_move']:+.1f}%)"
+            )
+        else:
+            lines.append("Not enough forward price history yet to compute the outcome move.")
+        return "\n".join(lines)
+
+    return "Unsupported question."
+
+
+def narrate_answer(intent: str, facts, api_key: str,
+                    model: str = _MODEL, max_tokens: int = 400) -> str | None:
+    """Returns the plain-English answer, or None on ANY failure (no key, API
+    error). Fail-open — never raises. Caller must show an explicit
+    'AI layer offline' state on None, never a fabricated answer."""
+    if not api_key:
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0,
+            system=_NARRATE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": facts_to_text(intent, facts)}],
+            timeout=LLM_REQUEST_TIMEOUT_SEC,
+        )
+        text = response.content[0].text.strip() if response.content else ""
+        return text or None
+    except Exception:
+        return None

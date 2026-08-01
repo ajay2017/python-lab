@@ -4525,6 +4525,34 @@ if page == "🏠 Home":
                             _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
                             _a = _b2.get("avg_sent")
                         return _a
+                    # Pillar-score capture (2026-08-01) — feeds Portfolio Q&A's
+                    # rec-outcome "why" answers. Mirrors _trim_basis's lookup
+                    # (app.py, "capped by <pillar>" caption) so the same t/bq/val
+                    # values a user sees live are the ones persisted historically.
+                    def _t_score_for(_tk: str):
+                        _u = str(_tk).upper()
+                        _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
+                        _t = _b.get("t_score")
+                        if _t is None:
+                            _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
+                            _t = _b2.get("t_score")
+                        return _t
+                    def _bq_score_for(_tk: str):
+                        _u = str(_tk).upper()
+                        _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
+                        _bq = _b.get("bq_score", _b.get("f_score"))
+                        if _bq is None:
+                            _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
+                            _bq = _b2.get("bq_score", _b2.get("f_score"))
+                        return _bq
+                    def _val_score_for(_tk: str):
+                        _u = str(_tk).upper()
+                        _b = _grow_comp_cache.get(_u) or _grow_comp_cache.get(_tk) or {}
+                        _v = _b.get("val_score")
+                        if _v is None:
+                            _b2 = _held_data_cache.get(_u) or _held_data_cache.get(_tk) or {}
+                            _v = _b2.get("val_score")
+                        return _v
 
                     _rec_rows: list[dict] = []
                     for _p in (_gt_today.get("new_picks") or []):
@@ -4542,6 +4570,9 @@ if page == "🏠 Home":
                             "thesis":           _p.get("thesis", ""),
                             "s_score":          _s_score_for(_tk),
                             "avg_sent":         _avg_sent_for(_tk),
+                            "t_score":          _t_score_for(_tk),
+                            "bq_score":         _bq_score_for(_tk),
+                            "val_score":        _val_score_for(_tk),
                         })
                     for _p in (_gt_today.get("add_positions") or []):
                         _tk = str(_p.get("ticker", ""))
@@ -4558,6 +4589,9 @@ if page == "🏠 Home":
                             "thesis":           _p.get("thesis", ""),
                             "s_score":          _s_score_for(_tk),
                             "avg_sent":         _avg_sent_for(_tk),
+                            "t_score":          _t_score_for(_tk),
+                            "bq_score":         _bq_score_for(_tk),
+                            "val_score":        _val_score_for(_tk),
                         })
                     for _p in (_daily_brief.get("buy_candidates") or []):
                         _bx = _p.get("xref") or {}
@@ -4575,6 +4609,9 @@ if page == "🏠 Home":
                             "thesis":           "",
                             "s_score":          _s_score_for(_tk),
                             "avg_sent":         _avg_sent_for(_tk),
+                            "t_score":          _t_score_for(_tk),
+                            "bq_score":         _bq_score_for(_tk),
+                            "val_score":        _val_score_for(_tk),
                         })
                     if _rec_rows:
                         _rec_save_result = db.save_recommendations(_rec_rows)
@@ -26217,7 +26254,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), and the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can type a question about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; anything outside those two question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )
 
@@ -26637,8 +26674,8 @@ elif page == "🧠 AI Insights":
     st.markdown("---")
 
     # ── Cadence tabs ───────────────────────────────────────────────────────────────────────────
-    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog = st.tabs(
-        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log"]
+    _ai_tab_pos, _ai_tab_deb, _ai_tab_res, _ai_tab_score, _ai_tab_rt, _ai_tab_dlog, _ai_tab_ask = st.tabs(
+        ["🩺 Positions", "📅 Debriefs", "🏦 Research", "📊 Scorecard", "⚠️ Red Team", "⚔️ Debate Log", "💬 Ask"]
     )
 
     with _ai_tab_pos:
@@ -28925,6 +28962,138 @@ elif page == "🧠 AI Insights":
                     _render_debate_result(_dl_row, _dl_type)
             if len(_dlog_rows) >= 200:
                 st.caption("Showing the 200 most recent debates.")
+
+    with _ai_tab_ask:
+        # ── Portfolio Q&A ─────────────────────────────────────────────────────
+        # Retrospective Q&A over trade history + past recommendations — NOT a
+        # live session_state reader. Two supported question shapes only (v1);
+        # anything else is told plainly it's unsupported rather than guessed
+        # at. See docs/plans/portfolio-qa.md.
+        from stock_analyzer import portfolio_qa as _qa
+        from stock_analyzer.constants import (
+            QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS as _qa_default_horizon,
+            QA_MAX_RANGE_DAYS,
+            QA_REC_OUTCOME_WIDE_FETCH_DAYS,
+        )
+
+        st.caption(
+            "Ask about your trade history or a past recommendation's outcome — "
+            "answered from what's actually on record, not a live snapshot. Two "
+            "kinds of questions work today:"
+        )
+        st.caption(
+            "• \"How many trades did I make last week, and what was the gain/loss on each?\"\n\n"
+            "• \"Why did AAPL lose money after being recommended?\""
+        )
+        _qa_question = st.text_input(
+            "Ask a question", key="_qa_question_input", label_visibility="collapsed",
+            placeholder="Ask about your trades or a past recommendation…",
+        )
+        if st.button("Ask", key="_qa_ask_btn") and _qa_question.strip():
+            if not _ai_api_key:
+                st.warning("🔌 AI layer offline — no Anthropic API key configured. Every other page is unaffected.")
+            else:
+                _qa_today = _today_et()
+                with st.spinner("Reading your question…"):
+                    _qa_parsed = _qa.parse_question(_qa_question, _ai_api_key, _qa_today)
+
+                if _qa_parsed is None:
+                    st.error(
+                        "Couldn't process that question right now — the AI layer "
+                        "may be rate-limited or offline. Try again shortly."
+                    )
+                elif _qa_parsed["intent"] == "unsupported":
+                    st.info(
+                        "That doesn't match a question I can answer yet. Try something like:\n\n"
+                        "- \"How many trades did I make last week, and what was the gain/loss on each?\"\n"
+                        "- \"Why did AAPL lose money after being recommended on 2026-07-20?\""
+                    )
+                elif _qa_parsed["intent"] == "trades_in_range":
+                    st.caption(f"Looking at: trades from {_qa_parsed['start_date']} to {_qa_parsed['end_date']}")
+                    if _qa_parsed.get("range_clamped"):
+                        st.caption(
+                            f"ℹ️ That range was wider than {QA_MAX_RANGE_DAYS} days — "
+                            f"narrowed to the most recent {QA_MAX_RANGE_DAYS} days shown above."
+                        )
+                    _qa_trades_df = st.session_state.get("trades_df", db.load_trades())
+
+                    # Current prices for still-open BUY lots, reusing the
+                    # session's already-loaded holdings rather than a live
+                    # fetch — same cache Diversification/Risk Analysis read.
+                    _qa_prices: dict = {}
+                    _qa_pdf = st.session_state.get("_port_df_enriched")
+                    if _qa_pdf is not None and not _qa_pdf.empty and "Shares" in _qa_pdf.columns:
+                        for _, _qr in _qa_pdf.iterrows():
+                            _qsh = _qr.get("Shares") or 0
+                            if _qsh:
+                                _qa_prices[str(_qr["Ticker"]).upper()] = float(_qr["Market Value"]) / float(_qsh)
+
+                    _qa_facts = _qa.trades_in_range(
+                        _qa_trades_df, _qa_parsed["start_date"], _qa_parsed["end_date"], _qa_prices
+                    )
+                    with st.spinner("Answering…"):
+                        _qa_answer = _qa.narrate_answer("trades_in_range", _qa_facts, _ai_api_key)
+                    if _qa_answer is None:
+                        st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
+                    else:
+                        st.markdown(_qa_answer)
+                    if _qa_facts:
+                        if any(f.get("pnl_label") == "unrealized" for f in _qa_facts):
+                            st.caption(
+                                "ℹ️ Unrealized P&L marks the full original BUY lot against "
+                                "the current price — not a remaining-shares figure if part "
+                                "of that lot has since been sold (the sold portion's realized "
+                                "P&L appears on its own SELL row)."
+                            )
+                        with st.expander("Show the underlying trades"):
+                            st.dataframe(pd.DataFrame(_qa_facts), hide_index=True, width='stretch')
+
+                elif _qa_parsed["intent"] == "rec_outcome":
+                    _qa_tk      = _qa_parsed["ticker"]
+                    _qa_horizon = _qa_parsed["horizon_days"] or _qa_default_horizon
+
+                    if _qa_parsed["start_date"]:
+                        _qa_rec_date = _qa_parsed["start_date"]
+                        _qa_recs_df  = db.load_recommendations(
+                            start_date=_qa_rec_date, end_date=_qa_rec_date
+                        )
+                    else:
+                        # No date given — fall back to the most recent recommendation
+                        # on record for this ticker, and say so explicitly rather than
+                        # silently picking one.
+                        _qa_all_recs = db.load_recommendations(start_date=None, end_date=None)
+                        _qa_tk_recs  = (
+                            _qa_all_recs[_qa_all_recs["ticker"].astype(str).str.upper() == _qa_tk]
+                            if not _qa_all_recs.empty else _qa_all_recs
+                        )
+                        if _qa_tk_recs.empty:
+                            _qa_rec_date, _qa_recs_df = None, _qa_tk_recs
+                        else:
+                            _qa_rec_date = str(_qa_tk_recs.iloc[0]["rec_date"])[:10]
+                            _qa_recs_df  = _qa_tk_recs
+
+                    if _qa_rec_date is None:
+                        st.caption(f"Looking at: {_qa_tk} — no recommendation on record")
+                        _qa_facts = {"found": False, "reason": "no recommendation on record for that ticker"}
+                    else:
+                        st.caption(f"Looking at: {_qa_tk}, surfaced {_qa_rec_date}, +{_qa_horizon} trading days")
+                        # A recommendation older than ~11 months needs more than the
+                        # default 1y fetch to cover rec_date + horizon_days forward —
+                        # widen the window rather than let old recs misreport "not
+                        # enough forward history" when the real cause is a too-short fetch.
+                        _qa_days_since_rec = (_qa_today - pd.Timestamp(_qa_rec_date).date()).days
+                        _qa_period = "2y" if _qa_days_since_rec > QA_REC_OUTCOME_WIDE_FETCH_DAYS else "1y"
+                        _qa_hist  = fetch_price_history(_qa_tk, period=_qa_period)
+                        _qa_facts = _qa.recommendation_outcome(
+                            _qa_tk, _qa_rec_date, _qa_recs_df, _qa_hist, _qa_horizon
+                        )
+
+                    with st.spinner("Answering…"):
+                        _qa_answer = _qa.narrate_answer("rec_outcome", _qa_facts, _ai_api_key)
+                    if _qa_answer is None:
+                        st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
+                    else:
+                        st.markdown(_qa_answer)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality
