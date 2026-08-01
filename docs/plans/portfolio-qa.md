@@ -166,3 +166,31 @@ branch, reason display), `tests/test_portfolio_qa.py` (grew from 31 to 50 tests,
 including regression tests reproducing both live failures verbatim). No
 `constants.py`/gate/scoring-formula change in this round, so no Opus review
 required per CLAUDE.md hard rule #4 — full suite passing throughout.
+
+---
+
+## v1.2 — dollar-sign rendering bug (same day, commit follows af956c0)
+
+Live test of the new `trade_lookup` intent (a real HOOD round-trip question)
+answered correctly — the underlying arithmetic and P&L labeling were exactly
+right — but part of the narration rendered in a garbled monospace font instead
+of plain prose. Root cause: **Streamlit's `st.markdown` treats a `$...$` pair as
+inline LaTeX math**, and the answer mentioned two dollar amounts ("$117.77" ...
+"$110.00"), so everything between the first and second `$` was silently
+swallowed into a math span.
+
+Fixed inside `narrate_answer()` itself (not at the two `app.py` call sites) —
+every literal `$` in the model's response is escaped to `\$` before the text is
+returned, so any caller rendering it via `st.markdown` is safe regardless of how
+many dollar amounts the narration mentions. Added a fake-`anthropic`-module test
+helper (mirrors `tests/test_news_intelligence.py`'s `_install_fake_anthropic`)
+so the escaping — and the real success/exception paths of both `parse_question`
+and `narrate_answer`, previously only exercised via their no-api-key fail-fast
+branch — now have genuine regression coverage. 7 new tests (50 → 57).
+
+**Same latent bug likely exists everywhere else in the app that renders raw LLM
+narration via `st.markdown`** (Weekly Debrief, Thesis Review, catalyst/regime
+scenario narratives, Red Team counter-evidence, Monthly Report summary) — none
+of those sites escape `$` either. Not fixed here (out of scope for this feature,
+and those surfaces are already shipped/reviewed) — worth a dedicated audit if
+raised again.

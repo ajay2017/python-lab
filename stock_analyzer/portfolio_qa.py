@@ -498,7 +498,14 @@ def narrate_answer(intent: str, facts, api_key: str,
         text = response.content[0].text.strip() if response.content else ""
         if not text:
             LAST_NARRATE_ERROR = "model returned an empty response"
-        return text or None
+            return None
+        # Escape literal "$" before the caller renders this via st.markdown —
+        # Streamlit treats a $...$ pair as inline LaTeX math, so any answer
+        # mentioning two or more dollar amounts (routine here) silently
+        # swallows the prose between the first and second "$" into a
+        # garbled math span instead of plain text. The escape keeps the
+        # dollar sign literal without changing the actual figures.
+        return text.replace("$", "\\$")
     except Exception as e:
         LAST_NARRATE_ERROR = f"{type(e).__name__}: {e}"[:300]
         return None

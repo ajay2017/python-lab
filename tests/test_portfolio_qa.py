@@ -3,9 +3,13 @@ Tests for stock_analyzer/portfolio_qa.py (💬 Ask tab, 🧠 AI Insights).
 
 Same pattern as tests/test_thesis_red_team.py: pin the None-vs-empty and
 fail-open contracts, and the "never invent a value" discipline that backs
-the parse/narrate prompts.
+the parse/narrate prompts. The fake-anthropic-module helper (below) mirrors
+tests/test_news_intelligence.py's `_install_fake_anthropic` so the real
+success/parsing path (not just the except-fallback path) is exercised.
 """
 import json
+import sys
+import types
 
 import pandas as pd
 import pytest
@@ -20,6 +24,46 @@ from stock_analyzer.portfolio_qa import (
     parse_question,
     narrate_answer,
 )
+
+
+# ── fake anthropic module helper (mirrors test_news_intelligence.py) ────────
+
+class _FakeBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeResponse:
+    def __init__(self, text):
+        self.content = [_FakeBlock(text)]
+
+
+class _FakeMessages:
+    def __init__(self, response_text=None, raise_exc=None):
+        self._response_text = response_text
+        self._raise_exc = raise_exc
+
+    def create(self, **kwargs):
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return _FakeResponse(self._response_text)
+
+
+class _FakeClient:
+    def __init__(self, response_text=None, raise_exc=None, **kwargs):
+        self.messages = _FakeMessages(response_text, raise_exc)
+
+
+def _install_fake_anthropic(response_text=None, raise_exc=None):
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = lambda **kwargs: _FakeClient(response_text, raise_exc)
+    sys.modules["anthropic"] = fake_mod
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_fake_anthropic():
+    yield
+    sys.modules.pop("anthropic", None)
 
 
 # ─── parse_parsed_query ──────────────────────────────────────────────────────
@@ -476,3 +520,72 @@ def test_narrate_answer_no_api_key_sets_last_narrate_error():
     import stock_analyzer.portfolio_qa as qa_mod
     qa_mod.narrate_answer("trades_in_range", [], "")
     assert qa_mod.LAST_NARRATE_ERROR is not None
+
+
+# ─── narrate_answer — dollar-sign escaping (live production bug, 2026-08-02) ─
+#
+# Streamlit's st.markdown renders a $...$ pair as inline LaTeX math. A real
+# answer mentioning two (or more) dollar amounts — routine for this feature —
+# had the prose BETWEEN the first and second "$" silently swallowed into a
+# garbled math span in production. The fix escapes every literal "$" to "\$"
+# before the text is returned to the caller (which renders it via
+# st.markdown), independent of what the caller does.
+
+def test_narrate_answer_escapes_dollar_signs_in_response():
+    _install_fake_anthropic(
+        "You bought 5 shares at $117.77 and sold at $95.77 for a loss."
+    )
+    answer = narrate_answer("trade_lookup", [], "fake-key")
+    assert answer == (
+        "You bought 5 shares at \\$117.77 and sold at \\$95.77 for a loss."
+    )
+    assert "95.77" in answer
+
+
+def test_narrate_answer_single_dollar_sign_also_escaped():
+    _install_fake_anthropic("The realized loss was $181.15.")
+    answer = narrate_answer("trade_lookup", [], "fake-key")
+    assert answer == "The realized loss was \\$181.15."
+
+
+def test_narrate_answer_no_dollar_signs_unaffected():
+    _install_fake_anthropic("No dollar amounts mentioned here at all.")
+    answer = narrate_answer("trade_lookup", [], "fake-key")
+    assert answer == "No dollar amounts mentioned here at all."
+
+
+def test_narrate_answer_real_exception_sets_last_narrate_error_message():
+    import stock_analyzer.portfolio_qa as qa_mod
+    _install_fake_anthropic(raise_exc=RuntimeError("rate limit exceeded"))
+    answer = qa_mod.narrate_answer("trade_lookup", [], "fake-key")
+    assert answer is None
+    assert "rate limit exceeded" in qa_mod.LAST_NARRATE_ERROR
+
+
+def test_narrate_answer_empty_response_returns_none_with_reason():
+    import stock_analyzer.portfolio_qa as qa_mod
+    _install_fake_anthropic("")
+    answer = qa_mod.narrate_answer("trade_lookup", [], "fake-key")
+    assert answer is None
+    assert qa_mod.LAST_NARRATE_ERROR == "model returned an empty response"
+
+
+# ─── parse_question — real success path via the fake client ────────────────
+
+def test_parse_question_real_success_path_via_fake_client():
+    _install_fake_anthropic(json.dumps({
+        "intent": "trade_lookup", "ticker": "HOOD",
+        "start_date": None, "end_date": None, "horizon_days": None,
+    }))
+    result = parse_question("how much did I lose on HOOD trade?", "fake-key", "2026-08-02")
+    assert result is not None
+    assert result["intent"] == "trade_lookup"
+    assert result["ticker"] == "HOOD"
+
+
+def test_parse_question_real_exception_sets_last_parse_error_message():
+    import stock_analyzer.portfolio_qa as qa_mod
+    _install_fake_anthropic(raise_exc=RuntimeError("connection reset"))
+    result = qa_mod.parse_question("how much did I lose on HOOD trade?", "fake-key", "2026-08-02")
+    assert result is None
+    assert "connection reset" in qa_mod.LAST_PARSE_ERROR
