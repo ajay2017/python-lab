@@ -313,3 +313,17 @@ def test_parse_question_empty_question_returns_none():
 
 def test_narrate_answer_no_api_key_returns_none():
     assert narrate_answer("trades_in_range", [], "") is None
+
+
+# ─── LAST_*_ERROR diagnostics — mirrors analyst_intel.LAST_EXTRACT_ERROR ────
+
+def test_parse_question_no_api_key_sets_last_parse_error():
+    import stock_analyzer.portfolio_qa as qa_mod
+    qa_mod.parse_question("how many trades last week", "", "2026-08-01")
+    assert qa_mod.LAST_PARSE_ERROR is not None
+
+
+def test_narrate_answer_no_api_key_sets_last_narrate_error():
+    import stock_analyzer.portfolio_qa as qa_mod
+    qa_mod.narrate_answer("trades_in_range", [], "")
+    assert qa_mod.LAST_NARRATE_ERROR is not None

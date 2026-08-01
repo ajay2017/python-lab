@@ -158,11 +158,20 @@ def parse_parsed_query(text) -> dict | None:
     }
 
 
+LAST_PARSE_ERROR: str | None = None
+
+
 def parse_question(question: str, api_key: str, today_et,
                     model: str = _MODEL, max_tokens: int = 300) -> dict | None:
     """Returns the validated structured query dict, or None on ANY failure
-    (no key, API error, malformed response). Fail-open — never raises."""
+    (no key, API error, malformed response). Fail-open — never raises.
+    On None, LAST_PARSE_ERROR carries the real reason (mirrors
+    analyst_intel.LAST_EXTRACT_ERROR) so the caller can show a "Details:"
+    caption instead of a mute failure."""
+    global LAST_PARSE_ERROR
+    LAST_PARSE_ERROR = None
     if not api_key or not question or not str(question).strip():
+        LAST_PARSE_ERROR = "no API key configured or empty question"
         return None
     try:
         import anthropic
@@ -176,8 +185,12 @@ def parse_question(question: str, api_key: str, today_et,
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text = response.content[0].text.strip() if response.content else ""
-        return parse_parsed_query(text)
-    except Exception:
+        result = parse_parsed_query(text)
+        if result is None:
+            LAST_PARSE_ERROR = f"model returned an unparseable response: {text[:200]!r}"
+        return result
+    except Exception as e:
+        LAST_PARSE_ERROR = f"{type(e).__name__}: {e}"[:300]
         return None
 
 
@@ -376,12 +389,19 @@ def facts_to_text(intent: str, facts) -> str:
     return "Unsupported question."
 
 
+LAST_NARRATE_ERROR: str | None = None
+
+
 def narrate_answer(intent: str, facts, api_key: str,
                     model: str = _MODEL, max_tokens: int = 400) -> str | None:
     """Returns the plain-English answer, or None on ANY failure (no key, API
     error). Fail-open — never raises. Caller must show an explicit
-    'AI layer offline' state on None, never a fabricated answer."""
+    'AI layer offline' state on None, never a fabricated answer. On None,
+    LAST_NARRATE_ERROR carries the real reason (mirrors LAST_PARSE_ERROR)."""
+    global LAST_NARRATE_ERROR
+    LAST_NARRATE_ERROR = None
     if not api_key:
+        LAST_NARRATE_ERROR = "no API key configured"
         return None
     try:
         import anthropic
@@ -395,6 +415,9 @@ def narrate_answer(intent: str, facts, api_key: str,
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
         text = response.content[0].text.strip() if response.content else ""
+        if not text:
+            LAST_NARRATE_ERROR = "model returned an empty response"
         return text or None
-    except Exception:
+    except Exception as e:
+        LAST_NARRATE_ERROR = f"{type(e).__name__}: {e}"[:300]
         return None

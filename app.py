@@ -29002,6 +29002,8 @@ elif page == "🧠 AI Insights":
                         "Couldn't process that question right now — the AI layer "
                         "may be rate-limited or offline. Try again shortly."
                     )
+                    if _qa.LAST_PARSE_ERROR:
+                        st.caption(f"Details: {_qa.LAST_PARSE_ERROR}")
                 elif _qa_parsed["intent"] == "unsupported":
                     st.info(
                         "That doesn't match a question I can answer yet. Try something like:\n\n"
@@ -29035,6 +29037,8 @@ elif page == "🧠 AI Insights":
                         _qa_answer = _qa.narrate_answer("trades_in_range", _qa_facts, _ai_api_key)
                     if _qa_answer is None:
                         st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
+                        if _qa.LAST_NARRATE_ERROR:
+                            st.caption(f"Details: {_qa.LAST_NARRATE_ERROR}")
                     else:
                         st.markdown(_qa_answer)
                     if _qa_facts:
@@ -29092,6 +29096,8 @@ elif page == "🧠 AI Insights":
                         _qa_answer = _qa.narrate_answer("rec_outcome", _qa_facts, _ai_api_key)
                     if _qa_answer is None:
                         st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
+                        if _qa.LAST_NARRATE_ERROR:
+                            st.caption(f"Details: {_qa.LAST_NARRATE_ERROR}")
                     else:
                         st.markdown(_qa_answer)
 
