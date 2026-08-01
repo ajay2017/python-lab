@@ -90,6 +90,35 @@ def test_parse_parsed_query_strips_code_fences():
     assert result["intent"] == "unsupported"
 
 
+def test_parse_parsed_query_trailing_prose_after_fence_no_closing_fence():
+    # Regression test for a live production failure (2026-08-01): Haiku
+    # opened a ```json fence, emitted valid JSON, then kept writing an
+    # explanation afterward with NO closing fence — the old parser only
+    # stripped trailing garbage when the cleaned string did NOT already
+    # start with "{", so this well-formed-looking case slipped through
+    # and broke json.loads on the extra prose.
+    raw = (
+        '```json\n{"intent": "unsupported", "ticker": null, "start_date": null, '
+        '"end_date": null, "horizon_days": null}\n \n\nThe question asks about a '
+        "trade on CrowdStrike (ticker: CRWD) but does not specify a date range."
+    )
+    result = parse_parsed_query(raw)
+    assert result is not None
+    assert result["intent"] == "unsupported"
+
+
+def test_parse_parsed_query_trailing_prose_no_fence_at_all():
+    raw = (
+        '{"intent": "rec_outcome", "ticker": "CRWD", "start_date": null, '
+        '"end_date": null, "horizon_days": null} — this assumes the most '
+        "recent recommendation for CRWD."
+    )
+    result = parse_parsed_query(raw)
+    assert result is not None
+    assert result["intent"] == "rec_outcome"
+    assert result["ticker"] == "CRWD"
+
+
 def test_parse_parsed_query_invalid_date_string_treated_as_none():
     raw = json.dumps({
         "intent": "trades_in_range", "ticker": None,

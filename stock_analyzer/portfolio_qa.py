@@ -68,7 +68,11 @@ _PARSE_SYSTEM_PROMPT_TEMPLATE = (
     "- Only extract a ticker if one is explicitly named as a stock symbol or "
     "unambiguous company name — never guess one.\n"
     "- If the question doesn't fit either shape, or needs a ticker that "
-    "isn't given, return intent \"unsupported\" with every other field null."
+    "isn't given, return intent \"unsupported\" with every other field null.\n"
+    "- Output the JSON object and NOTHING else — no markdown code fence, no "
+    "explanation before it, and no explanation after it, even if the intent "
+    "is \"unsupported\". The response must contain exactly one JSON object "
+    "and no other characters."
 )
 
 
@@ -80,6 +84,27 @@ def build_parse_prompt(today_et) -> str:
     return _PARSE_SYSTEM_PROMPT_TEMPLATE.replace("{today}", today_str)
 
 
+def _extract_json_object(s: str) -> str | None:
+    """Return the first balanced {...} substring in s, or None if there
+    isn't one. Depth-counted (not a bare find/rfind) so trailing prose
+    AFTER a well-formed JSON object — which Haiku sometimes emits even
+    when told to respond with ONLY JSON, e.g. an explanation tacked on
+    after a ```json fence with no closing fence — doesn't get swept into
+    the "JSON" text and break json.loads."""
+    start = s.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return None
+
+
 def parse_parsed_query(text) -> dict | None:
     """Validate a raw Haiku response into the structured query dict, or None
     on any failure. Never raises."""
@@ -87,15 +112,10 @@ def parse_parsed_query(text) -> dict | None:
         return None
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[-1]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[: cleaned.rfind("```")]
-        cleaned = cleaned.strip()
-    if not cleaned.startswith("{"):
-        start = cleaned.find("{")
-        end   = cleaned.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            cleaned = cleaned[start : end + 1]
+        cleaned = cleaned.split("\n", 1)[-1].strip()
+    extracted = _extract_json_object(cleaned)
+    if extracted is not None:
+        cleaned = extracted
     try:
         parsed = json.loads(cleaned)
     except Exception:
