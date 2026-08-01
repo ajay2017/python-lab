@@ -208,3 +208,31 @@ to `Ticker`/`Action`/`Shares`/`Price ($)`/`Date`/`Gain/Loss ($)`/`Status`, maps
 each `pnl_label` value to a plain-English status) called only at the render
 site — the underlying fact-dict schema consumed by `narrate_answer()` and the
 rest of the pipeline is unchanged. 3 new tests (57 → 60).
+
+---
+
+## v1.4 — mixed-format dates coerced to NaT (same day)
+
+A user cross-check between the Ask tab's CRWD trade list and the Trade
+Journal's own History table (ground truth) caught a real data bug: the
+oldest CRWD row — a broker text-import trade whose `traded_at` is a bare
+date (`"2026-07-07"`, no time/offset) saved alongside rows with full ISO
+timestamps+offsets — showed literal `"NaT"` in the Date column.
+
+Root cause, and the fix, are **already documented in this exact codebase**:
+`app.py`'s own Trade History table (`_tj_tab_hist`, ~line 20688) carries a
+comment explaining that `pd.to_datetime` infers a single format from the
+*first* row of a column and silently coerces every row that doesn't match to
+`NaT` via `errors="coerce"` — unless `format="ISO8601"` is passed, which
+accepts any valid ISO 8601 variant per-row instead of locking to one inferred
+shape. `portfolio_qa.py`'s `_real_trades()` was missing that argument.
+Reproduced directly: `pd.to_datetime(["2026-07-07", "2026-07-14T14:22:00+00:00", ...], utc=True, errors="coerce")` turns the two full-timestamp rows to `NaT`
+(the bare date lands first and its inferred format doesn't match the others);
+adding `format="ISO8601"` parses all three correctly.
+
+One-line fix (`format="ISO8601"` added to the one `pd.to_datetime` call in
+`_real_trades()`, shared by both `trades_in_range()` and `trades_for_ticker()`)
++ 1 new regression test reproducing the exact mixed-format sequence (61 total).
+**Lesson: any new module that parses `trades_df.traded_at` with `pd.to_datetime`
+needs `format="ISO8601"` — this is now the second place in the codebase that
+needed it, after `app.py`'s Trade History table.**

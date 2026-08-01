@@ -292,9 +292,18 @@ def _row_outcome(r, current_prices: dict) -> dict:
 
 
 def _real_trades(trades_df):
-    """trades_df with synthetic SPLIT rows excluded — shared filter."""
+    """trades_df with synthetic SPLIT rows excluded — shared filter.
+
+    format="ISO8601" is required, not optional (see app.py's Trade History
+    table, which documents the same fix): without it, pd.to_datetime infers
+    a single format from the FIRST row and silently coerces every row that
+    doesn't match — e.g. a bare-date "RH text import" row (no time/offset)
+    sitting alongside full-timestamp rows — to NaT via errors="coerce",
+    which then renders as the literal string "NaT" downstream. Confirmed
+    live: a CRWD BUY imported this way showed "NaT" in the Ask tab's trade
+    table until this was added."""
     df = trades_df.copy()
-    df["traded_at"] = pd.to_datetime(df["traded_at"], utc=True, errors="coerce")
+    df["traded_at"] = pd.to_datetime(df["traded_at"], utc=True, errors="coerce", format="ISO8601")
     return df[~df["action"].astype(str).str.upper().str.contains("SPLIT", na=False)]
 
 

@@ -374,6 +374,29 @@ def test_trades_for_ticker_no_date_filter_spans_all_history():
     assert result[1]["pnl"] == 500.0
 
 
+def test_trades_for_ticker_mixed_date_formats_no_row_becomes_nat():
+    # Regression test for a live production bug (2026-08-02): a broker
+    # text-import row's traded_at is a bare date ("2026-07-07", no time/
+    # offset) saved alongside rows with full ISO timestamps+offsets. Without
+    # format="ISO8601", pd.to_datetime infers a single format from the FIRST
+    # row and silently coerces every row that doesn't match to NaT via
+    # errors="coerce" — which then rendered as the literal string "NaT" in
+    # the Ask tab's trade table.
+    df = _trades_df([
+        {"ticker": "CRWD", "action": "BUY", "shares": 5, "price": 195.0,
+         "realized_pnl": None, "traded_at": "2026-07-07"},  # bare date, RH text import
+        {"ticker": "CRWD", "action": "BUY", "shares": 5, "price": 184.0,
+         "realized_pnl": None, "traded_at": "2026-07-14T14:22:00+00:00"},
+        {"ticker": "CRWD", "action": "SELL", "shares": 5, "price": 209.0,
+         "realized_pnl": 97.5, "traded_at": "2026-07-14T18:56:00+00:00"},
+    ])
+    result = trades_for_ticker(df, "CRWD")
+    assert len(result) == 3
+    dates = [r["traded_at"] for r in result]
+    assert "NaT" not in dates
+    assert dates[0] == "2026-07-07"  # oldest first, correctly parsed
+
+
 def test_trades_for_ticker_excludes_split_rows():
     df = _trades_df([
         {"ticker": "AAPL", "action": "SPLIT", "shares": 20, "price": 0,
