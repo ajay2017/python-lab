@@ -11392,7 +11392,14 @@ elif page == "🔗 Risk Analysis":
                 for _mc_col, _mc_p in zip(_mc_cols, _mc_summary["percentiles"]):
                     _mc_ret = _mc_end[_mc_p]
                     _mc_val = _mc_pv * (1 + _mc_ret)
-                    _mc_col.metric(f"{_mc_p}th pct.", f"{_mc_ret:+.1%}", _m(f"${_mc_val:,.0f}"))
+                    _mc_col.metric(
+                        f"{_mc_p}th pct.", f"{_mc_ret:+.1%}", _m(f"${_mc_val:,.0f}"),
+                        delta_color="off",   # delta here is a $ equivalent, not a real
+                        # change — it's always positive (a portfolio value), so the
+                        # default green-up/red-down arrow would color it by ITS sign,
+                        # not the %'s, showing a misleading green ↑ even on the loss
+                        # (5th/25th percentile) columns.
+                    )
 
                 with st.expander("Methodology & caveats", expanded=False):
                     st.markdown(
