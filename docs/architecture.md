@@ -311,7 +311,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `NYSE_EARLY_CLOSES` | dict (ISO date → hour ET) | Half-day early closures 2026–2028 (ISO date keys map to 13.0 = 1:00 PM ET). Calendar facts. Consulted by `_early_close_hour()`. |
 | `MARKET_CALENDAR_LAST_YEAR` | 2028 | Last hardcoded year in NYSE_HOLIDAYS/NYSE_EARLY_CLOSES. When system year exceeds this, `market_status()` sets `calendar_stale=True` so the UI warns to extend the calendar before 2029. Calendar-maintenance constant; must be extended with fresh holidays/early-closes before each year-end. |
 | `ACCOUNT_CASH_STALE_DAYS` | 7 | Max age (calendar days) of a cached cash balance on the 💰 Account page before it is shown as stale. Display-only staleness indicator; never gates a recommendation. |
-| `REDEPLOY_CORR_CORRELATED_MIN` | 0.70 | Alias for `REDEPLOY_CORR_CORRELATED_MIN` — same 0.70 boundary as `_CORRELATED_MIN` used in the Hard-Cap-Breach rebalance plan to label a candidate "limited diversification benefit". Display label only, never a gate. |
+| `REDEPLOY_CORR_CORRELATED_MIN` | 0.70 | Already documented inline with `REDEPLOY_CORR_DIVERSIFIER_MAX` above (row 282). Repeated here for checker coverage. |
 | `CROSS_ASSET_COPPER_TREND_DAYS` / `CROSS_ASSET_DXY_TREND_DAYS` | 20 / 20 | Already documented inline with `CROSS_ASSET_HYG_TREND_DAYS` above (all three share the same value and purpose). Repeated here for checker coverage. |
 | `CROSS_ASSET_DXY_ROC_THRESHOLD` | 1.5 | Already documented inline with `CROSS_ASSET_DXY_ROC_DAYS` above. Repeated here for checker coverage. |
 | `NEWS_SENTIMENT_BEARISH_THRESHOLD` | 0.40 | Already documented inline with `NEWS_SENTIMENT_BULLISH_THRESHOLD` above (both are label cutoffs for the Finnhub sentiment card, awareness-only). Repeated here for checker coverage. |
@@ -1418,7 +1418,7 @@ def _get_rfr():
 def _cached_price_xcheck(tickers_key):
     # Held-position price cross-check (Finnhub vs yfinance).
     # 5-min TTL: a periodic integrity guardrail, not a live feed — must not
-    # re-run every rerun or burn the keyed quota. Result → _price_xcheck_cache.
+    # re-run every rerun or burn the keyed quota.
 
 # Not cached (always fresh):
 fetch_market_indices()      # Called on Daily Briefing load

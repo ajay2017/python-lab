@@ -3494,7 +3494,6 @@ if page == "🏠 Home":
                 f"ℹ️ Price cross-check paused — an independent source ({_provider_label(_xc_validator_down)}) "
                 "is degraded; the integrity check resumes automatically when it recovers."
             )
-        st.session_state["_price_xcheck_cache"] = _xc
 
     # Merge live prices into held_data so P&L uses the freshest price
     for ticker, lp in st.session_state.get("_live_prices", {}).items():

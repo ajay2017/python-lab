@@ -118,7 +118,7 @@ Every threshold the app uses to gate, suppress, or downgrade a recommendation li
 | `EARNINGS_IMMINENT_DAYS` | 7 | Caution window |
 | `MACRO_IMMINENT_DAYS` | 3 | Hard suppression |
 
-Rationale for each value: [`memory/project_decision_thresholds.md`](.claude/projects/c--Users-ajay-x-ku-python-lab-python-lab/memory/project_decision_thresholds.md) (Claude's auto-memory; same content also summarised in requirements §2A).
+Rationale for each value: memory file `project_decision_thresholds.md` (Claude's auto-memory, stored outside this repo under the user's local `.claude` profile — not a repo-relative link; same content also summarised in requirements §2A).
 
 ---
 
