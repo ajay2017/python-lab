@@ -362,6 +362,14 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `PT_TARGET_LOOKBACK_DAYS` | 5 | F-169 Phase 2 (`stock_analyzer/analyst_targets.py::detect_pt_cut()`) — trading-day window (row-count, not calendar-date, to stay weekend/holiday-agnostic) the PT-cut comparison looks back over. Fewer than `LOOKBACK_DAYS + 1` distinct `analyst_target_snapshots` rows for a ticker ⇒ withheld, never a fabricated flat/neutral read. |
 | `PT_TARGET_CUT_WARN_PCT` | -7.0 | F-169 Phase 2 — a consensus `target_mean` drop of this magnitude (or more) over the `PT_TARGET_LOOKBACK_DAYS` window fires a warning-level 🎯 alert in the "📉 Analyst Revisions" category even with no accompanying rating downgrade (suppressed if a rating-based revision already fired for the same ticker — see `portfolio.py::alerts()`). Opus-reviewed policy value; do not retune without a fresh review. |
 | `PT_TARGET_CUT_DANGER_PCT` | -15.0 | F-169 Phase 2 — same comparison as `PT_TARGET_CUT_WARN_PCT`, danger tier. Opus-reviewed policy value; do not retune without a fresh review. |
+| `MC_HISTORY_PERIOD` | `"5y"` | 🎲 Outcome Range simulator (Risk Analysis, `stock_analyzer/monte_carlo.py`) — the `data.fetch_price_history` period string used for the long-history fetch feeding the bootstrap. Nothing else in the app fetches beyond the 6-month `bundle_loader` default; this is a dedicated, separately-cached fetch path. |
+| `MC_MIN_HISTORY_DAYS` | 252 | Outcome Range — minimum trading days (~1yr) of usable Close data a ticker needs to join the correlated bootstrap. Tickers below this (recent IPOs, fetch failures) are excluded and reported in the UI, never silently dropped; their weight is renormalized among the remaining tickers. |
+| `MC_TRIALS` | 2000 | Outcome Range — number of block-bootstrap trials run per simulation. |
+| `MC_BLOCK_DAYS` | 20 | Outcome Range — contiguous trading-day block length (~1 month) resampled together across ALL held tickers in a given trial, so a historically correlated move (e.g. a broad tech selloff day) hits correlated names together in the resample instead of being destroyed by independent per-ticker resampling. |
+| `MC_HORIZON_OPTIONS_DAYS` | `[21, 63, 252]` | Outcome Range — selectable simulation horizons in trading days (~1mo/1qtr/1yr), rendered as a radio control. |
+| `MC_HORIZON_DEFAULT_DAYS` | 63 | Outcome Range — default horizon selection (~1 quarter). |
+
+Simulation-method parameters, not investment-policy thresholds — the Outcome Range tab is diagnostic/awareness-only (same class as Stress Testing and Regime Fit) and never gates a recommendation. It deliberately does NOT attach a probability to any macro regime — it resamples real historical daily returns instead, sidestepping the same thin-data problem (`daily_regime` has only ~3 days of history) that made F-200 drop a regime-probability framing.
 
 ### 4.0.2 Cross-feature coordination caches
 

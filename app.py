@@ -73,6 +73,7 @@ from stock_analyzer.stress_test import (
     SCENARIOS, run_scenario, run_all_scenarios, assess_fragility,
     HISTORICAL_WINDOWS, fetch_historical_drawdowns,
 )
+from stock_analyzer import monte_carlo as _mc
 from stock_analyzer.daily_pnl import compute_positions_day_pnl
 from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
@@ -149,6 +150,11 @@ from stock_analyzer.constants import (
     EARNINGS_MIN_BEAT_RATE_ENTRY,
     DAY_SHOCK_PCT,
     ENTRY_TIMING_DIVERGENCE_DIVERGING_MAX,
+    MC_HORIZON_OPTIONS_DAYS,
+    MC_HORIZON_DEFAULT_DAYS,
+    MC_HISTORY_PERIOD,
+    MC_MIN_HISTORY_DAYS,
+    MC_BLOCK_DAYS,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -2563,6 +2569,25 @@ def _get_premarket_brief(held_tickers: tuple, watchlist: tuple) -> dict:
         "events":         [],          # caller fills this in from _macro_events
         "as_of":          now_et.strftime("%I:%M %p ET"),
     }
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_monte_carlo(
+    tickers_tuple: tuple, weights_tuple: tuple, market_values_tuple: tuple,
+    horizon_days: int,
+) -> dict:
+    """24h-cached historical block-bootstrap Monte Carlo (🎲 Outcome Range tab,
+    Risk Analysis). Re-keys on the holdings set + weights + horizon, not on
+    port_df directly, so an unrelated page rerun doesn't force a fresh multi-
+    year re-fetch. Takes primitive tuples (not port_df) to keep the cache key
+    stable and cheap to hash. See stock_analyzer/monte_carlo.py for the pure
+    simulation logic — this is a thin Streamlit-caching wrapper only."""
+    port_df = pd.DataFrame({
+        "Ticker":       list(tickers_tuple),
+        "Weight (%)":   list(weights_tuple),
+        "Market Value": list(market_values_tuple),
+    })
+    return _mc.run_monte_carlo(port_df, horizon_days=horizon_days)
 
 
 # ── Shared data loader ────────────────────────────────────────────────────────
@@ -9863,8 +9888,8 @@ elif page == "🔗 Risk Analysis":
     risk_pairs          = st.session_state.get("_risk_pairs_cache") or []
     _div_label          = st.session_state.get("_div_label_cache")
 
-    _ra_tab_dash, _ra_tab_action, _ra_tab_stress = st.tabs([
-        "📊 Dashboard", "📋 Action Plan", "🔥 Stress Testing"
+    _ra_tab_dash, _ra_tab_action, _ra_tab_stress, _ra_tab_mc = st.tabs([
+        "📊 Dashboard", "📋 Action Plan", "🔥 Stress Testing", "🎲 Outcome Range"
     ])
 
     with _ra_tab_dash:
@@ -11248,6 +11273,146 @@ elif page == "🔗 Risk Analysis":
                     "threaten every sector equally (Fed Policy, Growth/GDP releases) are "
                     "excluded from ranking since they can't identify a SPECIFIC weak point."
                 )
+
+    with _ra_tab_mc:
+        # ── Outcome Range (historical block-bootstrap Monte Carlo) ────────────
+        st.divider()
+        st.subheader("🎲 Outcome Range")
+        st.caption(
+            "A historical-bootstrap ESTIMATE — not a forecast and not a regime-probability "
+            "claim. Resamples real past daily returns for your held tickers (preserving how "
+            "they actually moved TOGETHER) to show a range of plausible portfolio paths, "
+            "alongside the single-point scenarios in 🔥 Stress Testing above."
+        )
+
+        _mc_horizon_labels = {21: "1 month", 63: "1 quarter", 252: "1 year"}
+        _mc_horizon = st.radio(
+            "Horizon",
+            MC_HORIZON_OPTIONS_DAYS,
+            index=MC_HORIZON_OPTIONS_DAYS.index(MC_HORIZON_DEFAULT_DAYS),
+            format_func=lambda d: _mc_horizon_labels.get(d, f"{d} trading days"),
+            horizontal=True,
+            key="_mc_horizon",
+        )
+
+        if port_df is None or port_df.empty:
+            st.info("No portfolio loaded — visit 🏠 Home first.")
+        else:
+            _mc_run_key = "_mc_last_run"
+            if st.button("🎲 Run Simulation", key="_mc_run_btn"):
+                _mc_tickers = tuple(port_df["Ticker"].tolist())
+                _mc_weights = tuple(_f(w) for w in port_df["Weight (%)"].tolist())
+                _mc_mvals   = tuple(_f(v) for v in port_df["Market Value"].tolist())
+                with st.spinner(
+                    "Fetching multi-year history and running the simulation… "
+                    "this can take up to a minute for a full portfolio."
+                ):
+                    st.session_state[_mc_run_key] = {
+                        "horizon": int(_mc_horizon),
+                        **_cached_monte_carlo(_mc_tickers, _mc_weights, _mc_mvals, int(_mc_horizon)),
+                    }
+
+            _mc_result = st.session_state.get(_mc_run_key)
+            if not _mc_result:
+                st.info(
+                    "Click **Run Simulation** to fetch multi-year history for your holdings "
+                    "and simulate a range of outcomes. Not run automatically — this fetches "
+                    f"{MC_HISTORY_PERIOD} of daily prices per position, so it's opt-in rather "
+                    "than something every page load pays for."
+                )
+            elif not _mc_result.get("included"):
+                st.warning(
+                    "Not enough multi-year price history across your holdings to run this "
+                    "simulation. Try again later, or after adding positions with longer history."
+                )
+            else:
+                if _mc_result.get("horizon") != int(_mc_horizon):
+                    st.caption(
+                        f"Showing the last simulation run ({_mc_horizon_labels.get(_mc_result['horizon'], _mc_result['horizon'])}). "
+                        "Click **Run Simulation** to update for the horizon selected above."
+                    )
+
+                _mc_summary = _mc_result["summary"]
+                _mc_pv      = _mc_result["portfolio_value"]
+                _mc_bands   = _mc_summary["bands"]
+                _mc_end     = _mc_summary["endpoint_pct"]
+
+                if _mc_result.get("excluded"):
+                    st.caption(
+                        "⚠️ Excluded from this simulation (insufficient price history): "
+                        f"{', '.join(_mc_result['excluded'])}. Remaining weights renormalized "
+                        "to 100% among the included tickers."
+                    )
+
+                import plotly.graph_objects as _go_mc
+                _mc_x = list(range(_mc_summary["horizon_days"] + 1))
+
+                def _mc_band_values(p):
+                    return [0.0] + _mc_bands[p]
+
+                _mc_fig = _go_mc.Figure()
+                _mc_fig.add_trace(_go_mc.Scatter(
+                    x=_mc_x, y=_mc_band_values(95), line=dict(width=0),
+                    showlegend=False, hoverinfo="skip",
+                ))
+                _mc_fig.add_trace(_go_mc.Scatter(
+                    x=_mc_x, y=_mc_band_values(5), line=dict(width=0),
+                    fill="tonexty", fillcolor="rgba(0,200,81,0.10)",
+                    name="5th–95th percentile", hoverinfo="skip",
+                ))
+                _mc_fig.add_trace(_go_mc.Scatter(
+                    x=_mc_x, y=_mc_band_values(75), line=dict(width=0),
+                    showlegend=False, hoverinfo="skip",
+                ))
+                _mc_fig.add_trace(_go_mc.Scatter(
+                    x=_mc_x, y=_mc_band_values(25), line=dict(width=0),
+                    fill="tonexty", fillcolor="rgba(0,200,81,0.22)",
+                    name="25th–75th percentile", hoverinfo="skip",
+                ))
+                _mc_fig.add_trace(_go_mc.Scatter(
+                    x=_mc_x, y=_mc_band_values(50), line=dict(color="#00C851", width=2),
+                    name="Median",
+                ))
+                _mc_fig.add_hline(y=0, line_color="#444", line_width=1)
+                _mc_fig.update_layout(
+                    title=f"Simulated Portfolio Return Range — {_mc_summary['n_trials']:,} trials",
+                    template="plotly_dark",
+                    yaxis_title="Cumulative Return",
+                    yaxis_tickformat=".0%",
+                    xaxis_title="Trading Days Ahead",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(_mc_fig, use_container_width=True)
+
+                st.markdown(
+                    f"**Outcome at horizon end ({_mc_summary['horizon_days']} trading days)** — "
+                    "$ basis is the included holdings above, not your full portfolio value:"
+                )
+                _mc_cols = st.columns(5)
+                for _mc_col, _mc_p in zip(_mc_cols, _mc_summary["percentiles"]):
+                    _mc_ret = _mc_end[_mc_p]
+                    _mc_val = _mc_pv * (1 + _mc_ret)
+                    _mc_col.metric(f"{_mc_p}th pct.", f"{_mc_ret:+.1%}", _m(f"${_mc_val:,.0f}"))
+
+                with st.expander("Methodology & caveats", expanded=False):
+                    st.markdown(
+                        f"- Resamples **{MC_HISTORY_PERIOD}** of real daily returns per ticker in "
+                        f"contiguous **{MC_BLOCK_DAYS}-trading-day blocks**, sampling the SAME "
+                        "dates across all tickers together — this is what preserves the real "
+                        "correlation between your holdings (a historically correlated selloff day "
+                        "hits correlated names together in the resample) rather than treating each "
+                        "ticker independently.\n"
+                        f"- Tickers need at least **{MC_MIN_HISTORY_DAYS} trading days** (~1 year) "
+                        "of history to be included; anything shorter (e.g. a recent IPO) is excluded "
+                        "and its weight redistributed among the rest — the $ figures above are scaled "
+                        "to the included holdings' value only, not your full portfolio.\n"
+                        "- Weights are held **constant** (implicitly rebalanced to target each "
+                        "simulated day), not a true drifting buy-and-hold path — a minor "
+                        "simplification at short horizons, more material at the 1-year horizon.\n"
+                        "- This is a historical-bootstrap estimate of what a similar mix of past "
+                        "days could produce, **not a probability forecast** of any specific future "
+                        "outcome or macro regime."
+                    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -26134,6 +26299,23 @@ The comparison table shows **Model Est. (%)** vs **Actual (%)** and the **Δ (di
 Use this over time as **calibration context** — it shows how well the model's risk estimates track reality for your specific book. Over many scenarios, you'll learn where the model's blind spots are.
 
 This is **awareness only** — it never gates a recommendation or sizes a trade.
+"""
+            )
+
+        with st.expander("🎲 Outcome Range — probability bands, not a single guess", expanded=False):
+            st.markdown(
+                """
+The **🎲 Outcome Range** tab (also on 🔗 Risk Analysis) answers a different question than Stress Testing above: instead of "what happens under ONE named scenario," it asks "what's the realistic SPREAD of outcomes over time?"
+
+**What it does:** It resamples your held tickers' real historical daily returns — in month-long chunks, applying the SAME historical dates to every ticker at once — to simulate thousands of possible paths your portfolio could have taken. Sampling the same dates together is what keeps your holdings' real correlation intact (a historically correlated selloff day still hits your correlated names together in the simulation), instead of pretending each position moves independently.
+
+**How to read it:** Pick a horizon (1 month / 1 quarter / 1 year) and click **Run Simulation** — this isn't automatic, since it fetches several years of price history per position. The chart shows a **fan** of percentile bands (5th–95th and 25th–75th) around the median simulated path; the table below it shows the same spread at the end of the chosen horizon, in both % and $.
+
+**What it is NOT:** a forecast, and NOT a probability attached to any macro regime (rate cuts, recession, etc.) — there isn't enough historical regime data in the app to support that kind of claim honestly. It's a historical-bootstrap ESTIMATE of what a similar mix of past trading days could produce for your specific holdings, nothing more.
+
+A ticker with too little price history (e.g. a recent IPO) is excluded and named explicitly — its weight is redistributed among the rest, and the $ figures shown reflect only the included holdings, not your whole portfolio.
+
+This is **awareness only** — like Stress Testing, it never gates a recommendation, sizes a trade, or feeds any score.
 """
             )
 

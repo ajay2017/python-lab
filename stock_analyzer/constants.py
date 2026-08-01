@@ -1074,3 +1074,19 @@ THESIS_EROSION_BASELINE_LOOKBACK_DAYS = 10   # calendar days to walk back for th
 # shock that stays above the 50-day MA (and so doesn't trip the tier) is still
 # visible instead of silently absorbed into the price strip's per-ticker badges.
 DAY_SHOCK_PCT = 5.0   # abs same-day % move (up or down) that triggers the banner
+
+# ── Outcome Range simulator (monte_carlo.py) ──────────────────────────────────
+# Historical block-bootstrap Monte Carlo on the 🎲 Outcome Range tab (Risk
+# Analysis). Resamples REAL historical daily returns (not regime labels — the
+# daily_regime table has too little history for a base rate, see F-200's
+# retreat from that framing) to produce a percentile-band distribution of
+# portfolio outcomes. AWARENESS/DIAGNOSTIC ONLY — same class as Stress Testing
+# and Regime Fit; never gates a recommendation. These are simulation-method
+# parameters, not investment-policy thresholds, but still live here per the
+# no-hardcoded-values rule.
+MC_HISTORY_PERIOD      = "5y"   # yfinance/orchestrator period string for the long-history fetch
+MC_MIN_HISTORY_DAYS    = 252    # min trading days of history a ticker needs to join the bootstrap (~1yr); shorter-history tickers (e.g. recent IPOs) are excluded and reported, weights renormalized among the rest
+MC_TRIALS              = 2000   # number of bootstrap trials
+MC_BLOCK_DAYS          = 20     # contiguous block length (trading days, ~1 month) sampled together across ALL tickers to preserve realized cross-ticker correlation
+MC_HORIZON_OPTIONS_DAYS = [21, 63, 252]   # selectable simulation horizons (~1mo/1qtr/1yr, trading days)
+MC_HORIZON_DEFAULT_DAYS = 63    # default horizon selection
