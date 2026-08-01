@@ -29102,7 +29102,7 @@ elif page == "🧠 AI Insights":
                                 "P&L appears on its own SELL row)."
                             )
                         with st.expander("Show the underlying trades"):
-                            st.dataframe(pd.DataFrame(_qa_facts), hide_index=True, width='stretch')
+                            st.dataframe(_qa.format_trades_table(_qa_facts), hide_index=True, width='stretch')
 
                 elif _qa_parsed["intent"] == "rec_outcome":
                     _qa_tk      = _qa_parsed["ticker"]

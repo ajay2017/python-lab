@@ -194,3 +194,17 @@ scenario narratives, Red Team counter-evidence, Monthly Report summary) — none
 of those sites escape `$` either. Not fixed here (out of scope for this feature,
 and those surfaces are already shipped/reviewed) — worth a dedicated audit if
 raised again.
+
+---
+
+## v1.3 — business-language display, not raw dict keys (same day)
+
+Live use flagged that "Show the underlying trades" rendered the fact dicts'
+raw internal keys (`pnl`, `pnl_label`, `traded_at`, ...) directly as column
+headers, and `pnl_label`'s raw enum values (`"realized"`, `"position_closed"`)
+directly as cell content — developer-facing names, not something to show a
+user. Added `format_trades_table()`, a display-only formatter (renames columns
+to `Ticker`/`Action`/`Shares`/`Price ($)`/`Date`/`Gain/Loss ($)`/`Status`, maps
+each `pnl_label` value to a plain-English status) called only at the render
+site — the underlying fact-dict schema consumed by `narrate_answer()` and the
+rest of the pipeline is unchanged. 3 new tests (57 → 60).

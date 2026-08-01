@@ -331,6 +331,34 @@ def trades_for_ticker(trades_df, ticker: str, current_prices: dict | None = None
     return [_row_outcome(r, current_prices) for _, r in df.sort_values("traded_at").iterrows()]
 
 
+_PNL_LABEL_DISPLAY = {
+    "realized":        "Realized",
+    "unrealized":       "Unrealized (still held)",
+    "position_closed": "Position closed (see matching sale)",
+    "unknown":          "—",
+}
+
+
+def format_trades_table(facts: list[dict]) -> pd.DataFrame:
+    """Render a trades_in_range/trades_for_ticker fact list as a DataFrame
+    with business-language column headers and status labels, for the "Show
+    the underlying trades" expander — the raw dict keys (pnl, pnl_label,
+    traded_at, ...) are internal field names, not something to show a user."""
+    df = pd.DataFrame(facts)
+    if df.empty:
+        return df
+    df["pnl_label"] = df["pnl_label"].map(lambda v: _PNL_LABEL_DISPLAY.get(v, v))
+    return df.rename(columns={
+        "ticker":     "Ticker",
+        "action":     "Action",
+        "shares":     "Shares",
+        "price":      "Price ($)",
+        "traded_at":  "Date",
+        "pnl":        "Gain/Loss ($)",
+        "pnl_label":  "Status",
+    })
+
+
 def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None,
                             horizon_days: int | None = None) -> dict:
     """

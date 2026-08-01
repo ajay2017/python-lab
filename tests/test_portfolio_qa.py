@@ -19,6 +19,7 @@ from stock_analyzer.portfolio_qa import (
     build_parse_prompt,
     trades_in_range,
     trades_for_ticker,
+    format_trades_table,
     recommendation_outcome,
     facts_to_text,
     parse_question,
@@ -383,6 +384,41 @@ def test_trades_for_ticker_excludes_split_rows():
     result = trades_for_ticker(df, "AAPL")
     assert len(result) == 1
     assert result[0]["action"] == "BUY"
+
+
+# ─── format_trades_table — business-language display, not raw dict keys ────
+
+def test_format_trades_table_empty_list_returns_empty_df():
+    result = format_trades_table([])
+    assert result.empty
+
+
+def test_format_trades_table_renames_columns_to_business_language():
+    facts = [{"ticker": "HOOD", "action": "SELL", "shares": 10, "price": 95.77,
+              "traded_at": "2026-07-24", "pnl": -181.15, "pnl_label": "realized"}]
+    result = format_trades_table(facts)
+    assert list(result.columns) == ["Ticker", "Action", "Shares", "Price ($)",
+                                     "Date", "Gain/Loss ($)", "Status"]
+    # no raw dev-facing keys survive in the displayed columns
+    assert "pnl" not in result.columns
+    assert "pnl_label" not in result.columns
+    assert "traded_at" not in result.columns
+
+
+def test_format_trades_table_relabels_status_values():
+    facts = [
+        {"ticker": "HOOD", "action": "SELL", "shares": 10, "price": 95.77,
+         "traded_at": "2026-07-24", "pnl": -181.15, "pnl_label": "realized"},
+        {"ticker": "HOOD", "action": "BUY", "shares": 5, "price": 117.77,
+         "traded_at": "2026-07-05", "pnl": None, "pnl_label": "position_closed"},
+    ]
+    result = format_trades_table(facts)
+    statuses = list(result["Status"])
+    assert "Realized" in statuses
+    assert "Position closed (see matching sale)" in statuses
+    # the raw enum strings themselves must not leak through
+    assert "realized" not in statuses
+    assert "position_closed" not in statuses
 
 
 # ─── recommendation_outcome ──────────────────────────────────────────────────
