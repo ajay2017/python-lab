@@ -29023,11 +29023,12 @@ elif page == "🧠 AI Insights":
 
         st.caption(
             "Ask about your trade history or a past recommendation's outcome — "
-            "answered from what's actually on record, not a live snapshot. Two "
+            "answered from what's actually on record, not a live snapshot. Three "
             "kinds of questions work today:"
         )
         st.caption(
             "• \"How many trades did I make last week, and what was the gain/loss on each?\"\n\n"
+            "• \"What was my trade on AAPL?\"\n\n"
             "• \"Why did AAPL lose money after being recommended?\""
         )
         _qa_question = st.text_input(
@@ -29050,23 +29051,18 @@ elif page == "🧠 AI Insights":
                     if _qa.LAST_PARSE_ERROR:
                         st.caption(f"Details: {_qa.LAST_PARSE_ERROR}")
                 elif _qa_parsed["intent"] == "unsupported":
-                    st.info(
-                        "That doesn't match a question I can answer yet. Try something like:\n\n"
+                    st.info(_qa_parsed.get("reason") or "That doesn't match a question I can answer yet.")
+                    st.caption(
+                        "Try something like:\n\n"
                         "- \"How many trades did I make last week, and what was the gain/loss on each?\"\n"
+                        "- \"What was my trade on AAPL?\"\n"
                         "- \"Why did AAPL lose money after being recommended on 2026-07-20?\""
                     )
-                elif _qa_parsed["intent"] == "trades_in_range":
-                    st.caption(f"Looking at: trades from {_qa_parsed['start_date']} to {_qa_parsed['end_date']}")
-                    if _qa_parsed.get("range_clamped"):
-                        st.caption(
-                            f"ℹ️ That range was wider than {QA_MAX_RANGE_DAYS} days — "
-                            f"narrowed to the most recent {QA_MAX_RANGE_DAYS} days shown above."
-                        )
-                    _qa_trades_df = st.session_state.get("trades_df", db.load_trades())
-
+                elif _qa_parsed["intent"] in ("trades_in_range", "trade_lookup"):
                     # Current prices for still-open BUY lots, reusing the
                     # session's already-loaded holdings rather than a live
                     # fetch — same cache Diversification/Risk Analysis read.
+                    _qa_trades_df = st.session_state.get("trades_df", db.load_trades())
                     _qa_prices: dict = {}
                     _qa_pdf = st.session_state.get("_port_df_enriched")
                     if _qa_pdf is not None and not _qa_pdf.empty and "Shares" in _qa_pdf.columns:
@@ -29075,11 +29071,22 @@ elif page == "🧠 AI Insights":
                             if _qsh:
                                 _qa_prices[str(_qr["Ticker"]).upper()] = float(_qr["Market Value"]) / float(_qsh)
 
-                    _qa_facts = _qa.trades_in_range(
-                        _qa_trades_df, _qa_parsed["start_date"], _qa_parsed["end_date"], _qa_prices
-                    )
+                    if _qa_parsed["intent"] == "trades_in_range":
+                        st.caption(f"Looking at: trades from {_qa_parsed['start_date']} to {_qa_parsed['end_date']}")
+                        if _qa_parsed.get("range_clamped"):
+                            st.caption(
+                                f"ℹ️ That range was wider than {QA_MAX_RANGE_DAYS} days — "
+                                f"narrowed to the most recent {QA_MAX_RANGE_DAYS} days shown above."
+                            )
+                        _qa_facts = _qa.trades_in_range(
+                            _qa_trades_df, _qa_parsed["start_date"], _qa_parsed["end_date"], _qa_prices
+                        )
+                    else:
+                        st.caption(f"Looking at: every trade on record for {_qa_parsed['ticker']}")
+                        _qa_facts = _qa.trades_for_ticker(_qa_trades_df, _qa_parsed["ticker"], _qa_prices)
+
                     with st.spinner("Answering…"):
-                        _qa_answer = _qa.narrate_answer("trades_in_range", _qa_facts, _ai_api_key)
+                        _qa_answer = _qa.narrate_answer(_qa_parsed["intent"], _qa_facts, _ai_api_key)
                     if _qa_answer is None:
                         st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
                         if _qa.LAST_NARRATE_ERROR:

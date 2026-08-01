@@ -14,6 +14,7 @@ from stock_analyzer.portfolio_qa import (
     parse_parsed_query,
     build_parse_prompt,
     trades_in_range,
+    trades_for_ticker,
     recommendation_outcome,
     facts_to_text,
     parse_question,
@@ -52,6 +53,7 @@ def test_parse_parsed_query_trades_in_range_missing_dates_becomes_unsupported():
     })
     result = parse_parsed_query(raw)
     assert result["intent"] == "unsupported"
+    assert "date" in result["reason"].lower()
 
 
 def test_parse_parsed_query_rec_outcome_missing_ticker_becomes_unsupported():
@@ -61,6 +63,58 @@ def test_parse_parsed_query_rec_outcome_missing_ticker_becomes_unsupported():
     })
     result = parse_parsed_query(raw)
     assert result["intent"] == "unsupported"
+    assert "ticker" in result["reason"].lower()
+
+
+def test_parse_parsed_query_valid_trade_lookup():
+    raw = json.dumps({
+        "intent": "trade_lookup", "ticker": "crwd",
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "trade_lookup"
+    assert result["ticker"] == "CRWD"
+    assert result["reason"] is None
+
+
+def test_parse_parsed_query_trade_lookup_missing_ticker_becomes_unsupported():
+    raw = json.dumps({
+        "intent": "trade_lookup", "ticker": None,
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "unsupported"
+    assert "ticker" in result["reason"].lower()
+
+
+def test_parse_parsed_query_model_supplied_unsupported_reason_is_kept():
+    raw = json.dumps({
+        "intent": "unsupported", "ticker": None, "start_date": None,
+        "end_date": None, "horizon_days": None,
+        "reason": "This asks for a portfolio-wide return, which isn't supported yet.",
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "unsupported"
+    assert result["reason"] == "This asks for a portfolio-wide return, which isn't supported yet."
+
+
+def test_parse_parsed_query_unsupported_with_no_reason_gets_generic_fallback():
+    raw = json.dumps({
+        "intent": "unsupported", "ticker": None, "start_date": None,
+        "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["intent"] == "unsupported"
+    assert result["reason"]  # non-empty fallback, never None/blank
+
+
+def test_parse_parsed_query_valid_intents_have_no_reason():
+    raw = json.dumps({
+        "intent": "trade_lookup", "ticker": "AAPL",
+        "start_date": None, "end_date": None, "horizon_days": None,
+    })
+    result = parse_parsed_query(raw)
+    assert result["reason"] is None
 
 
 def test_parse_parsed_query_malformed_json_returns_none():
@@ -234,6 +288,59 @@ def test_trades_in_range_end_date_is_inclusive():
     assert len(result) == 1
 
 
+# ─── trades_for_ticker ───────────────────────────────────────────────────────
+
+def test_trades_for_ticker_empty_df_returns_empty_list():
+    assert trades_for_ticker(pd.DataFrame(), "AAPL") == []
+
+
+def test_trades_for_ticker_none_df_returns_empty_list():
+    assert trades_for_ticker(None, "AAPL") == []
+
+
+def test_trades_for_ticker_no_ticker_returns_empty_list():
+    df = _trades_df([{"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+                       "realized_pnl": None, "traded_at": "2026-07-15T10:00:00Z"}])
+    assert trades_for_ticker(df, "") == []
+
+
+def test_trades_for_ticker_filters_to_matching_ticker_only():
+    df = _trades_df([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+         "realized_pnl": None, "traded_at": "2026-06-01T10:00:00Z"},
+        {"ticker": "CRWD", "action": "BUY", "shares": 5, "price": 300.0,
+         "realized_pnl": None, "traded_at": "2026-07-01T10:00:00Z"},
+    ])
+    result = trades_for_ticker(df, "crwd")
+    assert len(result) == 1
+    assert result[0]["ticker"] == "CRWD"
+
+
+def test_trades_for_ticker_no_date_filter_spans_all_history():
+    df = _trades_df([
+        {"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+         "realized_pnl": None, "traded_at": "2020-01-01T10:00:00Z"},
+        {"ticker": "AAPL", "action": "SELL", "shares": 10, "price": 250.0,
+         "realized_pnl": 500.0, "traded_at": "2026-07-01T10:00:00Z"},
+    ])
+    result = trades_for_ticker(df, "AAPL")
+    assert len(result) == 2
+    assert result[0]["traded_at"] == "2020-01-01"  # oldest first
+    assert result[1]["pnl"] == 500.0
+
+
+def test_trades_for_ticker_excludes_split_rows():
+    df = _trades_df([
+        {"ticker": "AAPL", "action": "SPLIT", "shares": 20, "price": 0,
+         "realized_pnl": None, "traded_at": "2026-07-15T10:00:00Z"},
+        {"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+         "realized_pnl": None, "traded_at": "2026-07-16T10:00:00Z"},
+    ])
+    result = trades_for_ticker(df, "AAPL")
+    assert len(result) == 1
+    assert result[0]["action"] == "BUY"
+
+
 # ─── recommendation_outcome ──────────────────────────────────────────────────
 
 def _recs_df(rows):
@@ -328,6 +435,19 @@ def test_facts_to_text_rec_outcome_not_found_states_reason():
 def test_facts_to_text_trades_in_range_empty_says_no_trades():
     text = facts_to_text("trades_in_range", [])
     assert "No trades" in text
+
+
+def test_facts_to_text_trade_lookup_empty_says_no_trades_on_record():
+    text = facts_to_text("trade_lookup", [])
+    assert "No trades on record" in text
+
+
+def test_facts_to_text_trade_lookup_renders_trade_list():
+    facts = [{"ticker": "CRWD", "action": "BUY", "shares": 5, "price": 300.0,
+              "traded_at": "2026-07-01", "pnl": 100.0, "pnl_label": "unrealized"}]
+    text = facts_to_text("trade_lookup", facts)
+    assert "CRWD" in text
+    assert "100.00" in text
 
 
 # ─── generate_* — fail-open contract ─────────────────────────────────────────

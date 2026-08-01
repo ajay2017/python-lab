@@ -31,7 +31,17 @@ from stock_analyzer.constants import (
 
 _MODEL = "claude-haiku-4-5-20251001"
 
-_VALID_INTENTS = ("trades_in_range", "rec_outcome", "unsupported")
+_VALID_INTENTS = ("trades_in_range", "rec_outcome", "trade_lookup", "unsupported")
+
+_REASON_NO_DATE_RANGE = (
+    "That sounds like a question about a range of trades, but I need both "
+    "a start and an end date to answer it."
+)
+_REASON_NO_TICKER = (
+    "I couldn't confidently identify a stock ticker in that question — try "
+    "naming the exact symbol (e.g. \"HOOD\") or the company's full name."
+)
+_REASON_GENERIC = "That doesn't match a question I can answer yet."
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -52,27 +62,39 @@ _PARSE_SYSTEM_PROMPT_TEMPLATE = (
     "\"5 trading days ago\") against this date, never your own guess of the "
     "current date.\n\n"
     "Respond with ONLY a JSON object, no other text before or after:\n"
-    '{"intent": "trades_in_range" | "rec_outcome" | "unsupported", '
+    '{"intent": "trades_in_range" | "rec_outcome" | "trade_lookup" | "unsupported", '
     '"ticker": "<UPPERCASE TICKER>" or null, '
     '"start_date": "YYYY-MM-DD" or null, '
     '"end_date": "YYYY-MM-DD" or null, '
-    '"horizon_days": <int> or null}\n\n'
+    '"horizon_days": <int> or null, '
+    '"reason": "<short explanation, ONLY when intent is unsupported>" or null}\n\n'
     "Rules:\n"
     "- \"trades_in_range\" = a question about trades/gain-loss over a date "
     "range. Requires start_date and end_date.\n"
+    "- \"trade_lookup\" = a question about what happened on a specific trade "
+    "or ticker, with NO date range given (e.g. \"what was my trade on X\", "
+    "\"how did my AAPL trade go\"). Requires ticker; leave start_date/"
+    "end_date/horizon_days null.\n"
     "- \"rec_outcome\" = a question about why a past recommendation did or "
     "didn't work out. Requires ticker; start_date is the date the "
     "recommendation was made if given, else null; horizon_days is the "
     "number of trading days after that the user is asking about, if given, "
     "else null.\n"
     "- Only extract a ticker if one is explicitly named as a stock symbol or "
-    "unambiguous company name — never guess one.\n"
-    "- If the question doesn't fit either shape, or needs a ticker that "
-    "isn't given, return intent \"unsupported\" with every other field null.\n"
+    "an unambiguous company name — never guess one. If the name in the "
+    "question doesn't map to a specific ticker with confidence, leave "
+    "ticker null.\n"
+    "- If the question doesn't fit any of the three shapes above, or needs "
+    "a ticker/date that isn't given, return intent \"unsupported\" with "
+    "every other field null EXCEPT reason: a short (under 20 words), "
+    "specific, plain-English explanation of what's missing or unclear — "
+    "e.g. \"I could not identify an unambiguous stock ticker in this "
+    "question\" or \"this needs a start and end date, which weren't given.\"\n"
     "- Output the JSON object and NOTHING else — no markdown code fence, no "
     "explanation before it, and no explanation after it, even if the intent "
-    "is \"unsupported\". The response must contain exactly one JSON object "
-    "and no other characters."
+    "is \"unsupported\" (the \"reason\" field IS the explanation — it "
+    "belongs inside the JSON, not alongside it). The response must contain "
+    "exactly one JSON object and no other characters."
 )
 
 
@@ -151,12 +173,20 @@ def parse_parsed_query(text) -> dict | None:
     except (TypeError, ValueError):
         horizon = None
 
+    model_reason = parsed.get("reason")
+    model_reason = str(model_reason).strip()[:200] if model_reason else None
+
+    def _unsupported(reason: str) -> dict:
+        return {"intent": "unsupported", "ticker": None, "start_date": None,
+                "end_date": None, "range_clamped": False, "horizon_days": None,
+                "reason": reason}
+
     if intent == "trades_in_range" and not (start_date and end_date):
-        return {"intent": "unsupported", "ticker": None, "start_date": None,
-                "end_date": None, "range_clamped": False, "horizon_days": None}
-    if intent == "rec_outcome" and not ticker:
-        return {"intent": "unsupported", "ticker": None, "start_date": None,
-                "end_date": None, "range_clamped": False, "horizon_days": None}
+        return _unsupported(_REASON_NO_DATE_RANGE)
+    if intent in ("rec_outcome", "trade_lookup") and not ticker:
+        return _unsupported(_REASON_NO_TICKER)
+    if intent == "unsupported":
+        return _unsupported(model_reason or _REASON_GENERIC)
 
     range_clamped = False
     if intent == "trades_in_range" and start_date and end_date:
@@ -175,6 +205,7 @@ def parse_parsed_query(text) -> dict | None:
         "end_date": end_date,
         "range_clamped": range_clamped,
         "horizon_days": horizon,
+        "reason": None,
     }
 
 
@@ -216,10 +247,9 @@ def parse_question(question: str, api_key: str, today_et,
 
 # ─── Step 2: deterministic queries (zero LLM) ───────────────────────────────
 
-def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None = None) -> list[dict]:
-    """
-    Every real (non-SPLIT) trade between start_date and end_date inclusive,
-    each with its gain/loss.
+def _row_outcome(r, current_prices: dict) -> dict:
+    """Per-trade gain/loss for one trades_df row. Shared by trades_in_range
+    and trades_for_ticker so both surfaces use identical P&L logic.
 
     SELLs report the already-stored realized_pnl directly (no recomputation).
     BUYs report unrealized P&L against current_prices (caller-supplied —
@@ -229,17 +259,53 @@ def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None
     than attempting new FIFO-lot matching — its realized P&L lives on the
     matching SELL row instead.
 
-    Returns list of {"ticker", "action", "shares", "price", "traded_at",
+    Returns {"ticker", "action", "shares", "price", "traded_at",
     "pnl": float|None, "pnl_label": "realized"|"unrealized"|"position_closed"|"unknown"}.
     """
+    ticker = str(r.get("ticker", "")).upper()
+    action = str(r.get("action", "")).upper()
+    shares = _f(r.get("shares"))
+    price  = _f(r.get("price"))
+    row = {
+        "ticker": ticker, "action": action, "shares": shares, "price": price,
+        "traded_at": str(r.get("traded_at"))[:10],
+        "pnl": None, "pnl_label": "unknown",
+    }
+    if action == "SELL":
+        rp = r.get("realized_pnl")
+        if rp is not None:
+            try:
+                rp_f = float(rp)
+                if rp_f == rp_f:  # not NaN
+                    row["pnl"] = round(rp_f, 2)
+                    row["pnl_label"] = "realized"
+            except (TypeError, ValueError):
+                pass
+    elif action == "BUY":
+        cur = current_prices.get(ticker)
+        if cur is not None and price > 0:
+            row["pnl"] = round((_f(cur) - price) * shares, 2)
+            row["pnl_label"] = "unrealized"
+        else:
+            row["pnl_label"] = "position_closed"
+    return row
+
+
+def _real_trades(trades_df):
+    """trades_df with synthetic SPLIT rows excluded — shared filter."""
+    df = trades_df.copy()
+    df["traded_at"] = pd.to_datetime(df["traded_at"], utc=True, errors="coerce")
+    return df[~df["action"].astype(str).str.upper().str.contains("SPLIT", na=False)]
+
+
+def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None = None) -> list[dict]:
+    """Every real (non-SPLIT) trade between start_date and end_date inclusive,
+    each with its gain/loss (see _row_outcome)."""
     current_prices = current_prices or {}
     if trades_df is None or trades_df.empty:
         return []
 
-    df = trades_df.copy()
-    df["traded_at"] = pd.to_datetime(df["traded_at"], utc=True, errors="coerce")
-    df = df[~df["action"].astype(str).str.upper().str.contains("SPLIT", na=False)]
-
+    df = _real_trades(trades_df)
     try:
         sd = pd.Timestamp(str(start_date)[:10], tz="UTC")
         ed = pd.Timestamp(str(end_date)[:10], tz="UTC") + pd.Timedelta(days=1)
@@ -247,36 +313,22 @@ def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None
         return []
     df = df[(df["traded_at"] >= sd) & (df["traded_at"] < ed)]
 
-    out = []
-    for _, r in df.sort_values("traded_at").iterrows():
-        ticker = str(r.get("ticker", "")).upper()
-        action = str(r.get("action", "")).upper()
-        shares = _f(r.get("shares"))
-        price  = _f(r.get("price"))
-        row = {
-            "ticker": ticker, "action": action, "shares": shares, "price": price,
-            "traded_at": str(r.get("traded_at"))[:10],
-            "pnl": None, "pnl_label": "unknown",
-        }
-        if action == "SELL":
-            rp = r.get("realized_pnl")
-            if rp is not None:
-                try:
-                    rp_f = float(rp)
-                    if rp_f == rp_f:  # not NaN
-                        row["pnl"] = round(rp_f, 2)
-                        row["pnl_label"] = "realized"
-                except (TypeError, ValueError):
-                    pass
-        elif action == "BUY":
-            cur = current_prices.get(ticker)
-            if cur is not None and price > 0:
-                row["pnl"] = round((_f(cur) - price) * shares, 2)
-                row["pnl_label"] = "unrealized"
-            else:
-                row["pnl_label"] = "position_closed"
-        out.append(row)
-    return out
+    return [_row_outcome(r, current_prices) for _, r in df.sort_values("traded_at").iterrows()]
+
+
+def trades_for_ticker(trades_df, ticker: str, current_prices: dict | None = None) -> list[dict]:
+    """Every real (non-SPLIT) trade ever recorded for `ticker`, oldest first,
+    each with its gain/loss (see _row_outcome). No date range — for
+    "what was my trade on X" style questions. Empty list (not None) when the
+    ticker has no trade history; the caller/narration must say so plainly."""
+    current_prices = current_prices or {}
+    ticker = str(ticker).upper().strip()
+    if trades_df is None or trades_df.empty or not ticker:
+        return []
+
+    df = _real_trades(trades_df)
+    df = df[df["ticker"].astype(str).str.upper() == ticker]
+    return [_row_outcome(r, current_prices) for _, r in df.sort_values("traded_at").iterrows()]
 
 
 def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None,
@@ -368,18 +420,27 @@ _NARRATE_SYSTEM_PROMPT = (
 )
 
 
+def _trade_list_lines(header: str, facts: list[dict]) -> str:
+    lines = [header]
+    for t in facts:
+        pnl = f"{t['pnl']:+.2f}" if t.get("pnl") is not None else "n/a"
+        lines.append(
+            f"- {t['traded_at']}: {t['action']} {t['shares']:g} {t['ticker']} "
+            f"@ ${t['price']:.2f} — P&L {pnl} ({t['pnl_label']})"
+        )
+    return "\n".join(lines)
+
+
 def facts_to_text(intent: str, facts) -> str:
     if intent == "trades_in_range":
         if not facts:
             return "No trades were recorded in this date range."
-        lines = ["Trades in range:"]
-        for t in facts:
-            pnl = f"{t['pnl']:+.2f}" if t.get("pnl") is not None else "n/a"
-            lines.append(
-                f"- {t['traded_at']}: {t['action']} {t['shares']:g} {t['ticker']} "
-                f"@ ${t['price']:.2f} — P&L {pnl} ({t['pnl_label']})"
-            )
-        return "\n".join(lines)
+        return _trade_list_lines("Trades in range:", facts)
+
+    if intent == "trade_lookup":
+        if not facts:
+            return "No trades on record for that ticker."
+        return _trade_list_lines("Trades on record for this ticker:", facts)
 
     if intent == "rec_outcome":
         if not facts.get("found"):

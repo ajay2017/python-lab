@@ -108,3 +108,61 @@ ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS val_score numeric;
 
 **Never gates, scores, or modifies any recommendation — display-only, same class
 as the rest of AI Insights.**
+
+---
+
+## v1.1 — live-use fixes and a third question shape (same day)
+
+Real usage right after ship surfaced three issues, all fixed same day:
+
+1. **Silent LLM failure (commit `2394791`).** `parse_question()`/`narrate_answer()`
+   caught and swallowed every exception with no logging anywhere — a live failure
+   was completely undiagnosable. Added `LAST_PARSE_ERROR`/`LAST_NARRATE_ERROR`
+   module-level globals (mirrors the pre-existing `analyst_intel.LAST_EXTRACT_ERROR`
+   pattern), reset at the start of each call and set to the real reason on any
+   failure path. The Ask tab now shows a "Details: ..." caption under the
+   error/warning whenever a call returns `None`.
+
+2. **JSON-parser bug (commit `efd1b12`).** The `LAST_PARSE_ERROR` diagnostics
+   immediately caught a real one: Haiku opened a `` ```json `` fence, emitted valid
+   JSON, then kept writing an explanation afterward with **no closing fence** — the
+   parser's brace-hunting fallback only ran when the cleaned string did NOT already
+   start with `{`, so this well-formed-looking case slipped through and broke
+   `json.loads` on the trailing prose. Replaced with `_extract_json_object()`, a
+   depth-counted balanced-brace scan that always runs regardless of what precedes
+   or follows the JSON object. **`thesis_red_team.py`'s array-JSON parser
+   (`parse_counter_evidence_response`) has the identical gap — not yet observed
+   failing live, but the same bug class if it ever does.**
+
+3. **Opaque declines + a missing third intent.** Testing showed 2 of 3 real
+   questions silently declined with a generic "doesn't match" message and zero
+   indication why:
+   - *"What was my trade on CrowdStrike?"* — no date range, and the only two v1
+     intents both require one dimension CrowdStrike's question didn't have
+     (`trades_in_range` needs dates; `rec_outcome` needs "why did this
+     recommendation..." framing). **Added a third intent, `trade_lookup`**
+     ("what was my trade on X", no date needed) via a new `trades_for_ticker()`
+     function — refactored `trades_in_range`'s per-row P&L logic into a shared
+     `_row_outcome()` helper so both functions use identical logic, no duplication.
+   - *"Why did Robin Hood lose money after being recommended?"* — "Robin Hood"
+     (two words) wasn't confidently mapped to ticker `HOOD` by the parser, per the
+     deliberate "never guess a ticker" rule. **This rule was kept as-is** — the
+     fix is telling the user why it declined, not loosening the anti-hallucination
+     guard.
+
+   Every `unsupported` result now carries a `reason` string: Python-determined for
+   the two structural gaps (`_REASON_NO_DATE_RANGE`, `_REASON_NO_TICKER` — precise
+   and reliable, since Python already knows exactly which required field is
+   missing), or the model's own short explanation for anything else that doesn't
+   fit any of the three shapes (validated non-empty, capped to 200 chars — this is
+   self-explanation of a parse decision, not a financial fact, so a plausible-but-
+   imprecise model explanation carries low risk compared to fabricating a number).
+   Shown directly in the UI instead of the old static three-bullet fallback.
+
+New/changed files: `stock_analyzer/portfolio_qa.py` (`_row_outcome`, `_real_trades`,
+`trades_for_ticker`, `_extract_json_object`, `LAST_PARSE_ERROR`/`LAST_NARRATE_ERROR`,
+`reason` field, `trade_lookup` intent), `app.py` (Details captions, `trade_lookup`
+branch, reason display), `tests/test_portfolio_qa.py` (grew from 31 to 50 tests,
+including regression tests reproducing both live failures verbatim). No
+`constants.py`/gate/scoring-formula change in this round, so no Opus review
+required per CLAUDE.md hard rule #4 — full suite passing throughout.
