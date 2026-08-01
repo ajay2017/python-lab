@@ -377,6 +377,12 @@ Simulation-method parameters, not investment-policy thresholds — the Outcome R
 
 Query-scoping parameters, not investment-policy thresholds — Portfolio Q&A is a retrospective narration layer over trade/recommendation history (see F-225 in requirements.md); it never gates or issues a recommendation.
 
+| `PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS` | 2 | Personalized Discovery (`stock_analyzer/personalized_discovery.py`, F-226) — of the 3 traits (composite band / momentum band / top sector), how many must match a candidate before the "matches your winning profile" caption renders on a 🏠 Home Grow Today pick. |
+| `PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW` | 25 | Personalized Discovery — lower percentile of the user's own realized winning entries' composite/momentum scores defining the "typical winner" band. |
+| `PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH` | 75 | Personalized Discovery — upper percentile of the same band. |
+
+New policy/method thresholds proposed alongside the feature, not investment-policy thresholds carried over from elsewhere — reuses the existing `BEHAVIORAL_MIN_SAMPLE_N` (above) for the min-sample withhold floor rather than a parallel constant. Diagnostic/awareness only — never changes which tickers clear the 5-gate `_grow_today()` pipeline, never re-scores or re-ranks a pick.
+
 ### 4.0.2 Cross-feature coordination caches
 
 Features publish to `st.session_state` when they own a piece of decision state; downstream features read it. When the producer fails, the consumer treats the absence as an "offline" state — not as "no constraint."

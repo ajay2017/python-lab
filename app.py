@@ -74,6 +74,7 @@ from stock_analyzer.stress_test import (
     HISTORICAL_WINDOWS, fetch_historical_drawdowns,
 )
 from stock_analyzer import monte_carlo as _mc
+from stock_analyzer.personalized_discovery import build_winner_profile
 from stock_analyzer.daily_pnl import compute_positions_day_pnl
 from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
@@ -155,6 +156,9 @@ from stock_analyzer.constants import (
     MC_HISTORY_PERIOD,
     MC_MIN_HISTORY_DAYS,
     MC_BLOCK_DAYS,
+    PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS,
+    PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW,
+    PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -3904,6 +3908,28 @@ if page == "🏠 Home":
                 "degraded": _chg["degraded"], "improved": _chg["improved"],
             })
 
+    def _compute_winner_profile():
+        """Personalized Discovery — the user's own REALIZED-winner entry
+        profile, built fresh each call (cheap: two already-cheap Supabase
+        reads + pure functions, no new fetch of any kind). Deliberately
+        recomputed here rather than read from a cross-page session_state
+        cache — same "cheap pure recompute beats cross-page order-
+        dependency" precedent already used for catalyst_stress.py. Returns
+        None below BEHAVIORAL_MIN_SAMPLE_N (withheld, never fabricated)."""
+        from stock_analyzer.investor_mirror import build_closed_lots as _pd_lots
+        from stock_analyzer.recommendations_history import match_recs_to_trades as _pd_match
+        _pd_recs_df = db.load_recommendations(start_date=None, end_date=None)
+        _pd_trades_df = st.session_state.get("trades_df")
+        if _pd_trades_df is None:
+            _pd_trades_df = db.load_trades()
+        _pd_closed_lots = _pd_lots(_pd_trades_df)
+        _pd_matched = _pd_match(_pd_recs_df, _pd_trades_df)
+        return build_winner_profile(
+            _pd_closed_lots, _pd_matched, min_n=BEHAVIORAL_MIN_SAMPLE_N,
+            pctl_low=PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW,
+            pctl_high=PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
+        )
+
     # ── Synthesis memoization (perf) ─────────────────────────
     # The heavy synthesis below (alerts -> risk -> grow-composites -> Daily
     # Brief -> rec-log) used to re-run top-to-bottom on EVERY rerun (every tab
@@ -3923,7 +3949,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 5  # bumped: WATCH tickers suppressed from buy_candidates add_winner
+    _SYNTH_SCHEMA_VER = 6  # bumped: grow_today new_picks now carry personalized_match
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -4031,6 +4057,7 @@ if page == "🏠 Home":
                         fragility       = st.session_state.get("_fragility_cache"),
                         spy_trend_df    = _cached_spy("1y"),
                         vix_level       = _cached_vix(),
+                        winner_profile  = _compute_winner_profile(),
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -4386,6 +4413,7 @@ if page == "🏠 Home":
                     fragility       = st.session_state.get("_fragility_cache"),
                     spy_trend_df    = _cached_spy("1y"),
                     vix_level       = _cached_vix(),
+                    winner_profile  = _compute_winner_profile(),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -6390,6 +6418,21 @@ if page == "🏠 Home":
                         f"📊 Predictive Analytics → ⏱️ Entry Timing for current numbers. "
                         f"Awareness only — doesn't change this recommendation."
                     )
+
+            # Personalized Discovery — flags when this pick resembles the
+            # user's own REALIZED winning entries (personalized_discovery.
+            # score_candidate_match(), computed at brief-build time in
+            # daily_briefing._grow_today() as pick["personalized_match"]).
+            # Silence, never a warning, when it doesn't match — this pick
+            # already cleared every gate above; a non-match isn't itself a
+            # negative signal.
+            _gp_pm = _gp.get("personalized_match") or {}
+            if _gp_pm.get("n_matched", 0) >= PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS:
+                st.caption(
+                    f"🧬 Matches your historical winning profile "
+                    f"({', '.join(_gp_pm['matched_traits'])}). Awareness only — "
+                    f"doesn't change this recommendation."
+                )
 
             if _gp.get("sector_elevated_warning"):
                 st.caption(f"⚠️ {_gp['sector_elevated_warning']}")
@@ -26463,6 +26506,8 @@ Directional, sample-gated observations over your own Buy-side decisions (new_pic
 
 Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Below the three Buy-side cards, an **Exit Signal Response** section covers how you react to TRIM/EXIT/WATCH/RISK_OFF signals: response rate (how often a signal is followed by a SELL within a window), response lag (median days to act), and escalation-ignored (holding through a WATCH→TRIM/EXIT or TRIM→EXIT escalation without selling) — built from the `exit_signals` history persisted since 2026-07-18, forward-only from that date.
 
+At the top of this tab, a **🔭 Your Winning Entry Profile** card runs that same analysis FORWARD: what did a typical *realized winning* entry look like (composite score band, momentum score band, top sector), built from your closed round-trips matched back to the recommendation that triggered them. Requires the same 8-decision floor, reporting "not enough closed winning trades yet" below it. This profile feeds a same-day match badge — **🧬 Matches your historical winning profile** — on 🏠 Home's Grow Today picks, when a fresh pick shares at least 2 of the 3 traits with your own past winners. Silence (no badge), never a warning, when it doesn't match — a non-match isn't a negative signal on a pick that already cleared every other gate. **Diagnostic only — never re-ranks, re-scores, or gates a pick.**
+
 ---
 
 **🪞 Investor Mirror — "Does my allocation match my conviction? Do I sell rationally?"**
@@ -30375,6 +30420,58 @@ elif page == "🎯 My Edge":
         _bf_matched_actionable = [
             r for r in _bf_matched_all if r.get("rec_type") in ("new_pick", "add_winner")
         ]
+
+        # ── Personalized Discovery — your winning entry profile ─────────────
+        # Runs this tab's own backward-looking analysis FORWARD: what did a
+        # typical REALIZED winning entry look like, so Grow Today can flag
+        # today's picks that resemble it. Uses FULL recommendation history
+        # (not the 30-day default _bf_recs_df above — a closed lot's entry
+        # can be far older than 30 days) joined against build_closed_lots()'s
+        # realized round-trips. Zero new fetches.
+        with st.container(border=True):
+            st.markdown("**🔭 Your Winning Entry Profile**")
+            st.caption(
+                "What a typical REALIZED winning trade looked like at entry, built "
+                "from your closed round-trips matched back to the recommendation that "
+                "triggered them. Feeds a same-day match badge on 🏠 Home's Grow Today "
+                "picks — never re-scores, re-ranks, or gates anything."
+            )
+            from stock_analyzer.investor_mirror import build_closed_lots as _im_build_closed_lots
+            _pd_full_recs_df = db.load_recommendations(start_date=None, end_date=None)
+            _pd_full_matched = _bf_match(_pd_full_recs_df, _bf_trades_df)
+            _pd_closed_lots  = _im_build_closed_lots(_bf_trades_df)
+            # min_n=0 so this ALWAYS returns the real matched-entry count (n),
+            # even below the floor — the "have N" withhold message below must
+            # report the SAME count build_winner_profile itself gates on
+            # (matched, deduped, pnl_pct-valid winning entries), not a raw
+            # is_gain sum that could include fragments or missing-price rows.
+            _pd_profile = build_winner_profile(
+                _pd_closed_lots, _pd_full_matched, min_n=0,
+                pctl_low=PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW,
+                pctl_high=PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
+            )
+            _pd_n = _pd_profile["n"] if _pd_profile else 0
+            if _pd_n < BEHAVIORAL_MIN_SAMPLE_N:
+                st.info(
+                    f"Not enough closed winning trades matched back to a recommendation "
+                    f"yet — need ≥{BEHAVIORAL_MIN_SAMPLE_N}, have {_pd_n}. This will "
+                    "populate as more of your trades trace back to a Grow Today pick."
+                )
+            else:
+                _pd_c1, _pd_c2, _pd_c3 = st.columns(3)
+                if _pd_profile["composite_low"] is not None:
+                    _pd_c1.metric(
+                        "Composite band",
+                        f"{_pd_profile['composite_low']:.0f}–{_pd_profile['composite_high']:.0f}",
+                    )
+                if _pd_profile["momentum_low"] is not None:
+                    _pd_c2.metric(
+                        "Momentum band",
+                        f"{_pd_profile['momentum_low']:.0f}–{_pd_profile['momentum_high']:.0f}",
+                    )
+                if _pd_profile["top_sectors"]:
+                    _pd_c3.metric("Top sector(s)", ", ".join(sorted(_pd_profile["top_sectors"])))
+                st.caption(f"Based on {_pd_profile['n']} matched winning entries.")
 
         # ── Pattern 1 — momentum / recency-chasing ──────────────────────────
         with st.container(border=True):

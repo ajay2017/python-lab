@@ -1099,3 +1099,21 @@ MC_HORIZON_DEFAULT_DAYS = 63    # default horizon selection
 QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS = 5     # trading days after surfacing to check price outcome, when the question doesn't specify one
 QA_MAX_RANGE_DAYS                   = 365   # widest date range a "trades in range" question may query, so an open-ended range can't fan out into an unbounded price-history fetch
 QA_REC_OUTCOME_WIDE_FETCH_DAYS      = 330   # rec age (calendar days) past which the price-history fetch widens from 1y to 2y, so an old recommendation gets an honest outcome instead of misreporting "not enough forward history" when the real cause was a too-short fetch window
+
+# ── Personalized Discovery (personalized_discovery.py, Grow Today + Behavioral
+# Fingerprint) ────────────────────────────────────────────────────────────────
+# Runs Behavioral Fingerprint's (F-193) backward-looking analysis FORWARD:
+# builds a "winner profile" from the user's own REALIZED winning trades
+# (build_closed_lots(), is_gain=True, joined to a matched acted-on new_pick/
+# add_winner recommendation at entry) and flags which of today's already-
+# gated Grow Today picks resemble it. Zero new fetches — entirely a replay of
+# already-loaded trades/recommendations. AWARENESS/DIAGNOSTIC ONLY: never
+# changes which tickers clear the 5-gate _grow_today() pipeline, never
+# re-scores or re-ranks a pick, never suppresses a non-matching one. Reuses
+# the EXISTING BEHAVIORAL_MIN_SAMPLE_N (above) for the min-sample withhold
+# floor rather than a parallel constant — same module family, same sample-size
+# philosophy. These are new policy/method thresholds proposed alongside the
+# feature — confirm before tuning, same as any other value in this file.
+PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS   = 2    # of 3 traits (composite band / momentum band / top sector) that must match before the "matches your winning profile" caption renders on a Grow Today pick
+PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW   = 25   # lower percentile of past winners' composite/momentum scores defining the "typical winner" band
+PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH  = 75   # upper percentile of the same band

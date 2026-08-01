@@ -75,6 +75,7 @@ from stock_analyzer.portfolio import resolve_sector
 from stock_analyzer import exit_advisor
 from stock_analyzer import decision_bucket
 from stock_analyzer.predictive_analytics import divergence_at_entry
+from stock_analyzer.personalized_discovery import score_candidate_match
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -475,7 +476,8 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 earnings_lookup: dict | None = None,
                 macro_events: list | None = None,
                 movers: list | None = None,
-                deterioration: list | None = None) -> dict:
+                deterioration: list | None = None,
+                winner_profile: dict | None = None) -> dict:
     """
     Build growth-oriented action list calibrated to today's market tone.
 
@@ -503,6 +505,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                  entry-price-agnostic, which is why this is the principled add
                  gate. (Changed 2026-07-21; was annotate-only, which read as
                  "add more to a name I'm telling you is weakening" — the FSLR case.)
+    winner_profile : output of personalized_discovery.build_winner_profile() — the
+                 composite/momentum band + top sectors of the user's own REALIZED
+                 winning entries. None when there isn't enough history yet (never
+                 fabricated at low N). Attached to new_picks ONLY (not
+                 add_positions — an add-to-winner is a call already made once, not
+                 a fresh entry decision) as pick["personalized_match"]. Diagnostic
+                 annotation only, same as "divergence" above — never gates,
+                 re-scores, or re-ranks; the pick has already cleared every gate.
     """
     tone        = market_context.get("tone", "flat")
     sp500_pct   = _f(market_context.get("sp500_pct", 0))
@@ -946,6 +956,17 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _movers_added += 1
             if _movers_added >= MOVER_MAX_PICKS:
                 break
+
+        # Personalized Discovery — flag which of TODAY's already-gated new_picks
+        # resemble the user's own REALIZED winning entries. new_picks ONLY (not
+        # add_positions below — an add-to-winner is a call already made once,
+        # not a fresh entry decision). None-safe: score_candidate_match() returns
+        # an empty match when winner_profile is None (not enough history yet).
+        for _pick in new_picks:
+            _pick["personalized_match"] = score_candidate_match(
+                _pick.get("composite_score"), _pick.get("score"),
+                _pick.get("sector"), winner_profile,
+            )
 
     # Add-to-winner: held Strong Buy, Score ≥ COMPOSITE_BUY (65), Gap ≥ 8%
     # — only on bull days. Composite bar aligned with new-pick threshold
@@ -2282,6 +2303,7 @@ def build_daily_briefing(
     fragility:       dict | None = None,
     spy_trend_df:    object | None = None,
     vix_level:       float | None = None,
+    winner_profile:  dict | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -2289,6 +2311,8 @@ def build_daily_briefing(
     grow_composites: optional dict {ticker: load_all() result} pre-fetched for top
                      scanner picks so _grow_today can validate conviction using the
                      full composite score, not just the momentum scanner score.
+    winner_profile:  optional personalized_discovery.build_winner_profile() output,
+                     passed straight through to _grow_today (see its own docstring).
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -2346,7 +2370,8 @@ def build_daily_briefing(
                          risk_recs=risk_recs,
                          earnings_lookup=earnings_lookup, macro_events=macro_events,
                          deterioration=deterioration,
-                         movers=movers)
+                         movers=movers,
+                         winner_profile=winner_profile)
     tuneup = _portfolio_tuneup(risk_recs)
     return {"act_today": act, "buy_candidates": buys, "review_list": review,
             "grow_today": grow, "portfolio_tuneup": tuneup}

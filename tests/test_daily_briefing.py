@@ -340,6 +340,68 @@ def test_grow_today_add_position_included_when_no_brief_conflict():
     assert find_item(grow["add_positions"], "AAA") is not None
 
 
+# ── _grow_today: Personalized Discovery annotation ───────────────────────────
+
+_WINNER_PROFILE = {
+    "composite_low": 60.0, "composite_high": 90.0,
+    "momentum_low": 60.0, "momentum_high": 90.0,
+    "top_sectors": {"Healthcare"}, "n": 10,
+}
+
+
+def test_grow_today_new_pick_gets_personalized_match_when_traits_align():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 70.0, "sector": "Healthcare"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, winner_profile=_WINNER_PROFILE)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert set(pick["personalized_match"]["matched_traits"]) == {"composite tier", "momentum", "sector"}
+    assert pick["personalized_match"]["n_matched"] == 3
+
+
+def test_grow_today_new_pick_personalized_match_empty_when_no_traits_align():
+    # score=95 clears the momentum pre-filter (>= COMPOSITE_BUY) but sits
+    # ABOVE the winner profile's momentum band (60-90); composite=95 likewise
+    # sits above the composite band; sector is outside top_sectors.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 95.0, "sector": "Energy"}])
+    composites = {"NEW": {"total": 95.0, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites, winner_profile=_WINNER_PROFILE)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["personalized_match"] == {"matched_traits": [], "n_matched": 0}
+
+
+def test_grow_today_new_pick_personalized_match_empty_when_profile_is_none():
+    # Default (no winner_profile passed) — not enough history yet, must be
+    # honest empty match, never a crash or a fabricated match. A composites
+    # entry is required here so the pick clears the composite-fetch gate
+    # (a None composite_score holds the pick out of new_picks entirely,
+    # unrelated to Personalized Discovery).
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": 70.0, "sector": "Healthcare"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       composites=composites)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["personalized_match"] == {"matched_traits": [], "n_matched": 0}
+
+
+def test_grow_today_add_position_never_gets_personalized_match():
+    # Scope: new entries only, per F-220-Phase-2 precedent -- an add-to-winner
+    # is a call already made once, not a fresh entry decision.
+    port_df = make_port_df([_winner_row()])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, {"tone": "bull"},
+                       winner_profile=_WINNER_PROFILE)
+    pick = find_item(grow["add_positions"], "AAA")
+    assert pick is not None
+    assert "personalized_match" not in pick
+
+
 # ── Review Before Close: weak-large position flag ────────────────────────────
 
 def test_weak_large_flag_fires_on_overweight_plus_weak_score():
