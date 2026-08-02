@@ -27,6 +27,8 @@ from stock_analyzer.constants import (
     LLM_REQUEST_TIMEOUT_SEC,
     QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS,
     QA_MAX_RANGE_DAYS,
+    QA_HISTORY_TURNS,
+    QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS,
 )
 
 _MODEL = "claude-haiku-4-5-20251001"
@@ -98,12 +100,40 @@ _PARSE_SYSTEM_PROMPT_TEMPLATE = (
 )
 
 
-def build_parse_prompt(today_et) -> str:
-    """today_et: a date/str already resolved by the caller (app.py's _today_et())."""
+def _format_history_block(history) -> str:
+    """history: list of {"question": str, "answer": str} pairs, most-recent
+    last (app.py assembles this from its own richer chat-turn objects — this
+    function stays Streamlit-free). Returns a bounded conversation-context
+    block for the parse prompt, or "" when there's no history (first
+    question, or the caller doesn't pass any)."""
+    if not history:
+        return ""
+    turns = list(history)[-QA_HISTORY_TURNS:]
+    lines = [
+        "\nConversation so far (most recent last) — use this ONLY to resolve "
+        "references like \"what about X instead\" or \"and the week before "
+        "that\"; still extract a fresh, complete structured query for the NEW "
+        "question below (do not just repeat the prior one's fields):"
+    ]
+    for turn in turns:
+        q = str(turn.get("question", "")).strip()[:200]
+        a = str(turn.get("answer", "")).strip()[:300]
+        lines.append(f"Q: {q}\nA: {a}")
+    return "\n".join(lines) + "\n"
+
+
+def build_parse_prompt(today_et, history=None) -> str:
+    """today_et: a date/str already resolved by the caller (app.py's _today_et()).
+    history: optional list of prior {"question","answer"} pairs (most-recent
+    last) so a referential follow-up question can be resolved — see
+    _format_history_block. Narration (narrate_answer) never receives history;
+    only parsing does — multi-turn context helps interpret what's being
+    asked, never what's true."""
     today_str = today_et.isoformat() if hasattr(today_et, "isoformat") else str(today_et)[:10]
     # .replace(), not .format() — the template's JSON example is full of
     # literal { } that .format() would misparse as fields.
-    return _PARSE_SYSTEM_PROMPT_TEMPLATE.replace("{today}", today_str)
+    prompt = _PARSE_SYSTEM_PROMPT_TEMPLATE.replace("{today}", today_str)
+    return prompt + _format_history_block(history)
 
 
 def _extract_json_object(s: str) -> str | None:
@@ -212,13 +242,16 @@ def parse_parsed_query(text) -> dict | None:
 LAST_PARSE_ERROR: str | None = None
 
 
-def parse_question(question: str, api_key: str, today_et,
+def parse_question(question: str, api_key: str, today_et, history=None,
                     model: str = _MODEL, max_tokens: int = 300) -> dict | None:
     """Returns the validated structured query dict, or None on ANY failure
     (no key, API error, malformed response). Fail-open — never raises.
     On None, LAST_PARSE_ERROR carries the real reason (mirrors
     analyst_intel.LAST_EXTRACT_ERROR) so the caller can show a "Details:"
-    caption instead of a mute failure."""
+    caption instead of a mute failure.
+
+    history: optional list of prior {"question","answer"} pairs (most-recent
+    last) for multi-turn follow-up resolution — see build_parse_prompt."""
     global LAST_PARSE_ERROR
     LAST_PARSE_ERROR = None
     if not api_key or not question or not str(question).strip():
@@ -231,7 +264,7 @@ def parse_question(question: str, api_key: str, today_et,
             model=model,
             max_tokens=max_tokens,
             temperature=0,
-            system=build_parse_prompt(today_et),
+            system=build_parse_prompt(today_et, history),
             messages=[{"role": "user", "content": str(question).strip()}],
             timeout=LLM_REQUEST_TIMEOUT_SEC,
         )
@@ -247,6 +280,22 @@ def parse_question(question: str, api_key: str, today_et,
 
 # ─── Step 2: deterministic queries (zero LLM) ───────────────────────────────
 
+def _trade_reasoning(r) -> str | None:
+    """Combine whichever of a trade row's user_thesis/notes/lesson fields are
+    actually populated into one short line, or None when nothing was
+    recorded — most trades have none of these filled in, and surfacing
+    "not recorded" for every field on every trade would bury the answer in
+    noise rather than help it."""
+    parts = []
+    for label, key in (("thesis", "user_thesis"), ("note", "notes"), ("lesson", "lesson")):
+        v = r.get(key)
+        if v is not None and str(v).strip():
+            parts.append(f"{label}: {str(v).strip()}")
+    if not parts:
+        return None
+    return "; ".join(parts)[:160]
+
+
 def _row_outcome(r, current_prices: dict) -> dict:
     """Per-trade gain/loss for one trades_df row. Shared by trades_in_range
     and trades_for_ticker so both surfaces use identical P&L logic.
@@ -260,7 +309,10 @@ def _row_outcome(r, current_prices: dict) -> dict:
     matching SELL row instead.
 
     Returns {"ticker", "action", "shares", "price", "traded_at",
-    "pnl": float|None, "pnl_label": "realized"|"unrealized"|"position_closed"|"unknown"}.
+    "pnl": float|None, "pnl_label": "realized"|"unrealized"|"position_closed"|"unknown",
+    "reasoning": str|None} — reasoning is whichever of the trade's own
+    recorded user_thesis/notes/lesson fields are non-empty, joined into one
+    short line, or None when nothing was recorded (most trades).
     """
     ticker = str(r.get("ticker", "")).upper()
     action = str(r.get("action", "")).upper()
@@ -270,6 +322,7 @@ def _row_outcome(r, current_prices: dict) -> dict:
         "ticker": ticker, "action": action, "shares": shares, "price": price,
         "traded_at": str(r.get("traded_at"))[:10],
         "pnl": None, "pnl_label": "unknown",
+        "reasoning": _trade_reasoning(r),
     }
     if action == "SELL":
         rp = r.get("realized_pnl")
@@ -357,6 +410,8 @@ def format_trades_table(facts: list[dict]) -> pd.DataFrame:
     if df.empty:
         return df
     df["pnl_label"] = df["pnl_label"].map(lambda v: _PNL_LABEL_DISPLAY.get(v, v))
+    if "reasoning" in df.columns:
+        df["reasoning"] = df["reasoning"].fillna("—")
     return df.rename(columns={
         "ticker":     "Ticker",
         "action":     "Action",
@@ -365,11 +420,42 @@ def format_trades_table(facts: list[dict]) -> pd.DataFrame:
         "traded_at":  "Date",
         "pnl":        "Gain/Loss ($)",
         "pnl_label":  "Status",
+        "reasoning":  "Notes",
     })
 
 
+def _find_buy_trade_for_rec(trades_df, ticker: str, rec_date, window_days: int) -> dict | None:
+    """Find the BUY trade a recommendation was most plausibly acted on by:
+    same ticker, action == BUY, traded_at within [rec_date, rec_date +
+    window_days] inclusive. Returns the full raw trade row as a dict (unlike
+    recommendations_history.match_recs_to_trades()'s narrow projection) so
+    notes/user_thesis/lesson/premortem fields are available — or None if no
+    BUY falls in that window. Never guesses further out or across tickers;
+    when multiple BUYs fall in the window, returns the earliest (the one
+    closest to the recommendation itself)."""
+    ticker = str(ticker).upper().strip()
+    if trades_df is None or trades_df.empty or not ticker:
+        return None
+
+    df = _real_trades(trades_df)
+    df = df[(df["ticker"].astype(str).str.upper() == ticker) & (df["action"].astype(str).str.upper() == "BUY")]
+    if df.empty:
+        return None
+
+    try:
+        rd_ts = pd.Timestamp(str(rec_date)[:10], tz="UTC")
+    except Exception:
+        return None
+    window_end = rd_ts + pd.Timedelta(days=window_days) + pd.Timedelta(days=1)
+    df = df[(df["traded_at"] >= rd_ts) & (df["traded_at"] < window_end)]
+    if df.empty:
+        return None
+
+    return df.sort_values("traded_at").iloc[0].to_dict()
+
+
 def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None,
-                            horizon_days: int | None = None) -> dict:
+                            horizon_days: int | None = None, trades_df=None) -> dict:
     """
     Look up the recommendation surfaced for `ticker` on `rec_date` (exact-date
     match — no "nearest recommendation" guessing) and, if given a price
@@ -380,6 +466,14 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
     rec_date (pure function — no DB access here).
     price_history_df: caller-fetched via data.fetch_price_history(ticker, ...)
     with enough forward history past rec_date to cover horizon_days.
+    trades_df: optional, caller-loaded via db.load_trades()/session cache. When
+    given, looks up the BUY trade this recommendation was plausibly acted on by
+    (see _find_buy_trade_for_rec) and adds "acted_on" (bool) plus whatever of
+    that trade's user_thesis/notes/lesson/premortem_case_against/
+    premortem_commitment were actually recorded — None for anything absent,
+    and None for all of these (not False) when trades_df isn't supplied at
+    all, so the caller/narration can tell "not checked" apart from "checked,
+    nothing found."
 
     Returns {"found": False, "reason": str} when no matching recommendation
     exists — never guesses. On a match, t_score/bq_score/val_score are None
@@ -416,7 +510,32 @@ def recommendation_outcome(ticker: str, rec_date, recs_df, price_history_df=None
         "horizon_days": horizon_days,
         "price_at_horizon": None,
         "pct_move": None,
+        # Pre-Mortem cross-reference (item 3, "complete the circle") — None
+        # for all of these when trades_df isn't supplied at all, so "not
+        # checked" is distinguishable from "checked, no matching trade."
+        "acted_on": None,
+        "trade_notes": None,
+        "trade_lesson": None,
+        "user_thesis": None,
+        "premortem_case_against": None,
+        "premortem_commitment": None,
     }
+
+    if trades_df is not None:
+        buy_trade = _find_buy_trade_for_rec(trades_df, ticker, rd_str, QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS)
+        result["acted_on"] = buy_trade is not None
+        if buy_trade is not None:
+            def _nonempty(v):
+                return str(v).strip() or None if v is not None else None
+            result["trade_notes"] = _nonempty(buy_trade.get("notes"))
+            result["trade_lesson"] = _nonempty(buy_trade.get("lesson"))
+            result["user_thesis"] = _nonempty(buy_trade.get("user_thesis"))
+            # jsonb -> native list via the Supabase client; a str form would
+            # mean the column was never populated in that shape and is
+            # intentionally ignored here, not a bug in this guard.
+            pca = buy_trade.get("premortem_case_against")
+            result["premortem_case_against"] = pca if isinstance(pca, list) and pca else None
+            result["premortem_commitment"] = _nonempty(buy_trade.get("premortem_commitment"))
 
     if price_history_df is None or price_history_df.empty or "Close" not in price_history_df.columns:
         return result
@@ -453,7 +572,12 @@ _NARRATE_SYSTEM_PROMPT = (
     "(especially a pillar sub-score), say plainly that it wasn't recorded "
     "rather than guessing why. Do not recommend any future action and do "
     "not restate a threshold — just explain what already happened. Keep it "
-    "to 2-4 short sentences."
+    "to 2-4 short sentences.\n\n"
+    "If a Pre-Mortem risk case or exit commitment is present in the facts, "
+    "assess RETROSPECTIVELY whether the actual price/outcome data shows it "
+    "materializing — say 'unclear' if the facts don't clearly show it either "
+    "way. This is a read of what already happened, never a recommendation or "
+    "forward-looking call — do not suggest any future action here either."
 )
 
 
@@ -461,10 +585,13 @@ def _trade_list_lines(header: str, facts: list[dict]) -> str:
     lines = [header]
     for t in facts:
         pnl = f"{t['pnl']:+.2f}" if t.get("pnl") is not None else "n/a"
-        lines.append(
+        line = (
             f"- {t['traded_at']}: {t['action']} {t['shares']:g} {t['ticker']} "
             f"@ ${t['price']:.2f} — P&L {pnl} ({t['pnl_label']})"
         )
+        if t.get("reasoning"):
+            line += f" — {t['reasoning']}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -502,6 +629,20 @@ def facts_to_text(intent: str, facts) -> str:
             )
         else:
             lines.append("Not enough forward price history yet to compute the outcome move.")
+
+        if facts.get("acted_on") is True:
+            if facts.get("user_thesis"):
+                lines.append(f"User's thesis recorded at purchase: {facts['user_thesis']}")
+            if facts.get("premortem_case_against"):
+                for c in facts["premortem_case_against"]:
+                    lines.append(f"Pre-Mortem risk case ({c.get('angle')}): {c.get('argument')}")
+            if facts.get("premortem_commitment"):
+                lines.append(f"Stated exit commitment if wrong: {facts['premortem_commitment']}")
+            if facts.get("trade_lesson"):
+                lines.append(f"Lesson recorded on this trade: {facts['trade_lesson']}")
+        elif facts.get("acted_on") is False:
+            lines.append("No matching BUY trade on record for this recommendation — it doesn't look like it was acted on.")
+
         return "\n".join(lines)
 
     return "Unsupported question."

@@ -236,3 +236,89 @@ One-line fix (`format="ISO8601"` added to the one `pd.to_datetime` call in
 **Lesson: any new module that parses `trades_df.traded_at` with `pd.to_datetime`
 needs `format="ISO8601"` — this is now the second place in the codebase that
 needed it, after `app.py`'s Trade History table.**
+
+---
+
+## v2 — "Complete the circle": reasoning, multi-turn, Pre-Mortem cross-reference (2026-08-02)
+
+After v1.1–v1.4 shipped and the user confirmed the feature was working well,
+three more ideas from the same brainstorm were approved to "complete the
+circle." A fourth idea (a forward-looking "what's the current call on X"
+intent) was explicitly considered and declined — see the **Parked** section
+below; nothing was built for it.
+
+**1. Reasoning surfacing.** `_row_outcome()` (shared by `trades_in_range()`
+and `trades_for_ticker()`) now reads a trade row's `user_thesis`/`notes`/
+`lesson` fields, joins whichever are non-empty into one short `reasoning`
+line (`None` when nothing was recorded — most trades), and `_trade_list_lines()`
+appends it inline. `format_trades_table()` renames it to a "Notes" column
+(`"—"` when absent), keeping the same "never leak raw dict keys to the user"
+discipline `format_trades_table` already had from v1.3.
+
+**2. Multi-turn conversation.** The Ask tab is now built with
+`st.chat_message`/`st.chat_input` — the first use of this Streamlit pattern
+anywhere in the app — backed by `st.session_state["_qa_history"]` (a list of
+round dicts: question, answer, intent, facts, plus whatever caption/error
+state a round needs to re-render identically from history). A single render
+function (`_qa_render_round`) draws both historical and just-answered turns,
+avoiding a second, divergent rendering path. `parse_question()` and
+`build_parse_prompt()` gained an optional `history` param — a bounded list of
+`{"question","answer"}` pairs (last `QA_HISTORY_TURNS` = 3), assembled by the
+caller from its own richer turn objects so the pure-function signature stays
+Streamlit-free. **`narrate_answer()` deliberately still receives no
+history** — conversation context only helps the parser resolve *what's being
+asked* (e.g. "what about MSFT instead?"); it must never change *what's true*
+in an answer, which stays scoped to the current query's facts alone.
+
+**3. Pre-Mortem cross-reference on `rec_outcome`.** New
+`_find_buy_trade_for_rec(trades_df, ticker, rec_date, window_days)` finds the
+BUY trade a recommendation was plausibly acted on by — same ticker, action
+BUY, `traded_at` within `[rec_date, rec_date + QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS]`
+(earliest match if several) — returning the **full raw trade row**, unlike
+`recommendations_history.match_recs_to_trades()`'s narrow same-day-only
+projection (confirmed via research: that function isn't reusable here without
+losing the premortem/notes fields). `recommendation_outcome()` gained an
+optional `trades_df` param that merges in a **tri-state** `acted_on` (`None`
+= trades_df not supplied/not checked, `False` = checked, no matching BUY,
+`True` = found) plus the matched trade's `user_thesis`, `trade_notes`,
+`trade_lesson`, `premortem_case_against` (list of `{"angle","argument"}` —
+confirmed via research to be a *different* shape from `thesis_red_team.py`'s
+`{"claim","severity","signal_basis"}`, not to be conflated), and
+`premortem_commitment`. `facts_to_text()`'s `rec_outcome` branch narrates
+these when present, and `_NARRATE_SYSTEM_PROMPT` gained one added instruction:
+assess *retrospectively* whether the stated risk case/commitment materialized
+("say 'unclear' if the facts don't clearly show it either way... never
+suggest any future action") — the concrete, in-prompt enforcement of the
+redline decision below.
+
+**New constants:** `QA_HISTORY_TURNS` (3), `QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS`
+(3) — both touch `constants.py`, so hard rule #4 applies (Opus review cited
+in the shipping commit, same as v1).
+
+**Tests:** 61 → 84 (23 new), covering reasoning inclusion/omission, the
+bounded history block in `build_parse_prompt` (including that history is
+actually sent in the system prompt via a capturing fake client), and
+`_find_buy_trade_for_rec`/`recommendation_outcome` across all three
+`acted_on` states plus the earliest-of-multiple-BUYs and outside-window
+cases. Full suite 3072 passing; `check_constants_documented.py` PASS.
+
+### Parked — forward-looking "current status" intent (NOT built)
+
+A fourth brainstormed idea — a `current_status` intent letting the Ask tab
+narrate the engine's *already-decided* live state for a ticker (composite
+tier, active WATCH/TRIM/EXIT, an active reduce call) — was explicitly
+discussed and **declined for this pass**: "let's keep the redline intact and
+not jump over it." Recorded here only as a provision so the idea isn't lost.
+
+If ever picked up, the safe version is narration-only of state the engine has
+already published (`_reduce_calls`, `exit_signals`' deterioration tier,
+existing composite/pillar scores) — never a newly-computed verdict or an
+action the engine hasn't already surfaced. This is a materially different
+trust boundary from items 1–3 above (those narrate *history*; this would
+narrate *live current state*), so it needs its own explicit go-ahead and its
+own Opus design review before any code is written. **Do not build this from
+this doc alone — treat it as requiring a fresh, explicit approval, not an
+implied one just because it's documented here.** Trigger to revisit: an
+explicit user re-ask, not a data/engineering milestone (a pure policy call,
+unlike this app's other "parked" items which mostly wait on data volume or
+observation windows).

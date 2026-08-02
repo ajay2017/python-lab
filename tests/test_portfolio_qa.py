@@ -233,6 +233,40 @@ def test_build_parse_prompt_embeds_today():
     assert "2026-08-01" in prompt
 
 
+# ─── build_parse_prompt — multi-turn history (item 2, complete the circle) ──
+
+def test_build_parse_prompt_no_history_has_no_conversation_block():
+    prompt = build_parse_prompt("2026-08-01", history=None)
+    assert "Conversation so far" not in prompt
+
+
+def test_build_parse_prompt_empty_history_has_no_conversation_block():
+    prompt = build_parse_prompt("2026-08-01", history=[])
+    assert "Conversation so far" not in prompt
+
+
+def test_build_parse_prompt_with_history_includes_conversation_block():
+    history = [{"question": "what was my trade on AAPL?", "answer": "You bought 10 shares at $200."}]
+    prompt = build_parse_prompt("2026-08-01", history=history)
+    assert "Conversation so far" in prompt
+    assert "what was my trade on AAPL?" in prompt
+    assert "You bought 10 shares" in prompt
+
+
+def test_build_parse_prompt_history_bounded_to_qa_history_turns():
+    from stock_analyzer.constants import QA_HISTORY_TURNS
+    history = [
+        {"question": f"question {i}", "answer": f"answer {i}"}
+        for i in range(QA_HISTORY_TURNS + 2)
+    ]
+    prompt = build_parse_prompt("2026-08-01", history=history)
+    # oldest entries fall outside the window and must not appear
+    assert "question 0" not in prompt
+    assert "question 1" not in prompt
+    # most recent entry must be present
+    assert f"question {QA_HISTORY_TURNS + 1}" in prompt
+
+
 def test_parse_parsed_query_range_within_max_not_clamped():
     raw = json.dumps({
         "intent": "trades_in_range", "ticker": None,
@@ -409,6 +443,71 @@ def test_trades_for_ticker_excludes_split_rows():
     assert result[0]["action"] == "BUY"
 
 
+# ─── reasoning surfacing (item 1, complete the circle) ──────────────────────
+# _row_outcome (shared by trades_in_range/trades_for_ticker) now also reports
+# whichever of a trade's own recorded user_thesis/notes/lesson fields are
+# non-empty, joined into one short "reasoning" line — None when nothing was
+# recorded, which is most trades.
+
+def test_trades_in_range_reasoning_none_when_nothing_recorded():
+    df = _trades_df([{
+        "ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+        "realized_pnl": None, "traded_at": "2026-07-15T10:00:00Z",
+    }])
+    result = trades_in_range(df, "2026-07-01", "2026-07-31")
+    assert result[0]["reasoning"] is None
+
+
+def test_trades_in_range_reasoning_surfaces_user_thesis():
+    df = _trades_df([{
+        "ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+        "realized_pnl": None, "traded_at": "2026-07-15T10:00:00Z",
+        "user_thesis": "Breaking out above 200-day MA on strong volume.",
+    }])
+    result = trades_in_range(df, "2026-07-01", "2026-07-31")
+    assert "Breaking out above 200-day MA" in result[0]["reasoning"]
+
+
+def test_trades_for_ticker_reasoning_combines_thesis_notes_lesson():
+    df = _trades_df([{
+        "ticker": "CRWD", "action": "SELL", "shares": 5, "price": 209.0,
+        "realized_pnl": 97.5, "traded_at": "2026-07-14T18:56:00+00:00",
+        "user_thesis": "entry thesis", "notes": "sold on earnings pop",
+        "lesson": "should have held longer",
+    }])
+    result = trades_for_ticker(df, "CRWD")
+    reasoning = result[0]["reasoning"]
+    assert "thesis: entry thesis" in reasoning
+    assert "note: sold on earnings pop" in reasoning
+    assert "lesson: should have held longer" in reasoning
+
+
+def test_trades_for_ticker_reasoning_ignores_blank_fields():
+    df = _trades_df([{
+        "ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+        "realized_pnl": None, "traded_at": "2026-07-15T10:00:00Z",
+        "user_thesis": "   ", "notes": None, "lesson": "",
+    }])
+    result = trades_for_ticker(df, "AAPL")
+    assert result[0]["reasoning"] is None
+
+
+def test_facts_to_text_trade_lookup_includes_reasoning_inline():
+    facts = [{"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+              "traded_at": "2026-07-15", "pnl": None, "pnl_label": "unknown",
+              "reasoning": "thesis: breaking out"}]
+    text = facts_to_text("trade_lookup", facts)
+    assert "thesis: breaking out" in text
+
+
+def test_facts_to_text_trade_lookup_no_reasoning_line_when_none():
+    facts = [{"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+              "traded_at": "2026-07-15", "pnl": None, "pnl_label": "unknown",
+              "reasoning": None}]
+    text = facts_to_text("trade_lookup", facts)
+    assert text.count(" — ") == 1  # only the P&L-label separator, no reasoning suffix
+
+
 # ─── format_trades_table — business-language display, not raw dict keys ────
 
 def test_format_trades_table_empty_list_returns_empty_df():
@@ -426,6 +525,24 @@ def test_format_trades_table_renames_columns_to_business_language():
     assert "pnl" not in result.columns
     assert "pnl_label" not in result.columns
     assert "traded_at" not in result.columns
+
+
+def test_format_trades_table_renames_reasoning_to_notes():
+    facts = [{"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+              "traded_at": "2026-07-15", "pnl": None, "pnl_label": "unknown",
+              "reasoning": "thesis: breaking out"}]
+    result = format_trades_table(facts)
+    assert "Notes" in result.columns
+    assert "reasoning" not in result.columns
+    assert result["Notes"].iloc[0] == "thesis: breaking out"
+
+
+def test_format_trades_table_reasoning_none_displays_as_dash():
+    facts = [{"ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+              "traded_at": "2026-07-15", "pnl": None, "pnl_label": "unknown",
+              "reasoning": None}]
+    result = format_trades_table(facts)
+    assert result["Notes"].iloc[0] == "—"
 
 
 def test_format_trades_table_relabels_status_values():
@@ -516,6 +633,94 @@ def test_recommendation_outcome_not_enough_forward_history_leaves_move_none():
     assert result["pct_move"] is None
 
 
+# ─── recommendation_outcome — Pre-Mortem cross-reference (item 3, complete
+# the circle) ─────────────────────────────────────────────────────────────
+# Retrospective-only: narrate what the recorded Pre-Mortem case-against/exit
+# commitment said, and what actually happened — never a new recommendation.
+
+def test_recommendation_outcome_without_trades_df_leaves_premortem_none():
+    # trades_df omitted entirely (default) -> "not checked", distinct from
+    # "checked, nothing found" (acted_on False).
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs)
+    assert result["acted_on"] is None
+    assert result["premortem_case_against"] is None
+    assert result["premortem_commitment"] is None
+
+
+def test_recommendation_outcome_no_matching_buy_sets_acted_on_false():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    trades = _trades_df([{
+        "ticker": "AAPL", "action": "SELL", "shares": 5, "price": 210.0,
+        "realized_pnl": 50.0, "traded_at": "2025-01-01T10:00:00Z",  # not a BUY, and far outside window
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, trades_df=trades)
+    assert result["acted_on"] is False
+    assert result["premortem_case_against"] is None
+
+
+def test_recommendation_outcome_finds_buy_and_surfaces_premortem():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    trades = _trades_df([{
+        "ticker": "AAPL", "action": "BUY", "shares": 10, "price": 201.0,
+        "realized_pnl": None, "traded_at": "2026-07-21T10:00:00Z",
+        "user_thesis": "breakout above resistance", "notes": None, "lesson": None,
+        "premortem_case_against": [
+            {"angle": "macro", "argument": "rate-cut delay could hit growth names"},
+        ],
+        "premortem_commitment": "exit if it closes below $190",
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, trades_df=trades)
+    assert result["acted_on"] is True
+    assert result["user_thesis"] == "breakout above resistance"
+    assert result["premortem_case_against"] == [
+        {"angle": "macro", "argument": "rate-cut delay could hit growth names"}
+    ]
+    assert result["premortem_commitment"] == "exit if it closes below $190"
+
+
+def test_recommendation_outcome_buy_outside_window_not_matched():
+    from stock_analyzer.constants import QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    late = pd.Timestamp("2026-07-20") + pd.Timedelta(days=QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS + 5)
+    trades = _trades_df([{
+        "ticker": "AAPL", "action": "BUY", "shares": 10, "price": 205.0,
+        "realized_pnl": None, "traded_at": late.isoformat() + "Z",
+        "premortem_case_against": None, "premortem_commitment": None,
+    }])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, trades_df=trades)
+    assert result["acted_on"] is False
+
+
+def test_recommendation_outcome_multiple_buys_picks_earliest_in_window():
+    recs = _recs_df([{
+        "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "price_at_surface": 200.0,
+    }])
+    trades = _trades_df([
+        {"ticker": "AAPL", "action": "BUY", "shares": 5, "price": 202.0,
+         "realized_pnl": None, "traded_at": "2026-07-22T10:00:00Z",
+         "premortem_commitment": "second buy commitment"},
+        {"ticker": "AAPL", "action": "BUY", "shares": 5, "price": 201.0,
+         "realized_pnl": None, "traded_at": "2026-07-21T10:00:00Z",
+         "premortem_commitment": "first buy commitment"},
+    ])
+    result = recommendation_outcome("AAPL", "2026-07-20", recs, trades_df=trades)
+    assert result["premortem_commitment"] == "first buy commitment"
+
+
 # ─── facts_to_text — the "never invent a value" discipline ──────────────────
 
 def test_facts_to_text_rec_outcome_states_missing_pillars_plainly():
@@ -533,6 +738,47 @@ def test_facts_to_text_rec_outcome_states_missing_pillars_plainly():
 def test_facts_to_text_rec_outcome_not_found_states_reason():
     text = facts_to_text("rec_outcome", {"found": False, "reason": "no recommendation on record for that ticker/date"})
     assert "no recommendation on record" in text
+
+
+def _rec_outcome_facts(**overrides):
+    base = {
+        "found": True, "ticker": "AAPL", "rec_date": "2026-07-20", "rec_type": "new_pick",
+        "composite_score": 75, "conviction": "high", "thesis": None,
+        "t_score": None, "bq_score": None, "val_score": None,
+        "price_at_surface": 200.0, "horizon_days": 5,
+        "price_at_horizon": None, "pct_move": None,
+        "acted_on": None, "trade_notes": None, "trade_lesson": None,
+        "user_thesis": None, "premortem_case_against": None, "premortem_commitment": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_facts_to_text_rec_outcome_not_acted_on_states_it_plainly():
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(acted_on=False))
+    assert "doesn't look like it was acted on" in text
+
+
+def test_facts_to_text_rec_outcome_not_checked_says_nothing_extra():
+    # acted_on is None (trades_df wasn't supplied) -> no acted-on line at all,
+    # not a false claim either way.
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(acted_on=None))
+    assert "acted on" not in text
+
+
+def test_facts_to_text_rec_outcome_includes_premortem_case_against():
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(
+        acted_on=True,
+        premortem_case_against=[{"angle": "macro", "argument": "rate-cut delay could hit growth names"}],
+    ))
+    assert "Pre-Mortem risk case (macro): rate-cut delay could hit growth names" in text
+
+
+def test_facts_to_text_rec_outcome_includes_exit_commitment():
+    text = facts_to_text("rec_outcome", _rec_outcome_facts(
+        acted_on=True, premortem_commitment="exit if it closes below $190",
+    ))
+    assert "exit if it closes below $190" in text
 
 
 def test_facts_to_text_trades_in_range_empty_says_no_trades():
@@ -648,3 +894,40 @@ def test_parse_question_real_exception_sets_last_parse_error_message():
     result = qa_mod.parse_question("how much did I lose on HOOD trade?", "fake-key", "2026-08-02")
     assert result is None
     assert "connection reset" in qa_mod.LAST_PARSE_ERROR
+
+
+# ─── parse_question — history passed through to the system prompt (item 2) ──
+
+def test_parse_question_sends_history_in_system_prompt():
+    captured = {}
+
+    class _CapturingMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeResponse(json.dumps({
+                "intent": "trade_lookup", "ticker": "MSFT",
+                "start_date": None, "end_date": None, "horizon_days": None,
+            }))
+
+    class _CapturingClient:
+        def __init__(self, **kwargs):
+            self.messages = _CapturingMessages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = lambda **kwargs: _CapturingClient()
+    sys.modules["anthropic"] = fake_mod
+
+    history = [{"question": "what was my trade on AAPL?", "answer": "You bought AAPL at $200."}]
+    result = parse_question("what about MSFT instead?", "fake-key", "2026-08-02", history)
+    assert result["ticker"] == "MSFT"
+    assert "Conversation so far" in captured["system"]
+    assert "what was my trade on AAPL?" in captured["system"]
+
+
+def test_parse_question_no_history_matches_prior_behavior():
+    _install_fake_anthropic(json.dumps({
+        "intent": "trade_lookup", "ticker": "HOOD",
+        "start_date": None, "end_date": None, "horizon_days": None,
+    }))
+    result = parse_question("how much did I lose on HOOD trade?", "fake-key", "2026-08-02")
+    assert result["ticker"] == "HOOD"

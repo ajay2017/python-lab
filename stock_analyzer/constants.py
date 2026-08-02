@@ -1099,6 +1099,8 @@ MC_HORIZON_DEFAULT_DAYS = 63    # default horizon selection
 QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS = 5     # trading days after surfacing to check price outcome, when the question doesn't specify one
 QA_MAX_RANGE_DAYS                   = 365   # widest date range a "trades in range" question may query, so an open-ended range can't fan out into an unbounded price-history fetch
 QA_REC_OUTCOME_WIDE_FETCH_DAYS      = 330   # rec age (calendar days) past which the price-history fetch widens from 1y to 2y, so an old recommendation gets an honest outcome instead of misreporting "not enough forward history" when the real cause was a too-short fetch window
+QA_HISTORY_TURNS                    = 3     # most-recent Q&A exchanges fed back into the parser as conversation context, so a referential follow-up ("what about MSFT?") can resolve — bounded to keep prompt size/cost predictable
+QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS = 3    # window (calendar days on/after a recommendation's surface date) to search for the BUY trade it was acted on by, for the Pre-Mortem cross-reference in rec_outcome answers — narrow and explicit rather than guessing across a wider span
 
 # ── Personalized Discovery (personalized_discovery.py, Grow Today + Behavioral
 # Fingerprint) ────────────────────────────────────────────────────────────────

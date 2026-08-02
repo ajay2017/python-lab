@@ -26297,7 +26297,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
-- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can type a question about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; anything outside those two question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
+- **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). Anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )
 
@@ -29011,9 +29011,16 @@ elif page == "🧠 AI Insights":
     with _ai_tab_ask:
         # ── Portfolio Q&A ─────────────────────────────────────────────────────
         # Retrospective Q&A over trade history + past recommendations — NOT a
-        # live session_state reader. Two supported question shapes only (v1);
-        # anything else is told plainly it's unsupported rather than guessed
-        # at. See docs/plans/portfolio-qa.md.
+        # live session_state reader. Three supported question shapes; anything
+        # else is told plainly it's unsupported rather than guessed at.
+        # Conversational (chat_message/chat_input) so a follow-up question can
+        # refer back to the prior one — the parser (not the narrator) sees a
+        # bounded window of prior Q&A text to resolve references; the narrator
+        # still answers from ONLY the current query's facts. Answers may also
+        # surface a trade's own recorded notes/thesis/lesson, and — for
+        # rec_outcome — the matching BUY trade's Pre-Mortem risk case and exit
+        # commitment, assessed retrospectively only (never a new recommendation).
+        # See docs/plans/portfolio-qa.md.
         from stock_analyzer import portfolio_qa as _qa
         from stock_analyzer.constants import (
             QA_REC_OUTCOME_DEFAULT_HORIZON_DAYS as _qa_default_horizon,
@@ -29023,7 +29030,8 @@ elif page == "🧠 AI Insights":
 
         st.caption(
             "Ask about your trade history or a past recommendation's outcome — "
-            "answered from what's actually on record, not a live snapshot. Three "
+            "answered from what's actually on record, not a live snapshot. "
+            "Follow-up questions ('what about MSFT instead?') work too. Three "
             "kinds of questions work today:"
         )
         st.caption(
@@ -29031,32 +29039,78 @@ elif page == "🧠 AI Insights":
             "• \"What was my trade on AAPL?\"\n\n"
             "• \"Why did AAPL lose money after being recommended?\""
         )
-        _qa_question = st.text_input(
-            "Ask a question", key="_qa_question_input", label_visibility="collapsed",
-            placeholder="Ask about your trades or a past recommendation…",
-        )
-        if st.button("Ask", key="_qa_ask_btn") and _qa_question.strip():
-            if not _ai_api_key:
-                st.warning("🔌 AI layer offline — no Anthropic API key configured. Every other page is unaffected.")
-            else:
-                _qa_today = _today_et()
-                with st.spinner("Reading your question…"):
-                    _qa_parsed = _qa.parse_question(_qa_question, _ai_api_key, _qa_today)
 
-                if _qa_parsed is None:
-                    st.error(
-                        "Couldn't process that question right now — the AI layer "
-                        "may be rate-limited or offline. Try again shortly."
-                    )
-                    if _qa.LAST_PARSE_ERROR:
-                        st.caption(f"Details: {_qa.LAST_PARSE_ERROR}")
-                elif _qa_parsed["intent"] == "unsupported":
-                    st.info(_qa_parsed.get("reason") or "That doesn't match a question I can answer yet.")
+        _qa_history = st.session_state.setdefault("_qa_history", [])
+        if _qa_history and st.button("Clear conversation", key="_qa_clear_btn"):
+            st.session_state["_qa_history"] = []
+            st.rerun()
+
+        def _qa_render_round(round_: dict) -> None:
+            with st.chat_message("user"):
+                st.markdown(round_["question"])
+            with st.chat_message("assistant"):
+                if round_.get("looking_at"):
+                    st.caption(round_["looking_at"])
+                if round_.get("clamped_note"):
+                    st.caption(round_["clamped_note"])
+                if round_.get("unsupported_reason"):
+                    st.info(round_["unsupported_reason"])
                     st.caption(
                         "Try something like:\n\n"
                         "- \"How many trades did I make last week, and what was the gain/loss on each?\"\n"
                         "- \"What was my trade on AAPL?\"\n"
                         "- \"Why did AAPL lose money after being recommended on 2026-07-20?\""
+                    )
+                elif round_.get("error"):
+                    st.error(round_["error"])
+                    if round_.get("details"):
+                        st.caption(f"Details: {round_['details']}")
+                elif round_.get("offline_no_key"):
+                    st.warning("🔌 AI layer offline — no Anthropic API key configured. Every other page is unaffected.")
+                elif round_.get("offline"):
+                    st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
+                    if round_.get("details"):
+                        st.caption(f"Details: {round_['details']}")
+                else:
+                    st.markdown(round_["answer"])
+                    if round_.get("intent") in ("trades_in_range", "trade_lookup") and round_.get("facts"):
+                        _qa_facts = round_["facts"]
+                        if any(f.get("pnl_label") == "unrealized" for f in _qa_facts):
+                            st.caption(
+                                "ℹ️ Unrealized P&L marks the full original BUY lot against "
+                                "the current price — not a remaining-shares figure if part "
+                                "of that lot has since been sold (the sold portion's realized "
+                                "P&L appears on its own SELL row)."
+                            )
+                        with st.expander("Show the underlying trades"):
+                            st.dataframe(_qa.format_trades_table(_qa_facts), hide_index=True, width='stretch')
+
+        for _qa_round in _qa_history:
+            _qa_render_round(_qa_round)
+
+        _qa_question = st.chat_input("Ask about your trades or a past recommendation…", key="_qa_chat_input")
+        if _qa_question and _qa_question.strip():
+            _qa_round: dict = {"question": _qa_question.strip()}
+            if not _ai_api_key:
+                _qa_round["offline_no_key"] = True
+            else:
+                _qa_today = _today_et()
+                _qa_parse_history = [
+                    {"question": r["question"], "answer": r.get("answer") or ""}
+                    for r in _qa_history
+                ]
+                with st.spinner("Reading your question…"):
+                    _qa_parsed = _qa.parse_question(_qa_question, _ai_api_key, _qa_today, _qa_parse_history)
+
+                if _qa_parsed is None:
+                    _qa_round["error"] = (
+                        "Couldn't process that question right now — the AI layer "
+                        "may be rate-limited or offline. Try again shortly."
+                    )
+                    _qa_round["details"] = _qa.LAST_PARSE_ERROR
+                elif _qa_parsed["intent"] == "unsupported":
+                    _qa_round["unsupported_reason"] = (
+                        _qa_parsed.get("reason") or "That doesn't match a question I can answer yet."
                     )
                 elif _qa_parsed["intent"] in ("trades_in_range", "trade_lookup"):
                     # Current prices for still-open BUY lots, reusing the
@@ -29072,9 +29126,9 @@ elif page == "🧠 AI Insights":
                                 _qa_prices[str(_qr["Ticker"]).upper()] = float(_qr["Market Value"]) / float(_qsh)
 
                     if _qa_parsed["intent"] == "trades_in_range":
-                        st.caption(f"Looking at: trades from {_qa_parsed['start_date']} to {_qa_parsed['end_date']}")
+                        _qa_round["looking_at"] = f"Looking at: trades from {_qa_parsed['start_date']} to {_qa_parsed['end_date']}"
                         if _qa_parsed.get("range_clamped"):
-                            st.caption(
+                            _qa_round["clamped_note"] = (
                                 f"ℹ️ That range was wider than {QA_MAX_RANGE_DAYS} days — "
                                 f"narrowed to the most recent {QA_MAX_RANGE_DAYS} days shown above."
                             )
@@ -29082,31 +29136,23 @@ elif page == "🧠 AI Insights":
                             _qa_trades_df, _qa_parsed["start_date"], _qa_parsed["end_date"], _qa_prices
                         )
                     else:
-                        st.caption(f"Looking at: every trade on record for {_qa_parsed['ticker']}")
+                        _qa_round["looking_at"] = f"Looking at: every trade on record for {_qa_parsed['ticker']}"
                         _qa_facts = _qa.trades_for_ticker(_qa_trades_df, _qa_parsed["ticker"], _qa_prices)
 
                     with st.spinner("Answering…"):
                         _qa_answer = _qa.narrate_answer(_qa_parsed["intent"], _qa_facts, _ai_api_key)
                     if _qa_answer is None:
-                        st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
-                        if _qa.LAST_NARRATE_ERROR:
-                            st.caption(f"Details: {_qa.LAST_NARRATE_ERROR}")
+                        _qa_round["offline"] = True
+                        _qa_round["details"] = _qa.LAST_NARRATE_ERROR
                     else:
-                        st.markdown(_qa_answer)
-                    if _qa_facts:
-                        if any(f.get("pnl_label") == "unrealized" for f in _qa_facts):
-                            st.caption(
-                                "ℹ️ Unrealized P&L marks the full original BUY lot against "
-                                "the current price — not a remaining-shares figure if part "
-                                "of that lot has since been sold (the sold portion's realized "
-                                "P&L appears on its own SELL row)."
-                            )
-                        with st.expander("Show the underlying trades"):
-                            st.dataframe(_qa.format_trades_table(_qa_facts), hide_index=True, width='stretch')
+                        _qa_round["answer"] = _qa_answer
+                        _qa_round["intent"] = _qa_parsed["intent"]
+                        _qa_round["facts"] = _qa_facts
 
                 elif _qa_parsed["intent"] == "rec_outcome":
                     _qa_tk      = _qa_parsed["ticker"]
                     _qa_horizon = _qa_parsed["horizon_days"] or _qa_default_horizon
+                    _qa_trades_df = st.session_state.get("trades_df", db.load_trades())
 
                     if _qa_parsed["start_date"]:
                         _qa_rec_date = _qa_parsed["start_date"]
@@ -29129,10 +29175,10 @@ elif page == "🧠 AI Insights":
                             _qa_recs_df  = _qa_tk_recs
 
                     if _qa_rec_date is None:
-                        st.caption(f"Looking at: {_qa_tk} — no recommendation on record")
+                        _qa_round["looking_at"] = f"Looking at: {_qa_tk} — no recommendation on record"
                         _qa_facts = {"found": False, "reason": "no recommendation on record for that ticker"}
                     else:
-                        st.caption(f"Looking at: {_qa_tk}, surfaced {_qa_rec_date}, +{_qa_horizon} trading days")
+                        _qa_round["looking_at"] = f"Looking at: {_qa_tk}, surfaced {_qa_rec_date}, +{_qa_horizon} trading days"
                         # A recommendation older than ~11 months needs more than the
                         # default 1y fetch to cover rec_date + horizon_days forward —
                         # widen the window rather than let old recs misreport "not
@@ -29141,17 +29187,20 @@ elif page == "🧠 AI Insights":
                         _qa_period = "2y" if _qa_days_since_rec > QA_REC_OUTCOME_WIDE_FETCH_DAYS else "1y"
                         _qa_hist  = fetch_price_history(_qa_tk, period=_qa_period)
                         _qa_facts = _qa.recommendation_outcome(
-                            _qa_tk, _qa_rec_date, _qa_recs_df, _qa_hist, _qa_horizon
+                            _qa_tk, _qa_rec_date, _qa_recs_df, _qa_hist, _qa_horizon, _qa_trades_df
                         )
 
                     with st.spinner("Answering…"):
                         _qa_answer = _qa.narrate_answer("rec_outcome", _qa_facts, _ai_api_key)
                     if _qa_answer is None:
-                        st.warning("🔌 AI layer offline or rate-limited — couldn't narrate an answer. Every other page is unaffected.")
-                        if _qa.LAST_NARRATE_ERROR:
-                            st.caption(f"Details: {_qa.LAST_NARRATE_ERROR}")
+                        _qa_round["offline"] = True
+                        _qa_round["details"] = _qa.LAST_NARRATE_ERROR
                     else:
-                        st.markdown(_qa_answer)
+                        _qa_round["answer"] = _qa_answer
+                        _qa_round["intent"] = "rec_outcome"
+
+            _qa_history.append(_qa_round)
+            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎯 My Edge — Benchmark Mirror · Workflow ROI · Decision Quality
