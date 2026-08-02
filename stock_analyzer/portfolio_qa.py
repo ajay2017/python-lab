@@ -30,6 +30,7 @@ from stock_analyzer.constants import (
     QA_HISTORY_TURNS,
     QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS,
 )
+from stock_analyzer.investor_mirror import build_closed_lots
 
 _MODEL = "claude-haiku-4-5-20251001"
 
@@ -296,17 +297,68 @@ def _trade_reasoning(r) -> str | None:
     return "; ".join(parts)[:160]
 
 
-def _row_outcome(r, current_prices: dict) -> dict:
+def _closed_shares_by_buy(trades_df) -> dict:
+    """Map (ticker, buy_date_str) -> total shares FIFO-matched to a SELL,
+    via investor_mirror.build_closed_lots() run over the ticker's FULL trade
+    history (not a query-filtered subset — a BUY inside a queried range can
+    be fully closed by a SELL outside it, and FIFO consumption order depends
+    on every earlier BUY/SELL/SPLIT too, so this must see everything).
+
+    Used only to tell a BUY row whose lot has been entirely sold apart from
+    one that's genuinely still open — see _row_outcome for why that
+    distinction matters. Keyed by (ticker, date) rather than by trade id, so
+    it inherits the same limitation build_closed_lots/tax_advisor._build_
+    open_lots already have elsewhere in this codebase: two separate same-day
+    BUYs of the same ticker are aggregated together, so a same-day partial
+    lot could in principle be over-matched. This fails in the conservative
+    direction (a still-open lot gets hidden as "position_closed" rather than
+    a closed one fabricating a duplicate unrealized figure), and same-day
+    multi-buy-same-ticker is rare, so it's accepted rather than solved here."""
+    if trades_df is None or trades_df.empty:
+        return {}
+    df = trades_df
+    if "id" not in df.columns:
+        # build_closed_lots sorts by (timestamp, id) to break same-timestamp
+        # ties deterministically — synthesize one for callers/tests that
+        # don't carry a DB id column rather than erroring.
+        df = df.copy()
+        df["id"] = range(len(df))
+    try:
+        closed = build_closed_lots(df)
+    except Exception:
+        # Fail open: worst case, callers fall back to the pre-fix ticker-level
+        # held/not-held check — never let this crash a Q&A answer.
+        return {}
+    if closed.empty:
+        return {}
+    result: dict = {}
+    for (ticker, buy_date), grp in closed.groupby(["ticker", "buy_date"]):
+        key = (ticker, str(buy_date))
+        result[key] = result.get(key, 0.0) + float(grp["shares"].sum())
+    return result
+
+
+def _row_outcome(r, current_prices: dict, closed_shares: dict | None = None) -> dict:
     """Per-trade gain/loss for one trades_df row. Shared by trades_in_range
     and trades_for_ticker so both surfaces use identical P&L logic.
 
     SELLs report the already-stored realized_pnl directly (no recomputation).
     BUYs report unrealized P&L against current_prices (caller-supplied —
     e.g. from the session's _port_df_enriched, so this stays a pure function
-    with no data-fetch of its own) when the ticker is still held; a BUY whose
-    position has since been fully sold is labeled "position_closed" rather
-    than attempting new FIFO-lot matching — its realized P&L lives on the
-    matching SELL row instead.
+    with no data-fetch of its own) when the ticker is still held — UNLESS
+    `closed_shares` (see _closed_shares_by_buy) shows this specific BUY's
+    lot has already been fully sold, in which case it's labeled
+    "position_closed" even if the ticker is currently held again via a
+    LATER re-buy. Without this check, a ticker with a full sell-then-rebuy
+    round trip had EVERY historical BUY row marked "unrealized" against
+    today's price — including lots already closed weeks earlier — silently
+    duplicating P&L that was already reported on the matching SELL row(s)
+    (confirmed live, 2026-08-02: an AAPL history with two closed round trips
+    and a fresh re-buy showed three "unrealized" BUY rows instead of one).
+    A genuinely PARTIALLY-sold lot still marks against the full original
+    share count — the UI already carries a caption for that approximation;
+    this fix only corrects the fully-closed case, which had no such caveat
+    and was flatly wrong rather than a documented simplification.
 
     Returns {"ticker", "action", "shares", "price", "traded_at",
     "pnl": float|None, "pnl_label": "realized"|"unrealized"|"position_closed"|"unknown",
@@ -318,9 +370,10 @@ def _row_outcome(r, current_prices: dict) -> dict:
     action = str(r.get("action", "")).upper()
     shares = _f(r.get("shares"))
     price  = _f(r.get("price"))
+    traded_at_str = str(r.get("traded_at"))[:10]
     row = {
         "ticker": ticker, "action": action, "shares": shares, "price": price,
-        "traded_at": str(r.get("traded_at"))[:10],
+        "traded_at": traded_at_str,
         "pnl": None, "pnl_label": "unknown",
         "reasoning": _trade_reasoning(r),
     }
@@ -335,6 +388,10 @@ def _row_outcome(r, current_prices: dict) -> dict:
             except (TypeError, ValueError):
                 pass
     elif action == "BUY":
+        total_closed = (closed_shares or {}).get((ticker, traded_at_str), 0.0)
+        if shares > 0 and total_closed >= shares - 1e-6:
+            row["pnl_label"] = "position_closed"
+            return row
         cur = current_prices.get(ticker)
         if cur is not None and price > 0:
             row["pnl"] = round((_f(cur) - price) * shares, 2)
@@ -367,6 +424,10 @@ def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None
     if trades_df is None or trades_df.empty:
         return []
 
+    # Computed from the FULL trades_df (before date-range filtering) — a BUY
+    # inside the range can be closed by a SELL outside it. See _row_outcome.
+    closed_shares = _closed_shares_by_buy(trades_df)
+
     df = _real_trades(trades_df)
     try:
         sd = pd.Timestamp(str(start_date)[:10], tz="UTC")
@@ -375,7 +436,7 @@ def trades_in_range(trades_df, start_date, end_date, current_prices: dict | None
         return []
     df = df[(df["traded_at"] >= sd) & (df["traded_at"] < ed)]
 
-    return [_row_outcome(r, current_prices) for _, r in df.sort_values("traded_at").iterrows()]
+    return [_row_outcome(r, current_prices, closed_shares) for _, r in df.sort_values("traded_at").iterrows()]
 
 
 def trades_for_ticker(trades_df, ticker: str, current_prices: dict | None = None) -> list[dict]:
@@ -388,9 +449,11 @@ def trades_for_ticker(trades_df, ticker: str, current_prices: dict | None = None
     if trades_df is None or trades_df.empty or not ticker:
         return []
 
+    closed_shares = _closed_shares_by_buy(trades_df)
+
     df = _real_trades(trades_df)
     df = df[df["ticker"].astype(str).str.upper() == ticker]
-    return [_row_outcome(r, current_prices) for _, r in df.sort_values("traded_at").iterrows()]
+    return [_row_outcome(r, current_prices, closed_shares) for _, r in df.sort_values("traded_at").iterrows()]
 
 
 _PNL_LABEL_DISPLAY = {

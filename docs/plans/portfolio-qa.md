@@ -302,6 +302,69 @@ actually sent in the system prompt via a capturing fake client), and
 `acted_on` states plus the earliest-of-multiple-BUYs and outside-window
 cases. Full suite 3072 passing; `check_constants_documented.py` PASS.
 
+---
+
+## v2.1 — closed-lot P&L mislabeling (same day, live bug found via screenshot)
+
+Live validation of v2's reasoning-surfacing column caught something unrelated
+but more serious in the same screenshot: an AAPL trade history with two
+complete sell-then-rebuy round trips plus a fresh re-buy showed **all three**
+historical BUY rows labeled "Unrealized (still held)" — including the two
+already fully closed weeks earlier. Each showed a fabricated P&L computed
+against *today's* price, duplicating value already correctly reported on
+the matching SELL rows.
+
+**Root cause:** `_row_outcome()`'s BUY branch only ever checked "is this
+ticker held **anywhere** in the portfolio right now" (`current_prices.get
+(ticker)` — a ticker-level check), never "is **this specific BUY's lot**
+still open." Since AAPL was genuinely held again (the fresh re-buy), every
+historical BUY row for AAPL passed that check, regardless of whether that
+particular lot had been sold out entirely in the meantime.
+
+**Fix:** new `_closed_shares_by_buy(trades_df)` calls the existing,
+already-tested `investor_mirror.build_closed_lots()` FIFO BUY-to-SELL
+matcher (already used elsewhere for Behavioral Fingerprint/Personalized
+Discovery — reused rather than reimplementing lot matching a third time in
+this codebase) over the ticker's **full** trade history, not the
+date-range-filtered subset a query is displaying — a BUY inside a queried
+range can be closed by a SELL outside it, and FIFO consumption order
+depends on every earlier trade regardless of the query window. Builds a
+`{(ticker, buy_date_str): total_closed_shares}` map; `_row_outcome()` now
+checks it before falling back to the old ticker-level logic — a BUY row
+whose own share count is fully covered by `total_closed_shares` is labeled
+`"position_closed"` (no fabricated `pnl`) even if the ticker is currently
+held again via a later re-buy. **Deliberately scoped to the fully-closed
+case only** — a genuinely partially-sold lot still marks against the full
+original share count, which the UI already carries an explicit caveat
+caption for; that's a documented approximation, not the bug being fixed.
+
+Robustness: `_closed_shares_by_buy` synthesizes a sequential `id` column
+when the input lacks one (`build_closed_lots` sorts by `(timestamp, id)`;
+test fixtures elsewhere in this file often omit `id`, real `db.load_trades()`
+output always has it) and wraps the call in try/except returning `{}` on
+any error — fail-open, so a Q&A answer never crashes over this.
+
+4 new tests: the exact reproduced screenshot scenario, a partially-closed
+lot still marking unrealized (confirming the deliberate scope boundary), a
+closing SELL falling outside the queried range still being detected, and a
+missing-`id` fixture not crashing. Tests 84 → 88; full suite 3076 passing
+(one pre-existing test, `test_debate_agent.py`'s anthropic-import-failure
+test, broke transiently mid-session because `anthropic` had been installed
+into this dev venv for an unrelated Pyright/IDE reason, defeating that
+test's reliance on the real import failing in this venv — uninstalled and
+the suite is back to green; unrelated to this fix, noted for the record).
+
+**No constants.py/gate/scoring-formula change, so CLAUDE.md hard rule #4
+didn't strictly require an Opus review — got one anyway given the
+P&L-correctness stakes: SHIP, 0 blocking** (2 non-blocking: softened an
+over-precise docstring claim — a same-day multi-BUY-same-ticker collision
+can, in principle, hide a still-open lot as closed, inheriting the same
+date-only-key limitation `investor_mirror.build_closed_lots`/
+`tax_advisor._build_open_lots` already have elsewhere in this codebase,
+accepted rather than solved since it fails in the conservative direction
+and is a rare shape; a reverse-split edge case also noted as an accepted
+fail-open gap, not fixed).
+
 ### Parked — forward-looking "current status" intent (NOT built)
 
 A fourth brainstormed idea — a `current_status` intent letting the Ask tab

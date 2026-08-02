@@ -443,6 +443,78 @@ def test_trades_for_ticker_excludes_split_rows():
     assert result[0]["action"] == "BUY"
 
 
+# ─── closed-lot detection (live production bug, 2026-08-02) ─────────────────
+# A ticker fully sold and later re-bought had EVERY historical BUY row marked
+# "unrealized" against today's price (the check was "is the ticker held
+# ANYWHERE right now", not "is THIS lot still open") — silently duplicating
+# P&L already reported on the matching SELL row(s). Confirmed live: an AAPL
+# history with two closed round trips + one fresh re-buy showed three
+# "unrealized" BUY rows instead of one. Fixed via investor_mirror.
+# build_closed_lots() run over the FULL trade history.
+
+def test_trades_for_ticker_fully_closed_lot_not_marked_unrealized_after_rebuy():
+    df = _trades_df([
+        {"id": 1, "ticker": "AAPL", "action": "BUY", "shares": 5, "price": 250.0,
+         "realized_pnl": None, "traded_at": "2026-05-27T10:00:00Z"},
+        {"id": 2, "ticker": "AAPL", "action": "SELL", "shares": 5, "price": 312.0,
+         "realized_pnl": 310.0, "traded_at": "2026-05-29T10:00:00Z"},
+        {"id": 3, "ticker": "AAPL", "action": "BUY", "shares": 5, "price": 305.0,
+         "realized_pnl": None, "traded_at": "2026-07-31T10:00:00Z"},
+    ])
+    result = trades_for_ticker(df, "AAPL", current_prices={"AAPL": 308.91})
+    by_date = {r["traded_at"]: r for r in result}
+    # the closed 05-27 lot must NOT be marked unrealized just because AAPL
+    # is held again via the later 07-31 re-buy
+    assert by_date["2026-05-27"]["pnl_label"] == "position_closed"
+    assert by_date["2026-05-27"]["pnl"] is None
+    # the genuinely open 07-31 lot still marks correctly
+    assert by_date["2026-07-31"]["pnl_label"] == "unrealized"
+    assert by_date["2026-07-31"]["pnl"] == pytest.approx(19.55, abs=0.01)
+
+
+def test_trades_for_ticker_partially_closed_lot_still_marks_unrealized():
+    # A partial sale is a documented approximation (the UI caveats it), not
+    # the bug being fixed here — only a FULLY closed lot should flip to
+    # position_closed.
+    df = _trades_df([
+        {"id": 1, "ticker": "AAPL", "action": "BUY", "shares": 10, "price": 200.0,
+         "realized_pnl": None, "traded_at": "2026-06-01T10:00:00Z"},
+        {"id": 2, "ticker": "AAPL", "action": "SELL", "shares": 4, "price": 220.0,
+         "realized_pnl": 80.0, "traded_at": "2026-06-15T10:00:00Z"},
+    ])
+    result = trades_for_ticker(df, "AAPL", current_prices={"AAPL": 230.0})
+    buy_row = next(r for r in result if r["action"] == "BUY")
+    assert buy_row["pnl_label"] == "unrealized"
+
+
+def test_trades_in_range_closed_lot_detected_even_when_closing_sell_outside_range():
+    # The BUY is inside the queried range; the SELL that fully closes it
+    # happens AFTER the range end. Closed-lot detection must still see it —
+    # it's computed from the full trades_df, not the range-filtered subset.
+    df = _trades_df([
+        {"id": 1, "ticker": "AAPL", "action": "BUY", "shares": 5, "price": 250.0,
+         "realized_pnl": None, "traded_at": "2026-05-27T10:00:00Z"},
+        {"id": 2, "ticker": "AAPL", "action": "SELL", "shares": 5, "price": 312.0,
+         "realized_pnl": 310.0, "traded_at": "2026-09-01T10:00:00Z"},
+    ])
+    result = trades_in_range(df, "2026-05-01", "2026-05-31", current_prices={"AAPL": 320.0})
+    assert len(result) == 1
+    assert result[0]["pnl_label"] == "position_closed"
+
+
+def test_closed_shares_by_buy_missing_id_column_does_not_crash():
+    # Real trades_df from db.load_trades() always has an id column; test
+    # fixtures elsewhere in this file often don't — must not crash either way.
+    df = pd.DataFrame([
+        {"ticker": "AAPL", "action": "BUY", "shares": 5, "price": 250.0,
+         "realized_pnl": None, "traded_at": "2026-05-27T10:00:00Z"},
+        {"ticker": "AAPL", "action": "SELL", "shares": 5, "price": 312.0,
+         "realized_pnl": 310.0, "traded_at": "2026-05-29T10:00:00Z"},
+    ])
+    result = trades_for_ticker(df, "AAPL")
+    assert result[0]["pnl_label"] == "position_closed"
+
+
 # ─── reasoning surfacing (item 1, complete the circle) ──────────────────────
 # _row_outcome (shared by trades_in_range/trades_for_ticker) now also reports
 # whichever of a trade's own recorded user_thesis/notes/lesson fields are
