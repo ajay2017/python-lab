@@ -19628,15 +19628,17 @@ elif page == "📒 Trade Journal":
                 except Exception:
                     pass
                 _refresh_portfolio_cache_after_trade(_pb_h_df)
-            st.session_state.pop("_tj_pending_buy", None)
-            st.session_state.pop("_tj_prefill", None)
-            st.session_state.pop("_tj_override_price", None)
-            st.session_state.pop("_tj_override_ticker", None)
-            st.session_state.pop("_tj_override_sell", None)
-            st.session_state.pop("_tj_drift_checked", None)
-            st.session_state.pop("_tj_drift_state",   None)
-            st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
-            st.rerun()
+                st.session_state.pop("_tj_pending_buy", None)
+                st.session_state.pop("_tj_prefill", None)
+                st.session_state.pop("_tj_override_price", None)
+                st.session_state.pop("_tj_override_ticker", None)
+                st.session_state.pop("_tj_override_sell", None)
+                st.session_state.pop("_tj_drift_checked", None)
+                st.session_state.pop("_tj_drift_state",   None)
+                import time as _pb_time
+                st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
+                st.session_state["_tj_last_submit_ts"]  = _pb_time.time()
+                st.rerun()
         if _pb_c2.button("✗ Cancel", key="_tj_cancel_buy", use_container_width=True):
             st.session_state["_tj_prefill"] = {
                 "ticker": _pb_ticker,
