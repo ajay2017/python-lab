@@ -4228,34 +4228,6 @@ if page == "🏠 Home":
             _fragility = None
         st.session_state["_fragility_cache"] = _fragility
 
-        # Judgment-layer opinion capture (Phase 0, log-only) — logged only at this
-        # fresh-compute site, not the _home_synth_cache-hit re-publish elsewhere,
-        # so an unchanged fragility read isn't logged twice in one day (the
-        # (source, dimension, ticker, signal_date) upsert key would no-op it
-        # anyway, but skipping the call avoids the redundant write attempt).
-        # A None fragility (withheld/unavailable) emits no opinion — consistent
-        # with the existing withhold-if-uncertain posture; Phase 1 must treat a
-        # missing structural_risk opinion as reduced visibility, not "calm."
-        if _fragility:
-            try:
-                from stock_analyzer.judgment_opinion import build_opinion
-                _jo_frag_opinion = build_opinion(
-                    source="fragility_gauge",
-                    dimension="structural_risk",
-                    signal=JUDGMENT_FRAGILITY_SIGNAL_MAP.get(_fragility.get("severity"), 0.0),
-                    confidence=0.6,
-                    evidence=(
-                        f"{_fragility.get('severity', '')} — beta "
-                        f"{_fragility.get('beta', 0):.2f}, implied move "
-                        f"{_fragility.get('implied_move', 0):.1f}%"
-                    ),
-                    label=_fragility.get("severity", ""),
-                )
-                db.save_judgment_opinions_batch([_jo_frag_opinion])
-                st.session_state["_judgment_opinions_today"].append(_jo_frag_opinion)
-            except Exception:
-                pass
-
         # High-beta cluster share (Part 2b) — standing "correlated exposure" read:
         # what % of the book sits in high-beta (β ≥ PORTFOLIO_BETA_ELEVATED) names.
         # A cheap, honest proxy for the "ten tech names that all fall together"
@@ -4839,87 +4811,6 @@ if page == "🏠 Home":
             if _exit_signals_to_save:
                 db.save_exit_signals_batch(_exit_signals_to_save)
 
-            # ── Judgment-layer opinion capture (Phase 0, log-only) ───────────────
-            # Tags today's witnesses with a structured opinion for the future Judge
-            # (docs/plans/judgment-layer.md). Nothing reads this table yet — it
-            # exists so Phase 2's grading harness has history once it's built.
-            # Best-effort: a capture failure must never affect Home rendering.
-            # NOTE for Phase 1 design: verdict_reconciliation is logged under the
-            # `quality` dimension alongside composite_score even though it's a
-            # meta-witness that already synthesizes momentum+composite+news+
-            # earnings — it may need its own handling (e.g. excluded from
-            # weighting) rather than being treated as an independent vote.
-            try:
-                from stock_analyzer.judgment_opinion import build_opinion
-                _jo_batch = []
-
-                for _es in _exit_signals_to_save:
-                    _jo_batch.append(build_opinion(
-                        source="exit_advisor",
-                        dimension="position_health",
-                        ticker=_es["ticker"],
-                        signal=JUDGMENT_EXIT_SIGNAL_MAP.get(_es["signal_type"], -0.5),
-                        confidence=0.7,
-                        evidence=f"{_es['signal_type']} signal from Daily Brief deterioration tiering",
-                        label=_es["signal_type"],
-                    ))
-
-                for _p in (_gt_today.get("new_picks") or []):
-                    _tk = str(_p.get("ticker", ""))
-                    if not _tk:
-                        continue
-                    _cs = _p.get("composite_score")
-                    if _cs is not None:
-                        _jo_batch.append(build_opinion(
-                            source="composite_score",
-                            dimension="quality",
-                            ticker=_tk,
-                            signal=max(-1.0, min(1.0, (float(_cs) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
-                            confidence=0.6,
-                            evidence=f"Composite {_cs:.0f}/100 ({_p.get('composite_label', '')})",
-                            label=_p.get("composite_label", ""),
-                        ))
-                    _mom = _p.get("score")
-                    if _mom is not None:
-                        _jo_batch.append(build_opinion(
-                            source="scanner_momentum",
-                            dimension="momentum",
-                            ticker=_tk,
-                            signal=max(-1.0, min(1.0, (float(_mom) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
-                            confidence=0.5,
-                            evidence=f"Momentum score {_mom:.0f}/100",
-                        ))
-                    _xr = (_p.get("xref") or {}).get("verdict_reconciled") or {}
-                    _verdict = _xr.get("verdict")
-                    if _verdict:
-                        # advisory=True: verdict_reconciliation is a META-witness that
-                        # already synthesizes momentum+composite+news+earnings into
-                        # one verdict — it is not a peer vote alongside composite_score
-                        # on `quality`. Reviewed 2026-08-03 (Opus 4.8, FIX-FIRST): left
-                        # as a non-advisory peer, it would (a) double-count composite
-                        # inside the quality blend and (b) get flagged by the
-                        # contradiction audit as "disagreeing" with composite on every
-                        # verdict_divergence-class ticker (a known, expected class of
-                        # divergence, not a bug to surface as a peer conflict). Marking
-                        # it advisory keeps it visible in the decomposition as context
-                        # without either failure mode.
-                        _jo_batch.append(build_opinion(
-                            source="verdict_reconciliation",
-                            dimension="quality",
-                            ticker=_tk,
-                            signal=JUDGMENT_VERDICT_SIGNAL_MAP.get(_verdict, 0.0),
-                            confidence=0.65,
-                            evidence=_xr.get("one_liner", "") or _xr.get("label", ""),
-                            label=_xr.get("label", ""),
-                            advisory=True,
-                        ))
-
-                if _jo_batch:
-                    db.save_judgment_opinions_batch(_jo_batch)
-                    st.session_state["_judgment_opinions_today"].extend(_jo_batch)
-            except Exception:
-                pass
-
             # ── Signal hysteresis (calm advisor 2C) ──────────────────────────────
             # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
             # a persistent pick as continuity, not a fresh daily call to re-litigate
@@ -4994,6 +4885,135 @@ if page == "🏠 Home":
     # Overlay covers the full synthesis (data load + brief build). Clear here
     # so content appears in one shot rather than progressively after load_all.
     _load_slot.empty()
+
+    # ── Judgment-layer opinion capture (Phase 1 fix, "🧑‍⚖️ The Judge") ─────────
+    # Tags today's witnesses with a structured opinion for the Judge page
+    # (docs/plans/judgment-layer.md). Deliberately placed HERE — after the
+    # hit/miss synthesis above converges — not inside either branch. An
+    # earlier version lived inside the cache-MISS branch only (next to the
+    # fragility compute and the exit-signal capture), which meant it silently
+    # stopped firing on every cache-HIT render (the common case after the
+    # first Home load of a session): the Judge page would show a live Home
+    # fragility gauge but report structural_risk as "no live witness," and
+    # Grow Today picks with real composite/momentum/verdict data would
+    # contribute zero opinions. Found via a live screenshot (2026-08-03) —
+    # `_fragility_cache` and `_daily_brief` are both reliably republished on
+    # EITHER branch (see the HIT branch's re-publish block above), so reading
+    # them here instead of a branch-local variable fixes it for good.
+    # Nothing reads the judgment_opinions table yet — log-only, best-effort;
+    # a capture failure must never affect Home rendering.
+    try:
+        from stock_analyzer.judgment_opinion import build_opinion
+        _jo_batch = []
+
+        _jo_fragility = st.session_state.get("_fragility_cache")
+        if _jo_fragility:
+            _jo_batch.append(build_opinion(
+                source="fragility_gauge",
+                dimension="structural_risk",
+                signal=JUDGMENT_FRAGILITY_SIGNAL_MAP.get(_jo_fragility.get("severity"), 0.0),
+                confidence=0.6,
+                evidence=(
+                    f"{_jo_fragility.get('severity', '')} — beta "
+                    f"{_jo_fragility.get('beta', 0):.2f}, implied move "
+                    f"{_jo_fragility.get('implied_move', 0):.1f}%"
+                ),
+                label=_jo_fragility.get("severity", ""),
+            ))
+
+        # Independent re-derivation of today's WATCH/TRIM/EXIT/RISK_OFF tickers
+        # from _daily_brief — deliberately NOT reusing the Behavioral
+        # Fingerprint exit-signal capture's own `_exit_signals_to_save` list
+        # (built earlier, inside the miss-only branch, for a different
+        # feature/table) so this fix doesn't also alter that pre-existing
+        # capture's own cadence.
+        _jo_kind_to_tier = {
+            "deterioration_trim": "TRIM",
+            "deterioration_exit": "EXIT",
+            "risk_off_derisk":    "RISK_OFF",
+        }
+        for _ad_item in ((_daily_brief or {}).get("act_today") or []):
+            _jo_tier = _jo_kind_to_tier.get(_ad_item.get("kind", ""))
+            _jo_tk = _ad_item.get("ticker")
+            if _jo_tier and _jo_tk:
+                _jo_batch.append(build_opinion(
+                    source="exit_advisor",
+                    dimension="position_health",
+                    ticker=_jo_tk,
+                    signal=JUDGMENT_EXIT_SIGNAL_MAP.get(_jo_tier, -0.5),
+                    confidence=0.7,
+                    evidence=f"{_jo_tier} signal from Daily Brief deterioration tiering",
+                    label=_jo_tier,
+                ))
+        for _rl_item in ((_daily_brief or {}).get("review_list") or []):
+            _rl_action = _rl_item.get("action") or {}
+            _jo_tk = _rl_item.get("ticker")
+            if isinstance(_rl_action, dict) and _rl_action.get("type") == "DETERIORATION_WATCH" and _jo_tk:
+                _jo_batch.append(build_opinion(
+                    source="exit_advisor",
+                    dimension="position_health",
+                    ticker=_jo_tk,
+                    signal=JUDGMENT_EXIT_SIGNAL_MAP.get("WATCH", -0.3),
+                    confidence=0.7,
+                    evidence="WATCH signal from Daily Brief deterioration tiering",
+                    label="WATCH",
+                ))
+
+        _jo_gt_today = (_daily_brief or {}).get("grow_today") or {}
+        for _p in (_jo_gt_today.get("new_picks") or []):
+            _tk = str(_p.get("ticker", ""))
+            if not _tk:
+                continue
+            _cs = _p.get("composite_score")
+            if _cs is not None:
+                _jo_batch.append(build_opinion(
+                    source="composite_score",
+                    dimension="quality",
+                    ticker=_tk,
+                    signal=max(-1.0, min(1.0, (float(_cs) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
+                    confidence=0.6,
+                    evidence=f"Composite {_cs:.0f}/100 ({_p.get('composite_label', '')})",
+                    label=_p.get("composite_label", ""),
+                ))
+            _mom = _p.get("score")
+            if _mom is not None:
+                _jo_batch.append(build_opinion(
+                    source="scanner_momentum",
+                    dimension="momentum",
+                    ticker=_tk,
+                    signal=max(-1.0, min(1.0, (float(_mom) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
+                    confidence=0.5,
+                    evidence=f"Momentum score {_mom:.0f}/100",
+                ))
+            _xr = (_p.get("xref") or {}).get("verdict_reconciled") or {}
+            _verdict = _xr.get("verdict")
+            if _verdict:
+                # advisory=True: verdict_reconciliation is a META-witness that
+                # already synthesizes momentum+composite+news+earnings into one
+                # verdict — not a peer vote alongside composite_score on
+                # `quality`. Reviewed 2026-08-03 (Opus 4.8, FIX-FIRST): left as a
+                # non-advisory peer, it would double-count composite in the
+                # blend AND get flagged by the contradiction audit as
+                # "disagreeing" with composite on every verdict_divergence-class
+                # ticker (an expected divergence class, not a bug to surface as
+                # a peer conflict). Advisory keeps it visible as context without
+                # either failure mode.
+                _jo_batch.append(build_opinion(
+                    source="verdict_reconciliation",
+                    dimension="quality",
+                    ticker=_tk,
+                    signal=JUDGMENT_VERDICT_SIGNAL_MAP.get(_verdict, 0.0),
+                    confidence=0.65,
+                    evidence=_xr.get("one_liner", "") or _xr.get("label", ""),
+                    label=_xr.get("label", ""),
+                    advisory=True,
+                ))
+
+        if _jo_batch:
+            db.save_judgment_opinions_batch(_jo_batch)
+            st.session_state["_judgment_opinions_today"].extend(_jo_batch)
+    except Exception:
+        pass
 
     # ── Structural alert banner — AWARENESS ONLY, never gates ────────────────
     # Diffs today's live correlation_clusters() against the most recent

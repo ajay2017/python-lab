@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
 **Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
-**Status:** Phase 0 SHIPPED 2026-08-03, DDL applied. Phase 1 (read-only "🧑‍⚖️ The Judge" nav page) built 2026-08-03 — code-reviewed (Opus 4.8: FIX-FIRST, 2 blocking, both fixed same session) — ready to commit/push. Phase 2 (grading harness) not started.
+**Status:** Phase 0 SHIPPED 2026-08-03, DDL applied. Phase 1 (read-only "🧑‍⚖️ The Judge" nav page) built + code-reviewed 2026-08-03 (Opus 4.8: FIX-FIRST, 2 blocking, both fixed) — then a real cache-hit/miss capture bug was found via live screenshot the same session and fixed (see status log). Ready to commit/push. Phase 2 (grading harness) not started.
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -395,3 +395,40 @@ conversation, before any code.
   exclusion, multi-opinion suppression, most-severe-wins, regression). Review = Opus
   reviewer (Opus 4.8, claude-opus-4-8[1m]): FIX-FIRST, 2 blocking — both fixed same
   session, cited in commit body per hard rule #4.
+- **2026-08-03** — **Real production bug found via live screenshot** (same session,
+  after the reviewed Phase 1 shipped): user opened the new Judge page and saw
+  `structural_risk` listed as "no live witness this run," but Home's own fragility
+  gauge was showing a live "1.1x, calm" read at the same moment. Traced the cause: the
+  entire fragility + composite/momentum/verdict/exit_advisor opinion-capture logic
+  had been written inside the `_home_synth_cache` cache-**MISS** branch only (a
+  ~850-line `else:` block, lines 4139-4993). On any cache-**HIT** render — which is
+  the common case for the rest of a session after the first Home load of the day —
+  none of that capture code ran at all. Only the concentration-gate capture (placed
+  earlier in the file, before the hit/miss split) reliably fired every render. This
+  meant the Judge would show almost nothing beyond concentration for most of a user's
+  session, even though Home's own gauges/picks were rendering live data from the
+  cached bundle the whole time. **Fix:** removed the opinion-capture code from its two
+  in-branch locations and moved it to a single consolidated block placed at the
+  hit/miss reconvergence point (right after `_load_slot.empty()`, where the codebase's
+  own "Structural alert banner" section already established the pattern of "placed
+  HERE because the hit/miss synthesis converges here"). The new block reads
+  `st.session_state["_fragility_cache"]` (reliably republished by BOTH branches) and
+  `_daily_brief` (also valid on both branches) instead of the miss-branch-local
+  `_fragility`/`_gt_today` variables, and independently re-derives the WATCH/TRIM/
+  EXIT/RISK_OFF ticker list from `_daily_brief.get("act_today"/"review_list")` rather
+  than reusing the pre-existing Behavioral Fingerprint exit-signal capture's own list
+  (`_exit_signals_to_save`, which is a different feature's table and was deliberately
+  left untouched — it may have the same miss-only limitation, which is a separate,
+  pre-existing condition outside this session's scope, not introduced by the Judge
+  work, and not silently "fixed" as a side effect here). Verified: py_compile clean,
+  3076/3076 tests pass, constants-doc check passes. This is exactly the class of bug
+  `feedback_mockup_first_ux`'s "verify shipped vs image" principle exists to catch —
+  found because the user actually looked at the live page rather than trusting the
+  design/code review alone. **Opus 4.8 scoped review of the fix: SHIP, 0 blocking**
+  (1 non-blocking defense-in-depth note — the `act_today`/`review_list` re-derivation
+  loops read `_daily_brief.get(...)` directly rather than `(_daily_brief or {}).get(...)`
+  like the Grow Today read two lines later; unreachable today since `_daily_brief` is
+  guaranteed a dict by that point on both branches, but fixed for consistency anyway).
+  Verified equivalence of the re-derived WATCH/TRIM/EXIT/RISK_OFF logic against the
+  removed code, confirmed the upsert key keeps every-render calls idempotent, and
+  confirmed no dangling references to the removed in-branch variables.
