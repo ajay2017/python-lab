@@ -9012,7 +9012,63 @@ elif page == "🧑‍⚖️ The Judge":
         "today's witnesses have run."
     )
 
+    def _jo_sig_class(sig: float) -> str:
+        if sig > 0.05:
+            return "#4ade80"
+        if sig < -0.05:
+            return "#f87171"
+        return "#94a3b8"
+
+    def _jo_render_group(label: str, result: dict):
+        if not result["opinions"]:
+            return
+        st.markdown(f"**{label}**")
+        if result["veto"]:
+            _v = result["veto"]
+            _supp_srcs = ", ".join(
+                f"{s['source']} ({s['dimension']}, {s['signal']:+.2f})"
+                for s in _v["suppressed"]
+            )
+            st.markdown(
+                f"<div style='background:#78350f33;border-left:3px solid #fbbf24;"
+                f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
+                f"color:#fcd34d'>🛑 PROTECTIVE VETO — {_v['protective']['source']} "
+                f"({_v['protective']['dimension']}, {_v['protective']['signal']:+.2f}) "
+                f"overrides {_supp_srcs} (suppressed — not blended).</div>",
+                unsafe_allow_html=True,
+            )
+        for _c in result["contradictions"]:
+            _srcs = " vs ".join(o["source"] for o in _c["opinions"])
+            st.markdown(
+                f"<div style='background:#7f1d1d33;border-left:3px solid #ef4444;"
+                f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
+                f"color:#fca5a5'>⚠ CONTRADICTION — {_c['dimension']}: {_srcs} disagree.</div>",
+                unsafe_allow_html=True,
+            )
+        for _o in result["opinions"]:
+            _is_advisory = bool(_o.get("advisory"))
+            _is_suppressed = bool(_o.get("suppressed"))
+            _wm = _o.get("weight_multiplier")
+            _wm_txt = f" · {_wm:.2f}x weight" if (_wm is not None and abs(_wm - 1.0) > 0.01) else ""
+            if _is_advisory:
+                _sig_txt = f"{_o['signal']:+.2f} (context only, not counted)"
+            elif _is_suppressed:
+                _sig_txt = f"{_o['signal']:+.2f} (suppressed)"
+            else:
+                _sig_txt = f"{_o['signal']:+.2f}{_wm_txt}"
+            _sig_color = "#64748b" if _is_advisory else _jo_sig_class(_o["signal"])
+            st.markdown(
+                f"<div style='display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b;"
+                f"font-size:0.82em'>"
+                f"<span style='color:#94a3b8;width:130px;flex-shrink:0'>{_o['dimension']}</span>"
+                f"<span style='color:{_sig_color};font-weight:700;width:170px'>{_sig_txt}</span>"
+                f"<span style='color:#cbd5e1;flex:1'>{_o['evidence']} — <em>{_o['source']}</em></span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
     _jo_today = st.session_state.get("_judgment_opinions_today")
+    _jr = None
     if not _jo_today:
         st.info(
             "No opinions captured yet this session. Open 🏠 Home first — "
@@ -9042,95 +9098,31 @@ elif page == "🧑‍⚖️ The Judge":
             unsafe_allow_html=True,
         )
 
-        def _jo_sig_class(sig: float) -> str:
-            if sig > 0.05:
-                return "#4ade80"
-            if sig < -0.05:
-                return "#f87171"
-            return "#94a3b8"
-
-        def _jo_render_group(label: str, result: dict):
-            if not result["opinions"]:
-                return
-            st.markdown(f"**{label}**")
-            if result["veto"]:
-                _v = result["veto"]
-                _supp_srcs = ", ".join(
-                    f"{s['source']} ({s['dimension']}, {s['signal']:+.2f})"
-                    for s in _v["suppressed"]
-                )
-                st.markdown(
-                    f"<div style='background:#78350f33;border-left:3px solid #fbbf24;"
-                    f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
-                    f"color:#fcd34d'>🛑 PROTECTIVE VETO — {_v['protective']['source']} "
-                    f"({_v['protective']['dimension']}, {_v['protective']['signal']:+.2f}) "
-                    f"overrides {_supp_srcs} (suppressed — not blended).</div>",
-                    unsafe_allow_html=True,
-                )
-            for _c in result["contradictions"]:
-                _srcs = " vs ".join(o["source"] for o in _c["opinions"])
-                st.markdown(
-                    f"<div style='background:#7f1d1d33;border-left:3px solid #ef4444;"
-                    f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
-                    f"color:#fca5a5'>⚠ CONTRADICTION — {_c['dimension']}: {_srcs} disagree.</div>",
-                    unsafe_allow_html=True,
-                )
-            for _o in result["opinions"]:
-                _is_advisory = bool(_o.get("advisory"))
-                _is_suppressed = bool(_o.get("suppressed"))
-                _wm = _o.get("weight_multiplier")
-                _wm_txt = f" · {_wm:.2f}x weight" if (_wm is not None and abs(_wm - 1.0) > 0.01) else ""
-                if _is_advisory:
-                    _sig_txt = f"{_o['signal']:+.2f} (context only, not counted)"
-                elif _is_suppressed:
-                    _sig_txt = f"{_o['signal']:+.2f} (suppressed)"
-                else:
-                    _sig_txt = f"{_o['signal']:+.2f}{_wm_txt}"
-                _sig_color = "#64748b" if _is_advisory else _jo_sig_class(_o["signal"])
-                st.markdown(
-                    f"<div style='display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b;"
-                    f"font-size:0.82em'>"
-                    f"<span style='color:#94a3b8;width:130px;flex-shrink:0'>{_o['dimension']}</span>"
-                    f"<span style='color:{_sig_color};font-weight:700;width:170px'>{_sig_txt}</span>"
-                    f"<span style='color:#cbd5e1;flex:1'>{_o['evidence']} — <em>{_o['source']}</em></span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-        st.markdown("##### Per-ticker decomposition")
-        if not _jr["tickers"]:
-            st.caption("No per-ticker opinions this run (no Grow Today picks or active exit signals).")
-        for _tk in sorted(_jr["tickers"]):
-            _jo_render_group(_tk, _jr["tickers"][_tk])
-
-        st.markdown("##### Portfolio-wide")
-        if _jr["portfolio"]["opinions"]:
-            _jo_render_group("Portfolio", _jr["portfolio"])
-        else:
-            st.caption("No portfolio-wide opinions this run.")
-
-        if _jr["reduced_visibility_dims"]:
-            st.caption(
-                "ℹ️ No live witness this run for: " + ", ".join(_jr["reduced_visibility_dims"]) +
-                " — not read as \"clear,\" simply not wired yet or not computed this run."
-            )
-
+    # Page order (2026-08-03 live-review reorder — action-first, reasoning-
+    # underneath, per the design's own pillar 3): posture banner above, then
+    # Coherence audit (the most consequential "is there a live problem" read),
+    # then Track record (how much to trust what follows — independent of
+    # `_jo_today`, so it renders even when Home hasn't been visited this
+    # session), then Portfolio-wide, then the full Per-ticker decomposition
+    # last as the detailed evidence trail. Was previously per-ticker-first,
+    # which buried both "so what" sections at the very bottom.
+    st.markdown("---")
+    st.markdown("##### 🔍 Coherence audit (Phase 4)")
+    st.caption(
+        "The Judge's one piece of real authority so far — an AUDIT, never a "
+        "new gate. Cross-checks every ticker under an active protective veto "
+        "against `_reduce_calls` specifically (the app's other "
+        "already-published cross-feature risk surface — not every "
+        "enforcement mechanism in the app) to catch coherence gaps "
+        "systematically rather than reactively (the design plan's "
+        "\"Job 3\"). Never suppresses or changes any recommendation itself."
+    )
+    if _jr is None:
         st.caption(
-            f"{_jr['n_opinions']} opinion(s) from {_jr['n_sources']} source(s) this session. "
-            f"Persisted to the judgment_opinions table — graded below as history accumulates."
+            "Coherence audit unavailable — no opinions captured this session "
+            "yet. Visit 🏠 Home first."
         )
-
-        st.markdown("---")
-        st.markdown("##### 🔍 Coherence audit (Phase 4)")
-        st.caption(
-            "The Judge's one piece of real authority so far — an AUDIT, never a "
-            "new gate. Cross-checks every ticker under an active protective veto "
-            "against `_reduce_calls` specifically (the app's other "
-            "already-published cross-feature risk surface — not every "
-            "enforcement mechanism in the app) to catch coherence gaps "
-            "systematically rather than reactively (the design plan's "
-            "\"Job 3\"). Never suppresses or changes any recommendation itself."
-        )
+    else:
         _jr_reduce_calls_raw = st.session_state.get("_reduce_calls")
         if _jr_reduce_calls_raw is None:
             st.info(
@@ -9284,6 +9276,32 @@ elif page == "🧑‍⚖️ The Judge":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+    if _jr is not None:
+        st.markdown("---")
+        st.markdown("##### Portfolio-wide")
+        if _jr["portfolio"]["opinions"]:
+            _jo_render_group("Portfolio", _jr["portfolio"])
+        else:
+            st.caption("No portfolio-wide opinions this run.")
+
+        if _jr["reduced_visibility_dims"]:
+            st.caption(
+                "ℹ️ No live witness this run for: " + ", ".join(_jr["reduced_visibility_dims"]) +
+                " — not read as \"clear,\" simply not wired yet or not computed this run."
+            )
+
+        st.caption(
+            f"{_jr['n_opinions']} opinion(s) from {_jr['n_sources']} source(s) this session. "
+            f"Persisted to the judgment_opinions table — graded above as history accumulates."
+        )
+
+        st.markdown("---")
+        st.markdown("##### Per-ticker decomposition")
+        if not _jr["tickers"]:
+            st.caption("No per-ticker opinions this run (no Grow Today picks or active exit signals).")
+        for _tk in sorted(_jr["tickers"]):
+            _jo_render_group(_tk, _jr["tickers"][_tk])
 
 
 # ═════════════════════════════════════════════════════════════════════════════
