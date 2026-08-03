@@ -6261,7 +6261,24 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+            # Layer 1 — sort by composite descending, momentum as tiebreaker
+            new_picks.sort(key=lambda p: (-(p.get("composite_score") or 0), -(p.get("score") or 0)))
+            # Layer 3 — tier count summary: "★ 2 Strong Buy · 3 Buy · sorted by composite ↓"
+            _sb_n  = sum(1 for _p in new_picks if ((_p.get("composite_score") or 0) >= COMPOSITE_STRONG_BUY))
+            _buy_n = len(new_picks) - _sb_n
+            _tier_parts = []
+            if _sb_n:
+                _tier_parts.append(f"★ {_sb_n} Strong Buy")
+            if _buy_n:
+                _tier_parts.append(f"{_buy_n} Buy")
+            if _tier_parts:
+                st.markdown(
+                    f"<div style='color:#64748b;font-size:0.78em;text-align:right;"
+                    f"margin-bottom:4px'>{' · '.join(_tier_parts)} · sorted by composite ↓</div>",
+                    unsafe_allow_html=True,
+                )
         _ac_cov_map = _cached_analyst_coverage_recent()   # hoisted; one query, annotation-only
+        _prev_tier = None
         for _gp in new_picks:
             _gx         = _gp.get("xref", {})
             _reconciled = _gx.get("verdict_reconciled", {}) or {}
@@ -6274,6 +6291,33 @@ if page == "🏠 Home":
             _conv       = _gp.get("conviction", "unverified")
             _comp_sc    = _gp.get("composite_score")   # None if not yet fetched
             _comp_lbl   = _gp.get("composite_label", "")
+
+            # Layer 2 — tier separator: renders once when entering each composite band.
+            # After the Layer-1 sort, all Strong Buy cards come first so the separator
+            # appears exactly once per band transition (Strong Buy → Buy).
+            _cur_tier = "strong_buy" if (_comp_sc or 0) >= COMPOSITE_STRONG_BUY else "buy"
+            if _cur_tier != _prev_tier:
+                _prev_tier = _cur_tier
+                if _cur_tier == "strong_buy":
+                    st.markdown(
+                        "<div style='display:flex;align-items:center;gap:8px;margin:8px 0 4px'>"
+                        "<span style='font-size:0.78em;font-weight:700;color:#fbbf24;"
+                        "letter-spacing:0.05em'>★ STRONG BUY</span>"
+                        "<div style='flex:1;height:1px;background:#fbbf2455'></div>"
+                        "<span style='font-size:0.74em;color:#92400e'>composite ≥ 75</span>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        "<div style='display:flex;align-items:center;gap:8px;margin:12px 0 4px'>"
+                        "<span style='font-size:0.78em;font-weight:700;color:#64748b;"
+                        "letter-spacing:0.05em'>BUY</span>"
+                        "<div style='flex:1;height:1px;background:#47556955'></div>"
+                        "<span style='font-size:0.74em;color:#475569'>composite 65–74</span>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
 
             # Conviction badge: color + text driven by composite score
             _conv_cfg = {
