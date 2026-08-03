@@ -680,6 +680,17 @@ conversation, before any code.
   Re-verified after all 3 fixes: py_compile clean, 3076/3076 tests pass, both
   manual scenarios re-run with identical results.
 
+  **Live-review follow-up, same session (commit `f12fe3d`):** the user
+  flagged that the per-ticker decomposition (the longest, most granular
+  section) was rendering first, burying both Coherence audit and Track
+  record at the very bottom — backwards from pillar 3 (action-first,
+  reasoning-underneath). Reordered the page: posture banner → Coherence
+  audit (Phase 4) → Track record (Phase 2+3, still renders independent of
+  `_jo_today`) → Portfolio-wide → Per-ticker decomposition last. Pure UI
+  reorganization, no logic/constants/scoring touched (hard rule #4 doesn't
+  apply); verified py_compile clean, 3076/3076 tests pass, no duplicate
+  section headers.
+
   **This closes the entire 5-phase Judge build (0-4).** Phase 4 delivers on
   the design's original "Job 3: audit for cross-feature contradiction
   systematically" promise — the Judge's verdict is now consequential
