@@ -9106,9 +9106,117 @@ elif page == "🧑‍⚖️ The Judge":
 
         st.caption(
             f"{_jr['n_opinions']} opinion(s) from {_jr['n_sources']} source(s) this session. "
-            f"Persisted to the judgment_opinions table for Phase 2's future grading harness — "
-            f"nothing reads that history yet."
+            f"Persisted to the judgment_opinions table — graded below as history accumulates."
         )
+
+    st.markdown("---")
+    st.markdown("##### 📊 Track record (Phase 2)")
+    st.caption(
+        "Grades each witness's PAST opinions against what actually happened — "
+        "not the Judge's aggregate posture, which is never itself graded (see "
+        "the design plan's Q2). Still equal-weight; nothing here changes a "
+        "recommendation. A witness needs at least "
+        f"{BEHAVIORAL_MIN_SAMPLE_N} graded opinions before its accuracy is "
+        "shown as real signal rather than noise."
+    )
+
+    if st.button("▶ Run grading", key="_judge_run_grading"):
+        with st.spinner("Grading matured opinions…"):
+            try:
+                from stock_analyzer.judgment_grading import (
+                    grade_ticker_opinion, grade_portfolio_opinion,
+                    portfolio_value_series_from_snapshots,
+                )
+                _jg_opinions_df = db.load_judgment_opinions(days_back=365)
+                _jg_grades_df = db.load_judgment_grades(days_back=365)
+                _jg_already_graded = set()
+                if not _jg_grades_df.empty:
+                    _jg_already_graded = set(
+                        zip(_jg_grades_df["source"], _jg_grades_df["dimension"],
+                            _jg_grades_df["ticker"], _jg_grades_df["signal_date"].astype(str))
+                    )
+
+                _jg_today_d = _today_et()
+                _jg_spy_by_date: dict = {}
+                try:
+                    _jg_spy_hist = _cached_spy("1y")
+                    if _jg_spy_hist is not None and not _jg_spy_hist.empty \
+                            and "Close" in _jg_spy_hist.columns:
+                        for _jsi, _jsr in _jg_spy_hist.iterrows():
+                            _jsd = _jsi.date() if hasattr(_jsi, "date") else None
+                            try:
+                                _jsc = float(_jsr["Close"])
+                            except (TypeError, ValueError):
+                                _jsc = None
+                            if _jsd is not None and _jsc and _jsc > 0:
+                                _jg_spy_by_date[_jsd] = _jsc
+                except Exception:
+                    _jg_spy_by_date = {}
+                _jg_snapshots_df = db.load_daily_snapshots()
+                _jg_portfolio_value_by_date = portfolio_value_series_from_snapshots(_jg_snapshots_df)
+
+                _jg_new_grades = []
+                _jg_n_pending = 0
+                _jg_n_skipped_advisory = 0
+                if not _jg_opinions_df.empty:
+                    for _, _op_row in _jg_opinions_df.iterrows():
+                        if bool(_op_row.get("advisory")):
+                            _jg_n_skipped_advisory += 1
+                            continue
+                        _op_ticker = _op_row.get("ticker")
+                        _op_ticker = None if _op_ticker == "_PORTFOLIO" else _op_ticker
+                        _op_signal_date = str(_op_row.get("signal_date"))
+                        _op_key = (_op_row.get("source"), _op_row.get("dimension"), _op_row.get("ticker"), _op_signal_date)
+                        if _op_key in _jg_already_graded:
+                            continue
+                        _op_dict = {
+                            "source": _op_row.get("source"),
+                            "dimension": _op_row.get("dimension"),
+                            "ticker": _op_ticker,
+                            "signal": float(_op_row.get("signal")),
+                            "as_of": str(_op_row.get("as_of")),
+                        }
+                        if _op_ticker is None:
+                            _jg_graded = grade_portfolio_opinion(
+                                _op_dict, _jg_portfolio_value_by_date, _jg_spy_by_date, _jg_today_d,
+                            )
+                        else:
+                            _jg_graded = grade_ticker_opinion(
+                                _op_dict, _cached_historical_close, _jg_spy_by_date, _jg_today_d,
+                            )
+                        if _jg_graded is None:
+                            _jg_n_pending += 1
+                        else:
+                            _jg_new_grades.append(_jg_graded)
+
+                if _jg_new_grades:
+                    db.save_judgment_grades_batch(_jg_new_grades)
+                st.success(
+                    f"Graded {len(_jg_new_grades)} newly-matured opinion(s). "
+                    f"{_jg_n_pending} still pending maturity. "
+                    f"{_jg_n_skipped_advisory} advisory (never graded)."
+                )
+            except Exception as _jg_err:
+                st.error(f"Grading pass failed: {str(_jg_err)[:300]}")
+
+    from stock_analyzer.judgment_grading import track_record_summary
+    _jg_all_grades = db.load_judgment_grades(days_back=365)
+    _jg_track_record = track_record_summary(_jg_all_grades, BEHAVIORAL_MIN_SAMPLE_N)
+    if not _jg_track_record:
+        st.caption("No graded opinions yet — click ▶ Run grading once some opinions have matured.")
+    else:
+        for _tr in _jg_track_record:
+            _tr_acc_txt = f"{_tr['accuracy']*100:.0f}%" if _tr["sufficient_sample"] else "building history"
+            _tr_color = "#4ade80" if (_tr["sufficient_sample"] and _tr["accuracy"] >= 0.5) else "#94a3b8"
+            st.markdown(
+                f"<div style='display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b;"
+                f"font-size:0.82em'>"
+                f"<span style='color:#cbd5e1;width:180px;flex-shrink:0'>{_tr['source']} / {_tr['dimension']}</span>"
+                f"<span style='color:{_tr_color};font-weight:700;width:140px'>{_tr_acc_txt}</span>"
+                f"<span style='color:#64748b'>n={_tr['n']} ({_tr['n_correct']} correct)</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -19372,6 +19480,163 @@ elif page == "📒 Trade Journal":
             st.session_state.pop("_tj_pending_sell", None)
             st.rerun()
 
+    # ── BUY confirmation card ──────────────────────────────────────────────
+    _pending_buy = st.session_state.get("_tj_pending_buy")
+    if _pending_buy:
+        _pb_ticker = _pending_buy["ticker"]
+        _pb_shares = _pending_buy["shares"]
+        _pb_price  = _pending_buy["price"]
+        _pb_notes  = _pending_buy.get("notes")
+        _pb_thesis = _pending_buy.get("user_thesis")
+        _pb_commit = _pending_buy.get("premortem_commitment")
+        _pb_extra_lines = []
+        if _pb_notes:
+            _pb_extra_lines.append(f"**Notes:** {_pb_notes}")
+        if _pb_thesis:
+            _pb_thesis_snip = (_pb_thesis[:200] + "…") if len(_pb_thesis) > 200 else _pb_thesis
+            _pb_extra_lines.append(f"**Thesis:** {_pb_thesis_snip}")
+        if _pb_commit:
+            _pb_extra_lines.append(f"**What would make me wrong:** {_pb_commit}")
+        _pb_extra = ("\n\n" + "\n\n".join(_pb_extra_lines)) if _pb_extra_lines else ""
+        st.info(
+            f"**Confirm this BUY before it's recorded**\n\n"
+            f"BUY **{_pb_shares:g} shares of {_pb_ticker}** "
+            f"at **${_pb_price:,.2f}**"
+            f"{_pb_extra}"
+        )
+        _pb_c1, _pb_c2 = st.columns([1, 1])
+        if _pb_c1.button("✅ Confirm BUY", type="primary", key="_tj_confirm_buy",
+                          use_container_width=True,
+                          disabled=st.session_state.get("_readonly", False)):
+            _pb_saved = db.save_trade(_pending_buy)
+            if _pb_saved or not db.has_db():
+                st.session_state["_tj_thesis_loaded_for"] = None
+                st.session_state.pop("_tj_thesis_draft_text", None)
+                st.session_state.pop("_tj_thesis_draft_for", None)
+                st.session_state.pop("_tj_thesis_seed", None)
+                st.session_state.pop("_tj_premortem_case", None)
+                st.session_state.pop("_tj_premortem_case_for", None)
+                st.session_state.pop("_tj_premortem_commitment", None)
+                if not db.has_db():
+                    _pb_new_row = pd.DataFrame([{**_pending_buy, "id": None, "traded_at": datetime.now().isoformat()}])
+                    st.session_state.trades_df = pd.concat(
+                        [_pb_new_row, st.session_state.trades_df], ignore_index=True
+                    )
+                else:
+                    st.session_state.trades_df = db.load_trades()
+                _pb_h_df   = st.session_state.holdings_df.copy()
+                _pb_h_mask = _pb_h_df["Ticker"] == _pb_ticker
+                if _pb_h_mask.any():
+                    _pb_h_idx      = _pb_h_df[_pb_h_mask].index[0]
+                    _pb_old_shares = float(_pb_h_df.at[_pb_h_idx, "Shares"])
+                    _pb_old_avg    = float(_pb_h_df.at[_pb_h_idx, "Avg Cost ($)"])
+                    _pb_new_shares = _pb_old_shares + _pb_shares
+                    _pb_new_avg    = round(
+                        (_pb_old_shares * _pb_old_avg + _pb_shares * _pb_price) / _pb_new_shares, 4
+                    )
+                    _pb_h_df.at[_pb_h_idx, "Shares"] = (
+                        int(_pb_new_shares) if _pb_new_shares == int(_pb_new_shares) else _pb_new_shares
+                    )
+                    _pb_h_df.at[_pb_h_idx, "Avg Cost ($)"] = _pb_new_avg
+                    st.success(
+                        f"✅ Added **{_pb_shares:.0f} shares of {_pb_ticker}** @ ${_pb_price:.2f}  ·  "
+                        f"Holdings: {_pb_old_shares:.0f} → {_pb_new_shares:.0f} shares  ·  "
+                        f"New avg cost: **${_pb_new_avg:.2f}**"
+                    )
+                else:
+                    _pb_new_h_row = pd.DataFrame([{
+                        "Ticker":       _pb_ticker,
+                        "Shares":       int(_pb_shares),
+                        "Avg Cost ($)": round(_pb_price, 4),
+                    }])
+                    _pb_h_df = pd.concat([_pb_h_df, _pb_new_h_row], ignore_index=True)
+                    st.success(
+                        f"✅ New position opened: **{_pb_shares:.0f} × {_pb_ticker}** @ ${_pb_price:.2f}"
+                    )
+                db.save_holdings(_pb_h_df)
+                st.session_state.holdings_df = _pb_h_df
+                # Reads pre-trade _last_port_df; must precede _refresh_portfolio_cache_after_trade.
+                try:
+                    _pb_cc_pdf    = st.session_state.get("_last_port_df")
+                    _pb_cc_pv     = _f(st.session_state.get("_portfolio_value"), 0.0)
+                    _pb_cc_gate   = st.session_state.get("_acct_gate_cache") or {}
+                    _pb_cc_denom  = _f(_pb_cc_gate.get("denom"), 0.0) or _pb_cc_pv
+                    _pb_cc_margin = _pb_cc_gate.get("basis") in ("account", "over-levered")
+                    if _pb_cc_pdf is not None and not _pb_cc_pdf.empty and _pb_cc_pv > 0:
+                        _pb_cc_match = _pb_cc_pdf[_pb_cc_pdf["Ticker"] == _pb_ticker]
+                        _pb_cc_existing_mv = (
+                            float(_pb_cc_match["Market Value"].iloc[0])
+                            if not _pb_cc_match.empty else 0.0
+                        )
+                        _pb_cc_sector = (
+                            str(_pb_cc_match["Sector"].iloc[0]) if not _pb_cc_match.empty
+                            else resolve_sector(_pb_ticker, None)
+                        )
+                        _pb_cc_sector_mv = (
+                            float(_pb_cc_pdf[_pb_cc_pdf["Sector"] == _pb_cc_sector]["Market Value"].sum())
+                            if "Sector" in _pb_cc_pdf.columns else 0.0
+                        )
+                        _pb_cc = assess_add_concentration(
+                            ticker=_pb_ticker, add_shares=_pb_shares, price=_pb_price,
+                            existing_name_mv=_pb_cc_existing_mv, sector_mv=_pb_cc_sector_mv,
+                            portfolio_value=_pb_cc_denom,
+                            single_ceiling=SINGLE_NAME_CEILING,
+                            sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
+                        )
+                        if _pb_cc:
+                            _pb_cc_msgs = []
+                            if _pb_cc["name_breach"]:
+                                _pb_cc_trim = _pb_cc["suggested_trim_shares"]
+                                _pb_cc_msgs.append(
+                                    f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_wt']:.0f}%** of your "
+                                    f"book (single-name ceiling {SINGLE_NAME_CEILING:.0f}%)."
+                                    + (f" To get back under, trim ~**{_pb_cc_trim} share(s)**."
+                                       if _pb_cc_trim > 0 else "")
+                                )
+                            if _pb_cc["sector_hard"]:
+                                _pb_cc_msgs.append(
+                                    f"Sector **{_pb_cc_sector}** is now ~**{_pb_cc['post_sector_wt']:.0f}%** "
+                                    f"— above the {SECTOR_CEILING:.0f}% sector cap."
+                                )
+                            elif _pb_cc["sector_elevated"]:
+                                _pb_cc_msgs.append(
+                                    f"Sector **{_pb_cc_sector}** is now ~**{_pb_cc['post_sector_wt']:.0f}%** "
+                                    f"— approaching the {SECTOR_CEILING:.0f}% cap "
+                                    f"(warn {SECTOR_ELEVATED:.0f}%)."
+                                )
+                            if _pb_cc_msgs:
+                                st.warning(
+                                    "⚠️ **Concentration check** — "
+                                    + "  ".join(_pb_cc_msgs)
+                                    + ("\n\n⚖️ _Measured on your **net capital** (margin nets the "
+                                       "denominator down) — these weights run higher than the "
+                                       "equity-only view._" if _pb_cc_margin else "")
+                                    + "\n\nNot blocked (this is a record of a real trade), but a "
+                                    "concentrated position amplifies every loss. Consider trimming, "
+                                    "or knowingly accept the higher single-name risk."
+                                )
+                except Exception:
+                    pass
+                _refresh_portfolio_cache_after_trade(_pb_h_df)
+            st.session_state.pop("_tj_pending_buy", None)
+            st.session_state.pop("_tj_prefill", None)
+            st.session_state.pop("_tj_override_price", None)
+            st.session_state.pop("_tj_override_ticker", None)
+            st.session_state.pop("_tj_override_sell", None)
+            st.session_state.pop("_tj_drift_checked", None)
+            st.session_state.pop("_tj_drift_state",   None)
+            st.session_state["_tj_last_submit_sig"] = (_pb_ticker, "BUY", _pb_shares)
+            st.rerun()
+        if _pb_c2.button("✗ Cancel", key="_tj_cancel_buy", use_container_width=True):
+            st.session_state["_tj_prefill"] = {
+                "ticker": _pb_ticker,
+                "action": "BUY",
+                "shares": _pb_shares,
+                "price":  _pb_price,
+            }
+            st.session_state.pop("_tj_pending_buy", None)
+            st.rerun()
+
     trades_df = st.session_state.get("trades_df", db.load_trades())
     stats = performance_stats(trades_df)
 
@@ -20163,213 +20428,12 @@ elif page == "📒 Trade Journal":
                         (st.session_state.get("_tj_premortem_commitment") or "").strip() or None
                     ) if action == "BUY" else None,
                 }
-                # ── SELL: hold for confirmation — don't write to DB yet ──────
+                # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 if action == "SELL":
                     st.session_state["_tj_pending_sell"] = record
-                    st.rerun()
-                saved = db.save_trade(record)
-                if saved or not db.has_db():
-                    # F-5: reset thesis seeding so the field refreshes next run.
-                    # Only touch non-widget keys here (the text_area's own key must
-                    # not be mutated post-instantiation); loaded_for=None forces a
-                    # reseed on the next run, clearing the just-saved draft.
-                    st.session_state["_tj_thesis_loaded_for"] = None
-                    st.session_state.pop("_tj_thesis_draft_text", None)
-                    st.session_state.pop("_tj_thesis_draft_for", None)
-                    st.session_state.pop("_tj_thesis_seed", None)
-                    # Concept C: clear the pre-mortem state so the next BUY
-                    # (a different ticker) doesn't inherit a stale case-against
-                    # or a leftover commitment text. Popping (not assigning) the
-                    # widget-bound key is required post-render — same pattern
-                    # as the override checkboxes below.
-                    st.session_state.pop("_tj_premortem_case", None)
-                    st.session_state.pop("_tj_premortem_case_for", None)
-                    st.session_state.pop("_tj_premortem_commitment", None)
-                    if not db.has_db():
-                        new_row = pd.DataFrame([{**record, "id": None, "traded_at": datetime.now().isoformat()}])
-                        st.session_state.trades_df = pd.concat(
-                            [new_row, st.session_state.trades_df], ignore_index=True
-                        )
-                    else:
-                        st.session_state.trades_df = db.load_trades()
-
-                    # ── Sync holdings with trade ─────────────────────────
-                    h_df = st.session_state.holdings_df.copy()
-                    mask = h_df["Ticker"] == ticker_input
-
-                    if action == "SELL":
-                        if mask.any():
-                            idx = h_df[mask].index[0]
-                            current_shares = float(h_df.at[idx, "Shares"])
-                            new_shares = current_shares - shares_val
-                            if new_shares <= 0:
-                                h_df = h_df.drop(idx).reset_index(drop=True)
-                                st.success(
-                                    f"✅ **{ticker_input}** fully exited — position removed from portfolio."
-                                )
-                            else:
-                                h_df.at[idx, "Shares"] = (
-                                    int(new_shares) if new_shares == int(new_shares) else new_shares
-                                )
-                                pnl_str = f"${realized_pnl:+,.2f}" if realized_pnl is not None else "—"
-                                pnl_pct = ((price_val - cost_basis_val) / cost_basis_val * 100
-                                           if cost_basis_val else 0)
-                                st.success(
-                                    f"✅ Sold **{shares_val:.0f} shares of {ticker_input}** "
-                                    f"@ ${price_val:.2f}  ·  "
-                                    f"Holdings: {current_shares:.0f} → {new_shares:.0f} shares  ·  "
-                                    f"Realized P&L: **{pnl_str}** ({pnl_pct:+.1f}%)"
-                                )
-                            db.save_holdings(h_df)
-                            st.session_state.holdings_df = h_df
-                            _refresh_portfolio_cache_after_trade(h_df)
-                        else:
-                            st.success(
-                                f"✅ SELL recorded for **{ticker_input}** "
-                                f"(not in current holdings — logged as historical trade)."
-                            )
-
-                    else:  # BUY
-                        if mask.any():
-                            # Add to existing position — recalculate weighted avg cost
-                            idx = h_df[mask].index[0]
-                            old_shares   = float(h_df.at[idx, "Shares"])
-                            old_avg_cost = float(h_df.at[idx, "Avg Cost ($)"])
-                            new_shares   = old_shares + shares_val
-                            new_avg_cost = round(
-                                (old_shares * old_avg_cost + shares_val * price_val) / new_shares, 4
-                            )
-                            h_df.at[idx, "Shares"] = (
-                                int(new_shares) if new_shares == int(new_shares) else new_shares
-                            )
-                            h_df.at[idx, "Avg Cost ($)"] = new_avg_cost
-                            st.success(
-                                f"✅ Added **{shares_val:.0f} shares of {ticker_input}** @ ${price_val:.2f}  ·  "
-                                f"Holdings: {old_shares:.0f} → {new_shares:.0f} shares  ·  "
-                                f"New avg cost: **${new_avg_cost:.2f}**"
-                            )
-                        else:
-                            # New position — add row
-                            new_row = pd.DataFrame([{
-                                "Ticker":       ticker_input,
-                                "Shares":       int(shares_val),
-                                "Avg Cost ($)": round(price_val, 4),
-                            }])
-                            h_df = pd.concat([h_df, new_row], ignore_index=True)
-                            st.success(
-                                f"✅ New position opened: **{shares_val:.0f} × {ticker_input}** @ ${price_val:.2f}"
-                            )
-                        db.save_holdings(h_df)
-                        st.session_state.holdings_df = h_df
-
-                        # ── Concentration nudge (NON-blocking) ──────────────
-                        # The journal records trades already executed at the
-                        # broker, so we never block — but a BUY that pushes a
-                        # name past the single-name (or sector) ceiling is
-                        # exactly how SPCX quietly grew to 23%. Surface the
-                        # resulting weight + the trim-back math so the discipline
-                        # is visible at the moment it's breached. Enforcement was
-                        # previously asymmetric (recommendations gated, manual
-                        # buys unchecked). See concentration.assess_add_concentration.
-                        #
-                        # MUST run before _refresh_portfolio_cache_after_trade below:
-                        # assess_add_concentration takes PRE-trade existing_name_mv/
-                        # sector_mv/portfolio_value and adds this buy itself — reading
-                        # _last_port_df/_portfolio_value after they've been refreshed
-                        # to post-trade values would double-count the shares just bought.
-                        try:
-                            _cc_pdf = st.session_state.get("_last_port_df")
-                            _cc_pv  = _f(st.session_state.get("_portfolio_value"), 0.0)
-                            # Concentration gate basis = equity (2026-07-09 — reqs
-                            # G-19): the published denom is invested equity, so the
-                            # nudge fires on the same equity weight as the hard gate.
-                            _cc_gate   = st.session_state.get("_acct_gate_cache") or {}
-                            _cc_denom  = _f(_cc_gate.get("denom"), 0.0) or _cc_pv
-                            _cc_margin = _cc_gate.get("basis") in ("account", "over-levered")
-                            if _cc_pdf is not None and not _cc_pdf.empty and _cc_pv > 0:
-                                _cc_match = _cc_pdf[_cc_pdf["Ticker"] == ticker_input]
-                                _cc_existing_mv = (
-                                    float(_cc_match["Market Value"].iloc[0])
-                                    if not _cc_match.empty else 0.0
-                                )
-                                _cc_sector = (
-                                    str(_cc_match["Sector"].iloc[0]) if not _cc_match.empty
-                                    else resolve_sector(ticker_input, None)
-                                )
-                                _cc_sector_mv = (
-                                    float(_cc_pdf[_cc_pdf["Sector"] == _cc_sector]["Market Value"].sum())
-                                    if "Sector" in _cc_pdf.columns else 0.0
-                                )
-                                _cc = assess_add_concentration(
-                                    ticker=ticker_input, add_shares=shares_val, price=price_val,
-                                    existing_name_mv=_cc_existing_mv, sector_mv=_cc_sector_mv,
-                                    portfolio_value=_cc_denom,
-                                    single_ceiling=SINGLE_NAME_CEILING,
-                                    sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
-                                )
-                                if _cc:
-                                    _cc_msgs = []
-                                    if _cc["name_breach"]:
-                                        _cc_trim = _cc["suggested_trim_shares"]
-                                        _cc_msgs.append(
-                                            f"**{ticker_input}** is now ~**{_cc['post_name_wt']:.0f}%** of your "
-                                            f"book (single-name ceiling {SINGLE_NAME_CEILING:.0f}%)."
-                                            + (f" To get back under, trim ~**{_cc_trim} share(s)**."
-                                               if _cc_trim > 0 else "")
-                                        )
-                                    if _cc["sector_hard"]:
-                                        _cc_msgs.append(
-                                            f"Sector **{_cc_sector}** is now ~**{_cc['post_sector_wt']:.0f}%** "
-                                            f"— above the {SECTOR_CEILING:.0f}% sector cap."
-                                        )
-                                    elif _cc["sector_elevated"]:
-                                        _cc_msgs.append(
-                                            f"Sector **{_cc_sector}** is now ~**{_cc['post_sector_wt']:.0f}%** "
-                                            f"— approaching the {SECTOR_CEILING:.0f}% cap "
-                                            f"(warn {SECTOR_ELEVATED:.0f}%)."
-                                        )
-                                    if _cc_msgs:
-                                        st.warning(
-                                            "⚠️ **Concentration check** — "
-                                            + "  ".join(_cc_msgs)
-                                            + ("\n\n⚖️ _Measured on your **net capital** (margin nets the "
-                                               "denominator down) — these weights run higher than the "
-                                               "equity-only view._" if _cc_margin else "")
-                                            + "\n\nNot blocked (this is a record of a real trade), but a "
-                                            "concentrated position amplifies every loss. Consider trimming, "
-                                            "or knowingly accept the higher single-name risk."
-                                        )
-                        except Exception:
-                            pass
-
-                        _refresh_portfolio_cache_after_trade(h_df)
-
-                    # Consume the prefill now that the trade was recorded —
-                    # any future visit to this page should start with a clean
-                    # form. Paired with the get() at the top of the page.
-                    st.session_state.pop("_tj_prefill", None)
-                    # Clear the price-sanity override so the next trade is
-                    # checked by default — overrides shouldn't be sticky.
-                    # Pop the widget-bound key rather than assigning to it;
-                    # direct writes to a widget's key after the widget has
-                    # been instantiated in the current run raise
-                    # StreamlitAPIException. Popping lets the checkboxes
-                    # re-init to their default (unchecked) on the next render.
-                    st.session_state.pop("_tj_override_price", None)
-                    st.session_state.pop("_tj_override_ticker", None)
-                    st.session_state.pop("_tj_override_sell", None)
-                    # Force the page-load drift check to re-run on next
-                    # render. Without this, any drift introduced by an
-                    # override-permitted save (e.g. backfill SELL) would
-                    # only surface in the NEXT session, not immediately.
-                    st.session_state.pop("_tj_drift_checked", None)
-                    st.session_state.pop("_tj_drift_state",   None)
-                    # Record this submission's signature so an immediate
-                    # double-click (same ticker/action/shares within 15s) is
-                    # rejected as a duplicate on the next run.
-                    st.session_state["_tj_last_submit_sig"] = _submit_sig
-                    st.session_state["_tj_last_submit_ts"]  = _tj_time.time()
-                    st.rerun()
+                else:
+                    st.session_state["_tj_pending_buy"] = record
+                st.rerun()
 
 
     with _tj_tab_perf:
