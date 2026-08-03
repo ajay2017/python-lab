@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
 **Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
-**Status:** Phase 0 SHIPPED 2026-08-03 (design-reviewed: Opus 4.8 FIX-FIRST → all findings incorporated). Table ships inert until DDL is manually applied in Supabase. Phase 1 (read-only Judge, touches the Daily Brief) is next and requires its own Opus review before shipping per hard rule #4 — not started.
+**Status:** Phase 0 SHIPPED 2026-08-03, DDL applied. Phase 1 (read-only "🧑‍⚖️ The Judge" nav page) built 2026-08-03 — code-reviewed (Opus 4.8: FIX-FIRST, 2 blocking, both fixed same session) — ready to commit/push. Phase 2 (grading harness) not started.
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -266,8 +266,8 @@ neutral-prior weight, the confidence-degradation factor for offline/stale witnes
 the `−1…+1` signal cutpoints, and the contradiction-audit "opposite signal" boundary.
 These are investment-policy decisions — set with the user, never inline literals.
 
-**Phase 1 scope caveats (post-review):** (a) beside-the-brief placement *intentionally*
-duplicates a risk surface (a deliberate, temporary exception to
+**Phase 1 scope caveats (post-review):** (a) the Judge duplicates a risk surface
+already shown elsewhere *intentionally* (a deliberate, temporary exception to
 single-surface-per-dimension) purely as a validation overlay — resolved when Phase 4
 replaces the brief. (b) Phase 1 equal-weight running validates the **schema, the
 contradiction-audit, and the decomposition** — it does **not** validate
@@ -276,10 +276,22 @@ Slow dimensions (`quality`, `thesis_integrity`) at n≥20 on a ~5–7-name book 
 months to earn weight, so the Judge runs equal-weight for a long time — expected, not a
 bug.
 
-**Phase 1 placement (decided):** the read-only Judge sits **beside** the existing Home
-brief first (observation panel), so its posture can be compared against the user's own
-read and the current brief at zero risk. It **replaces** the brief only at Phase 4,
-once it has authority and a track record.
+**Phase 1 placement — REVISED 2026-08-03 after mockup review.** Original decision was
+"beside the existing Home brief" (embedded on Home, next to Grow Today). Building a
+static HTML mockup first (`docs/plans/judgment-layer-phase1-mockup.html`, per
+`feedback_mockup_first_ux`) and viewing it rendered surfaced a real problem the text
+description missed: full per-ticker decomposition (every witness + evidence, per the
+decomposability redline) across 5+ picks plus a portfolio-wide section makes Home
+substantially longer, right after a separate pass to make Grow Today more scannable.
+**Revised decision: a standalone nav page, "🧑‍⚖️ The Judge," in the `MAIN` nav group
+between Home and Summary** (not embedded in Home). Rationale: (1) fits Phase 1's actual
+role — a page you visit to cross-check, not a wall of text competing with the
+actionable Brief; (2) sets up a cleaner Phase 4 story — *promoting* a page that has
+earned trust into Home's primary surface is a clearer graduation moment than something
+quietly embedded the whole time; (3) gives Phase 2/3 (grading-harness output,
+track-record stats) room to grow without ever crowding Home. Grow Today's pick cards
+stay untouched (no teaser link) to keep this phase's scope tight — decided alongside
+the placement pivot.
 
 ## OPEN QUESTIONS — ✅ all resolved 2026-08-03
 
@@ -351,3 +363,35 @@ conversation, before any code.
   needs manual application in Supabase before any data lands (ships inert until then,
   same as `analyst_target_snapshots`). Phase 1 (read-only Judge) is next and DOES
   require its own Opus review before shipping.
+- **2026-08-03** — DDL applied by user in Supabase; `judgment_opinions` now live.
+- **2026-08-03** — **Phase 1 built**: mockup-first (`docs/plans/judgment-layer-phase1-mockup.html`,
+  per `feedback_mockup_first_ux`) surfaced that embedding full per-ticker decomposition
+  beside Grow Today would make Home too long — placement REVISED to a standalone
+  "🧑‍⚖️ The Judge" nav page (see the placement section above). Built
+  `stock_analyzer/judgment_synthesis.py` (the veto/contradiction/blend routing engine)
+  + 9 new `JUDGMENT_*` constants + the new page. **Opus 4.8 code review: FIX-FIRST, 2
+  blocking.** (1) `verdict_reconciliation` (a meta-witness already synthesizing
+  momentum+composite+news+earnings) was emitted as a non-advisory peer under `quality`
+  alongside `composite_score` — this double-counted composite in the blend AND caused
+  the contradiction audit to flag their by-design divergence as a peer conflict on
+  every verdict_divergence-class ticker (the app's own known incident class). Fixed:
+  `verdict_reconciliation` now built with `advisory=True` — still shown in the
+  decomposition as context, excluded from blend/contradiction. (2) The veto only
+  tagged the FIRST positive acquisitive opinion as suppressed; sibling positive
+  opinions on the same vetoed ticker rendered as live green votes directly beneath the
+  veto banner — an incoherent double-surface. Fixed: `veto["suppressed"]` is now the
+  full list of every positive acquisitive opinion on that ticker, and the UI marks all
+  of them. Also fixed while in there (non-blocking, cheap): the veto now picks the
+  MOST SEVERE (lowest-signal) protective opinion when more than one qualifies, not
+  simply the first found; added `JUDGMENT_SCORE_MIDPOINT` constant to remove the last
+  inline `-1..+1` normalization literal. Two non-blocking findings deliberately left
+  as documented technical debt for Phase 3/4 (posture_signal on veto still only uses
+  the winning protective opinion's own value, ignoring other same-ticker opinions —
+  harmless today since posture_signal isn't rendered anywhere yet; protective "clear/
+  calm" signals are positive, which could inject bullishness into a future blend —
+  both flagged in code comments for revisit before any authority is granted). All
+  fixes verified: py_compile clean, `check_constants_documented.py` passes, 3076/3076
+  tests pass, 4 manual synthesis scenarios re-verified after the fix (advisory
+  exclusion, multi-opinion suppression, most-severe-wins, regression). Review = Opus
+  reviewer (Opus 4.8, claude-opus-4-8[1m]): FIX-FIRST, 2 blocking — both fixed same
+  session, cited in commit body per hard rule #4.

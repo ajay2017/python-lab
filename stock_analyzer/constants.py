@@ -1119,3 +1119,27 @@ QA_PREMORTEM_TRADE_MATCH_WINDOW_DAYS = 3    # window (calendar days on/after a r
 PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS   = 2    # of 3 traits (composite band / momentum band / top sector) that must match before the "matches your winning profile" caption renders on a Grow Today pick
 PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW   = 25   # lower percentile of past winners' composite/momentum scores defining the "typical winner" band
 PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH  = 75   # upper percentile of the same band
+
+# ── Judgment layer ("The Judge", docs/plans/judgment-layer.md) ─────────────────
+# Phase 0/1 only: opinion-tagging + a read-only, no-authority reconciliation
+# ("🧑‍⚖️ The Judge" page). These are the "-1..+1 signal cutpoints" and the
+# veto/contradiction boundaries the Opus design review (2026-08-03) required to
+# live here rather than as inline literals — same investment-policy-adjacent
+# reasoning as any other threshold in this file, even though Phase 1 has no
+# authority to act on them yet. Confirm before tuning.
+JUDGMENT_EXIT_SIGNAL_MAP = {
+    "WATCH": -0.3, "TRIM": -0.6, "EXIT": -0.9, "RISK_OFF": -0.9,
+}  # exit_advisor deterioration tier -> normalized position_health signal
+JUDGMENT_FRAGILITY_SIGNAL_MAP = {
+    "calm": 0.3, "caution": -0.3, "fragile": -0.8,
+}  # fragility_gauge severity -> normalized structural_risk signal
+JUDGMENT_VERDICT_SIGNAL_MAP = {
+    "go": 0.8, "verify": 0.0, "caution": -0.4, "skip": -0.9,
+}  # signal_reconciliation verdict tier -> normalized quality signal
+JUDGMENT_CONCENTRATION_BREACH_SIGNAL      = -0.8  # at/above SINGLE_NAME_CEILING or SECTOR_CEILING
+JUDGMENT_CONCENTRATION_NEAR_BREACH_SIGNAL = -0.3  # at/above this fraction of either ceiling but not yet breached
+JUDGMENT_CONCENTRATION_NEAR_BREACH_RATIO  = 0.8   # "near" = 80% of the hard ceiling
+JUDGMENT_CONCENTRATION_CLEAR_SIGNAL       = 0.3   # below the near-breach ratio on both ceilings
+JUDGMENT_VETO_PROTECTIVE_THRESHOLD     = -0.4  # a protective-dimension opinion at/below this vetoes EVERY same-ticker positive acquisitive opinion outright (never blended) — the most severe (lowest-signal) protective opinion wins when more than one qualifies
+JUDGMENT_CONTRADICTION_MIN_MAGNITUDE   = 0.3   # minimum |signal| for a same-dimension, opposite-sign opinion pair to be flagged as a contradiction — avoids flagging near-neutral noise as a real conflict
+JUDGMENT_SCORE_MIDPOINT = 50.0  # 0-100 score-scale midpoint used to normalize composite_score/scanner_momentum to the -1..+1 opinion signal range: (score - midpoint) / midpoint

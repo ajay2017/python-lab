@@ -387,6 +387,24 @@ Query-scoping parameters, not investment-policy thresholds — Portfolio Q&A is 
 
 New policy/method thresholds proposed alongside the feature, not investment-policy thresholds carried over from elsewhere — reuses the existing `BEHAVIORAL_MIN_SAMPLE_N` (above) for the min-sample withhold floor rather than a parallel constant. Diagnostic/awareness only — never changes which tickers clear the 5-gate `_grow_today()` pipeline, never re-scores or re-ranks a pick.
 
+| `JUDGMENT_EXIT_SIGNAL_MAP` | dict: WATCH=-0.3, TRIM=-0.6, EXIT=-0.9, RISK_OFF=-0.9 | "🧑‍⚖️ The Judge" (Phase 0/1, `docs/plans/judgment-layer.md`) — maps an `exit_advisor` deterioration tier to a normalized `-1..+1` `position_health` opinion signal. |
+| `JUDGMENT_FRAGILITY_SIGNAL_MAP` | dict: calm=0.3, caution=-0.3, fragile=-0.8 | The Judge — maps `fragility_gauge` severity to a normalized `structural_risk` opinion signal. |
+| `JUDGMENT_VERDICT_SIGNAL_MAP` | dict: go=0.8, verify=0.0, caution=-0.4, skip=-0.9 | The Judge — maps a `signal_reconciliation` verdict tier to a normalized `quality` opinion signal. |
+| `JUDGMENT_CONCENTRATION_BREACH_SIGNAL` | -0.8 | The Judge — `concentration` opinion signal when the largest name/sector is at or above `SINGLE_NAME_CEILING`/`SECTOR_CEILING`. |
+| `JUDGMENT_CONCENTRATION_NEAR_BREACH_SIGNAL` | -0.3 | The Judge — `concentration` opinion signal when at/above `JUDGMENT_CONCENTRATION_NEAR_BREACH_RATIO` of a ceiling but not yet breached. |
+| `JUDGMENT_CONCENTRATION_NEAR_BREACH_RATIO` | 0.8 | The Judge — "near" a hard ceiling is defined as 80% of `SINGLE_NAME_CEILING`/`SECTOR_CEILING`. |
+| `JUDGMENT_CONCENTRATION_CLEAR_SIGNAL` | 0.3 | The Judge — `concentration` opinion signal below the near-breach ratio on both ceilings. |
+| `JUDGMENT_VETO_PROTECTIVE_THRESHOLD` | -0.4 | The Judge — a protective-dimension opinion (`position_health`/`concentration`/`structural_risk`/`leverage`) at or below this hard-suppresses EVERY same-ticker positive acquisitive-dimension (`quality`/`momentum`) opinion outright, never blended (Q1's protective-veto routing class, added after the 2026-08-03 Opus design review found the original weighting-vs-contradiction dichotomy was a false split). The most severe (lowest-signal) protective opinion wins when more than one qualifies — fixed in the Phase 1 code review after an initial "first found" implementation was flagged as order-dependent. |
+| `JUDGMENT_CONTRADICTION_MIN_MAGNITUDE` | 0.3 | The Judge — minimum `\|signal\|` for a same-dimension, opposite-sign opinion pair from two different sources to be flagged as a contradiction; avoids flagging near-neutral noise as a real conflict. |
+| `JUDGMENT_SCORE_MIDPOINT` | 50.0 | The Judge — 0-100 score-scale midpoint used to normalize `composite_score`/`scanner_momentum` opinions to the `-1..+1` signal range via `(score - midpoint) / midpoint`. |
+
+These are the "-1..+1 signal cutpoints" and veto/contradiction boundaries the design
+review explicitly required to live here rather than as inline literals in `app.py` —
+same investment-policy-adjacent reasoning as any other threshold in this file, even
+though Phase 1 has no authority to act on them yet (read-only, no gating). Confirm
+before tuning. See §6.29 (`judgment_opinions` table) and
+`docs/plans/judgment-layer.md` for the full design.
+
 ### 4.0.2 Cross-feature coordination caches
 
 Features publish to `st.session_state` when they own a piece of decision state; downstream features read it. When the producer fails, the consumer treats the absence as an "offline" state — not as "no constraint."

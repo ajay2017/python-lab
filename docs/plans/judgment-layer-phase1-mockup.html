@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>The Judge — Phase 1 mockup (beside Grow Today)</title>
+<style>
+  body { background:#0b0f19; color:#e5e7eb; font-family: -apple-system, Segoe UI, sans-serif; padding:24px; max-width:900px; margin:0 auto; }
+  .card { background:#111827; border:1px solid #334155; border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+  .hdr { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .badge-beta { background:#1e293b; border:1px solid #64748b; color:#94a3b8; font-size:0.72em; font-weight:700; padding:2px 9px; border-radius:999px; }
+  .title { font-size:1.05em; font-weight:700; color:#f9fafb; }
+  .posture-line { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px; margin:8px 0 14px; }
+  .posture-neutral { background:#1e293b33; border-left:3px solid #94a3b8; }
+  .posture-cautious { background:#f59e0b1a; border-left:3px solid #f59e0b; }
+  .posture-text { font-weight:700; font-size:0.95em; }
+  .dim-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #1e293b; font-size:0.85em; }
+  .dim-row:last-child { border-bottom:none; }
+  .dim-name { color:#94a3b8; width:130px; flex-shrink:0; }
+  .dim-signal { font-weight:700; width:70px; }
+  .sig-pos { color:#4ade80; }
+  .sig-neg { color:#f87171; }
+  .sig-flat { color:#94a3b8; }
+  .dim-evidence { color:#cbd5e1; flex:1; }
+  .contradiction { background:#7f1d1d33; border-left:3px solid #ef4444; border-radius:6px; padding:8px 12px; margin:8px 0; font-size:0.85em; color:#fca5a5; }
+  .veto { background:#78350f33; border-left:3px solid #fbbf24; border-radius:6px; padding:8px 12px; margin:8px 0; font-size:0.85em; color:#fcd34d; }
+  .reduced-vis { color:#64748b; font-size:0.78em; font-style:italic; margin-top:6px; }
+  .section-label { color:#64748b; font-size:0.72em; font-weight:700; letter-spacing:0.05em; margin:14px 0 4px; text-transform:uppercase; }
+  .ticker-name { color:#f9fafb; font-weight:700; }
+  details summary { cursor:pointer; color:#7dd3fc; font-size:0.82em; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<h2 style="color:#f9fafb;">Mockup — "The Judge" Phase 1 card, placed directly below Grow Today's New Positions list</h2>
+<p style="color:#94a3b8;">Read-only, equal-weight, no authority. Renders after the existing new-picks cards, before the Debate/analyze buttons region ends.</p>
+
+<div class="card">
+  <div class="hdr">
+    <span class="title">🧑‍⚖️ The Judge</span>
+    <span class="badge-beta">BETA — READ-ONLY, NO AUTHORITY</span>
+  </div>
+  <div style="color:#94a3b8; font-size:0.82em; margin-bottom:10px;">
+    Reconciles today's witnesses across the tickers above. Equal-weighted (no track record yet —
+    see Phase 3). Does not change any recommendation. <a href="#" style="color:#7dd3fc;">What is this?</a>
+  </div>
+
+  <div class="posture-line posture-neutral">
+    <span class="posture-text">Today's read: no contradictions or protective overrides detected among today's 5 wired witnesses.</span>
+  </div>
+
+  <div class="section-label">Per-ticker decomposition</div>
+
+  <div style="margin-bottom:10px;">
+    <div style="margin-bottom:4px;"><span class="ticker-name">MPWR</span> — 3 opinions, no conflict</div>
+    <div class="dim-row">
+      <span class="dim-name">quality</span>
+      <span class="dim-signal sig-pos">+0.60</span>
+      <span class="dim-evidence">Composite 80/100 (Strong Buy) — composite_score</span>
+    </div>
+    <div class="dim-row">
+      <span class="dim-name">momentum</span>
+      <span class="dim-signal sig-pos">+0.60</span>
+      <span class="dim-evidence">Momentum score 80/100 — scanner_momentum</span>
+    </div>
+    <div class="dim-row">
+      <span class="dim-name">quality</span>
+      <span class="dim-signal sig-pos">+0.80</span>
+      <span class="dim-evidence">"Go — all signals agree" — verdict_reconciliation</span>
+    </div>
+  </div>
+
+  <div style="margin-bottom:10px;">
+    <div style="margin-bottom:4px;"><span class="ticker-name">NVDA</span> — 2 opinions, <span style="color:#fca5a5;">1 flagged</span></div>
+    <div class="dim-row">
+      <span class="dim-name">position_health</span>
+      <span class="dim-signal sig-neg">−0.60</span>
+      <span class="dim-evidence">TRIM signal from deterioration tiering — exit_advisor</span>
+    </div>
+    <div class="contradiction">
+      ⚠ CONTRADICTION — same dimension (position_health), no opposing source found this run.
+      (Illustrative: a second position_health source would render here if one existed —
+      today exit_advisor is the only position_health witness, so no same-dimension conflict
+      is possible yet.)
+    </div>
+  </div>
+
+  <div class="section-label">Portfolio-wide</div>
+  <div class="dim-row">
+    <span class="dim-name">concentration</span>
+    <span class="dim-signal sig-flat">+0.30</span>
+    <span class="dim-evidence">Largest name 12.1% (ceiling 15%), largest sector 28.4% (ceiling 35%) — clear</span>
+  </div>
+  <div class="dim-row">
+    <span class="dim-name">structural_risk</span>
+    <span class="dim-signal sig-flat">+0.30</span>
+    <span class="dim-evidence">calm — beta 1.05, implied move 4.2% — fragility_gauge</span>
+  </div>
+
+  <div class="reduced-vis">
+    ℹ macro_regime, leverage, sentiment, behavioral_fit, thesis_integrity have no wired witness yet (2nd wave) — not
+    read as "clear," simply not yet in scope.
+  </div>
+
+  <details>
+    <summary>▸ Illustrative veto example (not live today — shown so you can react to the visual before it can occur naturally)</summary>
+    <div style="padding:10px 0;">
+      <div class="veto">
+        🛑 PROTECTIVE VETO — SHOP: position_health says TRIM (−0.70) while momentum says ADD (+0.55).
+        Per design, the protective call wins outright; the momentum vote is suppressed from any blend,
+        not averaged against it.
+      </div>
+      <div class="dim-row">
+        <span class="dim-name">position_health</span>
+        <span class="dim-signal sig-neg">−0.70</span>
+        <span class="dim-evidence">TRIM — exit_advisor (WINS — protective veto)</span>
+      </div>
+      <div class="dim-row">
+        <span class="dim-name">momentum</span>
+        <span class="dim-signal sig-pos">+0.55 (suppressed)</span>
+        <span class="dim-evidence">Momentum score 77/100 — scanner_momentum (does not blend)</span>
+      </div>
+    </div>
+  </details>
+</div>
+
+<div class="card" style="border-color:#1e293b;">
+  <div style="color:#64748b; font-size:0.8em;">
+    <strong style="color:#94a3b8;">Design notes for review, not part of the rendered card:</strong><br>
+    • Placement: directly below Grow Today's existing pick cards (per your placement choice).<br>
+    • "BETA — READ-ONLY, NO AUTHORITY" badge is permanent through Phase 1–3; only Phase 4 removes it.<br>
+    • Reads today's in-memory opinions (session_state, not a DB round-trip) — same data already
+      computed for Phase 0's logging, just also captured for same-run synthesis.<br>
+    • With only 5 witnesses wired, live contradictions/vetoes will be rare — the card is honest about that
+      via the "no contradictions detected among today's 5 wired witnesses" framing, rather than implying
+      a clean bill of health across dimensions that aren't wired yet.
+  </div>
+</div>
+
+</body>
+</html>

@@ -93,6 +93,16 @@ from stock_analyzer.constants import (
     SECTOR_ELEVATED,
     SINGLE_NAME_CEILING,
     CONCENTRATION_HIGHBETA_SHARE_WARN,
+    JUDGMENT_EXIT_SIGNAL_MAP,
+    JUDGMENT_FRAGILITY_SIGNAL_MAP,
+    JUDGMENT_VERDICT_SIGNAL_MAP,
+    JUDGMENT_CONCENTRATION_BREACH_SIGNAL,
+    JUDGMENT_CONCENTRATION_NEAR_BREACH_SIGNAL,
+    JUDGMENT_CONCENTRATION_NEAR_BREACH_RATIO,
+    JUDGMENT_CONCENTRATION_CLEAR_SIGNAL,
+    JUDGMENT_VETO_PROTECTIVE_THRESHOLD,
+    JUDGMENT_CONTRADICTION_MIN_MAGNITUDE,
+    JUDGMENT_SCORE_MIDPOINT,
     ACCOUNT_CASH_STALE_DAYS,
     DIVERSIFY_DISPLAY_TOP,
     DIVERSIFY_SCAN_CAP,
@@ -2072,6 +2082,7 @@ with st.sidebar:
     _NAV_GROUPS = [
         ("MAIN", [
             ("Home",    "🏠 Home",                    ":material/home:"),
+            ("The Judge", "🧑‍⚖️ The Judge",           ":material/gavel:"),
             ("Summary", "🧾 Summary",                 ":material/receipt_long:"),
             ("Account", "💰 Account",                 ":material/account_balance_wallet:"),
             ("Scanner", "🔍 Market Scanner",           ":material/radar:"),
@@ -3204,6 +3215,15 @@ if st.session_state.get("_readonly"):
 
 if page == "🏠 Home":
 
+    # Judgment-layer opinion collector (Phase 1, "🧑‍⚖️ The Judge" page) — reset
+    # once per Home render so same-run witnesses (concentration, fragility,
+    # exit_advisor, composite/momentum/verdict — see the 3 capture sites below)
+    # accumulate into one list without growing across reruns. The Judge page
+    # reads this in-memory list directly (not a DB round-trip); judgment_opinions
+    # (Phase 0) persists the same opinions separately for Phase 2's future
+    # grading harness.
+    st.session_state["_judgment_opinions_today"] = []
+
     # Load data for all held tickers
     held_tickers = [
         str(r.get("Ticker", "")).strip().upper()
@@ -3741,13 +3761,15 @@ if page == "🏠 Home":
             _jo_max_sector_wt = float(_jo_sector_wts.max()) if not _jo_sector_wts.empty else 0.0
             _jo_name_breach = _jo_max_name_wt >= SINGLE_NAME_CEILING
             _jo_sector_breach = _jo_max_sector_wt >= SECTOR_CEILING
+            _jo_near_ratio = JUDGMENT_CONCENTRATION_NEAR_BREACH_RATIO
             if _jo_name_breach or _jo_sector_breach:
-                _jo_conc_signal = -0.8
-            elif _jo_max_name_wt >= SINGLE_NAME_CEILING * 0.8 or _jo_max_sector_wt >= SECTOR_CEILING * 0.8:
-                _jo_conc_signal = -0.3
+                _jo_conc_signal = JUDGMENT_CONCENTRATION_BREACH_SIGNAL
+            elif (_jo_max_name_wt >= SINGLE_NAME_CEILING * _jo_near_ratio
+                  or _jo_max_sector_wt >= SECTOR_CEILING * _jo_near_ratio):
+                _jo_conc_signal = JUDGMENT_CONCENTRATION_NEAR_BREACH_SIGNAL
             else:
-                _jo_conc_signal = 0.3
-            db.save_judgment_opinions_batch([build_opinion(
+                _jo_conc_signal = JUDGMENT_CONCENTRATION_CLEAR_SIGNAL
+            _jo_conc_opinion = build_opinion(
                 source="concentration_gate",
                 dimension="concentration",
                 signal=_jo_conc_signal,
@@ -3757,7 +3779,9 @@ if page == "🏠 Home":
                     f"largest sector {_jo_max_sector_wt:.1f}% (ceiling {SECTOR_CEILING:.0f}%)"
                 ),
                 label="breach" if (_jo_name_breach or _jo_sector_breach) else "clear",
-            )])
+            )
+            db.save_judgment_opinions_batch([_jo_conc_opinion])
+            st.session_state["_judgment_opinions_today"].append(_jo_conc_opinion)
         except Exception:
             pass
 
@@ -4215,11 +4239,10 @@ if page == "🏠 Home":
         if _fragility:
             try:
                 from stock_analyzer.judgment_opinion import build_opinion
-                _jo_severity_map = {"calm": 0.3, "caution": -0.3, "fragile": -0.8}
-                db.save_judgment_opinions_batch([build_opinion(
+                _jo_frag_opinion = build_opinion(
                     source="fragility_gauge",
                     dimension="structural_risk",
-                    signal=_jo_severity_map.get(_fragility.get("severity"), 0.0),
+                    signal=JUDGMENT_FRAGILITY_SIGNAL_MAP.get(_fragility.get("severity"), 0.0),
                     confidence=0.6,
                     evidence=(
                         f"{_fragility.get('severity', '')} — beta "
@@ -4227,7 +4250,9 @@ if page == "🏠 Home":
                         f"{_fragility.get('implied_move', 0):.1f}%"
                     ),
                     label=_fragility.get("severity", ""),
-                )])
+                )
+                db.save_judgment_opinions_batch([_jo_frag_opinion])
+                st.session_state["_judgment_opinions_today"].append(_jo_frag_opinion)
             except Exception:
                 pass
 
@@ -4828,19 +4853,17 @@ if page == "🏠 Home":
                 from stock_analyzer.judgment_opinion import build_opinion
                 _jo_batch = []
 
-                _jo_exit_signal_map = {"WATCH": -0.3, "TRIM": -0.6, "EXIT": -0.9, "RISK_OFF": -0.9}
                 for _es in _exit_signals_to_save:
                     _jo_batch.append(build_opinion(
                         source="exit_advisor",
                         dimension="position_health",
                         ticker=_es["ticker"],
-                        signal=_jo_exit_signal_map.get(_es["signal_type"], -0.5),
+                        signal=JUDGMENT_EXIT_SIGNAL_MAP.get(_es["signal_type"], -0.5),
                         confidence=0.7,
                         evidence=f"{_es['signal_type']} signal from Daily Brief deterioration tiering",
                         label=_es["signal_type"],
                     ))
 
-                _jo_verdict_map = {"go": 0.8, "verify": 0.0, "caution": -0.4, "skip": -0.9}
                 for _p in (_gt_today.get("new_picks") or []):
                     _tk = str(_p.get("ticker", ""))
                     if not _tk:
@@ -4851,7 +4874,7 @@ if page == "🏠 Home":
                             source="composite_score",
                             dimension="quality",
                             ticker=_tk,
-                            signal=max(-1.0, min(1.0, (float(_cs) - 50.0) / 50.0)),
+                            signal=max(-1.0, min(1.0, (float(_cs) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
                             confidence=0.6,
                             evidence=f"Composite {_cs:.0f}/100 ({_p.get('composite_label', '')})",
                             label=_p.get("composite_label", ""),
@@ -4862,25 +4885,38 @@ if page == "🏠 Home":
                             source="scanner_momentum",
                             dimension="momentum",
                             ticker=_tk,
-                            signal=max(-1.0, min(1.0, (float(_mom) - 50.0) / 50.0)),
+                            signal=max(-1.0, min(1.0, (float(_mom) - JUDGMENT_SCORE_MIDPOINT) / JUDGMENT_SCORE_MIDPOINT)),
                             confidence=0.5,
                             evidence=f"Momentum score {_mom:.0f}/100",
                         ))
                     _xr = (_p.get("xref") or {}).get("verdict_reconciled") or {}
                     _verdict = _xr.get("verdict")
                     if _verdict:
+                        # advisory=True: verdict_reconciliation is a META-witness that
+                        # already synthesizes momentum+composite+news+earnings into
+                        # one verdict — it is not a peer vote alongside composite_score
+                        # on `quality`. Reviewed 2026-08-03 (Opus 4.8, FIX-FIRST): left
+                        # as a non-advisory peer, it would (a) double-count composite
+                        # inside the quality blend and (b) get flagged by the
+                        # contradiction audit as "disagreeing" with composite on every
+                        # verdict_divergence-class ticker (a known, expected class of
+                        # divergence, not a bug to surface as a peer conflict). Marking
+                        # it advisory keeps it visible in the decomposition as context
+                        # without either failure mode.
                         _jo_batch.append(build_opinion(
                             source="verdict_reconciliation",
                             dimension="quality",
                             ticker=_tk,
-                            signal=_jo_verdict_map.get(_verdict, 0.0),
+                            signal=JUDGMENT_VERDICT_SIGNAL_MAP.get(_verdict, 0.0),
                             confidence=0.65,
                             evidence=_xr.get("one_liner", "") or _xr.get("label", ""),
                             label=_xr.get("label", ""),
+                            advisory=True,
                         ))
 
                 if _jo_batch:
                     db.save_judgment_opinions_batch(_jo_batch)
+                    st.session_state["_judgment_opinions_today"].extend(_jo_batch)
             except Exception:
                 pass
 
@@ -8921,6 +8957,138 @@ if page == "🏠 Home":
             f'</div>'
         )
         _brief_slot.markdown(_css + _card, unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PAGE — THE JUDGE (Phase 1, docs/plans/judgment-layer.md)
+# ═════════════════════════════════════════════════════════════════════════════
+# Read-only, no authority. Reconciles today's judgment_opinions witnesses
+# (built in Home's render — see the 3 capture sites: concentration gate,
+# fragility gauge, exit_advisor + composite/momentum/verdict_reconciliation)
+# into one decomposable posture. Placed as its own MAIN-nav page (revised
+# from an original "beside Grow Today" plan after a mockup review showed full
+# per-ticker decomposition made Home too long — see judgment-layer.md's
+# 2026-08-03 placement revision). Reads st.session_state["_judgment_opinions_
+# today"], which is reset once per Home render and populated by the 3 capture
+# sites — if the user hasn't opened Home yet this session, the list is absent
+# and this page says so rather than rendering an empty/misleading posture.
+elif page == "🧑‍⚖️ The Judge":
+    st.title("🧑‍⚖️ The Judge")
+    st.markdown(
+        "<span style='background:#1e293b;border:1px solid #64748b;color:#94a3b8;"
+        "font-size:0.78em;font-weight:700;padding:2px 10px;border-radius:999px'>"
+        "BETA — READ-ONLY, NO AUTHORITY</span>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Reconciles today's witnesses (concentration, structural risk, exit "
+        "signals, composite, momentum, verdict reconciliation) across your "
+        "portfolio and today's Grow Today picks. Equal-weighted — no track "
+        "record exists yet to weight by (see Phase 3 in the design plan). "
+        "**Does not change any recommendation** — visit 🏠 Home first so "
+        "today's witnesses have run."
+    )
+
+    _jo_today = st.session_state.get("_judgment_opinions_today")
+    if not _jo_today:
+        st.info(
+            "No opinions captured yet this session. Open 🏠 Home first — "
+            "the Judge reads what Home's witnesses computed during that render."
+        )
+    else:
+        from stock_analyzer.judgment_synthesis import synthesize
+        _jr = synthesize(_jo_today)
+
+        _posture_bg = "#f59e0b1a" if (
+            any(r["veto"] for r in _jr["tickers"].values()) or _jr["portfolio"]["veto"]
+        ) else "#1e293b33"
+        _posture_border = "#f59e0b" if _posture_bg == "#f59e0b1a" else "#94a3b8"
+        st.markdown(
+            f"<div style='background:{_posture_bg};border-left:3px solid {_posture_border};"
+            f"border-radius:8px;padding:10px 14px;margin:10px 0 16px'>"
+            f"<span style='font-weight:700;font-size:0.95em'>{_jr['overall_line']}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        def _jo_sig_class(sig: float) -> str:
+            if sig > 0.05:
+                return "#4ade80"
+            if sig < -0.05:
+                return "#f87171"
+            return "#94a3b8"
+
+        def _jo_render_group(label: str, result: dict):
+            if not result["opinions"]:
+                return
+            st.markdown(f"**{label}**")
+            _veto_suppressed_ids = set()
+            if result["veto"]:
+                _v = result["veto"]
+                _supp_srcs = ", ".join(
+                    f"{s['source']} ({s['dimension']}, {s['signal']:+.2f})"
+                    for s in _v["suppressed"]
+                )
+                _veto_suppressed_ids = {id(s) for s in _v["suppressed"]}
+                st.markdown(
+                    f"<div style='background:#78350f33;border-left:3px solid #fbbf24;"
+                    f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
+                    f"color:#fcd34d'>🛑 PROTECTIVE VETO — {_v['protective']['source']} "
+                    f"({_v['protective']['dimension']}, {_v['protective']['signal']:+.2f}) "
+                    f"overrides {_supp_srcs} (suppressed — not blended).</div>",
+                    unsafe_allow_html=True,
+                )
+            for _c in result["contradictions"]:
+                _srcs = " vs ".join(o["source"] for o in _c["opinions"])
+                st.markdown(
+                    f"<div style='background:#7f1d1d33;border-left:3px solid #ef4444;"
+                    f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
+                    f"color:#fca5a5'>⚠ CONTRADICTION — {_c['dimension']}: {_srcs} disagree.</div>",
+                    unsafe_allow_html=True,
+                )
+            for _o in result["opinions"]:
+                _is_advisory = bool(_o.get("advisory"))
+                _is_suppressed = id(_o) in _veto_suppressed_ids
+                if _is_advisory:
+                    _sig_txt = f"{_o['signal']:+.2f} (context only, not counted)"
+                elif _is_suppressed:
+                    _sig_txt = f"{_o['signal']:+.2f} (suppressed)"
+                else:
+                    _sig_txt = f"{_o['signal']:+.2f}"
+                _sig_color = "#64748b" if _is_advisory else _jo_sig_class(_o["signal"])
+                st.markdown(
+                    f"<div style='display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b;"
+                    f"font-size:0.82em'>"
+                    f"<span style='color:#94a3b8;width:130px;flex-shrink:0'>{_o['dimension']}</span>"
+                    f"<span style='color:{_sig_color};font-weight:700;width:170px'>{_sig_txt}</span>"
+                    f"<span style='color:#cbd5e1;flex:1'>{_o['evidence']} — <em>{_o['source']}</em></span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("##### Per-ticker decomposition")
+        if not _jr["tickers"]:
+            st.caption("No per-ticker opinions this run (no Grow Today picks or active exit signals).")
+        for _tk in sorted(_jr["tickers"]):
+            _jo_render_group(_tk, _jr["tickers"][_tk])
+
+        st.markdown("##### Portfolio-wide")
+        if _jr["portfolio"]["opinions"]:
+            _jo_render_group("Portfolio", _jr["portfolio"])
+        else:
+            st.caption("No portfolio-wide opinions this run.")
+
+        if _jr["reduced_visibility_dims"]:
+            st.caption(
+                "ℹ️ No live witness this run for: " + ", ".join(_jr["reduced_visibility_dims"]) +
+                " — not read as \"clear,\" simply not wired yet or not computed this run."
+            )
+
+        st.caption(
+            f"{_jr['n_opinions']} opinion(s) from {_jr['n_sources']} source(s) this session. "
+            f"Persisted to the judgment_opinions table for Phase 2's future grading harness — "
+            f"nothing reads that history yet."
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
