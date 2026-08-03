@@ -1,10 +1,10 @@
 # Pre-Commitment Enforcement — Design Plan
 
 **Date:** 2026-08-03
-**Status:** SCOPING — Q1/Q3 resolved by the user; Opus design review
-returned FIX-FIRST (3 blocking, 2 fix-first, 2 non-blocking), all resolved
-in this doc. Q2 (revised) and Q4 pending explicit user confirmation. No
-code written yet.
+**Status:** DESIGN COMPLETE. All 4 open questions resolved by the user;
+Opus design review returned FIX-FIRST (3 blocking, 2 fix-first, 2
+non-blocking), all resolved in this doc. Clear to move to build on
+go-ahead. No code written yet.
 
 > **One-line spec:** actively monitor a user's own stated Pre-Mortem exit
 > commitment (`trades.premortem_commitment`, free text captured at BUY) against
@@ -189,7 +189,8 @@ while its own deterioration condition remains true. *Recommend (pending
 explicit confirmation): persistent daily is now fine as-is* — no new
 acknowledge/snooze state, no new constant — because the auto-resolving
 close-basis check means it only ever shows while the trigger condition is
-actually still true today.
+actually still true today. **RESOLVED 2026-08-03 — user confirmed:
+persistent daily, no new state.**
 
 **Q3 — Non-numeric/vague commitments. RESOLVED 2026-08-03: nothing extra for
 v1.** Leave them exactly as today — passive LLM context in Red Team/Q&A only.
@@ -202,6 +203,7 @@ has a same-day WATCH/TRIM/EXIT card from `exit_advisor`, does the new
 `feedback_single_surface_priority` dedupes by *dimension*, and "your own
 stated condition fired" is a genuinely different dimension from "the
 algorithm's deterioration tier fired," not a restatement of the same fact.
+**RESOLVED 2026-08-03 — user confirmed: show both separately.**
 
 **New `constants.py` entries:** still none required — the temporal-semantic
 fix (close-basis "still beyond the level today") replaces what would have
@@ -248,5 +250,8 @@ when the code is written.
   explicitly for #4. Module split documented for the naming note; the
   cache-staleness assumption confirmed safe today (trades grid is
   delete-only, `premortem_commitment` isn't even editable) and stated
-  explicitly. Next: confirm Q2 (now revised) and Q4 with the user, then this
-  plan is clear to move to build.
+  explicitly.
+- **2026-08-03** — Q2 (revised: persistent daily is fine given the
+  self-resolving fix) and Q4 (show both cards separately) confirmed by the
+  user. **Design is now complete — all 4 questions resolved, all review
+  findings resolved. Clear to move to build on explicit go-ahead.**
