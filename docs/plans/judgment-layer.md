@@ -3,8 +3,8 @@
 **Date:** 2026-08-03
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
-**Opus review:** NOT YET — this is a planning doc, not code. Per CLAUDE.md hard rule #4, the first build that touches decision logic / the Daily Brief requires an explicit Opus design review before it ships.
-**Status:** DESIGN COMPLETE (all three load-bearing questions resolved 2026-08-03). **Not green-lit to build.** Phase 1 (first Judge output, touches the Daily Brief) requires an **Opus design review before shipping** per hard rule #4; Phase 0 (log-only instrumentation, no decision logic) could precede it. Awaiting user go/no-go on starting Phase 0.
+**Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
+**Status:** DESIGN COMPLETE + design-reviewed (Opus 4.8 FIX-FIRST → all findings incorporated 2026-08-03). **Not green-lit to build.** Phase 0 (log-only instrumentation, no decision logic) is cleared to start; Phase 1 code (first Judge output, touches the Daily Brief) needs its own Opus review at build time per hard rule #4. Awaiting user go/no-go on starting Phase 0.
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -111,9 +111,20 @@ Every feature hands the Judge an *opinion* in one common shape. The Judge does t
 different things with the opinion set, and the `dimension` field is what **routes** an
 opinion-pair to the right machine:
 
-- **Different dimensions, same subject → WEIGHTING (jobs 1 & 4).** Momentum says GO
-  while position-health says TRIM is *not* a conflict — it's the normal multi-factor
-  picture. The Judge weighs them (by track record) into one call; override resolves.
+- **Protective dimension vs acquisitive dimension, same subject → VETO (hard gate,
+  NOT weighting).** *(Added post-review — this was the original routing's structural
+  hole.)* A protective/gating dimension (`position_health`, `concentration`,
+  `structural_risk`, `leverage`) emitting TRIM/REDUCE/over-limit **suppresses** an
+  acquisitive one (`momentum`, `quality`) emitting ADD/size-up — it does **not**
+  average with it. This preserves the app's existing hard suppressions
+  (`decision_bucket.suppress_orphans_under_reduce_call`, the `_reduce_calls`
+  ADD-suppression consumers, add-winner-on-deterioration): *"gates are hard
+  suppressions with visible banners, not soft warnings."* A strong momentum ADD
+  (+0.8) must **never** out-vote a live protective signal (−0.4) into a net-positive
+  posture. The `−1…+1` blend is valid **only within the non-protective set**.
+- **Two non-protective dimensions, same subject → WEIGHTING (jobs 1 & 4).** e.g.
+  `momentum` vs `sentiment` — the normal multi-factor picture; the Judge weighs them
+  (by track record) into one call.
 - **Same dimension, same subject, opposite signals → CONTRADICTION AUDIT (job 3).**
   Two features answering the *same* question disagree (the `verdict_divergence`
   class). That is the bug/split-read to surface.
@@ -137,6 +148,15 @@ silos.
 | `ticker` | optional | Present for per-name opinions; absent for portfolio-wide ones (concentration, regime). |
 | `advisory` | flag | `true` = shown in the narrative but **excluded from weighting** (e.g. `tax`, `catalyst` — they never gate, per existing redlines). |
 
+**Offline protective witnesses degrade posture confidence (added post-review, finding
+#2).** An offline (`None`) *protective* witness (`concentration`, `structural_risk`,
+`leverage`, `position_health`) must NOT be silently excluded from synthesis — exclusion
+reads as "no risk present" and tilts the posture bullish precisely because the risk
+sensor went dark (the `None`-vs-`[]` trap at portfolio scale). Rule: when a protective
+witness is offline, the Judge's overall confidence **degrades** and the posture
+surfaces "reduced visibility" — it may **never** render a clean bullish posture with a
+dark protective sensor.
+
 **Dimension taxonomy (first cut, ~10 questions):** `quality` · `momentum` ·
 `thesis_integrity` · `position_health` · `concentration` · `structural_risk` ·
 `macro_regime` · `behavioral_fit` · `sentiment` · `leverage`. (`tax`, `catalyst` exist
@@ -150,6 +170,16 @@ and within-dimension contradiction-audit on top. This avoids rewriting ~60 featu
 stop deciding, and respects pillar 2 (features you already trust). Individual features
 can migrate to purer raw-opinion form later if one warrants it.
 
+**Witnesses consume POST-reconcile outputs, never producer-raw streams (added
+post-review, finding #3).** The Brief already de-contradicts itself — `decision_bucket
+._reconcile_act()` folds a "hold/monitor" critical-news card into a same-ticker reduce
+card, and `feedback_single_surface_priority` dedupes by *dimension*. If witnesses read
+the **raw** `act_today`/`review_list` they will see both halves of a contradiction the
+Brief already collapsed and double-count it as a fresh conflict. Witnesses MUST read
+the post-`split_defensive`/`_reconcile_act` (published-cache) outputs, resolving
+tickers via the canonical `decision_bucket._ticker()` (which already handles the
+`ticker=None` → `action.trim_ticker` macro-card shape).
+
 ## Posture correctness measurement (Q2 — RESOLVED 2026-08-03)
 
 **Reframe that dissolves the fuzzy-truth problem: don't grade the aggregate posture —
@@ -158,9 +188,13 @@ correctly-cautious call about a risk that didn't fire this time looks wrong; one
 is mostly noise). But pillar #4 needs **witness-level** accuracy (`source × dimension`),
 not aggregate-posture accuracy — and a witness's opinion is far closer to a testable
 prediction. Posture-correctness becomes a *derived, secondary* read: the posture is as
-good as its track-record-weighted witnesses. **This generalizes the existing
-`rec_engine_evaluation` harness (already grades the composite/recommendation witness
-on forward alpha) to all witnesses** — extension, not new invention.
+good as its track-record-weighted witnesses. **Scope-honest framing (corrected
+post-review, finding #4): this reuses the `rec_engine_evaluation` harness for ONE of
+the three grading classes (ticker-forward-return); the cluster-drawdown and
+regime-match graders are NET-NEW.** The `recommendations` table today persists only
+`composite_score` + `momentum_score` — `quality`/`sentiment`/`thesis_integrity` are not
+logged there, so grading them as separate witnesses needs net-new Phase-0 logging.
+Plan Phase 2 for roughly 2× the "just extend the harness" framing.
 
 **Decisions:**
 
@@ -175,11 +209,15 @@ on forward alpha) to all witnesses** — extension, not new invention.
    app already uses — Research Scorecard Phase 3, "building history" captions.)
 3. **Grading target is per-dimension-class (Gap A).** Three classes:
    *ticker-forward-return* (`quality`, `momentum`, `thesis_integrity`,
-   `position_health`, `sentiment` → forward alpha vs SPY, reuse
-   `rec_engine_evaluation`); *cluster/portfolio-drawdown* (`concentration`,
-   `structural_risk`, `leverage` → did the flagged cluster draw down?);
-   *regime-match* (`macro_regime` → did the call match what the market did?). Without
-   this, portfolio-level witnesses go silently ungraded and never earn weight.
+   `position_health`, `sentiment` → forward alpha vs SPY, **reuses**
+   `rec_engine_evaluation` / `recommendations_history.compute_outcomes`);
+   *cluster/portfolio-drawdown* (`concentration`, `structural_risk`, `leverage` → did
+   the flagged cluster draw down? — **net-new grader**; `structural_scan_cache`
+   persists a dated `cluster_snapshot` so `structural_risk` is feasible, but
+   `concentration` is session-only today and needs net-new persisted substrate too);
+   *regime-match* (`macro_regime` → did the call match the market? — substrate solid
+   via `daily_regime`, but **net-new grader**). Without this, portfolio-level
+   witnesses go silently ungraded and never earn weight.
 4. **Protective witnesses graded on the counterfactual, not naive direction (Gap B —
    the important one).** A STOP/TRIM/DEFENSIVE witness makes a *risk-avoidance*
    prediction; grading it on "did the thing go down" punishes it for every risk that
@@ -216,7 +254,27 @@ accumulated track record).
 covering the highest-value dimensions — **verdict reconciliation** + **composite**
 (`quality`/`momentum`), **exit_signals/reduce_calls** (`position_health`),
 **concentration gate** (`concentration`), **fragility/structural** (`structural_risk`).
-Behavioral, sentiment, macro, leverage witnesses deferred to a second wave.
+Behavioral, sentiment, macro, leverage witnesses deferred to a second wave. **Review
+caveat (finding #3/#4):** 3 of these (verdict `signal_reconciliation.py`, composite,
+`exit_signals`) already emit near-opinions with persisted history; **`concentration`
+has NO persisted history today** (`_acct_gate_cache` is session-only) — Phase 0 must
+add its logging substrate, not just tag an existing stream.
+
+**New decision thresholds that MUST live in `constants.py` (hard rule #1, enumerated
+post-review):** the min-sample gate N (per dimension), the per-dimension horizons, the
+neutral-prior weight, the confidence-degradation factor for offline/stale witnesses,
+the `−1…+1` signal cutpoints, and the contradiction-audit "opposite signal" boundary.
+These are investment-policy decisions — set with the user, never inline literals.
+
+**Phase 1 scope caveats (post-review):** (a) beside-the-brief placement *intentionally*
+duplicates a risk surface (a deliberate, temporary exception to
+single-surface-per-dimension) purely as a validation overlay — resolved when Phase 4
+replaces the brief. (b) Phase 1 equal-weight running validates the **schema, the
+contradiction-audit, and the decomposition** — it does **not** validate
+posture-correctness, which is gated behind Phase 3 weights; don't over-sell it. (c)
+Slow dimensions (`quality`, `thesis_integrity`) at n≥20 on a ~5–7-name book take many
+months to earn weight, so the Judge runs equal-weight for a long time — expected, not a
+bug.
 
 **Phase 1 placement (decided):** the read-only Judge sits **beside** the existing Home
 brief first (observation panel), so its posture can be compared against the user's own
@@ -263,3 +321,13 @@ conversation, before any code.
   beside-not-replace decided. **All three load-bearing design questions now closed;
   design is complete.** Next real gate: Opus design review before Phase 1 code (Phase
   0 log-only could precede). Awaiting user go/no-go on Phase 0.
+- **2026-08-03** — Opus 4.8 design review (via `reviewer` subagent): **FIX-FIRST**.
+  Confirmed the North Star, pillars, Q3 order, and Phase-0 safety. Caught 1 structural
+  hole — Q1's routing dichotomy omitted the **protective-veto class** (protective dims
+  hard-suppress acquisitive ones; my rule would have softened an existing hard gate
+  into a weighted vote, re-surfacing vetoed ADDs at Phase 4) — plus offline-protective
+  posture inversion (#2), raw-vs-reconciled double-count (#3), and an over-claimed
+  "extension not invention" on Q2 grading (#4, only 1 of 3 classes truly reuses the
+  harness; `concentration` has no persisted history). **All 4 blocking + 3 non-blocking
+  incorporated into the doc above this session.** Phase 0 now cleared to start on user
+  go-ahead; Phase 1 code needs its own Opus review at build time.
