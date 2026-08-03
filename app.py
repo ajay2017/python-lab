@@ -20075,13 +20075,18 @@ elif page == "📒 Trade Journal":
                 "🖊️ What would make me wrong about this? (required before this Buy can be recorded)",
                 key="_tj_premortem_commitment",
                 placeholder=(
-                    "e.g. If Q3 guidance disappoints, or if this sector rotates out "
-                    "of favor within 60 days…"
+                    "e.g. If Q3 guidance disappoints, or if it breaks below $150…"
                 ),
                 help=(
                     "A falsifiable condition you're committing to watch for. "
                     "Required for every live Buy — the discipline comes from "
-                    "writing this, not from the AI's case above."
+                    "writing this, not from the AI's case above. "
+                    "**Include an explicit price** (e.g. \"if it breaks below "
+                    "$150\" or \"if it rallies above $200\") if you want the app "
+                    "to actively monitor this and flag it on Home when it "
+                    "fires — a purely qualitative condition (e.g. \"if "
+                    "guidance disappoints\") is saved but can't be "
+                    "mechanically checked, so it's never auto-monitored."
                 ),
             )
 

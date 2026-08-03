@@ -157,6 +157,21 @@ into the architecture itself so this doc stays the single source of truth.
    `buy_date`) for the "it happened {N} days ago" framing — but that's
    narrative only; the gate that decides whether to show the card at all is
    always "is it *still* beyond the level today."
+
+   **Corollary found during live validation, 2026-08-03 (not a bug — a
+   direct consequence of the close-basis design above, undocumented until
+   now): a trigger can never fire on the SAME DAY its BUY was logged.** The
+   price-history comparison filters to `closes.index.date >= buy_date` and
+   reads the last available row; on the entry day itself, that day's
+   session hasn't closed yet, so there is no qualifying close and
+   `detect_premortem_triggers()` correctly finds nothing to compare —
+   regardless of how far the live price has already moved intraday. The
+   earliest a genuinely-fired trigger can surface is the **next trading day**
+   after the BUY, once a completed close for the entry day (or later) exists
+   in the price history. This is the same reason a live "does it fire
+   immediately" smoke test on a same-day BUY will always show nothing — not
+   a broken pipeline, just the close-basis semantic working as designed one
+   day earlier than an intraday check would.
 6. **Plumbing (fix-first finding #4, resolved).** `_act_today()`
    (`daily_briefing.py:1243`) has no access to `trades_df` or price history
    today. Follow the EXACT existing precedent for feeding it a new
@@ -333,3 +348,28 @@ when the code is written.
   **This closes F-228 — Pre-Commitment Enforcement is shipped.** The one
   item from the 2026-08-03 morning brainstorm's ranked list that was
   genuinely unbuilt is now live.
+
+- **2026-08-03 — DDL applied by user; live validation same session.** User
+  logged a real SPOT BUY ($486) with a qualitative commitment ("the composite
+  score's reliance on that spike will prove misleading") expecting an
+  immediate same-day Act Today card. None appeared. Investigated (Explore
+  agent, read the actual code, not guessed) and confirmed via a direct
+  Supabase query on the trade row: `premortem_trigger_price=NULL`,
+  `premortem_trigger_direction='not_checkable'` — **the extraction pipeline
+  is working correctly**; the commitment simply had no explicit numeric
+  price to extract, so it was correctly marked unmonitorable rather than
+  guessed. Separately confirmed the close-basis design (architecture point
+  #5 above) has a real, previously-undocumented corollary: a trigger can
+  never fire on the same day its BUY is logged, since that day's close
+  doesn't exist yet in price history when the check runs — the earliest a
+  fired trigger can surface is the next trading day. Ruled out Home's
+  `_home_synth_cache` (its signature does pick up a new trade via a
+  `(Ticker, Shares)` hash) and the BUY-confirmation rerun flow (extraction
+  correctly runs and persists before any rerun) as causes — this was purely
+  the close-basis semantic behaving as designed, one day earlier than an
+  intraday check would have shown something. **Added a UI help-text hint**
+  on the Pre-Mortem commitment `st.text_area` (`app.py`, near line 20075)
+  explicitly telling the user to include an explicit price if they want the
+  commitment to be actively monitorable — a purely qualitative one is saved
+  but never auto-checked. No logic changed, so no Opus review required (copy
+  only); verified `py_compile` clean.
