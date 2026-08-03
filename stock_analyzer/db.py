@@ -2107,6 +2107,82 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# ── Judgment-layer opinions (Phase 0, log-only — see docs/plans/judgment-layer.md) ──
+# Ships inert until the DDL below is applied — degrades silently, same convention
+# as analyst_target_snapshots. RLS: FOR ALL TO service_role.
+#
+# CREATE TABLE IF NOT EXISTS judgment_opinions (
+#     id           BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+#     source       TEXT NOT NULL,
+#     dimension    TEXT NOT NULL,
+#     ticker       TEXT NOT NULL,   -- '_PORTFOLIO' sentinel for portfolio-wide opinions
+#     signal_date  DATE NOT NULL,
+#     signal       NUMERIC NOT NULL,
+#     label        TEXT,
+#     confidence   NUMERIC NOT NULL,
+#     as_of        TIMESTAMPTZ NOT NULL,
+#     is_live      BOOLEAN NOT NULL DEFAULT TRUE,
+#     evidence     TEXT,
+#     advisory     BOOLEAN NOT NULL DEFAULT FALSE,
+#     created_at   TIMESTAMPTZ DEFAULT NOW(),
+#     CONSTRAINT judgment_opinions_unique UNIQUE (source, dimension, ticker, signal_date)
+# );
+def save_judgment_opinions_batch(opinions: list[dict]) -> None:
+    """Persist Phase-0 judgment-layer opinions (log-only; nothing reads this yet).
+
+    Idempotent: upserts on (source, dimension, ticker, signal_date) — repeated
+    same-day Home renders are no-ops. Never raises — a capture failure must
+    never break Home. Each dict must be shaped by
+    stock_analyzer.judgment_opinion.build_opinion(); this function only adds
+    signal_date (derived from as_of) and the ticker sentinel for portfolio-wide
+    opinions before writing.
+    """
+    if _READONLY:
+        return
+    if not opinions:
+        return
+    if not has_db():
+        return
+    try:
+        rows = []
+        for _op in opinions:
+            _row = dict(_op)
+            _row["ticker"] = _row.get("ticker") or "_PORTFOLIO"
+            _row["signal_date"] = str(_row["as_of"])[:10]
+            rows.append(_row)
+        _client().table("judgment_opinions").upsert(
+            rows,
+            on_conflict="source,dimension,ticker,signal_date",
+        ).execute()
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_judgment_opinions_batch: {e}")
+
+
+def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
+    """Read persisted judgment-layer opinions going back days_back calendar days.
+
+    Returns a DataFrame (column names match the judgment_opinions table,
+    snake_case) on success, or an empty DataFrame on any exception. Nothing
+    consumes this yet (Phase 0) — it exists so Phase 2's grading harness has
+    history to read once it's built.
+    """
+    try:
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("judgment_opinions")
+            .select("*")
+            .gte("signal_date", cutoff)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Price cross-check history (ticker × date) ────────────────────────────────
 # System cache → NOT _READONLY-gated (mirrors sector_cache / sentiment_llm_cache).
 # A viewer-only session still benefits from a warm cross-check history rather

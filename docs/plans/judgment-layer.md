@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
 **Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
-**Status:** DESIGN COMPLETE + design-reviewed (Opus 4.8 FIX-FIRST → all findings incorporated 2026-08-03). **Not green-lit to build.** Phase 0 (log-only instrumentation, no decision logic) is cleared to start; Phase 1 code (first Judge output, touches the Daily Brief) needs its own Opus review at build time per hard rule #4. Awaiting user go/no-go on starting Phase 0.
+**Status:** Phase 0 SHIPPED 2026-08-03 (design-reviewed: Opus 4.8 FIX-FIRST → all findings incorporated). Table ships inert until DDL is manually applied in Supabase. Phase 1 (read-only Judge, touches the Daily Brief) is next and requires its own Opus review before shipping per hard rule #4 — not started.
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -331,3 +331,23 @@ conversation, before any code.
   harness; `concentration` has no persisted history). **All 4 blocking + 3 non-blocking
   incorporated into the doc above this session.** Phase 0 now cleared to start on user
   go-ahead; Phase 1 code needs its own Opus review at build time.
+- **2026-08-03** — **Phase 0 SHIPPED.** New pure module
+  `stock_analyzer/judgment_opinion.py` (opinion schema, `build_opinion()`,
+  `PROTECTIVE_DIMENSIONS`/`ACQUISITIVE_DIMENSIONS`/`ADVISORY_DIMENSIONS` constants);
+  new table `judgment_opinions` (`docs/architecture.md` §6.29, inert until DDL
+  applied) + `db.save_judgment_opinions_batch()`/`load_judgment_opinions()`. All 5
+  core-set witnesses wired: `exit_advisor`/position_health (app.py, exit-signal
+  capture block), `composite_score`+`scanner_momentum`+`verdict_reconciliation`/
+  quality+momentum (app.py, Grow Today new_picks), `fragility_gauge`/structural_risk
+  (app.py, fresh-compute site only), `concentration_gate`/concentration (app.py — a
+  **real** single-name/sector ceiling breach check against
+  `SINGLE_NAME_CEILING`/`SECTOR_CEILING`, not a placeholder, since this table IS the
+  new persisted substrate the design review said concentration lacked). Log-only:
+  nothing reads this table yet, no decision logic changed, no UI changed. Verified:
+  py_compile clean, `check_constants_documented.py` passes (no new constants — Q2's
+  thresholds are correctly deferred to Phase 2/3), 69 targeted tests pass. No Opus
+  code-review required for Phase 0 itself (no constants/gate/scoring-formula touched
+  per hard rule #4) — the design was already Opus-reviewed above. Next: the table DDL
+  needs manual application in Supabase before any data lands (ships inert until then,
+  same as `analyst_target_snapshots`). Phase 1 (read-only Judge) is next and DOES
+  require its own Opus review before shipping.

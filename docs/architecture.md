@@ -1310,6 +1310,70 @@ a recomputable analytical narrative, not user-authored data (contrast with
 owner's holdings' data-quality state — the two patterns are reconciled, not
 inconsistent). RLS: `FOR ALL TO service_role`.
 
+### 6.29 `judgment_opinions` table
+
+```sql
+CREATE TABLE IF NOT EXISTS judgment_opinions (
+    id           BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    source       TEXT NOT NULL,
+    dimension    TEXT NOT NULL,
+    ticker       TEXT NOT NULL,   -- '_PORTFOLIO' sentinel for portfolio-wide opinions
+    signal_date  DATE NOT NULL,
+    signal       NUMERIC NOT NULL,
+    label        TEXT,
+    confidence   NUMERIC NOT NULL,
+    as_of        TIMESTAMPTZ NOT NULL,
+    is_live      BOOLEAN NOT NULL DEFAULT TRUE,
+    evidence     TEXT,
+    advisory     BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT judgment_opinions_unique UNIQUE (source, dimension, ticker, signal_date)
+);
+```
+
+**Phase 0 (log-only instrumentation) of "The Judge"** — see
+`docs/plans/judgment-layer.md` for the full design. This is the first table in a
+multi-phase, Opus-design-reviewed plan (2026-08-03, Opus 4.8: FIX-FIRST → all
+findings incorporated) for a future portfolio-level judgment layer that reconciles
+every existing feature into one accountable daily posture. **Nothing reads this table
+yet** — it exists purely so Phase 2's grading harness has witness history to read
+once it's built. Ships inert until the DDL above is applied — degrades silently, same
+convention as `analyst_target_snapshots`.
+
+One row per `(source, dimension, ticker, signal_date)` — upserts on that key, so
+repeated same-day Home renders are no-ops. `ticker` uses the sentinel `'_PORTFOLIO'`
+(not `NULL`) for portfolio-wide opinions (`concentration`, `structural_risk`) so the
+unique constraint dedupes reliably (Postgres `NULL` never equals `NULL`). `signal` is
+normalized `-1..+1`; `dimension` is one of the ~10-dimension taxonomy in the plan doc
+(`quality`, `momentum`, `thesis_integrity`, `position_health`, `concentration`,
+`structural_risk`, `macro_regime`, `behavioral_fit`, `sentiment`, `leverage`, plus
+advisory-only `tax`/`catalyst`). `is_live` preserves the codebase's `None`
+(offline)-vs-`[]` (checked-clean) distinction at opinion grain — an opinion built from
+stale/offline source data must carry `is_live=False`, not be silently omitted, so a
+future Judge can degrade its confidence rather than reading absence as "all clear."
+
+**Phase 0 witnesses wired** (5 core-set sources, chosen because they already emit
+something close to an opinion — see the plan doc's Phase-0 core-set): `exit_advisor`
+(`position_health`, from the existing exit-signal capture block), `composite_score` +
+`scanner_momentum` + `verdict_reconciliation` (`quality`/`momentum`, from Grow Today's
+`new_picks`), `fragility_gauge` (`structural_risk`, logged only at the fresh-compute
+site, not the `_home_synth_cache`-hit re-publish), and `concentration_gate`
+(`concentration` — a **real** worst single-name/sector breach check against
+`SINGLE_NAME_CEILING`/`SECTOR_CEILING`, not a placeholder, since no persisted
+concentration history existed before this table). Built by
+`stock_analyzer.judgment_opinion.build_opinion()` (pure, no I/O) at each site; written
+by `db.save_judgment_opinions_batch()` (best-effort, never raises — a capture failure
+must never affect Home rendering); read by `db.load_judgment_opinions(days_back=365)`.
+**`_READONLY`-gated** (`if _READONLY: return`) — consistent with
+`exit_signals`/`analyst_target_snapshots` (interactive-app-path writers computed
+during a real user's Home render, not a system cron), not the
+`structural_scan_cache`/`debate_cache` exemption class. RLS: `FOR ALL TO service_role`.
+
+**Not yet built:** the routing logic (protective-veto vs weighting vs
+contradiction-audit), the grading harness, evidence-based weighting, and any Judge
+output/UI — all gated behind their own phases and their own Opus review per hard
+rule #4. This table only logs; it decides nothing.
+
 ### `stock_analyzer/portfolio_health.py`
 
 Pure-logic module for the 🏆 Health page. No I/O, no Streamlit imports.

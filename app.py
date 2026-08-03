@@ -3723,6 +3723,44 @@ if page == "🏠 Home":
     st.session_state["_acct_gate_cache"] = {
         "denom": _gate_denom, "basis": "equity", "over_levered": False,
     }
+
+    # Judgment-layer opinion capture (Phase 0, log-only) — a real breach check
+    # (worst single-name / sector weight vs the hard ceilings) rather than a
+    # placeholder, since port_df + Gate Weight (%) are both already in scope
+    # here. No persisted concentration history exists yet (session-only cache
+    # today, per judgment-layer.md Q2 finding #4) — this table IS that new
+    # substrate going forward.
+    if not port_df.empty and "Gate Weight (%)" in port_df.columns:
+        try:
+            from stock_analyzer.judgment_opinion import build_opinion
+            _jo_max_name_wt = float(port_df["Gate Weight (%)"].max())
+            _jo_sector_wts = (
+                port_df.groupby("Sector")["Gate Weight (%)"].sum()
+                if "Sector" in port_df.columns else pd.Series(dtype=float)
+            )
+            _jo_max_sector_wt = float(_jo_sector_wts.max()) if not _jo_sector_wts.empty else 0.0
+            _jo_name_breach = _jo_max_name_wt >= SINGLE_NAME_CEILING
+            _jo_sector_breach = _jo_max_sector_wt >= SECTOR_CEILING
+            if _jo_name_breach or _jo_sector_breach:
+                _jo_conc_signal = -0.8
+            elif _jo_max_name_wt >= SINGLE_NAME_CEILING * 0.8 or _jo_max_sector_wt >= SECTOR_CEILING * 0.8:
+                _jo_conc_signal = -0.3
+            else:
+                _jo_conc_signal = 0.3
+            db.save_judgment_opinions_batch([build_opinion(
+                source="concentration_gate",
+                dimension="concentration",
+                signal=_jo_conc_signal,
+                confidence=0.6,
+                evidence=(
+                    f"Largest name {_jo_max_name_wt:.1f}% (ceiling {SINGLE_NAME_CEILING:.0f}%), "
+                    f"largest sector {_jo_max_sector_wt:.1f}% (ceiling {SECTOR_CEILING:.0f}%)"
+                ),
+                label="breach" if (_jo_name_breach or _jo_sector_breach) else "clear",
+            )])
+        except Exception:
+            pass
+
     # ── Leverage / margin AWARENESS (text-only — NEVER gates) ──────────────────
     # Net capital = invested equity + signed net cash (negative cash = margin
     # debit). Published for the 🔗 Risk Analysis leverage read + the 💰 Account
@@ -4165,6 +4203,33 @@ if page == "🏠 Home":
         except Exception:
             _fragility = None
         st.session_state["_fragility_cache"] = _fragility
+
+        # Judgment-layer opinion capture (Phase 0, log-only) — logged only at this
+        # fresh-compute site, not the _home_synth_cache-hit re-publish elsewhere,
+        # so an unchanged fragility read isn't logged twice in one day (the
+        # (source, dimension, ticker, signal_date) upsert key would no-op it
+        # anyway, but skipping the call avoids the redundant write attempt).
+        # A None fragility (withheld/unavailable) emits no opinion — consistent
+        # with the existing withhold-if-uncertain posture; Phase 1 must treat a
+        # missing structural_risk opinion as reduced visibility, not "calm."
+        if _fragility:
+            try:
+                from stock_analyzer.judgment_opinion import build_opinion
+                _jo_severity_map = {"calm": 0.3, "caution": -0.3, "fragile": -0.8}
+                db.save_judgment_opinions_batch([build_opinion(
+                    source="fragility_gauge",
+                    dimension="structural_risk",
+                    signal=_jo_severity_map.get(_fragility.get("severity"), 0.0),
+                    confidence=0.6,
+                    evidence=(
+                        f"{_fragility.get('severity', '')} — beta "
+                        f"{_fragility.get('beta', 0):.2f}, implied move "
+                        f"{_fragility.get('implied_move', 0):.1f}%"
+                    ),
+                    label=_fragility.get("severity", ""),
+                )])
+            except Exception:
+                pass
 
         # High-beta cluster share (Part 2b) — standing "correlated exposure" read:
         # what % of the book sits in high-beta (β ≥ PORTFOLIO_BETA_ELEVATED) names.
@@ -4748,6 +4813,76 @@ if page == "🏠 Home":
 
             if _exit_signals_to_save:
                 db.save_exit_signals_batch(_exit_signals_to_save)
+
+            # ── Judgment-layer opinion capture (Phase 0, log-only) ───────────────
+            # Tags today's witnesses with a structured opinion for the future Judge
+            # (docs/plans/judgment-layer.md). Nothing reads this table yet — it
+            # exists so Phase 2's grading harness has history once it's built.
+            # Best-effort: a capture failure must never affect Home rendering.
+            # NOTE for Phase 1 design: verdict_reconciliation is logged under the
+            # `quality` dimension alongside composite_score even though it's a
+            # meta-witness that already synthesizes momentum+composite+news+
+            # earnings — it may need its own handling (e.g. excluded from
+            # weighting) rather than being treated as an independent vote.
+            try:
+                from stock_analyzer.judgment_opinion import build_opinion
+                _jo_batch = []
+
+                _jo_exit_signal_map = {"WATCH": -0.3, "TRIM": -0.6, "EXIT": -0.9, "RISK_OFF": -0.9}
+                for _es in _exit_signals_to_save:
+                    _jo_batch.append(build_opinion(
+                        source="exit_advisor",
+                        dimension="position_health",
+                        ticker=_es["ticker"],
+                        signal=_jo_exit_signal_map.get(_es["signal_type"], -0.5),
+                        confidence=0.7,
+                        evidence=f"{_es['signal_type']} signal from Daily Brief deterioration tiering",
+                        label=_es["signal_type"],
+                    ))
+
+                _jo_verdict_map = {"go": 0.8, "verify": 0.0, "caution": -0.4, "skip": -0.9}
+                for _p in (_gt_today.get("new_picks") or []):
+                    _tk = str(_p.get("ticker", ""))
+                    if not _tk:
+                        continue
+                    _cs = _p.get("composite_score")
+                    if _cs is not None:
+                        _jo_batch.append(build_opinion(
+                            source="composite_score",
+                            dimension="quality",
+                            ticker=_tk,
+                            signal=max(-1.0, min(1.0, (float(_cs) - 50.0) / 50.0)),
+                            confidence=0.6,
+                            evidence=f"Composite {_cs:.0f}/100 ({_p.get('composite_label', '')})",
+                            label=_p.get("composite_label", ""),
+                        ))
+                    _mom = _p.get("score")
+                    if _mom is not None:
+                        _jo_batch.append(build_opinion(
+                            source="scanner_momentum",
+                            dimension="momentum",
+                            ticker=_tk,
+                            signal=max(-1.0, min(1.0, (float(_mom) - 50.0) / 50.0)),
+                            confidence=0.5,
+                            evidence=f"Momentum score {_mom:.0f}/100",
+                        ))
+                    _xr = (_p.get("xref") or {}).get("verdict_reconciled") or {}
+                    _verdict = _xr.get("verdict")
+                    if _verdict:
+                        _jo_batch.append(build_opinion(
+                            source="verdict_reconciliation",
+                            dimension="quality",
+                            ticker=_tk,
+                            signal=_jo_verdict_map.get(_verdict, 0.0),
+                            confidence=0.65,
+                            evidence=_xr.get("one_liner", "") or _xr.get("label", ""),
+                            label=_xr.get("label", ""),
+                        ))
+
+                if _jo_batch:
+                    db.save_judgment_opinions_batch(_jo_batch)
+            except Exception:
+                pass
 
             # ── Signal hysteresis (calm advisor 2C) ──────────────────────────────
             # Mark Grow-Today picks that are "steady vs yesterday" so the user reads
