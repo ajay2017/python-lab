@@ -1165,3 +1165,20 @@ JUDGMENT_HORIZON_STRUCTURAL_RISK_DAYS  = 10
 # Reuses BEHAVIORAL_MIN_SAMPLE_N (above) rather than a parallel constant — same
 # n-before-a-pattern-counts philosophy, and the same reuse precedent Personalized
 # Discovery already established for this exact constant. See judgment-layer.md Q2.
+
+# Phase 3 (evidence-based weighting) — converts a witness's track record
+# (track_record_summary(), gated on BEHAVIORAL_MIN_SAMPLE_N same as above) into
+# a weight multiplier applied ONLY inside the confidence-weighted blend — the
+# protective veto and the contradiction-audit magnitude floor stay hard gates,
+# never softened by track record (that would silently re-litigate an existing
+# hard suppression into a vote, the exact structural hole the Q1 design review
+# caught). multiplier = accuracy / NEUTRAL_ACCURACY, clamped to [FLOOR, CEILING]
+# — 50% accuracy (coin-flip) is neutral (1.0x, identical to today's equal-weight
+# behavior); until a source×dimension pair clears the min-sample gate it stays
+# at 1.0x regardless of its thin observed accuracy. User confirmed the moderate
+# 0.25x-2.0x band (2026-08-03): a strong track record can up to double a
+# witness's say, a poor one drops it to a quarter, but no witness is ever fully
+# silenced or allowed to dominate the blend alone.
+JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY = 0.5
+JUDGMENT_TRACK_RECORD_WEIGHT_FLOOR     = 0.25
+JUDGMENT_TRACK_RECORD_WEIGHT_CEILING   = 2.0

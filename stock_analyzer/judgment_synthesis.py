@@ -6,11 +6,20 @@ into one decomposable posture per ticker plus a portfolio-wide posture. Pure
 logic, no I/O, no Streamlit imports — see docs/plans/judgment-layer.md for the
 full design and Opus review history.
 
-Equal-weight era (Phase 1-2): every opinion is weighted by its own `confidence`
-only, never by a source's historical track record (that's Phase 3 — no track
-record exists yet to weight by). This module changes NOTHING: it renders a read
-for the user to compare against the Daily Brief, and has no override/gating
-authority. It does not decide; it only reconciles what witnesses already said.
+Evidence-based weighting (Phase 3): the blend below is a *confidence-weighted*
+average, and each opinion's confidence is further scaled by a track-record
+weight multiplier once its (source, dimension) pair clears the min-sample gate
+(track_record_summary(), same BEHAVIORAL_MIN_SAMPLE_N floor Phase 2 uses) — see
+_weight_multiplier(). Until then, or when no track record is supplied at all
+(track_record=None, the Phase 1/2 behavior), every multiplier is 1.0 and the
+blend is identical to plain confidence-weighting. The multiplier is ONLY ever
+applied inside the blend — the protective veto and the contradiction-audit
+magnitude floor stay hard gates, never softened by a source's track record
+(that would silently re-litigate an existing hard suppression into a weighted
+vote, the exact structural hole the Q1 design review caught for veto-vs-
+acquisitive routing). This module still changes NOTHING to any recommendation:
+it renders a read for the user to compare against the Daily Brief, and has no
+override/gating authority.
 
 Routing (three outcomes per ticker, never a plain average of everything):
   1. PROTECTIVE VETO — the MOST SEVERE protective-dimension opinion
@@ -18,11 +27,13 @@ Routing (three outcomes per ticker, never a plain average of everything):
      JUDGMENT_VETO_PROTECTIVE_THRESHOLD hard-suppresses EVERY same-ticker
      positive acquisitive-dimension opinion (quality, momentum) at once — not
      just the first one found. All suppressed opinions are shown as dissent,
-     never blended in.
+     never blended in. Track record plays no part in this decision.
   2. CONTRADICTION AUDIT — two different sources on the SAME dimension with
      opposite-sign signals, both at/above JUDGMENT_CONTRADICTION_MIN_MAGNITUDE,
-     are flagged (not silently averaged away).
-  3. WEIGHTING — everything else blends via a confidence-weighted average.
+     are flagged (not silently averaged away). Track record plays no part here
+     either — a contradiction is a magnitude/sign fact, not a vote.
+  3. WEIGHTING — everything else blends via a track-record-weighted average
+     (Phase 3) — equal-weight confidence average until a witness earns history.
 
 Advisory opinions (build_opinion(advisory=True), e.g. verdict_reconciliation —
 a META-witness that already synthesizes momentum+composite+news+earnings into
@@ -40,6 +51,9 @@ from collections import defaultdict
 from stock_analyzer.constants import (
     JUDGMENT_VETO_PROTECTIVE_THRESHOLD,
     JUDGMENT_CONTRADICTION_MIN_MAGNITUDE,
+    JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY,
+    JUDGMENT_TRACK_RECORD_WEIGHT_FLOOR,
+    JUDGMENT_TRACK_RECORD_WEIGHT_CEILING,
 )
 from stock_analyzer.judgment_opinion import (
     PROTECTIVE_DIMENSIONS,
@@ -90,16 +104,41 @@ def _find_contradictions(ops: list[dict]) -> list[dict]:
     return contradictions
 
 
-def _confidence_weighted_average(ops: list[dict]) -> float:
+def _weight_multiplier(o: dict, track_record: dict | None) -> float:
+    """Track-record weight multiplier for one opinion's (source, dimension)
+    pair, applied on top of its own `confidence` inside the blend only.
+
+    Returns 1.0 (neutral, identical to pre-Phase-3 behavior) when no track
+    record was supplied, the pair has no track record yet, or it hasn't
+    cleared the min-sample gate (`track_record_summary`'s `sufficient_sample`)
+    — a thin sample is noise, not evidence, so it must not move weight.
+    Otherwise scales linearly off 50%-accuracy-is-neutral (a coin-flip witness
+    is worth exactly what it always was) and clamps to the user-set
+    [JUDGMENT_TRACK_RECORD_WEIGHT_FLOOR, …_CEILING] band so one witness can
+    never be fully silenced or allowed to dominate the blend alone.
+    """
+    if not track_record:
+        return 1.0
+    tr = track_record.get((o["source"], o["dimension"]))
+    if not tr or not tr.get("sufficient_sample"):
+        return 1.0
+    if JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY <= 0:
+        return 1.0  # guards a future constants.py misconfiguration, not a real code path today
+    raw = tr["accuracy"] / JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY
+    return max(JUDGMENT_TRACK_RECORD_WEIGHT_FLOOR, min(JUDGMENT_TRACK_RECORD_WEIGHT_CEILING, raw))
+
+
+def _confidence_weighted_average(ops: list[dict], track_record: dict | None = None) -> float:
     if not ops:
         return 0.0
-    total_weight = sum(o["confidence"] for o in ops)
+    weights = [o["confidence"] * _weight_multiplier(o, track_record) for o in ops]
+    total_weight = sum(weights)
     if total_weight <= 0:
         return 0.0
-    return sum(o["signal"] * o["confidence"] for o in ops) / total_weight
+    return sum(o["signal"] * w for o, w in zip(ops, weights)) / total_weight
 
 
-def _synthesize_group(ops: list[dict]) -> dict:
+def _synthesize_group(ops: list[dict], track_record: dict | None = None) -> dict:
     """Reconcile one ticker's (or the portfolio's) opinions into one posture.
     Shared by both grains — the routing logic doesn't care whether it's a real
     ticker or the portfolio-wide bucket.
@@ -122,6 +161,20 @@ def _synthesize_group(ops: list[dict]) -> dict:
         veto = {"protective": _most_severe, "suppressed": positive_acquisitive}
 
     contradictions = _find_contradictions(scored_ops)
+    # Keyed by natural identity (source, dimension, ticker) rather than id() —
+    # the returned "opinions" list below is now a set of shallow copies (each
+    # carries its own weight_multiplier annotation), so identity comparison
+    # against the original veto["suppressed"] objects would silently break.
+    # INVARIANT: this assumes at most one opinion per (source, dimension,
+    # ticker) within a group — true for every witness wired today. If a future
+    # witness ever emits two opinions on the same dimension+ticker in one run,
+    # a sibling opinion sharing that key would be mislabeled "suppressed" too
+    # (display-only — posture_signal is unaffected either way). Reviewed and
+    # accepted 2026-08-03 Opus review of Judge Phase 3; dedupe upstream in
+    # build_opinion() call sites if this ever stops holding.
+    _suppressed_keys = {
+        (s["source"], s["dimension"], s.get("ticker")) for s in (veto["suppressed"] if veto else [])
+    }
 
     if veto:
         posture_signal = veto["protective"]["signal"]
@@ -131,16 +184,31 @@ def _synthesize_group(ops: list[dict]) -> dict:
         # scored_ops on this ticker (additional protective/"other"-dimension
         # opinions beyond the one that won) are currently also NOT folded in
         # once a veto fires — posture_signal is the winning protective
-        # opinion's own value alone. Harmless in Phase 1 (posture_signal is
+        # opinion's own value alone. Harmless today (posture_signal is
         # computed but not rendered anywhere yet) but must be revisited before
-        # any Phase 3/4 consumer reads it, so a third opinion isn't silently
+        # any Phase 4 consumer reads it, so a third opinion isn't silently
         # dropped from an authoritative call.
     else:
-        posture_signal = _confidence_weighted_average(scored_ops)
+        posture_signal = _confidence_weighted_average(scored_ops, track_record)
         posture_source = "blend"
 
+    # Annotate each returned opinion with its blend weight_multiplier (None
+    # for advisory opinions — never weighted — and for every opinion when a
+    # veto fired, since the blend didn't run this ticker) and whether it was
+    # veto-suppressed, so the UI can show both without touching this module's
+    # internals or relying on object identity.
+    annotated_ops = []
+    for o in ops:
+        d = dict(o)
+        if o.get("advisory") or veto:
+            d["weight_multiplier"] = None
+        else:
+            d["weight_multiplier"] = _weight_multiplier(o, track_record)
+        d["suppressed"] = (o["source"], o["dimension"], o.get("ticker")) in _suppressed_keys
+        annotated_ops.append(d)
+
     return {
-        "opinions": ops,
+        "opinions": annotated_ops,
         "veto": veto,
         "contradictions": contradictions,
         "posture_signal": posture_signal,
@@ -172,7 +240,7 @@ def _build_overall_line(ticker_results: dict, portfolio_result: dict) -> str:
     )
 
 
-def synthesize(opinions: list[dict]) -> dict:
+def synthesize(opinions: list[dict], track_record: dict | None = None) -> dict:
     """Reconcile today's in-memory opinions into a decomposable read.
 
     `opinions` is the raw list built by judgment_opinion.build_opinion() across
@@ -180,6 +248,12 @@ def synthesize(opinions: list[dict]) -> dict:
     yet coerced to the '_PORTFOLIO' storage sentinel, that coercion only
     happens at db.py write time). Returns a dict a Streamlit page can render
     directly without further business logic — see the "🧑‍⚖️ The Judge" page.
+
+    `track_record` (Phase 3, optional) is a `{(source, dimension): row}` map
+    built from judgment_grading.track_record_summary() — each row needs
+    `accuracy` and `sufficient_sample`. Omit it (or pass None/{}) to get the
+    Phase 1/2 equal-weight behavior exactly. It only ever influences the blend
+    inside _synthesize_group — never the veto or contradiction-audit routing.
 
     Advisory opinions stay attached to their ticker's "opinions" list (so the
     decomposition still shows them as context) but are excluded from veto,
@@ -191,8 +265,10 @@ def synthesize(opinions: list[dict]) -> dict:
         by_ticker[o.get("ticker")].append(o)
 
     portfolio_ops = by_ticker.pop(_PORTFOLIO_KEY, [])
-    ticker_results = {ticker: _synthesize_group(ops) for ticker, ops in by_ticker.items()}
-    portfolio_result = _synthesize_group(portfolio_ops)
+    ticker_results = {
+        ticker: _synthesize_group(ops, track_record) for ticker, ops in by_ticker.items()
+    }
+    portfolio_result = _synthesize_group(portfolio_ops, track_record)
 
     live_protective_dims_seen = {
         o["dimension"] for o in opinions

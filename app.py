@@ -9003,8 +9003,11 @@ elif page == "🧑‍⚖️ The Judge":
     st.caption(
         "Reconciles today's witnesses (concentration, structural risk, exit "
         "signals, composite, momentum, verdict reconciliation) across your "
-        "portfolio and today's Grow Today picks. Equal-weighted — no track "
-        "record exists yet to weight by (see Phase 3 in the design plan). "
+        "portfolio and today's Grow Today picks. Blend weight is now "
+        "track-record-adjusted per witness once it clears the min-sample gate "
+        "below (Phase 3) — until then every witness stays at equal, neutral "
+        "weight, same as before. The protective veto and contradiction audit "
+        "are never weighted — those stay hard gates. "
         "**Does not change any recommendation** — visit 🏠 Home first so "
         "today's witnesses have run."
     )
@@ -9017,7 +9020,15 @@ elif page == "🧑‍⚖️ The Judge":
         )
     else:
         from stock_analyzer.judgment_synthesis import synthesize
-        _jr = synthesize(_jo_today)
+        from stock_analyzer.judgment_grading import track_record_summary
+        try:
+            _jg_tr_rows = track_record_summary(
+                db.load_judgment_grades(days_back=365), BEHAVIORAL_MIN_SAMPLE_N,
+            )
+            _jg_track_record_map = {(r["source"], r["dimension"]): r for r in _jg_tr_rows}
+        except Exception:
+            _jg_track_record_map = {}
+        _jr = synthesize(_jo_today, track_record=_jg_track_record_map)
 
         _posture_bg = "#f59e0b1a" if (
             any(r["veto"] for r in _jr["tickers"].values()) or _jr["portfolio"]["veto"]
@@ -9042,14 +9053,12 @@ elif page == "🧑‍⚖️ The Judge":
             if not result["opinions"]:
                 return
             st.markdown(f"**{label}**")
-            _veto_suppressed_ids = set()
             if result["veto"]:
                 _v = result["veto"]
                 _supp_srcs = ", ".join(
                     f"{s['source']} ({s['dimension']}, {s['signal']:+.2f})"
                     for s in _v["suppressed"]
                 )
-                _veto_suppressed_ids = {id(s) for s in _v["suppressed"]}
                 st.markdown(
                     f"<div style='background:#78350f33;border-left:3px solid #fbbf24;"
                     f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
@@ -9068,13 +9077,15 @@ elif page == "🧑‍⚖️ The Judge":
                 )
             for _o in result["opinions"]:
                 _is_advisory = bool(_o.get("advisory"))
-                _is_suppressed = id(_o) in _veto_suppressed_ids
+                _is_suppressed = bool(_o.get("suppressed"))
+                _wm = _o.get("weight_multiplier")
+                _wm_txt = f" · {_wm:.2f}x weight" if (_wm is not None and abs(_wm - 1.0) > 0.01) else ""
                 if _is_advisory:
                     _sig_txt = f"{_o['signal']:+.2f} (context only, not counted)"
                 elif _is_suppressed:
                     _sig_txt = f"{_o['signal']:+.2f} (suppressed)"
                 else:
-                    _sig_txt = f"{_o['signal']:+.2f}"
+                    _sig_txt = f"{_o['signal']:+.2f}{_wm_txt}"
                 _sig_color = "#64748b" if _is_advisory else _jo_sig_class(_o["signal"])
                 st.markdown(
                     f"<div style='display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b;"
@@ -9110,14 +9121,15 @@ elif page == "🧑‍⚖️ The Judge":
         )
 
     st.markdown("---")
-    st.markdown("##### 📊 Track record (Phase 2)")
+    st.markdown("##### 📊 Track record (Phase 2 + 3)")
     st.caption(
         "Grades each witness's PAST opinions against what actually happened — "
         "not the Judge's aggregate posture, which is never itself graded (see "
-        "the design plan's Q2). Still equal-weight; nothing here changes a "
-        "recommendation. A witness needs at least "
-        f"{BEHAVIORAL_MIN_SAMPLE_N} graded opinions before its accuracy is "
-        "shown as real signal rather than noise."
+        "the design plan's Q2). A witness needs at least "
+        f"{BEHAVIORAL_MIN_SAMPLE_N} graded opinions before its accuracy feeds "
+        "the blend above as a weight — below that it stays at neutral, "
+        "equal weight. Still no override/gating authority; the veto and "
+        "contradiction audit are never weighted."
     )
 
     if st.button("▶ Run grading", key="_judge_run_grading"):

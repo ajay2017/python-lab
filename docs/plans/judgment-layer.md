@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
 **Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
-**Status:** Phase 0 + Phase 1 SHIPPED 2026-08-03 (DDL applied, cache-hit/miss capture bug found via live screenshot and fixed same session). **Phase 2 (grading harness) SHIPPED 2026-08-03** — built, Opus-reviewed (FIX-FIRST, 2 blocking, both fixed), and recovered from a concurrent-session commit race that briefly broke `main` (see status log). Phase 3 (evidence-based weighting) not started.
+**Status:** Phase 0 + Phase 1 SHIPPED 2026-08-03 (DDL applied, cache-hit/miss capture bug found via live screenshot and fixed same session). **Phase 2 (grading harness) SHIPPED 2026-08-03** — built, Opus-reviewed (FIX-FIRST, 2 blocking, both fixed), and recovered from a concurrent-session commit race that briefly broke `main` (see status log). **Phase 3 (evidence-based weighting) SHIPPED 2026-08-03** — built, Opus-reviewed (SHIP, 0 blocking, 2 non-blocking hardening tweaks applied anyway). Phase 4 (override/gating authority) not started — deliberately last per the design's own sequencing.
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -490,3 +490,74 @@ conversation, before any code.
   `grade_portfolio_opinion`'s portfolio-alpha-vs-SPY is a weaker proxy for
   idiosyncratic cluster/concentration risk than a true cluster-specific measure
   would be — both acceptable for this pass, revisit in a Phase 2b.
+
+- **2026-08-03 — Phase 3 (evidence-based weighting) built**, same day the user
+  confirmed live via screenshot that Phase 2's grading harness was deployed and
+  behaving exactly as designed (0 graded / 19 pending / 5 advisory-excluded / 4
+  protective-withheld, matching the ~1-2 days of history accumulated against
+  5-20 day horizons). Confirmed one scope fork with the user first: the
+  track-record → weight-multiplier conversion (`accuracy / 0.5` neutral point,
+  clamped to a floor/ceiling) — offered conservative (0.5x-1.5x) / moderate
+  (0.25x-2.0x) / aggressive (0.1x-3.0x) bands; user picked **moderate,
+  0.25x-2.0x**. New constants `JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY` (0.5),
+  `JUDGMENT_TRACK_RECORD_WEIGHT_FLOOR` (0.25), `JUDGMENT_TRACK_RECORD_WEIGHT_CEILING`
+  (2.0). `judgment_synthesis.py` gained `_weight_multiplier()` (returns 1.0 —
+  neutral, byte-identical to Phase 1/2 — when no track record is supplied, the
+  (source, dimension) pair has no track record yet, or it hasn't cleared
+  `BEHAVIORAL_MIN_SAMPLE_N`) and `_confidence_weighted_average()` /
+  `_synthesize_group()` / `synthesize()` all gained an optional `track_record`
+  param threaded through. **The multiplier only ever scales the blend — the
+  protective veto and the contradiction-audit magnitude floor are untouched**,
+  preserving Q1's structural principle that a hard gate must never be softened
+  into a weighted vote by track record any more than by raw confidence.
+  `app.py`'s Judge page now loads `track_record_summary()` before calling
+  `synthesize()`, builds a `{(source, dimension): row}` map, and passes it in;
+  each opinion's effective weight renders next to its signal (e.g. "1.8x
+  weight") whenever it differs from neutral, so the adjustment is never
+  hidden — satisfies the "never decide+hide" redline now that opinions are no
+  longer uniformly equal-weight. **Also fixed a latent fragility while in
+  there:** the veto-suppressed-opinion UI match used to rely on Python object
+  `id()` identity between `veto["suppressed"]` and the rendered `opinions`
+  list — safe only because `_synthesize_group` had never copied opinion dicts
+  before. Phase 3 needed to attach a per-opinion `weight_multiplier` onto a
+  copy, which would have silently broken that identity match. Replaced with an
+  explicit `suppressed` boolean field computed from a `(source, dimension,
+  ticker)` natural key inside `_synthesize_group` itself — more robust, and
+  removes a dependency on object identity from the rendering layer entirely.
+  Given ~1-2 days of opinion history and 0 (source, dimension) pairs yet
+  cleared `BEHAVIORAL_MIN_SAMPLE_N`, every multiplier renders as 1.0 today —
+  Phase 3 ships correctly inert, exactly per the "weighting is time-gated"
+  load-bearing principle, and will activate automatically as grades
+  accumulate with no further code change needed.
+
+  **Opus 4.8 code review: SHIP, 0 blocking.** Traced and cleared: the
+  multiplier math can never break the blend (accuracy is always in [0,1] when
+  `sufficient_sample` is true since that requires n≥8, so the clamped
+  multiplier is always in [0.25, 2.0], never negative/zero/NaN/inf, and
+  `_confidence_weighted_average`'s pre-existing `total_weight <= 0` guard
+  still covers the only remaining zero case — all-zero confidences); no
+  protective-dimension track record can leak into the acquisitive blend or
+  vice versa (multiplier lookup is strictly keyed by (source, dimension), and
+  protective dimensions carry no `sufficient_sample` row today since Phase 2
+  withholds them from grading); the veto and contradiction-audit routing are
+  genuinely untouched by track record (both operate on raw `signal` only,
+  `track_record` reaches nothing but the non-veto blend branch); the `app.py`
+  wiring builds the track-record map before calling `synthesize()` and its
+  `except Exception: {}` fallback degrades safely to Phase 1/2's exact
+  equal-weight behavior rather than crashing the page; the transparency
+  redline holds (a weight tag renders whenever it differs from neutral, so
+  the adjustment is never hidden). **2 non-blocking findings, both fixed
+  anyway (cheap, in the same pass):** (1) the new `(source, dimension,
+  ticker)`-keyed `suppressed` lookup is only collision-safe because exactly
+  one opinion is emitted per that key today — unlike the old `id()`-based
+  check it replaced, which was collision-proof by construction; documented
+  as an explicit invariant comment in `_synthesize_group` rather than left
+  implicit, so a future multi-opinion-per-dimension witness doesn't silently
+  mislabel a sibling opinion as suppressed (display-only impact even if it
+  ever fires). (2) the accuracy/neutral-accuracy divide had no guard against
+  a hypothetical future `JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY` misconfigured
+  to 0 — added a defensive `<= 0` check that falls back to neutral (1.0)
+  rather than raising `ZeroDivisionError`; verified this doesn't change
+  real-path behavior (re-ran the weighting scenario post-fix, same 1.8x/0.25x
+  result). Re-verified after both fixes: py_compile clean, 3076/3076 tests
+  pass, constants-doc check passes, all 5 manual scenarios still pass.
