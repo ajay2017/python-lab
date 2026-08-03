@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
 **Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
-**Status:** Phase 0 SHIPPED 2026-08-03, DDL applied. Phase 1 (read-only "🧑‍⚖️ The Judge" nav page) built + code-reviewed 2026-08-03 (Opus 4.8: FIX-FIRST, 2 blocking, both fixed) — then a real cache-hit/miss capture bug was found via live screenshot the same session and fixed (see status log). Ready to commit/push. Phase 2 (grading harness) not started.
+**Status:** Phase 0 + Phase 1 SHIPPED 2026-08-03 (DDL applied, cache-hit/miss capture bug found via live screenshot and fixed same session). **Phase 2 (grading harness) SHIPPED 2026-08-03** — built, Opus-reviewed (FIX-FIRST, 2 blocking, both fixed), and recovered from a concurrent-session commit race that briefly broke `main` (see status log). Phase 3 (evidence-based weighting) not started.
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -432,3 +432,61 @@ conversation, before any code.
   Verified equivalence of the re-derived WATCH/TRIM/EXIT/RISK_OFF logic against the
   removed code, confirmed the upsert key keeps every-render calls idempotent, and
   confirmed no dangling references to the removed in-branch variables.
+- **2026-08-03 — Phase 2 (grading harness) built and shipped**, same session, after
+  confirming three scope forks with the user: (1) per-dimension horizons —
+  momentum=5, quality=20, position_health=10 trading days, with concentration=20 /
+  structural_risk=10 proposed by pairing to the closest precedent (flagged for
+  reconsideration once real data accumulates); (2) reuse `BEHAVIORAL_MIN_SAMPLE_N`
+  as the shared min-sample gate rather than a new parallel constant; (3) grading
+  triggered by a manual "▶ Run grading" button on the Judge page, not automatic on
+  every load. Reused `predictive_analytics.forward_alpha_at_horizon()` (the Entry
+  Timing tab's own mechanism) for ticker-class grading rather than reinventing it;
+  built a net-new `portfolio_value_series_from_snapshots()` aggregation over
+  `daily_snapshots` for the portfolio-drawdown class. New table `judgment_grades`
+  (§6.30) + `stock_analyzer/judgment_grading.py`.
+
+  **Opus 4.8 code review: FIX-FIRST, 2 blocking**, both fixed before commit: (1)
+  protective witnesses (`position_health`/`concentration`/`structural_risk`) were
+  graded by naive sign-match against forward alpha — scoring a TRIM/caution
+  "correct" only when the flagged name/portfolio subsequently underperformed, i.e.
+  marking the witness WRONG for every risk that correctly didn't fire. This is
+  exactly the anti-caution posture inversion Q2's Gap B was designed to prevent,
+  caught here before any biased grade was persisted (only ~1-2 days of opinion
+  history existed at review time). Fixed by making both graders WITHHOLD (return
+  `None`) for any protective dimension until a real counterfactual grader exists —
+  the button handler now counts these separately ("N protective (withheld)") rather
+  than silently conflating them with "pending maturity." (2) `_sign_match()` scored
+  an exactly-flat realized outcome or a zero opinion signal as `correct=False`
+  despite its own docstring saying "nothing to grade" — since both graders round
+  alpha to 2 decimals, `0.0` is realistically reachable and would have biased
+  accuracy downward on pure noise; fixed to return `None` (excluded from
+  `track_record_summary`'s N and accuracy) instead of `False`.
+
+  **A concurrent-session commit race broke `main` mid-build.** A different session
+  (Sonnet 4.6, working the unrelated Trade Journal BUY-confirmation-card feature)
+  staged and pushed this session's in-progress `app.py` Judge edits under its own
+  commit (`a7c2542`, titled `feat(trade-journal): add BUY confirmation card before
+  DB write`) — bundling unrelated work together, without the supporting files
+  (`judgment_grading.py`, the `constants.py`/`db.py` additions) Phase 2's app.py
+  code depends on, and without an Opus review citation for the Judge-related
+  portion (hard rule #4 applies to it same as any other Judge commit). From that
+  push until this fix, opening "🧑‍⚖️ The Judge" page raised
+  `ModuleNotFoundError` and crashed — confirmed live via `git log`/`git show`
+  before acting, not assumed from the reviewer's claim alone. Recovered via a
+  **forward-fix commit** (not a history rewrite — `a7c2542`'s legitimate
+  trade-journal work was left untouched) that added the missing files together
+  with both review fixes, restored the working import chain (verified before
+  push), and carried the review citation the mislabeled commit was missing. Same
+  incident class `feedback_concurrent_session_git_races` already tracks — worth
+  re-reading that memory before any future multi-file build that spans more than
+  one tool-call round-trip, since the working tree is shared with any other active
+  session.
+
+  Verified after both the code fixes and the recovery commit: py_compile clean,
+  3076/3076 tests pass, constants-doc check passes, 5 manual scenarios (2 protective
+  withholds, normal ticker grading, flat-outcome None-not-False, track-record
+  exclusion) all pass. Deferred as documented non-blocking follow-ups: a
+  matured-but-fetch-failed opinion is never automatically retried on a later run;
+  `grade_portfolio_opinion`'s portfolio-alpha-vs-SPY is a weaker proxy for
+  idiosyncratic cluster/concentration risk than a true cluster-specific measure
+  would be — both acceptable for this pass, revisit in a Phase 2b.
