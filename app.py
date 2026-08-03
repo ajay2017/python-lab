@@ -8997,7 +8997,7 @@ elif page == "🧑‍⚖️ The Judge":
     st.markdown(
         "<span style='background:#1e293b;border:1px solid #64748b;color:#94a3b8;"
         "font-size:0.78em;font-weight:700;padding:2px 10px;border-radius:999px'>"
-        "BETA — READ-ONLY, NO AUTHORITY</span>",
+        "BETA — AUDIT AUTHORITY ONLY, NEVER GATES A RECOMMENDATION</span>",
         unsafe_allow_html=True,
     )
     st.caption(
@@ -9019,7 +9019,7 @@ elif page == "🧑‍⚖️ The Judge":
             "the Judge reads what Home's witnesses computed during that render."
         )
     else:
-        from stock_analyzer.judgment_synthesis import synthesize
+        from stock_analyzer.judgment_synthesis import synthesize, audit_coherence
         from stock_analyzer.judgment_grading import track_record_summary
         try:
             _jg_tr_rows = track_record_summary(
@@ -9119,6 +9119,51 @@ elif page == "🧑‍⚖️ The Judge":
             f"{_jr['n_opinions']} opinion(s) from {_jr['n_sources']} source(s) this session. "
             f"Persisted to the judgment_opinions table — graded below as history accumulates."
         )
+
+        st.markdown("---")
+        st.markdown("##### 🔍 Coherence audit (Phase 4)")
+        st.caption(
+            "The Judge's one piece of real authority so far — an AUDIT, never a "
+            "new gate. Cross-checks every ticker under an active protective veto "
+            "against `_reduce_calls` specifically (the app's other "
+            "already-published cross-feature risk surface — not every "
+            "enforcement mechanism in the app) to catch coherence gaps "
+            "systematically rather than reactively (the design plan's "
+            "\"Job 3\"). Never suppresses or changes any recommendation itself."
+        )
+        _jr_reduce_calls_raw = st.session_state.get("_reduce_calls")
+        if _jr_reduce_calls_raw is None:
+            st.info(
+                "ℹ️ Coherence audit unavailable this run — reduce-call data not "
+                "published yet this session. Visit 🏠 Home first."
+            )
+        else:
+            _jr_audit = audit_coherence(_jr, set(_jr_reduce_calls_raw.keys()))
+            if not _jr_audit["covered"] and not _jr_audit["uncovered"]:
+                st.caption("No active protective vetoes this run — nothing to audit.")
+            else:
+                for _f in _jr_audit["uncovered"]:
+                    _f_label = (
+                        "the portfolio-wide posture" if _f["ticker"] == "_PORTFOLIO_WIDE"
+                        else _f["ticker"]
+                    )
+                    st.markdown(
+                        f"<div style='background:#7f1d1d33;border-left:3px solid #ef4444;"
+                        f"border-radius:6px;padding:8px 12px;margin:6px 0;font-size:0.85em;"
+                        f"color:#fca5a5'>⚠ COHERENCE GAP — {_f_label}: {_f['source']} "
+                        f"flags {_f['dimension']} ({_f['signal']:+.2f}, {_f['evidence']}) "
+                        f"— no active reduce call is currently flagging this ticker "
+                        f"elsewhere.</div>",
+                        unsafe_allow_html=True,
+                    )
+                if not _jr_audit["uncovered"]:
+                    st.caption("✅ No coherence gaps found this run.")
+                if _jr_audit["covered"]:
+                    _cov_tickers = ", ".join(f["ticker"] for f in _jr_audit["covered"])
+                    st.caption(
+                        f"{len(_jr_audit['covered'])} vetoed ticker(s) already covered "
+                        f"by an active reduce call: {_cov_tickers}."
+                    )
 
     st.markdown("---")
     st.markdown("##### 📊 Track record (Phase 2 + 3)")

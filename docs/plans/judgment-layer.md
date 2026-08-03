@@ -4,7 +4,7 @@
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 4.8 (brainstorm/design stage)
 **Opus review (design):** Round 1 (2026-08-03) — Claude Opus 4.8 (1M context) (`claude-opus-4-8[1m]`) — **FIX-FIRST**: North Star, three pillars, and Q3 phase order sound; Phase 0 (log-only) safe to start; Q1 contract had 1 structural hole + 3 lesser gaps. **All 4 blocking findings + 3 non-blocking incorporated** (protective-veto routing class, offline-protective confidence degradation, post-reconcile consumption, honest Q2 grading-class scoping, constants enumeration, Phase-1 caveats). Phase 1 *code* will still need its own Opus review at build time per hard rule #4.
-**Status:** Phase 0 + Phase 1 SHIPPED 2026-08-03 (DDL applied, cache-hit/miss capture bug found via live screenshot and fixed same session). **Phase 2 (grading harness) SHIPPED 2026-08-03** — built, Opus-reviewed (FIX-FIRST, 2 blocking, both fixed), and recovered from a concurrent-session commit race that briefly broke `main` (see status log). **Phase 3 (evidence-based weighting) SHIPPED 2026-08-03** — built, Opus-reviewed (SHIP, 0 blocking, 2 non-blocking hardening tweaks applied anyway). **Phase 4 (override/gating authority) explicitly PARKED 2026-08-03 — waiting on real track record, not started.** User confirmed live via screenshot that Phase 3 deployed correctly (equal-weight, byte-identical to Phase 1/2, exactly as expected with 0 graded opinions), then was asked how to sequence Phase 4 given weighting is still neutral for every witness. **Decision: wait for real track record to accumulate before scoping or building Phase 4** — granting override/gating authority to a Judge whose "evidence-based" weighting hasn't actually been evidenced yet would defeat the point; Phase 4's risk (demoting the Daily Brief, real gating power) is too high to build against a system that today behaves identically to the already-shipped, authority-free Phase 1. **Trigger to revisit: the Judge page's Track Record table shows at least one (source, dimension) row with `sufficient_sample=True` (a real accuracy % instead of "building history")** — an observable app-state signal, not a calendar date, since real elapsed time depends on how many Grow Today picks/exit signals fire and how often grading is run. This is a genuinely gated future phase per CLAUDE.md's Definition of Done step 6 — also recorded there, not just here.
+**Status:** Phase 0 + Phase 1 SHIPPED 2026-08-03 (DDL applied, cache-hit/miss capture bug found via live screenshot and fixed same session). **Phase 2 (grading harness) SHIPPED 2026-08-03** — built, Opus-reviewed (FIX-FIRST, 2 blocking, both fixed), and recovered from a concurrent-session commit race that briefly broke `main` (see status log). **Phase 3 (evidence-based weighting) SHIPPED 2026-08-03** — built, Opus-reviewed (SHIP, 0 blocking, 2 non-blocking hardening tweaks applied anyway). **Phase 4 SHIPPED 2026-08-03 — scoped down from literal override/gating authority to an audit-only coherence check** after the user reconsidered the earlier same-day decision to wait for real track record, and asked to finish the phase now. See status log for the full scoping rationale (why 3 of 4 protective dimensions couldn't get literal veto authority without duplicating existing enforcement or reversing a documented house policy) and Opus review. **This closes the entire 5-phase Judge build (0-4) — nothing left open in this plan.**
 
 > **One-line spec:** A tier *above* the app's 60+ features — a single accountable
 > judgment layer ("the Judge") that reconciles every subsystem into ONE
@@ -561,3 +561,129 @@ conversation, before any code.
   real-path behavior (re-ran the weighting scenario post-fix, same 1.8x/0.25x
   result). Re-verified after both fixes: py_compile clean, 3076/3076 tests
   pass, constants-doc check passes, all 5 manual scenarios still pass.
+
+- **2026-08-03 — Phase 4 explicitly PARKED, same session, immediately after
+  Phase 3 shipped.** User confirmed via screenshot that Phase 3 deployed
+  correctly (equal-weight, byte-identical to Phase 1/2, exactly as expected
+  with 0 graded opinions). Asked how to sequence Phase 4 given every
+  witness's blend weight is still neutral — offered wait-for-real-track-
+  record / scope-now-build-later / proceed-now-regardless. **User picked
+  wait-for-real-track-record.** Recorded the trigger to revisit (Track
+  Record table shows ≥1 `(source, dimension)` row with `sufficient_sample=
+  True`) in `CLAUDE.md`'s "What's queued → Genuinely not yet done" per
+  Definition of Done step 6, and in memory `project_judgment_layer_northstar`.
+
+- **2026-08-03 — Decision reversed same session; Phase 4 built and SHIPPED.**
+  User asked to finish the phase now rather than wait, explicitly accepting
+  it will be inert until real track record accumulates (same "ships
+  correctly inert, activates automatically" pattern every prior phase
+  followed). Before writing any code, ran a research pass (Explore agent,
+  not guessed) into what today's ACTUAL enforcement looks like for each of
+  the 4 protective dimensions the Judge's veto covers, to avoid proposing
+  something already redundant or something that reverses a deliberate house
+  policy:
+  - **`position_health`** — already enforced across 5+ surfaces via the
+    mature `_reduce_calls` mechanism (Grow Today's `_act_blocked` skip,
+    Rebalancer ADD suppression, Investor Mirror orphan-conviction filtering,
+    Analysis add-sizing suppression, deterioration-WATCH add blocking).
+  - **`concentration`** — already hard-enforced, fully decoupled from the
+    Judge, via `daily_briefing.py`'s own `SINGLE_NAME_CEILING`/
+    `SECTOR_CEILING` checks (`sector_blocked_picks`, `concentration_blocked_
+    adds`) and Watchlist's own `_portfolio_risk_gate`. The Judge's
+    `concentration_gate` opinion (Phase 0) re-derives the same breach
+    purely for display — it was never wired to enforce anything, confirming
+    the two are cleanly decoupled as originally intended.
+  - **`structural_risk`** (fragility) — has a narrow, conditional
+    suppression today (only fires when a regime AND-gate is armed, only
+    trims already-held top-beta names via the same `_reduce_calls`
+    machinery) — does NOT broadly block brand-new entries. The one
+    dimension with a genuine, currently-missing gap — but closing it would
+    be new investment policy (a new gate, new threshold), not a mechanical
+    wire-up.
+  - **`leverage`** — confirmed still purely informational; `CLAUDE.md`'s
+    coordination pattern explicitly documents `_leverage_cache` as
+    "read-only, never gates," and no code path anywhere contradicts that.
+
+  **Conclusion presented to the user:** a literal "Judge gets veto authority
+  over all 4 dimensions," as the original one-line Phase 4 description
+  envisioned, would either duplicate mature existing enforcement (a drift
+  risk — two independent paths suppressing the same thing can silently
+  diverge, exactly what the app's coordination-pattern rules exist to
+  prevent) or silently reverse the `leverage`-never-gates policy as a side
+  effect. Offered three scopings: (1) **coherence auditor** — no new gate;
+  cross-check the Judge's already-computed vetoes against what's already
+  enforced elsewhere, surfacing a genuine gap loudly rather than silently;
+  (2) a new, narrower `structural_risk`-only gate (its own policy
+  conversation); (3) the original full-override scope, accepting the
+  redundancy/policy-reversal risk. **User picked (1), the coherence
+  auditor.**
+
+  **Built:** `stock_analyzer/judgment_synthesis.py::audit_coherence(judge_result,
+  reduce_call_tickers)` — pure, no new I/O. For every ticker (plus a
+  `"_PORTFOLIO_WIDE"` sentinel bucket, future-proofing only — a
+  portfolio-wide veto cannot fire today since no portfolio-wide acquisitive
+  opinion is ever emitted) under an active protective veto in `synthesize()`'s
+  output, checks membership against `reduce_call_tickers` and buckets the
+  finding as `"covered"` (veto + an active reduce call already exists —
+  validating) or `"uncovered"` (veto with NO active reduce call — a genuine
+  coherence gap the Judge alone caught). Deliberately reuses
+  `st.session_state["_reduce_calls"]` — already published every Home render
+  per `CLAUDE.md`'s own coordination pattern — so this needed ZERO new
+  session-state wiring or cross-page dependency. `app.py`'s Judge page gained
+  a new "🔍 Coherence audit (Phase 4)" section: an explicit "unavailable —
+  visit Home first" state when `_reduce_calls` is `None` (never silently
+  treated as zero reduce calls, preserving the codebase's `None`-vs-`[]`
+  discipline — a false "all clear" here would be worse than no read at all),
+  a red banner per `"uncovered"` finding, and a calm confirmation line when
+  none exist. **Never suppresses or modifies any recommendation — pure
+  audit.** The page's top badge updated from "BETA — READ-ONLY, NO
+  AUTHORITY" to "BETA — AUDIT AUTHORITY ONLY, NEVER GATES A RECOMMENDATION"
+  to accurately reflect the new capability without overclaiming it.
+  Verified: py_compile clean, 3076/3076 tests pass (still no dedicated
+  `tests/test_judgment_*.py` — consistent with Phases 0-3, verified via
+  manual scenarios instead), 5 manual scenarios (veto+covered, veto+
+  uncovered, no-veto-empty-audit, unrelated reduce-call tickers ignored,
+  portfolio bucket doesn't spuriously fire) all pass.
+
+  **Opus 4.8 code review: SHIP, 0 blocking** — the phase flagged for the
+  heaviest review in the whole design got real scrutiny, not a rubber stamp.
+  Traced and cleared: `audit_coherence()` has exactly one call site and its
+  return value is only ever consumed by `st.markdown`/`st.caption` — never
+  written to `session_state`, never fed into anything that filters/
+  suppresses a recommendation, confirming this stays a pure audit. The
+  `None`-vs-`{}` distinction for `_reduce_calls` is correctly followed
+  through (a `None` routes to the "unavailable" info box and skips the
+  audit entirely, never silently treated as "zero reduce calls," which
+  would have false-flagged every vetoed ticker as "uncovered" purely
+  because the reference data hadn't loaded). Confirmed every dimension that
+  can actually fire a per-ticker veto today (`position_health` — the only
+  one below the veto threshold at the ticker grain; `concentration`/
+  `structural_risk` are portfolio-scoped and cannot veto a specific ticker)
+  is sourced from the exact same act-kinds `_reduce_calls` itself buckets
+  from, so a fireable veto is always "covered" today — "uncovered" is
+  genuine future-proofing, not a live false-positive, and the scope-down
+  rationale (avoid duplicating mature enforcement, avoid reversing the
+  leverage-never-gates policy) holds. **3 non-blocking findings, all fixed
+  anyway:** (1) the module docstring and page caption said an "uncovered"
+  finding means "nothing else in the app is flagging this ticker," when the
+  code only cross-checks `_reduce_calls` specifically (concentration's own
+  gate and leverage's policy sit outside it) — reworded both to say
+  "not covered by `_reduce_calls` specifically," matching what the rendered
+  banner itself already said precisely; harmless today (see above) but
+  would mislead once a future per-ticker protective witness is wired that
+  doesn't also feed `_reduce_calls`. (2) the `"_PORTFOLIO_WIDE"` sentinel
+  key would have rendered as a literal fake ticker in the red banner if a
+  portfolio veto ever becomes reachable in a later phase (unreachable
+  today) — added a display alias ("the portfolio-wide posture") at the
+  render site. (3) a redundant inline `audit_coherence` import — consolidated
+  into the existing `judgment_synthesis` import at the top of the branch.
+  Re-verified after all 3 fixes: py_compile clean, 3076/3076 tests pass, both
+  manual scenarios re-run with identical results.
+
+  **This closes the entire 5-phase Judge build (0-4).** Phase 4 delivers on
+  the design's original "Job 3: audit for cross-feature contradiction
+  systematically" promise — the Judge's verdict is now consequential
+  (cross-referenced against reality, a mismatch surfaced loudly) without
+  duplicating or risking collision with the app's existing, more nuanced
+  enforcement mechanisms, and without silently reversing the leverage
+  never-gates policy. There is no further phase queued for this feature.

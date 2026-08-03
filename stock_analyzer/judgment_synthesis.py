@@ -17,9 +17,27 @@ applied inside the blend — the protective veto and the contradiction-audit
 magnitude floor stay hard gates, never softened by a source's track record
 (that would silently re-litigate an existing hard suppression into a weighted
 vote, the exact structural hole the Q1 design review caught for veto-vs-
-acquisitive routing). This module still changes NOTHING to any recommendation:
-it renders a read for the user to compare against the Daily Brief, and has no
-override/gating authority.
+acquisitive routing). synthesize() itself still changes NOTHING to any
+recommendation: it renders a read for the user to compare against the Daily
+Brief.
+
+Coherence audit (Phase 4, `audit_coherence()`): the one piece of real
+"authority" granted so far — but authority to AUDIT, never to gate. A
+research pass before building Phase 4 found that 3 of the 4 protective
+dimensions are either already enforced elsewhere (position_health via
+`_reduce_calls`, concentration via the entry-gate pipeline) or explicitly
+documented as "never gates" (leverage, per CLAUDE.md's coordination pattern)
+— so a literal "Judge gets veto authority" would either duplicate existing
+enforcement (a drift risk) or silently reverse a deliberate house policy.
+The user chose the audit-only scope instead: `audit_coherence()` cross-checks
+every ticker under an active Judge veto against `_reduce_calls` (the app's
+one other already-published cross-feature risk surface) and reports which
+vetoed tickers are already "covered" by that mechanism vs "uncovered" — a
+genuine coherence gap where the Judge is the only thing flagging risk on
+that name. This operationalizes the design's own "Job 3: audit for
+cross-feature contradiction systematically" — it never suppresses or
+modifies any recommendation, purely surfaces a finding loudly for the user
+to act on.
 
 Routing (three outcomes per ticker, never a plain average of everything):
   1. PROTECTIVE VETO — the MOST SEVERE protective-dimension opinion
@@ -284,3 +302,71 @@ def synthesize(opinions: list[dict], track_record: dict | None = None) -> dict:
         "n_opinions": len(opinions),
         "n_sources": len({o["source"] for o in opinions}),
     }
+
+
+def audit_coherence(judge_result: dict, reduce_call_tickers: set) -> dict:
+    """Phase 4 — the Judge's one piece of real authority: an AUDIT, never a
+    new gate. Cross-checks every ticker under an active protective veto (from
+    `synthesize()`'s output) against `_reduce_calls` — the app's one other
+    already-published cross-feature risk surface (`app.py` publishes it every
+    Home render; see CLAUDE.md's coordination pattern) — to find coherence
+    gaps: a ticker the Judge independently flags as at-risk with no active
+    reduce call. **Scope note:** this checks ONLY `_reduce_calls`, not every
+    enforcement mechanism in the app (concentration's own entry-gate and
+    leverage's documented never-gates policy sit outside it) — "uncovered"
+    means "not covered by `_reduce_calls` specifically," not "nothing else in
+    the app is watching this ticker." Today every dimension that can actually
+    fire this veto (`position_health` — the only per-ticker protective
+    dimension below the veto threshold; `concentration`/`structural_risk` are
+    portfolio-scoped and cannot veto a ticker) is sourced from the exact same
+    act-kinds `_reduce_calls` itself buckets from, so a fireable veto is
+    always "covered" today and "uncovered" is genuine future-proofing, not a
+    live false-positive. Re-check this scope note if a future phase wires a
+    NEW per-ticker protective witness that doesn't also feed `_reduce_calls`.
+
+    Why audit rather than gate: a pre-build research pass found 3 of the 4
+    protective dimensions are either already enforced elsewhere
+    (`position_health` via `_reduce_calls` itself across 5+ surfaces;
+    `concentration` via the entry-gate pipeline's own `SINGLE_NAME_CEILING`/
+    `SECTOR_CEILING` checks, fully decoupled from the Judge) or explicitly
+    documented as never gating (`leverage`, per CLAUDE.md's coordination
+    pattern — `_leverage_cache` is "read-only, never gates" by deliberate
+    house policy). A literal veto-enforces-everything Phase 4 would therefore
+    either duplicate mature, more nuanced existing enforcement (a drift risk
+    the app's own single-surface-priority principle warns against) or
+    silently reverse a standing policy decision — so the user chose this
+    audit-only scope instead. It operationalizes the design's own "Job 3:
+    audit for cross-feature contradiction systematically."
+
+    Returns `{"covered": [...], "uncovered": [...]}`:
+      - "covered" — a Judge veto exists AND the ticker has an active reduce
+        call: validating (the Judge agrees with what's already flagged).
+      - "uncovered" — a Judge veto exists with NO active reduce call: a real
+        coherence gap the Judge alone caught this run.
+    Each finding: {ticker, source, dimension, signal, evidence} from the
+    veto's winning protective opinion. Includes the portfolio-wide bucket
+    under the sentinel ticker key "_PORTFOLIO_WIDE" (a portfolio veto cannot
+    currently fire — no portfolio-wide acquisitive opinion is emitted yet —
+    so this is future-proofing, not dead code invoked today).
+
+    Pure — no I/O, no Streamlit. Never suppresses or modifies any
+    recommendation; purely reports a finding for the page to render loudly.
+    """
+    groups = dict(judge_result["tickers"])
+    groups["_PORTFOLIO_WIDE"] = judge_result["portfolio"]
+
+    covered, uncovered = [], []
+    for ticker, result in groups.items():
+        veto = result.get("veto")
+        if not veto:
+            continue
+        protective = veto["protective"]
+        finding = {
+            "ticker": ticker,
+            "source": protective["source"],
+            "dimension": protective["dimension"],
+            "signal": protective["signal"],
+            "evidence": protective["evidence"],
+        }
+        (covered if ticker in reduce_call_tickers else uncovered).append(finding)
+    return {"covered": covered, "uncovered": uncovered}
