@@ -397,6 +397,11 @@ New policy/method thresholds proposed alongside the feature, not investment-poli
 | `JUDGMENT_VETO_PROTECTIVE_THRESHOLD` | -0.4 | The Judge — a protective-dimension opinion (`position_health`/`concentration`/`structural_risk`/`leverage`) at or below this hard-suppresses EVERY same-ticker positive acquisitive-dimension (`quality`/`momentum`) opinion outright, never blended (Q1's protective-veto routing class, added after the 2026-08-03 Opus design review found the original weighting-vs-contradiction dichotomy was a false split). The most severe (lowest-signal) protective opinion wins when more than one qualifies — fixed in the Phase 1 code review after an initial "first found" implementation was flagged as order-dependent. |
 | `JUDGMENT_CONTRADICTION_MIN_MAGNITUDE` | 0.3 | The Judge — minimum `\|signal\|` for a same-dimension, opposite-sign opinion pair from two different sources to be flagged as a contradiction; avoids flagging near-neutral noise as a real conflict. |
 | `JUDGMENT_SCORE_MIDPOINT` | 50.0 | The Judge — 0-100 score-scale midpoint used to normalize `composite_score`/`scanner_momentum` opinions to the `-1..+1` signal range via `(score - midpoint) / midpoint`. |
+| `JUDGMENT_HORIZON_MOMENTUM_DAYS` | 5 | The Judge Phase 2 — trading days from `signal_date` before a `momentum` opinion is graded against realized forward alpha; mirrors the Entry Timing tab's Day+5 precedent for a short-term technical read. |
+| `JUDGMENT_HORIZON_QUALITY_DAYS` | 20 | The Judge Phase 2 — grading horizon for `quality` opinions (composite_score/verdict_reconciliation); mirrors Entry Timing's Day+20 for a longer fundamental thesis. |
+| `JUDGMENT_HORIZON_POSITION_HEALTH_DAYS` | 10 | The Judge Phase 2 — grading horizon for `position_health` opinions (exit_advisor WATCH/TRIM/EXIT/RISK_OFF); a near-term protective read, shorter than `quality`. |
+| `JUDGMENT_HORIZON_CONCENTRATION_DAYS` | 20 | The Judge Phase 2 — grading horizon for portfolio-wide `concentration` opinions; paired to the same horizon as `quality` since overweight-position risk plays out on a similar timescale to a fundamental thesis, not a single-day shock. Proposed 2026-08-03, not yet observed against real data — flag if it feels wrong once grades accumulate. |
+| `JUDGMENT_HORIZON_STRUCTURAL_RISK_DAYS` | 10 | The Judge Phase 2 — grading horizon for portfolio-wide `structural_risk` opinions (fragility_gauge); paired to the same horizon as `position_health` as a near-term protective read. Same caveat as `JUDGMENT_HORIZON_CONCENTRATION_DAYS`. |
 
 These are the "-1..+1 signal cutpoints" and veto/contradiction boundaries the design
 review explicitly required to live here rather than as inline literals in `app.py` —
@@ -1387,10 +1392,72 @@ must never affect Home rendering); read by `db.load_judgment_opinions(days_back=
 during a real user's Home render, not a system cron), not the
 `structural_scan_cache`/`debate_cache` exemption class. RLS: `FOR ALL TO service_role`.
 
-**Not yet built:** the routing logic (protective-veto vs weighting vs
-contradiction-audit), the grading harness, evidence-based weighting, and any Judge
-output/UI — all gated behind their own phases and their own Opus review per hard
-rule #4. This table only logs; it decides nothing.
+**Phase 1 SHIPPED** (2026-08-03): the routing logic (protective-veto vs weighting vs
+contradiction-audit, `stock_analyzer/judgment_synthesis.py`) and the read-only
+"🧑‍⚖️ The Judge" nav page. **Phase 2 SHIPPED** (2026-08-03): the grading harness
+(`stock_analyzer/judgment_grading.py`) — see §6.30 `judgment_grades`. **Not yet
+built:** evidence-based weighting (Phase 3) and any override/gating authority
+(Phase 4) — both gated behind their own Opus review per hard rule #4. This table
+only logs; it decides nothing.
+
+### 6.30 `judgment_grades` table
+
+```sql
+CREATE TABLE IF NOT EXISTS judgment_grades (
+    id             BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    source         TEXT NOT NULL,
+    dimension      TEXT NOT NULL,
+    ticker         TEXT NOT NULL,   -- '_PORTFOLIO' sentinel, matches judgment_opinions
+    signal_date    DATE NOT NULL,
+    horizon_days   INT NOT NULL,
+    opinion_signal NUMERIC NOT NULL,
+    realized_pct   NUMERIC,
+    correct        BOOLEAN,
+    graded_at      TIMESTAMPTZ NOT NULL,
+    created_at     TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT judgment_grades_unique UNIQUE (source, dimension, ticker, signal_date)
+);
+```
+
+**Phase 2 (grading harness) of "The Judge"** — see `docs/plans/judgment-layer.md`.
+One row per graded `judgment_opinions` row (same natural key). Grades individual
+WITNESSES against realized outcomes — never the Judge's aggregate posture, which
+is deliberately never itself graded (Q2: "posture-correctness is a derived,
+secondary read"). Two grading classes, dispatched by `stock_analyzer.
+judgment_grading` on whether the opinion's `ticker` is `None` (portfolio-wide) or
+a real ticker — not a hardcoded per-dimension set, so a future witness on either
+grain grades correctly without touching the dispatcher:
+
+- **`grade_ticker_opinion()`** — `quality`/`momentum`/`position_health`: forward
+  alpha vs SPY, reusing `predictive_analytics.forward_alpha_at_horizon()` exactly
+  (the same mechanism the Entry Timing tab already uses) — not a fresh
+  reimplementation.
+- **`grade_portfolio_opinion()`** — `concentration`/`structural_risk`:
+  portfolio-wide forward alpha vs SPY, from a `daily_snapshots`-derived value
+  series (`portfolio_value_series_from_snapshots()`, new aggregation — nothing
+  else in the app turns per-ticker `daily_snapshots` rows into a portfolio-value
+  time series today).
+
+Both graders check the horizon's target date against `today` **before** any price
+fetch, so "not matured yet" (returns `None` from the grader — no row written) is
+never confused with "matured but the fetch failed" (`realized_pct`/`correct` are
+`NULL` in a written row — a real data gap, not silently dropped). `correct` is a
+simple sign-match between `realized_pct` and `opinion_signal` — magnitude-weighted
+correctness is deferred to Phase 3. Per-dimension horizons and the shared
+min-sample gate (`BEHAVIORAL_MIN_SAMPLE_N`, reused rather than a parallel
+constant) are listed in §4.0.1's constants table under "Judgment layer."
+
+**Trigger: manual "▶ Run grading" button on the Judge page** — not automatic on
+every page load (would re-fetch price history on every visit) and not a cron job
+(grading is cheap, on-demand price lookups, not an LLM call). Written by
+`db.save_judgment_grades_batch()` (upsert on the same natural key as
+`judgment_opinions`, best-effort, never raises); read by
+`db.load_judgment_grades(days_back=365)`, rolled up by
+`judgment_grading.track_record_summary()` into a per-(source, dimension) accuracy
+display, always visible on the Judge page (not gated behind the button — reads
+whatever's already graded). `_READONLY`-gated, same class as `judgment_opinions`.
+RLS: `FOR ALL TO service_role`. **Nothing reads this table's history for
+weighting yet** — Phase 3 is what would.
 
 ### `stock_analyzer/portfolio_health.py`
 

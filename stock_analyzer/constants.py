@@ -1143,3 +1143,25 @@ JUDGMENT_CONCENTRATION_CLEAR_SIGNAL       = 0.3   # below the near-breach ratio 
 JUDGMENT_VETO_PROTECTIVE_THRESHOLD     = -0.4  # a protective-dimension opinion at/below this vetoes EVERY same-ticker positive acquisitive opinion outright (never blended) — the most severe (lowest-signal) protective opinion wins when more than one qualifies
 JUDGMENT_CONTRADICTION_MIN_MAGNITUDE   = 0.3   # minimum |signal| for a same-dimension, opposite-sign opinion pair to be flagged as a contradiction — avoids flagging near-neutral noise as a real conflict
 JUDGMENT_SCORE_MIDPOINT = 50.0  # 0-100 score-scale midpoint used to normalize composite_score/scanner_momentum to the -1..+1 opinion signal range: (score - midpoint) / midpoint
+
+# Phase 2 (grading harness) — per-dimension horizon (trading days from signal_date
+# before an opinion is checked against realized outcome) and the shared min-sample
+# gate. Horizons chosen to match each dimension's natural timescale: momentum is a
+# short-term technical read (checked fastest, mirrors the existing Entry Timing
+# tab's Day+5 precedent); quality/composite is a longer fundamental thesis
+# (Day+20, same horizon Entry Timing already uses for composite-band grading);
+# position_health/structural_risk are near-term protective reads (Day+10);
+# concentration is graded on the same longer horizon as quality since concentration
+# risk (a name/sector becoming overweight) plays out over a similar timescale to a
+# fundamental thesis, not a single-day shock. Confirm before tuning (2026-08-03
+# horizon proposal: user confirmed momentum/quality/position_health explicitly;
+# concentration/structural_risk paired to the closest existing precedent — flag if
+# these two feel wrong once real data accumulates).
+JUDGMENT_HORIZON_MOMENTUM_DAYS         = 5
+JUDGMENT_HORIZON_QUALITY_DAYS          = 20
+JUDGMENT_HORIZON_POSITION_HEALTH_DAYS  = 10
+JUDGMENT_HORIZON_CONCENTRATION_DAYS    = 20
+JUDGMENT_HORIZON_STRUCTURAL_RISK_DAYS  = 10
+# Reuses BEHAVIORAL_MIN_SAMPLE_N (above) rather than a parallel constant — same
+# n-before-a-pattern-counts philosophy, and the same reuse precedent Personalized
+# Discovery already established for this exact constant. See judgment-layer.md Q2.

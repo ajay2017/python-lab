@@ -9127,6 +9127,7 @@ elif page == "🧑‍⚖️ The Judge":
                     grade_ticker_opinion, grade_portfolio_opinion,
                     portfolio_value_series_from_snapshots,
                 )
+                from stock_analyzer.judgment_opinion import is_protective
                 _jg_opinions_df = db.load_judgment_opinions(days_back=365)
                 _jg_grades_df = db.load_judgment_grades(days_back=365)
                 _jg_already_graded = set()
@@ -9158,10 +9159,14 @@ elif page == "🧑‍⚖️ The Judge":
                 _jg_new_grades = []
                 _jg_n_pending = 0
                 _jg_n_skipped_advisory = 0
+                _jg_n_withheld_protective = 0
                 if not _jg_opinions_df.empty:
                     for _, _op_row in _jg_opinions_df.iterrows():
                         if bool(_op_row.get("advisory")):
                             _jg_n_skipped_advisory += 1
+                            continue
+                        if is_protective(_op_row.get("dimension")):
+                            _jg_n_withheld_protective += 1
                             continue
                         _op_ticker = _op_row.get("ticker")
                         _op_ticker = None if _op_ticker == "_PORTFOLIO" else _op_ticker
@@ -9194,14 +9199,19 @@ elif page == "🧑‍⚖️ The Judge":
                 st.success(
                     f"Graded {len(_jg_new_grades)} newly-matured opinion(s). "
                     f"{_jg_n_pending} still pending maturity. "
-                    f"{_jg_n_skipped_advisory} advisory (never graded)."
+                    f"{_jg_n_skipped_advisory} advisory (never graded). "
+                    f"{_jg_n_withheld_protective} protective (withheld — no "
+                    f"counterfactual grader yet, see design plan Gap B)."
                 )
             except Exception as _jg_err:
                 st.error(f"Grading pass failed: {str(_jg_err)[:300]}")
 
-    from stock_analyzer.judgment_grading import track_record_summary
-    _jg_all_grades = db.load_judgment_grades(days_back=365)
-    _jg_track_record = track_record_summary(_jg_all_grades, BEHAVIORAL_MIN_SAMPLE_N)
+    try:
+        from stock_analyzer.judgment_grading import track_record_summary
+        _jg_all_grades = db.load_judgment_grades(days_back=365)
+        _jg_track_record = track_record_summary(_jg_all_grades, BEHAVIORAL_MIN_SAMPLE_N)
+    except Exception:
+        _jg_track_record = []
     if not _jg_track_record:
         st.caption("No graded opinions yet — click ▶ Run grading once some opinions have matured.")
     else:

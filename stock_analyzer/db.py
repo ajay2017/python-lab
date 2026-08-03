@@ -2183,6 +2183,73 @@ def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# ── Judgment-layer grades (Phase 2, see docs/plans/judgment-layer.md) ───────────
+# Ships inert until the DDL below is applied — degrades silently, same convention
+# as judgment_opinions/analyst_target_snapshots. RLS: FOR ALL TO service_role.
+#
+# CREATE TABLE IF NOT EXISTS judgment_grades (
+#     id             BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+#     source         TEXT NOT NULL,
+#     dimension      TEXT NOT NULL,
+#     ticker         TEXT NOT NULL,   -- '_PORTFOLIO' sentinel, matches judgment_opinions
+#     signal_date    DATE NOT NULL,
+#     horizon_days   INT NOT NULL,
+#     opinion_signal NUMERIC NOT NULL,
+#     realized_pct   NUMERIC,         -- ticker alpha vs SPY, or portfolio alpha vs SPY
+#     correct        BOOLEAN,         -- sign(realized_pct) == sign(opinion_signal); NULL if realized_pct is NULL
+#     graded_at      TIMESTAMPTZ NOT NULL,
+#     created_at     TIMESTAMPTZ DEFAULT NOW(),
+#     CONSTRAINT judgment_grades_unique UNIQUE (source, dimension, ticker, signal_date)
+# );
+def save_judgment_grades_batch(grades: list[dict]) -> None:
+    """Persist Phase-2 judgment-layer grades (one row per graded opinion).
+
+    Idempotent: upserts on (source, dimension, ticker, signal_date) — matches
+    judgment_opinions' natural key, one grade per opinion. Never raises — a
+    capture failure must never break the Judge page. Each dict must be shaped
+    by stock_analyzer.judgment_grading's grade_ticker_opinion()/
+    grade_portfolio_opinion() output.
+    """
+    if _READONLY:
+        return
+    if not grades:
+        return
+    if not has_db():
+        return
+    try:
+        _client().table("judgment_grades").upsert(
+            grades,
+            on_conflict="source,dimension,ticker,signal_date",
+        ).execute()
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_judgment_grades_batch: {e}")
+
+
+def load_judgment_grades(days_back: int = 365) -> pd.DataFrame:
+    """Read persisted judgment-layer grades going back days_back calendar days.
+
+    Returns a DataFrame (column names match the judgment_grades table,
+    snake_case) on success, or an empty DataFrame on any exception. Consumed by
+    the Judge page's track-record display and (eventually) Phase 3's
+    evidence-based weighting.
+    """
+    try:
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("judgment_grades")
+            .select("*")
+            .gte("signal_date", cutoff)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Price cross-check history (ticker × date) ────────────────────────────────
 # System cache → NOT _READONLY-gated (mirrors sector_cache / sentiment_llm_cache).
 # A viewer-only session still benefits from a warm cross-check history rather
