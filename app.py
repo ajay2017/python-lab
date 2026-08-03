@@ -9118,10 +9118,7 @@ elif page == "🧑‍⚖️ The Judge":
         "\"Job 3\"). Never suppresses or changes any recommendation itself."
     )
     if _jr is None:
-        st.caption(
-            "Coherence audit unavailable — no opinions captured this session "
-            "yet. Visit 🏠 Home first."
-        )
+        st.caption("Unavailable — see the notice above.")
     else:
         _jr_reduce_calls_raw = st.session_state.get("_reduce_calls")
         if _jr_reduce_calls_raw is None:
