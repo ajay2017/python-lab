@@ -82,11 +82,19 @@ def _earliest_buy(ticker: str, trades_df: pd.DataFrame) -> _date | None:
 def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list[dict]:
     """FIFO-replay the trade journal and return the currently-open tax lots.
 
-    Each returned dict: {shares, buy_date, days_held}. SELLs consume from
-    the oldest open lot first (FIFO). SPLIT rows pro-rata adjust each lot's
-    share count so the post-split total matches the SPLIT row's shares,
-    preserving each lot's original acquisition date (IRS rule: a split
-    inherits the holding period of the pre-split shares).
+    Each returned dict: {shares, buy_date, days_held, split_ratio}. SELLs
+    consume from the oldest open lot first (FIFO). SPLIT rows pro-rata
+    adjust each lot's share count so the post-split total matches the SPLIT
+    row's shares, preserving each lot's original acquisition date (IRS rule:
+    a split inherits the holding period of the pre-split shares).
+
+    `split_ratio` is the CUMULATIVE product of every SPLIT ratio applied to
+    that lot since its `buy_date` (1.0 if none) — added for
+    `premortem_monitor.py` (docs/plans/premortem-enforcement.md), which
+    divides a stored pre-split trigger price by this ratio before comparing
+    it to (already split-adjusted) current price history. Purely additive:
+    existing callers (`build_tax_analysis`, `portfolio_health.py`) only read
+    `shares`/`days_held` by key and are unaffected.
 
     Without this lot-level reconstruction, a multi-lot position is
     incorrectly classified by `_earliest_buy` — recently-added shares get
@@ -100,7 +108,7 @@ def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list
     rows["_ts"] = pd.to_datetime(rows["traded_at"], errors="coerce", utc=True, format="ISO8601")
     rows = rows.dropna(subset=["_ts"]).sort_values(["_ts", "id"], ascending=True)
 
-    lots: list[list] = []  # each entry: mutable [shares, buy_date]
+    lots: list[list] = []  # each entry: mutable [shares, buy_date, split_ratio]
     for _, r in rows.iterrows():
         action = str(r.get("action", "")).upper()
         try:
@@ -116,11 +124,15 @@ def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list
                 ratio = sh / old_total
                 for lot in lots:
                     lot[0] *= ratio
+                    lot[2] *= ratio
             else:
                 # No prior lots (rebuild from a SPLIT seed) — synthesize one.
-                lots = [[sh, d]]
+                # Ratio is 1.0: there's no known pre-seed price to adjust
+                # against, so a trigger on a lot seeded this way is treated
+                # as already being in current (post-seed) terms.
+                lots = [[sh, d, 1.0]]
         elif "BUY" in action:
-            lots.append([sh, d])
+            lots.append([sh, d, 1.0])
         elif "SELL" in action:
             remaining = sh
             while remaining > 1e-6 and lots:
@@ -132,8 +144,8 @@ def _build_open_lots(ticker: str, trades_df: pd.DataFrame, today: _date) -> list
                     remaining = 0.0
 
     return [
-        {"shares": s, "buy_date": d, "days_held": (today - d).days}
-        for s, d in lots if s > 1e-6
+        {"shares": s, "buy_date": d, "days_held": (today - d).days, "split_ratio": ratio}
+        for s, d, ratio in lots if s > 1e-6
     ]
 
 

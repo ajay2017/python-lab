@@ -184,6 +184,58 @@ def test_build_open_lots_split_with_no_prior_lots_synthesizes_seed():
     assert lots[0]["days_held"] == 100
 
 
+# ── split_ratio (premortem_monitor.py's split-safety fix) ──────────────────
+
+def test_build_open_lots_no_split_ratio_stays_one():
+    trades = _trades([(0, "AAPL", 200, "BUY", 10)])
+    lots = ta._build_open_lots("AAPL", trades, TODAY)
+    assert lots[0]["split_ratio"] == 1.0
+
+
+def test_build_open_lots_split_ratio_tracks_2for1():
+    trades = _trades([
+        (0, "AAPL", 200, "BUY", 10),
+        (1, "AAPL", 100, "SPLIT", 20),  # 2-for-1: 10 -> 20
+    ])
+    lots = ta._build_open_lots("AAPL", trades, TODAY)
+    assert lots[0]["split_ratio"] == 2.0
+
+
+def test_build_open_lots_split_ratio_compounds_across_two_splits():
+    trades = _trades([
+        (0, "AAPL", 300, "BUY", 10),
+        (1, "AAPL", 200, "SPLIT", 20),   # 2-for-1
+        (2, "AAPL", 100, "SPLIT", 80),   # 4-for-1 -> cumulative 8x
+    ])
+    lots = ta._build_open_lots("AAPL", trades, TODAY)
+    assert len(lots) == 1
+    assert lots[0]["shares"] == 80
+    assert lots[0]["split_ratio"] == 8.0
+
+
+def test_build_open_lots_split_ratio_synthesized_seed_is_one():
+    """No prior lots to ratio-adjust against — treated as already in
+    current terms (module docstring's documented assumption)."""
+    trades = _trades([(0, "AAPL", 100, "SPLIT", 15)])
+    lots = ta._build_open_lots("AAPL", trades, TODAY)
+    assert lots[0]["split_ratio"] == 1.0
+
+
+def test_build_open_lots_sell_then_rebuy_new_lot_ratio_is_one():
+    """A split affecting an OLD (now-closed) lot must not leak into a
+    brand-new lot opened afterward."""
+    trades = _trades([
+        (0, "AAPL", 300, "BUY", 10),
+        (1, "AAPL", 250, "SPLIT", 20),   # 2-for-1 on the old lot
+        (2, "AAPL", 200, "SELL", 20),    # old lot fully closed
+        (3, "AAPL", 100, "BUY", 5),      # brand-new lot, never split
+    ])
+    lots = ta._build_open_lots("AAPL", trades, TODAY)
+    assert len(lots) == 1
+    assert lots[0]["shares"] == 5
+    assert lots[0]["split_ratio"] == 1.0
+
+
 def test_build_open_lots_invalid_timestamps_dropped():
     trades = pd.DataFrame([
         {"id": 0, "ticker": "AAPL", "traded_at": "not-a-date", "action": "BUY", "shares": 10},

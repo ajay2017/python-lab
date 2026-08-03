@@ -1,10 +1,13 @@
 # Pre-Commitment Enforcement — Design Plan
 
 **Date:** 2026-08-03
-**Status:** DESIGN COMPLETE. All 4 open questions resolved by the user;
-Opus design review returned FIX-FIRST (3 blocking, 2 fix-first, 2
-non-blocking), all resolved in this doc. Clear to move to build on
-go-ahead. No code written yet.
+**Status:** SHIPPED 2026-08-03 (F-228, `docs/requirements.md`). Opus code
+review: SHIP, 0 blocking, 2 non-blocking (one cosmetic wording fix applied,
+one confirmed-harmless pre-existing convention, one confirmed-unreachable
+defensive guard — see status log). Design was fully resolved first: all 4
+open questions answered by the user, Opus design review returned FIX-FIRST
+(3 blocking, 2 fix-first, 2 non-blocking), all resolved in this doc before
+any code was written.
 
 > **One-line spec:** actively monitor a user's own stated Pre-Mortem exit
 > commitment (`trades.premortem_commitment`, free text captured at BUY) against
@@ -255,3 +258,78 @@ when the code is written.
   self-resolving fix) and Q4 (show both cards separately) confirmed by the
   user. **Design is now complete — all 4 questions resolved, all review
   findings resolved. Clear to move to build on explicit go-ahead.**
+- **2026-08-03 — Built, same session, on explicit user go-ahead ("lets build
+  it now").** All pieces from the resolved design:
+  - `tax_advisor.py::_build_open_lots()` extended with a per-lot
+    `split_ratio` key (cumulative product of every SPLIT ratio applied since
+    the lot's `buy_date`), purely additive — verified existing callers only
+    read by dict key, 5 new regression tests, all 64 tax_advisor tests pass.
+  - Two new nullable `trades` columns (DDL comment in `db.py`, plus
+    `_TRADE_COLS`/`load_trades` backfill/`save_trade` optional-column retry,
+    matching `premortem_case_against`'s exact existing pattern).
+  - New `stock_analyzer/premortem_monitor.py`: `extract_trigger()` (mirrors
+    `premortem_advisor.generate_case_against()`'s exact LLM-call shape —
+    Haiku, `LLM_REQUEST_TIMEOUT_SEC`, strict JSON parse, fails open to
+    `None`) and `detect_premortem_triggers()` (pure, reuses the extended
+    `_build_open_lots()` for both the lot-scoping and split-adjustment
+    fixes). 29 new tests covering both, including all 3 of the design
+    review's named false-trigger classes.
+  - BUY-submission wiring in `app.py`: extraction runs once, synchronously,
+    inside the existing `if submitted:` handler (never on every rerun) —
+    fails open to unmonitored (`None`/`None`) on any error, no key, or an
+    empty commitment.
+  - `daily_briefing.py`: new `_act_today()` section "2.6" builds the card;
+    `build_daily_briefing()` gained a `trades_df` param (both `app.py` call
+    sites updated) and computes `premortem_triggers` at the same call site as
+    `deterioration_signals()`. `premortem_triggered` added to `_KIND_RANK`
+    (tier 3, alongside `deterioration_trim`) and `decision_bucket._ACT_KINDS`
+    (correctly buckets as "act," not "aware") — but deliberately NOT added to
+    `_REDUCE_ACT_KINDS`, so it never suppresses a same-ticker "hold"
+    critical-news card the way an actual reduce does.
+  - **A real coexistence bug was caught and fixed while wiring this, not by
+    the design review** (a design review reads the plan, not the existing
+    consolidation code): `_consolidate_act_today()` collapses ALL same-ticker
+    Act Today items down to ONE surviving card (or drops everything but a
+    mechanical exit) — which would have silently swallowed the premortem
+    card on any ticker also carrying a deterioration card, directly
+    violating user-confirmed Q4. Fixed by exempting `premortem_triggered`
+    from the ticker-consolidation entirely (same passthrough treatment as
+    ticker-less macro cards), verified with a manual end-to-end scenario and
+    2 dedicated regression tests (coexists with `deterioration_trim`;
+    coexists even with a mechanical `stop_breach`, which normally wins
+    outright and drops everything else).
+  - 10 new tests in `tests/test_premortem_act_today.py` covering the card
+    build, the coexistence fix, and `decision_bucket` classification/dedup
+    interactions (`classify_bucket` returns "act"; `_is_reduce` is False;
+    `_reconcile_act` does not fold a same-ticker critical-news card).
+  - Verified: py_compile clean on all 5 touched/new files, 3076 → 3120 tests
+    pass (44 new, 0 regressions), `check_constants_documented.py` passes (no
+    new constants).
+
+  **Opus 4.8 code review: SHIP, 0 blocking.** Real scrutiny, not a rubber
+  stamp — specifically traced: the split-ratio math is the correct inverse
+  of the shares adjustment (2:1 split → $150 becomes $75, matches how the
+  real stock price halves) and compounds correctly across multiple splits;
+  the lot-scoping fix correctly binds to the governing (most-recently-opened)
+  lot and a sell-then-rebuy correctly uses the NEW lot's trigger, not the
+  old one; the self-resolving temporal gate cannot diverge from its own
+  first-breach walk; the `_consolidate_act_today()` exemption is complete —
+  checked every OTHER by-ticker grouping in the file plus
+  `decision_bucket._reconcile_act()` and confirmed none of them can still
+  swallow a premortem card; schema/backfill/retry tuples are symmetric
+  across all 3 sites; the BUY-submission wiring only fires once per
+  submission, never per rerun. **2 non-blocking findings:** (1) the card's
+  wording read awkwardly for the "above" direction ("broke $50.00 above")
+  — fixed to word-before-number for both directions ("broke below $150.00"
+  / "broke above $50.00"), re-verified all 10 Act Today tests + full suite
+  still pass. (2) a UTC-vs-exchange-local date-boundary edge case in the
+  price-history window filter (same pre-existing convention used elsewhere
+  in this codebase, confirmed harmless — only trims the earliest edge of
+  the window, never affects the active-trigger gate) — left as-is per the
+  reviewer's own assessment, not a real gap. A second test-runner agent
+  independently confirmed 3120/3120 passing, 0 regressions, before this
+  review landed.
+
+  **This closes F-228 — Pre-Commitment Enforcement is shipped.** The one
+  item from the 2026-08-03 morning brainstorm's ranked list that was
+  genuinely unbuilt is now live.

@@ -4120,6 +4120,7 @@ if page == "🏠 Home":
                         spy_trend_df    = _cached_spy("1y"),
                         vix_level       = _cached_vix(),
                         winner_profile  = _compute_winner_profile(),
+                        trades_df       = st.session_state.get("trades_df"),
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -4476,6 +4477,7 @@ if page == "🏠 Home":
                     spy_trend_df    = _cached_spy("1y"),
                     vix_level       = _cached_vix(),
                     winner_profile  = _compute_winner_profile(),
+                    trades_df       = st.session_state.get("trades_df"),
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -20484,6 +20486,37 @@ elif page == "📒 Trade Journal":
                 _pm_case_final = None
                 if action == "BUY" and st.session_state.get("_tj_premortem_case_for") == ticker_input:
                     _pm_case_final = st.session_state.get("_tj_premortem_case")
+
+                # Pre-Commitment Enforcement (docs/plans/premortem-enforcement.md):
+                # one-shot LLM extraction of a structured, checkable price
+                # trigger from the free-text commitment above — runs exactly
+                # once per BUY, here at submission time (never on every rerun,
+                # since this whole block is gated on `if submitted:`). Fails
+                # open to unchecked (None/None) on any error, no key, or a
+                # qualitative commitment with no stated price — the daily
+                # check (premortem_monitor.detect_premortem_triggers) treats
+                # a "not_checkable" direction as permanently nothing-to-check,
+                # never re-attempted (the trades grid is delete-only, so
+                # there's no edit path that could make a retry meaningful).
+                _pmt_trigger_price     = None
+                _pmt_trigger_direction = None
+                if action == "BUY":
+                    _pmt_commitment = (st.session_state.get("_tj_premortem_commitment") or "").strip()
+                    if _pmt_commitment:
+                        _pmt_api_key = (
+                            st.secrets.get("anthropic", {}).get("api_key", "")
+                            if hasattr(st, "secrets") else ""
+                        )
+                        from stock_analyzer import premortem_monitor as _pmt_monitor
+                        _pmt_result = _pmt_monitor.extract_trigger(_pmt_commitment, _pmt_api_key)
+                        if _pmt_result is None:
+                            _pmt_trigger_direction = None  # extraction failed — never monitored, fails open
+                        elif _pmt_result["checkable"]:
+                            _pmt_trigger_price     = _pmt_result["price_level"]
+                            _pmt_trigger_direction = _pmt_result["direction"]
+                        else:
+                            _pmt_trigger_direction = "not_checkable"
+
                 record = {
                     "ticker":           ticker_input,
                     "action":           action,
@@ -20511,6 +20544,8 @@ elif page == "📒 Trade Journal":
                     "premortem_commitment": (
                         (st.session_state.get("_tj_premortem_commitment") or "").strip() or None
                     ) if action == "BUY" else None,
+                    "premortem_trigger_price":     _pmt_trigger_price,
+                    "premortem_trigger_direction": _pmt_trigger_direction,
                 }
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 if action == "SELL":

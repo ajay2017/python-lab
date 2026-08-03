@@ -120,6 +120,31 @@ Buy decisions only (exit friction is bad; entry friction is the point).
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_case_against jsonb;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_commitment   text;
 
+Pre-Commitment Enforcement (docs/plans/premortem-enforcement.md — added
+2026-08-03). Extracts a structured, checkable price trigger from the free-text
+premortem_commitment above (LLM, ONE-SHOT at BUY-submission time —
+stock_analyzer/premortem_monitor.py::extract_trigger()) so a daily,
+zero-LLM-cost check (detect_premortem_triggers()) can confront the investor
+with a dedicated Act Today card when the stated condition has actually fired
+and they're still holding. premortem_trigger_direction is 'below', 'above', or
+'not_checkable' (the commitment stated no explicit numeric price — a
+qualitative condition like "if guidance disappoints" can never be
+mechanically checked, so this is a genuine, permanent state, not "not yet
+attempted"; distinguished from the pre-extraction state where BOTH columns
+are NULL). premortem_trigger_price is the RAW (pre-split) price the investor
+stated — detect_premortem_triggers() divides it by the ticker's cumulative
+split ratio since the governing lot's buy_date (tax_advisor._build_open_lots)
+before comparing to current price history. Optional: until these columns
+exist, save_trade drops them and retries (inert until DDL is applied). Same
+scope as premortem_commitment — LIVE Buy only, never broker/screenshot/split
+imports, recalculate_from_trades, or any SELL. Extraction is one-shot and
+never retried (the trades grid is delete-only — app.py:21225-21248 — so a
+failed extraction stays unmonitored for that trade, same fail-open posture as
+every other best-effort AI surface in this app).
+
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_trigger_price     numeric;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_trigger_direction text;
+
 Recommendations log (added 2026-05-26 — first-seen capture of every pick
 surfaced by Today's Brief so you can audit the App's recommendation
 history over time):
@@ -1118,7 +1143,8 @@ _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "cost_basis", "realized_pnl", "notes", "trigger_type",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
                "lesson_category", "traded_at", "user_thesis", "thesis_source",
-               "decision_context", "premortem_case_against", "premortem_commitment"]
+               "decision_context", "premortem_case_against", "premortem_commitment",
+               "premortem_trigger_price", "premortem_trigger_direction"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -1137,7 +1163,8 @@ def load_trades() -> pd.DataFrame:
                 for col in ("signal_seen", "followed_signal", "deviation_reason",
                             "lesson", "lesson_category", "user_thesis", "thesis_source",
                             "decision_context", "premortem_case_against",
-                            "premortem_commitment"):
+                            "premortem_commitment", "premortem_trigger_price",
+                            "premortem_trigger_direction"):
                     if col not in df.columns:
                         df[col] = None
                 return df
@@ -1171,6 +1198,7 @@ def save_trade(record: dict) -> bool:
         # case where multiple columns are missing simultaneously.
         _optional = ("thesis_source", "decision_context",
                      "premortem_case_against", "premortem_commitment",
+                     "premortem_trigger_price", "premortem_trigger_direction",
                      "lesson_category")
         _err_str = str(e)
         _any_optional = any(c in _err_str for c in _optional)

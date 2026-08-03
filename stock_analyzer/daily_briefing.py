@@ -1241,7 +1241,8 @@ def deterioration_signals(port_df, held_data, spy_df=None) -> list[dict]:
 
 
 def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
-               deterioration: list | None = None) -> list[dict]:
+               deterioration: list | None = None,
+               premortem_triggers: list | None = None) -> list[dict]:
     """
     Build the Act Today list. Each item carries a structured directive so the
     UI renders a concrete ACT/Why/Trigger block (matching Review Before Close)
@@ -1361,6 +1362,44 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             # into the weakness"), so the UI must gate any sell-log button on
             # kind == "deterioration_exit", not just this field's presence.
             "shares": d.get("shares") if _is_exit else None,
+        })
+
+    # 2.6 — Pre-Commitment Enforcement (docs/plans/premortem-enforcement.md):
+    # a fired pre-commitment trigger is a genuinely DIFFERENT reason from the
+    # algorithm's own deterioration read above — the investor's own stated
+    # condition, not exit_advisor's technical tier — so this section
+    # DELIBERATELY does NOT dedupe against tickers already in `items` the way
+    # section 2.5 does (2026-08-03 user-confirmed Q4: show both cards on the
+    # same ticker, never merge — never a new gate, purely an audit/confront).
+    for pmt in (premortem_triggers or []):
+        _pmt_ticker = pmt["ticker"]
+        _pmt_prow = port_df[port_df["Ticker"] == _pmt_ticker]
+        _pmt_weight = _f(_pmt_prow.iloc[0].get("Weight (%)"), None) if not _pmt_prow.empty else None
+        _pmt_pnl    = _f(_pmt_prow.iloc[0].get("P&L (%)"), None) if not _pmt_prow.empty else None
+        _pmt_dir_word = "below" if pmt["direction"] == "below" else "above"
+        items.append({
+            "priority": "high",
+            "icon":     "🎯",
+            "ticker":   _pmt_ticker,
+            "kind":     "premortem_triggered",
+            "action":   "YOUR OWN COMMITMENT FIRED",
+            "directive": (
+                f"You said you'd exit if it broke {_pmt_dir_word} "
+                f"${pmt['trigger_price']:.2f}. It happened on "
+                f"{pmt['first_breach_date']} — {pmt['days_since']} day(s) ago. "
+                f"You're still holding. What's changed?"
+            ),
+            "why": (
+                f"Your Pre-Mortem exit commitment for this position stated a "
+                f"{_pmt_dir_word} ${pmt['trigger_price']:.2f} trigger; the price "
+                f"is currently ${pmt['current_price']:.2f}."
+            ),
+            "trigger": (
+                "This is your own stated condition, not the algorithm's — "
+                "reconsider or explicitly recommit."
+            ),
+            "weight":  _pmt_weight,
+            "pnl_pct": _pmt_pnl,
         })
 
     # 3 — Critical news on held positions (compound ≤ NEWS_SENTIMENT_CRITICAL, tier ≤ 2,
@@ -1491,11 +1530,13 @@ _MECHANICAL_KINDS = {"stop_breach", "sell_signal"}
 # hierarchy: a breached stop first, then a composite Sell, then the deterioration
 # tiers (aggressive EXIT before a TRIM), then everything else.
 _KIND_RANK = {
-    "stop_breach":        0,
-    "sell_signal":        1,
-    "deterioration_exit": 2,
-    "deterioration_trim": 3,
-    "risk_off_derisk":    4,   # lowest-priority reduce (market-wide overlay, not name-specific)
+    "stop_breach":         0,
+    "sell_signal":         1,
+    "deterioration_exit":  2,
+    "deterioration_trim":  3,
+    "premortem_triggered": 3,  # your own stated exit condition fired — same tier as
+                               # deterioration_trim: a real decision due, not a mechanical stop
+    "risk_off_derisk":     4,   # lowest-priority reduce (market-wide overlay, not name-specific)
 }
 
 
@@ -1503,15 +1544,27 @@ def _consolidate_act_today(items: list[dict], port_df) -> list[dict]:
     """Collapse Act Today items so each ticker appears at most once.
 
     - Ticker-less items (macro) pass through unchanged.
-    - For each ticker: if a mechanical-exit item exists, emit only the
-      highest-priority mechanical one (drop risk + news — moot if exiting).
+    - `premortem_triggered` items ALSO pass through unchanged despite having a
+      ticker (docs/plans/premortem-enforcement.md, user-confirmed Q4): it is a
+      genuinely different reason from the algorithm's own reduce/risk read on
+      that same ticker, and the merge logic below would otherwise silently
+      drop it (picked or not as the ticker's single "primary" card) — the
+      exact double-surface bug this exemption exists to prevent.
+    - For each remaining ticker: if a mechanical-exit item exists, emit only
+      the highest-priority mechanical one (drop risk + news — moot if
+      exiting).
     - Otherwise merge: the highest-priority item becomes the card; all
       risk_flags across the group are gathered onto it so a ticker with
       two risk recs (e.g. beta + volatility) renders as one card.
     """
-    passthrough = [it for it in items if not it.get("ticker")]
+    passthrough = [
+        it for it in items
+        if not it.get("ticker") or it.get("kind") == "premortem_triggered"
+    ]
     by_ticker: dict[str, list[dict]] = {}
     for it in items:
+        if it.get("kind") == "premortem_triggered":
+            continue  # exempted above — never merged with same-ticker items
         t = it.get("ticker")
         if t:
             by_ticker.setdefault(str(t).upper(), []).append(it)
@@ -2304,6 +2357,7 @@ def build_daily_briefing(
     spy_trend_df:    object | None = None,
     vix_level:       float | None = None,
     winner_profile:  dict | None = None,
+    trades_df:       object | None = None,
 ) -> dict:
     """
     Build a Start-Your-Day briefing synthesising all available intelligence.
@@ -2313,6 +2367,10 @@ def build_daily_briefing(
                      full composite score, not just the momentum scanner score.
     winner_profile:  optional personalized_discovery.build_winner_profile() output,
                      passed straight through to _grow_today (see its own docstring).
+    trades_df:       optional full trade journal (db.load_trades()) — feeds
+                     Pre-Commitment Enforcement (docs/plans/premortem-
+                     enforcement.md); omitted or None degrades to no
+                     premortem_triggered cards, never an error.
 
     Returns dict with: act_today, buy_candidates, review_list, grow_today.
     """
@@ -2334,8 +2392,15 @@ def build_daily_briefing(
     # Act Today (TRIM/EXIT) and the Review awareness lane (WATCH).
     deterioration = deterioration_signals(port_df, held_data, spy_df)
 
+    # Pre-Commitment Enforcement (docs/plans/premortem-enforcement.md) — pure
+    # Python, zero LLM cost; degrades to [] on any missing/malformed input
+    # (no trades_df, no held_data, DDL not yet applied) rather than erroring.
+    from stock_analyzer.premortem_monitor import detect_premortem_triggers
+    premortem_triggers = detect_premortem_triggers(trades_df, held_data, today)
+
     act    = _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
-                        deterioration=deterioration)
+                        deterioration=deterioration,
+                        premortem_triggers=premortem_triggers)
     review = _review_list(port_df, news_items, macro_events, held_data, today,
                           portfolio_value=portfolio_value, act_today=act,
                           deterioration=deterioration)

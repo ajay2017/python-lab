@@ -21,9 +21,16 @@ from stock_analyzer.constants import (
 # act_today `kind`s that are genuine same-day trade decisions.
 # deterioration_exit / deterioration_trim are included: their card language is
 # "→ ACT: Reduce aggressively" which belongs in Act Today, not Monitoring.
+# premortem_triggered (docs/plans/premortem-enforcement.md, added 2026-08-03)
+# is a genuine same-day decision too — the investor's OWN stated exit
+# condition has fired and they haven't acted — but it is NOT in
+# _REDUCE_ACT_KINDS below: its directive is "reconsider or recommit," not a
+# reduce, so it deliberately does not suppress a same-ticker "hold" card the
+# way an actual reduce card does (user-confirmed Q4: shows alongside other
+# cards on the same ticker, never merges/suppresses).
 _ACT_KINDS = frozenset({
     "stop_breach", "sell_signal", "risk", "risk_off_derisk",
-    "deterioration_exit", "deterioration_trim",
+    "deterioration_exit", "deterioration_trim", "premortem_triggered",
 })
 # review `action.type`s that are genuine trades (free/raise capital, reduce risk).
 _ACT_REVIEW_TYPES = frozenset({"TRIM_AND_TIGHTEN", "TRIM_TO_TARGET", "PROTECTIVE_TRIM"})
