@@ -20660,6 +20660,18 @@ elif page == "📒 Trade Journal":
                             _pmt_trigger_direction = "not_checkable"
 
                 record = {
+                    # Generated ONCE here, at staging time — record is reused
+                    # verbatim (same dict object, same key) if the user
+                    # double-clicks "Confirm" on the review card below, so a
+                    # retried/duplicated write hits the DB's unique index on
+                    # this column and is rejected as an idempotent no-op
+                    # instead of creating a second row (2026-08-04 audit
+                    # finding — this is the DB-level backstop behind the
+                    # interactive session-state dedup guard; broker/screenshot/
+                    # split imports never set this column, so their legitimate
+                    # same-day multi-fills are untouched — Postgres unique
+                    # indexes don't enforce uniqueness across NULLs).
+                    "idempotency_key":  str(uuid.uuid4()),
                     "ticker":           ticker_input,
                     "action":           action,
                     "shares":           shares_val,

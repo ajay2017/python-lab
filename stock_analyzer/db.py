@@ -145,6 +145,33 @@ every other best-effort AI surface in this app).
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_trigger_price     numeric;
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS premortem_trigger_direction text;
 
+Idempotency key (2026-08-04 audit finding — added same day). A retried/
+double-submitted interactive save (e.g. an impatient double-click on
+"Confirm" past the session-state dedup guard) could create a duplicate
+trade row with no DB-level backstop, unlike recommendations/daily_snapshots
+which use real unique-constraint upserts. idempotency_key is a UUID
+generated ONCE at record-staging time (app.py, when the review card is
+built) and reused verbatim if the same staged record is submitted twice —
+a UNIQUE index rejects the second insert as a no-op instead of creating a
+second row. Deliberately NOT a blanket unique constraint on business
+columns (ticker/action/shares/price/traded_at): broker_import.py's
+classify_against_existing already correctly allows multiple identical-
+content rows for legitimate same-day multi-fills via its own
+existing_count allowance, and a table-wide constraint would break that.
+Broker/screenshot/split-import writes never set this column — Postgres
+unique indexes don't enforce uniqueness across NULLs, so those paths are
+unaffected. Optional: until the column/index exist, save_trade drops the
+key and retries, so trade logging runs exactly as before (the backstop
+ships inert until DDL is applied).
+
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS idempotency_key text;
+    CREATE UNIQUE INDEX IF NOT EXISTS trades_idempotency_key_unique
+        ON trades (idempotency_key) NULLS DISTINCT;
+    -- NULLS DISTINCT is Postgres's default (multiple NULLs never collide) —
+    -- stated explicitly so a future Postgres default change or a copy-paste
+    -- into a NULLS NOT DISTINCT context can't silently break the
+    -- broker/screenshot/split-import exemption this design depends on.
+
 Recommendations log (added 2026-05-26 — first-seen capture of every pick
 surfaced by Today's Brief so you can audit the App's recommendation
 history over time):
@@ -1210,17 +1237,29 @@ def save_trade(record: dict) -> bool:
         _client().table("trades").insert(record).execute()
         return True
     except Exception as e:
+        _err_str = str(e)
+        # DB-level idempotency backstop (2026-08-04 audit finding): a unique-
+        # violation naming trades_idempotency_key_unique means this exact
+        # staged record (same UUID, generated once at app.py record-staging
+        # time) was already inserted — e.g. a double-clicked Confirm past the
+        # session-state dedup guard. The first insert already won; treat the
+        # retry as an idempotent no-op success, not an error.
+        if "trades_idempotency_key_unique" in _err_str or (
+            "idempotency_key" in _err_str
+            and ("duplicate key" in _err_str or "23505" in _err_str)
+        ):
+            return True
         # Graceful degradation: additive optional columns (thesis_source, F-5;
         # decision_context, Concept E; premortem_case_against/premortem_commitment,
-        # Concept C) may not exist yet in Supabase (DDL not applied). If the
-        # error names ANY optional column (or is a PGRST204 schema-cache miss),
-        # drop ALL optional columns and retry once — a single retry handles the
-        # case where multiple columns are missing simultaneously.
+        # Concept C; idempotency_key, 2026-08-04) may not exist yet in Supabase
+        # (DDL not applied). If the error names ANY optional column (or is a
+        # PGRST204 schema-cache miss), drop ALL optional columns and retry
+        # once — a single retry handles the case where multiple columns are
+        # missing simultaneously.
         _optional = ("thesis_source", "decision_context",
                      "premortem_case_against", "premortem_commitment",
                      "premortem_trigger_price", "premortem_trigger_direction",
-                     "lesson_category")
-        _err_str = str(e)
+                     "lesson_category", "idempotency_key")
         _any_optional = any(c in _err_str for c in _optional)
         if _any_optional:
             _to_drop = {c for c in _optional if c in record}
