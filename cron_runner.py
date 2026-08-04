@@ -19,7 +19,9 @@ Mode = $ALERT_RUN_MODE if it's one of scan|intraday|thesis|debrief|monthly
 ET hour (≥12:00 ET ⇒ eod, else premarket) — premarket/eod are never taken as a
 direct override value, only ever hour-derived. All output → stdout (the
 Actions log). Ships INERT: no RESEND_API_KEY ⇒ compute + log, send nothing.
-Always exits 0.
+Exits 0 on every mode except a Sunday thesis-lane sub-job failure (thesis/
+debrief/monthly), which deliberately returns 1 so GitHub Actions marks the
+run failed — the dead-man's-switch failure notification depends on this.
 
 Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
 FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_FROM
