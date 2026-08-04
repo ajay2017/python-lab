@@ -129,25 +129,59 @@ def _days_until(date_str: str, today: date) -> int | None:
 # breaches are NOT here — they stay in Act (structural, user-flagged act-worthy).
 _TUNEUP_RISK_TYPES = frozenset({"beta", "sharpe", "volatility", "drawdown", "tail_risk", "single_name_concentration"})
 
+# Of the Tune-up types, only these two name a concrete TRIM target (same scope
+# as `_trim_targets`) — so only these can double-surface against an Act Today
+# risk-off TRIM on the same high-beta name (both rank by β·weight). vol/drawdown/
+# tail/concentration recommend ADDING diversifiers, a different action, so they
+# never restate a trim and are left untouched (2026-08-04 audit).
+_TUNEUP_TRIM_DRIVER_TYPES = frozenset({"beta", "sharpe"})
+# Of the trim-drivers, only the beta card's recommendation prose is anchored to
+# a single headline name (`trim_ticker == root_tickers[0]`); sharpe's prose is a
+# generic per-position rule that names no anchor. So a beta card whose PRIMARY
+# name is already acted must be dropped whole (its "Sell 50% of X" would go
+# stale), whereas sharpe just chip-filters and survives on any remaining drag.
+_TUNEUP_PRIMARY_ANCHORED_TYPES = frozenset({"beta"})
 
-def _portfolio_tuneup(risk_recs: list | None) -> list[dict]:
+
+def _portfolio_tuneup(risk_recs: list | None, acted_tickers: set | None = None) -> list[dict]:
     """Slow-moving risk-metric recommendations surfaced as standing 'Portfolio
     Tune-up' items (awareness), not Act Today decisions. HIGH or MEDIUM only —
-    OK/LOW aren't improvements to make. Shape is render-ready for app.py."""
+    OK/LOW aren't improvements to make. Shape is render-ready for app.py.
+
+    acted_tickers (optional): every ticker already carrying an Act Today / Review
+    card this render (same broad basis as the risk-off exclude set — matches the
+    sibling block's 2026-07-29 H6 precedent). For the trim-driver types
+    (beta/sharpe) this suppresses the redundant restatement of a trim already in
+    Act Today (2026-08-04 audit — the beta Tune-up card and a risk-off TRIM both
+    rank the same high-beta names, so a fragile+risk-off render otherwise shows
+    "trim NVDA" in both lanes). A beta card whose primary trim_ticker is acted is
+    dropped whole; a merely SECONDARY overlap is filtered from the chip list only,
+    keeping the card's still-valid primary-anchored prose."""
+    acted = {str(t).upper() for t in (acted_tickers or set())}
     out: list[dict] = []
     for rec in (risk_recs or []):
         if rec.get("type") not in _TUNEUP_RISK_TYPES:
             continue
         if rec.get("priority") not in ("HIGH", "MEDIUM"):
             continue
+        rtype = rec.get("type")
         rt = rec.get("root_tickers", []) or []
+        tickers = [r.get("ticker") for r in rt if r.get("ticker")]
+        if acted and rtype in _TUNEUP_TRIM_DRIVER_TYPES and tickers:
+            # Beta prose is built around root_tickers[0] — if THAT name is being
+            # trimmed today, the whole card duplicates the Act Today call.
+            if rtype in _TUNEUP_PRIMARY_ANCHORED_TYPES and str(tickers[0]).upper() in acted:
+                continue
+            tickers = [t for t in tickers if str(t).upper() not in acted]
+            if not tickers:
+                continue  # every named trim target already acted -> nothing to add
         out.append({
-            "type":           rec.get("type"),
+            "type":           rtype,
             "priority":       rec.get("priority"),
             "title":          rec.get("title", "Portfolio metric"),
             "problem":        rec.get("problem", ""),
             "recommendation": rec.get("recommendation", ""),
-            "tickers":        [r.get("ticker") for r in rt if r.get("ticker")],
+            "tickers":        tickers,
         })
     return out
 
@@ -2444,6 +2478,11 @@ def build_daily_briefing(
                          deterioration=deterioration,
                          movers=movers,
                          winner_profile=winner_profile)
-    tuneup = _portfolio_tuneup(risk_recs)
+    # Tune-up beta/sharpe cards restate a trim; if that name is already carrying
+    # an Act Today card (incl. the risk-off TRIM appended above) or a Review
+    # card, drop the redundant restatement (2026-08-04 audit — same broad
+    # flagged basis as the risk-off exclude set, now that `act` includes risk-off).
+    _acted_final = decision_bucket.all_flagged_tickers(act, review)
+    tuneup = _portfolio_tuneup(risk_recs, acted_tickers=_acted_final)
     return {"act_today": act, "buy_candidates": buys, "review_list": review,
             "grow_today": grow, "portfolio_tuneup": tuneup}

@@ -32,6 +32,7 @@ from stock_analyzer.daily_briefing import (
     _cross_reference,
     _dynamic_overweight_floor,
     _grow_today,
+    _portfolio_tuneup,
     _recently_added,
     _review_list,
     _rewrite_macro_affected,
@@ -788,3 +789,86 @@ def test_rewrite_macro_affected_keeps_reason_in_sync_with_filtered_why():
     _rewrite_macro_affected(act, reduced={"GD"})
     assert act[0]["why"] == "Economic release today. Affected: BKNG."
     assert act[0]["reason"] == "Hold through the print. Economic release today. Affected: BKNG."
+
+
+# ── _portfolio_tuneup — beta/sharpe trim-driver dedup (2026-08-04 audit) ──────
+# The beta Tune-up card and a risk-off Act Today TRIM both rank the same
+# high-beta names, so a fragile+risk-off render otherwise restates "trim NVDA"
+# in both lanes. _portfolio_tuneup drops the redundant restatement when the
+# name is already acted on today. Beta prose is anchored to root_tickers[0]
+# (trim_ticker), so a beta card whose PRIMARY name is acted is dropped whole;
+# sharpe prose is a generic per-position rule, so it only chip-filters.
+
+def _beta_rec(tickers, priority="HIGH"):
+    return {
+        "type": "beta", "priority": priority, "title": "Portfolio Beta 1.8",
+        "problem": "p", "recommendation": "Sell 50% of X",
+        "root_tickers": [{"ticker": t} for t in tickers],
+    }
+
+
+def _sharpe_rec(tickers, priority="HIGH"):
+    return {
+        "type": "sharpe", "priority": priority, "title": "Sharpe 0.4",
+        "problem": "p", "recommendation": "For each drag position, trim 40-50%",
+        "root_tickers": [{"ticker": t} for t in tickers],
+    }
+
+
+def test_tuneup_no_acted_set_is_unfiltered_backcompat():
+    # No acted_tickers passed -> behaves exactly as before (no suppression).
+    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])])
+    assert len(out) == 1
+    assert out[0]["tickers"] == ["NVDA", "AMD"]
+
+
+def test_tuneup_beta_primary_acted_drops_whole_card():
+    # NVDA (root_tickers[0], the name the beta prose is built around) is being
+    # trimmed today -> the entire beta card is redundant.
+    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])], acted_tickers={"NVDA"})
+    assert out == []
+
+
+def test_tuneup_beta_secondary_acted_keeps_card_filters_chip():
+    # Only a SECONDARY name (AMD) is acted; the primary NVDA is not -> keep the
+    # card (its NVDA-anchored prose is still valid) but drop AMD from the chips.
+    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])], acted_tickers={"AMD"})
+    assert len(out) == 1
+    assert out[0]["tickers"] == ["NVDA"]
+
+
+def test_tuneup_beta_all_acted_drops_card():
+    out = _portfolio_tuneup([_beta_rec(["NVDA", "AMD"])], acted_tickers={"NVDA", "AMD"})
+    assert out == []
+
+
+def test_tuneup_beta_case_insensitive_match():
+    out = _portfolio_tuneup([_beta_rec(["nvda", "AMD"])], acted_tickers={"NVDA"})
+    assert out == []
+
+
+def test_tuneup_sharpe_primary_acted_only_chip_filters():
+    # Sharpe prose names no single anchor -> a primary-name overlap only filters
+    # the chip; the card survives on the remaining drag name.
+    out = _portfolio_tuneup([_sharpe_rec(["TSLA", "COIN"])], acted_tickers={"TSLA"})
+    assert len(out) == 1
+    assert out[0]["tickers"] == ["COIN"]
+
+
+def test_tuneup_sharpe_all_acted_drops_card():
+    out = _portfolio_tuneup([_sharpe_rec(["TSLA", "COIN"])], acted_tickers={"TSLA", "COIN"})
+    assert out == []
+
+
+def test_tuneup_non_trim_driver_types_never_filtered():
+    # volatility/drawdown/tail/concentration recommend ADDING diversifiers, a
+    # different action from a trim -> never suppressed even if their names overlap.
+    for rtype in ("volatility", "drawdown", "tail_risk", "single_name_concentration"):
+        rec = {
+            "type": rtype, "priority": "HIGH", "title": "t", "problem": "p",
+            "recommendation": "add a diversifier",
+            "root_tickers": [{"ticker": "NVDA"}],
+        }
+        out = _portfolio_tuneup([rec], acted_tickers={"NVDA"})
+        assert len(out) == 1, rtype
+        assert out[0]["tickers"] == ["NVDA"], rtype
