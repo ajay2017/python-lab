@@ -13,11 +13,13 @@ Works as long as >=4 articles exist.  Also detects price-sentiment divergences.
 from datetime import datetime as _dt, timezone as _tz
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _VADER
 
-_va = _VADER()
+from stock_analyzer.constants import (
+    SENTIMENT_VELOCITY_THRESHOLD as _VELOCITY_THRESHOLD,
+    SENTIMENT_DIVERGENCE_PRICE_PCT as _DIVERGENCE_PRICE_PCT,
+    SENTIMENT_VELOCITY_MIN_ARTICLES as _MIN_ARTICLES,
+)
 
-_VELOCITY_THRESHOLD   = 0.10  # compound score shift considered meaningful
-_DIVERGENCE_PRICE_PCT = 3.0   # 7d price move % needed to flag divergence
-_MIN_ARTICLES         = 4     # need at least this many to compute velocity
+_va = _VADER()
 
 
 def _score(titles: list[str]) -> float | None:

@@ -21,6 +21,14 @@ from stock_analyzer.constants import (
     DECISION_QUALITY_GRADE_D,
     DECISION_QUALITY_MIN_TRADES,
     DECISION_QUALITY_ALPHA_SCALE,
+    DECISION_QUALITY_WIN_RATE_FLOOR_PCT,
+    DECISION_QUALITY_WIN_RATE_CEILING_PCT,
+    DECISION_QUALITY_PF_FLOOR,
+    DECISION_QUALITY_PF_CEILING,
+    DECISION_QUALITY_OVERTRADE_SEVERE_MULT,
+    DECISION_QUALITY_OVERTRADE_MODERATE_MULT,
+    DECISION_QUALITY_OVERTRADE_SEVERE_PENALTY,
+    DECISION_QUALITY_OVERTRADE_MODERATE_PENALTY,
     WORKFLOW_ANALYST_LOOKBACK_DAYS,
     WORKFLOW_EARNINGS_WINDOW_DAYS,
     WORKFLOW_MIN_THESIS_LENGTH,
@@ -165,14 +173,16 @@ def build_monthly_grades(
         win_rate = round(len(winners) / n * 100, 1)
         pf       = _profit_factor(grp)
 
-        # Win-rate subscore: linear 0 → 100 mapped 30% → 70%
-        wr_sub = max(0.0, min(100.0, (win_rate - 30.0) / 40.0 * 100.0))
+        # Win-rate subscore: linear 0 → 100 mapped floor% → ceiling%
+        wr_range = DECISION_QUALITY_WIN_RATE_CEILING_PCT - DECISION_QUALITY_WIN_RATE_FLOOR_PCT
+        wr_sub = max(0.0, min(100.0, (win_rate - DECISION_QUALITY_WIN_RATE_FLOOR_PCT) / wr_range * 100.0))
 
-        # Profit-factor subscore: log-linear 0.5 → 2.0 → 0..100
+        # Profit-factor subscore: log-linear floor → ceiling → 0..100
         if pf is None:
             pf_sub = 100.0   # all-winner month — full score
         else:
-            pf_sub = max(0.0, min(100.0, (pf - 0.5) / 1.5 * 100.0))
+            pf_range = DECISION_QUALITY_PF_CEILING - DECISION_QUALITY_PF_FLOOR
+            pf_sub = max(0.0, min(100.0, (pf - DECISION_QUALITY_PF_FLOOR) / pf_range * 100.0))
 
         # Alpha subscore
         spy_ret = spy_map.get(month_str)
@@ -197,10 +207,10 @@ def build_monthly_grades(
 
         # Overtrading penalty
         ot_mult = overtrade_map.get(month_str)
-        if ot_mult is not None and ot_mult >= 2.0:
-            composite = max(0.0, composite - 25.0)
-        elif ot_mult is not None and ot_mult >= 1.5:
-            composite = max(0.0, composite - 10.0)
+        if ot_mult is not None and ot_mult >= DECISION_QUALITY_OVERTRADE_SEVERE_MULT:
+            composite = max(0.0, composite - DECISION_QUALITY_OVERTRADE_SEVERE_PENALTY)
+        elif ot_mult is not None and ot_mult >= DECISION_QUALITY_OVERTRADE_MODERATE_MULT:
+            composite = max(0.0, composite - DECISION_QUALITY_OVERTRADE_MODERATE_PENALTY)
 
         composite = round(composite, 1)
         letter = _grade_letter(composite)

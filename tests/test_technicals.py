@@ -236,10 +236,14 @@ def test_technical_score_ma_trend_downtrend_below_both():
 
 def test_technical_score_bollinger_band_range_zero_guard():
     # bb_upper == bb_lower -> band_range <= 0 -> the guard skips scoring
-    # entirely, but max_pts was already incremented -> score 0, not 50.
+    # entirely AND max_pts stays 0 for this leg, so a flat-price data
+    # artifact doesn't deflate the score (2026-08-04 audit finding fixed:
+    # max_pts += 20 used to run before this guard, silently charging the
+    # denominator with no numerator credit -- score used to be 0.0, not the
+    # neutral 50 "no data" default).
     df = _sig_df({"BB_upper": 100.0, "BB_lower": 100.0}, close=100.0)
     score, signals = technical_score(df)
-    assert score == 0.0
+    assert score == 50.0
     assert "Bollinger" not in signals
 
 
@@ -326,6 +330,18 @@ def test_technical_score_volume_low_interest_below_0_9():
     score, signals = technical_score(df)
     assert score == 25.0  # 5/20 * 100
     assert "low interest" in signals["Volume"]
+
+
+def test_technical_score_volume_zero_average_guard():
+    # vol_avg == 0 (sparse/zero-volume history, e.g. a recent IPO) -> the
+    # guard skips scoring entirely AND max_pts stays 0 for this leg, so a
+    # zero-volume data artifact doesn't deflate the score (2026-08-04 audit
+    # finding fixed: max_pts += 20 used to run before this guard).
+    volumes = [0.0] * 20
+    df = _vol_df(volumes)
+    score, signals = technical_score(df)
+    assert score == 50.0
+    assert "Volume" not in signals
 
 
 # ─── technical_score — max_pts == 0 fallback ────────────────────────────────

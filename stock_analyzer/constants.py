@@ -391,6 +391,9 @@ REBALANCE_ADD_MIN_SCORE        = 70    # Strong Buy + undersized (<5% weight) + 
                                         # (kept as-is; adjacent code already requires "Strong Buy" in signal, which
                                         # implies composite ≥ COMPOSITE_STRONG_BUY=75, making this sub-condition
                                         # likely redundant today — named rather than silently changed, see audit H3)
+REBALANCE_ADD_UNDERSIZED_PCT   = 5.0   # "undersized" weight ceiling for the add-candidate check above — was a
+                                        # bare `w < 5` literal despite this comment already describing it as if
+                                        # extracted (2026-08-04 audit finding)
 REBALANCE_ADD_TARGET_WEIGHT_PCT = 8.0  # target weight used to size the "add" action's suggested dollar amount
 REBALANCE_REVIEW_GAP_PCT       = 5.0   # bearish signal + profitable + gap below this (or unknown) = high urgency
 
@@ -692,9 +695,19 @@ COMPOSITE_WEIGHTS = {
 
 # ── Earnings / macro proximity windows (days) ────────────────────────────────
 EARNINGS_IMMINENT_DAYS      = 7  # any trade within this window = caution (binary-event conflict)
+# Tighter "danger" sub-window inside EARNINGS_IMMINENT_DAYS — decide position
+# size before the report, vs. the wider window's "review ahead of report."
+# Single source for portfolio.py's alert danger/warning split and
+# daily_briefing's earnings-overweight priority bump; was duplicated as a
+# bare `3` in each independently (2026-08-04 audit finding).
+EARNINGS_CRITICAL_DAYS      = 3
 EARNINGS_MANAGEABLE_DAYS    = 21 # Brief verdict: imminent < window <= this = "manageable window" (agreed signal, not a conflict)
 EARNINGS_URGENCY_SOON_DAYS  = 14 # Catalyst Watch playbook urgency tier: imminent < window <= this = "SOON", beyond = "AHEAD"
 MACRO_IMMINENT_DAYS    = 3       # HIGH-impact macro event within this window = suppress new picks in affected sector
+# 🌐 Macro page: warn when this much of the portfolio (by weight) sits in
+# sectors facing a headwind under the current ETF-proxy regime read. Was a
+# bare `> 30` literal (2026-08-04 audit finding).
+MACRO_HEADWIND_WARN_PCT = 30.0
 
 # Forward window (days) for the Catalyst Watch panel — upcoming earnings for
 # names the app tracks (held + watchlist + sector universe). AWARENESS ONLY: it
@@ -830,6 +843,15 @@ DATA_YF_REQUEST_TIMEOUT_SEC = 20
 # beyond this, fail loud rather than pass off very old signals as current. Mild
 # policy flavour (stale data drives the shown signals); adjustable.
 BUNDLE_CACHE_MAX_AGE_DAYS = 5
+
+# ── Stock-split detection (split_detector.py) — data-integrity tuning, NOT an
+# investment threshold. These gate whether an unaccounted split gets flagged
+# for the user to apply, not any buy/sell/trim call. Were module-local
+# literals in split_detector.py, invisible to check_constants_documented.py
+# (2026-08-04 audit finding).
+SPLIT_DETECT_LOOKBACK_DAYS    = 730   # 2 years of split history to fetch
+SPLIT_DETECT_MIN_DISTORTION   = 0.35  # skip investigating unless |cost vs price| gap exceeds this
+SPLIT_DETECT_MAX_ADJ_DISTANCE = 0.60  # adjusted cost must land within this fraction of current price to confirm
 
 # Max fundamentals age (days) allowed for a new-position recommendation.
 # Older fundamentals can make a deteriorating ticker appear composite-healthy.
@@ -1029,6 +1051,21 @@ DECISION_QUALITY_GRADE_C = 50        # composite ≥ 50 → C (Learning)
 DECISION_QUALITY_GRADE_D = 35        # composite ≥ 35 → D (Struggling); below = F
 DECISION_QUALITY_MIN_TRADES = 2      # min closed trades to compute a period grade
 DECISION_QUALITY_ALPHA_SCALE = 5.0   # ±X% realized alpha maps to 100/0 on alpha subscore
+# Win-rate subscore: linear map, floor% -> 0, ceiling% -> 100. (2026-08-04
+# audit finding: these two plus the profit-factor/overtrading bounds below
+# were bare literals in decision_quality.py, unlike the properly-externalized
+# grade bands above.)
+DECISION_QUALITY_WIN_RATE_FLOOR_PCT   = 30.0
+DECISION_QUALITY_WIN_RATE_CEILING_PCT = 70.0
+# Profit-factor subscore: linear map, floor -> 0, ceiling -> 100.
+DECISION_QUALITY_PF_FLOOR   = 0.5
+DECISION_QUALITY_PF_CEILING = 2.0
+# Overtrading penalty on the composite score: month's trade count vs its
+# rolling 12-month prior average, at 2 severity tiers.
+DECISION_QUALITY_OVERTRADE_SEVERE_MULT      = 2.0    # count >= this x the prior average
+DECISION_QUALITY_OVERTRADE_MODERATE_MULT    = 1.5
+DECISION_QUALITY_OVERTRADE_SEVERE_PENALTY   = 25.0   # points subtracted from composite
+DECISION_QUALITY_OVERTRADE_MODERATE_PENALTY = 10.0
 
 # ── My Edge — Workflow ROI prep-tier classification windows ──────────────────
 # Lookback/proximity windows used to classify each BUY trade by how much
@@ -1222,3 +1259,44 @@ JUDGMENT_HORIZON_STRUCTURAL_RISK_DAYS  = 10
 JUDGMENT_TRACK_RECORD_NEUTRAL_ACCURACY = 0.5
 JUDGMENT_TRACK_RECORD_WEIGHT_FLOOR     = 0.25
 JUDGMENT_TRACK_RECORD_WEIGHT_CEILING   = 2.0
+
+# ── Compare page — 2-ticker verdict tie-break sensitivity (comparison.py) ────
+# When composite scores are close (COMPARE_TIE_GAP), the verdict defers to
+# these sub-factor gaps to cite specific tie-break evidence rather than
+# picking arbitrarily. Were bare literals (2026-08-04 audit finding).
+COMPARE_TIE_GAP           = 3     # composite-score gap below which scores count as "nearly identical"
+COMPARE_FCF_YIELD_GAP_PCT = 0.5   # FCF-yield gap (percentage points) worth citing as a tie-breaker
+COMPARE_BETA_GAP          = 0.15  # beta gap worth citing as a tie-breaker
+COMPARE_SHARPE_GAP        = 0.2   # Sharpe gap worth citing as a tie-breaker
+
+# ── Sentiment Velocity (sentiment_velocity.py) ────────────────────────────────
+# Were module-local literals (2026-08-04 audit finding).
+SENTIMENT_VELOCITY_THRESHOLD    = 0.10  # compound-score shift considered meaningful (Improving/Deteriorating label)
+SENTIMENT_DIVERGENCE_PRICE_PCT  = 3.0   # 7-day price move % needed to flag a price-sentiment divergence
+SENTIMENT_VELOCITY_MIN_ARTICLES = 4     # min articles required to compute a velocity read at all
+
+# ── Pre-market intelligence (premarket.py) ────────────────────────────────────
+# Were module-local literals (2026-08-04 audit finding).
+PREMARKET_FUTURES_TONE_PCT = 0.4  # ES=F % change cutoff for bull/bear/flat futures_tone()
+PREMARKET_MOVER_MIN_PCT    = 0.5  # min |% change| for a held/watchlist ticker to qualify as a pre-market mover
+
+# ── Quick Research entry-timing verdict (quick_research._entry_timing) ──────
+# Directly actionable ("High Risk — Avoid Chasing" / "Wait for Pullback" /
+# "Oversold — Potential Entry" / "Normal Entry Conditions"). Were bare
+# literals despite driving a user-facing verdict (2026-08-04 audit finding).
+QUICK_RESEARCH_RSI_SEVERE_OVERBOUGHT = 80   # RSI >= this -> "High Risk — Avoid Chasing"
+QUICK_RESEARCH_MOVE_1D_EXTREME_PCT   = 15   # 1-day move % >= this -> same tier
+QUICK_RESEARCH_MOVE_5D_EXTREME_PCT   = 25   # 5-day move % >= this -> same tier
+QUICK_RESEARCH_RSI_ELEVATED          = 68   # RSI >= this -> "Wait for Pullback"
+QUICK_RESEARCH_MOVE_1D_ELEVATED_PCT  = 5    # 1-day move % >= this -> same tier
+QUICK_RESEARCH_MOVE_5D_ELEVATED_PCT  = 12   # 5-day move % >= this -> same tier
+QUICK_RESEARCH_RSI_OVERSOLD          = 35   # RSI <= this -> "Oversold — Potential Entry"
+
+# ── Trade Journal entry-sanity guards (app.py) — anti-fat-finger, not a
+# gate/scoring value. Were bare literals despite the same form correctly
+# importing RR_ENTRY_MIN/COMPOSITE_BUY/etc. from here (2026-08-04 audit
+# finding).
+TRADE_PRICE_SANITY_FLOOR      = 0.10  # entered price below this = probable typo, blocks submit
+TRADE_PRICE_SANITY_RATIO_LOW  = 0.5   # entered-price / live-market-price below this = probable typo
+TRADE_PRICE_SANITY_RATIO_HIGH = 2.0   # ...above this = probable typo
+TRADE_DUP_SUBMIT_WINDOW_SEC   = 15    # identical (ticker, action, shares) resubmit within this window = dedup guard

@@ -2,8 +2,9 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
+from stock_analyzer.earnings_advisor import _today_et
 
 
 def _safe_float(val, default: float = 0.0) -> float:
@@ -388,7 +389,7 @@ def alerts(
     without an accompanying rating action (F-169 Phase 2 — closes the gap the
     rating-based "Analyst revision spike" branch below cannot see).
     """
-    from datetime import date as _date, datetime as _datetime
+    from datetime import datetime as _datetime
 
     _det_tier = {d["ticker"]: d["tier"] for d in (deterioration or []) if d.get("ticker")}
 
@@ -453,7 +454,7 @@ def alerts(
 
     # ── Data-driven alerts (require held_data) ────────────────────────────────
     if held_data:
-        today = _date.today()
+        today = _today_et()
         for _, row in portfolio_df.iterrows():
             ticker = row["Ticker"]
             r      = held_data.get(ticker, {})
@@ -463,7 +464,7 @@ def alerts(
             if earn:
                 try:
                     days = (_datetime.strptime(earn, "%Y-%m-%d").date() - today).days
-                    if 0 <= days <= 3:
+                    if 0 <= days <= EARNINGS_CRITICAL_DAYS:
                         result.append({
                             "level": "danger", "category": "earnings",
                             "msg": (
@@ -471,7 +472,7 @@ def alerts(
                                 f"— decide your position size before the report"
                             ),
                         })
-                    elif 4 <= days <= 7:
+                    elif EARNINGS_CRITICAL_DAYS < days <= EARNINGS_IMMINENT_DAYS:
                         result.append({
                             "level": "warning", "category": "earnings",
                             "msg": f"📅 **{ticker}** reports earnings in {days} days ({earn}) — review ahead of report",
@@ -586,7 +587,7 @@ def rebalance_actions(
                 "avg_cost": avg_cost,
             })
 
-        if "Strong Buy" in signal and w < 5 and score > REBALANCE_ADD_MIN_SCORE:
+        if "Strong Buy" in signal and w < REBALANCE_ADD_UNDERSIZED_PCT and score > REBALANCE_ADD_MIN_SCORE:
             add_val = mval * (REBALANCE_ADD_TARGET_WEIGHT_PCT - w) / 100  # rough cost to reach target weight
             actions.append({
                 "type":    "add",

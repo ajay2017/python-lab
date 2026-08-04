@@ -188,7 +188,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
     stop, atr_val = atr_stop_loss(df, multiplier=ATR_STOP_MULT)
     entry_lo, entry_hi = entry_zone(price, atr_val) if price else (None, None)
     targets = compute_price_targets(df, financials, price) if price else None
-    sr = support_resistance(df)
+    sr = support_resistance(df, current_price=price)
     try:
         risk_metrics = compute_all_risk(df, spy_df, rfr)
     except Exception:

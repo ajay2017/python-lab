@@ -16,6 +16,10 @@ doesn't support.
 from stock_analyzer.constants import (
     SECTOR_ELEVATED,
     SECTOR_CEILING,
+    COMPARE_TIE_GAP,
+    COMPARE_FCF_YIELD_GAP_PCT,
+    COMPARE_BETA_GAP,
+    COMPARE_SHARPE_GAP,
 )
 
 
@@ -376,7 +380,7 @@ def _compute_verdict(bundle_a, bundle_b, ticker_a, ticker_b,
     # cite specific evidence rather than just "higher score."
     reasons: list[str] = []
     if fin_a.get("fcf_yield") is not None and fin_b.get("fcf_yield") is not None:
-        if abs(fin_a["fcf_yield"] - fin_b["fcf_yield"]) >= 0.5:
+        if abs(fin_a["fcf_yield"] - fin_b["fcf_yield"]) >= COMPARE_FCF_YIELD_GAP_PCT:
             if fin_a["fcf_yield"] > fin_b["fcf_yield"]:
                 reasons.append(
                     f"{ticker_a} better FCF yield ({fin_a['fcf_yield']:.1f}% vs {fin_b['fcf_yield']:.1f}%)"
@@ -386,20 +390,20 @@ def _compute_verdict(bundle_a, bundle_b, ticker_a, ticker_b,
                     f"{ticker_b} better FCF yield ({fin_b['fcf_yield']:.1f}% vs {fin_a['fcf_yield']:.1f}%)"
                 )
     if rm_a.get("beta") is not None and rm_b.get("beta") is not None:
-        if abs(rm_a["beta"] - rm_b["beta"]) >= 0.15:
+        if abs(rm_a["beta"] - rm_b["beta"]) >= COMPARE_BETA_GAP:
             if rm_a["beta"] < rm_b["beta"]:
                 reasons.append(f"{ticker_a} lower beta ({rm_a['beta']:.2f} vs {rm_b['beta']:.2f})")
             else:
                 reasons.append(f"{ticker_b} lower beta ({rm_b['beta']:.2f} vs {rm_a['beta']:.2f})")
     if rm_a.get("sharpe") is not None and rm_b.get("sharpe") is not None:
-        if abs(rm_a["sharpe"] - rm_b["sharpe"]) >= 0.2:
+        if abs(rm_a["sharpe"] - rm_b["sharpe"]) >= COMPARE_SHARPE_GAP:
             if rm_a["sharpe"] > rm_b["sharpe"]:
                 reasons.append(f"{ticker_a} stronger Sharpe ({rm_a['sharpe']:.2f} vs {rm_b['sharpe']:.2f})")
             else:
                 reasons.append(f"{ticker_b} stronger Sharpe ({rm_b['sharpe']:.2f} vs {rm_a['sharpe']:.2f})")
 
     # Composite-tight tie — defer to the user with specific factors to weigh.
-    if gap < 3:
+    if gap < COMPARE_TIE_GAP:
         if reasons:
             return {
                 "preferred":  "tie",

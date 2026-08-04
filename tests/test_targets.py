@@ -64,6 +64,70 @@ def test_support_resistance_captures_clear_peak_and_trough():
     assert 10.0 in result["supports"]
 
 
+def test_support_resistance_nearest_resistance_is_closest_not_most_extreme():
+    """2026-08-04 audit finding: nearest_resistance used to always be the
+    single most-extreme local high regardless of distance to price. With
+    current_price supplied, "nearest" must mean nearest by distance -- a
+    closer, less-extreme level beats a farther, more-extreme one. A tiny
+    monotonic-slope baseline (no ties) plus 2 isolated spikes >= window(5)
+    apart, away from the edges, so exactly those 2 points register as local
+    highs -- no spurious ties from a flat/oscillating baseline."""
+    n = 22
+    high = [90.0 + 0.001 * i for i in range(n)]
+    high[8], high[15] = 200.0, 105.0  # far-above-price, close-above-price
+    low = [h - 30 for h in high]
+    df = _mk_ohlc([(h + l) / 2 for h, l in zip(high, low)], highs=high, lows=low)
+
+    result = targets.support_resistance(df, lookback=n, current_price=100.0)
+    assert result["resistances"][0] == 200.0        # strongest-3 unaffected by price
+    assert result["nearest_resistance"] == 105.0     # closest ABOVE price, not the most extreme
+
+
+def test_support_resistance_nearest_support_is_closest_not_most_extreme():
+    n = 22
+    low = [150.0 - 0.001 * i for i in range(n)]  # baseline well ABOVE both dips below
+    low[8], low[15] = 10.0, 92.0  # far-below-price, close-below-price
+    high = [l + 30 for l in low]
+    df = _mk_ohlc([(h + l) / 2 for h, l in zip(high, low)], highs=high, lows=low)
+
+    result = targets.support_resistance(df, lookback=n, current_price=100.0)
+    assert result["supports"][0] == 10.0            # strongest-3 unaffected by price
+    assert result["nearest_support"] == 92.0         # closest BELOW price, not the deepest
+
+
+def test_support_resistance_no_level_in_direction_falls_back_to_extreme():
+    """When every local high is already below current price (fully breached
+    resistance), there's no "above" candidate -- fall back to the single
+    most extreme level rather than returning None."""
+    n = 15
+    high = [100.0 + (i % 2) for i in range(n)]
+    high[7] = 105.0  # still below current_price=200 -- all "resistances" breached
+    low = [50.0 - (i % 2) for i in range(n)]
+    low[7] = 10.0
+    closes = [(h + l) / 2 for h, l in zip(high, low)]
+    df = _mk_ohlc(closes, highs=high, lows=low)
+
+    result = targets.support_resistance(df, lookback=n, current_price=200.0)
+    assert result["nearest_resistance"] == 105.0  # max of local highs, not None
+
+
+def test_support_resistance_without_current_price_keeps_magnitude_fallback():
+    """Backward compatibility: a caller that doesn't supply current_price
+    gets the old magnitude-based nearest_* (documented, not a silent
+    behavior change for that call shape)."""
+    n = 15
+    high = [100.0 + (i % 2) for i in range(n)]
+    high[7] = 200.0
+    low = [50.0 - (i % 2) for i in range(n)]
+    low[7] = 10.0
+    closes = [(h + l) / 2 for h, l in zip(high, low)]
+    df = _mk_ohlc(closes, highs=high, lows=low)
+
+    result = targets.support_resistance(df, lookback=n)
+    assert result["nearest_resistance"] == 200.0
+    assert result["nearest_support"] == 10.0
+
+
 def test_support_resistance_monotonic_series_has_no_locals():
     n = 20
     closes = [100.0 + i for i in range(n)]
@@ -153,7 +217,7 @@ def test_compute_price_targets_bear_floor_support_cushion_wins():
 
     result = targets.compute_price_targets(df, financials, current_price)
 
-    nearest_support = targets.support_resistance(df)["nearest_support"]
+    nearest_support = targets.support_resistance(df, current_price=current_price)["nearest_support"]
     atr_val = targets._atr_val(df)
     atr_bear = current_price - TARGETS_BEAR_ATR_MULT * atr_val
     cand_support = nearest_support * TARGETS_BEAR_SUPPORT_CUSHION_MULT
@@ -174,7 +238,7 @@ def test_compute_price_targets_bear_floor_52w_low_cushion_wins():
 
     result = targets.compute_price_targets(df, financials, current_price)
 
-    nearest_support = targets.support_resistance(df)["nearest_support"]
+    nearest_support = targets.support_resistance(df, current_price=current_price)["nearest_support"]
     atr_val = targets._atr_val(df)
     atr_bear = current_price - TARGETS_BEAR_ATR_MULT * atr_val
     cand_support = nearest_support * TARGETS_BEAR_SUPPORT_CUSHION_MULT
@@ -196,7 +260,7 @@ def test_compute_price_targets_bear_floor_atr_based_wins():
 
     result = targets.compute_price_targets(df, financials, current_price)
 
-    nearest_support = targets.support_resistance(df)["nearest_support"]
+    nearest_support = targets.support_resistance(df, current_price=current_price)["nearest_support"]
     atr_val = targets._atr_val(df)
     atr_bear = current_price - TARGETS_BEAR_ATR_MULT * atr_val
     cand_support = nearest_support * TARGETS_BEAR_SUPPORT_CUSHION_MULT

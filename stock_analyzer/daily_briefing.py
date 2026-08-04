@@ -36,6 +36,7 @@ from stock_analyzer.constants import (
     UNCLASSIFIED_SECTOR,
     MACRO_IMMINENT_DAYS,
     EARNINGS_IMMINENT_DAYS,
+    EARNINGS_CRITICAL_DAYS,
     EARNINGS_MANAGEABLE_DAYS,
     RISK_PCT_PER_TRADE,
     ADD_WINNER_MIN_GAP_PCT,
@@ -2033,7 +2034,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             )
             trigger = "Surprise miss + price gap-down → existing stop protects; no pre-event action needed."
         items.append({
-            "priority": "medium" if days <= 3 else "low",
+            "priority": "medium" if days <= EARNINGS_CRITICAL_DAYS else "low",
             "icon":     "📅",
             "ticker":   ticker,
             "headline": f"earnings {label} ({earn_date}), weight {weight:.1f}%",
@@ -2138,7 +2139,7 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
         if not ev_date or ev.get("impact") != MC_HIGH:
             continue
         days = _days_until(ev_date, today)
-        if days is None or not (1 <= days <= 3):
+        if days is None or not (1 <= days <= MACRO_IMMINENT_DAYS):
             continue
 
         # Compute user's exposure to the event's affected sectors.

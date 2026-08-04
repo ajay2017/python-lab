@@ -100,8 +100,8 @@ def technical_score(df: pd.DataFrame) -> tuple[float, dict]:
     bb_lower = latest.get("BB_lower")
     if pd.notna(bb_upper) and pd.notna(bb_lower):
         band_range = bb_upper - bb_lower
-        max_pts += 20
         if band_range > 0:
+            max_pts += 20
             pos = (close - bb_lower) / band_range
             if pos < 0.2:
                 points += 18; signals["Bollinger"] = f"Near lower band ({pos:.0%}) — potential bounce"
@@ -116,10 +116,10 @@ def technical_score(df: pd.DataFrame) -> tuple[float, dict]:
 
     # Volume trend
     if "Volume" in df.columns:
-        max_pts += 20
         vol_recent = df["Volume"].iloc[-5:].mean()
         vol_avg    = df["Volume"].iloc[-20:].mean()
         if vol_avg > 0:
+            max_pts += 20
             ratio = vol_recent / vol_avg
             if ratio > 1.5:
                 points += 20; signals["Volume"] = f"{ratio:.1f}x avg — strong interest"

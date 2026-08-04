@@ -895,10 +895,6 @@ def main() -> int:
 
     if test_email:
         return _run_test_email(now_et)
-    if mode == "scan":
-        return _run_scan(now_et, force)
-    if mode == "intraday":
-        return _run_intraday(now_et, force)
     if mode == "thesis":
         # Sunday lane: thesis review → weekly debrief → (first Sunday only) monthly
         # report. Isolate each lane so one's uncaught exception can't take down the
@@ -914,13 +910,25 @@ def main() -> int:
                 _log(f"{_job}: UNCAUGHT — {str(exc)[:160]}")
                 rc = 1
         return rc
-    if mode == "debrief":
-        return _run_debrief(now_et, force)
-    if mode == "monthly":
-        return _run_monthly_report(now_et, force)
-    if mode == "eod":
-        return _run_eod(now_et, force)
-    return _run_premarket(now_et, force)
+
+    # Every other mode dispatches exactly one job per invocation. Wrap it in
+    # the same log-then-fail discipline as the thesis lane above (2026-08-04
+    # audit finding: these used to call their _run_X function unguarded — a
+    # crash still fails the GitHub Actions run either way, but bypassed this
+    # module's own _log() so the failure reason never made it into the
+    # run log / dedup state, only a raw traceback in Actions' own output).
+    _job_name, _job_fn = {
+        "scan":     ("scan",     _run_scan),
+        "intraday": ("intraday", _run_intraday),
+        "debrief":  ("debrief",  _run_debrief),
+        "monthly":  ("monthly",  _run_monthly_report),
+        "eod":      ("eod",      _run_eod),
+    }.get(mode, ("premarket", _run_premarket))
+    try:
+        return _job_fn(now_et, force)
+    except Exception as exc:
+        _log(f"{_job_name}: UNCAUGHT — {str(exc)[:160]}")
+        raise
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ import yfinance as yf
 
 from stock_analyzer import api_health as _ah
 from stock_analyzer import data as _data
+from stock_analyzer.constants import PREMARKET_FUTURES_TONE_PCT, PREMARKET_MOVER_MIN_PCT
 
 _ET = pytz.timezone("America/New_York")
 
@@ -99,9 +100,9 @@ def futures_tone(futures: list[dict]) -> str:
     if es is None:
         return "flat"
     chg = es["chg_pct"]
-    if chg >= 0.4:
+    if chg >= PREMARKET_FUTURES_TONE_PCT:
         return "bull"
-    if chg <= -0.4:
+    if chg <= -PREMARKET_FUTURES_TONE_PCT:
         return "bear"
     return "flat"
 
@@ -138,7 +139,7 @@ def fetch_premarket_movers(
     Pre-market % change for held + watchlist stocks.
     Uses the last Close from held_data as the prior close baseline (most accurate),
     falls back to fast_info.previous_close.
-    Only returns movers with |chg| >= 0.5%.
+    Only returns movers with |chg| >= PREMARKET_MOVER_MIN_PCT.
 
     Each qualifying mover is passed through data.crosscheck_against("finnhub", ...)
     (deliberate, not auto-run on every ticker — only the ones we're about to
@@ -163,7 +164,7 @@ def fetch_premarket_movers(
         if prev is None:
             prev = fi_prev
         chg = _pct(price, prev)
-        if chg is not None and abs(chg) >= 0.5:
+        if chg is not None and abs(chg) >= PREMARKET_MOVER_MIN_PCT:
             try:
                 xcheck = _data.crosscheck_against("finnhub", sym, price, prev)
             except Exception:

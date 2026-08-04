@@ -20,9 +20,11 @@ import yfinance as _yf
 from datetime import datetime as _datetime
 import pytz as _pytz
 
-_LOOKBACK_DAYS    = 730    # 2 years of split history
-_MIN_DISTORTION   = 0.35   # skip if cost vs price gap < 35%
-_MAX_ADJ_DISTANCE = 0.60   # adj_cost must be within 60% of current price
+from stock_analyzer.constants import (
+    SPLIT_DETECT_LOOKBACK_DAYS as _LOOKBACK_DAYS,
+    SPLIT_DETECT_MIN_DISTORTION as _MIN_DISTORTION,
+    SPLIT_DETECT_MAX_ADJ_DISTANCE as _MAX_ADJ_DISTANCE,
+)
 
 
 def _today_et():
@@ -30,16 +32,29 @@ def _today_et():
 
 
 def fetch_splits(ticker: str, lookback_days: int = _LOOKBACK_DAYS) -> _pd.Series:
-    """Return yfinance split history within the lookback window."""
+    """Return yfinance split history within the lookback window.
+
+    Routed through the shared yfinance timeout/retry wrapper (bounded to
+    DATA_YF_REQUEST_TIMEOUT_SEC, with rate-limit backoff) instead of a bare
+    `yf.Ticker(ticker).splits` call — that used to have no timeout at all and
+    could hang on a TCP-level stall for the OS socket timeout. A fetch
+    failure is now recorded to api_health (visible on Data Health) via the
+    shared wrapper, rather than silently swallowed by a bare `except
+    Exception: return empty` (2026-08-04 audit finding). Still returns an
+    empty Series either way (genuinely-no-splits and fetch-failed remain
+    indistinguishable to the caller — a further contract change, not done
+    here to avoid a breaking change to detect_portfolio_splits' return
+    shape; the fetch failure is at least now observable in Data Health).
+    """
+    from stock_analyzer.providers.yfinance_provider import _retry
     try:
-        t      = _yf.Ticker(ticker)
-        splits = t.splits
-        if splits is None or splits.empty:
-            return _pd.Series(dtype=float)
-        cutoff = _pd.Timestamp.now(tz="UTC") - _pd.Timedelta(days=lookback_days)
-        return splits[splits.index >= cutoff]
+        splits = _retry(lambda: _yf.Ticker(ticker).splits)
     except Exception:
         return _pd.Series(dtype=float)
+    if splits is None or splits.empty:
+        return _pd.Series(dtype=float)
+    cutoff = _pd.Timestamp.now(tz="UTC") - _pd.Timedelta(days=lookback_days)
+    return splits[splits.index >= cutoff]
 
 
 def cumulative_ratio(splits: _pd.Series) -> float:

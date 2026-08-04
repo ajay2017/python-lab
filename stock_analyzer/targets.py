@@ -25,23 +25,47 @@ def _atr_val(df: pd.DataFrame, length: int = 14) -> float:
     return float((df["High"] - df["Low"]).tail(length).mean())
 
 
-def support_resistance(df: pd.DataFrame, lookback: int = 60) -> dict:
+def support_resistance(
+    df: pd.DataFrame, lookback: int = 60, current_price: float | None = None
+) -> dict:
+    """
+    resistances/supports: the 3 STRONGEST levels in the lookback window
+    (highest local highs / lowest local lows by magnitude) — unaffected by
+    current_price, a "where has this stock historically turned" read.
+
+    nearest_resistance/nearest_support: the closest level to current_price
+    in the correct direction (resistance above, support below) — genuinely
+    "nearest," not just the most extreme of the top-3 strongest. Requires
+    current_price; without it, falls back to the strongest level (the old
+    behavior, kept for any caller that doesn't have a price yet). 2026-08-04
+    audit finding: nearest_* used to always be the single most-extreme
+    local high/low regardless of distance to price, despite the field name.
+    """
     recent = df.tail(lookback)
     high = recent["High"]
     low = recent["Low"]
 
     window = 5
-    local_highs = high[high == high.rolling(window, center=True).max()].dropna()
-    local_lows = low[low == low.rolling(window, center=True).min()].dropna()
+    local_highs = high[high == high.rolling(window, center=True).max()].dropna().tolist()
+    local_lows = low[low == low.rolling(window, center=True).min()].dropna().tolist()
 
-    resistances = sorted(local_highs.tolist(), reverse=True)[:3]
-    supports = sorted(local_lows.tolist())[:3]
+    resistances = sorted(local_highs, reverse=True)[:3]
+    supports = sorted(local_lows)[:3]
+
+    if current_price is not None:
+        above = [h for h in local_highs if h >= current_price]
+        nearest_resistance = min(above) if above else (max(local_highs) if local_highs else None)
+        below = [l for l in local_lows if l <= current_price]
+        nearest_support = max(below) if below else (min(local_lows) if local_lows else None)
+    else:
+        nearest_resistance = resistances[0] if resistances else None
+        nearest_support = supports[0] if supports else None
 
     return {
         "resistances": [round(r, 2) for r in resistances],
         "supports": [round(s, 2) for s in supports],
-        "nearest_resistance": round(resistances[0], 2) if resistances else None,
-        "nearest_support": round(supports[0], 2) if supports else None,
+        "nearest_resistance": round(nearest_resistance, 2) if nearest_resistance is not None else None,
+        "nearest_support": round(nearest_support, 2) if nearest_support is not None else None,
     }
 
 
@@ -61,7 +85,7 @@ def compute_price_targets(
     _w52l = financials.get("52_week_low")
     week52_low = _w52l if _w52l is not None else current_price * TARGETS_52W_LOW_FALLBACK_MULT
 
-    sr = support_resistance(df)
+    sr = support_resistance(df, current_price=current_price)
     _sup = sr["nearest_support"]
     nearest_support = _sup if _sup is not None else current_price * TARGETS_SUPPORT_FALLBACK_MULT
     nearest_resistance = sr["nearest_resistance"]
