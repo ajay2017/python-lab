@@ -18,11 +18,17 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-07-30 (sector-diversification feature session)
+## 1. Latest run — 2026-08-04 (baseline refresh ahead of full-codebase audit)
 
-**2909 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 24.54s; `pytest
-tests/ --cov=stock_analyzer --cov-report=term-missing -q`: 30.37s — TOTAL
-14148 stmts, 3739 missed, **74%** overall coverage). Python (local `.venv`).
+**3120 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 27.84s; `pytest
+tests/ --cov=stock_analyzer --cov-report=term-missing -q`: 27.93s — TOTAL
+15112 stmts, 3913 missed, **74%** overall coverage). Python (local `.venv`).
+Run to refresh the baseline before the 2026-08-04 full audit (`docs/reviews/2026-08-04-review.md`)
+— 5 days and several decision-adjacent features (The Judge Phases 3-4, F-228
+Pre-Mortem enforcement) had shipped since the last recorded run with no
+fresh pass/fail check in between. The 2909→3120 delta (+211) is organic
+test growth from those sessions, not independently itemized here; see git
+log for the per-commit test additions.
 
 **Note on the jump from 1108 (2026-07-28) to 2909:** the large majority of
 this growth is from the test-coverage-backlog project (memory
@@ -195,6 +201,15 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-08-04 — Baseline refresh + full-codebase audit, 3120/3120 passing
+
+No test changes this session — this is a pure baseline refresh. Full suite
+re-run (3120 passed, 74% coverage, see §1) ahead of a full-codebase `/audit
+--full` sweep (`docs/reviews/2026-08-04-review.md`), triggered by 5 days
+without an independent test/audit check spanning two decision-adjacent
+feature builds (The Judge Phases 3-4, F-228 Pre-Mortem enforcement — see
+`git log`). The audit's findings are tracked in the review doc, not here.
 
 ### 2026-07-30 — Sector-diversification feature (F-222/F-223): 6 new tests, full suite re-run at 2909/2909 passing
 
