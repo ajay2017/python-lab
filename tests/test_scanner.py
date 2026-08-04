@@ -389,6 +389,16 @@ def test_scan_sectors_extra_ticker_already_in_sector_keeps_real_sector(monkeypat
 
 # ─── scan_movers — empty ticker list skips the network call ─────────────────
 
+def test_scan_movers_default_threshold_matches_governed_constant():
+    # 2026-08-04 audit finding: the default was a bare 4.0, dormant/wrong
+    # relative to the governed MOVER_MIN_DAY_GAIN_PCT (5.0) since the one
+    # call site always passed the constant explicitly.
+    import inspect
+    from stock_analyzer.constants import MOVER_MIN_DAY_GAIN_PCT
+    default = inspect.signature(scanner.scan_movers).parameters["min_day_gain_pct"].default
+    assert default == MOVER_MIN_DAY_GAIN_PCT
+
+
 def test_scan_movers_empty_ticker_list_skips_network_call(monkeypatch):
     fake = _FakeYF(pd.DataFrame())
     monkeypatch.setattr(scanner, "yf", fake)

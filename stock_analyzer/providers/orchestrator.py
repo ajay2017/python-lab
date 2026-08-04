@@ -102,6 +102,12 @@ def _failover_single(capability: str, method: str, *args, **kwargs):
         except ProviderUnavailable as exc:
             last_exc = exc
             continue
+        except NotImplementedError:
+            # base.py's own contract: a capable provider never has an
+            # unimplemented method called on it, so this is a real
+            # programming-error regression, not a data hiccup — must not be
+            # masked as "try the next provider."
+            raise
         except Exception as exc:
             last_exc = exc
             continue

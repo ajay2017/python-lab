@@ -192,6 +192,18 @@ def test_calibration_by_sector_broad_exactly_75():
     assert list(out["Tech"].keys()) == ["75+"]
 
 
+def test_calibration_by_sector_broad_bands_source_from_constants_not_literals(monkeypatch):
+    # 2026-08-04 audit finding: _broad()'s 65/75 boundaries were bare literals
+    # duplicating COMPOSITE_BUY/COMPOSITE_STRONG_BUY. Monkeypatching the
+    # constants and confirming the label boundary shifts proves the fix reads
+    # them dynamically -- the boundary tests above alone wouldn't catch a
+    # regression back to hardcoded literals, since today's values coincide.
+    monkeypatch.setattr(pa, "COMPOSITE_BUY", 50)
+    monkeypatch.setattr(pa, "COMPOSITE_STRONG_BUY", 80)
+    out = pa.calibration_by_sector(_sector_rows("Tech", 60.0, 3))
+    assert list(out["Tech"].keys()) == ["50–79"]
+
+
 def test_calibration_by_sector_cell_below_min_n_omitted():
     out = pa.calibration_by_sector(_sector_rows("Tech", 70.0, 2), min_n=3)
     assert out == {}

@@ -10,6 +10,14 @@ from stock_analyzer.technicals import compute_indicators, technical_score
 from stock_analyzer.indicators import rsi as _rsi_fn
 
 
+# ─── technical_score — empty DataFrame guard (2026-08-04 audit) ─────────────
+
+def test_technical_score_empty_df_returns_neutral_not_indexerror():
+    score, signals = technical_score(pd.DataFrame())
+    assert score == 50.0
+    assert signals == {}
+
+
 # ─── compute_indicators — NaN-Close drop-before-compute ─────────────────────
 
 def test_compute_indicators_drops_nan_close_row_before_computing():

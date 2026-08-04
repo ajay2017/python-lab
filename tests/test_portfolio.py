@@ -16,6 +16,7 @@ import pytest
 from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD, CORR_HIGH_PAIRS_THRESHOLD
 from stock_analyzer.portfolio import (
     alerts,
+    build_portfolio_df,
     diversification_score,
     manual_stop_wins,
     protective_stop,
@@ -388,3 +389,74 @@ def test_alerts_pt_cut_no_signal_produces_no_pt_alert():
     }}
     result2 = alerts(port_df, held_data, pt_cut_signals=pt_cut_signals)
     assert _pt_alerts(result2) == []
+
+
+# ── build_portfolio_df — dropped-holdings visibility (2026-08-04 audit) ──────
+# Never silently filter: a holding dropped for invalid shares/avg_cost must be
+# reportable, not vanish with no trace. Uses pandas .attrs (pure metadata, no
+# signature change) so app.py can render a banner without touching the 3
+# existing call sites' contract.
+
+def _loaded_row(price=100.0, stop=90.0):
+    return {
+        "current_price": price, "stop": stop, "sector": "Technology",
+        "rec": {"icon": "🟢", "label": "Buy"}, "total": 70,
+    }
+
+
+def test_build_portfolio_df_valid_holding_has_empty_dropped_list():
+    holdings = [{"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0}]
+    df = build_portfolio_df(holdings, {"AAA": _loaded_row()})
+    assert df.attrs["dropped_holdings"] == []
+    assert list(df["Ticker"]) == ["AAA"]
+
+
+def test_build_portfolio_df_zero_shares_is_dropped_and_reported():
+    holdings = [{"Ticker": "BBB", "Shares": 0, "Avg Cost ($)": 50.0}]
+    df = build_portfolio_df(holdings, {"BBB": _loaded_row()})
+    assert df.empty
+    assert df.attrs["dropped_holdings"] == [{"ticker": "BBB", "shares": 0.0, "avg_cost": 50.0}]
+
+
+def test_build_portfolio_df_invalid_avg_cost_is_dropped_and_reported():
+    holdings = [{"Ticker": "CCC", "Shares": 10, "Avg Cost ($)": 0}]
+    df = build_portfolio_df(holdings, {"CCC": _loaded_row()})
+    assert df.attrs["dropped_holdings"] == [{"ticker": "CCC", "shares": 10.0, "avg_cost": 0.0}]
+
+
+def test_build_portfolio_df_mixed_valid_and_invalid_holdings():
+    holdings = [
+        {"Ticker": "AAA", "Shares": 10, "Avg Cost ($)": 50.0},
+        {"Ticker": "BBB", "Shares": -5, "Avg Cost ($)": 50.0},
+    ]
+    df = build_portfolio_df(holdings, {"AAA": _loaded_row(), "BBB": _loaded_row()})
+    assert list(df["Ticker"]) == ["AAA"]
+    assert df.attrs["dropped_holdings"] == [{"ticker": "BBB", "shares": -5.0, "avg_cost": 50.0}]
+
+
+def test_build_portfolio_df_missing_ticker_not_added_to_dropped_list():
+    # A row with no ticker at all isn't a reportable "skipped holding" -- it's
+    # not a holding to begin with (e.g. a stray blank row).
+    holdings = [{"Ticker": "", "Shares": 10, "Avg Cost ($)": 50.0}]
+    df = build_portfolio_df(holdings, {})
+    assert df.attrs["dropped_holdings"] == []
+
+
+# ── alerts() — earnings-date parse failure isolation (2026-08-04 audit) ─────
+# Was a bare `except Exception: pass`; narrowed to (ValueError, TypeError) so
+# a genuine bug elsewhere can't be silently masked as a routine bad-date.
+
+def test_alerts_malformed_earnings_date_string_does_not_crash():
+    ticker = "AAA"
+    port_df = _one_holding_port_df(ticker)
+    held_data = {ticker: {"earnings": "not-a-date"}}
+    result = alerts(port_df, held_data)
+    assert [a for a in result if a["category"] == "earnings"] == []
+
+
+def test_alerts_non_string_earnings_value_does_not_crash():
+    ticker = "AAA"
+    port_df = _one_holding_port_df(ticker)
+    held_data = {ticker: {"earnings": 12345}}
+    result = alerts(port_df, held_data)
+    assert [a for a in result if a["category"] == "earnings"] == []

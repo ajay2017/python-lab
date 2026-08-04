@@ -270,11 +270,14 @@ def build_portfolio_df(
     """
     manual_stops = manual_stops or {}
     rows = []
+    dropped: list[dict] = []
     for h in holdings:
         ticker = str(h.get("Ticker", h.get("ticker", "")) or "").strip().upper()
         shares = _safe_float(h.get("Shares", h.get("shares")))
         avg_cost = _safe_float(h.get("Avg Cost ($)", h.get("avg_cost")))
         if not ticker or shares <= 0 or avg_cost <= 0:
+            if ticker:
+                dropped.append({"ticker": ticker, "shares": shares, "avg_cost": avg_cost})
             continue
         r = loaded_data.get(ticker)
         if not r or not r.get("current_price"):
@@ -351,6 +354,11 @@ def build_portfolio_df(
             # failed. Leave Weight at its 0.0 default rather than letting
             # inf/NaN propagate into rebalancer / risk_advisor / brief gates.
             df["Weight (%)"] = 0.0
+    # Never silently filter (CLAUDE.md UI-suppression rule) — pandas .attrs is
+    # pure metadata (no signature/call-site change for the 3 existing callers,
+    # invisible to DataFrame equality/column checks), read by app.py to render
+    # a visible banner for whichever holdings got dropped above.
+    df.attrs["dropped_holdings"] = dropped
     return df
 
 
@@ -477,7 +485,11 @@ def alerts(
                             "level": "warning", "category": "earnings",
                             "msg": f"📅 **{ticker}** reports earnings in {days} days ({earn}) — review ahead of report",
                         })
-                except Exception:
+                except (ValueError, TypeError):
+                    # Malformed/missing earnings-date string from the provider —
+                    # isolate to this ticker, same as every other per-ticker loop
+                    # in this file. Anything else (a real bug) must surface, not
+                    # vanish silently.
                     pass
 
             # Analyst revision spike

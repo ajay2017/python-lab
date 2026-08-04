@@ -123,6 +123,7 @@ from stock_analyzer.constants import (
     TRADE_PRICE_SANITY_RATIO_LOW,
     TRADE_PRICE_SANITY_RATIO_HIGH,
     TRADE_DUP_SUBMIT_WINDOW_SEC,
+    ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS,
     WATCHLIST_STALE_DAYS,
     PREMATURE_EXIT_RATIO,
     PREMATURE_EXIT_MIN_LOTS,
@@ -1815,6 +1816,14 @@ def _render_portfolio_stale_banner(key_suffix: str = "") -> None:
             st.session_state["_pending_page"] = "🏠 Home"
             st.rerun()
         return
+    _pd_dropped = getattr(st.session_state.get("_last_port_df"), "attrs", {}).get("dropped_holdings") or []
+    if _pd_dropped:
+        st.warning(
+            f"⚠️ {len(_pd_dropped)} holding(s) skipped — invalid shares or cost basis: "
+            + ", ".join(str(d.get("ticker", "?")) for d in _pd_dropped)
+            + ". Check the entry for these tickers."
+        )
+
     if not _portfolio_snapshot_stale():
         return
     st.warning(
@@ -3589,6 +3598,14 @@ if page == "🏠 Home":
     )
     st.session_state["_signals_computed_at"] = datetime.now().strftime("%I:%M %p")  # for staleness warning
 
+    _pd_dropped = port_df.attrs.get("dropped_holdings") or []
+    if _pd_dropped:
+        st.warning(
+            f"⚠️ {len(_pd_dropped)} holding(s) skipped — invalid shares or cost basis: "
+            + ", ".join(str(d.get("ticker", "?")) for d in _pd_dropped)
+            + ". Check the entry for these tickers."
+        )
+
     if port_df.empty:
         # Distinguish "no holdings yet" from "you HAVE holdings but the heavy
         # data bundle (history + fundamentals) failed for all of them". The old
@@ -5087,7 +5104,17 @@ if page == "🏠 Home":
         _struct_alert_clusters_today = portfolio_intelligence.correlation_clusters(
             corr_df, _struct_alert_weights
         )
-        _struct_alert_baseline = db.load_structural_scan_baseline(str(_today_et()))
+        # Memoize just the Supabase round-trip by date (2026-08-04 audit finding
+        # -- was an unconditional DB call on every Home render/warm rerun). The
+        # baseline only changes when the Structural Scanner page saves a new
+        # scan, which explicitly invalidates this key (app.py, save_structural_
+        # scan_cache call site) so the self-clearing behavior in the comment
+        # above still holds within the same day. clusters_today/detect_new_
+        # clusters stay live every render (cheap, local, no I/O).
+        _struct_alert_baseline_key = f"_struct_alert_baseline_{_today_et()}"
+        if _struct_alert_baseline_key not in st.session_state:
+            st.session_state[_struct_alert_baseline_key] = db.load_structural_scan_baseline(str(_today_et()))
+        _struct_alert_baseline = st.session_state[_struct_alert_baseline_key]
         _struct_alert_baseline_snapshot = (
             _struct_alert_baseline.get("cluster_snapshot") if _struct_alert_baseline else None
         )
@@ -12453,6 +12480,10 @@ elif page == "🧩 Intelligence":
                                 cluster_snapshot=_ss_clusters,
                                 risk_budget_snapshot=_ss_rb["positions"][:3],
                             )
+                            # Invalidate Home's memoized baseline (app.py ~5099)
+                            # so its structural-alert banner picks up THIS fresh
+                            # scan immediately, not next calendar day.
+                            st.session_state.pop(f"_struct_alert_baseline_{_ss_scan_date}", None)
                             st.rerun()
                         else:
                             st.warning("Narrative generation failed — API unavailable or rate-limited. Try again.")
@@ -18635,7 +18666,7 @@ elif page == "📈 Analysis":
 
     # Analysis summary
     with st.expander("📋 Analysis Summary"):
-        today_str = date.today().strftime("%B %d, %Y")
+        today_str = _today_et().strftime("%B %d, %Y")
         lines = [f"# Investment Brief — {today_str}",
                  f"Portfolio: ${portfolio_value:,.0f} · Moderate Risk\n\n---"]
         for ticker, r in results.items():
@@ -18664,7 +18695,7 @@ elif page == "📈 Analysis":
         st.markdown(brief)
         st.download_button(
             "⬇️ Download Brief", data=brief,
-            file_name=f"brief_{date.today()}.md", mime="text/markdown",
+            file_name=f"brief_{_today_et()}.md", mime="text/markdown",
         )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -24789,8 +24820,11 @@ elif page == "📊 Predictive Analytics":
                     st.session_state.pop("_entry_timing_cache", None)
                     st.rerun()
 
-    # ── Alpha Attribution — activates after 180 days of snapshots ───────────
-    with st.expander("📊 Alpha Attribution — activates after 180 days of snapshots", expanded=False):
+    # ── Alpha Attribution — activates after ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS days of snapshots ───
+    with st.expander(
+        f"📊 Alpha Attribution — activates after {ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS} days of snapshots",
+        expanded=False,
+    ):
         st.info(
             "**Coming once you have 6+ months of daily portfolio snapshots.**  \n\n"
             "Factor attribution decomposes your realized alpha into the dimensions "
@@ -24815,14 +24849,18 @@ elif page == "📊 Predictive Analytics":
                 _pa_c3.metric(
                     "Coverage",
                     f"{_pa_days_cov} days",
-                    delta=f"{_pa_days_cov - 180:+d} vs 180-day target",
+                    delta=f"{_pa_days_cov - ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS:+d} vs "
+                          f"{ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS}-day target",
                     delta_color="normal",
                 )
-                if _pa_days_cov < 180:
+                if _pa_days_cov < ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS:
                     st.progress(
-                        min(_pa_days_cov / 180, 1.0),
-                        text=f"{min(int(_pa_days_cov/180*100),100)}% to activation — "
-                             f"{180 - _pa_days_cov} more days needed",
+                        min(_pa_days_cov / ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS, 1.0),
+                        text=(
+                            f"{min(int(_pa_days_cov / ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS * 100), 100)}"
+                            f"% to activation — "
+                            f"{ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS - _pa_days_cov} more days needed"
+                        ),
                     )
             else:
                 st.caption("No daily snapshots recorded yet.")
@@ -25637,7 +25675,7 @@ elif page == "🔔 Catalyst Watch":
                 for _cand in _cw_candidates:
                     _rxn_emoji = {"bullish": "🟢", "mixed": "🟡"}.get(_cand["reaction"], "🟡")
                     with st.expander(
-                        f"🎯 **{_cand['ticker']}** · Beat rate {_cand['beat_rate']:.0f}% · "
+                        f"**{_cand['ticker']}** · Beat rate {_cand['beat_rate']:.0f}% · "
                         f"Score {_cand['score']:.0f} · {_cand['earn_date']} ({_cand['days_until']}d) "
                         f"· {_rxn_emoji} {_cand['reaction'].capitalize()} reaction",
                         expanded=False,
@@ -25652,7 +25690,7 @@ elif page == "🔔 Catalyst Watch":
                         st.caption("  ·  ".join(_info_parts))
                         if _cand["what_to_watch_cnbc"]:
                             st.caption(f"What to watch (CNBC): {_cand['what_to_watch_cnbc']}")
-                        if st.button("▶ Analyse", key=f"_cw_cand_analyze_{_cand['ticker']}"):
+                        if st.button("🔍 Research on Analysis page", key=f"_cw_cand_analyze_{_cand['ticker']}"):
                             st.session_state["_pending_page"]    = "📈 Analysis"
                             st.session_state["_analysis_ticker"] = _cand["ticker"]
                             st.rerun()
@@ -27263,7 +27301,7 @@ The taxonomy is fixed so patterns stay comparable across months and years — it
         with st.expander("📚 Glossary & external references", expanded=False):
             st.markdown(
                 """
-- **Composite** — the blended 0–100 score (Technical + Fundamental + Sentiment).
+- **Composite** — the blended 0–100 score (Technical + Fundamental + Valuation + Sentiment).
 - **Momentum** — a single-factor breakout signal; necessary but not sufficient for a Buy.
 - **Lifecycle (Settling / Winning / At Risk)** — where a held position is in its life, used to decide which nudges are worth showing.
 - **Act vs Awareness vs Tune-up** — decision-today / FYI / standing-quality, respectively.

@@ -3,16 +3,20 @@ analytics (trigger-type breakdown, monthly P&L trend, hold-time stats, and
 the coaching-card behavioral insights engine). Previously zero test coverage
 despite being real decision logic feeding a user-facing page. Pure logic,
 no I/O — except `_build_overtrading_stats` and `build_full_analytics`, which
-call `datetime.utcnow()` internally (tested by constructing trade dates
-relative to `datetime.utcnow()` at run time, not hardcoded dates).
+call `datetime.now(_ET)` internally (NY-local, 2026-08-04 audit fix — was a
+naive `datetime.utcnow()`; tested by constructing trade dates relative to
+`datetime.now(_ET)` at run time, not hardcoded dates).
 """
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import pytest
+import pytz
 
 from stock_analyzer import trade_analytics as ta
+
+_ET = pytz.timezone("America/New_York")
 
 
 # ─── builders ───────────────────────────────────────────────────────────────
@@ -81,9 +85,11 @@ def test_pnl_pct_zero_invested_returns_none():
     assert ta._pnl_pct(100.0, 50.0, 0) is None
 
 
-def test_pnl_pct_zero_pnl_returns_none_not_zero():
-    # Documented edge case: pnl == 0 returns None, not 0.0.
-    assert ta._pnl_pct(0.0, 50.0, 10) is None
+def test_pnl_pct_zero_pnl_with_valid_invested_returns_zero_not_none():
+    # 2026-08-04 audit fix: a genuine breakeven trade (pnl == 0, invested > 0)
+    # must be distinguishable from "no data" (invested <= 0 -> None).
+    assert ta._pnl_pct(0.0, 50.0, 10) == 0.0
+    assert ta._pnl_pct(0.0, 50.0, 10) is not None
 
 
 def test_pnl_pct_positive_calculation():
@@ -249,19 +255,20 @@ def test_build_hold_time_stats_happy_path():
 # ─── _build_overtrading_stats ────────────────────────────────────────────────
 
 def _months_ago(n_months, day=15):
-    """Return an ISO date string exactly n_months before utcnow()'s calendar
-    month (day fixed at the 15th to dodge month-length edge cases), using
-    real month arithmetic via pd.DateOffset — NOT a 30-day approximation,
-    which drifts a full calendar month off near month boundaries (e.g. 90
-    days before day 29 of a month lands one month short), corrupting the
-    "1 distinct trade per prior month" fixture this helper exists to build."""
-    dt = pd.Timestamp.utcnow().replace(day=min(day, 28)) - pd.DateOffset(months=n_months)
+    """Return an ISO date string exactly n_months before today's (NY-local,
+    matching production's `_dt.now(_ET)`) calendar month (day fixed at the
+    15th to dodge month-length edge cases), using real month arithmetic via
+    pd.DateOffset — NOT a 30-day approximation, which drifts a full calendar
+    month off near month boundaries (e.g. 90 days before day 29 of a month
+    lands one month short), corrupting the "1 distinct trade per prior month"
+    fixture this helper exists to build."""
+    dt = pd.Timestamp(datetime.now(_ET)).replace(day=min(day, 28), tzinfo=None) - pd.DateOffset(months=n_months)
     return dt.strftime("%Y-%m-%d")
 
 
 def test_build_overtrading_stats_insufficient_history_returns_empty():
     # Only the current month present -> < 2 distinct months -> {}.
-    current = datetime.utcnow().strftime("%Y-%m-15")
+    current = datetime.now(_ET).strftime("%Y-%m-15")
     df = _trades_df([_buy(traded_at=current), _sell(traded_at=current)])
     assert ta._build_overtrading_stats(df) == {}
 
@@ -272,7 +279,7 @@ def test_build_overtrading_stats_happy_path_elevated():
     rows = []
     for n in range(3, 0, -1):
         rows.append(_buy(ticker="AAA", traded_at=_months_ago(n)))
-    current = datetime.utcnow().strftime("%Y-%m-%d")
+    current = datetime.now(_ET).strftime("%Y-%m-%d")
     for _ in range(4):
         rows.append(_sell(ticker="AAA", traded_at=current, realized_pnl=10.0))
     df = _trades_df(rows)
@@ -287,7 +294,7 @@ def test_build_overtrading_stats_not_elevated_below_threshold():
     rows = []
     for n in range(3, 0, -1):
         rows.append(_buy(ticker="AAA", traded_at=_months_ago(n)))
-    current = datetime.utcnow().strftime("%Y-%m-%d")
+    current = datetime.now(_ET).strftime("%Y-%m-%d")
     rows.append(_sell(ticker="AAA", traded_at=current, realized_pnl=10.0))
     df = _trades_df(rows)
     stats = ta._build_overtrading_stats(df)
@@ -518,7 +525,7 @@ def test_build_full_analytics_no_sell_rows_returns_empty_shape():
 def test_build_full_analytics_happy_path_multi_month_history():
     rows = []
     for n in range(3, -1, -1):
-        d = _months_ago(n) if n > 0 else datetime.utcnow().strftime("%Y-%m-%d")
+        d = _months_ago(n) if n > 0 else datetime.now(_ET).strftime("%Y-%m-%d")
         rows.append(_buy(ticker="AAA", traded_at=d))
         rows.append(_sell(ticker="AAA", traded_at=d, realized_pnl=25.0, cost_basis=50.0, shares=10))
     df = _trades_df(rows)

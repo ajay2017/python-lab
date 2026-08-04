@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 from stock_analyzer.indicators import sma, rsi as calc_rsi
+from stock_analyzer.constants import MOVER_MIN_DAY_GAIN_PCT
 
 SECTOR_UNIVERSE = {
     "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "WDAY"],
@@ -227,7 +228,7 @@ def _day_change_pct(close: pd.Series) -> float | None:
     return (float(c.iloc[-1]) / prev - 1) * 100
 
 
-def scan_movers(tickers: list[str], min_day_gain_pct: float = 4.0,
+def scan_movers(tickers: list[str], min_day_gain_pct: float = MOVER_MIN_DAY_GAIN_PCT,
                 period: str = "3mo") -> pd.DataFrame:
     """
     Scan a broad ticker list for today's biggest 1-day GAINERS.

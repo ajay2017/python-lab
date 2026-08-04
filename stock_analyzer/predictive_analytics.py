@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, Callable
 
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_STRONG_BUY
+
 
 # ── Signal Calibration ─────────────────────────────────────────────────────────
 
@@ -122,11 +124,11 @@ def calibration_by_sector(
     average built on a single data point.
     """
     def _broad(score: float) -> str:
-        if score < 65:
-            return "< 65"
-        if score < 75:
-            return "65–74"
-        return "75+"
+        if score < COMPOSITE_BUY:
+            return f"< {COMPOSITE_BUY:.0f}"
+        if score < COMPOSITE_STRONG_BUY:
+            return f"{COMPOSITE_BUY:.0f}–{COMPOSITE_STRONG_BUY - 1:.0f}"
+        return f"{COMPOSITE_STRONG_BUY:.0f}+"
 
     acc: dict[str, dict[str, list[float]]] = {}
 

@@ -12,7 +12,10 @@ Turns raw trade history into PM-level self-awareness:
 
 import pandas as pd
 import numpy as np
+import pytz as _pytz
 from datetime import datetime as _dt
+
+_ET = _pytz.timezone("America/New_York")
 
 
 def _safe_float(val, default=0.0):
@@ -35,13 +38,13 @@ def _parse_dt(val):
 
 
 def _pnl_pct(realized_pnl, cost_basis, shares):
-    """Return % gain/loss on the invested capital."""
+    """Return % gain/loss on the invested capital. A genuine breakeven trade
+    (pnl == 0 with valid invested capital) returns 0.0, distinct from None
+    ("no data" — invested capital unknown)."""
     invested = _safe_float(cost_basis) * _safe_float(shares)
     if invested <= 0:
         return None
     pnl = _safe_float(realized_pnl)
-    if pnl == 0:
-        return None
     return round(pnl / invested * 100, 2)
 
 
@@ -217,7 +220,7 @@ def _build_overtrading_stats(trades_df: pd.DataFrame) -> dict:
     if len(monthly_counts) < 2:
         return {}
 
-    current_month = _dt.utcnow().strftime("%Y-%m")
+    current_month = _dt.now(_ET).strftime("%Y-%m")
     current_count = int(monthly_counts.get(current_month, 0))
 
     # Exclude the current (possibly partial) month from the baseline avg

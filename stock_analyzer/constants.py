@@ -1300,3 +1300,9 @@ TRADE_PRICE_SANITY_FLOOR      = 0.10  # entered price below this = probable typo
 TRADE_PRICE_SANITY_RATIO_LOW  = 0.5   # entered-price / live-market-price below this = probable typo
 TRADE_PRICE_SANITY_RATIO_HIGH = 2.0   # ...above this = probable typo
 TRADE_DUP_SUBMIT_WINDOW_SEC   = 15    # identical (ticker, action, shares) resubmit within this window = dedup guard
+
+# ── Alpha Attribution activation gate (app.py, AI Insights panel) — the
+# panel is inert until enough daily_snapshots history accumulates to
+# decompose realized alpha meaningfully. Was 8 bare literal copies of "180"
+# (2026-08-04 audit finding); feature not yet active.
+ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS = 180

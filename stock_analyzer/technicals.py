@@ -48,6 +48,12 @@ def technical_score(df: pd.DataFrame) -> tuple[float, dict]:
     points  = 0
     max_pts = 0
 
+    # An empty df (df.iloc[-1] would IndexError) hits the same "nothing
+    # computed" outcome the max_pts==0 branch below already returns for a
+    # non-empty-but-all-NaN bar — same sentinel, just reached earlier.
+    if df.empty:
+        return 50.0, signals
+
     latest = df.iloc[-1]
     prev   = df.iloc[-2] if len(df) > 1 else latest
 
