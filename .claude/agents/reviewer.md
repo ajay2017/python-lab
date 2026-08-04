@@ -2,11 +2,16 @@
 name: reviewer
 description: >
   Opus-grade review pass for changes that touch decision logic, gates,
-  thresholds (stock_analyzer/constants.py), cross-feature coordination, or the
-  Daily Brief. Use BEFORE committing anything that could affect a recommendation
-  or a gate. Read-only — it reviews and reports, it does not edit. Give it the
-  diff/files and the intent; it returns a verdict (ship / fix-first) with
-  specific findings.
+  thresholds (stock_analyzer/constants.py), cross-feature coordination,
+  DB-write/data-integrity, a new user-facing decision surface, or the Daily
+  Brief. Use BEFORE committing anything that could affect a recommendation or a
+  gate. DON'T invoke it for docs-only, comments, tests-only, pure-additive code
+  not yet wired into a decision path, or mechanical refactors when the suite +
+  antipattern + constants-doc gates are green — the deterministic gates cover
+  those, and Opus review is a paid judgment step to spend where a wrong call
+  moves money (see CLAUDE.md "Review & test economy"). Read-only — it reviews
+  and reports, it does not edit. Give it the diff/files and the intent; it
+  returns a verdict (ship / fix-first) with specific findings.
 tools: Read, Grep, Glob, Bash
 model: opus
 color: red

@@ -77,6 +77,15 @@ def undocumented() -> list[str]:
 
 
 def main() -> int:
+    # The ✅/❌ status lines crash on a Windows cp1252 console (UnicodeEncodeError)
+    # even when the check itself passed. Force utf-8 with replacement so a green
+    # check never reports a false failure on Windows.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
+
     if "--init" in sys.argv:
         miss = undocumented()
         header = (

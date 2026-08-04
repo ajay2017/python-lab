@@ -74,9 +74,21 @@ in `.claude/settings.json`) intercepts `git commit`/`git push` tool calls and:
 - On `push`, always runs the suite first and **blocks the push** the same way
   — this covers a commit that landed before the gate existed, or from another
   session/tool, so a known-failing suite can never reach `origin/main`.
+- **Recurring-defect gate (added 2026-08-04):** on `commit` when a staged file
+  is `app.py`/`cron_runner.py`/under `stock_analyzer/`, and always on `push`,
+  runs `scripts/check_antipatterns.py` and **blocks** (exit 2) if a change
+  introduces a NEW instance of a bug-class our audits keep re-finding
+  (offline-sentinel collapse `.get(...) or []`, dynamic `unsafe_allow_html`,
+  naive `utcnow()`/`date.today()`). It is baseline-gated
+  (`scripts/antipattern_baseline.json`), so the existing tail passes and only
+  new instances fail. Fix at the source (see the shared helpers
+  `stock_analyzer/util.py` `get_or_offline`/`safe_html` and
+  `stock_analyzer/market_time.py` `now_et`/`today_et`), or — if genuinely
+  acceptable — regenerate the baseline deliberately
+  (`python scripts/check_antipatterns.py --init`).
 - Fails open on infra problems (missing `.venv`, pytest not installed, a
-  120s timeout) — warns but does not block, since that's an environment gap,
-  not a code problem.
+  120s timeout, a missing gate script) — warns but does not block, since that's
+  an environment gap, not a code problem.
 
 **Caveat, learned the hard way from the rule #4 citation hook**
 (memory `feedback_hook_enforcement`): a hook edit takes effect for Claude Code
@@ -87,7 +99,10 @@ Claude Code's Bash/PowerShell tools; it is not a real `.git/hooks/` script,
 so a manual `git commit`/`git push` from an external terminal is not covered.
 
 **CI:** `.github/workflows/tests.yml` runs the suite on push/PR touching
-`stock_analyzer/**` or `tests/**`. This is a **pre-push safety net, not a
+`stock_analyzer/**` or `tests/**`; `.github/workflows/antipatterns-check.yml`
+runs `check_antipatterns.py` on push/PR touching `app.py`/`cron_runner.py`/
+`stock_analyzer/**` (a second, independent line behind the local hook, same as
+the docs-sync tripwire). These are a **pre-push safety net, not a
 deploy gate** — neither Streamlit Cloud nor Railway consults GitHub Actions,
 so a red ❌ shows up on the commit but does not block the redeploy. Making it
 a required branch-protection check is deliberately deferred until the suite

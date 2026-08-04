@@ -1,0 +1,37 @@
+name: Anti-pattern check
+
+# Recurring-defect tripwire (scripts/check_antipatterns.py). Fails when a change
+# introduces a NEW instance of a bug-class our audits keep re-finding:
+# offline-sentinel collapse (`.get(...) or []`), dynamic unsafe_allow_html (XSS
+# class), or naive utcnow()/date.today() date math. Baseline-gated so it only
+# fails on new instances, not the existing tail. Pure stdlib; no install step.
+# See project_audit_2026_07_29 / project_audit_2026_08_04 for why this exists.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "cron_runner.py"
+      - "stock_analyzer/**.py"
+      - "scripts/check_antipatterns.py"
+      - "scripts/antipattern_baseline.json"
+  pull_request:
+    paths:
+      - "app.py"
+      - "cron_runner.py"
+      - "stock_analyzer/**.py"
+      - "scripts/check_antipatterns.py"
+      - "scripts/antipattern_baseline.json"
+  workflow_dispatch: {}
+
+jobs:
+  no-new-antipatterns:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Fail on any new recurring-defect instance
+        run: python scripts/check_antipatterns.py

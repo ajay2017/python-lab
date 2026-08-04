@@ -54,12 +54,20 @@ def main() -> None:
         if _touches_tested_code(staged):
             _gate_on_pytest("commit", "committing")
 
+        # Recurring-defect gate (scripts/check_antipatterns.py): block a commit
+        # that introduces a NEW instance of a bug-class our audits keep
+        # re-finding (offline-sentinel collapse, dynamic unsafe_allow_html,
+        # naive utcnow/date.today). Only when in-scope source is staged.
+        if _touches_scanned_code(staged):
+            _gate_on_antipatterns("commit", "committing")
+
     # Always re-check before push, regardless of which files are in the
     # commits being pushed -- push sends whatever HEAD currently is, so one
     # suite run against the working tree covers it. Catches the case where a
     # commit landed before this gate existed, or from another session/tool.
     if is_push:
         _gate_on_pytest("push", "pushing")
+        _gate_on_antipatterns("push", "pushing")
 
     sys.exit(0)
 
@@ -79,6 +87,43 @@ def _gate_on_pytest(noun: str, gerund: str) -> None:
         print(f"WARNING: could not run the regression suite ({detail}) -- not blocking {noun}.", file=sys.stderr)
 
 
+def _gate_on_antipatterns(noun: str, gerund: str) -> None:
+    ok, detail = _run_antipatterns()
+    if ok is False:
+        print(
+            f"BLOCKED (new anti-pattern introduced): scripts/check_antipatterns.py "
+            f"found a NEW instance of a recurring bug-class.\n"
+            f"{detail}\n"
+            f"Fix at the source (see the script's guidance), or — if genuinely "
+            f"acceptable — regenerate the baseline deliberately "
+            f"(python scripts/check_antipatterns.py --init) before {gerund}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    elif ok is None:
+        print(f"WARNING: could not run the anti-pattern gate ({detail}) -- not blocking {noun}.", file=sys.stderr)
+
+
+def _run_antipatterns() -> tuple:
+    """Returns (True, "") when clean, (False, detail) on a new instance,
+    (None, detail) when the gate couldn't run (missing script/python)."""
+    script = os.path.join(os.getcwd(), "scripts", "check_antipatterns.py")
+    if not os.path.isfile(script):
+        return None, "scripts/check_antipatterns.py not found"
+    py = _find_python() or sys.executable  # pure stdlib -- any python works
+    try:
+        r = subprocess.run(
+            [py, script], capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "anti-pattern gate timed out after 60s"
+    except Exception as e:
+        return None, f"could not invoke the gate ({e})"
+    if r.returncode == 0:
+        return True, ""
+    return False, "\n".join((r.stdout or "").strip().splitlines()[-20:])
+
+
 def _get_staged_files() -> list[str]:
     try:
         r = subprocess.run(
@@ -90,13 +135,33 @@ def _get_staged_files() -> list[str]:
         return []
 
 
-# Files whose presence in a commit requires an Opus review citation
+# Files whose presence in a commit requires an Opus review citation (CLAUDE.md
+# Hard Rule #4: constants, a gate, or a scoring/recommendation formula). This is
+# the decision-engine core — a change to any of these can move a real buy/sell
+# call, so the citation is required regardless of how small the diff looks (the
+# 2026-08-04 Critical was a one-char boundary bug a design review had called
+# harmless). Peripheral files that merely *display* or *consume* a score are
+# intentionally NOT here — gating all of them would add friction without
+# protecting a formula. Broadened 2026-08-04 from the original 5 to match Rule
+# #4's written scope (was constants/risk_advisor/exit_advisor/daily_briefing/
+# portfolio only; scoring formulas in scoring.py/pillars/ranking/targets were
+# unguarded).
 _GATE_FILES = {
     "stock_analyzer/constants.py",
     "stock_analyzer/risk_advisor.py",
     "stock_analyzer/exit_advisor.py",
     "stock_analyzer/daily_briefing.py",
     "stock_analyzer/portfolio.py",
+    # scoring / recommendation formulas
+    "stock_analyzer/scoring.py",        # composite assembly + weight application
+    "stock_analyzer/valuation.py",      # valuation pillar
+    "stock_analyzer/technicals.py",     # technical pillar
+    "stock_analyzer/fundamentals.py",   # business-quality pillar
+    "stock_analyzer/ranking.py",        # pick ranking/sort (Grow Today)
+    "stock_analyzer/targets.py",        # price targets + R:R feeding ENTER_NOW
+    "stock_analyzer/risk.py",           # portfolio risk metrics behind risk gates
+    "stock_analyzer/bundle_loader.py",  # verdict assembly + availability gates
+    "stock_analyzer/watchlist_advisor.py",  # emits REMOVE / ENTER_NOW verdicts
 }
 
 
@@ -106,6 +171,14 @@ def _gate_files_staged(staged: list[str]) -> list[str]:
 
 def _touches_tested_code(staged: list[str]) -> bool:
     return any(f.startswith("stock_analyzer/") or f.startswith("tests/") for f in staged)
+
+
+def _touches_scanned_code(staged: list[str]) -> bool:
+    """Files the anti-pattern gate scans (mirrors TARGETS in check_antipatterns.py)."""
+    return any(
+        f == "app.py" or f == "cron_runner.py" or f.startswith("stock_analyzer/")
+        for f in staged
+    )
 
 
 def _has_review_citation(command: str) -> bool:
