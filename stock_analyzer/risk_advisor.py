@@ -14,6 +14,8 @@ from collections import defaultdict
 
 from stock_analyzer.earnings_advisor import _today_et
 from stock_analyzer.constants import (
+    DEFENSIVE_DIVERSIFIER_MIN_PCT,
+    DEFENSIVE_DIVERSIFIER_MAX_PCT,
     DRAWDOWN_CONTRIB_MAX,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
@@ -68,9 +70,16 @@ def build_risk_advisor_recommendations(
     portfolio_value: float,
     gate_denom: float | None = None,
     trades_df: pd.DataFrame | None = None,
-) -> list[dict]:
+) -> list[dict] | None:
     """
-    Returns a ranked list of recommendation dicts.  Each dict has:
+    Returns a ranked list of recommendation dicts, or None if risk/portfolio
+    data isn't available to compute one (offline sentinel — house contract:
+    a producer fails to None, never a silently-cached-as-healthy []). A
+    healthy portfolio that was actually checked always gets at least one
+    ok_* card, so an empty list should not occur in practice; None is
+    reserved for the two genuine failure paths below.
+
+    Each dict has:
 
       priority        : "HIGH" | "MEDIUM" | "OK"
       type            : "beta" | "sharpe" | "volatility" | "drawdown" | "tail_risk" | "ok_*"
@@ -91,7 +100,7 @@ def build_risk_advisor_recommendations(
       normal trim candidates once the buy is no longer same-day.
     """
     if not port_risk or port_df.empty:
-        return []
+        return None
 
     recs: list[dict] = []
 
@@ -133,10 +142,10 @@ def build_risk_advisor_recommendations(
     # Don't fabricate a $50k portfolio when the real value is missing —
     # every "saving ~$X in a 10% correction" number would otherwise be
     # plausible-shaped but unrelated to the user's actual capital. Bail
-    # with empty list so the caller renders a "portfolio value missing"
-    # banner instead of confident wrong-data numbers.
+    # with the offline sentinel so the caller renders a "portfolio value
+    # missing" banner instead of confident wrong-data numbers.
     if portfolio_value is None or portfolio_value <= 0:
-        return []
+        return None
     pv = portfolio_value
 
     # ── Concentration-rec basis: whatever `gate_denom` the caller passes ───────
@@ -260,7 +269,8 @@ def build_risk_advisor_recommendations(
                         f"(saving ~${_saved_10:,.0f} in a 10% correction). "
                     ) if trim_ticker else ""
                 ) + (
-                    f"To reach target beta of {target:.1f}, also consider adding 8–10% in a "
+                    f"To reach target beta of {target:.1f}, also consider adding "
+                    f"{DEFENSIVE_DIVERSIFIER_MIN_PCT:.0f}–{DEFENSIVE_DIVERSIFIER_MAX_PCT:.0f}% in a "
                     "defensive sector (Healthcare XLV, Consumer Staples XLP, or Utilities XLU) "
                     "to dilute beta without fully exiting high-conviction names."
                 ),
@@ -425,7 +435,8 @@ def build_risk_advisor_recommendations(
             ),
             "root_tickers": top_vol,
             "recommendation": (
-                "Add 8–12% allocation to a lower-volatility sector: Healthcare (XLV ~16% vol), "
+                f"Add {DEFENSIVE_DIVERSIFIER_MIN_PCT:.0f}–{DEFENSIVE_DIVERSIFIER_MAX_PCT:.0f}% allocation "
+                "to a lower-volatility sector: Healthcare (XLV ~16% vol), "
                 "Consumer Staples (XLP ~14% vol), or Utilities (XLU ~15% vol). "
                 f"A 10% defensive allocation at 15% vol reduces portfolio volatility by "
                 f"approximately {(ann_vol - ann_vol * 0.88):.1f}–{(ann_vol - ann_vol * 0.85):.1f}% annualised."

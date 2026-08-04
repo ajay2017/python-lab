@@ -731,7 +731,10 @@ def build_post_event_analysis(
                 detail = "Limited direct sector exposure. Monitor for indirect spillover."
         elif scenario_key == "bear":
             if sector_move <= -2.0 and weight >= 8.0:
-                action = "REDUCE"
+                # Same underlying "de-risk around this event" action as the
+                # pre-event playbook's PROTECT tier above — kept as one verb
+                # across pre/post so the module doesn't split its own vocabulary.
+                action = "PROTECT"
                 detail = (
                     f"Significant sector headwind ({sector_move:.1f}%) on a {weight:.1f}% position. "
                     f"Review whether thesis is impaired. Consider trimming 25–50% if stop is hit."

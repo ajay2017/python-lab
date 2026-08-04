@@ -53,8 +53,11 @@ def pt_points_from_signal(signal: dict | None) -> float:
 # first threshold the score meets wins.  These are display-copy tuning
 # values, NOT gate/recommendation inputs — tune against live production data
 # for ~1 week, then adjust without Opus review. Escalate to constants.py
-# only if any band ever feeds a gate.
-_LABELS = [
+# only if any band ever feeds a gate. Public name (no leading underscore) —
+# app.py's "how to read this" caption formats from this list rather than
+# hand-duplicating the boundary numbers, which would silently drift the
+# next time these get tuned per the note above.
+EROSION_LABELS = [
     (75, "Breaking"),
     (50, "Eroding"),
     (25, "Softening"),
@@ -84,7 +87,7 @@ def compute_erosion_score(
     score = tier_pts + rs_pts + comp_pts + pt_pts
 
     label = "Intact"
-    for threshold, lbl in _LABELS:
+    for threshold, lbl in EROSION_LABELS:
         if score >= threshold:
             label = lbl
             break

@@ -67,6 +67,7 @@ from stock_analyzer.constants import (
     GROW_MAX_PICKS_DEFAULT,
     GROW_CANDIDATE_OVERFETCH,
     GROW_TODAY_MAX_FUND_AGE_DAYS,
+    DETERIORATION_TRIM_SUGGESTED_PCT,
 )
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
@@ -1383,9 +1384,11 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
                 f"{d['dd_from_peak_pct']:.1f}% from its ${d['peak']:.2f} peak and below "
                 f"the {d['trend_ma']}-day trend."
                 if _is_exit else
-                f"Trim into the weakness. Down {d['dd_from_peak_pct']:.1f}% from its "
-                f"${d['peak']:.2f} peak, below the {d['trend_ma']}-day trend, and lagging "
-                f"the market."
+                f"Trim into the weakness — an approximate {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
+                f"reduction ({max(1, int(d['shares'] * DETERIORATION_TRIM_SUGGESTED_PCT / 100.0))} of "
+                f"{d['shares']} shares) is a reasonable floor. Down {d['dd_from_peak_pct']:.1f}% "
+                f"from its ${d['peak']:.2f} peak, below the {d['trend_ma']}-day trend, and "
+                f"lagging the market."
             ),
             "why": (
                 f"Drawdown {d['dd_from_peak_pct']:.1f}% (trigger "
@@ -1398,10 +1401,12 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             "pnl_pct": d.get("pnl_pct"),
             "dollar_risk": d.get("dollar_risk"),
             # Only meaningful for the EXIT tier — a full-position quantity the
-            # directive already names ("exit most/all of N shares"). TRIM has no
-            # equivalent computed quantity (its directive is qualitative, "trim
-            # into the weakness"), so the UI must gate any sell-log button on
-            # kind == "deterioration_exit", not just this field's presence.
+            # directive already names ("exit most/all of N shares"). TRIM's
+            # directive text now names an approximate suggested quantity too
+            # (DETERIORATION_TRIM_SUGGESTED_PCT), but this structured field
+            # stays None for TRIM by design — it's a full-position exit count,
+            # not a partial-trim one — so the UI must keep gating any sell-log
+            # button on kind == "deterioration_exit", not just this field's presence.
             "shares": d.get("shares") if _is_exit else None,
         })
 

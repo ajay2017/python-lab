@@ -184,7 +184,7 @@ from stock_analyzer import exit_advisor
 from stock_analyzer.exit_advisor import compute_relative_strength
 from stock_analyzer.thesis_red_team import (
     compute_erosion_score, build_counter_evidence_inputs, generate_counter_evidence,
-    pt_points_from_signal,
+    pt_points_from_signal, EROSION_LABELS,
 )
 from stock_analyzer.analyst_targets import detect_pt_cut
 from stock_analyzer.position_lifecycle import lifecycle_badge
@@ -4336,12 +4336,20 @@ if page == "🏠 Home":
                     gate_denom=_gate_denom,
                     trades_df=st.session_state.get("trades_df"),
                 )
-                st.session_state["_risk_high_alerts_cache"] = [
-                    r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
-                ]
-                # Full recommendation list — published for the standalone Portfolio
-                # Allocation page (which reads this instead of recomputing).
-                st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
+                # build_risk_advisor_recommendations can itself return the
+                # offline sentinel (empty port_df / invalid portfolio_value,
+                # separate from the _port_risk-is-None case handled above) —
+                # must check before iterating, or a None result crashes here.
+                if _risk_advisor_recs is None:
+                    st.session_state["_risk_high_alerts_cache"] = None
+                    st.session_state["_risk_advisor_recs_cache"] = None
+                else:
+                    st.session_state["_risk_high_alerts_cache"] = [
+                        r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
+                    ]
+                    # Full recommendation list — published for the standalone Portfolio
+                    # Allocation page (which reads this instead of recomputing).
+                    st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
         except Exception:
             _risk_advisor_recs = None
             st.session_state["_risk_high_alerts_cache"] = None
@@ -15931,7 +15939,7 @@ elif page == "🌐 Macro":
                 st.markdown(
                     f"<div style='background:{_rc}22;border-left:4px solid {_rc};"
                     f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
-                    f"<b style='color:{_rc};font-size:1.1em'>Current Regime: {regime['label']}</b>"
+                    f"<b style='color:{_rc};font-size:1.1em'>Current Regime (ETF-proxy read): {regime['label']}</b>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -26363,10 +26371,10 @@ elif page == "📅 Economic Calendar":
 
                 _post_action_colors = {
                     "ADD":    "#00C851", "HOLD":   "#3b82f6",
-                    "WATCH":  "#f59e0b", "REDUCE": "#ef4444",
+                    "WATCH":  "#f59e0b", "PROTECT": "#ef4444",
                 }
                 _post_action_icons = {
-                    "ADD": "➕", "HOLD": "✋", "WATCH": "👁️", "REDUCE": "📉",
+                    "ADD": "➕", "HOLD": "✋", "WATCH": "👁️", "PROTECT": "🛡️",
                 }
 
                 for _pe in _past_events:
@@ -29638,10 +29646,27 @@ elif page == "🧠 AI Insights":
             # 6. Render
             _rt_results.sort(key=lambda r: r.get("erosion_score") or 0, reverse=True)
 
+            # Display-only rename: internal/DB erosion_label stays "Intact"
+            # (thesis_red_team.py's stored value) — only the on-screen word
+            # changes, to avoid colliding with Thesis Review's INTACT status.
+            _RT_DISPLAY_LABEL = {"Intact": "Holding"}
+
+            # Band caption built from thesis_red_team.EROSION_LABELS (not
+            # hand-duplicated numbers) — that module's own comment says these
+            # thresholds get tuned against live data without an Opus review,
+            # so a hardcoded copy here would silently drift the next time
+            # they're adjusted (2026-08-04 UX audit I14).
+            _rt_bands_asc = sorted(EROSION_LABELS, key=lambda t: t[0])
+            _rt_band_parts = []
+            for _bi, (_blo, _blbl) in enumerate(_rt_bands_asc):
+                _bhi = _rt_bands_asc[_bi + 1][0] - 1 if _bi + 1 < len(_rt_bands_asc) else 100
+                _rt_band_parts.append(f"{_blo}–{_bhi} {_RT_DISPLAY_LABEL.get(_blbl, _blbl)}")
+            _rt_band_caption = " · ".join(_rt_band_parts)
+
             # How to read this
             st.caption(
                 "**How to read this:** Higher score = more pressure on the thesis. "
-                "0–24 Holding · 25–49 Softening · 50–74 Eroding · 75–100 Breaking. "
+                f"{_rt_band_caption}. "
                 "Signals that push the score up are shown in red; signals holding the thesis are neutral. "
                 "**Analyst PT revision** tracks only the numeric consensus price target — it's independent "
                 "from the rating-action alert on 📡 Signals & Advice, so a rating downgrade there doesn't "
@@ -29674,10 +29699,6 @@ elif page == "🧠 AI Insights":
                     "Softening": "🟡",
                     "Intact":    "🟢",
                 }
-                # Display-only rename: internal/DB erosion_label stays "Intact"
-                # (thesis_red_team.py's stored value) — only the on-screen word
-                # changes, to avoid colliding with Thesis Review's INTACT status.
-                _RT_DISPLAY_LABEL = {"Intact": "Holding"}
 
                 # Plain-English signal interpretations
                 def _rt_tier_text(tier):

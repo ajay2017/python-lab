@@ -435,10 +435,10 @@ def test_build_post_event_analysis_bull_hold_when_modest_tailwind():
     assert result["positions"][0]["action"] == "HOLD"
 
 
-def test_build_post_event_analysis_bear_reduce_when_large_headwind_and_weight():
+def test_build_post_event_analysis_bear_protect_when_large_headwind_and_weight():
     port_df = pd.DataFrame([_port_df_row(sector="Financials", weight=10.0)])
     result = build_post_event_analysis(_event(), port_df, 100_000.0, "bear")
-    assert result["positions"][0]["action"] == "REDUCE"
+    assert result["positions"][0]["action"] == "PROTECT"
 
 
 def test_build_post_event_analysis_bear_watch_when_moderate_headwind():

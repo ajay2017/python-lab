@@ -48,20 +48,22 @@ def _recs(rows, **overrides):
 
 # ── guard clauses ─────────────────────────────────────────────────────────────
 
-def test_empty_port_df_returns_empty():
+def test_empty_port_df_returns_none():
+    # None, not [] — an empty list would be cached indistinguishably from a
+    # checked-and-healthy portfolio (offline-sentinel house contract).
     _unused_df, held_data, port_risk, h_rets, pv, gd = make_risk_advisor_inputs(_ONE_ROW)
-    assert build_risk_advisor_recommendations(pd.DataFrame(), held_data, port_risk, h_rets, pv, gd) == []
+    assert build_risk_advisor_recommendations(pd.DataFrame(), held_data, port_risk, h_rets, pv, gd) is None
 
 
-def test_empty_port_risk_returns_empty():
+def test_empty_port_risk_returns_none():
     port_df, held_data, _unused_risk, h_rets, pv, gd = make_risk_advisor_inputs(_ONE_ROW)
-    assert build_risk_advisor_recommendations(port_df, held_data, {}, h_rets, pv, gd) == []
+    assert build_risk_advisor_recommendations(port_df, held_data, {}, h_rets, pv, gd) is None
 
 
-def test_missing_or_nonpositive_portfolio_value_returns_empty():
+def test_missing_or_nonpositive_portfolio_value_returns_none():
     port_df, held_data, port_risk, h_rets, _unused_pv, gd = make_risk_advisor_inputs(_ONE_ROW)
-    assert build_risk_advisor_recommendations(port_df, held_data, port_risk, h_rets, None, gd) == []  # type: ignore[arg-type]
-    assert build_risk_advisor_recommendations(port_df, held_data, port_risk, h_rets, 0.0, gd) == []
+    assert build_risk_advisor_recommendations(port_df, held_data, port_risk, h_rets, None, gd) is None  # type: ignore[arg-type]
+    assert build_risk_advisor_recommendations(port_df, held_data, port_risk, h_rets, 0.0, gd) is None
 
 
 # ── beta ──────────────────────────────────────────────────────────────────────

@@ -13,6 +13,14 @@ PORTFOLIO_BETA_TARGET   = 1.0    # baseline equity-portfolio target
 PORTFOLIO_BETA_ELEVATED = 1.3    # soft warning above this
 PORTFOLIO_BETA_CEILING  = 1.4    # hard breach above this — institutional ceiling
 
+# ── Defensive-sector diversifier sizing (risk_advisor beta + volatility recs) ──
+# Shared range so the two risk_advisor.py recommendations that both suggest
+# adding a Healthcare/Staples/Utilities diversifier can't quote different
+# numbers for the same underlying action. The volatility rec's own follow-up
+# math already assumes the midpoint (10%), which is why the max is 10, not 12.
+DEFENSIVE_DIVERSIFIER_MIN_PCT = 8.0
+DEFENSIVE_DIVERSIFIER_MAX_PCT = 10.0
+
 # ── Portfolio Sharpe (risk-adjusted return) ──────────────────────────────────
 # Below SHARPE_MEDIUM_RISK_MAX an action recommendation fires (MEDIUM, or HIGH
 # if also below SHARPE_HIGH_RISK_MAX); at/above SHARPE_STRONG_MIN a congratulatory
@@ -436,6 +444,7 @@ DETERIORATION_EXIT_DOLLAR_LOSS = 250.0  # unrealized $ loss that escalates TRIM 
 DETERIORATION_TREND_MA         = 50     # trend reference moving average (close < SMA50 = trend broken)
 DETERIORATION_CONFIRM_DAYS     = 3      # trend-confirmation lookback window (sessions)
 DETERIORATION_CONFIRM_REQUIRED = 2      # sessions below the MA required to confirm TRIM (NOT required for a deep EXIT)
+DETERIORATION_TRIM_SUGGESTED_PCT = 25.0 # suggested reduction % shown in the idiosyncratic-deterioration TRIM directive (display-only quantity — never changes the TRIM/EXIT tier itself; matches RISK_OFF_TRIM_PCT's convention for a "modest reduction")
 REL_STRENGTH_LOOKBACK_DAYS     = 20     # relative-strength-vs-SPY lookback (negative RS = idiosyncratic weakness)
 DETERIORATION_PEAK_FALLBACK_BARS = 63   # peak-window lookback (~3mo) when position age is unknown (no journal)
 MATERIAL_ADD_RESET_THRESHOLD   = 25.0   # a non-initial lot ≥ this % of the position re-anchors the deterioration PEAK window to "since the add" (averaging-down guard; cost basis stays blended — see exit_advisor.material_add_window_days)
