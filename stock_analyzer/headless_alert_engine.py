@@ -410,22 +410,29 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
         return {"picks": [], "built_at": built_at,
                 "errors": errors + [f"build_daily_briefing failed: {e}"]}
 
+    # build_daily_briefing's tone/new_picks/etc. live nested under "grow_today"
+    # (app.py always reads it that way) -- NOT at the top level of `brief`.
+    grow = brief.get("grow_today") or {}
+
     # Diagnostic so a 0-pick run is self-explaining in the cron log (a flat tape
     # raises the new-pick bar to 78 and caps at 1, a bull tape lets 65+ through —
     # so "0 picks" next to a Home page showing morning picks is usually the tone
     # gate, not a fault). bar=None on bear (new entries suppressed outright).
-    _tone = brief.get("tone", "flat")
+    _tone = grow.get("tone", "flat")
     _bar = None if _tone == "bear" else (COMPOSITE_BUY if _tone == "bull" else COMPOSITE_BUY_FLAT_DAY)
     diag = {
         "tone":             _tone,
-        "sp500_pct":        brief.get("sp500_pct"),
+        # _grow_today's bear-day early return omits "sp500_pct" entirely (it
+        # only builds the message string) -- fall back to market_context's own
+        # fetched value so a real risk-off move never logs as "S&P n/a".
+        "sp500_pct":        grow.get("sp500_pct", market_context.get("sp500_pct")),
         "bar":              _bar,
-        "sector_blocked":   len(brief.get("sector_blocked_picks", []) or []),
-        "macro_blocked":    len(brief.get("macro_blocked_picks", []) or []),
-        "composite_short":  len(brief.get("composite_skipped", []) or []),
-        "composite_unavail": len(brief.get("composite_unavailable", []) or []),
+        "sector_blocked":   len(grow.get("sector_blocked_picks", []) or []),
+        "macro_blocked":    len(grow.get("macro_blocked_picks", []) or []),
+        "composite_short":  len(grow.get("composite_skipped", []) or []),
+        "composite_unavail": len(grow.get("composite_unavailable", []) or []),
     }
-    return {"picks": brief.get("new_picks", []) or [], "built_at": built_at,
+    return {"picks": grow.get("new_picks", []) or [], "built_at": built_at,
             "errors": errors, "diag": diag}
 
 

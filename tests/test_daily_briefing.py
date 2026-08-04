@@ -36,6 +36,7 @@ from stock_analyzer.daily_briefing import (
     _review_list,
     _rewrite_macro_affected,
     _trim_targets,
+    build_daily_briefing,
 )
 from tests.conftest import find_item, make_port_df
 
@@ -317,6 +318,55 @@ def test_grow_today_new_pick_no_warning_below_elevated_band():
     pick = find_item(grow["new_picks"], "NEW")
     assert pick is not None
     assert pick["sector_elevated_warning"] is None
+
+
+# ── build_daily_briefing: top-level contract ──────────────────────────────────
+# Regression guard for the 2026-08-04 headless_alert_engine bug: compute_
+# morning_picks() read tone/new_picks/sp500_pct off the top-level brief dict
+# for 5+ weeks, but those fields only ever existed nested under "grow_today" --
+# a mismatch a test-double mocking the wrong shape had been masking. This pins
+# the real, unmocked contract so a future refactor can't reintroduce the drift
+# silently.
+
+def test_build_daily_briefing_top_level_keys_exclude_grow_today_fields():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Tech"}])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY, market_context={"tone": "bull"},
+    )
+    assert set(brief.keys()) == {
+        "act_today", "buy_candidates", "review_list", "grow_today", "portfolio_tuneup",
+    }
+    grow_only_keys = (
+        "tone", "sp500_pct", "new_picks", "sector_blocked_picks",
+        "macro_blocked_picks", "composite_skipped", "composite_unavailable",
+    )
+    for key in grow_only_keys:
+        assert key not in brief, f"{key!r} leaked onto the top-level brief dict"
+        assert key in brief["grow_today"], f"{key!r} missing from grow_today"
+
+
+def test_build_daily_briefing_bear_tone_grow_today_omits_sp500_pct():
+    """Pins a real asymmetry (2026-08-04 reviewer note): the bear-day early
+    return in _grow_today builds only a message string and omits sp500_pct/
+    nasdaq_pct/leading_sectors/cooldown_adds/deterioration_blocked_adds --
+    unlike the bull/flat path, which includes all of them. compute_morning_
+    picks() must (and does) fall back to market_context's own sp500_pct for
+    this case rather than logging the real move as unavailable."""
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0, "sector": "Tech"}])
+    brief = build_daily_briefing(
+        port_df=port_df, alert_list=[], risk_recs=[], news_items=[],
+        macro_events=[], held_data={}, scanner_results=None,
+        portfolio_value=100_000.0, today=_TODAY,
+        market_context={"tone": "bear", "sp500_pct": -1.5},
+    )
+    grow = brief["grow_today"]
+    assert grow["tone"] == "bear"
+    assert "sp500_pct" not in grow
+    for key in ("new_picks", "sector_blocked_picks", "macro_blocked_picks",
+                "composite_skipped", "composite_unavailable"):
+        assert key in grow, f"{key!r} missing from the bear-branch return"
 
 
 def test_grow_today_add_position_suppressed_when_review_blocked():

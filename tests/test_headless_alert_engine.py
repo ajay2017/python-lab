@@ -533,10 +533,11 @@ def _run_morning_picks(sp_pct, brief_overrides=None):
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
     }
-    brief = {"tone": "bull", "new_picks": [{"ticker": "NVDA"}], "sp500_pct": sp_pct,
-             "sector_blocked_picks": [], "macro_blocked_picks": [],
-             "composite_skipped": [], "composite_unavailable": []}
-    brief.update(brief_overrides or {})
+    grow = {"tone": "bull", "new_picks": [{"ticker": "NVDA"}], "sp500_pct": sp_pct,
+            "sector_blocked_picks": [], "macro_blocked_picks": [],
+            "composite_skipped": [], "composite_unavailable": []}
+    grow.update(brief_overrides or {})
+    brief = {"grow_today": grow}
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
          patch("stock_analyzer.data.fetch_market_indices",
                return_value=[{"short": "S&P 500", "change_pct": sp_pct},
@@ -565,6 +566,29 @@ def test_morning_picks_bear_tone_has_no_bar():
     assert result["diag"]["bar"] is None
 
 
+def test_morning_picks_bear_tone_sp500_pct_falls_back_to_market_context():
+    """_grow_today's real bear-day early return omits "sp500_pct" entirely (it
+    only builds a message string) -- diag must still surface the real S&P
+    move via market_context rather than logging it as "n/a" (2026-08-04
+    reviewer non-blocking note on the grow_today-unwrap fix)."""
+    ctx = {
+        "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
+        "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+    }
+    # Real bear-branch shape: no "sp500_pct" key at all.
+    brief = {"grow_today": {"tone": "bear", "new_picks": []}}
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.data.fetch_market_indices",
+               return_value=[{"short": "S&P 500", "change_pct": -1.75},
+                             {"short": "NASDAQ", "change_pct": -2.1}]), \
+         patch("stock_analyzer.headless_alert_engine.load_bundle", return_value={}), \
+         patch("stock_analyzer.data.curate_news_items", return_value=[]), \
+         patch("stock_analyzer.macro_calendar.build_macro_calendar", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.build_daily_briefing", return_value=brief):
+        result = hae.compute_morning_picks(TODAY, scanner_results=_scanner_df(["NVDA"]))
+    assert result["diag"]["sp500_pct"] == -1.75
+
+
 def test_morning_picks_diag_counts_blocked_lists():
     result = _run_morning_picks(sp_pct=1.0, brief_overrides={
         "sector_blocked_picks": [{"ticker": "X"}],
@@ -579,7 +603,7 @@ def test_morning_picks_market_tone_fetch_failure_falls_back_to_flat():
         "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
         "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
     }
-    brief = {"tone": "flat", "new_picks": [], "sp500_pct": 0.0}
+    brief = {"grow_today": {"tone": "flat", "new_picks": [], "sp500_pct": 0.0}}
     with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
          patch("stock_analyzer.data.fetch_market_indices", side_effect=RuntimeError("down")), \
          patch("stock_analyzer.headless_alert_engine.load_bundle", return_value={}), \

@@ -18,7 +18,43 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-04 (post-Medium-fix baseline, same session as the audit)
+## 1. Latest run — 2026-08-04 (morning-picks cron bug fix + trades-idempotency catch-up)
+
+**3149 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
+--cov-report=term-missing -q`: 24.89s — TOTAL 15177 stmts, 3852 missed,
+**75%** overall coverage). Python (local `.venv`). +8 tests over the 3141
+entry below, none of which is itself stale-doc drift, not new-this-run:
+**+5** are `tests/test_db_save_trade.py` (commit `8fdeb7e`, the DB-level
+trades-idempotency fix) which shipped after the 3141 entry was recorded but
+never got its own log entry; **+3** are new with this run's own fix —
+`test_build_daily_briefing_top_level_keys_exclude_grow_today_fields` and
+`test_build_daily_briefing_bear_tone_grow_today_omits_sp500_pct` in
+`test_daily_briefing.py`, plus `test_morning_picks_bear_tone_sp500_pct_
+falls_back_to_market_context` in `test_headless_alert_engine.py`.
+
+This run's own fix: `compute_morning_picks()` in `stock_analyzer/
+headless_alert_engine.py` was reading `tone`/`sp500_pct`/`new_picks`/
+`sector_blocked_picks`/`macro_blocked_picks`/`composite_skipped`/
+`composite_unavailable` directly off the top-level dict returned by
+`build_daily_briefing()` — but those fields only ever exist nested under
+`brief["grow_today"]` (confirmed via `app.py`'s own reads of the same brief).
+Found investigating why the 9:45 ET "New Positions to Initiate" email had
+never fired; introduced in commit `3eae985` (2026-06-26), broken for the
+entire 5+ week life of both the morning buy-list email and the ~11:30 ET
+intraday pullback-entry email (both share this function). Fixed by reading
+all 7 fields from `grow = brief.get("grow_today") or {}` instead. Also fixed
+two `tests/test_headless_alert_engine.py` mocks (`_run_morning_picks()` and
+`test_morning_picks_market_tone_fetch_failure_falls_back_to_flat`) that had
+been mocking `build_daily_briefing` with the wrong (flat) shape — the exact
+reason the test suite stayed green while the real integration was broken.
+Opus review (Opus 4.8, 1M context): SHIP, 0 blocking, 1 non-blocking applied
+— the bear-tone early return in `_grow_today` omits `sp500_pct` entirely
+(unlike the bull/flat path), so `diag["sp500_pct"]` now falls back to
+`market_context`'s own fetched value on a bear day instead of logging a real
+risk-off move as "n/a"; a second non-blocking suggestion (cover the bear-
+branch key shape in the new contract test) was also applied.
+
+## 1a. Prior run — 2026-08-04 (post-Medium-fix baseline, same session as the audit)
 
 **3141 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term-missing -q`: 30.97s — TOTAL 15174 stmts, 3909 missed,
@@ -29,7 +65,7 @@ findings fixed same day (`docs/reviews/2026-08-04-review.md` §9): 3 in
 guard test) and updates/additions in `test_targets.py` (nearest-by-distance
 support/resistance).
 
-## 1a. Prior run — 2026-08-04 (post-High-fix baseline, same session as the audit)
+## 1b. Prior run — 2026-08-04 (post-High-fix baseline, same session as the audit)
 
 **3136 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term-missing -q`: 35.45s — TOTAL 15133 stmts, 3909 missed,
@@ -39,7 +75,7 @@ coverage for the Critical + all 9 High findings fixed same day
 (`docs/reviews/2026-08-04-review.md`), including 2 new test files
 (`test_db_readonly.py`, `test_providers_util.py`).
 
-## 1a. Prior run — 2026-08-04 (baseline refresh ahead of full-codebase audit)
+## 1c. Prior run — 2026-08-04 (baseline refresh ahead of full-codebase audit)
 
 **3120 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 27.84s; `pytest
 tests/ --cov=stock_analyzer --cov-report=term-missing -q`: 27.93s — TOTAL
