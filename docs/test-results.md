@@ -18,7 +18,18 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-04 (post-audit-fix baseline, same session as the audit)
+## 1. Latest run — 2026-08-04 (post-Medium-fix baseline, same session as the audit)
+
+**3141 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
+--cov-report=term-missing -q`: 30.97s — TOTAL 15174 stmts, 3909 missed,
+**74%** overall coverage). Python (local `.venv`). +5 tests over the
+3136 mid-session entry below — regression coverage for 2 of the 17 Medium
+findings fixed same day (`docs/reviews/2026-08-04-review.md` §9): 3 in
+`test_technicals.py` (Bollinger zero-guard corrected + 1 new zero-volume
+guard test) and updates/additions in `test_targets.py` (nearest-by-distance
+support/resistance).
+
+## 1a. Prior run — 2026-08-04 (post-High-fix baseline, same session as the audit)
 
 **3136 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term-missing -q`: 35.45s — TOTAL 15133 stmts, 3909 missed,
@@ -211,6 +222,20 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-08-04 (later still, same session) — Medium-fix regression tests, +5, 3141/3141 passing
+
+Fixed 17 of the 19 Medium findings from the same-session audit
+(`docs/reviews/2026-08-04-review.md` §9). Most were pure constants.py
+extractions (no test changes needed — same values, same behavior). Real
+behavior changes got test coverage: `test_technicals.py`'s existing
+Bollinger zero-guard test was re-asserted from the old buggy value (0.0)
+to the corrected neutral-50, plus a new zero-volume-guard test; 3
+`test_targets.py` tests added/updated for `support_resistance()`'s
+nearest-by-distance fix, including updating 2 existing bear-floor tests
+whose own reference recomputation needed the same `current_price` fix the
+production code got. Opus review (Opus 4.8): SHIP, 0 blocking, 2
+non-blocking (both addressed).
 
 ### 2026-08-04 (later same session) — Audit-fix regression tests, 16 new, 3136/3136 passing
 
