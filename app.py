@@ -1179,8 +1179,8 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
     """
     from stock_analyzer.constants import (
         ATR_STOP_MULT, STOP_TIGHTEN_ATR_MULT, STOP_TIGHTEN_MIN_GAIN_PCT, APPROACHING_STOP_GAP_PCT,
+        STOP_RATCHET_LEVELS,
     )
-    from stock_analyzer.portfolio import _RATCHET_LEVELS
 
     avg_cost = _f(holding.get("Avg Cost"))
     atr_val  = _f(r.get("atr"))
@@ -1208,10 +1208,10 @@ def _render_stop_ladder(r: dict, holding: dict, price: float,
 
     _active = L["active_stop"]
     # Ratchet ladder description, interpolated from the engine's own levels so
-    # the bullet text can never drift from _RATCHET_LEVELS.
+    # the bullet text can never drift from STOP_RATCHET_LEVELS.
     _rl_desc = ", ".join(
         f"+{thr:.0f}% → {'breakeven' if mult <= 0.02 else f'lock +{mult*100:.0f}%'}"
-        for thr, mult, _ in sorted(_RATCHET_LEVELS, key=lambda x: x[0])
+        for thr, mult, _ in sorted(STOP_RATCHET_LEVELS, key=lambda x: x[0])
     )
     with st.expander("🛡️ How your stop is set — and what happens next", expanded=False):
         # ── Buy-add framing: two stops are in play (sizing vs protective) ──────
@@ -4254,19 +4254,29 @@ if page == "🏠 Home":
         # vanishes (fail-open). None trips the Watchlist's existing offline banner so
         # the disabled gate is visible (house contract: producers fail to None).
         try:
-            _risk_advisor_recs = build_risk_advisor_recommendations(
-                port_df, held_data, _port_risk, h_rets, total_val,
-                gate_denom=_gate_denom,
-                trades_df=st.session_state.get("trades_df"),
-            )
-            st.session_state["_risk_high_alerts_cache"] = [
-                r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
-            ]
-            # Full recommendation list — published for the standalone Portfolio
-            # Allocation page (which reads this instead of recomputing).
-            st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
+            if _port_risk is None:
+                # _port_risk offline (insufficient data or a build failure) —
+                # propagate the offline sentinel rather than calling the
+                # advisor, which would otherwise return [] on a falsy
+                # port_risk and get cached as a false "checked, no risk"
+                # (2026-08-04 audit finding).
+                _risk_advisor_recs = None
+                st.session_state["_risk_high_alerts_cache"] = None
+                st.session_state["_risk_advisor_recs_cache"] = None
+            else:
+                _risk_advisor_recs = build_risk_advisor_recommendations(
+                    port_df, held_data, _port_risk, h_rets, total_val,
+                    gate_denom=_gate_denom,
+                    trades_df=st.session_state.get("trades_df"),
+                )
+                st.session_state["_risk_high_alerts_cache"] = [
+                    r.get("title", "") for r in _risk_advisor_recs if r.get("priority") == "HIGH"
+                ]
+                # Full recommendation list — published for the standalone Portfolio
+                # Allocation page (which reads this instead of recomputing).
+                st.session_state["_risk_advisor_recs_cache"] = _risk_advisor_recs
         except Exception:
-            _risk_advisor_recs = []
+            _risk_advisor_recs = None
             st.session_state["_risk_high_alerts_cache"] = None
             st.session_state["_risk_advisor_recs_cache"] = None
 
@@ -4298,7 +4308,12 @@ if page == "🏠 Home":
             _nq_row      = next((i for i in _mkt_indices if i["short"] == "NASDAQ"),  None)
             _sp_pct      = float(_sp_row["change_pct"]) if _sp_row else 0.0
             _nq_pct      = float(_nq_row["change_pct"]) if _nq_row else 0.0
-            _mkt_tone    = "bull" if _sp_pct >= 0.5 else "bear" if _sp_pct <= -0.5 else "flat"
+            from stock_analyzer.constants import MARKET_TONE_BULL_PCT, MARKET_TONE_BEAR_PCT
+            _mkt_tone    = (
+                "bull" if _sp_pct >= MARKET_TONE_BULL_PCT
+                else "bear" if _sp_pct <= MARKET_TONE_BEAR_PCT
+                else "flat"
+            )
 
             # Leading / lagging sectors from 1-week returns
             _sect_df_ctx  = _fetch_sector_returns()
@@ -9726,7 +9741,8 @@ elif page == "📡 Signals & Advice":
     held_data  = _aa_hd
     alert_list = st.session_state.get("_alert_list_cache") or []
     actions    = st.session_state.get("_actions_cache") or []
-    div_recs   = st.session_state.get("_div_recs_cache") or []
+    _div_recs_raw = st.session_state.get("_div_recs_cache")
+    div_recs   = _div_recs_raw or []
 
     _sa_tab1, _sa_tab2 = st.tabs(["📡 Active Signals", "🧩 Diversification"])
 
@@ -10310,7 +10326,12 @@ elif page == "📡 Signals & Advice":
         # Diversification advisor — flat
         st.subheader("📋 Diversification Advisor")
         st.caption("Data-driven recommendations based on your sector weights, pairwise correlations, and analyst signals.")
-        if not div_recs:
+        if _div_recs_raw is None:
+            st.warning(
+                "⚠️ Diversification check unavailable this session (couldn't build "
+                "the recommendation set) — revisit 🏠 Home to rebuild the Brief."
+            )
+        elif not div_recs:
             st.success("✅ No major diversification gaps — your portfolio is well balanced.")
         else:
             reduce_recs = [r for r in div_recs if r["type"] in ("REDUCE", "PAIR_RISK")]
@@ -10520,7 +10541,8 @@ elif page == "🔗 Risk Analysis":
     held_tickers        = st.session_state.get("_last_held_tickers") or list(_ra_hd.keys())
     total_val           = st.session_state.get("_portfolio_value", 0.0)
     _port_risk          = st.session_state.get("_port_risk_cache") or {}
-    _risk_advisor_recs  = st.session_state.get("_risk_advisor_recs_cache") or []
+    _risk_advisor_recs_raw = st.session_state.get("_risk_advisor_recs_cache")
+    _risk_advisor_recs  = _risk_advisor_recs_raw or []
     corr_df             = st.session_state.get("_corr_df_cache")
     div_score           = st.session_state.get("_div_score_cache")
     avg_corr            = st.session_state.get("_avg_corr_cache")
@@ -11027,7 +11049,12 @@ elif page == "🔗 Risk Analysis":
 
     with _ra_tab_action:
         # ── Risk Action Plan ──────────────────────────────────────────────────
-        if _risk_advisor_recs:
+        if _risk_advisor_recs_raw is None:
+            st.warning(
+                "⚠️ Risk Action Plan unavailable this session (couldn't compute "
+                "portfolio risk metrics) — revisit 🏠 Home to rebuild the Brief."
+            )
+        elif _risk_advisor_recs:
             st.divider()
             st.subheader("📋 Risk Action Plan")
             st.caption(
@@ -12653,7 +12680,8 @@ elif page == "🥧 Portfolio Overview":
     total_val           = st.session_state.get("_portfolio_value", 0.0)
     held_tickers        = st.session_state.get("_last_held_tickers") or list(_pa_hd.keys())
     h_rets              = holding_returns(held_data)
-    _risk_advisor_recs  = st.session_state.get("_risk_advisor_recs_cache") or []
+    _risk_advisor_recs_raw = st.session_state.get("_risk_advisor_recs_cache")
+    _risk_advisor_recs  = _risk_advisor_recs_raw or []
 
     _pa_tab_ov, _pa_tab_rb, _pa_tab_tax, _pa_tab_perf, _pa_tab2 = st.tabs([
         "📊 Overview", "⚖️ Rebalancing", "💰 Tax", "📈 Performance", "📈 Analytics"
@@ -13395,7 +13423,14 @@ elif page == "🥧 Portfolio Overview":
             }
 
         # Build Risk Advisor trim set so Rebalancer ADD can never contradict
-        # an investment-level reduce-exposure recommendation.
+        # an investment-level reduce-exposure recommendation. When the cache
+        # is offline (None), that cross-check can't run — say so rather than
+        # silently applying zero exclusions (2026-08-04 audit finding).
+        if _risk_advisor_recs_raw is None:
+            st.caption(
+                "⚠️ Risk Advisor cross-check unavailable this session — ADD "
+                "suggestions below aren't verified against active trim calls."
+            )
         _rb_risk_trim_set: set = set()
         for _rrec in (_risk_advisor_recs or []):
             if _rrec.get("priority") not in ("HIGH", "MEDIUM"):
@@ -16823,7 +16858,7 @@ elif page == "📈 Analysis":
     if len(results) == 1:
         _sv_ticker, _sv_r = next(iter(results.items()))
         _sv_rec = _sv_r["rec"]
-        if not _sv_r.get("fundamentals_available", True):
+        if not (_sv_r.get("fundamentals_available", True) and _sv_r.get("val_available", True)):
             st.markdown(
                 "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                 "border-left:5px solid #dc2626;margin-bottom:10px'>"
@@ -16917,7 +16952,7 @@ elif page == "📈 Analysis":
         # — the quick-glance surface — must match, or the same page shows
         # "Hold 54.2" up top and "verdict withheld" in the body. Score/Signal are
         # withheld; price-derived columns (Stop, Target, R:R) stay (data is real).
-        _sc_fund_ok = r.get("fundamentals_available", True)
+        _sc_fund_ok = r.get("fundamentals_available", True) and r.get("val_available", True)
         rows.append({
             "Ticker":           ticker,
             "Price":            f"${price:.2f}" if price else "N/A",
@@ -17017,7 +17052,8 @@ elif page == "📈 Analysis":
             # mismatch the user would otherwise see. The composite number is
             # deliberately NOT shown — a "Hold 58.1" on a fake 50 is the
             # misleading output we're suppressing.
-            if not r.get("fundamentals_available", True):
+            if not (r.get("fundamentals_available", True) and r.get("val_available", True)):
+                _vg_missing = "Business Quality" if not r.get("fundamentals_available", True) else "Valuation"
                 st.markdown(
                     "<div style='padding:12px;border-radius:8px;background:#dc262618;"
                     "border-left:5px solid #dc2626;margin-bottom:10px'>"
@@ -17026,7 +17062,7 @@ elif page == "📈 Analysis":
                     f"<br><span style='color:#dc2626'>We couldn't get {ticker}'s "
                     "fundamental data from any source right now (Yahoo Finance returned "
                     "nothing and the failover couldn't backfill it). The composite needs "
-                    "the Business Quality leg (35% weight) to issue a trustworthy call — "
+                    f"the {_vg_missing} leg to issue a trustworthy call — "
                     "without it the score defaults to a neutral 50 and produces a "
                     "<b>misleading verdict</b>, so the app is holding the recommendation "
                     "rather than guessing.</span>"
@@ -17734,7 +17770,10 @@ elif page == "📈 Analysis":
                                 _gc_earn_days = None  # past earnings date
                     except Exception:
                         pass
-                    _gate_bq_ok     = r.get("bq_available", r.get("fundamentals_available", True))
+                    _gate_bq_ok     = (
+                        r.get("bq_available", r.get("fundamentals_available", True))
+                        and r.get("val_available", True)
+                    )
                     _gate_rr_ok     = (rr_val >= RR_ENTRY_MIN)       if rr_val else None
                     _gate_conc_ok   = ((_gc_tw or 0) < SINGLE_NAME_CEILING) if _gc_tw is not None else None
                     _gate_sector_ok = ((_gc_sw or 0) < SECTOR_CEILING)      if _gc_sw is not None else None
@@ -17743,7 +17782,7 @@ elif page == "📈 Analysis":
                     _gate_cols = st.columns(5)
                     _gate_rows = [
                         ("Data Quality",  _gate_bq_ok,
-                         "BQ metrics available"),
+                         "BQ + Valuation metrics available"),
                         ("R/R ≥ 2×",      _gate_rr_ok,
                          f"R/R = {rr_val:.1f}×" if rr_val else "R/R unavailable"),
                         ("Concentration", _gate_conc_ok,
@@ -18724,9 +18763,16 @@ elif page == "📋 Watchlist":
     _wl_recs.sort(key=lambda x: sort_key_for_action(x["action"]))
 
     # ── KPI summary strip ─────────────────────────────────────────────────────
-    _wl_enter  = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")
-    _wl_near   = sum(1 for r in _wl_recs if r["action"] == "NEAR_ENTRY")
-    _wl_remove = sum(1 for r in _wl_recs if r["action"] == "REMOVE")
+    _wl_enter    = sum(1 for r in _wl_recs if r["action"] == "ENTER_NOW")
+    _wl_near     = sum(1 for r in _wl_recs if r["action"] == "NEAR_ENTRY")
+    _wl_remove   = sum(1 for r in _wl_recs if r["action"] == "REMOVE")
+    _wl_unavail  = sum(1 for r in _wl_recs if r["action"] == "DATA_UNAVAILABLE")
+    if _wl_unavail:
+        st.caption(
+            f"⚠️ {_wl_unavail} ticker(s) couldn't be assessed this session "
+            "(fundamentals/valuation data unavailable) — no Remove/Enter call "
+            "was made on them. See the **All** filter below."
+        )
     _wl_k1, _wl_k2, _wl_k3, _wl_k4 = st.columns(4)
     _wl_k1.metric("Watchlist size", len(_wl_recs))
     _wl_k2.metric("✅ Enter Now",    _wl_enter,
@@ -19552,7 +19598,9 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_override_sell", None)
                 st.session_state.pop("_tj_drift_checked", None)
                 st.session_state.pop("_tj_drift_state", None)
+                import time as _ps_time
                 st.session_state["_tj_last_submit_sig"] = (_ps_ticker, "SELL", _ps_shares)
+                st.session_state["_tj_last_submit_ts"]  = _ps_time.time()
                 st.rerun()
         if _ps_c2.button("✗ Cancel", key="_tj_cancel_sell", use_container_width=True):
             st.session_state["_tj_prefill"] = {
@@ -19601,6 +19649,7 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_premortem_case", None)
                 st.session_state.pop("_tj_premortem_case_for", None)
                 st.session_state.pop("_tj_premortem_commitment", None)
+                st.session_state.pop("_tj_premortem_commitment_for", None)
                 if not db.has_db():
                     _pb_new_row = pd.DataFrame([{**_pending_buy, "id": None, "traded_at": datetime.now().isoformat()}])
                     st.session_state.trades_df = pd.concat(
@@ -20071,6 +20120,18 @@ elif page == "📒 Trade Journal":
             except Exception:
                 pass
 
+            # Ticker-scope the commitment box: if the resolved ticker changed
+            # since this text was last written (e.g. blocked by an earlier
+            # gate, then the user switches tickers without touching this
+            # box), a stale commitment written about a DIFFERENT company
+            # would otherwise still satisfy the "required" gate below and
+            # get persisted — including seeding a bogus F-228 trigger price
+            # extracted from text about the wrong ticker (2026-08-04 audit
+            # finding). Mirrors the _pm_case_stale pattern above.
+            if st.session_state.get("_tj_premortem_commitment_for") != _pm_tk:
+                st.session_state.pop("_tj_premortem_commitment", None)
+                st.session_state["_tj_premortem_commitment_for"] = _pm_tk
+
             st.text_area(
                 "🖊️ What would make me wrong about this? (required before this Buy can be recorded)",
                 key="_tj_premortem_commitment",
@@ -20506,7 +20567,15 @@ elif page == "📒 Trade Journal":
                 _pmt_trigger_price     = None
                 _pmt_trigger_direction = None
                 if action == "BUY":
-                    _pmt_commitment = (st.session_state.get("_tj_premortem_commitment") or "").strip()
+                    # Belt-and-suspenders with the render-time ticker-scope clear
+                    # above (mirrors the premortem-case submit-time guard at the
+                    # hard gate below) — don't persist a commitment that wasn't
+                    # actually written for THIS submission's ticker.
+                    _pmt_commitment = (
+                        (st.session_state.get("_tj_premortem_commitment") or "").strip()
+                        if st.session_state.get("_tj_premortem_commitment_for") == ticker_input
+                        else ""
+                    )
                     if _pmt_commitment:
                         _pmt_api_key = (
                             st.secrets.get("anthropic", {}).get("api_key", "")
@@ -20546,9 +20615,7 @@ elif page == "📒 Trade Journal":
                     "premortem_case_against": (
                         (_pm_case_final or {}).get("case_against") if _pm_case_final else None
                     ),
-                    "premortem_commitment": (
-                        (st.session_state.get("_tj_premortem_commitment") or "").strip() or None
-                    ) if action == "BUY" else None,
+                    "premortem_commitment": (_pmt_commitment or None) if action == "BUY" else None,
                     "premortem_trigger_price":     _pmt_trigger_price,
                     "premortem_trigger_direction": _pmt_trigger_direction,
                 }

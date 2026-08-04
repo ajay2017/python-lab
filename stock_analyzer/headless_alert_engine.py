@@ -38,6 +38,8 @@ from stock_analyzer.constants import (
     GROW_CANDIDATE_POOL,
     COMPOSITE_BUY,
     COMPOSITE_BUY_FLAT_DAY,
+    MARKET_TONE_BULL_PCT,
+    MARKET_TONE_BEAR_PCT,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -148,7 +150,7 @@ def _build_context(today: date) -> dict:
     try:
         port_risk = compute_portfolio_risk_metrics(port_df, held_data, spy_6mo, rfr)
     except Exception:
-        port_risk = {}
+        port_risk = None
     fragility = None
     try:
         beta = _f(port_risk.get("beta")) if port_risk else None
@@ -337,7 +339,11 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
         _nq = next((i for i in _idx if i.get("short") == "NASDAQ"), None)
         _sp_pct = float(_sp["change_pct"]) if _sp else 0.0
         market_context = {
-            "tone": "bull" if _sp_pct >= 0.5 else "bear" if _sp_pct <= -0.5 else "flat",
+            "tone": (
+                "bull" if _sp_pct >= MARKET_TONE_BULL_PCT
+                else "bear" if _sp_pct <= MARKET_TONE_BEAR_PCT
+                else "flat"
+            ),
             "sp500_pct": _sp_pct,
             "nasdaq_pct": float(_nq["change_pct"]) if _nq else 0.0,
             "leading_sectors": [],

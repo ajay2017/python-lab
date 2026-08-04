@@ -216,6 +216,16 @@ COMPOSITE_HIGH_CONVICTION = COMPOSITE_STRONG_BUY
 # setups clear when the index isn't providing tailwind.
 COMPOSITE_BUY_FLAT_DAY = 78
 
+# Market tone (bull/bear/flat) from the S&P 500's daily % move — selects
+# COMPOSITE_BUY (bull) vs COMPOSITE_BUY_FLAT_DAY (flat) vs no new entries
+# (bear). Single source for both the interactive app (Home's market-context
+# assembly) and the headless cron (headless_alert_engine.py's morning email)
+# so the two runtimes can never independently drift on which gate a given
+# day's picks were screened against (2026-08-04 audit finding — this was
+# duplicated as a bare ±0.5 literal in both files).
+MARKET_TONE_BULL_PCT = 0.5
+MARKET_TONE_BEAR_PCT = -0.5
+
 # Minimum composite for the #1 pick to be featured with full "Act on" framing
 # in the morning action email. Below this it still appears but carries a
 # "moderate" label rather than a high-conviction directive.
@@ -343,6 +353,24 @@ STOP_TIGHTEN_MIN_GAIN_PCT = 8.0
 # precision (was a bare literal 1 in each). Not a stop-width policy value;
 # it only controls where the rounding tips a near-zero gap to <=0.
 GAP_TO_STOP_ROUND_DECIMALS = 1
+
+# Profit-lock ratchet ladder: as a position's gain grows, floor its
+# protective stop at (avg_cost × (1 + floor_pct)) so accumulated profit is
+# never fully surrendered back to the ATR stop. Each row is
+# (gain_pct_threshold, floor_pct, label); checked in descending-threshold
+# order by portfolio.protective_stop()/stop_ladder() — the first tier whose
+# gain threshold the position has cleared wins. The single source for both
+# the live engine's stop and the Analysis "How your stop is set" explainer's
+# ratchet-tier display, so they can never drift. Policy value — change =
+# investment-policy decision. (2026-08-04 audit finding: this table lived as
+# a portfolio.py module-local list, invisible to check_constants_documented.py,
+# for a threshold this consequential — moved here per Hard Rule #1.)
+STOP_RATCHET_LEVELS = (
+    (75, 0.40, "Protect 40% gain"),
+    (50, 0.25, "Protect 25% gain"),
+    (25, 0.10, "Protect 10% gain"),
+    (10, 0.02, "Breakeven guard"),
+)
 
 # ── Position lifecycle (position_lifecycle.classify_position_state) ───────────
 # A held position moves through states: settling → established → winning, with
@@ -620,6 +648,18 @@ NEWS_SENTIMENT_NEGATIVE =  -0.15   # cross-reference "negative news" conflict
 NEWS_SENTIMENT_WARN     =  -0.05   # warning-news Review Before Close
 NEWS_SENTIMENT_POSITIVE =   0.10   # treat as supporting signal in xref
 NEWS_CRITICAL_MIN_HEADLINES     = 2     # min qualifying headlines per ticker before firing Critical News Act Today
+# Max news tier (1 = highest-quality source) that qualifies for "critical" —
+# shared by daily_briefing's Critical News Act Today card AND
+# news_intelligence.build_news_intelligence's per-headline alert-level
+# classifier. Was a bare `<= 2` literal duplicated in both (2026-08-04 audit
+# finding).
+NEWS_CRITICAL_MAX_TIER = 2
+# Minimum held-position weight (%) for a single critical-compound headline to
+# be classified "critical" rather than "warning" in news_intelligence's
+# per-headline alert level — a critical-sentiment headline on a 0.5%-weight
+# position isn't worth the same urgency as one on an 8%+ position. Was a bare
+# `8.0` literal with no constant at all (2026-08-04 audit finding).
+NEWS_CRITICAL_MIN_WEIGHT_PCT = 8.0
 # LLM bidirectional rescore — max points the LLM can shift any single headline's
 # VADER compound score in either direction. Prevents a single LLM outlier from
 # dominating the average while still giving the model full authority on genuine

@@ -22,12 +22,17 @@ def valuation_score(
     analyst_data: dict,
     current_price: float | None,
     sector: str = "",
-) -> tuple[float, dict]:
+) -> tuple[float, dict, bool]:
     """
-    Returns (score 0-100, signals dict). Pure computation — no I/O.
+    Returns (score 0-100, signals dict, val_available). Pure computation — no I/O.
 
     analyst_data keys: avg_pt (float|None), consensus_label (str|None), has_coverage (bool).
     Graceful degradation: absent metrics contribute 0 to numerator AND denominator.
+    val_available is False when NONE of the four metrics had any data at all —
+    in that case `score` is a fabricated neutral 50 with zero signal behind it
+    (mirrors business_quality_score's own fundamentals_available gate; see the
+    2026-08-04 audit finding — this pillar was fabricating a neutral 50 with
+    no availability flag for callers to withhold the verdict on).
     """
     points = 0
     max_points = 0
@@ -103,5 +108,6 @@ def valuation_score(
         points += pts
         signals["Analyst Consensus"] = f"{label_raw} (analyst consensus)"
 
-    score = round((points / max_points) * 100, 1) if max_points > 0 else 50.0
-    return score, signals
+    val_available = max_points > 0
+    score = round((points / max_points) * 100, 1) if val_available else 50.0
+    return score, signals, val_available

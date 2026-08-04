@@ -45,6 +45,7 @@ def _f(val, default=0.0):
 _ACTION_PRIORITY = {
     "REMOVE":             "HIGH",
     "HOLD_OFF_EARNINGS":  "MEDIUM",
+    "DATA_UNAVAILABLE":   "MEDIUM",
     "ENTER_NOW":          "OK",
     "NEAR_ENTRY":         "MONITOR",
     "WAIT_ENTRY":         "MONITOR",
@@ -61,14 +62,15 @@ _ACTION_SORT_RANK = {
     "NEAR_ENTRY":         1,
     "REMOVE":             2,
     "HOLD_OFF_EARNINGS":  3,
-    "WAIT_ENTRY":         4,
-    "WAIT_CATALYST":      5,
+    "DATA_UNAVAILABLE":   4,
+    "WAIT_ENTRY":         5,
+    "WAIT_CATALYST":      6,
 }
 
 
 def sort_key_for_action(action: str) -> int:
     """Display-order rank for a watchlist action (lower sorts first)."""
-    return _ACTION_SORT_RANK.get(action, 6)
+    return _ACTION_SORT_RANK.get(action, 7)
 
 
 def _earn_days_until(earn_str: str | None) -> int | None:
@@ -199,6 +201,43 @@ def build_watchlist_recommendation(
 
     earn_days   = _earn_days_until(earn_str)
     earn_soon   = earn_days is not None and 0 <= earn_days <= EARNINGS_IMMINENT_DAYS
+
+    # Data-availability gate: when neither fundamentals nor valuation could be
+    # sourced from any provider, `score` is a fabricated neutral-ish 50/50
+    # blend with zero real signal behind it — issuing REMOVE (score < 44) or
+    # ENTER_NOW off that would be a data-outage artifact presented as an
+    # investment verdict (2026-08-04 audit finding). Mirrors the Analysis
+    # page's own "Verdict withheld" gate. Default True so legacy bundles
+    # without either flag aren't gated.
+    if not (data.get("fundamentals_available", True) and data.get("val_available", True)):
+        return _card(
+            ticker, "DATA_UNAVAILABLE", score, rec_label, price, entry_lo, entry_hi,
+            stop, None, earn_days,
+            title=f"{ticker} — Can't Assess Right Now (data unavailable)",
+            summary=(
+                "Fundamentals and/or valuation data couldn't be sourced from any "
+                "provider this session, so the composite score isn't trustworthy — "
+                "no REMOVE or ENTER_NOW call is being made on it."
+            ),
+            detail=(
+                f"We couldn't get {ticker}'s fundamental or valuation data from any "
+                "source right now. Rather than issue a Remove or Enter Now call off "
+                "a fabricated neutral score, the app is holding the verdict. "
+                "Re-check in a few minutes — data sources typically recover — or "
+                "verify manually before acting. This is a data gap, not a change "
+                "in the thesis."
+            ),
+            conditions_met=[],
+            conditions_missing=[
+                "Fundamentals and/or valuation data unavailable from all providers",
+            ],
+            institutional_lens=(
+                "A verdict built on missing data is worse than no verdict at all — "
+                "it looks confident while measuring nothing. The discipline here is "
+                "the same one the Analysis page applies: withhold the call rather "
+                "than guess."
+            ),
+        )
 
     # Risk/reward
     base_target = _f(targets.get("base")) if targets.get("base") else None

@@ -56,8 +56,17 @@ def http_get_json(url: str, params: dict | None = None, timeout: int = _TIMEOUT)
     """GET `url` and return parsed JSON. Raises on HTTP error (incl. 429) so the
     caller can classify rate-limit vs other errors and record api_health.
     No per-call retry by design — the orchestrator fails over to the next provider.
-    API key query params are redacted from any raised exception message."""
-    resp = requests.get(url, params=params, timeout=timeout)
+    API key query params are redacted from any raised exception message —
+    including a bare requests.get() failure (Timeout/ConnectionError/etc.),
+    not just the raise_for_status() branch. requests embeds the full request
+    URL in those exceptions' own message, so a redaction that only wrapped
+    raise_for_status() (as this used to) let a plaintext API key leak into
+    api_health on a routine timeout/DNS hiccup (2026-08-04 audit finding —
+    Finnhub had this gap; FMP's provider-level _safe() masked it there)."""
+    try:
+        resp = requests.get(url, params=params, timeout=timeout)
+    except requests.RequestException as exc:
+        raise type(exc)(_redact_url(str(exc))) from None
     try:
         resp.raise_for_status()
     except requests.HTTPError as exc:

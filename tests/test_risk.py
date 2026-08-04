@@ -373,23 +373,25 @@ def test_compute_all_risk_beta_none_without_spy():
 
 # ─── compute_portfolio_risk_metrics ──────────────────────────────────────────
 
-def test_compute_portfolio_risk_metrics_empty_held_data_returns_empty_dict():
+def test_compute_portfolio_risk_metrics_empty_held_data_returns_none():
+    """None, not {} -- an offline sentinel so callers can tell "couldn't
+    compute" from "computed, zero risk" (2026-08-04 audit finding)."""
     port_df = pd.DataFrame([_port_row("AAPL", "Consumer Tech", 100.0)])
-    assert compute_portfolio_risk_metrics(port_df, held_data={}) == {}
+    assert compute_portfolio_risk_metrics(port_df, held_data={}) is None
 
 
-def test_compute_portfolio_risk_metrics_insufficient_history_returns_empty_dict():
+def test_compute_portfolio_risk_metrics_insufficient_history_returns_none():
     short_df = _price_df([100.0, 101.0, 102.0])  # only 3 rows, needs >= 10
     port_df = pd.DataFrame([_port_row("AAPL", "Consumer Tech", 100.0)])
     held_data = {"AAPL": {"df": short_df}}
-    assert compute_portfolio_risk_metrics(port_df, held_data) == {}
+    assert compute_portfolio_risk_metrics(port_df, held_data) is None
 
 
-def test_compute_portfolio_risk_metrics_no_matching_weights_returns_empty_dict():
+def test_compute_portfolio_risk_metrics_no_matching_weights_returns_none():
     df = _price_df([100.0 * (1.01 ** i) for i in range(15)])
     port_df = pd.DataFrame([_port_row("MSFT", "Enterprise Tech", 100.0)])  # different ticker
     held_data = {"AAPL": {"df": df}}  # AAPL has data but isn't in port_df
-    assert compute_portfolio_risk_metrics(port_df, held_data) == {}
+    assert compute_portfolio_risk_metrics(port_df, held_data) is None
 
 
 def test_compute_portfolio_risk_metrics_happy_path_returns_full_shape():

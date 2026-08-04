@@ -47,6 +47,7 @@ from stock_analyzer.constants import (
     NEWS_SENTIMENT_NEGATIVE,
     NEWS_SENTIMENT_WARN,
     NEWS_SENTIMENT_POSITIVE,
+    NEWS_CRITICAL_MAX_TIER,
     NEWS_CRITICAL_MIN_HEADLINES,
     STOP_PROFIT_LOCK_PNL_PCT,
     STOP_PROFIT_LOCK_TRIM_PCT,
@@ -822,13 +823,18 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                 })
                 continue
 
-            # Fundamentals gate: if the composite was computed on a fabricated
-            # neutral-50 fundamental (no real data from any source), the verdict
-            # isn't trustworthy — hold it OUT of new_picks exactly like a failed
-            # fetch. Otherwise the Brief can surface a "new position to initiate"
-            # whose Analysis page withholds its verdict (the PINS/HUBS mismatch).
-            # Default True so legacy bundles without the flag aren't gated.
-            if _comp_data and not _comp_data.get("fundamentals_available", True):
+            # Fundamentals/Valuation gate: if the composite was computed on a
+            # fabricated neutral-50 fundamental OR valuation leg (no real data
+            # from any source), the verdict isn't trustworthy — hold it OUT of
+            # new_picks exactly like a failed fetch. Otherwise the Brief can
+            # surface a "new position to initiate" whose Analysis page
+            # withholds its verdict (the PINS/HUBS mismatch, and — since
+            # 2026-08-04 — the same class for Valuation's own availability flag).
+            # Default True so legacy bundles without either flag aren't gated.
+            if _comp_data and not (
+                _comp_data.get("fundamentals_available", True)
+                and _comp_data.get("val_available", True)
+            ):
                 composite_unavailable.append({
                     "ticker":         ticker,
                     "sector":         sector,
@@ -1410,7 +1416,7 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         _t = str(item.get("ticker", "")).upper()
         if (_t in held_tickers
                 and item.get("compound", 0) <= NEWS_SENTIMENT_CRITICAL
-                and item.get("tier", 3) <= 2):
+                and item.get("tier", 3) <= NEWS_CRITICAL_MAX_TIER):
             _crit_by_ticker.setdefault(_t, []).append(item)
 
     for ticker, _crit_items in _crit_by_ticker.items():

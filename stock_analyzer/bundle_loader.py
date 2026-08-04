@@ -148,7 +148,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
                 }
     except Exception:
         pass  # silent degrade — valuation scores on P/E + FCF alone
-    val_score, val_signals = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
+    val_score, val_signals, val_available = valuation_score(financials, _analyst_data, price, _sector_for_scoring)
     avg_sent, headlines = analyze_news(bundle["news"])
     # Bidirectional LLM rescore — ticker-aware financial context, persisted to
     # sentiment_llm_cache so app + cron always use the same composite for a given
@@ -217,6 +217,7 @@ def load_bundle(ticker: str, period: str = "6mo", spy_df=None, rfr: float = 0.04
         "val_score":        val_score, "val_signals":  val_signals,
         "val_analyst_data": _analyst_data,
         "bq_available":     bq_available,
+        "val_available":    val_available,
         # Backward compat aliases (keep for one release):
         "f_score":          bq_score,  "f_signals":    bq_signals,
         "fundamentals_available": bq_available,

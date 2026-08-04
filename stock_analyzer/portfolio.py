@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 
 
@@ -76,15 +76,6 @@ def resolve_sector(ticker: str, fallback: str = "") -> str:
     )
 
 
-# Ratchet stop levels: as gains grow, floor the stop to protect accumulated profit
-_RATCHET_LEVELS = [
-    (75, 0.40, "Protect 40% gain"),
-    (50, 0.25, "Protect 25% gain"),
-    (25, 0.10, "Protect 10% gain"),
-    (10, 0.02, "Breakeven guard"),
-]
-
-
 def protective_stop(
     current_price: float, avg_cost: float, atr_stop: float
 ) -> tuple[float, str]:
@@ -95,7 +86,7 @@ def protective_stop(
     if avg_cost <= 0:
         return atr_stop, "ATR Stop"
     gain_pct = (current_price - avg_cost) / avg_cost * 100
-    for threshold, multiplier, label in _RATCHET_LEVELS:
+    for threshold, multiplier, label in STOP_RATCHET_LEVELS:
         if gain_pct >= threshold:
             floor = avg_cost * (1 + multiplier)
             return round(max(atr_stop, floor), 2), label
@@ -171,11 +162,11 @@ def stop_ladder(
     atr_stop = round(atr_stop_override, 2) if atr_stop_override else round(price - atr_multiplier * atr_val, 2)
 
     # Ratchet floor for the CURRENT gain tier (display-only — which number
-    # actually wins is decided by protective_stop below). Mirrors _RATCHET_LEVELS
+    # actually wins is decided by protective_stop below). Mirrors STOP_RATCHET_LEVELS
     # exactly; None until the gain reaches the first rung (+10%).
     ratchet_floor = None
     ratchet_floor_label = None
-    for threshold, mult, label in _RATCHET_LEVELS:
+    for threshold, mult, label in STOP_RATCHET_LEVELS:
         if gain_pct >= threshold:
             ratchet_floor = round(avg_cost * (1 + mult), 2)
             ratchet_floor_label = label
@@ -209,7 +200,7 @@ def stop_ladder(
     # Next ratchet rung the price has NOT reached yet — the "keep climbing" story:
     # at +N% your stop auto-ratchets to $floor (locks +M%). None past the top rung.
     next_tier = None
-    for threshold, mult, label in sorted(_RATCHET_LEVELS, key=lambda x: x[0]):
+    for threshold, mult, label in sorted(STOP_RATCHET_LEVELS, key=lambda x: x[0]):
         if threshold > gain_pct:
             next_tier = {
                 "gain_pct":      threshold,
@@ -223,7 +214,7 @@ def stop_ladder(
     # visual. Each rung carries the PRICE that activates the tier and the stop
     # FLOOR it locks. reached = gain already at/above it; is_current = the highest
     # reached rung (the tier in force). Same avg_cost×(1+…) math as protective_stop.
-    _reached = [t for t, _, _ in _RATCHET_LEVELS if gain_pct >= t]
+    _reached = [t for t, _, _ in STOP_RATCHET_LEVELS if gain_pct >= t]
     _current_threshold = max(_reached) if _reached else None
     ratchet_rungs = [
         {
@@ -235,7 +226,7 @@ def stop_ladder(
             "reached":       gain_pct >= threshold,
             "is_current":    threshold == _current_threshold,
         }
-        for threshold, mult, label in sorted(_RATCHET_LEVELS, key=lambda x: x[0])
+        for threshold, mult, label in sorted(STOP_RATCHET_LEVELS, key=lambda x: x[0])
     ]
 
     return {

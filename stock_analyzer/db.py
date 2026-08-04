@@ -591,13 +591,33 @@ _DEFAULT_WATCHLIST = ["NVDA", "AMD", "INTC", "MU"]
 # app.py after resolving the viewer's identity. NOTE: save_fundamentals_cache is
 # intentionally NOT gated — it's a system cache (not user data), and cache
 # warming on a viewer's visit is harmless/desirable.
+#
+# Stored in st.session_state (per-browser-session), NOT as a bare module
+# global — Streamlit runs every active session's script in its own thread
+# within the SAME process, so a module global here would be shared/racy
+# across concurrent sessions: an owner's rerun setting it False could land
+# between a read-only viewer's write call being gated and executed, letting
+# a non-owner write succeed (2026-08-04 audit finding). `_READONLY` remains
+# only as the fallback for callers outside a Streamlit session (the headless
+# cron never calls set_readonly() at all, so it's always False there).
 _READONLY = False
 
 def set_readonly(flag: bool) -> None:
     global _READONLY
     _READONLY = bool(flag)
+    try:
+        import streamlit as _st
+        _st.session_state["_db_readonly"] = bool(flag)
+    except Exception:
+        pass  # no active Streamlit session (e.g. headless cron) — fallback stands
 
 def is_readonly() -> bool:
+    try:
+        import streamlit as _st
+        if "_db_readonly" in _st.session_state:
+            return bool(_st.session_state["_db_readonly"])
+    except Exception:
+        pass
     return _READONLY
 
 
@@ -720,7 +740,7 @@ def save_holdings(df: pd.DataFrame) -> bool:
     first so a transient failure leaves the prior data intact, never wipes.
     Requires UNIQUE(ticker) on holdings (see one-time SQL at module top).
     """
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     from stock_analyzer import api_health as _ah
     if not has_db():
         return False
@@ -837,7 +857,7 @@ def save_daily_snapshot(snapshot_date, rows: list[dict]) -> bool:
     final, market-closed close price). Sweeps tickers no longer held for that
     date so a same-day exit doesn't linger. Read-only viewers no-op; a missing
     table degrades to a silent no-op (returns False)."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     _date = str(snapshot_date)
@@ -876,7 +896,7 @@ def save_daily_regime(regime_date, regime: dict) -> bool:
     calendar day, portfolio-independent). Read-only viewers no-op; a missing
     table degrades to a silent no-op (returns False). Never fabricates a
     regime — `regime` must come from a real `detect_macro_regime()` call."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     if not regime or not regime.get("regime"):
@@ -930,7 +950,7 @@ def save_sentiment_snapshot(snap_date, rows: list[dict]) -> bool:
     vs_sector_pp, source.  Upserts on (ticker, snap_date); last writer wins
     intraday. Silently no-ops in READONLY mode or when DB is offline.
     """
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db() or not rows:
         return False
@@ -1004,7 +1024,7 @@ def save_bundle_cache(ticker: str, bundle: dict) -> bool:
     can serve aged-but-real data when providers are down. Read-only viewers
     no-op; a missing table degrades to a silent no-op. NEVER raises (callers wrap
     too) — cache I/O must not break the load_all success path."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     # Instrumented under the "bundle_cache" Data Health source so seeding is
     # finally visible (it was a fully-silent except: pass — a broken table / RLS
     # / serialization / missing-context write was invisible). has_db() is inside
@@ -1183,7 +1203,7 @@ def load_trades() -> pd.DataFrame:
 
 
 def save_trade(record: dict) -> bool:
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -1218,7 +1238,7 @@ def save_trade(record: dict) -> bool:
 
 
 def delete_trade(trade_id: int) -> bool:
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -1238,7 +1258,7 @@ def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
     Used by recalculate_from_trades() to correct stale figures stored on rows
     that were saved when holdings_df was in a corrupted state.
     """
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -1285,7 +1305,7 @@ def load_thesis_reviews() -> pd.DataFrame:
 
 
 def save_thesis_review(record: dict) -> bool:
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1300,7 +1320,7 @@ def save_thesis_review(record: dict) -> bool:
 
 def update_user_thesis(ticker: str, thesis: str) -> bool:
     """Update user_thesis on the most recent BUY trade for `ticker`."""
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1359,7 +1379,7 @@ def load_weekly_debriefs(limit: int = 4) -> "pd.DataFrame":
 
 def save_weekly_debrief(record: dict) -> bool:
     """Upsert a weekly debrief record (unique on week_ending)."""
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1408,7 +1428,7 @@ def load_monthly_reports(limit: int = 3) -> "pd.DataFrame":
 
 def save_monthly_report(record: dict) -> bool:
     """Upsert a monthly intelligence report (unique on period_end)."""
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1435,7 +1455,7 @@ _ANALYST_COVERAGE_COLS = [
 
 def save_analyst_coverage(record: dict) -> bool:
     """Insert one analyst-coverage record. Append-only (each article is a distinct row)."""
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1487,7 +1507,7 @@ def load_analyst_coverage(
 
 def delete_analyst_coverage(row_id) -> bool:
     """Delete a single analyst-coverage record by id."""
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1503,7 +1523,7 @@ def delete_analyst_coverage(row_id) -> bool:
 def update_analyst_coverage_price(row_id, price: float) -> bool:
     """Backfill price_at_article_date on one existing analyst-coverage row.
     Used by scripts/backfill_analyst_prices.py; awareness-only, never gates."""
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db():
         return False
@@ -1521,7 +1541,7 @@ def update_analyst_coverage_price(row_id, price: float) -> bool:
 def save_earnings_context(records: list[dict]) -> None:
     """Bulk upsert earnings_context rows on (ticker, article_date).
     Ships inert if the table doesn't exist yet (graceful degradation)."""
-    if _READONLY or not has_db() or not records:
+    if is_readonly() or not has_db() or not records:
         return
     try:
         _client().table("earnings_context").upsert(
@@ -1622,7 +1642,7 @@ def load_earnings_context_batch(tickers: list[str], max_age_days: int = 30) -> d
 def save_earnings_results(records: list[dict]) -> None:
     """Bulk upsert earnings_results rows on (ticker, report_date).
     Ships inert if the table doesn't exist yet (graceful degradation)."""
-    if _READONLY or not has_db() or not records:
+    if is_readonly() or not has_db() or not records:
         return
     try:
         _client().table("earnings_results").upsert(
@@ -1826,7 +1846,7 @@ def save_scanner_cache(results_df, scan_date, source: str = "cron") -> bool:
     by a manual full scan (source="app"). System cache, but honours the read-only
     guard (it's a write). Best-effort; never raises.
     """
-    if _READONLY:
+    if is_readonly():
         return False
     if not has_db() or results_df is None or getattr(results_df, "empty", True):
         return False
@@ -1896,7 +1916,7 @@ def save_recommendations(records: list[dict]) -> dict:
     The DB defaults `surfaced_at` to now() — don't set it client-side so the
     first-seen timestamp is server-authoritative.
     """
-    if _READONLY: return {"attempted": 0, "saved": 0, "error": "read-only"}  # read-only viewer: no-op
+    if is_readonly(): return {"attempted": 0, "saved": 0, "error": "read-only"}  # read-only viewer: no-op
     if not records or not has_db():
         return {"attempted": 0, "saved": 0, "error": None}
     payload = []
@@ -2046,7 +2066,7 @@ def save_exit_signals_batch(signals: list[dict]) -> None:
     All other columns (composite_score, price_at_signal, dd_from_peak_pct,
     pnl_pct, below_ma_count, rel_strength) are nullable and may be omitted.
     """
-    if _READONLY:
+    if is_readonly():
         return
     if not signals:
         return
@@ -2097,7 +2117,7 @@ def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> None:
     Each dict in `snapshots` must have at minimum: ticker, snapshot_date.
     target_mean/num_analysts/info_source are nullable and may be omitted.
     """
-    if _READONLY:
+    if is_readonly():
         return
     if not snapshots:
         return
@@ -2165,7 +2185,7 @@ def save_judgment_opinions_batch(opinions: list[dict]) -> None:
     signal_date (derived from as_of) and the ticker sentinel for portfolio-wide
     opinions before writing.
     """
-    if _READONLY:
+    if is_readonly():
         return
     if not opinions:
         return
@@ -2238,7 +2258,7 @@ def save_judgment_grades_batch(grades: list[dict]) -> None:
     by stock_analyzer.judgment_grading's grade_ticker_opinion()/
     grade_portfolio_opinion() output.
     """
-    if _READONLY:
+    if is_readonly():
         return
     if not grades:
         return
@@ -2338,7 +2358,7 @@ def save_watchlist(tickers: list[str]) -> bool:
     Building the deduped list first means malformed input never reaches the
     DB; the sweep at the end is idempotent.
     """
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     cleaned: list[str] = []
     seen: set[str] = set()
     for t in tickers:
@@ -2415,7 +2435,7 @@ def save_manual_stop(ticker: str, stop_price: float,
                      note: str | None = None,
                      source_action: str | None = None) -> bool:
     """Upsert a manual stop for the ticker. Returns True on success."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     t = str(ticker or "").upper().strip()
     try:
         sp = float(stop_price)
@@ -2443,7 +2463,7 @@ def save_manual_stop(ticker: str, stop_price: float,
 
 def clear_manual_stop(ticker: str) -> bool:
     """Remove the manual stop override for the ticker (revert to ATR)."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     t = str(ticker or "").upper().strip()
     if not t or not has_db():
         return False
@@ -2784,7 +2804,7 @@ def load_account_cash() -> dict | None:
 def save_account_cash(cash_balance: float, note: str | None = None) -> bool:
     """Upsert the single account-cash row (id=1). USER data → honours the
     read-only viewer guard. Best-effort; swallows failures."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -2833,7 +2853,7 @@ def add_account_flow(flow_date: str, flow_type: str, amount: float,
     """Insert one cash-flow row (baseline / deposit / withdrawal). `amount` is
     stored POSITIVE (the type carries the sign). USER data → honours the
     read-only viewer guard. Best-effort; swallows failures."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:
@@ -2852,7 +2872,7 @@ def add_account_flow(flow_date: str, flow_type: str, amount: float,
 def delete_account_flow(flow_id) -> bool:
     """Delete one cash-flow row by id. USER data → honours the read-only viewer
     guard. Best-effort; swallows failures."""
-    if _READONLY: return False  # read-only viewer: no-op
+    if is_readonly(): return False  # read-only viewer: no-op
     if not has_db():
         return False
     try:

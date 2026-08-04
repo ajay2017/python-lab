@@ -15,6 +15,9 @@ from stock_analyzer.constants import (
     NEWS_OPPORTUNITY_COMPOUND_MIN,
     NEWS_OPPORTUNITY_SCORE_MIN,
     SENTIMENT_LLM_MAX_SWING,
+    NEWS_SENTIMENT_CRITICAL,
+    NEWS_CRITICAL_MAX_TIER,
+    NEWS_CRITICAL_MIN_WEIGHT_PCT,
 )
 
 
@@ -116,7 +119,9 @@ def build_news_intelligence(news_items: list, port_df, reduce_tickers=None) -> d
             continue
         level = (
             "critical"
-            if item["compound"] <= -0.25 and item["weight"] >= 8.0 and item["tier"] <= 2
+            if item["compound"] <= NEWS_SENTIMENT_CRITICAL
+            and item["weight"] >= NEWS_CRITICAL_MIN_WEIGHT_PCT
+            and item["tier"] <= NEWS_CRITICAL_MAX_TIER
             else "warning"
         )
         alerts.append({**item, "alert_level": level})

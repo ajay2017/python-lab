@@ -201,8 +201,10 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
     # neutral 50, and showing it as a confident "Hold 50/100" contradicts the Analysis
     # page, which WITHHOLDS the verdict (the PINS/HUBS fundamentals-gate class). Withhold
     # here too so the two surfaces can't disagree on the same name. Momentum and entry
-    # timing below are purely technical and stay valid. (Audit §9 P1.)
-    fundamentals_available = data.get("fundamentals_available", True)
+    # timing below are purely technical and stay valid. (Audit §9 P1.) Also honor the
+    # Valuation pillar's own availability flag (2026-08-04 audit finding) — same
+    # fabricated-neutral-50 failure mode, just the other 30%-weighted leg.
+    fundamentals_available = data.get("fundamentals_available", True) and data.get("val_available", True)
 
     target     = fins.get("analyst_target")
     upside_pct = float((target - price) / price * 100) if target and price else None

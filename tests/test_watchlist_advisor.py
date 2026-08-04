@@ -166,6 +166,40 @@ def test_remove_on_low_score():
     assert rec["priority"] == "HIGH"
 
 
+# ─── Data-availability gate (2026-08-04 audit finding) ───────────────────────
+
+def test_data_unavailable_withholds_instead_of_remove():
+    """A low fabricated score with fundamentals unavailable must NOT issue a
+    REMOVE call — it's a data outage, not a broken thesis."""
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(total=30.0, fundamentals_available=False)
+    )
+    assert rec["action"] == "DATA_UNAVAILABLE"
+    assert rec["priority"] == "MEDIUM"
+
+
+def test_data_unavailable_withholds_instead_of_enter_now():
+    """A high fabricated score with valuation unavailable must NOT issue an
+    ENTER_NOW call — same failure mode, other pillar."""
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(total=80.0, val_available=False)
+    )
+    assert rec["action"] == "DATA_UNAVAILABLE"
+
+
+def test_data_available_both_flags_true_scores_normally():
+    rec = build_watchlist_recommendation(
+        "XYZ", _base_data(total=30.0, fundamentals_available=True, val_available=True)
+    )
+    assert rec["action"] == "REMOVE"
+
+
+def test_data_availability_flags_default_true_for_legacy_bundles():
+    """Bundles built before this fix have neither key — must not be gated."""
+    rec = build_watchlist_recommendation("XYZ", _base_data(total=30.0))
+    assert rec["action"] == "REMOVE"
+
+
 def test_remove_on_sell_signal_even_with_decent_score():
     rec = build_watchlist_recommendation("XYZ", _base_data(total=50.0, rec={"label": "Sell"}))
     assert rec["action"] == "REMOVE"

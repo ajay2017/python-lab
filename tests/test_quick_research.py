@@ -307,7 +307,7 @@ def test_portfolio_bullet_new_position_no_concerns_fallback():
 
 # ─── research_ticker — fundamentals-gated bullet 1 + score/signal withheld ───
 
-def _base_data(close_values, rsi=None, fundamentals_available=True):
+def _base_data(close_values, rsi=None, fundamentals_available=True, val_available=True):
     df = pd.DataFrame({"Close": close_values})
     if rsi is not None:
         df["RSI"] = rsi
@@ -321,6 +321,7 @@ def _base_data(close_values, rsi=None, fundamentals_available=True):
         "revisions": {"net": 0},
         "earnings": None,
         "fundamentals_available": fundamentals_available,
+        "val_available": val_available,
         "name": "Test Co",
         "sector": "Technology",
         "headlines": ["h1", "h2", "h3", "h4"],
@@ -341,6 +342,24 @@ def test_research_ticker_fundamentals_available_shows_real_score():
     result = qr.research_ticker("XYZ", data)
     assert result["score"] == 72.0
     assert result["signal"] == "Buy"
+
+
+def test_research_ticker_val_unavailable_also_withholds():
+    """2026-08-04 audit finding: fundamentals_available alone isn't enough —
+    the Valuation pillar can independently fabricate its own neutral 50."""
+    data = _base_data([100, 101, 102], fundamentals_available=True, val_available=False)
+    result = qr.research_ticker("XYZ", data)
+    assert result["score"] is None
+    assert result["signal"] == "Verdict withheld"
+
+
+def test_research_ticker_val_missing_key_defaults_available_true():
+    """Bundles built before this fix has no val_available key at all — must
+    default to True (available), not silently withhold every legacy bundle."""
+    data = _base_data([100, 101, 102])
+    del data["val_available"]
+    result = qr.research_ticker("XYZ", data)
+    assert result["score"] == 72.0
 
 
 # ─── research_ticker — momentum move calc len(close) guards ─────────────────

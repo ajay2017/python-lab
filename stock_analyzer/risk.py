@@ -219,12 +219,15 @@ def compute_portfolio_risk_metrics(
     held_data: dict,
     spy_df: pd.DataFrame | None = None,
     risk_free_annual: float = 0.045,
-) -> dict:
+) -> dict | None:
     """
     Portfolio-level risk metrics from weighted daily returns.
     Returns Beta, Ann. Volatility, Sharpe, Sortino, VaR 95%, CVaR, Max Drawdown,
     plus drawdown_series and cum_returns Series for charting.
-    Returns empty dict if insufficient data.
+    Returns None if insufficient data — an offline sentinel, not {}, so
+    callers can distinguish "couldn't compute" from "computed, zero risk"
+    (2026-08-04 audit finding: a bare {} here was silently read downstream
+    as "no risk," suppressing risk alerts instead of flagging them offline).
     """
     series: dict[str, pd.Series] = {}
     for ticker, data in held_data.items():
@@ -237,11 +240,11 @@ def compute_portfolio_risk_metrics(
                 series[ticker] = closes
 
     if not series:
-        return {}
+        return None
 
     prices = pd.DataFrame(series).ffill().dropna()
     if len(prices) < 10:
-        return {}
+        return None
 
     daily_returns = prices.pct_change().dropna()
 
@@ -252,11 +255,11 @@ def compute_portfolio_risk_metrics(
             weights[t] = float(row["Weight (%)"]) / 100.0
 
     if not weights:
-        return {}
+        return None
 
     total_w = sum(weights.values())
     if total_w == 0:
-        return {}
+        return None
     weights = {t: w / total_w for t, w in weights.items()}
 
     port_returns = pd.Series(0.0, index=daily_returns.index)
