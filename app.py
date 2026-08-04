@@ -11328,6 +11328,7 @@ elif page == "🔗 Risk Analysis":
                                             st.session_state[_def_comp_key] = _def_comps
                                             st.rerun()
 
+                                    _dp_skipped = 0
                                     for _, _dp in _def_picks.iterrows():
                                         _dp_ticker  = str(_dp["Ticker"])
                                         _dp_sector  = str(_dp.get("Sector", ""))
@@ -11343,6 +11344,7 @@ elif page == "🔗 Risk Analysis":
 
                                         # Skip Sell-rated composites (below the Hold floor) — not suitable for defensive addition
                                         if _dp_cscore is not None and _dp_cscore < COMPOSITE_HOLD:
+                                            _dp_skipped += 1
                                             continue
 
                                         _sig_clr = (
@@ -11402,6 +11404,21 @@ elif page == "🔗 Risk Analysis":
                                                 st.session_state["_pending_page"]    = "📈 Analysis"
                                                 st.session_state["_nav_origin"]      = "🏠 Home"
                                                 st.rerun()
+
+                                    if _dp_skipped:
+                                        _dp_n_shown = len(_def_picks) - _dp_skipped
+                                        if _dp_n_shown == 0:
+                                            st.info(
+                                                f"All {_dp_skipped} candidate{'s' if _dp_skipped > 1 else ''} "
+                                                f"filtered — composite score below the Hold floor ({COMPOSITE_HOLD}). "
+                                                "No qualifying defensive picks with loaded scores."
+                                            )
+                                        else:
+                                            st.caption(
+                                                f"{_dp_skipped} candidate{'s' if _dp_skipped > 1 else ''} not shown — "
+                                                f"composite score below the Hold floor ({COMPOSITE_HOLD}), "
+                                                "not suitable for defensive addition."
+                                            )
 
         # ── Regime Fit — Concept D regime-conditional position targets ────────
         # Diagnostic only: never gates/resizes/suppresses anything. Read-only
@@ -25340,6 +25357,8 @@ elif page == "💰 Account":
     else:
         import plotly.graph_objects as _pgo_trend
 
+        _chart_priv = st.session_state.get("_privacy", True)
+
         _trend_view = st.radio(
             "Granularity",
             ["Weekly", "Monthly", "All data"],
@@ -25379,7 +25398,10 @@ elif page == "💰 Account":
             x=_plot_tdf.index, y=_plot_tdf["ncc"],
             name="Contributed capital",
             line=dict(color="#9ca3af", width=1.5, dash="dot"),
-            hovertemplate="Contributed: $%{y:,.0f}<extra></extra>",
+            hovertemplate=(
+                "Contributed: ••••••<extra></extra>" if _chart_priv
+                else "Contributed: $%{y:,.0f}<extra></extra>"
+            ),
             mode="lines",
         ))
         # Equity filled area — fills to the NCC trace above/below it
@@ -25389,7 +25411,10 @@ elif page == "💰 Account":
             fill="tonexty",
             fillcolor=_t_fill,
             line=dict(color=_t_eq_color, width=2),
-            hovertemplate="Equity positions: $%{y:,.0f}<extra></extra>",
+            hovertemplate=(
+                "Equity positions: ••••••<extra></extra>" if _chart_priv
+                else "Equity positions: $%{y:,.0f}<extra></extra>"
+            ),
             mode="lines",
         ))
         # Net account value marker — equity + cash (may be negative = margin debit).
@@ -25404,10 +25429,13 @@ elif page == "💰 Account":
                 mode="markers+text",
                 marker=dict(size=12, color=_t_net_color, symbol="diamond",
                             line=dict(color="white", width=1.5)),
-                text=[f"  Net: ${_total_value:,.0f}"],
+                text=["  Net: ••••••"] if _chart_priv else [f"  Net: ${_total_value:,.0f}"],
                 textposition="middle right",
                 textfont=dict(size=11, color=_t_net_color),
-                hovertemplate="Net account value: $%{y:,.0f}<extra></extra>",
+                hovertemplate=(
+                    "Net account value: ••••••<extra></extra>" if _chart_priv
+                    else "Net account value: $%{y:,.0f}<extra></extra>"
+                ),
             ))
         _t_fig.update_layout(
             margin=dict(l=0, r=0, t=28, b=0),
@@ -25415,6 +25443,7 @@ elif page == "💰 Account":
             legend=dict(orientation="h", y=1.12, x=0),
             xaxis=dict(showgrid=False),
             yaxis=dict(
+                showticklabels=not _chart_priv,
                 tickprefix="$", tickformat=",.0f",
                 gridcolor="rgba(128,128,128,0.15)",
             ),
@@ -25441,8 +25470,9 @@ elif page == "💰 Account":
         # Narration — use \$ to escape dollar signs from Streamlit's KaTeX parser.
         # Bare $ in markdown triggers inline LaTeX mode, consuming the sign and
         # mangling adjacent text. \$ renders as a literal dollar sign.
+        # When privacy mode is on, mask dollar values to match the KPI tiles above.
         def _d(v: float) -> str:
-            return f"\\${v:,.0f}"
+            return "••••••" if _chart_priv else f"\\${v:,.0f}"
 
         _t_narr = (
             f"Since **{_t_first_dt}**, equity positions moved from "
