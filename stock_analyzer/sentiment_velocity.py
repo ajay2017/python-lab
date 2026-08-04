@@ -132,7 +132,7 @@ def compute_velocity(
     elif divergence and divergence_type == "BULLISH":
         signal = "🔄 Divergence — price falling but sentiment recovering"
     elif direction == "Improving ↑":
-        signal = "✅ Sentiment improving"
+        signal = "📈 Sentiment improving"
     elif direction == "Deteriorating ↓":
         signal = "🔴 Sentiment deteriorating"
     else:

@@ -12550,7 +12550,7 @@ elif page == "🧩 Intelligence":
                     _hsb_state_style = {
                         "unverified": ("⚪", "Unverified — no price-correlation data this session"),
                         "possible":   ("🟠", "Possible shared assumption — review"),
-                        "confirmed":  ("🟡", "Confirmed — also visible in Correlation Clusters"),
+                        "confirmed":  ("🟡", "Cluster Confirmed — also visible in Correlation Clusters"),
                     }
                     for _hsb_c in _hsb_classified:
                         _hsb_icon, _hsb_label = _hsb_state_style.get(
@@ -24778,7 +24778,7 @@ elif page == "📊 Predictive Analytics":
                         f"'N (deduped)' (the band's total divergent picks) since a forward-close "
                         f"fetch can fail for one horizon and not another, and Day+20 only counts "
                         f"picks old enough to have matured. Bands/horizons below "
-                        f"n={PREDICTIVE_MIN_BAND_N} (`PREDICTIVE_MIN_BAND_N`) are still shown — "
+                        f"n={PREDICTIVE_MIN_BAND_N} are still shown — "
                         f"treat as indicative only. Day+1/Day+5 computed as stock return minus "
                         f"SPY's own Day+1/Day+5 return — never raw %, to avoid mistaking a broad "
                         f"market move for an entry-timing signal."
@@ -27149,7 +27149,7 @@ This is **awareness only** — like Stress Testing, it never gates a recommendat
         with st.expander("🚦 Signal severity — what the colors mean", expanded=False):
             st.markdown(
                 """
-The app uses three color bands across all pages — the color always carries the same meaning, even when the words differ by page.
+The app uses three primary color bands — the color always carries the same meaning, even when the words differ by page. A neutral **HOLD** state (grey on the Pre-Event Playbook, blue on the Post-Event Results tab) appears on the Economic Calendar to signal no specific action is needed for that position around this event.
 
 | Color | Meaning | When to act |
 |---|---|---|
@@ -27164,8 +27164,10 @@ The app uses three color bands across all pages — the color always carries the
 | 🏠 Home — Act Today | EXIT · TRIM · Stop Breached | Watch | ✅ You're set for today |
 | 🔔 Signal badges | ❌ Skip — Signals Disagree | ⚠️ Caution · 🔍 Verify | ✅ Go — All Signals Agree |
 | 📋 Watchlist | Remove | Wait for Entry · Wait for Catalyst · Hold Off — Earnings Soon | Ready to Enter · Near Entry |
-| 📅 Economic Calendar | PROTECT | Watch | OPPORTUNITY · HOLD |
+| 📅 Economic Calendar | PROTECT | Watch | OPPORTUNITY |
 | Risk Advisor cards | HIGH | MEDIUM | OK |
+
+*Economic Calendar also uses **HOLD** (grey/blue — this position needs no specific action for this event).*
 
 **Rule of thumb:** red = decide today; amber = keep in view, don't trade yet; green = the app has nothing to add right now.
 """

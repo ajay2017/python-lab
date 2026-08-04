@@ -302,7 +302,7 @@ def _format_prompt(package: dict) -> str:
 
     if package.get("verdict_rows"):
         lines.append("")
-        lines.append("By cross-check verdict (Confirmed = the App's actual recommendations; others = awareness it steered you away from):")
+        lines.append("By cross-check verdict (Engine-Confirmed = the App's actual recommendations; others = awareness it steered you away from):")
         for row in package["verdict_rows"]:
             lines.append(_band_line(row))
 

@@ -313,11 +313,10 @@ def build_rebalance_plan(
                 )
 
             inst_lens = (
-                "Underweight rebalancing in high-conviction names is one of the highest-return"
-                "uses of portfolio cash. Research shows that systematic rebalancing "
-                "— buying underweight winners and trimming overweight laggards — adds "
-                "approximately 0.5–1.0% annually versus a drift portfolio, purely from "
-                "the discipline of maintaining target allocations. "
+                "Underweight rebalancing in high-conviction names is one of the highest-return "
+                "uses of portfolio cash. Systematic rebalancing — buying underweight winners and "
+                "trimming overweight laggards — tends to improve long-term returns versus a drift "
+                "portfolio, purely from the discipline of maintaining target allocations. "
                 "Use proceeds from trims to fund adds — keeping total exposure stable."
             )
 

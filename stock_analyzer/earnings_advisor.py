@@ -242,11 +242,10 @@ def _recommend(
                 "the report may confirm it."
             ),
             (
-                "Earnings revision momentum is one of the most reliable alpha factors in institutional investing. "
-                "When analysts are cutting estimates heading into a report, it's usually because they have "
-                "channel checks, supplier data, or management conversations that signal trouble. "
-                "Quantitative research teams show that stocks with negative pre-earnings revisions miss consensus "
-                "at twice the rate of those with positive revisions. Reduce before the report; re-evaluate after."
+                "Earnings revision momentum is a reliable miss-risk signal in professional portfolio management. "
+                "When analysts are cutting estimates heading into a report, it's usually because channel checks, "
+                "supplier data, or management conversations signal emerging trouble. "
+                "Negative pre-earnings revisions correlate with higher miss rates. Reduce before the report; re-evaluate after."
             ),
         )
 
