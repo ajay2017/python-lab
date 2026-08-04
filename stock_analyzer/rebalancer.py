@@ -67,7 +67,10 @@ def compute_drift(
         if abs(drift) <= TOLERANCE_OK:
             status = "OK"
         elif abs(drift) <= TOLERANCE_WATCH:
-            status = "WATCH"
+            # "DRIFTING" not "WATCH" — this is a sizing-tolerance band, a
+            # different concept from exit_advisor's deterioration WATCH tier
+            # (2026-08-04 UX audit CA2).
+            status = "DRIFTING"
         else:
             status = "TRIM" if drift > 0 else "ADD"
 
@@ -172,7 +175,7 @@ def build_rebalance_plan(
                 urgency += 30
             elif abs(drift_pp) > TOLERANCE_OK:
                 urgency += 10
-            if status == "WATCH":
+            if status == "DRIFTING":
                 urgency = max(urgency, 5)
 
             # Rationale

@@ -502,7 +502,7 @@ def synthesize_directives(
                 "type": "action",
                 "text": (
                     f"Sentiment alignment adds {edge:+.1f}pp of alpha in your history — "
-                    f"favour Confirmed-verdict picks over Conflicted or Unverified ones "
+                    f"favour Engine-Confirmed-verdict picks over Conflicted or Unverified ones "
                     f"when conviction is similar."
                 ),
                 "source_tab": "🧭 Sentiment Alignment",

@@ -60,12 +60,12 @@ def _cleanup_fake_anthropic():
 
 # ─── _pct ──────────────────────────────────────────────────────────────────────
 
-def test_pct_none_returns_na():
-    assert ir._pct(None) == "N/A"
+def test_pct_none_returns_placeholder():
+    assert ir._pct(None) == "—"
 
 
-def test_pct_nan_returns_na():
-    assert ir._pct(float("nan")) == "N/A"
+def test_pct_nan_returns_placeholder():
+    assert ir._pct(float("nan")) == "—"
 
 
 def test_pct_normal_float_signed_one_decimal():
@@ -73,8 +73,8 @@ def test_pct_normal_float_signed_one_decimal():
     assert ir._pct(-2.5) == "-2.5%"
 
 
-def test_pct_non_numeric_returns_na():
-    assert ir._pct("not-a-number") == "N/A"
+def test_pct_non_numeric_returns_placeholder():
+    assert ir._pct("not-a-number") == "—"
 
 
 # ─── _band_line ────────────────────────────────────────────────────────────────

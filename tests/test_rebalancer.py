@@ -1,5 +1,5 @@
 """Regression tests for stock_analyzer/rebalancer.py — the Portfolio
-Rebalancing Advisor: per-position drift vs target weight, OK/WATCH/TRIM/ADD
+Rebalancing Advisor: per-position drift vs target weight, OK/DRIFTING/TRIM/ADD
 classification, and the trim/add action lists with urgency ordering,
 rationale branching, and the News Intelligence / Risk Advisor coordination
 gates. Pure computation, no I/O. See docs/plans/test-automation.md for scope.
@@ -60,10 +60,10 @@ def test_compute_drift_status_ok_within_2pp():
     assert result.iloc[0]["Drift (pp)"] == 2.0
 
 
-def test_compute_drift_status_watch_between_2_and_5pp():
+def test_compute_drift_status_drifting_between_2_and_5pp():
     df = pd.DataFrame([_port_row("AAPL", weight=14.0)])
     result = reb.compute_drift(df, {"AAPL": 10.0}, total_val=100_000.0)
-    assert result.iloc[0]["Status"] == "WATCH"
+    assert result.iloc[0]["Status"] == "DRIFTING"
 
 
 def test_compute_drift_status_trim_when_overweight_beyond_5pp():
@@ -167,18 +167,18 @@ def test_build_rebalance_plan_trim_winner_running_rationale():
     assert trim["urgency"] == 30  # only drift>WATCH tier, no Sell/low-score bonus
 
 
-def test_build_rebalance_plan_trim_watch_status_urgency_floor_is_5():
-    df = pd.DataFrame([_drift_row("AAPL", "WATCH", 3.0, 3000.0, signal="Buy", score=70.0)])
+def test_build_rebalance_plan_trim_drifting_status_urgency_floor_is_5():
+    df = pd.DataFrame([_drift_row("AAPL", "DRIFTING", 3.0, 3000.0, signal="Buy", score=70.0)])
     result = reb.build_rebalance_plan(df, total_val=100_000.0)
     trim = result["trims"][0]
     # drift 3.0 > TOLERANCE_OK(2.0) but <= TOLERANCE_WATCH(5.0) -> +10, already above floor
     assert trim["urgency"] == 10
 
 
-def test_build_rebalance_plan_trim_watch_status_urgency_floor_applies_when_below():
-    # Construct a WATCH row where the raw urgency tally would be 0, to confirm
-    # the max(urgency, 5) floor actually kicks in.
-    df = pd.DataFrame([_drift_row("AAPL", "WATCH", 2.5, 2500.0, signal="Hold", score=70.0)])
+def test_build_rebalance_plan_trim_drifting_status_urgency_floor_applies_when_below():
+    # Construct a DRIFTING row where the raw urgency tally would be 0, to
+    # confirm the max(urgency, 5) floor actually kicks in.
+    df = pd.DataFrame([_drift_row("AAPL", "DRIFTING", 2.5, 2500.0, signal="Hold", score=70.0)])
     result = reb.build_rebalance_plan(df, total_val=100_000.0)
     trim = result["trims"][0]
     # abs(drift_pp)=2.5 > TOLERANCE_OK(2.0) -> +10 already, so floor is moot here;

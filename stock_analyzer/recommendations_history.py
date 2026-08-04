@@ -350,7 +350,11 @@ def _verdict_bucket(v: str) -> str:
     """Normalize the stored verdict string into a display bucket."""
     s = (v or "").strip().lower()
     if "confirm" in s:
-        return "Confirmed"
+        # "Engine-Confirmed" not bare "Confirmed" — matches
+        # intelligence_report.py's qualifier for this same cross-check-verdict
+        # concept, distinct from thesis_cluster.py's unrelated "Cluster
+        # Confirmed" (2026-08-04 UX audit CA4/C5).
+        return "Engine-Confirmed"
     if "conflict" in s:
         return "Conflicted"
     if "caution" in s:
@@ -363,16 +367,16 @@ def _verdict_bucket(v: str) -> str:
 
 
 # Stable display order for the by-verdict rollup (best → worst signal quality).
-_VERDICT_ORDER = ["Confirmed", "Conflicted", "Caution", "Mixed", "Unverified", "Other / blank"]
+_VERDICT_ORDER = ["Engine-Confirmed", "Conflicted", "Caution", "Mixed", "Unverified", "Other / blank"]
 
 
 def by_verdict(enriched: list[dict]) -> list[dict]:
     """
     Action-rate + outcome + alpha rollup keyed by verdict bucket. This is the
-    engine-quality view: it judges the App's actual recommendations (Confirmed)
-    apart from the awareness feed it deliberately surfaces but steers you away
-    from (Conflicted / Caution). Returns a list ordered best→worst signal
-    quality so the table reads top-down.
+    engine-quality view: it judges the App's actual recommendations
+    (Engine-Confirmed) apart from the awareness feed it deliberately surfaces
+    but steers you away from (Conflicted / Caution). Returns a list ordered
+    best→worst signal quality so the table reads top-down.
     """
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in enriched:

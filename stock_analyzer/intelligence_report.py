@@ -72,12 +72,14 @@ Rules:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _pct(v) -> str:
+    # "—" not "N/A" — matches _band_line's own missing-value placeholder so
+    # one report never mixes both tokens (2026-08-04 UX audit CA13).
     if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
-        return "N/A"
+        return "—"
     try:
         return f"{float(v):+.1f}%"
     except (TypeError, ValueError):
-        return "N/A"
+        return "—"
 
 
 def _band_line(row: dict) -> str:

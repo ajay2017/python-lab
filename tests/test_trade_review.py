@@ -641,18 +641,18 @@ def test_diag_holding_period_imbalance_gap_exactly_5_critical_vs_just_below_watc
     wins = [_t(id_=i, is_win=True, hold_days=5) for i in range(1, 4)]
     at_losses = [_t(id_=i, is_win=False, hold_days=10) for i in range(10, 13)]  # gap=5
     rec_at = tr._diag_holding_period_imbalance(wins + at_losses)
-    assert rec_at["severity"] == "critical"
+    assert rec_at["severity"] == "concern"
 
     below_losses = [_t(id_=i, is_win=False, hold_days=9.9) for i in range(10, 13)]  # gap=4.9
     rec_below = tr._diag_holding_period_imbalance(wins + below_losses)
-    assert rec_below["severity"] == "watch"
+    assert rec_below["severity"] == "note"
 
 
 def test_diag_holding_period_imbalance_gap_exactly_2_watch_vs_just_below_dead_zone():
     wins = [_t(id_=i, is_win=True, hold_days=5) for i in range(1, 4)]
     at_losses = [_t(id_=i, is_win=False, hold_days=7) for i in range(10, 13)]  # gap=2
     rec_at = tr._diag_holding_period_imbalance(wins + at_losses)
-    assert rec_at["severity"] == "watch"
+    assert rec_at["severity"] == "note"
 
     below_losses = [_t(id_=i, is_win=False, hold_days=6.9) for i in range(10, 13)]  # gap=1.9
     assert tr._diag_holding_period_imbalance(wins + below_losses) is None
@@ -698,7 +698,7 @@ def test_diag_signal_defying_bias_spread_exactly_100_critical_vs_just_below():
     compliant_at = [_t(id_=i, is_win=True, action="BUY", signal_seen="buy", outcome_pnl=50.0)
                     for i in range(10, 13)]
     rec_at = tr._diag_signal_defying_bias(defying + compliant_at)  # spread=100
-    assert rec_at["severity"] == "critical"
+    assert rec_at["severity"] == "concern"
 
     defying_below = [_t(id_=i, is_win=False, action="BUY", signal_seen="sell", outcome_pnl=-49.0)
                       for i in range(1, 4)]
@@ -712,7 +712,7 @@ def test_diag_signal_defying_bias_spread_exactly_neg100_watch_vs_just_above():
     compliant = [_t(id_=i, is_win=False, action="BUY", signal_seen="buy", outcome_pnl=-50.0)
                  for i in range(10, 13)]
     rec_at = tr._diag_signal_defying_bias(defying_at + compliant)  # spread=-100
-    assert rec_at["severity"] == "watch"
+    assert rec_at["severity"] == "note"
 
     defying_above = [_t(id_=i, is_win=True, action="BUY", signal_seen="sell", outcome_pnl=49.0)
                       for i in range(1, 4)]
@@ -724,7 +724,7 @@ def test_diag_signal_defying_bias_no_compliant_avg_def_negative_watch_positive_n
     negative = [_t(id_=i, is_win=False, action="BUY", signal_seen="sell", outcome_pnl=-10.0)
                 for i in range(1, 4)]
     rec = tr._diag_signal_defying_bias(negative)
-    assert rec["severity"] == "watch"
+    assert rec["severity"] == "note"
 
     positive = [_t(id_=i, is_win=True, action="BUY", signal_seen="sell", outcome_pnl=10.0)
                 for i in range(1, 4)]
@@ -749,14 +749,14 @@ def test_diag_vs_spy_drag_boundary_at_65_pct_good_vs_just_below_watch():
     good = tr._diag_vs_spy_drag(_closed_trades(65, 35))       # exactly 65%
     assert good["severity"] == "good"
     watch = tr._diag_vs_spy_drag(_closed_trades(64, 36))       # just below
-    assert watch["severity"] == "watch"
+    assert watch["severity"] == "note"
 
 
 def test_diag_vs_spy_drag_boundary_at_50_pct_watch_vs_just_below_critical():
     watch = tr._diag_vs_spy_drag(_closed_trades(50, 50))       # exactly 50%
-    assert watch["severity"] == "watch"
+    assert watch["severity"] == "note"
     critical = tr._diag_vs_spy_drag(_closed_trades(49, 51))    # just below
-    assert critical["severity"] == "critical"
+    assert critical["severity"] == "concern"
 
 
 def test_diag_vs_spy_drag_cumulative_alpha_dollar_math():
@@ -792,12 +792,12 @@ def test_diag_re_entered_tickers_boundary_at_neg200_critical_vs_just_above_watch
     at = [_t(id_=1, action="BUY", ticker="AAA", is_win=False, outcome_pnl=-100.0),
           _t(id_=2, action="BUY", ticker="AAA", is_win=False, outcome_pnl=-100.0)]  # -200
     rec_at = tr._diag_re_entered_tickers(at)
-    assert rec_at["severity"] == "critical"
+    assert rec_at["severity"] == "concern"
 
     above = [_t(id_=1, action="BUY", ticker="AAA", is_win=False, outcome_pnl=-99.0),
              _t(id_=2, action="BUY", ticker="AAA", is_win=False, outcome_pnl=-100.0)]  # -199
     rec_above = tr._diag_re_entered_tickers(above)
-    assert rec_above["severity"] == "watch"
+    assert rec_above["severity"] == "note"
 
 
 def test_diag_re_entered_tickers_all_positive_is_good_severity():
@@ -831,25 +831,25 @@ def test_diag_trigger_type_effectiveness_severity_boundary_at_35_critical_vs_bel
     b_at = _trigger_group("B", 100, 50, pnl_per_loss=-30.0, start_id=1000)  # spread=35, net<0
     rec_at = tr._diag_trigger_type_effectiveness(a + b_at)
     assert rec_at["evidence"]["spread_pp"] == pytest.approx(35.0)
-    assert rec_at["severity"] == "critical"
+    assert rec_at["severity"] == "concern"
 
     a2 = _trigger_group("A", 100, 84, start_id=1)
     b2 = _trigger_group("B", 100, 50, pnl_per_loss=-30.0, start_id=1000)    # spread=34
     rec2 = tr._diag_trigger_type_effectiveness(a2 + b2)
-    assert rec2["severity"] == "watch"
+    assert rec2["severity"] == "note"
 
 
 def test_diag_trigger_type_effectiveness_two_distinct_watch_text_templates():
     a = _trigger_group("A", 100, 80, start_id=1)
     b = _trigger_group("B", 100, 48, pnl_per_loss=-1.0, start_id=1000)  # spread=32, net>=0
     rec_lean = tr._diag_trigger_type_effectiveness(a + b)
-    assert rec_lean["severity"] == "watch"
+    assert rec_lean["severity"] == "note"
     assert "Lean toward" in rec_lean["action"]
 
     a2 = _trigger_group("A", 100, 70, start_id=1)
     b2 = _trigger_group("B", 100, 45, start_id=1000)  # spread=25, in [20,30)
     rec_short = tr._diag_trigger_type_effectiveness(a2 + b2)
-    assert rec_short["severity"] == "watch"
+    assert rec_short["severity"] == "note"
     assert "Lean toward" not in rec_short["action"]
     assert "outperforming" in rec_short["action"]
 
@@ -867,7 +867,7 @@ def test_diag_lesson_capture_rate_boundary_at_25_pct_dead_zone_vs_just_below_wat
 
     below = [_t(id_=i, is_win=True, lesson=("x" if i <= 24 else "")) for i in range(1, 101)]
     rec = tr._diag_lesson_capture_rate(below)
-    assert rec["severity"] == "watch"
+    assert rec["severity"] == "note"
 
 
 def test_diag_lesson_capture_rate_exactly_40_pct_middling_dead_zone_none():
@@ -935,14 +935,14 @@ def test_diag_day_of_week_timing_spread_just_below_30_none_vs_at_30_fires():
 def test_diag_day_of_week_timing_critical_when_worst_net_negative():
     trades = _weekday_group(MONDAY, 100, 65, 1) + _weekday_group(FRIDAY, 100, 35, 1000)
     rec = tr._diag_day_of_week_timing(trades)
-    assert rec["severity"] == "critical"
+    assert rec["severity"] == "concern"
 
 
 def test_diag_day_of_week_timing_watch_when_worst_net_nonnegative():
     trades = (_weekday_group(MONDAY, 100, 65, 1) +
               _weekday_group(FRIDAY, 100, 35, 1000, pnl_per_loss=-1.0))
     rec = tr._diag_day_of_week_timing(trades)
-    assert rec["severity"] == "watch"
+    assert rec["severity"] == "note"
 
 
 # ─── build_recommendations ───────────────────────────────────────────────────
@@ -962,8 +962,8 @@ def test_build_recommendations_diagnostic_exception_excluded_others_still_return
 def test_build_recommendations_sorted_critical_before_watch_before_good(monkeypatch):
     fixed = {
         "_diag_holding_period_imbalance": "good",
-        "_diag_signal_defying_bias": "critical",
-        "_diag_vs_spy_drag": "watch",
+        "_diag_signal_defying_bias": "concern",
+        "_diag_vs_spy_drag": "note",
         "_diag_re_entered_tickers": None,
         "_diag_trigger_type_effectiveness": None,
         "_diag_lesson_capture_rate": None,
@@ -978,7 +978,7 @@ def test_build_recommendations_sorted_critical_before_watch_before_good(monkeypa
                 (lambda s: (lambda trades: {"pattern_key": s, "severity": s}))(sev),
             )
     recs = tr.build_recommendations([])
-    assert [r["severity"] for r in recs] == ["critical", "watch", "good"]
+    assert [r["severity"] for r in recs] == ["concern", "note", "good"]
 
 
 # ─── build_insights ─────────────────────────────────────────────────────────

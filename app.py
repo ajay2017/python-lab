@@ -13581,7 +13581,7 @@ elif page == "🥧 Portfolio Overview":
         _rb_k1, _rb_k2, _rb_k3, _rb_k4 = st.columns(4)
         _n_trim  = len(_rb_plan["trims"])
         _n_add   = len(_rb_plan["adds"])
-        _n_ok    = len(_rb_plan["ok"]) + sum(1 for _, r in _drift_df.iterrows() if r["Status"] == "WATCH")
+        _n_ok    = len(_rb_plan["ok"]) + sum(1 for _, r in _drift_df.iterrows() if r["Status"] == "DRIFTING")
         _rb_k1.metric("Trim needed",    _n_trim,
                       delta="Action required" if _n_trim else None,
                       delta_color="inverse" if _n_trim else "off")
@@ -14686,7 +14686,10 @@ elif page == "🥧 Portfolio Overview":
         st.caption(
             "Waterfall: each bar is one position's dollar P&L contribution; "
             "the final 'Total' bar is the portfolio sum.  "
-            "Sector chart groups by GICS sector."
+            "Sector chart groups by this app's own curated thematic buckets "
+            "(Semiconductors, Consumer Tech, AI & Data, etc. — see `resolve_sector`), "
+            "not GICS. For a real-market-sector view against actual S&P 500 weights, "
+            "see \"🏛️ Portfolio vs. S&P 500 (Real Sector)\" further down this tab."
         )
     with _pa_tab2:
         if not h_rets:
@@ -22624,7 +22627,7 @@ elif page == "🪞 Trade Review":
 
         # ── 🎯 Course-Correction Recommendations (Lens 3) ─────────────────────
         # Each rec is a sample-size-guarded behavioural diagnostic — fires only
-        # when YOUR data supports the conclusion. Severity-sorted (critical
+        # when YOUR data supports the conclusion. Severity-sorted (concern
         # first) so the most important course correction is at the top. Each
         # card has a toggle to expand the trades that triggered the finding.
         _tr_recs = build_recommendations(_tr_trades)
@@ -22909,13 +22912,13 @@ elif page == "🪞 Trade Review":
                 )
             else:
                 _sev_styles = {
-                    "critical": ("🔴", "#ef4444", "#3f1d1d", "Act Today"),
-                    "watch":    ("🟡", "#f59e0b", "#3b2a0a", "Watch"),
+                    "concern": ("🔴", "#ef4444", "#3f1d1d", "Act Today"),
+                    "note":    ("🟡", "#f59e0b", "#3b2a0a", "Worth Noting"),
                     "good":     ("🟢", "#22c55e", "#052e16", "Doing Well"),
                 }
                 for _i, _rec in enumerate(_tr_recs):
                     _icon, _col, _bg, _sev_label = _sev_styles.get(
-                        _rec["severity"], _sev_styles["watch"]
+                        _rec["severity"], _sev_styles["note"]
                     )
                     _action_block = ""
                     if _rec.get("action"):
@@ -23596,10 +23599,11 @@ elif page == "📜 Recommendations History":
                 st.caption("Not enough data to draw the daily-volume chart yet.")
 
         # ── By verdict (engine quality) ─────────────────────────────────────────
-        # The headline view: judge the App's actual recommendations (Confirmed)
-        # apart from the awareness feed it surfaces but steers you away from
-        # (Conflicted / Caution). Alpha columns make it regime-fair.
-        with st.expander("🔬 By verdict — engine quality (Confirmed vs the rest)", expanded=True):
+        # The headline view: judge the App's actual recommendations
+        # (Engine-Confirmed) apart from the awareness feed it surfaces but
+        # steers you away from (Conflicted / Caution). Alpha columns make it
+        # regime-fair.
+        with st.expander("🔬 By verdict — engine quality (Engine-Confirmed vs the rest)", expanded=True):
             _rh_verd = by_verdict(_rh_enriched)
             if _rh_verd:
                 _rh_v_df = _rh_pd.DataFrame([
@@ -23617,12 +23621,12 @@ elif page == "📜 Recommendations History":
                 ])
                 st.dataframe(_rh_v_df, hide_index=True, width='stretch')
                 st.caption(
-                    "This is the cleanest read on the engine: **Confirmed** is what the "
-                    "App actually recommends; **Conflicted / Caution** are surfaced for "
+                    "This is the cleanest read on the engine: **Engine-Confirmed** is what "
+                    "the App actually recommends; **Conflicted / Caution** are surfaced for "
                     "awareness with a badge telling you to skip. Judge the engine on the "
-                    "Confirmed row's **α** (return vs SPY) — and check that Confirmed "
-                    "outperforms Conflicted. The α columns strip out the market regime "
-                    "so a down-tape doesn't make a sound engine look broken."
+                    "Engine-Confirmed row's **α** (return vs SPY) — and check that "
+                    "Engine-Confirmed outperforms Conflicted. The α columns strip out the "
+                    "market regime so a down-tape doesn't make a sound engine look broken."
                 )
             else:
                 st.caption("No verdict-tagged data in this range yet.")
@@ -24553,8 +24557,12 @@ elif page == "📊 Predictive Analytics":
             f"{PREDICTIVE_MIN_BAND_N} outcomes — indicative only."
         )
         if _pac_by_verdict:
+            # "Engine-Confirmed" not bare "Confirmed" — same cross-check-verdict
+            # qualifier used on Recommendations History (2026-08-04 UX audit CA4).
             _sv_labels = [
-                f"{b['verdict'].title()} · {b['n']} outcomes" for b in _pac_by_verdict
+                ("Engine-Confirmed" if b["verdict"].lower() == "confirmed" else b["verdict"].title())
+                + f" · {b['n']} outcomes"
+                for b in _pac_by_verdict
             ]
             _sv_alphas = [b["avg_alpha"] if b["avg_alpha"] is not None else 0 for b in _pac_by_verdict]
             _sv_colors = [

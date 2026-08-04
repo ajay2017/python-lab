@@ -556,7 +556,7 @@ def sector_mix(trades_with_outcome: list[dict],
 #     pattern_key    : slug used by the UI to dispatch to the right evidence
 #                       renderer (e.g. 'holding_period_imbalance')
 #     pattern        : human-readable name (e.g. "Holding-Period Imbalance")
-#     severity       : 'critical' | 'watch' | 'good'
+#     severity       : 'concern' | 'note' | 'good'
 #     detection      : prose explanation with the specific numbers
 #     action         : concrete next step (None for "good" severity)
 #     evidence       : raw aggregate numbers for transparency
@@ -619,7 +619,7 @@ def _diag_holding_period_imbalance(trades: list[dict]) -> dict | None:
     gap           = avg_loss_hold - avg_win_hold        # positive = imbalance
 
     if gap >= 5:
-        severity  = "critical"
+        severity  = "concern"
         detection = (
             f"You're cutting winners short. Winning trades held "
             f"<b>{avg_win_hold:.0f}d</b> on average vs <b>{avg_loss_hold:.0f}d</b> "
@@ -632,7 +632,7 @@ def _diag_holding_period_imbalance(trades: list[dict]) -> dict | None:
             "first +5% gain. Asymmetric hold time = lost compounding."
         )
     elif gap >= 2:
-        severity  = "watch"
+        severity  = "note"
         detection = (
             f"Slight winner-cut tendency: winners held <b>{avg_win_hold:.0f}d</b> "
             f"vs losers <b>{avg_loss_hold:.0f}d</b> ({gap:.0f}-day gap). Not yet "
@@ -719,7 +719,7 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
     if avg_comp is not None and len(compliant) >= 3:
         spread = avg_comp - avg_def
         if spread >= 100:   # compliant outperforms by ≥$100 avg
-            severity  = "critical"
+            severity  = "concern"
             detection = (
                 f"<b>{len(defying)}</b> trades went against the signal you saw "
                 f"in the journal — avg outcome <b style='color:#fca5a5'>"
@@ -733,7 +733,7 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
                 "review weekly — repeating the same deviation pattern is the leak."
             )
         elif spread <= -100:
-            severity  = "watch"
+            severity  = "note"
             detection = (
                 f"Interestingly, defying the signal worked better in your sample: "
                 f"avg <b>${avg_def:+,.0f}</b> vs <b>${avg_comp:+,.0f}</b> compliant "
@@ -747,7 +747,7 @@ def _diag_signal_defying_bias(trades: list[dict]) -> dict | None:
             return None
     else:
         if avg_def < 0:
-            severity  = "watch"
+            severity  = "note"
             detection = (
                 f"<b>{len(defying)}</b> signal-defying trades averaged "
                 f"<b style='color:#fca5a5'>${avg_def:+,.0f}</b> "
@@ -821,7 +821,7 @@ def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
         )
         action = None
     elif beat_pct >= 50:
-        severity  = "watch"
+        severity  = "note"
         detection = (
             f"<b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
             f"(<b>{beat_pct:.0f}%</b>) — net alpha "
@@ -833,7 +833,7 @@ def _diag_vs_spy_drag(trades: list[dict]) -> dict | None:
             "(composite ≥ 70). Marginal trades are eating the alpha."
         )
     else:
-        severity  = "critical"
+        severity  = "concern"
         detection = (
             f"Only <b>{beat_spy}/{len(closed)}</b> closed trades beat SPY "
             f"(<b>{beat_pct:.0f}%</b>) — net alpha "
@@ -911,7 +911,7 @@ def _diag_re_entered_tickers(trades: list[dict]) -> dict | None:
             f"<b>{e['ticker']}</b> ({e['n_trades']}× = ${e['net_pnl']:+,.0f})"
             for e in top3
         )
-        severity  = "critical" if total_neg <= -200 else "watch"
+        severity  = "concern" if total_neg <= -200 else "note"
         detection = (
             f"<b>{len(repeated_negative)}</b> ticker"
             f"{'s' if len(repeated_negative) != 1 else ''} you've re-entered "
@@ -1012,20 +1012,20 @@ def _diag_trigger_type_effectiveness(trades: list[dict]) -> dict | None:
         return None
 
     if spread >= 35 and worst_stat["net_pnl"] < 0:
-        severity = "critical"
+        severity = "concern"
         action = (
             f"Pause new entries via <b>{worst_trig}</b> until you've reviewed "
             f"why those trades fail more often. <b>{best_trig}</b> entries are "
             "clearly the more reliable source right now."
         )
     elif spread >= 30:
-        severity = "watch"
+        severity = "note"
         action = (
             f"Lean toward <b>{best_trig}</b> entries; tighten criteria when "
             f"sourcing trades via <b>{worst_trig}</b>."
         )
     else:
-        severity = "watch"
+        severity = "note"
         action = (
             f"<b>{best_trig}</b> is outperforming — when discretion allows, "
             "prefer that entry source."
@@ -1092,7 +1092,7 @@ def _diag_lesson_capture_rate(trades: list[dict]) -> dict | None:
     action:     str | None
 
     if capture_rate < 25:
-        severity = "watch"
+        severity = "note"
         detection = (
             f"Only <b>{len(with_lesson)}/{len(judged)}</b> trades "
             f"(<b>{capture_rate:.0f}%</b>) have a lesson recorded. The "
@@ -1204,7 +1204,7 @@ def _diag_day_of_week_timing(trades: list[dict]) -> dict | None:
 
     worst_name = _WEEKDAY_NAMES[worst_wd]
     best_name  = _WEEKDAY_NAMES[best_wd]
-    severity   = "critical" if worst_stat["net_pnl"] < 0 else "watch"
+    severity   = "concern" if worst_stat["net_pnl"] < 0 else "note"
 
     detection = (
         f"<b>{worst_name}</b> trades win <b>{worst_stat['win_rate']:.0f}%</b> "
@@ -1244,13 +1244,13 @@ def _diag_day_of_week_timing(trades: list[dict]) -> dict | None:
     }
 
 
-_SEVERITY_RANK = {"critical": 0, "watch": 1, "good": 2}
+_SEVERITY_RANK = {"concern": 0, "note": 1, "good": 2}
 
 
 def build_recommendations(trades: list[dict]) -> list[dict]:
     """
     Run every Lens-3 diagnostic and return the populated recommendations,
-    sorted critical → watch → good. Empty list when data is too thin for any
+    sorted concern → note → good. Empty list when data is too thin for any
     diagnostic to fire — UI should soft-fail with a "keep logging" caption.
     """
     diagnostics = (

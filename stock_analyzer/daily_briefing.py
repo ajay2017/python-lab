@@ -395,7 +395,11 @@ def _cross_reference(ticker: str, scanner_row: dict, port_df, news_items: list,
         # Compact form (Consistency #6) — this legacy field only ever renders as a
         # small nowrap badge (app.py Grow Today / scanner-picks pills), never as a
         # card headline; the verbose one-liner for that role is verdict_one_liner.
-        verdict_label = "✅ Confirmed"
+        # "Signals Agree" not bare "Confirmed" — echoes reconcile_signals()'s own
+        # "Go — All Signals Agree" label (which this compact form is a fallback
+        # for) and avoids colliding with thesis_cluster.py's unrelated
+        # cluster-match "Confirmed" (2026-08-04 UX audit CA4).
+        verdict_label = "✅ Signals Agree"
         verdict_color = "#22c55e"
 
     # ── Central reconciliation — populates the explicit one-liner the UI ─────

@@ -501,7 +501,7 @@ def test_by_rec_type_groups_by_literal_string_value():
 # ─── _verdict_bucket ────────────────────────────────────────────────────────
 
 def test_verdict_bucket_confirm():
-    assert rh._verdict_bucket("Confirmed") == "Confirmed"
+    assert rh._verdict_bucket("Confirmed") == "Engine-Confirmed"
 
 
 def test_verdict_bucket_conflict():
@@ -529,7 +529,7 @@ def test_verdict_bucket_none_or_blank_falls_to_other():
 
 def test_verdict_bucket_priority_order_confirm_checked_before_caution():
     # A value matching multiple substrings resolves to whichever is checked first.
-    assert rh._verdict_bucket("Confirmed but caution ahead") == "Confirmed"
+    assert rh._verdict_bucket("Confirmed but caution ahead") == "Engine-Confirmed"
 
 
 # ─── by_verdict ─────────────────────────────────────────────────────────────
@@ -540,7 +540,7 @@ def test_by_verdict_orders_per_verdict_order_and_skips_empty_buckets():
         _erow(ticker="BBB", verdict="Confirmed", outcome_pct=2.0, outcome_label="win", acted_on=True),
     ]
     out = rh.by_verdict(rows)
-    assert [o["verdict"] for o in out] == ["Confirmed", "Mixed"]  # only 2 of 6 buckets populated
+    assert [o["verdict"] for o in out] == ["Engine-Confirmed", "Mixed"]  # only 2 of 6 buckets populated
 
 
 # ─── by_composite_band ──────────────────────────────────────────────────────
