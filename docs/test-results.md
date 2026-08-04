@@ -18,7 +18,17 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-04 (baseline refresh ahead of full-codebase audit)
+## 1. Latest run — 2026-08-04 (post-audit-fix baseline, same session as the audit)
+
+**3136 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
+--cov-report=term-missing -q`: 35.45s — TOTAL 15133 stmts, 3909 missed,
+**74%** overall coverage). Python (local `.venv`). +16 tests over the
+3120 baseline earlier this same session (§2 entry below) — regression
+coverage for the Critical + all 9 High findings fixed same day
+(`docs/reviews/2026-08-04-review.md`), including 2 new test files
+(`test_db_readonly.py`, `test_providers_util.py`).
+
+## 1a. Prior run — 2026-08-04 (baseline refresh ahead of full-codebase audit)
 
 **3120 passed, 0 failed, 0 skipped** (`pytest tests/ -v`: 27.84s; `pytest
 tests/ --cov=stock_analyzer --cov-report=term-missing -q`: 27.93s — TOTAL
@@ -201,6 +211,22 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module
 addition or whenever a run fails.)*
+
+### 2026-08-04 (later same session) — Audit-fix regression tests, 16 new, 3136/3136 passing
+
+Fixed the Critical + all 9 High findings from the full audit run earlier
+this same session (`docs/reviews/2026-08-04-review.md` §9 Resolution
+status). +16 tests over the 3120 baseline: 1 in `test_premortem_monitor.py`
+(same-day-fire regression, for the Critical fix, landed before this entry's
+starting point but counted in this delta), 2 in `test_quick_research.py` +
+4 in `test_watchlist_advisor.py` (the Valuation `val_available` gate and
+its new `DATA_UNAVAILABLE` watchlist action), and 2 new files —
+`test_db_readonly.py` (5 tests, the read-only-viewer session-scoping fix)
+and `test_providers_util.py` (4 tests, the Finnhub key-redaction fix).
+`test_risk.py` had 3 existing tests renamed/re-asserted (`== {}` →
+`is None`) and `test_valuation.py` had all 34 call sites updated for the
+new 3-tuple return — no net-new test functions in either file. Opus review
+(Opus 4.8): SHIP, 0 blocking, 2 non-blocking (both applied).
 
 ### 2026-08-04 — Baseline refresh + full-codebase audit, 3120/3120 passing
 
