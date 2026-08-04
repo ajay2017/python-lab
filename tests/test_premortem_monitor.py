@@ -165,6 +165,17 @@ def test_detect_active_below_trigger():
     assert r["days_since"] == 2
 
 
+def test_detect_never_fires_same_day_as_buy_even_if_todays_close_is_already_beyond():
+    """2026-08-04 audit finding: the BUY date's own price row must be excluded
+    from the breach scan, even when it's the only row and already crosses the
+    trigger — otherwise a live/intraday quote labelled with today's date could
+    fire the Act Today card on the very day the commitment was made."""
+    trades = pd.DataFrame([_buy_row("EEE", 150.0, "below", traded_at="2024-01-05T10:00:00Z")])
+    held_data = {"EEE": {"df": _hist([140], start="2024-01-05")}}  # already below 150, buy day only
+    result = pm.detect_premortem_triggers(trades, held_data, date(2024, 1, 5))
+    assert result == []
+
+
 def test_detect_recovered_trigger_is_self_resolving():
     """Blocking finding #3: a dip that recovers must stop firing, not nag forever."""
     trades = pd.DataFrame([_buy_row("AAA", 150.0, "below")])

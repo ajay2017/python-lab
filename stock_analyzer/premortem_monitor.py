@@ -223,7 +223,11 @@ def detect_premortem_triggers(
         closes = hist["Close"].dropna().copy()
         if getattr(closes.index, "tz", None) is not None:
             closes.index = closes.index.tz_localize(None)
-        closes = closes[closes.index.date >= governing["buy_date"]]
+        # Strictly after buy_date, not >=: an open-market "today" row from the
+        # provider can be a live/intraday quote mislabeled with today's date,
+        # not a settled close — including it here would let a trigger fire
+        # the same day it was set (2026-08-04 audit finding).
+        closes = closes[closes.index.date > governing["buy_date"]]
         if closes.empty:
             continue
 

@@ -158,20 +158,26 @@ into the architecture itself so this doc stays the single source of truth.
    narrative only; the gate that decides whether to show the card at all is
    always "is it *still* beyond the level today."
 
-   **Corollary found during live validation, 2026-08-03 (not a bug — a
-   direct consequence of the close-basis design above, undocumented until
-   now): a trigger can never fire on the SAME DAY its BUY was logged.** The
-   price-history comparison filters to `closes.index.date >= buy_date` and
-   reads the last available row; on the entry day itself, that day's
-   session hasn't closed yet, so there is no qualifying close and
-   `detect_premortem_triggers()` correctly finds nothing to compare —
-   regardless of how far the live price has already moved intraday. The
-   earliest a genuinely-fired trigger can surface is the **next trading day**
-   after the BUY, once a completed close for the entry day (or later) exists
-   in the price history. This is the same reason a live "does it fire
-   immediately" smoke test on a same-day BUY will always show nothing — not
-   a broken pipeline, just the close-basis semantic working as designed one
-   day earlier than an intraday check would.
+   **Corollary found during live validation, 2026-08-03, then found to be
+   NOT actually enforced by the 2026-08-04 full-codebase audit, and fixed
+   the same day (commit pending): a trigger can never fire on the SAME DAY
+   its BUY was logged.** The 2026-08-03 reasoning assumed the price-history
+   comparison's `>=` filter was harmless because "that day's session hasn't
+   closed yet, so there is no qualifying close" — true only if the
+   historical-data provider never returns a row for today while the market
+   is open. It does: an open-market "today" row can be a live/intraday
+   quote mislabeled with today's date, not a settled close, and the old
+   `closes.index.date >= buy_date` filter let that row satisfy the breach
+   check on BUY day itself (`first_breach_date == buy_date`, `days_since ==
+   0`). **Fixed by changing the filter to `closes.index.date > buy_date`**
+   (strictly after, not on-or-after) — see the code comment at
+   `stock_analyzer/premortem_monitor.py:226-230` and the regression test
+   `test_detect_never_fires_same_day_as_buy_even_if_todays_close_is_already_beyond`
+   in `tests/test_premortem_monitor.py`, which reproduces the exact
+   live-intraday-quote scenario. With the fix, the earliest a genuinely-fired
+   trigger can surface is still the **next trading day** after the BUY, but
+   this is now actually enforced by the code, not just true in the common
+   case where "today" has no row at all.
 6. **Plumbing (fix-first finding #4, resolved).** `_act_today()`
    (`daily_briefing.py:1243`) has no access to `trades_df` or price history
    today. Follow the EXACT existing precedent for feeding it a new
@@ -338,12 +344,15 @@ when the code is written.
   — fixed to word-before-number for both directions ("broke below $150.00"
   / "broke above $50.00"), re-verified all 10 Act Today tests + full suite
   still pass. (2) a UTC-vs-exchange-local date-boundary edge case in the
-  price-history window filter (same pre-existing convention used elsewhere
-  in this codebase, confirmed harmless — only trims the earliest edge of
-  the window, never affects the active-trigger gate) — left as-is per the
-  reviewer's own assessment, not a real gap. A second test-runner agent
-  independently confirmed 3120/3120 passing, 0 regressions, before this
-  review landed.
+  price-history window filter, at the time assessed as harmless ("only
+  trims the earliest edge of the window, never affects the active-trigger
+  gate") and left as-is. **Correction, 2026-08-04: that assessment was
+  wrong — it was the same `>=` boundary this section's later corollary
+  entry describes, and it DOES affect the active-trigger gate in the
+  live-intraday-quote case. See the 2026-08-04 fix entry below; do not
+  treat the original "not a real gap" call as still standing.** A second
+  test-runner agent independently confirmed 3120/3120 passing, 0
+  regressions, before this review landed.
 
   **This closes F-228 — Pre-Commitment Enforcement is shipped.** The one
   item from the 2026-08-03 morning brainstorm's ranked list that was
@@ -373,3 +382,21 @@ when the code is written.
   commitment to be actively monitorable — a purely qualitative one is saved
   but never auto-checked. No logic changed, so no Opus review required (copy
   only); verified `py_compile` clean.
+
+- **2026-08-04 — Full-codebase audit found the "never fires same-day"
+  invariant was NOT actually enforced; fixed same day.** `docs/reviews/
+  2026-08-04-review.md`'s one Critical finding: the price-history filter
+  used an inclusive `closes.index.date >= buy_date`, which the 2026-08-03
+  entries above had reasoned was harmless because "today" never has a
+  qualifying close on BUY day. That reasoning holds when the data provider
+  returns no row for today at all, but not when it returns an open-market
+  "today" row that's actually a live/intraday quote mislabeled with today's
+  date — that row can satisfy the inclusive filter and fire the trigger the
+  same day it was set. Fixed by changing `>=` to `>` at
+  `stock_analyzer/premortem_monitor.py:226` (excludes the BUY-date row from
+  the scan entirely, not just from the reported first-breach date), with a
+  new regression test (`test_detect_never_fires_same_day_as_buy_even_if_
+  todays_close_is_already_beyond`, `tests/test_premortem_monitor.py`) that
+  reproduces the exact scenario. Opus review: **SHIP, 0 blocking** — full
+  suite 3120→3121 (1 new test), no other invariant (split-adjustment,
+  sell-then-rebuy lot attribution, self-resolving recovery) affected.
