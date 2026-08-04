@@ -18,6 +18,7 @@ from stock_analyzer.constants import (
     EARNINGS_BEARISH_REACTION_COMPOSITE_GATE,
     EARNINGS_MIN_BEAT_RATE_ENTRY,
     COMPOSITE_BUY,
+    COMPOSITE_HOLD,
     COMPOSITE_STRONG_BUY,
     SINGLE_NAME_CEILING,
     SINGLE_NAME_TRIM_TRIGGER,
@@ -206,7 +207,7 @@ def _recommend(
         )
 
     # ── REDUCE — weak fundamentals ────────────────────────────────────────────
-    if score < 44 and weight >= 5:
+    if score < COMPOSITE_HOLD and weight >= 5:
         trim_sh = max(1, shares // 2)
         return (
             "REDUCE",

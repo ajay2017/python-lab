@@ -46,7 +46,7 @@ _ACTION_PRIORITY = {
     "REMOVE":             "HIGH",
     "HOLD_OFF_EARNINGS":  "MEDIUM",
     "DATA_UNAVAILABLE":   "MEDIUM",
-    "ENTER_NOW":          "OK",
+    "ENTER_NOW":          "READY",   # own label — never share "OK" with risk_advisor's "nothing to flag"
     "NEAR_ENTRY":         "MONITOR",
     "WAIT_ENTRY":         "MONITOR",
     "WAIT_CATALYST":      "MONITOR",

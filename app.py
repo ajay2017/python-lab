@@ -984,12 +984,17 @@ def _render_debate_result(row: dict, debate_type: str) -> None:
          labels) AND whether the exit-only disclaimer renders.
     """
     _v   = row.get("verdict")
+    _err = row.get("error")
     _kd  = row.get("key_dispute")
     _bsc = row.get("bull_case_score")
     _brc = row.get("bear_case_score")
     _grd = row.get("grounded")
     _trn = row.get("transcript") or []
-    _failed = _v is None and not _trn
+    # _failed covers two distinct states: total API failure (no transcript at
+    # all) and judge-call failure (transcript present but verdict is None with
+    # error=="judge_failed"). Both need an explicit message so the user can
+    # distinguish an infra hiccup from a genuine 50/50 contested result.
+    _failed = (_v is None and not _trn) or _err == "judge_failed"
 
     if debate_type == "exit":
         _bull_label, _bear_label = "Hold case", "Exit case"
@@ -1002,7 +1007,14 @@ def _render_debate_result(row: dict, debate_type: str) -> None:
         _bull_label, _bear_label = "Bull score", "Bear score"
 
     if _failed:
-        st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
+        if _err == "judge_failed":
+            st.caption(
+                "Judge verdict unavailable — the debate ran but the final call could not be parsed. "
+                "The transcript below shows the full exchange; this is an infrastructure hiccup, "
+                "not a genuine 50/50 split. Try running the debate again for a fresh verdict."
+            )
+        else:
+            st.caption("Debate could not complete (API unavailable or rate-limited). Try again later.")
     else:
         if _bsc is not None and _brc is not None:
             _c1, _c2 = st.columns(2)
@@ -12718,14 +12730,16 @@ elif page == "🧩 Intelligence":
                 )
                 _sca_type_label = "buy-time" if _sca_is_buytime else str(_sca_deb.get("debate_type") or "")
                 _sca_verdict_label = (
-                    "Bull wins" if _sca_verdict == "bull_wins" else
-                    "Bear wins" if _sca_verdict == "bear_wins" else
-                    "Contested"
+                    "Bull wins"          if _sca_verdict == "bull_wins" else
+                    "Bear wins"          if _sca_verdict == "bear_wins" else
+                    "Contested"          if _sca_verdict == "contested"  else
+                    "Verdict unavailable"  # verdict=None → judge-call failure, not a real 50/50
                 )
                 _sca_signals.append({
                     "direction": (
-                        "bull" if _sca_verdict == "bull_wins" else
-                        "bear" if _sca_verdict == "bear_wins" else "neutral"
+                        "bull"    if _sca_verdict == "bull_wins" else
+                        "bear"    if _sca_verdict == "bear_wins" else
+                        "neutral"
                     ),
                     "text": f"Debate: {_sca_verdict_label} — {_sca_type_label}, {_sca_deb_date}",
                 })
@@ -19046,7 +19060,7 @@ elif page == "📋 Watchlist":
         _bclr = {
             "HIGH":    "#ff4444",
             "MEDIUM":  "#ffbb33",
-            "OK":      "#00C851",
+            "READY":   "#00C851",   # ENTER_NOW — green, matches the action-card badge
             "MONITOR": "#4a9eff",
         }.get(_priority, "#888")
         # Row badge colors (bg, fg, border) — distinct from _bclr, which colors

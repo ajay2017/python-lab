@@ -402,20 +402,43 @@ def test_run_debate_full_success_populates_judge_fields(monkeypatch):
     ]
 
 
-def test_run_debate_judge_unparseable_defaults_to_contested_not_an_error(monkeypatch):
+def test_run_debate_judge_unparseable_returns_error_sentinel_not_contested(monkeypatch):
+    """Judge call succeeds but returns unparseable output → error sentinel, not "contested".
+    A genuine 50/50 contested verdict comes from _parse_judge returning verdict="contested",
+    not from a parse failure — the two must be distinguishable.
+    """
     _install_fake_anthropic()
     fake = _stateful_haiku(["bull1", "bear1", "bull2", "bear2", "not valid json"])
     monkeypatch.setattr(da, "_call_haiku", fake)
     result = da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
 
-    assert result["partial"] is False
-    assert result["error"] is None
-    assert result["verdict"] == "contested"
+    assert result["verdict"] is None           # NOT "contested"
+    assert result["error"] == "judge_failed"   # explicit infra-failure sentinel
+    assert result["partial"] is True           # debate ran but verdict unavailable
     assert result["key_dispute"] is None
     assert result["bull_case_score"] is None
     assert result["bear_case_score"] is None
     assert result["grounded"] is None
-    assert len(result["transcript"]) == 4
+    assert len(result["transcript"]) == 4      # rounds 1-4 are present
+
+
+_JUDGE_JSON_CONTESTED = (
+    '{"verdict": "contested", "key_dispute": "bulls and bears equally matched", '
+    '"bull_case_score": 55, "bear_case_score": 55, "grounded": true}'
+)
+
+
+def test_run_debate_genuine_contested_verdict_distinct_from_judge_failure(monkeypatch):
+    """A 50/50 judge result returns verdict='contested' (non-None) with no error."""
+    _install_fake_anthropic()
+    fake = _stateful_haiku(["bull1", "bear1", "bull2", "bear2", _JUDGE_JSON_CONTESTED])
+    monkeypatch.setattr(da, "_call_haiku", fake)
+    result = da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
+
+    assert result["verdict"] == "contested"    # genuine 50/50, not a failure
+    assert result["error"] is None             # no error — judge succeeded
+    assert result["partial"] is False
+    assert result["key_dispute"] == "bulls and bears equally matched"
 
 
 def test_run_debate_exit_vs_entry_round1_prompt_wording_differs(monkeypatch):

@@ -521,16 +521,18 @@ def run_debate(corpus: dict, debate_type: str, api_key: str,
     judge = _parse_judge(judge_raw) if judge_raw else None
 
     if judge is None:
-        # Judge call failed or unparseable — return transcript with contested default
+        # Judge call failed or unparseable — return a distinct error sentinel so
+        # callers can distinguish an infrastructure failure from a genuine 50/50
+        # contested debate (which would have a non-None verdict from _parse_judge).
         return {
             "transcript":      transcript,
-            "verdict":         "contested",
+            "verdict":         None,
             "key_dispute":     None,
             "bull_case_score": None,
             "bear_case_score": None,
             "grounded":        None,
-            "partial":         False,
-            "error":           None,
+            "partial":         True,
+            "error":           "judge_failed",
         }
 
     return {

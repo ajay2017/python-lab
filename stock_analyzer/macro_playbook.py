@@ -17,8 +17,13 @@ from stock_analyzer.constants import (
     COMPOSITE_HOLD,
     SINGLE_NAME_CEILING,
     MACRO_PROTECT_PNL_PCT,
+    MACRO_PROTECT_BEAR_MOVE,
+    MACRO_WATCH_MED_WEIGHT,
+    MACRO_WATCH_BEAR_MOVE,
     MACRO_WATCH_LOW_SCORE,
     MACRO_WATCH_LOW_WEIGHT,
+    MACRO_OPP_SCORE,
+    MACRO_OPP_BULL_MOVE,
     MACRO_EXPOSURE_CRITICAL_PCT,
     MACRO_EXPOSURE_HIGH_PCT,
     MACRO_EXPOSURE_MEDIUM_PCT,
@@ -297,11 +302,11 @@ _SCENARIOS: dict = {
 # matched COMPOSITE_HOLD by coincidence; importing makes the link explicit.
 _PROTECT_WEIGHT  = SINGLE_NAME_CEILING   # % — oversized position (hard single-name cap)
 _PROTECT_SCORE   = COMPOSITE_HOLD        # composite score — weak fundamentals (below Hold floor)
-_PROTECT_BEAR    = 1.5    # min % sector bear-move to flag PROTECT
-_WATCH_WEIGHT    = 8.0    # min weight to flag WATCH
-_WATCH_BEAR      = 1.0    # min sector bear-move to flag WATCH
-_OPP_SCORE       = 68.0   # min score for OPPORTUNITY
-_OPP_BULL        = 1.5    # min sector bull-move for OPPORTUNITY
+_PROTECT_BEAR    = MACRO_PROTECT_BEAR_MOVE  # min % sector bear-move to flag PROTECT
+_WATCH_WEIGHT    = MACRO_WATCH_MED_WEIGHT   # min weight for WATCH-MEDIUM
+_WATCH_BEAR      = MACRO_WATCH_BEAR_MOVE    # min sector bear-move for any WATCH tier
+_OPP_SCORE       = MACRO_OPP_SCORE          # min composite score for OPPORTUNITY
+_OPP_BULL        = MACRO_OPP_BULL_MOVE      # min sector bull-move for OPPORTUNITY
 
 
 def _pre_event_action(row, event_name: str, days_until: int) -> tuple:

@@ -742,8 +742,13 @@ CATALYST_STRESS_WINDOW_DAYS = 14
 # Pre-event PROTECT / WATCH classification thresholds. Values surfaced here
 # so future changes are policy decisions, not hidden literals.
 MACRO_PROTECT_PNL_PCT    = -15.0  # already-underwater + bear-move = MEDIUM PROTECT
+MACRO_PROTECT_BEAR_MOVE  =  1.5   # min % sector bear-move to flag any PROTECT action
+MACRO_WATCH_MED_WEIGHT   =  8.0   # min weight for WATCH-MEDIUM (oversized + meaningful bear)
+MACRO_WATCH_BEAR_MOVE    =  1.0   # min sector bear-move for any WATCH tier
 MACRO_WATCH_LOW_SCORE    = 55.0   # weak score gating WATCH-LOW
 MACRO_WATCH_LOW_WEIGHT   = 12.0   # min weight gating WATCH-LOW
+MACRO_OPP_SCORE          = 68.0   # min composite score for OPPORTUNITY classification
+MACRO_OPP_BULL_MOVE      =  1.5   # min sector bull-move for OPPORTUNITY
 
 # Portfolio bear-exposure tier cutoffs for the macro-event playbook header
 # (% of portfolio sitting in sectors with high bear-move sensitivity).
