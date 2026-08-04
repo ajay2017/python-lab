@@ -1176,6 +1176,10 @@ CREATE TABLE IF NOT EXISTS exit_signals (
     surfaced_at      TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT exit_signals_unique UNIQUE (ticker, signal_date, signal_type)
 );
+
+ALTER TABLE exit_signals ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_exit_signals" ON exit_signals
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Forward capture of every WATCH/TRIM/EXIT/RISK_OFF signal per (ticker, day)** — the prerequisite for the exit-side Behavioral Fingerprint (Concept A v2, `docs/plans/exit-signal-capture.md`; Phase 1 shipped 2026-07-18, commit `f86147d`). `signal_type` ∈ `WATCH`/`TRIM`/`EXIT`/`RISK_OFF`, sourced from `exit_advisor.classify_deterioration_tier()` and `exit_advisor.assess_risk_off_derisk()`. `composite_score` is enriched from `port_df["Score"]` at the capture site (not present on the assess_holding/risk_off dicts themselves) — null for RISK_OFF where a field doesn't apply (e.g. `dd_from_peak_pct`/`below_ma_count`/`rel_strength` on a risk_off row). Written from **two** independent paths as of 2026-07-21: (1) `app.py`'s Home MISS-path build (`app.py:4137-4199`, the original Phase 1 capture — interactive sessions only), and (2) `cron_runner._run_premarket()` (added 2026-07-21, closing Phase 1's own deferred "cron capture" scope item) via `headless_alert_engine.compute_protective_alerts()`'s additive `all_deterioration_signals`/`risk_off_signals` return keys — so signal history is now captured daily regardless of whether the app is opened. Idempotent upsert on `(ticker, signal_date, signal_type)` via `db.save_exit_signals_batch()` — safe if both paths fire the same day. Read via `db.load_exit_signals(days_back=365)`. RLS: `FOR ALL TO service_role`.
@@ -1193,6 +1197,10 @@ CREATE TABLE IF NOT EXISTS daily_regime (
     source       TEXT,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE daily_regime ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_daily_regime" ON daily_regime
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Daily persistence of the detected macro regime** (added 2026-07-21) — one row per calendar day, portfolio-independent. `regime`/`label`/`confidence`/`fed_trend`/`cpi_yoy`/`source` mirror the return shape of `macro_calendar.detect_macro_regime()` (regime id ∈ `rate_cut`/`inflation_fight`/`recession_fear`/`stagflation_risk`/`neutral`). Closes the gap Concept D's regime-conditional targets (F-188) explicitly deferred — "no Home 'regime changed' annotation (would need day-over-day regime persistence that doesn't exist)" — though **no consuming UI exists yet**; this is the persistence prerequisite only, same pattern as `exit_signals` Phase 1 vs Phase 2. Written by `cron_runner._run_eod()` once/day (alongside `daily_snapshots`/`sentiment_history`), calling `detect_macro_regime(os.environ.get("FRED_API_KEY") or None)` — degrades to the neutral fallback (`source="fallback"`) when no FRED key is configured, never fabricates a regime. Upserts on `regime_date` via `db.save_daily_regime()`; read via `db.load_daily_regime(days_back=90)`. **Ships inert until the DDL is applied** — degrades silently (`save_daily_regime` returns False). RLS: `FOR ALL TO service_role`. Not read from `st.session_state`'s ephemeral per-browser-session regime cache (`_macro_regime_{date}_{bool(fred_key)}`, used by Risk Analysis/Economic Calendar/Pre-Market Stance) — a separate, independent write path.
@@ -1210,6 +1218,10 @@ CREATE TABLE IF NOT EXISTS analyst_target_snapshots (
     captured_at    TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT analyst_target_snapshots_unique UNIQUE (ticker, snapshot_date)
 );
+
+ALTER TABLE analyst_target_snapshots ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_analyst_target_snapshots" ON analyst_target_snapshots
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Log-only daily snapshot of each held ticker's analyst consensus price target** (added 2026-07-21) — one row per (ticker, day), prerequisite for a future day-over-day "consensus target dropped X%" comparison. Motivated by a real gap found in a 2026-07-21 retrospective: the existing `"revisions"` alert (`portfolio.py:472-492`, fed by yfinance's `upgrades_downgrades`) only counts rating-ACTION changes (`up`/`down`/`init`/`main`/`reit`) — a firm that keeps its rating and just cuts the price target logs as `main`/`reit`, never as a `down`, so it's structurally invisible to that alert regardless of magnitude. `target_mean`/`num_analysts` mirror `financials["analyst_target"]`/`financials["num_analyst_opinions"]` (`data.py:227,233` — already fetched on every load, zero extra API cost). `info_source` records which provider supplied `.info` when the primary was backfilled (`orchestrator.py:187`, `None` implies yfinance was sufficient) — future comparison logic should treat a delta that coincides with a source change as suspect (yfinance and FMP compute consensus differently). Rows are **skipped entirely** (not written with a stale flag) when the bundle's `stale_as_of` is set, so persisted history never mixes in a stale `bundle_cache` fallback value. Written by `cron_runner._run_premarket()` (via `headless_alert_engine.compute_protective_alerts()`'s additive `analyst_target_snapshots` return key, reusing the bundles already loaded for the protective-alert checks — no new API cost) once/day, cron-only (deliberately not also written from the interactive app path — simpler single-path model, no historical gap to retrofit the way `exit_signals` had). Upserts on `(ticker, snapshot_date)` via `db.save_analyst_target_snapshots_batch()`; read via `db.load_analyst_target_snapshots(days_back=365)`. **Ships inert until the DDL is applied** — degrades silently. RLS: `FOR ALL TO service_role`. **Phase 1 is log-only: no alert, no new `constants.py` threshold, no gate** — the % consensus-target drop worth flagging is left uncalibrated until real snapshots accumulate; wiring an actual alert into the `"revisions"` category is a deferred Phase 2 that will need its own policy discussion + Opus review (touches `constants.py` + alert logic, unlike this pure-plumbing phase).
@@ -1229,6 +1241,10 @@ CREATE TABLE IF NOT EXISTS thesis_erosion_cache (
     created_at       TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (ticker, score_date)
 );
+
+ALTER TABLE thesis_erosion_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_thesis_erosion_cache" ON thesis_erosion_cache
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Daily adversarial erosion score per held ticker** (Thesis Red Team Agent, Phase 1 — shipped 2026-07-23). One row per `(ticker, score_date)` where `score_date` is the America/New_York ISO date (`_today_et()`). `erosion_score` (0–100) aggregates four signals: deterioration tier weight (from `exit_signals`, today's rows only), 20-session RS vs SPY (`exit_advisor.compute_relative_strength()`), 5-session composite delta (self-referential: `signals_snapshot["composite_today"]` read from the 5-sessions-back row of this same table — inert for the first 5 trading days), and analyst PT revision direction (`analyst_target_snapshots`, real as of F-169 Phase 2 — see §6.23 — via `thesis_red_team.py::pt_points_from_signal()`; still falls back to the inert 7.0=flat reading for any ticker without enough snapshot history yet). `erosion_label` ∈ {`Intact`, `Softening`, `Eroding`, `Breaking`}. `signals_snapshot` MUST include `composite_today` (the day's live composite score) so future rows can look back for the 5-session delta.
@@ -1254,6 +1270,10 @@ CREATE TABLE IF NOT EXISTS debate_cache (
     created_at      TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (ticker, debate_type, debate_date)
 );
+
+ALTER TABLE debate_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_debate_cache" ON debate_cache
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Structured Bull vs Bear debate result per candidate** (Multi-Agent Debate Agent, Phase 1 — shipped 2026-07-23). One row per `(ticker, debate_type, debate_date)` where `debate_type` ∈ {`entry` (Phase 1, triggered from 📈 Grow Today), `exit` (Phase 2, "⚔️ Challenge This Exit" on deterioration cards — shipped 2026-07-24)} and `debate_date` is the America/New_York ISO date (`_today_et()`). `verdict` ∈ {`bull_wins`, `bear_wins`, `contested`} — `bull_wins`/`bear_wins` require the Judge's `bull_case_score`/`bear_case_score` gap to reach `DEBATE_WIN_MARGIN` (20, module-level constant in `stock_analyzer/debate_agent.py` — a display classifier, not a `constants.py` policy threshold, since no gate or score is affected regardless of its value). `key_dispute` is the Judge's one-sentence summary of the specific claim Bull and Bear most disagree on (`null` if the two sides converged). `grounded` is `false` when the Judge assessed either side as arguing generically instead of citing the supplied evidence corpus. `transcript` is the ordered `[{round, agent, text}]` list from all 4 debate rounds (Bull open → Bear response → Bull rebuttal → Bear close); `corpus_snapshot` is the exact evidence dict both agents debated from (`build_entry_corpus()`/`build_exit_corpus()`), kept for auditability. Row is only written when `transcript` is non-empty — a failed run (no API key, a mid-debate Haiku failure) is never cached, so a transient failure can be retried immediately rather than showing a false "Contested" verdict for the rest of the day. Written by `db.save_debate_cache()` (upsert, best-effort); read by `db.load_debate_cache(ticker, debate_type, debate_date)` (single row, exact key) and `db.load_debate_verdicts(tickers)` (verdict-only, filtered to a ticker list — feeds D3 Signal Coherence). **`db.load_all_debates(limit=200)`** (Phase 3 — shipped 2026-07-27) returns every stored row across all tickers/types, most recent first (`debate_date` then `created_at` as a same-day tiebreak), excluding `corpus_snapshot`, for the 🧠 AI Insights "⚔️ Debate Log" browsable history tab. System cache — not `_READONLY`-gated (same classification as `thesis_erosion_cache`/`sentiment_llm_cache`). RLS: `FOR ALL TO service_role`.
@@ -1270,6 +1290,10 @@ CREATE TABLE IF NOT EXISTS structural_scan_cache (
     created_at           TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (scan_date)
 );
+
+ALTER TABLE structural_scan_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_structural_scan_cache" ON structural_scan_cache
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Daily portfolio-level structural narrative** (Structural Vulnerability Scanner, Phase 1 — shipped 2026-07-24). One row per `scan_date` (America/New_York ISO date via `_today_et()`) — this is a **portfolio-wide** synthesis, not per-ticker, unlike `thesis_erosion_cache`/`debate_cache`. `narrative` is the Haiku-generated 2-4 sentence structural explanation; `null` only if the Haiku call failed, but a failed/empty narrative is never written in the first place (the caller only calls `save_structural_scan_cache()` when the narrative call succeeded), so a `null` narrative should never actually appear in a saved row. `blast_radius` is `stock_analyzer.structural_scanner.blast_radius()`'s output at scan time (one dict per shocked ticker, the top-3 risk-budget contributors); `cluster_snapshot` is `portfolio_intelligence.correlation_clusters()`'s output; `risk_budget_snapshot` is the top-3 `risk_budget()` positions — all three kept for audit alongside the narrative they produced. Written by `db.save_structural_scan_cache()` (upsert, best-effort); read by `db.load_structural_scan_cache(scan_date)`. **Button-gated write, not auto-computed** — the tab's Blast Radius Map (pure Python) recomputes live every render, but the narrative only calls Haiku inside an explicit "🧬 Generate structural narrative" button click, because Streamlit executes every tab body on every page rerun regardless of which tab is selected — an auto-compute design would fire the LLM call far more than once/day. System cache — not `_READONLY`-gated (same classification as `debate_cache`/`thesis_erosion_cache`). RLS: `FOR ALL TO service_role`.
@@ -1288,6 +1312,10 @@ CREATE TABLE IF NOT EXISTS price_xcheck_history (
     created_at       TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (ticker, check_date)
 );
+
+ALTER TABLE price_xcheck_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_price_xcheck_history" ON price_xcheck_history
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Daily history of the already-shipped price cross-check** (Information Asymmetry
@@ -1328,6 +1356,10 @@ CREATE TABLE IF NOT EXISTS regime_scenario_cache (
     created_at            TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (scan_date)
 );
+
+ALTER TABLE regime_scenario_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_regime_scenario_cache" ON regime_scenario_cache
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Daily portfolio-level regime-aware adversarial scenario narrative** (Regime-Aware
@@ -1375,6 +1407,10 @@ CREATE TABLE IF NOT EXISTS judgment_opinions (
     created_at   TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT judgment_opinions_unique UNIQUE (source, dimension, ticker, signal_date)
 );
+
+ALTER TABLE judgment_opinions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_judgment_opinions" ON judgment_opinions
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Phase 0 (log-only instrumentation) of "The Judge"** — see
@@ -1384,7 +1420,15 @@ findings incorporated) for a future portfolio-level judgment layer that reconcil
 every existing feature into one accountable daily posture. **Nothing reads this table
 yet** — it exists purely so Phase 2's grading harness has witness history to read
 once it's built. Ships inert until the DDL above is applied — degrades silently, same
-convention as `analyst_target_snapshots`.
+convention as `analyst_target_snapshots`. **RLS gap found + closed 2026-08-04**: same
+failure mode as `sentiment_history`'s 2026-07-21 incident below — the original DDL
+applied to Supabase only ran the `CREATE TABLE` statement above (RLS wasn't yet inline
+in this fence), so the table sat with RLS disabled in production until Supabase's
+security advisor flagged it (`public.judgment_opinions` "RLS Disabled in Public"). The
+fence now carries the RLS statements inline; the recurrence across 8 other table
+sections triggered a repo-wide sweep the same day (§6.21–6.29) to close the class,
+since fixing only this one instance a second time would leave the doc template broken
+for the next table.
 
 One row per `(source, dimension, ticker, signal_date)` — upserts on that key, so
 repeated same-day Home renders are no-ops. `ticker` uses the sentinel `'_PORTFOLIO'`
@@ -1440,6 +1484,10 @@ CREATE TABLE IF NOT EXISTS judgment_grades (
     created_at     TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT judgment_grades_unique UNIQUE (source, dimension, ticker, signal_date)
 );
+
+ALTER TABLE judgment_grades ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_judgment_grades" ON judgment_grades
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
 
 **Phase 2 (grading harness) of "The Judge"** — see `docs/plans/judgment-layer.md`.

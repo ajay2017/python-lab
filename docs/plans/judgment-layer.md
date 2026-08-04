@@ -698,3 +698,21 @@ conversation, before any code.
   duplicating or risking collision with the app's existing, more nuanced
   enforcement mechanisms, and without silently reversing the leverage
   never-gates policy. There is no further phase queued for this feature.
+- **2026-08-04 — Security advisory: RLS was never enabled on `judgment_opinions`
+  in Supabase**, despite the table being live since the 2026-08-03 DDL-applied
+  entry above. Root cause: `docs/architecture.md` §6.29's SQL fence contained
+  only `CREATE TABLE` — the `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` +
+  `CREATE POLICY` statements existed only as prose below the fence, so the
+  manual DDL application on 2026-08-03 never ran them (the same failure mode
+  `sentiment_history` hit on 2026-07-21). User confirmed the fix SQL was run in
+  Supabase (RLS enabled + `service_role_all_judgment_opinions` policy added).
+  Since the same doc-template gap existed in 8 other table sections
+  (`exit_signals`, `daily_regime`, `analyst_target_snapshots`,
+  `thesis_erosion_cache`, `debate_cache`, `structural_scan_cache`,
+  `price_xcheck_history`, `regime_scenario_cache`, plus `judgment_grades` in
+  this same table's Phase 2 block), all 9 fences were corrected in the same
+  pass to close the class rather than the single instance — the fences now
+  carry the RLS statements inline, matching the working `sentiment_history`/
+  `api_quota_log` pattern. `stock_analyzer/db.py`'s duplicate inline-comment
+  DDL blocks for `judgment_opinions`/`judgment_grades` were synced to match.
+  No code/gate/scoring logic touched — doc + one-time Supabase DDL only.

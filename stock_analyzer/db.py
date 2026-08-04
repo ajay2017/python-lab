@@ -2214,6 +2214,10 @@ def load_analyst_target_snapshots(days_back: int = 365) -> pd.DataFrame:
 #     created_at   TIMESTAMPTZ DEFAULT NOW(),
 #     CONSTRAINT judgment_opinions_unique UNIQUE (source, dimension, ticker, signal_date)
 # );
+#
+# ALTER TABLE judgment_opinions ENABLE ROW LEVEL SECURITY;
+# CREATE POLICY "service_role_all_judgment_opinions" ON judgment_opinions
+#     FOR ALL TO service_role USING (true) WITH CHECK (true);
 def save_judgment_opinions_batch(opinions: list[dict]) -> None:
     """Persist Phase-0 judgment-layer opinions (log-only; nothing reads this yet).
 
@@ -2288,6 +2292,10 @@ def load_judgment_opinions(days_back: int = 365) -> pd.DataFrame:
 #     created_at     TIMESTAMPTZ DEFAULT NOW(),
 #     CONSTRAINT judgment_grades_unique UNIQUE (source, dimension, ticker, signal_date)
 # );
+#
+# ALTER TABLE judgment_grades ENABLE ROW LEVEL SECURITY;
+# CREATE POLICY "service_role_all_judgment_grades" ON judgment_grades
+#     FOR ALL TO service_role USING (true) WITH CHECK (true);
 def save_judgment_grades_batch(grades: list[dict]) -> None:
     """Persist Phase-2 judgment-layer grades (one row per graded opinion).
 
