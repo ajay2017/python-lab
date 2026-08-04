@@ -392,7 +392,8 @@ def _build_rationale(row, event_name: str, action: str) -> str:
         return (
             f"**{ticker}** ({sector}) has ~{bear_move:.0f}% sector exposure in the bear scenario. "
             f"Score {score:.0f}/100, weight {weight:.1f}%. No pre-event action required — "
-            f"but be at your terminal when the number drops and have a decision rule ready."
+            f"but if the bear scenario prints, check the 📊 Post-Event Results tab once the "
+            f"number drops for a fresh, outcome-specific action rather than guessing now."
         )
 
     if bear_move < 0.5:

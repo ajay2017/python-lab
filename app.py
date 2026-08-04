@@ -7076,12 +7076,12 @@ if page == "🏠 Home":
             )
 
     # ── Two-column layout: Act Today (left) | Grow Today (right) ────────
-    _db_col_right, _db_col_left = st.columns([1, 1])
-
-    with _db_col_left:
-        _render_grow_today(_db_grow, _db_tone)
+    _db_col_left, _db_col_right = st.columns([1, 1])
 
     with _db_col_right:
+        _render_grow_today(_db_grow, _db_tone)
+
+    with _db_col_left:
         # ── Act vs Awareness split (calm advisor 2B) ────────────────────
         # Split the defensive column by URGENCY, not origin: "Act Today" holds
         # genuine same-day trade decisions; "Monitoring / Awareness" holds FYI
@@ -8180,10 +8180,10 @@ if page == "🏠 Home":
     # (made the pick cap, or surfaced in Filtered Out / macro-blocked /
     # pending) is dropped so the same name never appears twice in the
     # brief. What remains is the overflow — confirmed/unverified buys
-    # beyond the Grow Today pick cap. Rendered in the left column under
+    # beyond the Grow Today pick cap. Rendered in the right column under
     # Grow Today so the whole brief stays a clean 2-column offense/defense
     # split (no full-width banner crossing the page).
-    with _db_col_left:
+    with _db_col_right:
         _grow_shown: set = set()
         # Include the suppressed-add buckets too: a held name the Brief has already
         # SUPPRESSED as an add (deterioration WATCH, cooldown, sector/single-name
@@ -9772,7 +9772,7 @@ elif page == "🧾 Summary":
 
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
     st.markdown("**🧭 Elsewhere in DRISHTA**")
-    _sm_ptr_cols = st.columns(3)
+    _sm_ptr_cols = st.columns(2)
     with _sm_ptr_cols[0]:
         if _sm_n_reviewed > 0:
             st.markdown("**🩺 Thesis Review**")
@@ -16202,6 +16202,7 @@ elif page == "🔍 Market Scanner":
                         f"<div style='padding:10px;border-radius:8px;"
                         f"border:1px solid {score_color};text-align:center'>"
                         f"<b style='font-size:1.1em'>{row['Ticker']}</b><br>"
+                        f"<small style='color:#9ca3af'>Momentum Score</small><br>"
                         f"<span style='color:{score_color};font-size:1.4em;font-weight:bold'>"
                         f"{row['Score']}</span>/100<br>"
                         f"<small>{row['Sector']}</small><br>"
@@ -16497,7 +16498,7 @@ elif page == "🔍 Market Scanner":
                     else:
                         _comp_line = (
                             "<div style='margin-top:4px;color:#6b7280;font-size:0.8em'>"
-                            "Composite: not yet fetched — click Refresh Signals to validate</div>"
+                            "Composite: not yet fetched — click Load Signal Evidence to validate</div>"
                         )
 
                     st.markdown(
@@ -17996,6 +17997,11 @@ elif page == "📈 Analysis":
                                     f"Use a firm stop at **${r['stop']:.2f}** and consider a starter position "
                                     f"(50–75% of suggested size) before committing fully."
                                 )
+                    elif not ps and not _stop_breached and not _under_reduce:
+                        # Neither of the two banners above fired, yet Position Sizing
+                        # still didn't render — say so rather than silently vanishing
+                        # (matches Watchlist's equivalent caption for the same gap).
+                        st.caption("Position sizing unavailable — stop price too close to entry or not set.")
 
                     if targets:
                         st.markdown("#### Price Scenarios")
@@ -19109,6 +19115,7 @@ elif page == "📋 Watchlist":
                     st.rerun()
             with _rc2:
                 _readi = max(0, min(100, int(_wr["readiness_pct"] or 0)))
+                _readi_color = "#00C851" if _readi >= 70 else "#ffbb33" if _readi >= 40 else "#ff4444"
                 _watched_chip = ""
                 if _ticker in _wl_resurrected:
                     _wdays = (_wl_today - date.fromisoformat(_wl_added_dates[_ticker])).days
@@ -19131,7 +19138,7 @@ elif page == "📋 Watchlist":
                     f"<span style='color:#9ca3af;display:inline-flex;align-items:center;gap:6px'>"
                     f"Readiness <span style='width:60px;height:6px;background:#1f2937;"
                     f"border-radius:3px;display:inline-block;overflow:hidden'>"
-                    f"<span style='height:100%;width:{_readi}%;background:#00C851;display:block'></span>"
+                    f"<span style='height:100%;width:{_readi}%;background:{_readi_color};display:block'></span>"
                     f"</span> {_readi}%</span>"
                     f"{_price_chip}{_rr_chip}{_earn_chip}{_watched_chip}"
                     f"</div>",
@@ -19544,9 +19551,7 @@ elif page == "⚖️ Compare":
                 st.session_state["_analysis_ticker"] = _cmp_b_in
                 st.rerun()
 
-    elif _cmp_should_run and not (_cmp_a_in and _cmp_b_in):
-        st.info("Enter two tickers and click ⚖️ Compare to see a side-by-side analysis.")
-    elif not _cmp_cached:
+    elif (_cmp_should_run and not (_cmp_a_in and _cmp_b_in)) or not _cmp_cached:
         st.info("Enter two tickers and click ⚖️ Compare to see a side-by-side analysis.")
 
 
@@ -22640,7 +22645,9 @@ elif page == "🪞 Trade Review":
                 _vs_col = "#86efac" if t["vs_spy_pct"] >= 0 else "#fca5a5"
                 _extras.append(f"vs SPY <b style='color:{_vs_col}'>{t['vs_spy_pct']:+.2f}%</b>")
             if show_signal and t.get("signal_seen"):
-                _extras.append(f"signal seen: <i>{_html.escape(t['signal_seen'][:32])}</i>")
+                _sig_seen = t["signal_seen"]
+                _sig_seen_clip = _sig_seen[:32] + ("…" if len(_sig_seen) > 32 else "")
+                _extras.append(f"signal seen: <i>{_html.escape(_sig_seen_clip)}</i>")
             if t.get("panic_window"):
                 _extras.append("🌪 panic day")
             _extra_str = " · ".join(_extras)
@@ -23061,16 +23068,20 @@ elif page == "🪞 Trade Review":
 
                     _dev_note = ""
                     if t["category"] == "deviated" and t.get("deviation_reason"):
+                        _dev_reason = t["deviation_reason"]
+                        _dev_reason_clip = _dev_reason[:140] + ("…" if len(_dev_reason) > 140 else "")
                         _dev_note = (
                             f"<div style='color:#fca5a5;font-size:0.78em;margin-top:4px;font-style:italic'>"
-                            f"Why deviated: {_html.escape(t['deviation_reason'][:140])}"
+                            f"Why deviated: {_html.escape(_dev_reason_clip)}"
                             f"</div>"
                         )
                     _lesson_note = ""
                     if t.get("lesson"):
+                        _lesson_text = t["lesson"]
+                        _lesson_clip = _lesson_text[:140] + ("…" if len(_lesson_text) > 140 else "")
                         _lesson_note = (
                             f"<div style='color:#fde68a;font-size:0.78em;margin-top:4px;font-style:italic'>"
-                            f"💡 Lesson: {_html.escape(t['lesson'][:140])}"
+                            f"💡 Lesson: {_html.escape(_lesson_clip)}"
                             f"</div>"
                         )
 
@@ -25854,8 +25865,9 @@ elif page == "📅 Economic Calendar":
     _ek3.metric("This week",         len(_ec_week),
                 delta="⚠️ Be prepared" if _ec_week else None,
                 delta_color="inverse" if _ec_week else "off")
+    _ec_next_name = _ec_next["event"] if _ec_next else None
     _ek4.metric("Next major event",
-                _ec_next["event"][:20] if _ec_next else "—",
+                (_ec_next_name[:20] + ("…" if len(_ec_next_name) > 20 else "")) if _ec_next_name else "—",
                 _ec_next["days_label"] if _ec_next else "")
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
@@ -26192,9 +26204,9 @@ elif page == "📅 Economic Calendar":
                     _actions_needed = _pb["protect_count"] + _pb["watch_count"]
                     with st.expander(
                         f"⚡ Pre-Event Actions — "
-                        f"{_pb['protect_count']} PROTECT  ·  {_pb['watch_count']} Watch  ·  "
+                        f"{_pb['protect_count']} Protect  ·  {_pb['watch_count']} Watch  ·  "
                         f"{_pb['opp_count']} Add  ·  "
-                        f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} HOLD",
+                        f"{len(_pb['positions']) - _pb['protect_count'] - _pb['watch_count'] - _pb['opp_count']} Hold",
                         expanded=(_pb_urgent and _actions_needed > 0),
                     ):
                         for _pos in _pb["positions"]:
@@ -26597,10 +26609,11 @@ elif page == "📅 Economic Calendar":
                                     _imp   = _pp["dollar_impact"]
                                     _mc    = "#00C851" if _imp >= 0 else "#ef4444"
                                     _smc   = "#00C851" if _pp["sector_move"] >= 0 else "#ef4444"
-                                    # Display-only label — standardize WATCH to "Watch"
-                                    # (Consistency #2); _act keeps driving the color/icon
-                                    # lookups above.
-                                    _act_label = "Watch" if _act == "WATCH" else _act
+                                    # Display-only label, Title Case for every action so
+                                    # one row's badge doesn't read ALL-CAPS next to
+                                    # another's Title Case (2026-08-04 UX audit QW4);
+                                    # _act keeps driving the color/icon lookups above.
+                                    _act_label = _act.capitalize()
 
                                     with st.expander(
                                         f"{_aicon} **{_pp['ticker']}**  ·  "
@@ -26994,23 +27007,23 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Strictly display-only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
 - **⚔️ Challenge This Exit — "make me the strongest case for holding before I sell this"** When a held name rolls over into a **deterioration TRIM or EXIT** call on Today's Brief, that card gets a **⚔️ Challenge This Exit** button — the mirror image of the entry debate, pointed at the sell decision (which is where panic and premature selling do the most damage). A Bull agent defends *continuing to hold*, anchored on your original buy thesis if you saved one — and it's explicitly forbidden from arguing "hold just because we're underwater." A Bear agent argues the exit, citing the actual deterioration numbers (how far off the peak, sessions below trend, how much it's lagging the market). The Judge reads it as 🟢 Hold defensible, 🔴 Exit supported, or ⚖️ Contested. Shares the same 3-per-session cap and daily cache as the entry debate. **It's a second opinion only — the exit recommendation stands exactly as shown; the debate never removes the card, changes the tier, or touches the score.**
 
-- **🧬 Structural Scan — "which of my positions are secretly dangerous together?"** On 🧩 Intelligence, click **🧬 Generate structural narrative** to have Haiku synthesize the Correlation Clusters, Risk Budget, and Factor Tilt panels above it into one plain-English explanation of your portfolio's single most dangerous structural pattern — naming the specific tickers and numbers involved rather than a generic warning. The **Blast Radius Map** above the narrative always shows live, without a click: it estimates what a -20% shock to each of your top 3 risk-contributing positions would cost the *whole* portfolio, given how correlated your other holdings are to it. **Directional, not precise** — the cascade estimate is a simplified approximation, exactly as rough as the Factor Tilt estimates beside it. Refreshes once per trading day. **Strictly diagnostic: nothing here reorders a panel, resizes a position, or changes the composite score.**
+- **🧬 Structural Scan — "which of my positions are secretly dangerous together?"** On 🧩 Intelligence, click **🧬 Generate structural narrative** to have Haiku synthesize the Correlation Clusters, Risk Budget, and Factor Tilt panels above it into one plain-English explanation of your portfolio's single most dangerous structural pattern — naming the specific tickers and numbers involved rather than a generic warning. The **Blast Radius Map** above the narrative always shows live, without a click: it estimates what a -20% shock to each of your top 3 risk-contributing positions would cost the *whole* portfolio, given how correlated your other holdings are to it. **Directional, not precise** — the cascade estimate is a simplified approximation, exactly as rough as the Factor Tilt estimates beside it. Refreshes once per trading day. **Awareness only: nothing here reorders a panel, resizes a position, or changes the composite score.**
 
-- **🧠 Hidden Same-Bet Detector — "which of my 'diversified' positions are secretly the same bet?"** Below the Structural Scan narrative, click **🧠 Check for hidden shared bets** to have Haiku read your saved buy theses (the ones you wrote when logging a BUY) and look for groups of positions resting on the *same* underlying assumption — even across different sectors, even with low price correlation. Each finding is labeled **⚪ Unverified** (no price-correlation data this session to check against), **🟠 Possible shared assumption — review** (checked — not already flagged by Correlation Clusters, so this is genuinely new information), or **🟡 Confirmed** (checked — also already price-correlated, a second signal agreeing with the first). Needs at least 2 held positions with a saved thesis to run at all — if you haven't been writing theses at BUY, this section will just say so. **Strictly diagnostic — a "possible" finding is a prompt to look closer, never a verdict, and never touches a gate or the composite score.**
+- **🧠 Hidden Same-Bet Detector — "which of my 'diversified' positions are secretly the same bet?"** Below the Structural Scan narrative, click **🧠 Check for hidden shared bets** to have Haiku read your saved buy theses (the ones you wrote when logging a BUY) and look for groups of positions resting on the *same* underlying assumption — even across different sectors, even with low price correlation. Each finding is labeled **⚪ Unverified** (no price-correlation data this session to check against), **🟠 Possible shared assumption — review** (checked — not already flagged by Correlation Clusters, so this is genuinely new information), or **🟡 Confirmed** (checked — also already price-correlated, a second signal agreeing with the first). Needs at least 2 held positions with a saved thesis to run at all — if you haven't been writing theses at BUY, this section will just say so. **Awareness only — a "possible" finding is a prompt to look closer, never a verdict, and never touches a gate or the composite score.**
 
-- **🔍 Missed-Opportunity Pattern — "what do the buy calls I skipped have in common?"** On 📊 Recommendations History → Summary, below the Missed Opportunity list, click **🔍 Look for a pattern** to have Haiku look across every "New Position to Initiate" you never acted on and describe what they have in common — sector, price range, composite-score band, or outcome — citing the specific tickers. Every pattern shows its real win/dodge/flat mix, so it can never read as "these were all winners, buy the next one like it" — this is a retrospective mirror on your own selection habits, never a forward-looking buy signal, and it's never compared against your current watchlist or candidates. Needs at least 3 graded missed opportunities to run. **Strictly diagnostic — describes, never prescribes, and never touches a gate or the composite score.**
+- **🔍 Missed-Opportunity Pattern — "what do the buy calls I skipped have in common?"** On 📊 Recommendations History → Summary, below the Missed Opportunity list, click **🔍 Look for a pattern** to have Haiku look across every "New Position to Initiate" you never acted on and describe what they have in common — sector, price range, composite-score band, or outcome — citing the specific tickers. Every pattern shows its real win/dodge/flat mix, so it can never read as "these were all winners, buy the next one like it" — this is a retrospective mirror on your own selection habits, never a forward-looking buy signal, and it's never compared against your current watchlist or candidates. Needs at least 3 graded missed opportunities to run. **Awareness only — describes, never prescribes, and never touches a gate or the composite score.**
 
-- **🧭 Signal Coherence — "do my own signals agree with each other on this name?"** New 5th tab on 🧩 Intelligence. For every held position, checks whether the composite score, your weekly Thesis Red Team review, and your most recent Bull/Bear debate verdict (if you've run one) actually agree — and shows you only the names where they don't. No button, no LLM call — this reads data that already exists elsewhere in the app and just diffs it live. A ticker needs at least 2 of the 3 signals on file to be checked at all, and full agreement never produces a card — you'll only ever see genuine disagreements here. Each signal chip shows its own type and date, so a stale debate from before you bought never gets mistaken for a live opinion. **Strictly diagnostic — never gates, scores, or changes any of the three underlying surfaces.**
+- **🧭 Signal Coherence — "do my own signals agree with each other on this name?"** New 5th tab on 🧩 Intelligence. For every held position, checks whether the composite score, your weekly Thesis Red Team review, and your most recent Bull/Bear debate verdict (if you've run one) actually agree — and shows you only the names where they don't. No button, no LLM call — this reads data that already exists elsewhere in the app and just diffs it live. A ticker needs at least 2 of the 3 signals on file to be checked at all, and full agreement never produces a card — you'll only ever see genuine disagreements here. Each signal chip shows its own type and date, so a stale debate from before you bought never gets mistaken for a live opinion. **Awareness only — never gates, scores, or changes any of the three underlying surfaces.**
 
-- **🎯 Regime-Aware Adversarial Scenario — "what compound macro scenario would hurt THIS portfolio most?"** On 🔗 Risk Analysis → 🔥 Stress Testing, click **🎯 Generate regime-aware scenario** to have Haiku combine your portfolio's structural weak points (the same clusters and cascade estimate as Structural Scan, above) with the current macro regime and dollar-strength readings into a named compound scenario — e.g. "rate spike + dollar strength hitting your semiconductor cluster." The **regime confidence score** shown alongside it is real, current data (how confident the detector is in today's regime read) — it is **not** a forecast of anything happening in the next 90 days, and the app never fabricates that kind of probability. The **early indicators to watch** are always real, currently-tracked signals — never invented. Refreshes once per trading day. **Strictly diagnostic: uses the same cascade numbers Structural Scan already shows, under a macro-scenario framing — never a new stress calculation, never a gate.**
+- **🎯 Regime-Aware Adversarial Scenario — "what compound macro scenario would hurt THIS portfolio most?"** On 🔗 Risk Analysis → 🔥 Stress Testing, click **🎯 Generate regime-aware scenario** to have Haiku combine your portfolio's structural weak points (the same clusters and cascade estimate as Structural Scan, above) with the current macro regime and dollar-strength readings into a named compound scenario — e.g. "rate spike + dollar strength hitting your semiconductor cluster." The **regime confidence score** shown alongside it is real, current data (how confident the detector is in today's regime read) — it is **not** a forecast of anything happening in the next 90 days, and the app never fabricates that kind of probability. The **early indicators to watch** are always real, currently-tracked signals — never invented. Refreshes once per trading day. **Awareness only: uses the same cascade numbers Structural Scan already shows, under a macro-scenario framing — never a new stress calculation, never a gate.**
 
-- **📅 Catalyst-Specific Stress — "which upcoming EVENT threatens this book most?"** Right below the scenario above, on the same tab, click **📅 Generate catalyst-specific stress** to check whether any upcoming HIGH-impact macro event (within 14 days) or one of your own holdings' earnings reports overlaps the same structural weak points. Broad, sector-wide events like FOMC and GDP releases are deliberately excluded from this ranking — they threaten everything equally, so they can't point to a SPECIFIC vulnerability. If neither a macro event nor an earnings report has real overlap with your weak points, this says so plainly rather than manufacturing a concern. **Strictly diagnostic: the event-driven twin of the scenario above, never a new stress calculation, never a gate.**
+- **📅 Catalyst-Specific Stress — "which upcoming EVENT threatens this book most?"** Right below the scenario above, on the same tab, click **📅 Generate catalyst-specific stress** to check whether any upcoming HIGH-impact macro event (within 14 days) or one of your own holdings' earnings reports overlaps the same structural weak points. Broad, sector-wide events like FOMC and GDP releases are deliberately excluded from this ranking — they threaten everything equally, so they can't point to a SPECIFIC vulnerability. If neither a macro event nor an earnings report has real overlap with your weak points, this says so plainly rather than manufacturing a concern. **Awareness only: the event-driven twin of the scenario above, never a new stress calculation, never a gate.**
 
 - **🤖 AI Snapshot** — On-demand, point-in-time portfolio narrative generated live from your holdings, active alerts, market indices, and news. Your choice of provider: Claude, OpenAI, Gemini, or Groq. For cadence-driven reflection (thesis health, weekly/monthly review), use 🧠 AI Insights instead.
 
@@ -27080,14 +27093,14 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
-- **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Diagnostic only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
-- **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Diagnostic only — never gates or reorders; composite score still decides which name to act on.
+- **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
+- **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
 - **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it. Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
-- **🪞 Trade Review** — performance vs benchmark, what's working/dragging.
+- **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
-- **📅 Economic Calendar** — upcoming macro releases and which holdings they affect.
+- **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). Anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
@@ -27300,7 +27313,7 @@ Directional, sample-gated observations over your own Buy-side decisions (new_pic
 
 Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Below the three Buy-side cards, an **Exit Signal Response** section covers how you react to TRIM/EXIT/WATCH/RISK_OFF signals: response rate (how often a signal is followed by a SELL within a window), response lag (median days to act), and escalation-ignored (holding through a WATCH→TRIM/EXIT or TRIM→EXIT escalation without selling) — built from the `exit_signals` history persisted since 2026-07-18, forward-only from that date.
 
-At the top of this tab, a **🔭 Your Winning Entry Profile** card runs that same analysis FORWARD: what did a typical *realized winning* entry look like (composite score band, momentum score band, top sector), built from your closed round-trips matched back to the recommendation that triggered them. Requires the same 8-decision floor, reporting "not enough closed winning trades yet" below it. This profile feeds a same-day match badge — **🧬 Matches your historical winning profile** — on 🏠 Home's Grow Today picks, when a fresh pick shares at least 2 of the 3 traits with your own past winners. Silence (no badge), never a warning, when it doesn't match — a non-match isn't a negative signal on a pick that already cleared every other gate. **Diagnostic only — never re-ranks, re-scores, or gates a pick.**
+At the top of this tab, a **🔭 Your Winning Entry Profile** card runs that same analysis FORWARD: what did a typical *realized winning* entry look like (composite score band, momentum score band, top sector), built from your closed round-trips matched back to the recommendation that triggered them. Requires the same 8-decision floor, reporting "not enough closed winning trades yet" below it. This profile feeds a same-day match badge — **🧬 Matches your historical winning profile** — on 🏠 Home's Grow Today picks, when a fresh pick shares at least 2 of the 3 traits with your own past winners. Silence (no badge), never a warning, when it doesn't match — a non-match isn't a negative signal on a pick that already cleared every other gate. **Awareness only — never re-ranks, re-scores, or gates a pick.**
 
 ---
 
@@ -31672,7 +31685,7 @@ elif page == "🎯 My Edge":
 
                 with _mi_col_kpi:
                     st.metric(
-                        "Alignment Score (ρ)",
+                        "Alignment Score (ρ) — score-to-weight rank correlation",
                         f"{_mi_rho:+.2f}",
                         help=(
                             "Spearman rank correlation between composite score rank "

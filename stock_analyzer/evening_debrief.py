@@ -185,7 +185,11 @@ def _plan_vs_reality(brief: dict | None, trades_today_list: list[dict],
             outcome = "— Intraday data unavailable"
             verdict = "unknown"
         elif today_pct_val >= MEANINGFUL_INTRADAY_PCT:
-            outcome = f"💭 Would have worked — {today_pct_val:+.2f}% today (composite still says wait)"
+            # Same icon/phrase as go_picks' analogous "Missed" case above — both
+            # describe the identical underlying concept (a positive move on a
+            # name not acted on), confirmed by this branch's own verdict="missed"
+            # below (2026-08-04 UX audit QW12).
+            outcome = f"💸 Missed — would have gained {today_pct_val:+.2f}% today (composite still says wait)"
             verdict = "missed"
         elif today_pct_val <= -MEANINGFUL_INTRADAY_PCT:
             outcome = f"🛡 Dodged — {today_pct_val:+.2f}% today (skip was right)"
