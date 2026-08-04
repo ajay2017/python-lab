@@ -130,7 +130,7 @@ def test_compute_velocity_strong_positive_shift_is_improving():
     result = sv.compute_velocity("TST", items)
     assert result["velocity"] > sv._VELOCITY_THRESHOLD
     assert result["direction"] == "Improving ↑"
-    assert result["signal"] == "✅ Sentiment improving"
+    assert result["signal"] == "📈 Sentiment improving"
 
 
 def test_compute_velocity_strong_negative_shift_is_deteriorating():

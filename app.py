@@ -9215,7 +9215,7 @@ elif page == "🧑‍⚖️ The Judge":
     # last as the detailed evidence trail. Was previously per-ticker-first,
     # which buried both "so what" sections at the very bottom.
     st.markdown("---")
-    st.markdown("##### 🔍 Coherence audit (Phase 4)")
+    st.markdown("##### 🔍 Coherence audit")
     st.caption(
         "The Judge's one piece of real authority so far — an AUDIT, never a "
         "new gate. Cross-checks every ticker under an active protective veto "
@@ -9263,7 +9263,7 @@ elif page == "🧑‍⚖️ The Judge":
                     )
 
     st.markdown("---")
-    st.markdown("##### 📊 Track record (Phase 2 + 3)")
+    st.markdown("##### 📊 Track record")
     st.caption(
         "Grades each witness's PAST opinions against what actually happened — "
         "not the Judge's aggregate posture, which is never itself graded (see "
@@ -17912,7 +17912,7 @@ elif page == "📈 Analysis":
                     _gate_rows = [
                         ("Data Quality",  _gate_bq_ok,
                          "BQ + Valuation metrics available"),
-                        ("R/R ≥ 2×",      _gate_rr_ok,
+                        (f"R/R ≥ {RR_ENTRY_MIN:.0f}×", _gate_rr_ok,
                          f"R/R = {rr_val:.1f}×" if rr_val else "R/R unavailable"),
                         ("Concentration", _gate_conc_ok,
                          f"{_gc_tw:.1f}% of portfolio" if _gc_tw is not None else "See Account page"),
@@ -19157,8 +19157,8 @@ elif page == "📋 Watchlist":
                           delta_color="off")
             _wm[3].metric("R:R",
                           f"{_rr:.1f}:1" if _rr else "—",
-                          delta="≥2:1 ✓" if _rr and _rr >= 2.0 else ("< 2:1" if _rr else None),
-                          delta_color="normal" if (_rr and _rr >= 2.0) else "inverse")
+                          delta=f"≥{RR_ENTRY_MIN:.0f}:1 ✓" if _rr and _rr >= RR_ENTRY_MIN else (f"< {RR_ENTRY_MIN:.0f}:1" if _rr else None),
+                          delta_color="normal" if (_rr and _rr >= RR_ENTRY_MIN) else "inverse")
             _wm[4].metric("Earnings",
                           f"{_earn_d}d" if _earn_d is not None and _earn_d >= 0 else "—",
                           delta="⚠️ Imminent" if _earn_d is not None and 0 <= _earn_d <= 7 else None,
@@ -29144,14 +29144,30 @@ elif page == "🧠 AI Insights":
                             st.success(f"{_ac_t} added to watchlist.")
                             st.rerun()
                 with _ac_btn_c3:
-                    if st.button(
-                        "🗑",
-                        key=f"_ac_del_{_ac_rowid}_{_ac_i}",
-                        disabled=st.session_state.get("_readonly", False),
-                        help="Delete this coverage record",
-                    ):
-                        _ai_db.delete_analyst_coverage(_ac_rowid)
-                        st.rerun()
+                    _ac_del_key = f"_ac_del_confirm_{_ac_rowid}_{_ac_i}"
+                    if not st.session_state.get(_ac_del_key):
+                        if st.button(
+                            "🗑",
+                            key=f"_ac_del_{_ac_rowid}_{_ac_i}",
+                            disabled=st.session_state.get("_readonly", False),
+                            help="Delete this coverage record",
+                        ):
+                            st.session_state[_ac_del_key] = True
+                            st.rerun()
+
+                if st.session_state.get(_ac_del_key):
+                    st.warning(f"Delete this **{_ac_t}** coverage record?")
+                    _ac_dc1, _ac_dc2 = st.columns(2)
+                    with _ac_dc1:
+                        if st.button("Yes, delete", key=f"_ac_del_yes_{_ac_rowid}_{_ac_i}", type="primary",
+                                     disabled=st.session_state.get("_readonly", False)):
+                            st.session_state.pop(_ac_del_key, None)
+                            _ai_db.delete_analyst_coverage(_ac_rowid)
+                            st.rerun()
+                    with _ac_dc2:
+                        if st.button("Cancel", key=f"_ac_del_cancel_{_ac_rowid}_{_ac_i}"):
+                            st.session_state.pop(_ac_del_key, None)
+                            st.rerun()
 
                 st.divider()
 
@@ -29625,7 +29641,7 @@ elif page == "🧠 AI Insights":
             # How to read this
             st.caption(
                 "**How to read this:** Higher score = more pressure on the thesis. "
-                "0–24 Intact · 25–49 Softening · 50–74 Eroding · 75–100 Breaking. "
+                "0–24 Holding · 25–49 Softening · 50–74 Eroding · 75–100 Breaking. "
                 "Signals that push the score up are shown in red; signals holding the thesis are neutral. "
                 "**Analyst PT revision** tracks only the numeric consensus price target — it's independent "
                 "from the rating-action alert on 📡 Signals & Advice, so a rating downgrade there doesn't "
@@ -29642,7 +29658,7 @@ elif page == "🧠 AI Insights":
             _rt_c1.metric("Breaking",  _rt_counts["Breaking"])
             _rt_c2.metric("Eroding",   _rt_counts["Eroding"])
             _rt_c3.metric("Softening", _rt_counts["Softening"])
-            _rt_c4.metric("Intact",    _rt_counts["Intact"])
+            _rt_c4.metric("Holding",   _rt_counts["Intact"])
 
             if not _rt_results:
                 st.info(
@@ -29658,6 +29674,10 @@ elif page == "🧠 AI Insights":
                     "Softening": "🟡",
                     "Intact":    "🟢",
                 }
+                # Display-only rename: internal/DB erosion_label stays "Intact"
+                # (thesis_red_team.py's stored value) — only the on-screen word
+                # changes, to avoid colliding with Thesis Review's INTACT status.
+                _RT_DISPLAY_LABEL = {"Intact": "Holding"}
 
                 # Plain-English signal interpretations
                 def _rt_tier_text(tier):
@@ -29713,7 +29733,8 @@ elif page == "🧠 AI Insights":
                         "All 4 signals support the thesis today"
                     )
 
-                    with st.expander(f"{_icon} {_rr['ticker']} — {_rl} ({_rscr:.0f}/100)  ·  {_summary}"):
+                    _rl_display = _RT_DISPLAY_LABEL.get(_rl, _rl)
+                    with st.expander(f"{_icon} {_rr['ticker']} — {_rl_display} ({_rscr:.0f}/100)  ·  {_summary}"):
                         _rt_breakdown_caption = (
                             "**Signal breakdown** — signals in 🔴 are pushing the score up"
                             if _rt_pressure_n > 0 else
@@ -29827,9 +29848,24 @@ elif page == "🧠 AI Insights":
         )
 
         _qa_history = st.session_state.setdefault("_qa_history", [])
-        if _qa_history and st.button("Clear conversation", key="_qa_clear_btn"):
-            st.session_state["_qa_history"] = []
-            st.rerun()
+        if _qa_history:
+            _qa_clear_key = "_qa_clear_confirm"
+            if not st.session_state.get(_qa_clear_key):
+                if st.button("Clear conversation", key="_qa_clear_btn"):
+                    st.session_state[_qa_clear_key] = True
+                    st.rerun()
+            else:
+                st.warning("Clear this Q&A conversation?")
+                _qa_cc1, _qa_cc2 = st.columns(2)
+                with _qa_cc1:
+                    if st.button("Yes, clear", key="_qa_clear_yes", type="primary"):
+                        st.session_state.pop(_qa_clear_key, None)
+                        st.session_state["_qa_history"] = []
+                        st.rerun()
+                with _qa_cc2:
+                    if st.button("Cancel", key="_qa_clear_cancel"):
+                        st.session_state.pop(_qa_clear_key, None)
+                        st.rerun()
 
         def _qa_render_round(round_: dict) -> None:
             with st.chat_message("user"):
@@ -31602,7 +31638,7 @@ elif page == "🎯 My Edge":
             else:
                 _mi_rho = _mi_align["spearman_rho"]
                 if _mi_rho >= CONVICTION_ALIGNMENT_HIGH:
-                    _mi_align_label = "Disciplined"
+                    _mi_align_label = "Aligned"
                     _mi_align_color = "#22c55e"
                 elif _mi_rho >= CONVICTION_ALIGNMENT_LOW:
                     _mi_align_label = "Partial"
@@ -31630,7 +31666,7 @@ elif page == "🎯 My Edge":
                     )
                     st.caption(
                         f"Based on {_mi_align['n_positions']} positions.\n\n"
-                        f"**{CONVICTION_ALIGNMENT_HIGH:.0%}+** = Disciplined · "
+                        f"**{CONVICTION_ALIGNMENT_HIGH:.0%}+** = Aligned · "
                         f"**{CONVICTION_ALIGNMENT_LOW:.0%}–{CONVICTION_ALIGNMENT_HIGH:.0%}** = Partial · "
                         f"**< {CONVICTION_ALIGNMENT_LOW:.0%}** = Random"
                     )
