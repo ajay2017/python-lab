@@ -22746,11 +22746,13 @@ elif page == "🪞 Trade Review":
             if _extra_str:
                 _extra_str = f" · {_extra_str}"
             _chip = f" {extra_chip}" if extra_chip else ""
+            _action_esc = _html.escape(str(t["action"]))
+            _ticker_esc = _html.escape(str(t["ticker"]))
             return (
                 f"<div style='background:#0f172a;border-radius:4px;"
                 f"padding:6px 10px;margin-bottom:4px;color:#cbd5e1;font-size:0.82em'>"
-                f"<span style='color:{_act_col};font-weight:600'>{t['action']}</span> "
-                f"<b>{t['ticker']}</b> · "
+                f"<span style='color:{_act_col};font-weight:600'>{_action_esc}</span> "
+                f"<b>{_ticker_esc}</b> · "
                 f"{t['shares']:.0f}sh @ ${t['price']:.2f} · "
                 f"<b style='color:{_pnl_col}'>${t['outcome_pnl']:+,.0f} "
                 f"({t['outcome_pct']:+.2f}%)</b>"

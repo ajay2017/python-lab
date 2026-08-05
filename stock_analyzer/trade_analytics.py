@@ -197,6 +197,15 @@ def build_hold_time_stats(ext_df: pd.DataFrame) -> dict:
     }
 
 
+def _month_str_et(d) -> str:
+    """Bucket a parsed trade timestamp into its America/New_York calendar
+    month — must agree with current_month's own ET basis below, or trades
+    in the last few hours of an ET day land in the wrong month bucket."""
+    if d.tzinfo is None:
+        d = _ET.localize(d)
+    return d.astimezone(_ET).strftime("%Y-%m")
+
+
 def _build_overtrading_stats(trades_df: pd.DataFrame) -> dict:
     """
     Detect overtrading by comparing the current calendar month's trade count
@@ -215,7 +224,7 @@ def _build_overtrading_stats(trades_df: pd.DataFrame) -> dict:
     if df.empty:
         return {}
 
-    df["month_str"] = df["_dt"].apply(lambda d: d.strftime("%Y-%m"))
+    df["month_str"] = df["_dt"].apply(_month_str_et)
     monthly_counts = df.groupby("month_str").size().sort_index()
     if len(monthly_counts) < 2:
         return {}
