@@ -9651,10 +9651,10 @@ elif page == "🧾 Summary":
         # on 📡 Signals & Advice; the sidebar nav badge already flags danger).
         if _sm_alpha is None:
             st.metric(
-                "Alpha vs SPY", "—",
+                "Alpha vs SPY (actual)", "—",
                 help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
                      "adjusted for any buys/sells during that time. For the precise "
-                     "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+                     "money-weighted alpha vs benchmark, see 🎯 My Edge → 📐 Benchmark Mirror.",
             )
             st.caption("Building history")
         elif _sm_alpha.get("has_flows"):
@@ -9663,22 +9663,22 @@ elif page == "🧾 Summary":
             # inflated). The money-weighted read on 💰 Account is the honest
             # figure; suppress the number here rather than mislead.
             st.metric(
-                f"Alpha vs SPY ({_sm_alpha['n_days']}d)", "n/a",
+                f"Alpha vs SPY (actual, {_sm_alpha['n_days']}d)", "n/a",
                 "capital moved — see 💰 Capital Trend",
                 delta_color="off",
                 help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
                      "adjusted for any buys/sells during that time. For the precise "
-                     "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+                     "money-weighted alpha vs benchmark, see 🎯 My Edge → 📐 Benchmark Mirror.",
             )
         else:
             st.metric(
-                f"Alpha vs SPY ({_sm_alpha['n_days']}d)",
+                f"Alpha vs SPY (actual, {_sm_alpha['n_days']}d)",
                 f"{_sm_alpha['pct']:+.1f}%",
                 "beating SPY" if _sm_alpha["pct"] >= 0 else "trailing SPY",
                 delta_color="normal" if _sm_alpha["pct"] >= 0 else "inverse",
                 help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
                      "adjusted for any buys/sells during that time. For the precise "
-                     "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+                     "money-weighted alpha vs benchmark, see 🎯 My Edge → 📐 Benchmark Mirror.",
             )
             if len(_sm_alpha["series"]) >= 2:
                 _render_sparkline(
@@ -14724,7 +14724,7 @@ elif page == "🥧 Portfolio Overview":
                     _km1, _km2, _km3 = st.columns(3)
                     _km1.metric("Portfolio Return",  f"{_port_final:+.2f}%")
                     _km2.metric("S&P 500 Return",    f"{_spy_final:+.2f}%")
-                    _km3.metric("Alpha vs SPY",
+                    _km3.metric("Alpha vs SPY (backtest)",
                                 f"{_alpha_sign}{_alpha:.2f}%",
                                 delta=f"{'Outperforming' if _beating else 'Underperforming'}",
                                 delta_color="normal" if _beating else "inverse")
@@ -14764,7 +14764,8 @@ elif page == "🥧 Portfolio Overview":
                     st.plotly_chart(_perf_fig, use_container_width=True)
                     st.caption(
                         "Uses current portfolio weights applied to historical prices. "
-                        "Assumes constant allocation throughout the selected period."
+                        "Assumes constant allocation throughout the selected period. "
+                        "For your actual historical Alpha (not a backtest), see 🧾 Summary."
                     )
                 else:
                     st.info("No price history available to build the chart.")

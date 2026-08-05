@@ -623,7 +623,7 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False) -> str:
             "<tr>"
             + _pct_cell("Portfolio", perf, bold=True, subtitle="this week · equity positions")
             + _pct_cell("S&P 500", spy, subtitle="this week · SPY")
-            + _pct_cell("Alpha", alpha, bold=True, subtitle="vs benchmark").replace("border-right:1px solid #e5e7eb", "border-right:none")
+            + _pct_cell("Alpha (portfolio, unadjusted)", alpha, bold=True, subtitle="vs benchmark").replace("border-right:1px solid #e5e7eb", "border-right:none")
             + "</tr></table>"
             "<p style='font-size:0.72em;color:#9ca3af;margin:0 0 20px;text-align:center'>"
             "Weekly change in equity position value (Mon&#8202;–&#8202;Fri). "
