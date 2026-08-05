@@ -9940,151 +9940,162 @@ elif page == "🧾 Summary":
         _etr_m_alpha = _etr_h["missed_alpha"]
         _etr_n       = _etr_h["n_acted_mature"]
         _etr_since   = _etr_h["since_date"]
-        st.markdown("**🎯 Engine Track Record**")
-        if _etr_band == "building":
-            _etr_need = max(0, _etr_min_calls - _etr_n)
+        with st.container(border=True, key="etr_hero"):
             st.markdown(
-                f"<div style='color:#9ca3af;font-size:0.95em'>Building history</div>"
-                f"<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
-                f"The App needs {_etr_need} more matured BUY call(s) before it can "
-                f"report a track record.</div>",
+                "<style>.st-key-etr_hero{"
+                "border-left:3px solid #22c55e !important;"
+                "background:rgba(34,197,94,.04)}"
+                "</style>",
                 unsafe_allow_html=True,
             )
-        else:
-            # Alpha unknown — show neutral grey rather than asserting a
-            # performance verdict.  LAGGING would falsely claim underperformance
-            # when the truth is simply "not enough priced outcomes yet."
-            if _etr_alpha is None:
-                _etr_badge   = "NO DATA"
-                _etr_color   = "#6b7280"
-                _etr_verdict = (
-                    "Not enough priced data yet — outcomes will appear as calls mature."
+            st.markdown("**🎯 Engine Track Record**")
+            if _etr_band == "building":
+                _etr_need = max(0, _etr_min_calls - _etr_n)
+                st.markdown(
+                    f"<div style='color:#9ca3af;font-size:0.95em'>Building history</div>"
+                    f"<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
+                    f"The App needs {_etr_need} more matured BUY call(s) before it can "
+                    f"report a track record.</div>",
+                    unsafe_allow_html=True,
                 )
-            elif _etr_band == "firm" and _etr_alpha > 0:
-                _etr_badge   = "WORKING"
-                _etr_color   = "#22c55e"
-                _etr_verdict = (
-                    "Acting on the App's new-position calls has beaten the benchmark."
+            else:
+                # Alpha unknown — show neutral grey rather than asserting a
+                # performance verdict.  LAGGING would falsely claim underperformance
+                # when the truth is simply "not enough priced outcomes yet."
+                if _etr_alpha is None:
+                    _etr_badge   = "NO DATA"
+                    _etr_color   = "#6b7280"
+                    _etr_verdict = (
+                        "Not enough priced data yet — outcomes will appear as calls mature."
+                    )
+                elif _etr_band == "firm" and _etr_alpha > 0:
+                    _etr_badge   = "WORKING"
+                    _etr_color   = "#22c55e"
+                    _etr_verdict = (
+                        "Acting on the App's new-position calls has beaten the benchmark."
+                    )
+                elif _etr_band == "firm":
+                    _etr_badge   = "LAGGING"
+                    _etr_color   = "#f59e0b"
+                    _etr_verdict = (
+                        "Acting on the App's new-position calls hasn't beaten the "
+                        "benchmark over this sample."
+                    )
+                else:   # early, alpha is not None
+                    _etr_badge = "EARLY READ"
+                    _etr_color = "#f59e0b"
+                    _etr_verdict = (
+                        "Directionally positive but a thin sample — treat as a read."
+                        if _etr_alpha > 0
+                        else "Thin sample — more matured calls needed before a firm read."
+                    )
+                _etr_hero = f"{_etr_alpha:+.1f} pp vs S&P" if _etr_alpha is not None else "—"
+                _etr_contrast_html = (
+                    f"<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
+                    f"The ones you skipped: {_etr_m_alpha:+.1f}pp</div>"
+                    if _etr_m_alpha is not None else ""
                 )
-            elif _etr_band == "firm":
-                _etr_badge   = "LAGGING"
-                _etr_color   = "#f59e0b"
-                _etr_verdict = (
-                    "Acting on the App's new-position calls hasn't beaten the "
-                    "benchmark over this sample."
+                _etr_since_str = (
+                    _etr_since.strftime("%b %d, %Y") if _etr_since else ""
                 )
-            else:   # early, alpha is not None
-                _etr_badge = "EARLY READ"
-                _etr_color = "#f59e0b"
-                _etr_verdict = (
-                    "Directionally positive but a thin sample — treat as a read."
-                    if _etr_alpha > 0
-                    else "Thin sample — more matured calls needed before a firm read."
+                _etr_caption = (
+                    f"{_etr_n} matured call(s)"
+                    + (f" since {_etr_since_str}" if _etr_since_str else "")
+                    + " · measures calls surfaced to you, not every possible call."
                 )
-            _etr_hero = f"{_etr_alpha:+.1f} pp vs S&P" if _etr_alpha is not None else "—"
-            _etr_contrast_html = (
-                f"<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
-                f"The ones you skipped: {_etr_m_alpha:+.1f}pp</div>"
-                if _etr_m_alpha is not None else ""
-            )
-            _etr_since_str = (
-                _etr_since.strftime("%b %d, %Y") if _etr_since else ""
-            )
-            _etr_caption = (
-                f"{_etr_n} matured call(s)"
-                + (f" since {_etr_since_str}" if _etr_since_str else "")
-                + " · measures calls surfaced to you, not every possible call."
-            )
-            st.markdown(
-                f"<div style='font-size:1.05em;font-weight:600;color:{_etr_color}'>"
-                f"<span style='font-size:0.75em;background:rgba(255,255,255,.08);"
-                f"border-radius:10px;padding:1px 7px;margin-right:6px'>"
-                f"{_etr_badge}</span>{_etr_hero}</div>"
-                f"<div style='color:#c7d2e2;font-size:0.85em;margin-top:2px'>"
-                f"when you acted on the App's new-position calls</div>"
-                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
-                f"{_etr_verdict}</div>"
-                f"{_etr_contrast_html}"
-                f"<div style='color:#6b7280;font-size:0.78em;margin-top:5px;"
-                f"font-style:italic'>{_etr_caption}</div>",
-                unsafe_allow_html=True,
-            )
-        if st.button("→ Recommendations History", key="sm_ptr_etr"):
-            st.session_state["_pending_page"] = "📜 Recommendations History"
-            st.rerun()
+                st.markdown(
+                    f"<div style='font-size:1.05em;font-weight:600;color:{_etr_color}'>"
+                    f"<span style='font-size:0.75em;background:rgba(255,255,255,.08);"
+                    f"border-radius:10px;padding:1px 7px;margin-right:6px'>"
+                    f"{_etr_badge}</span>{_etr_hero}</div>"
+                    f"<div style='color:#c7d2e2;font-size:0.85em;margin-top:2px'>"
+                    f"when you acted on the App's new-position calls</div>"
+                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
+                    f"{_etr_verdict}</div>"
+                    f"{_etr_contrast_html}"
+                    f"<div style='color:#6b7280;font-size:0.78em;margin-top:5px;"
+                    f"font-style:italic'>{_etr_caption}</div>",
+                    unsafe_allow_html=True,
+                )
+            if st.button("→ Recommendations History", key="sm_ptr_etr"):
+                st.session_state["_pending_page"] = "📜 Recommendations History"
+                st.rerun()
     with _sm_ptr_row1[1]:
         # 🩺 Thesis Review — top-right. Never a second independent verdict;
         # reads the same "most recent review per ticker" the AI Insights page
         # uses. Shows a "No reviews yet" note when _sm_n_reviewed == 0 so this
         # cell is never empty in the 2×2 grid.
-        st.markdown("**🩺 Thesis Review**")
-        if _sm_n_reviewed > 0:
-            if _sm_n_broken or _sm_n_weakening:
-                _sm_tr_parts = []
-                if _sm_n_broken:
-                    _sm_tr_parts.append(f"{_sm_n_broken} Broken")
-                if _sm_n_weakening:
-                    _sm_tr_parts.append(f"{_sm_n_weakening} Weakening")
-                _sm_tr_line  = ", ".join(_sm_tr_parts)
-                _sm_tr_color = "#ef4444" if _sm_n_broken else "#f59e0b"
+        with st.container(border=True):
+            st.markdown("**🩺 Thesis Review**")
+            if _sm_n_reviewed > 0:
+                if _sm_n_broken or _sm_n_weakening:
+                    _sm_tr_parts = []
+                    if _sm_n_broken:
+                        _sm_tr_parts.append(f"{_sm_n_broken} Broken")
+                    if _sm_n_weakening:
+                        _sm_tr_parts.append(f"{_sm_n_weakening} Weakening")
+                    _sm_tr_line  = ", ".join(_sm_tr_parts)
+                    _sm_tr_color = "#ef4444" if _sm_n_broken else "#f59e0b"
+                else:
+                    _sm_tr_line  = "All Intact"
+                    _sm_tr_color = "#22c55e"
+                st.markdown(
+                    f"<div style='font-size:1.1em;font-weight:600;color:{_sm_tr_color}'>{_sm_tr_line}</div>"
+                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>of {_sm_n_reviewed} reviewed</div>",
+                    unsafe_allow_html=True,
+                )
             else:
-                _sm_tr_line  = "All Intact"
-                _sm_tr_color = "#22c55e"
-            st.markdown(
-                f"<div style='font-size:1.1em;font-weight:600;color:{_sm_tr_color}'>{_sm_tr_line}</div>"
-                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>of {_sm_n_reviewed} reviewed</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption("No held position with a saved review yet.")
-        if st.button("→ AI Insights", key="sm_ptr_thesis"):
-            st.session_state["_pending_page"] = "🧠 AI Insights"
-            st.rerun()
+                st.caption("No held position with a saved review yet.")
+            if st.button("→ AI Insights", key="sm_ptr_thesis"):
+                st.session_state["_pending_page"] = "🧠 AI Insights"
+                st.rerun()
     # ── Row 2: Catalyst Watch (bottom-left) · Risk Posture (bottom-right)
     _sm_ptr_row2 = st.columns(2)
     with _sm_ptr_row2[0]:
         # 🔔 Catalyst Watch — bottom-left. Reads the same cached earnings
         # dates as the Catalyst Watch page — first-cached wins; no second fetch.
-        st.markdown("**🔔 Catalyst Watch**")
-        if _sm_n_earnings_soon:
-            _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
-            _sm_cw_color = "#f59e0b"
-        else:
-            _sm_cw_line  = "None soon"
-            _sm_cw_color = "#22c55e"
-        st.markdown(
-            f"<div style='font-size:1.1em;font-weight:600;color:{_sm_cw_color}'>{_sm_cw_line}</div>"
-            f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
-            st.session_state["_pending_page"] = "🔔 Catalyst Watch"
-            st.rerun()
+        with st.container(border=True):
+            st.markdown("**🔔 Catalyst Watch**")
+            if _sm_n_earnings_soon:
+                _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
+                _sm_cw_color = "#f59e0b"
+            else:
+                _sm_cw_line  = "None soon"
+                _sm_cw_color = "#22c55e"
+            st.markdown(
+                f"<div style='font-size:1.1em;font-weight:600;color:{_sm_cw_color}'>{_sm_cw_line}</div>"
+                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
+                st.session_state["_pending_page"] = "🔔 Catalyst Watch"
+                st.rerun()
     with _sm_ptr_row2[1]:
         # 🔗 Risk Posture — bottom-right (moved from the old Tier-3 row so no
         # cell is empty and the grid is complete). Same _sm_posture computed
         # above; never a second independent verdict.
-        st.markdown("**🔗 Risk Posture**")
-        if _sm_posture is not None:
-            # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
-            # which collides with the risk-off de-risk TRIM card's own 🛡️
-            # (2026-08-04 UX audit CA10) — ☀️ here instead, producer untouched.
-            _sm_posture_icon = "☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"]
-            st.markdown(
-                f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture_icon} {_sm_posture['label']}</div>"
-                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                "<div style='color:#9ca3af;font-size:0.95em'>—</div>"
-                "<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
-                "Visit 🔗 Risk Analysis to compute.</div>",
-                unsafe_allow_html=True,
-            )
-        if st.button("→ Risk Analysis", key="sm_ptr_riskposture"):
-            st.session_state["_pending_page"] = "🔗 Risk Analysis"
-            st.rerun()
+        with st.container(border=True):
+            st.markdown("**🔗 Risk Posture**")
+            if _sm_posture is not None:
+                # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
+                # which collides with the risk-off de-risk TRIM card's own 🛡️
+                # (2026-08-04 UX audit CA10) — ☀️ here instead, producer untouched.
+                _sm_posture_icon = "☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"]
+                st.markdown(
+                    f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture_icon} {_sm_posture['label']}</div>"
+                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<div style='color:#9ca3af;font-size:0.95em'>—</div>"
+                    "<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
+                    "Visit 🔗 Risk Analysis to compute.</div>",
+                    unsafe_allow_html=True,
+                )
+            if st.button("→ Risk Analysis", key="sm_ptr_riskposture"):
+                st.session_state["_pending_page"] = "🔗 Risk Analysis"
+                st.rerun()
 
     # ── Holdings — identical table to Home's (shared function, same output).
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
