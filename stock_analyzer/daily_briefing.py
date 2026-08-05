@@ -1377,6 +1377,16 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
         _is_exit = d["tier"] == "EXIT"
         _pnl = d.get("pnl_pct") or 0.0
         _wt = d.get("weight_pct") or 0.0
+        # d["shares"] is int()-truncated upstream (exit_advisor.py) — a genuine
+        # sub-1-share holding reports 0, which would otherwise combine with the
+        # max(1, ...) floor below to read "1 of 0 shares," or "exit most/all of
+        # 0 shares" on the EXIT side. Fall back to a share-count-free phrasing
+        # rather than show a self-contradictory quantity on either branch.
+        _trim_qty_clause = (
+            f" ({max(1, int(d['shares'] * DETERIORATION_TRIM_SUGGESTED_PCT / 100.0))} of {d['shares']} shares)"
+            if d["shares"] > 0 else ""
+        )
+        _exit_qty_clause = f"of {d['shares']} shares" if d["shares"] > 0 else "of the position"
         items.append({
             "priority": "high",
             "icon":     "📉" if _is_exit else "✂️",
@@ -1384,13 +1394,12 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             "kind":     "deterioration_exit" if _is_exit else "deterioration_trim",
             "action":   "REDUCE — Deterioration Exit" if _is_exit else "TRIM — Deterioration",
             "directive": (
-                f"Reduce aggressively — exit most/all of {d['shares']} shares. Down "
+                f"Reduce aggressively — exit most/all {_exit_qty_clause}. Down "
                 f"{d['dd_from_peak_pct']:.1f}% from its ${d['peak']:.2f} peak and below "
                 f"the {d['trend_ma']}-day trend."
                 if _is_exit else
                 f"Trim into the weakness — an approximate {DETERIORATION_TRIM_SUGGESTED_PCT:.0f}% "
-                f"reduction ({max(1, int(d['shares'] * DETERIORATION_TRIM_SUGGESTED_PCT / 100.0))} of "
-                f"{d['shares']} shares) is a reasonable floor. Down {d['dd_from_peak_pct']:.1f}% "
+                f"reduction{_trim_qty_clause} is a reasonable floor. Down {d['dd_from_peak_pct']:.1f}% "
                 f"from its ${d['peak']:.2f} peak, below the {d['trend_ma']}-day trend, and "
                 f"lagging the market."
             ),

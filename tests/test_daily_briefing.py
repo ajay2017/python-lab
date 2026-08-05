@@ -28,6 +28,7 @@ from stock_analyzer.constants import (
     WEAK_CONVICTION_SCORE,
 )
 from stock_analyzer.daily_briefing import (
+    _act_today,
     _buy_candidates,
     _cross_reference,
     _dynamic_overweight_floor,
@@ -872,3 +873,65 @@ def test_tuneup_non_trim_driver_types_never_filtered():
         out = _portfolio_tuneup([rec], acted_tickers={"NVDA"})
         assert len(out) == 1, rtype
         assert out[0]["tickers"] == ["NVDA"], rtype
+
+
+# ── _act_today — deterioration TRIM/EXIT directive, sub-1-share holdings ──────
+# d["shares"] is int()-truncated upstream (exit_advisor.py) -- a genuine
+# fractional-share holding under 1 share reports 0. 2026-08-05 audit finding:
+# the TRIM directive's suggested-quantity clause combined a max(1, ...) floor
+# with that 0 to read "1 of 0 shares"; the EXIT directive had the same class
+# of defect ("exit most/all of 0 shares"). Both must fall back to a
+# share-count-free phrasing instead.
+
+def _deterioration_item(tier, shares):
+    return {
+        "tier": tier, "ticker": "ABC", "shares": shares,
+        "dd_from_peak_pct": -12.0, "peak": 10.0, "trend_ma": 50,
+        "below_ma_count": 3, "rel_strength": -2.0,
+        "trim_floor": 10.0, "exit_floor": 20.0,
+        "pnl_pct": -5.0, "weight_pct": 2.0,
+    }
+
+
+def test_act_today_trim_directive_omits_share_count_when_shares_truncate_to_zero():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("TRIM", 0)],
+    )
+    assert len(items) == 1
+    directive = items[0]["directive"]
+    assert "of 0 shares" not in directive
+    assert "reduction is a reasonable floor" in directive
+
+
+def test_act_today_trim_directive_includes_share_count_when_shares_present():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("TRIM", 10)],
+    )
+    directive = items[0]["directive"]
+    assert "of 10 shares" in directive
+
+
+def test_act_today_exit_directive_falls_back_when_shares_truncate_to_zero():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("EXIT", 0)],
+    )
+    assert len(items) == 1
+    directive = items[0]["directive"]
+    assert "of 0 shares" not in directive
+    assert "exit most/all of the position" in directive
+
+
+def test_act_today_exit_directive_includes_share_count_when_shares_present():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("EXIT", 10)],
+    )
+    directive = items[0]["directive"]
+    assert "of 10 shares" in directive
