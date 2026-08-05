@@ -14257,962 +14257,974 @@ elif page == "🥧 Portfolio Overview":
 
     # ── Performance vs SPY + Diagnostics + Waterfall ────────────────────────
     with _pa_tab_perf:
-        _pc1, _pc2 = st.columns([3, 1])
-        _pc1.markdown("### Portfolio Performance vs S&P 500")
-        _perf_period = _pc2.radio(
-            "Period", ["1M", "3M", "6M"], horizontal=True,
-            index=1, key="_perf_period", label_visibility="collapsed",
+        _pf_t1, _pf_t2, _pf_t3 = st.tabs(
+            ["📈 vs S&P 500", "📊 Diagnostics", "🏭 Sector Attribution"]
         )
-        _period_days = {"1M": 21, "3M": 63, "6M": 126}
-        _n_days = _period_days[_perf_period]
-
-        try:
-            _spy_hist  = _cached_spy("6mo")
-            _spy_close = _spy_hist["Close"]
-            if _spy_close.index.tz is not None:
-                _spy_close.index = _spy_close.index.tz_localize(None)
-
-            _closes = {}
-            for _, _row in port_df.iterrows():
-                _t = _row["Ticker"]
-                if _t in held_data and not held_data[_t]["df"].empty:
-                    _c = held_data[_t]["df"]["Close"].copy()
-                    if _c.index.tz is not None:
-                        _c.index = _c.index.tz_localize(None)
-                    _closes[_t] = _c
-
-            if _closes:
-                _common = _spy_close.index
-                for _s in _closes.values():
-                    _common = _common.intersection(_s.index)
-                _common = sorted(_common)[-_n_days:]
-
-                _weights_s = port_df.set_index("Ticker")["Weight (%)"] / 100
-                _port_ret  = pd.Series(0.0, index=_common)
-                _total_w   = 0.0
-                for _t, _c in _closes.items():
-                    _w = float(_weights_s.get(_t, 0))
-                    if _w <= 0:
-                        continue
-                    _aligned = _c.reindex(_common).ffill().bfill()
-                    if _aligned.empty or _aligned.iloc[0] == 0:
-                        continue
-                    _port_ret += (_aligned / _aligned.iloc[0] - 1) * 100 * _w
-                    _total_w  += _w
-                if _total_w > 0:
-                    _port_ret = _port_ret / _total_w
-
-                _spy_s   = _spy_close.reindex(_common).ffill().bfill()
-                _spy_ret = (_spy_s / _spy_s.iloc[0] - 1) * 100
-
-                _port_final = float(_port_ret.iloc[-1])
-                _spy_final  = float(_spy_ret.iloc[-1])
-                _alpha      = _port_final - _spy_final
-                _beating    = _alpha >= 0
-                _port_clr   = "#00C851" if _beating else "#ff6b6b"
-                _fill_clr   = "rgba(0,200,81,0.08)" if _beating else "rgba(255,100,100,0.08)"
-                _alpha_sign = "+" if _beating else ""
-
-                # ── KPI row ──────────────────────────────────────────────────
-                _km1, _km2, _km3 = st.columns(3)
-                _km1.metric("Portfolio Return",  f"{_port_final:+.2f}%")
-                _km2.metric("S&P 500 Return",    f"{_spy_final:+.2f}%")
-                _km3.metric("Alpha vs SPY",
-                            f"{_alpha_sign}{_alpha:.2f}%",
-                            delta=f"{'Outperforming' if _beating else 'Underperforming'}",
-                            delta_color="normal" if _beating else "inverse")
-
-                # ── Chart ────────────────────────────────────────────────────
-                _perf_fig = go.Figure()
-                _perf_fig.add_trace(go.Scatter(
-                    x=list(_common), y=list(_spy_ret),
-                    name="S&P 500",
-                    line=dict(color="#888888", width=1.5, dash="dot"),
-                    hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>S&P 500</extra>",
-                ))
-                _perf_fig.add_trace(go.Scatter(
-                    x=list(_common), y=list(_port_ret),
-                    name="Portfolio",
-                    line=dict(color=_port_clr, width=2.5),
-                    fill="tonexty", fillcolor=_fill_clr,
-                    hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>Portfolio</extra>",
-                ))
-                _perf_fig.update_layout(
-                    template="plotly_dark",
-                    height=380,
-                    margin=dict(l=0, r=0, t=12, b=0),
-                    legend=dict(
-                        orientation="h", yanchor="bottom", y=1.0,
-                        xanchor="left", x=0,
-                        font=dict(size=12, color="#e8e8e8"),
-                        bgcolor="rgba(13,17,23,0.85)",
-                        bordercolor="#444", borderwidth=1,
-                    ),
-                    hovermode="x unified",
-                    yaxis=dict(ticksuffix="%", gridcolor="#1f2937",
-                               zeroline=True, zerolinecolor="#444"),
-                    xaxis=dict(gridcolor="#1f2937"),
-                    plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
-                )
-                st.plotly_chart(_perf_fig, use_container_width=True)
-                st.caption(
-                    "Uses current portfolio weights applied to historical prices. "
-                    "Assumes constant allocation throughout the selected period."
-                )
-            else:
-                st.info("No price history available to build the chart.")
-        except Exception as _e:
-            st.warning(f"Performance chart unavailable: {_e}")
-
-        # ── Performance Diagnostics ───────────────────────────────────────────
-        st.divider()
-        st.markdown("### 📊 Performance Diagnostics")
-        st.caption(
-            "Breaks down portfolio performance into per-position alpha vs SPY and vs the sector ETF benchmark. "
-            "Distinguishes genuine stock-picking skill from sector-driven returns — "
-            "and identifies exactly which positions are generating vs destroying alpha."
-        )
-
-        try:
-            # Build sector ETF returns dict from cached data
-            _sect_df = _fetch_sector_returns()
-            _sect_rets_dict: dict = {}
-            if not _sect_df.empty:
-                for _, _sr in _sect_df.iterrows():
-                    _sect_rets_dict[str(_sr["ETF"])] = {
-                        "1W": _sr.get("1W"), "1M": _sr.get("1M"),
-                        "3M": _sr.get("3M"), "6M": _sr.get("6M"),
-                    }
-
-            _attr_df = compute_attribution(
-                port_df, held_data, _cached_spy("6mo"),
-                _n_days, _sect_rets_dict, _perf_period,
+        with _pf_t1:
+            _pc1, _pc2 = st.columns([3, 1])
+            _pc1.markdown("### Portfolio Performance vs S&P 500")
+            _perf_period = _pc2.radio(
+                "Period", ["1M", "3M", "6M"], horizontal=True,
+                index=1, key="_perf_period", label_visibility="collapsed",
             )
+            _period_days = {"1M": 21, "3M": 63, "6M": 126}
+            _n_days = _period_days[_perf_period]
 
-            if _attr_df.empty:
-                st.info("Not enough price history to compute attribution for the selected period.")
-            else:
-                _perf_recs = build_perf_recommendations(_attr_df, total_val, _perf_period)
+            try:
+                _spy_hist  = _cached_spy("6mo")
+                _spy_close = _spy_hist["Close"]
+                if _spy_close.index.tz is not None:
+                    _spy_close.index = _spy_close.index.tz_localize(None)
 
-                # ── Summary KPIs ──────────────────────────────────────────────
-                _net_alpha_dollar = float(_attr_df["Dollar Alpha ($)"].sum())
-                _n_generators = int((_attr_df["Category"] == "Alpha Generator").sum())
-                _n_riders     = int((_attr_df["Category"] == "Sector Rider").sum())
-                _n_destroyers = int((_attr_df["Category"] == "Alpha Destroyer").sum())
-                _n_total      = len(_attr_df)
-                _skill_pct    = int((_attr_df["Alpha vs SPY (%)"] > 0).sum() / _n_total * 100) if _n_total else 0
+                _closes = {}
+                for _, _row in port_df.iterrows():
+                    _t = _row["Ticker"]
+                    if _t in held_data and not held_data[_t]["df"].empty:
+                        _c = held_data[_t]["df"]["Close"].copy()
+                        if _c.index.tz is not None:
+                            _c.index = _c.index.tz_localize(None)
+                        _closes[_t] = _c
 
-                _dp1, _dp2, _dp3, _dp4 = st.columns(4)
-                _dp1.metric(
-                    f"Net Alpha vs SPY ({_perf_period})",
-                    f"${_net_alpha_dollar:+,.0f}",
-                    "Outperforming" if _net_alpha_dollar >= 0 else "Underperforming",
-                    delta_color="normal" if _net_alpha_dollar >= 0 else "inverse",
-                    help=f"Total extra $ earned (or lost) vs holding SPY at identical weights over {_perf_period}",
-                )
-                _dp2.metric("Alpha Generators",  _n_generators,
-                            "beating SPY ≥ 5%", delta_color="off")
-                _dp3.metric("Alpha Destroyers",  _n_destroyers,
-                            "lagging SPY ≥ 5%", delta_color="off")
-                _dp4.metric(
-                    "Skill Ratio",
-                    f"{_skill_pct}%",
-                    f"{int(_skill_pct / 100 * _n_total)}/{_n_total} positions beating SPY",
-                    delta_color="off",
-                    help="% of positions generating positive alpha vs S&P 500",
-                )
+                if _closes:
+                    _common = _spy_close.index
+                    for _s in _closes.values():
+                        _common = _common.intersection(_s.index)
+                    _common = sorted(_common)[-_n_days:]
 
-                # ── Alpha attribution chart ───────────────────────────────────
-                _asc = _attr_df.sort_values("Alpha vs SPY (%)", ascending=True)
-                _bar_clrs = [
-                    "#00C851" if v >= PERF_ALPHA_BAND_PCT else "#ff4444" if v <= -PERF_ALPHA_BAND_PCT else "#888888"
-                    for v in _asc["Alpha vs SPY (%)"]
-                ]
-                _hover = [
-                    f"<b>{r['Ticker']}</b><br>"
-                    f"Return: {r['Holding Ret (%)']:+.1f}%<br>"
-                    f"SPY: {r['SPY Ret (%)']:+.1f}%<br>"
-                    f"Alpha vs SPY: {r['Alpha vs SPY (%)']:+.1f}%<br>"
-                    f"vs {r['ETF']}: "
-                    + (f"{r['Alpha vs Sector (%)']:+.1f}%" if r['Alpha vs Sector (%)'] is not None else "—")
-                    + f"<br>Category: {r['Category']}<br>$ Alpha: ${r['Dollar Alpha ($)']:+,.0f}"
-                    for _, r in _asc.iterrows()
-                ]
-                _attr_fig = go.Figure(go.Bar(
-                    x=list(_asc["Alpha vs SPY (%)"]),
-                    y=list(_asc["Ticker"]),
-                    orientation="h",
-                    marker_color=_bar_clrs,
-                    text=[f"{v:+.1f}%" for v in _asc["Alpha vs SPY (%)"]],
-                    textposition="outside",
-                    customdata=_hover,
-                    hovertemplate="%{customdata}<extra></extra>",
-                ))
-                _attr_fig.add_vline(x=0,   line_color="#555",      line_width=1)
-                _attr_fig.add_vline(x=5,   line_dash="dash",
-                                    line_color="rgba(0,200,81,0.4)",  line_width=1)
-                _attr_fig.add_vline(x=-5,  line_dash="dash",
-                                    line_color="rgba(255,68,68,0.4)", line_width=1)
-                _attr_fig.update_layout(
-                    title=f"Alpha vs S&P 500 by Position — {_perf_period}",
-                    template="plotly_dark",
-                    height=max(220, len(_asc) * 44 + 60),
-                    margin=dict(l=0, r=90, t=40, b=0),
-                    xaxis=dict(ticksuffix="%", gridcolor="#1f2937",
-                               zeroline=False, title="Alpha vs SPY (%)"),
-                    yaxis=dict(gridcolor="#1f2937"),
-                    plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
-                    showlegend=False,
-                )
-                st.plotly_chart(_attr_fig, use_container_width=True)
-                st.caption(
-                    "🟢 Green = outperforming SPY ≥ 5% (alpha generator)  |  "
-                    "⬛ Gray = within ±5% of SPY  |  "
-                    "🔴 Red = lagging SPY ≥ 5% (alpha destroyer)  |  "
-                    "Dashed lines = ±5% thresholds  |  Hover for full breakdown vs sector ETF"
-                )
+                    _weights_s = port_df.set_index("Ticker")["Weight (%)"] / 100
+                    _port_ret  = pd.Series(0.0, index=_common)
+                    _total_w   = 0.0
+                    for _t, _c in _closes.items():
+                        _w = float(_weights_s.get(_t, 0))
+                        if _w <= 0:
+                            continue
+                        _aligned = _c.reindex(_common).ffill().bfill()
+                        if _aligned.empty or _aligned.iloc[0] == 0:
+                            continue
+                        _port_ret += (_aligned / _aligned.iloc[0] - 1) * 100 * _w
+                        _total_w  += _w
+                    if _total_w > 0:
+                        _port_ret = _port_ret / _total_w
 
-                # ── Position Diagnostics cards ────────────────────────────────
-                if _perf_recs:
-                    st.divider()
-                    st.markdown("#### 🎯 Position Diagnostics & Actions")
+                    _spy_s   = _spy_close.reindex(_common).ffill().bfill()
+                    _spy_ret = (_spy_s / _spy_s.iloc[0] - 1) * 100
 
-                    for _prec in _perf_recs:
-                        _pri   = _prec["priority"]
-                        _ptype = _prec["type"]
-                        _icon  = {"OK": "✅", "MONITOR": "⚠️",
-                                  "HIGH": "🔴", "MEDIUM": "🟡"}.get(_pri, "📌")
-                        _bclr  = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33",
-                                  "MONITOR": "#ffbb33", "OK": "#00C851"}.get(_pri, "#888")
-                        _expand = _pri in ("HIGH", "MEDIUM")
-                        # Display-only label — standardize MONITOR to "Watch"
-                        # (Consistency #2); _pri itself keeps driving the icon/color
-                        # lookups and the _expand check above.
-                        _pri_label = "Watch" if _pri == "MONITOR" else _pri
+                    _port_final = float(_port_ret.iloc[-1])
+                    _spy_final  = float(_spy_ret.iloc[-1])
+                    _alpha      = _port_final - _spy_final
+                    _beating    = _alpha >= 0
+                    _port_clr   = "#00C851" if _beating else "#ff6b6b"
+                    _fill_clr   = "rgba(0,200,81,0.08)" if _beating else "rgba(255,100,100,0.08)"
+                    _alpha_sign = "+" if _beating else ""
 
-                        with st.expander(
-                            f"{_icon} **{_pri_label}** · {_prec['title']}",
-                            expanded=_expand,
-                        ):
-                            # Metrics mini-strip
-                            if _prec.get("metrics"):
-                                _mc = st.columns(len(_prec["metrics"]))
-                                for _mcol, (_mlbl, _mval_s) in zip(_mc, _prec["metrics"].items()):
-                                    _mcol.metric(_mlbl, _mval_s)
+                    # ── KPI row ──────────────────────────────────────────────────
+                    _km1, _km2, _km3 = st.columns(3)
+                    _km1.metric("Portfolio Return",  f"{_port_final:+.2f}%")
+                    _km2.metric("S&P 500 Return",    f"{_spy_final:+.2f}%")
+                    _km3.metric("Alpha vs SPY",
+                                f"{_alpha_sign}{_alpha:.2f}%",
+                                delta=f"{'Outperforming' if _beating else 'Underperforming'}",
+                                delta_color="normal" if _beating else "inverse")
 
-                            # Problem banner (action cards only)
-                            if _prec.get("problem"):
-                                st.markdown(
-                                    f"<div style='padding:10px 14px;background:#1a1a1a;"
-                                    f"border-radius:6px;border-left:4px solid {_bclr};"
-                                    f"margin:10px 0'>"
-                                    f"<span style='font-size:0.72em;color:#888;font-weight:700;"
-                                    f"letter-spacing:0.09em;text-transform:uppercase'>"
-                                    f"The Problem</span><br>"
-                                    f"<span style='color:#eee'>{_prec['problem']}</span>"
-                                    f"</div>",
-                                    unsafe_allow_html=True,
-                                )
+                    # ── Chart ────────────────────────────────────────────────────
+                    _perf_fig = go.Figure()
+                    _perf_fig.add_trace(go.Scatter(
+                        x=list(_common), y=list(_spy_ret),
+                        name="S&P 500",
+                        line=dict(color="#888888", width=1.5, dash="dot"),
+                        hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>S&P 500</extra>",
+                    ))
+                    _perf_fig.add_trace(go.Scatter(
+                        x=list(_common), y=list(_port_ret),
+                        name="Portfolio",
+                        line=dict(color=_port_clr, width=2.5),
+                        fill="tonexty", fillcolor=_fill_clr,
+                        hovertemplate="%{x|%b %d}: %{y:+.2f}%<extra>Portfolio</extra>",
+                    ))
+                    _perf_fig.update_layout(
+                        template="plotly_dark",
+                        height=380,
+                        margin=dict(l=0, r=0, t=12, b=0),
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.0,
+                            xanchor="left", x=0,
+                            font=dict(size=12, color="#e8e8e8"),
+                            bgcolor="rgba(13,17,23,0.85)",
+                            bordercolor="#444", borderwidth=1,
+                        ),
+                        hovermode="x unified",
+                        yaxis=dict(ticksuffix="%", gridcolor="#1f2937",
+                                   zeroline=True, zerolinecolor="#444"),
+                        xaxis=dict(gridcolor="#1f2937"),
+                        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                    )
+                    st.plotly_chart(_perf_fig, use_container_width=True)
+                    st.caption(
+                        "Uses current portfolio weights applied to historical prices. "
+                        "Assumes constant allocation throughout the selected period."
+                    )
+                else:
+                    st.info("No price history available to build the chart.")
+            except Exception as _e:
+                st.warning(f"Performance chart unavailable: {_e}")
 
-                            _col_l, _col_r = st.columns([1, 1])
-
-                            with _col_l:
-                                if _prec.get("root_cause"):
-                                    st.markdown("**Thesis Status**")
-                                    st.markdown(
-                                        f"<div style='color:#bbb;font-size:0.88em'>"
-                                        f"{_prec['root_cause']}</div>",
-                                        unsafe_allow_html=True,
-                                    )
-
-                            with _col_r:
-                                if _prec.get("recommendation"):
-                                    st.markdown(
-                                        f"<div style='padding:10px 14px;background:#0d2137;"
-                                        f"border-radius:6px;border-left:4px solid #4a9eff;"
-                                        f"margin-bottom:10px'>"
-                                        f"<span style='font-size:0.72em;color:#4a9eff;"
-                                        f"font-weight:700;letter-spacing:0.09em;"
-                                        f"text-transform:uppercase'>Recommendation</span><br>"
-                                        f"<span style='color:#eee;font-size:0.9em'>"
-                                        f"{_prec['recommendation']}</span>"
-                                        f"</div>",
-                                        unsafe_allow_html=True,
-                                    )
-                                if _prec.get("expected_outcome"):
-                                    st.markdown(
-                                        f"<div style='padding:10px 14px;background:#0d1a0d;"
-                                        f"border-radius:6px;border-left:4px solid #00C851'>"
-                                        f"<span style='font-size:0.72em;color:#00C851;"
-                                        f"font-weight:700;letter-spacing:0.09em;"
-                                        f"text-transform:uppercase'>Expected Outcome</span><br>"
-                                        f"<span style='color:#ccc;font-size:0.88em'>"
-                                        f"{_prec['expected_outcome']}</span>"
-                                        f"</div>",
-                                        unsafe_allow_html=True,
-                                    )
-
-                            if _prec.get("institutional_lens"):
-                                with st.expander("Why this matters"):
-                                    st.markdown(_prec['institutional_lens'])
-
-        except Exception as _de:
-            st.warning(f"Performance Diagnostics unavailable: {_de}")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # P&L ATTRIBUTION WATERFALL (Performance tab)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-        st.caption(
-            "Shows each position's dollar contribution to total portfolio P&L — "
-            "largest winners on the left, largest losers on the right. "
-            "Identifies which holdings are driving performance and which are dragging it."
-        )
-
-        # Sort by P&L $ descending (winners left, losers right)
-        _pnl_df = port_df[["Ticker", "Sector", "P&L ($)", "P&L (%)", "Weight (%)", "Market Value", "Signal"]].copy()
-        _pnl_df = _pnl_df.sort_values("P&L ($)", ascending=False).reset_index(drop=True)
-
-        _total_pnl   = float(_pnl_df["P&L ($)"].sum())
-        _winners     = _pnl_df[_pnl_df["P&L ($)"] > 0]
-        _losers      = _pnl_df[_pnl_df["P&L ($)"] < 0]
-        _win_total   = float(_winners["P&L ($)"].sum())
-        _loss_total  = float(_losers["P&L ($)"].sum())
-        _best        = _pnl_df.iloc[0]
-        _worst       = _pnl_df.iloc[-1]
-
-        # KPI strip
-        _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
-        _pk1.metric("Total P&L",      _m(f"${_total_pnl:+,.0f}"),
-                    delta_color="normal" if _total_pnl >= 0 else "inverse")
-        _pk2.metric("Gross Gains",    _m(f"${_win_total:,.0f}"),
-                    f"{len(_winners)} positions", delta_color="off")
-        _pk3.metric("Gross Losses",   _m(f"${_loss_total:,.0f}"),
-                    f"{len(_losers)} positions",  delta_color="off")
-        _pk4.metric(f"Top: {_best['Ticker']}",
-                    _m(f"${_best['P&L ($)']:+,.0f}"), f"{_best['P&L (%)']:+.1f}%",
-                    delta_color="normal")
-        _pk5.metric(f"Drag: {_worst['Ticker']}",
-                    _m(f"${_worst['P&L ($)']:+,.0f}"), f"{_worst['P&L (%)']:+.1f}%",
-                    delta_color="inverse")
-
-        # ── Waterfall chart ───────────────────────────────────────────────────
-        _tickers  = list(_pnl_df["Ticker"]) + ["Total"]
-        _measures = ["relative"] * len(_pnl_df) + ["total"]
-        _values   = list(_pnl_df["P&L ($)"]) + [_total_pnl]
-        _bar_clrs = [
-            "#00C851" if v >= 0 else "#ff4444"
-            for v in list(_pnl_df["P&L ($)"]) + [_total_pnl]
-        ]
-        _priv = st.session_state.get("_privacy")
-        _hover = [
-            f"{row['Ticker']}<br>"
-            + (f"P&L: •••• ({row['P&L (%)']:+.1f}%)<br>" if _priv else f"P&L: ${row['P&L ($)']:+,.0f} ({row['P&L (%)']:+.1f}%)<br>")
-            + f"Weight: {row['Weight (%)']:.1f}%<br>"
-            f"Sector: {row['Sector']}<br>"
-            f"Signal: {row['Signal']}"
-            for _, row in _pnl_df.iterrows()
-        ] + [("Total P&L: ••••" if _priv else f"Total P&L: ${_total_pnl:+,.0f}")]
-
-        _wf_fig = go.Figure(go.Waterfall(
-            orientation="v",
-            measure=_measures,
-            x=_tickers,
-            y=_values,
-            text=["••••" if _priv else f"${v:+,.0f}" for v in _values],
-            textposition="outside",
-            textfont=dict(size=11),
-            customdata=_hover,
-            hovertemplate="%{customdata}<extra></extra>",
-            connector=dict(line=dict(color="#333", width=1, dash="dot")),
-            increasing=dict(marker=dict(color="#00C851")),
-            decreasing=dict(marker=dict(color="#ff4444")),
-            totals=dict(marker=dict(
-                color="#00C851" if _total_pnl >= 0 else "#ff4444",
-                line=dict(color="#fff", width=1.5),
-            )),
-        ))
-        _wf_fig.update_layout(
-            template="plotly_dark", height=420,
-            margin=dict(l=0, r=0, t=20, b=0),
-            xaxis=dict(gridcolor="#1f2937"),
-            yaxis=dict(
-                tickprefix="$", tickformat=",.0f",
-                gridcolor="#1f2937", zeroline=True, zerolinecolor="#555",
-            ),
-            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
-            showlegend=False,
-        )
-        st.plotly_chart(_wf_fig, use_container_width=True)
-
-        # ── Sector attribution breakdown ──────────────────────────────────────
-        st.markdown("#### Sector Attribution")
-        _sec_pnl = (
-            _pnl_df.groupby("Sector")["P&L ($)"]
-            .sum().sort_values(ascending=False).reset_index()
-        )
-        _sec_pnl["Share of P&L (%)"] = (
-            _sec_pnl["P&L ($)"] / abs(_total_pnl) * 100
-            if _total_pnl != 0 else 0.0
-        )
-        _sec_fig = go.Figure(go.Bar(
-            x=_sec_pnl["Sector"],
-            y=_sec_pnl["P&L ($)"],
-            marker_color=[
-                "#00C851" if v >= 0 else "#ff4444"
-                for v in _sec_pnl["P&L ($)"]
-            ],
-            text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _sec_pnl["P&L ($)"]],
-            textposition="outside",
-            customdata=list(zip(_sec_pnl["Sector"], _sec_pnl["Share of P&L (%)"])),
-            hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                + ("P&L: ••••<br>" if st.session_state.get("_privacy") else "P&L: $%{y:+,.0f}<br>")
-                + "Share: %{customdata[1]:.1f}% of total<extra></extra>"
-            ),
-        ))
-        _sec_fig.update_layout(
-            template="plotly_dark", height=280,
-            margin=dict(l=0, r=0, t=10, b=0),
-            xaxis=dict(gridcolor="#1f2937"),
-            yaxis=dict(
-                tickprefix="$", tickformat=",.0f",
-                gridcolor="#1f2937", zeroline=True, zerolinecolor="#555",
-            ),
-            plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
-            showlegend=False,
-        )
-        st.plotly_chart(_sec_fig, use_container_width=True)
-        st.caption(
-            "Waterfall: each bar is one position's dollar P&L contribution; "
-            "the final 'Total' bar is the portfolio sum.  "
-            "Sector chart groups by this app's own curated thematic buckets "
-            "(Semiconductors, Consumer Tech, AI & Data, etc. — see `resolve_sector`), "
-            "not GICS. For a real-market-sector view against actual S&P 500 weights, "
-            "see \"🏛️ Portfolio vs. S&P 500 (Real Sector)\" further down this tab."
-        )
-    with _pa_tab2:
-        if not h_rets:
-            st.info("Need at least 1 position with price history to compute relative strength.")
-        else:
+        with _pf_t2:
+            # ── Performance Diagnostics ───────────────────────────────────────────
+            st.markdown("### 📊 Performance Diagnostics")
             st.caption(
-                "Each holding's 6-month return vs its sector ETF benchmark. "
-                "**Outperforming** = genuine stock-specific alpha, not just riding the sector tide. "
-                "**Underperforming** = the sector rallied but this position lagged — an institutional rotation flag."
+                "Breaks down portfolio performance into per-position alpha vs SPY and vs the sector ETF benchmark. "
+                "Distinguishes genuine stock-picking skill from sector-driven returns — "
+                "and identifies exactly which positions are generating vs destroying alpha."
             )
 
-            # Holding returns bar chart (instant — uses existing price data)
-            _rs_ord = port_df[port_df["Ticker"].isin(h_rets)]["Ticker"].tolist()
-            _rs_vals = [h_rets[t] for t in _rs_ord]
-            ret_fig = go.Figure(go.Bar(
-                x=_rs_ord, y=_rs_vals,
-                marker_color=["#00C851" if v >= 0 else "#ff4444" for v in _rs_vals],
-                text=[f"{v:+.1f}%" for v in _rs_vals],
-                textposition="outside",
-            ))
-            ret_fig.update_layout(
-                title="6-Month Holding Returns",
-                template="plotly_dark", height=280,
-                yaxis_title="Return (%)", yaxis_zeroline=True,
-                margin=dict(l=0, r=0, t=40, b=0),
-            )
-            st.plotly_chart(ret_fig, use_container_width=True)
+            try:
+                # Build sector ETF returns dict from cached data
+                _sect_df = _fetch_sector_returns()
+                _sect_rets_dict: dict = {}
+                if not _sect_df.empty:
+                    for _, _sr in _sect_df.iterrows():
+                        _sect_rets_dict[str(_sr["ETF"])] = {
+                            "1W": _sr.get("1W"), "1M": _sr.get("1M"),
+                            "3M": _sr.get("3M"), "6M": _sr.get("6M"),
+                        }
 
-            # ETF benchmarks — gated behind button to avoid extra API calls on load
-            if st.button("📊 Load sector ETF benchmarks", key="_rs_load_btn"):
-                _unique_etfs = list({SECTOR_ETF.get(row["Sector"], "SPY")
-                                     for _, row in port_df.iterrows()})
-                _etf_rets = {}
-                for _etf in _unique_etfs:
-                    try:
-                        with st.spinner(f"Loading {_etf}…"):
-                            _hist = fetch_price_history(_etf, period="6mo")
-                        if not _hist.empty and "Close" in _hist.columns:
-                            _cl = _hist["Close"].dropna()
-                            if len(_cl) >= 5 and float(_cl.iloc[0]) > 0:
-                                _etf_rets[_etf] = round(float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1)
-                    except Exception:
-                        pass
-                st.session_state["_rs_etf_rets"] = _etf_rets
+                _attr_df = compute_attribution(
+                    port_df, held_data, _cached_spy("6mo"),
+                    _n_days, _sect_rets_dict, _perf_period,
+                )
 
-            if st.session_state.get("_rs_etf_rets"):
-                etf_rets_cached = st.session_state["_rs_etf_rets"]
-                rs_df = relative_strength_table(port_df, h_rets, etf_rets_cached)
-                if not rs_df.empty and rs_df["Alpha (%)"].notna().any():
-                    n_out   = int((rs_df["Alpha (%)"] >= PERF_ALPHA_BAND_PCT).sum())
-                    n_under = int((rs_df["Alpha (%)"] <= -PERF_ALPHA_BAND_PCT).sum())
-                    n_line  = int(((rs_df["Alpha (%)"] > -PERF_ALPHA_BAND_PCT) & (rs_df["Alpha (%)"] < PERF_ALPHA_BAND_PCT)).sum())
+                if _attr_df.empty:
+                    st.info("Not enough price history to compute attribution for the selected period.")
+                else:
+                    _perf_recs = build_perf_recommendations(_attr_df, total_val, _perf_period)
 
-                    _rm1, _rm2, _rm3 = st.columns(3)
-                    _rm1.metric("Outperforming", n_out,   help=f"Alpha ≥ +{PERF_ALPHA_BAND_PCT:.0f}% vs sector ETF")
-                    _rm2.metric("In Line",        n_line,  help=f"Alpha between -{PERF_ALPHA_BAND_PCT:.0f}% and +{PERF_ALPHA_BAND_PCT:.0f}%")
-                    _rm3.metric("Underperforming", n_under, help=f"Alpha ≤ -{PERF_ALPHA_BAND_PCT:.0f}% vs sector ETF")
+                    # ── Summary KPIs ──────────────────────────────────────────────
+                    _net_alpha_dollar = float(_attr_df["Dollar Alpha ($)"].sum())
+                    _n_generators = int((_attr_df["Category"] == "Alpha Generator").sum())
+                    _n_riders     = int((_attr_df["Category"] == "Sector Rider").sum())
+                    _n_destroyers = int((_attr_df["Category"] == "Alpha Destroyer").sum())
+                    _n_total      = len(_attr_df)
+                    _skill_pct    = int((_attr_df["Alpha vs SPY (%)"] > 0).sum() / _n_total * 100) if _n_total else 0
 
-                    # Alpha bar chart
-                    _rs_sorted = rs_df.dropna(subset=["Alpha (%)"]).sort_values("Alpha (%)", ascending=False)
-                    _alpha_colors = [
-                        "#00C851" if a >= PERF_ALPHA_BAND_PCT else "#ff4444" if a <= -PERF_ALPHA_BAND_PCT else "#888888"
-                        for a in _rs_sorted["Alpha (%)"]
+                    _dp1, _dp2, _dp3, _dp4 = st.columns(4)
+                    _dp1.metric(
+                        f"Net Alpha vs SPY ({_perf_period})",
+                        f"${_net_alpha_dollar:+,.0f}",
+                        "Outperforming" if _net_alpha_dollar >= 0 else "Underperforming",
+                        delta_color="normal" if _net_alpha_dollar >= 0 else "inverse",
+                        help=f"Total extra $ earned (or lost) vs holding SPY at identical weights over {_perf_period}",
+                    )
+                    _dp2.metric("Alpha Generators",  _n_generators,
+                                "beating SPY ≥ 5%", delta_color="off")
+                    _dp3.metric("Alpha Destroyers",  _n_destroyers,
+                                "lagging SPY ≥ 5%", delta_color="off")
+                    _dp4.metric(
+                        "Skill Ratio",
+                        f"{_skill_pct}%",
+                        f"{int(_skill_pct / 100 * _n_total)}/{_n_total} positions beating SPY",
+                        delta_color="off",
+                        help="% of positions generating positive alpha vs S&P 500",
+                    )
+
+                    # ── Alpha attribution chart ───────────────────────────────────
+                    _asc = _attr_df.sort_values("Alpha vs SPY (%)", ascending=True)
+                    _bar_clrs = [
+                        "#00C851" if v >= PERF_ALPHA_BAND_PCT else "#ff4444" if v <= -PERF_ALPHA_BAND_PCT else "#888888"
+                        for v in _asc["Alpha vs SPY (%)"]
                     ]
-                    alpha_fig = go.Figure(go.Bar(
-                        x=_rs_sorted["Ticker"],
-                        y=_rs_sorted["Alpha (%)"],
-                        marker_color=_alpha_colors,
-                        text=[f"{a:+.1f}%" for a in _rs_sorted["Alpha (%)"]],
+                    _hover = [
+                        f"<b>{r['Ticker']}</b><br>"
+                        f"Return: {r['Holding Ret (%)']:+.1f}%<br>"
+                        f"SPY: {r['SPY Ret (%)']:+.1f}%<br>"
+                        f"Alpha vs SPY: {r['Alpha vs SPY (%)']:+.1f}%<br>"
+                        f"vs {r['ETF']}: "
+                        + (f"{r['Alpha vs Sector (%)']:+.1f}%" if r['Alpha vs Sector (%)'] is not None else "—")
+                        + f"<br>Category: {r['Category']}<br>$ Alpha: ${r['Dollar Alpha ($)']:+,.0f}"
+                        for _, r in _asc.iterrows()
+                    ]
+                    _attr_fig = go.Figure(go.Bar(
+                        x=list(_asc["Alpha vs SPY (%)"]),
+                        y=list(_asc["Ticker"]),
+                        orientation="h",
+                        marker_color=_bar_clrs,
+                        text=[f"{v:+.1f}%" for v in _asc["Alpha vs SPY (%)"]],
+                        textposition="outside",
+                        customdata=_hover,
+                        hovertemplate="%{customdata}<extra></extra>",
+                    ))
+                    _attr_fig.add_vline(x=0,   line_color="#555",      line_width=1)
+                    _attr_fig.add_vline(x=5,   line_dash="dash",
+                                        line_color="rgba(0,200,81,0.4)",  line_width=1)
+                    _attr_fig.add_vline(x=-5,  line_dash="dash",
+                                        line_color="rgba(255,68,68,0.4)", line_width=1)
+                    _attr_fig.update_layout(
+                        title=f"Alpha vs S&P 500 by Position — {_perf_period}",
+                        template="plotly_dark",
+                        height=max(220, len(_asc) * 44 + 60),
+                        margin=dict(l=0, r=90, t=40, b=0),
+                        xaxis=dict(ticksuffix="%", gridcolor="#1f2937",
+                                   zeroline=False, title="Alpha vs SPY (%)"),
+                        yaxis=dict(gridcolor="#1f2937"),
+                        plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_attr_fig, use_container_width=True)
+                    st.caption(
+                        "🟢 Green = outperforming SPY ≥ 5% (alpha generator)  |  "
+                        "⬛ Gray = within ±5% of SPY  |  "
+                        "🔴 Red = lagging SPY ≥ 5% (alpha destroyer)  |  "
+                        "Dashed lines = ±5% thresholds  |  Hover for full breakdown vs sector ETF"
+                    )
+
+                    # ── Position Diagnostics cards ────────────────────────────────
+                    if _perf_recs:
+                        st.divider()
+                        st.markdown("#### 🎯 Position Diagnostics & Actions")
+
+                        for _prec in _perf_recs:
+                            _pri   = _prec["priority"]
+                            _ptype = _prec["type"]
+                            _icon  = {"OK": "✅", "MONITOR": "⚠️",
+                                      "HIGH": "🔴", "MEDIUM": "🟡"}.get(_pri, "📌")
+                            _bclr  = {"HIGH": "#ff4444", "MEDIUM": "#ffbb33",
+                                      "MONITOR": "#ffbb33", "OK": "#00C851"}.get(_pri, "#888")
+                            _expand = _pri in ("HIGH", "MEDIUM")
+                            # Display-only label — standardize MONITOR to "Watch"
+                            # (Consistency #2); _pri itself keeps driving the icon/color
+                            # lookups and the _expand check above.
+                            _pri_label = "Watch" if _pri == "MONITOR" else _pri
+
+                            with st.expander(
+                                f"{_icon} **{_pri_label}** · {_prec['title']}",
+                                expanded=_expand,
+                            ):
+                                # Metrics mini-strip
+                                if _prec.get("metrics"):
+                                    _mc = st.columns(len(_prec["metrics"]))
+                                    for _mcol, (_mlbl, _mval_s) in zip(_mc, _prec["metrics"].items()):
+                                        _mcol.metric(_mlbl, _mval_s)
+
+                                # Problem banner (action cards only)
+                                if _prec.get("problem"):
+                                    st.markdown(
+                                        f"<div style='padding:10px 14px;background:#1a1a1a;"
+                                        f"border-radius:6px;border-left:4px solid {_bclr};"
+                                        f"margin:10px 0'>"
+                                        f"<span style='font-size:0.72em;color:#888;font-weight:700;"
+                                        f"letter-spacing:0.09em;text-transform:uppercase'>"
+                                        f"The Problem</span><br>"
+                                        f"<span style='color:#eee'>{_prec['problem']}</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True,
+                                    )
+
+                                _col_l, _col_r = st.columns([1, 1])
+
+                                with _col_l:
+                                    if _prec.get("root_cause"):
+                                        st.markdown("**Thesis Status**")
+                                        st.markdown(
+                                            f"<div style='color:#bbb;font-size:0.88em'>"
+                                            f"{_prec['root_cause']}</div>",
+                                            unsafe_allow_html=True,
+                                        )
+
+                                with _col_r:
+                                    if _prec.get("recommendation"):
+                                        st.markdown(
+                                            f"<div style='padding:10px 14px;background:#0d2137;"
+                                            f"border-radius:6px;border-left:4px solid #4a9eff;"
+                                            f"margin-bottom:10px'>"
+                                            f"<span style='font-size:0.72em;color:#4a9eff;"
+                                            f"font-weight:700;letter-spacing:0.09em;"
+                                            f"text-transform:uppercase'>Recommendation</span><br>"
+                                            f"<span style='color:#eee;font-size:0.9em'>"
+                                            f"{_prec['recommendation']}</span>"
+                                            f"</div>",
+                                            unsafe_allow_html=True,
+                                        )
+                                    if _prec.get("expected_outcome"):
+                                        st.markdown(
+                                            f"<div style='padding:10px 14px;background:#0d1a0d;"
+                                            f"border-radius:6px;border-left:4px solid #00C851'>"
+                                            f"<span style='font-size:0.72em;color:#00C851;"
+                                            f"font-weight:700;letter-spacing:0.09em;"
+                                            f"text-transform:uppercase'>Expected Outcome</span><br>"
+                                            f"<span style='color:#ccc;font-size:0.88em'>"
+                                            f"{_prec['expected_outcome']}</span>"
+                                            f"</div>",
+                                            unsafe_allow_html=True,
+                                        )
+
+                                if _prec.get("institutional_lens"):
+                                    with st.expander("Why this matters"):
+                                        st.markdown(_prec['institutional_lens'])
+
+            except Exception as _de:
+                st.warning(f"Performance Diagnostics unavailable: {_de}")
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # P&L ATTRIBUTION WATERFALL (Performance tab)
+        # ═══════════════════════════════════════════════════════════════════════════
+
+            st.caption(
+                "Shows each position's dollar contribution to total portfolio P&L — "
+                "largest winners on the left, largest losers on the right. "
+                "Identifies which holdings are driving performance and which are dragging it."
+            )
+
+            # Sort by P&L $ descending (winners left, losers right)
+            _pnl_df = port_df[["Ticker", "Sector", "P&L ($)", "P&L (%)", "Weight (%)", "Market Value", "Signal"]].copy()
+            _pnl_df = _pnl_df.sort_values("P&L ($)", ascending=False).reset_index(drop=True)
+
+            _total_pnl   = float(_pnl_df["P&L ($)"].sum())
+            _winners     = _pnl_df[_pnl_df["P&L ($)"] > 0]
+            _losers      = _pnl_df[_pnl_df["P&L ($)"] < 0]
+            _win_total   = float(_winners["P&L ($)"].sum())
+            _loss_total  = float(_losers["P&L ($)"].sum())
+            _best        = _pnl_df.iloc[0]
+            _worst       = _pnl_df.iloc[-1]
+
+            # KPI strip
+            _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
+            _pk1.metric("Total P&L",      _m(f"${_total_pnl:+,.0f}"),
+                        delta_color="normal" if _total_pnl >= 0 else "inverse")
+            _pk2.metric("Gross Gains",    _m(f"${_win_total:,.0f}"),
+                        f"{len(_winners)} positions", delta_color="off")
+            _pk3.metric("Gross Losses",   _m(f"${_loss_total:,.0f}"),
+                        f"{len(_losers)} positions",  delta_color="off")
+            _pk4.metric(f"Top: {_best['Ticker']}",
+                        _m(f"${_best['P&L ($)']:+,.0f}"), f"{_best['P&L (%)']:+.1f}%",
+                        delta_color="normal")
+            _pk5.metric(f"Drag: {_worst['Ticker']}",
+                        _m(f"${_worst['P&L ($)']:+,.0f}"), f"{_worst['P&L (%)']:+.1f}%",
+                        delta_color="inverse")
+
+            # ── Waterfall chart ───────────────────────────────────────────────────
+            _tickers  = list(_pnl_df["Ticker"]) + ["Total"]
+            _measures = ["relative"] * len(_pnl_df) + ["total"]
+            _values   = list(_pnl_df["P&L ($)"]) + [_total_pnl]
+            _bar_clrs = [
+                "#00C851" if v >= 0 else "#ff4444"
+                for v in list(_pnl_df["P&L ($)"]) + [_total_pnl]
+            ]
+            _priv = st.session_state.get("_privacy")
+            _hover = [
+                f"{row['Ticker']}<br>"
+                + (f"P&L: •••• ({row['P&L (%)']:+.1f}%)<br>" if _priv else f"P&L: ${row['P&L ($)']:+,.0f} ({row['P&L (%)']:+.1f}%)<br>")
+                + f"Weight: {row['Weight (%)']:.1f}%<br>"
+                f"Sector: {row['Sector']}<br>"
+                f"Signal: {row['Signal']}"
+                for _, row in _pnl_df.iterrows()
+            ] + [("Total P&L: ••••" if _priv else f"Total P&L: ${_total_pnl:+,.0f}")]
+
+            _wf_fig = go.Figure(go.Waterfall(
+                orientation="v",
+                measure=_measures,
+                x=_tickers,
+                y=_values,
+                text=["••••" if _priv else f"${v:+,.0f}" for v in _values],
+                textposition="outside",
+                textfont=dict(size=11),
+                customdata=_hover,
+                hovertemplate="%{customdata}<extra></extra>",
+                connector=dict(line=dict(color="#333", width=1, dash="dot")),
+                increasing=dict(marker=dict(color="#00C851")),
+                decreasing=dict(marker=dict(color="#ff4444")),
+                totals=dict(marker=dict(
+                    color="#00C851" if _total_pnl >= 0 else "#ff4444",
+                    line=dict(color="#fff", width=1.5),
+                )),
+            ))
+            _wf_fig.update_layout(
+                template="plotly_dark", height=420,
+                margin=dict(l=0, r=0, t=20, b=0),
+                xaxis=dict(gridcolor="#1f2937"),
+                yaxis=dict(
+                    tickprefix="$", tickformat=",.0f",
+                    gridcolor="#1f2937", zeroline=True, zerolinecolor="#555",
+                ),
+                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                showlegend=False,
+            )
+            st.plotly_chart(_wf_fig, use_container_width=True)
+
+        with _pf_t3:
+            # ── Sector attribution breakdown ──────────────────────────────────────
+            st.markdown("#### Sector Attribution")
+            _sec_pnl = (
+                _pnl_df.groupby("Sector")["P&L ($)"]
+                .sum().sort_values(ascending=False).reset_index()
+            )
+            _sec_pnl["Share of P&L (%)"] = (
+                _sec_pnl["P&L ($)"] / abs(_total_pnl) * 100
+                if _total_pnl != 0 else 0.0
+            )
+            _sec_fig = go.Figure(go.Bar(
+                x=_sec_pnl["Sector"],
+                y=_sec_pnl["P&L ($)"],
+                marker_color=[
+                    "#00C851" if v >= 0 else "#ff4444"
+                    for v in _sec_pnl["P&L ($)"]
+                ],
+                text=[("••••" if st.session_state.get("_privacy") else f"${v:+,.0f}") for v in _sec_pnl["P&L ($)"]],
+                textposition="outside",
+                customdata=list(zip(_sec_pnl["Sector"], _sec_pnl["Share of P&L (%)"])),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    + ("P&L: ••••<br>" if st.session_state.get("_privacy") else "P&L: $%{y:+,.0f}<br>")
+                    + "Share: %{customdata[1]:.1f}% of total<extra></extra>"
+                ),
+            ))
+            _sec_fig.update_layout(
+                template="plotly_dark", height=280,
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(gridcolor="#1f2937"),
+                yaxis=dict(
+                    tickprefix="$", tickformat=",.0f",
+                    gridcolor="#1f2937", zeroline=True, zerolinecolor="#555",
+                ),
+                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                showlegend=False,
+            )
+            st.plotly_chart(_sec_fig, use_container_width=True)
+            st.caption(
+                "Waterfall: each bar is one position's dollar P&L contribution; "
+                "the final 'Total' bar is the portfolio sum.  "
+                "Sector chart groups by this app's own curated thematic buckets "
+                "(Semiconductors, Consumer Tech, AI & Data, etc. — see `resolve_sector`), "
+                "not GICS. For a real-market-sector view against actual S&P 500 weights, "
+                "see \"🏛️ Portfolio vs. S&P 500 (Real Sector)\" on the 📈 Analytics tab."
+            )
+    with _pa_tab2:
+        _an_t1, _an_t2, _an_t3, _an_t4 = st.tabs(
+            ["💪 Relative Strength", "🔥 Sector Heatmap", "🏛️ vs S&P 500 (Real Sector)", "🔄 Rankings"]
+        )
+        with _an_t1:
+            if not h_rets:
+                st.info("Need at least 1 position with price history to compute relative strength.")
+            else:
+                st.caption(
+                    "Each holding's 6-month return vs its sector ETF benchmark. "
+                    "**Outperforming** = genuine stock-specific alpha, not just riding the sector tide. "
+                    "**Underperforming** = the sector rallied but this position lagged — an institutional rotation flag."
+                )
+
+                # Holding returns bar chart (instant — uses existing price data)
+                _rs_ord = port_df[port_df["Ticker"].isin(h_rets)]["Ticker"].tolist()
+                _rs_vals = [h_rets[t] for t in _rs_ord]
+                ret_fig = go.Figure(go.Bar(
+                    x=_rs_ord, y=_rs_vals,
+                    marker_color=["#00C851" if v >= 0 else "#ff4444" for v in _rs_vals],
+                    text=[f"{v:+.1f}%" for v in _rs_vals],
+                    textposition="outside",
+                ))
+                ret_fig.update_layout(
+                    title="6-Month Holding Returns",
+                    template="plotly_dark", height=280,
+                    yaxis_title="Return (%)", yaxis_zeroline=True,
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(ret_fig, use_container_width=True)
+
+                # ETF benchmarks — gated behind button to avoid extra API calls on load
+                if st.button("📊 Load sector ETF benchmarks", key="_rs_load_btn"):
+                    _unique_etfs = list({SECTOR_ETF.get(row["Sector"], "SPY")
+                                         for _, row in port_df.iterrows()})
+                    _etf_rets = {}
+                    for _etf in _unique_etfs:
+                        try:
+                            with st.spinner(f"Loading {_etf}…"):
+                                _hist = fetch_price_history(_etf, period="6mo")
+                            if not _hist.empty and "Close" in _hist.columns:
+                                _cl = _hist["Close"].dropna()
+                                if len(_cl) >= 5 and float(_cl.iloc[0]) > 0:
+                                    _etf_rets[_etf] = round(float((_cl.iloc[-1] / _cl.iloc[0] - 1) * 100), 1)
+                        except Exception:
+                            pass
+                    st.session_state["_rs_etf_rets"] = _etf_rets
+
+                if st.session_state.get("_rs_etf_rets"):
+                    etf_rets_cached = st.session_state["_rs_etf_rets"]
+                    rs_df = relative_strength_table(port_df, h_rets, etf_rets_cached)
+                    if not rs_df.empty and rs_df["Alpha (%)"].notna().any():
+                        n_out   = int((rs_df["Alpha (%)"] >= PERF_ALPHA_BAND_PCT).sum())
+                        n_under = int((rs_df["Alpha (%)"] <= -PERF_ALPHA_BAND_PCT).sum())
+                        n_line  = int(((rs_df["Alpha (%)"] > -PERF_ALPHA_BAND_PCT) & (rs_df["Alpha (%)"] < PERF_ALPHA_BAND_PCT)).sum())
+
+                        _rm1, _rm2, _rm3 = st.columns(3)
+                        _rm1.metric("Outperforming", n_out,   help=f"Alpha ≥ +{PERF_ALPHA_BAND_PCT:.0f}% vs sector ETF")
+                        _rm2.metric("In Line",        n_line,  help=f"Alpha between -{PERF_ALPHA_BAND_PCT:.0f}% and +{PERF_ALPHA_BAND_PCT:.0f}%")
+                        _rm3.metric("Underperforming", n_under, help=f"Alpha ≤ -{PERF_ALPHA_BAND_PCT:.0f}% vs sector ETF")
+
+                        # Alpha bar chart
+                        _rs_sorted = rs_df.dropna(subset=["Alpha (%)"]).sort_values("Alpha (%)", ascending=False)
+                        _alpha_colors = [
+                            "#00C851" if a >= PERF_ALPHA_BAND_PCT else "#ff4444" if a <= -PERF_ALPHA_BAND_PCT else "#888888"
+                            for a in _rs_sorted["Alpha (%)"]
+                        ]
+                        alpha_fig = go.Figure(go.Bar(
+                            x=_rs_sorted["Ticker"],
+                            y=_rs_sorted["Alpha (%)"],
+                            marker_color=_alpha_colors,
+                            text=[f"{a:+.1f}%" for a in _rs_sorted["Alpha (%)"]],
+                            textposition="outside",
+                            customdata=list(zip(
+                                _rs_sorted["ETF"],
+                                _rs_sorted["6mo Return (%)"],
+                                _rs_sorted["ETF Return (%)"],
+                            )),
+                            hovertemplate=(
+                                "<b>%{x}</b><br>"
+                                "Alpha: %{y:+.1f}%<br>"
+                                "Holding 6mo: %{customdata[1]:+.1f}%<br>"
+                                "Benchmark (%{customdata[0]}): %{customdata[2]:+.1f}%"
+                                "<extra></extra>"
+                            ),
+                        ))
+                        alpha_fig.add_hline(y=0, line_color="white", line_dash="dot", line_width=1)
+                        alpha_fig.update_layout(
+                            title="Alpha vs Sector ETF",
+                            template="plotly_dark", height=300,
+                            yaxis_title="Alpha (%)",
+                            margin=dict(l=0, r=0, t=40, b=0),
+                        )
+                        st.plotly_chart(alpha_fig, use_container_width=True)
+                        st.caption(
+                            "🟢 Green = outperforming sector (genuine alpha)  |  "
+                            "⬜ Gray = in line with sector  |  "
+                            "🔴 Red = lagging sector (riding the tide or underperforming)"
+                        )
+
+                        # Styled table
+                        def _alpha_col(val):
+                            if isinstance(val, float):
+                                if val >= PERF_ALPHA_BAND_PCT:  return "color:#00C851;font-weight:bold"
+                                if val <= -PERF_ALPHA_BAND_PCT: return "color:#ff4444"
+                            return ""
+
+                        def _status_col(val):
+                            s = str(val)
+                            if "Outperforming" in s: return "color:#00C851;font-weight:bold"
+                            if "Underperforming" in s: return "color:#ff4444"
+                            return "color:#888888"
+
+                        _rs_disp = rs_df[["Ticker", "Sector", "6mo Return (%)", "ETF", "ETF Return (%)", "Alpha (%)", "Status"]]
+                        _fmt = {"6mo Return (%)": "{:+.1f}%", "ETF Return (%)": "{:+.1f}%", "Alpha (%)": "{:+.1f}%"}
+                        _styled_rs = (
+                            _rs_disp.style
+                            .map(_alpha_col,  subset=["Alpha (%)"])
+                            .map(_status_col, subset=["Status"])
+                            .format(_fmt, na_rep="—")
+                        )
+                        st.dataframe(_styled_rs, width='stretch')
+
+                        # Institutional-style insight callouts
+                        _valid = rs_df.dropna(subset=["Alpha (%)"])
+                        if n_under > 0:
+                            _worst = _valid.loc[_valid["Alpha (%)"].idxmin()]
+                            st.warning(
+                                f"⚠️ **{_worst['Ticker']}** is lagging its sector ETF ({_worst['ETF']}) "
+                                f"by **{abs(_worst['Alpha (%)']):+.1f}%** over 6 months — "
+                                f"the sector rallied but this position did not keep pace. "
+                                f"Best practice would flag this for rotation review."
+                            )
+                        if n_out > 0:
+                            _best = _valid.loc[_valid["Alpha (%)"].idxmax()]
+                            st.success(
+                                f"✅ **{_best['Ticker']}** is generating genuine alpha: "
+                                f"**{_best['Alpha (%)']:+.1f}%** above its sector ETF ({_best['ETF']}) — "
+                                f"stock-specific strength, not just a sector tailwind."
+                            )
+
+        with _an_t2:
+        # ═══════════════════════════════════════════════════════════════════════════
+        # SECTOR ROTATION HEATMAP (Analytics tab)
+        # ═══════════════════════════════════════════════════════════════════════════
+
+            st.caption(
+                "Multi-period return heatmap for every sector ETF. "
+                "Green = outperforming, red = underperforming. "
+                "Your portfolio's sector exposure is shown in the last column — "
+                "use this to spot where money is rotating and whether you're positioned correctly."
+            )
+
+            if st.button("🔥 Load Sector Heatmap", key="_heat_btn", type="primary"):
+                st.session_state["_sector_rets"] = _fetch_sector_returns()
+
+            _sr_df = st.session_state.get("_sector_rets")
+
+            if _sr_df is not None and not _sr_df.empty:
+                # Reverse map: ETF → sector name(s) — use first match
+                _etf_to_sector = {}
+                for sec, etf in SECTOR_ETF.items():
+                    if etf not in _etf_to_sector:
+                        _etf_to_sector[etf] = sec
+
+                # Portfolio sector exposure — convert DataFrame → dict {sector: weight%}
+                _sec_exp_df = sector_exposure(port_df)
+                _sec_exp = (
+                    dict(zip(_sec_exp_df["Sector"], _sec_exp_df["Pct"]))
+                    if not _sec_exp_df.empty else {}
+                )
+
+                # Build display table
+                _periods = ["1W", "1M", "3M", "6M"]
+                _heat_rows = []
+                for _, row in _sr_df.iterrows():
+                    etf     = row["ETF"]
+                    sector  = _etf_to_sector.get(etf, etf)
+                    exp_pct = _sec_exp.get(sector, 0.0)
+                    _heat_rows.append({
+                        "Sector":     sector,
+                        "ETF":        etf,
+                        "1W %":       row.get("1W"),
+                        "1M %":       row.get("1M"),
+                        "3M %":       row.get("3M"),
+                        "6M %":       row.get("6M"),
+                        "My Exposure": round(exp_pct, 1),
+                    })
+                _heat_df = pd.DataFrame(_heat_rows).sort_values("3M %", ascending=False).reset_index(drop=True)
+
+                # KPI strip
+                _best_sec  = _heat_df.loc[_heat_df["3M %"].idxmax()]
+                _worst_sec = _heat_df.loc[_heat_df["3M %"].idxmin()]
+                _my_sectors = _heat_df[_heat_df["My Exposure"] > 0].sort_values("My Exposure", ascending=False)
+                _top_exp    = _my_sectors.iloc[0] if not _my_sectors.empty else None
+
+                _hk1, _hk2, _hk3, _hk4 = st.columns(4)
+                _hk1.metric("Best Sector (3M)",  _best_sec["Sector"],  f"{_best_sec['3M %']:+.1f}%",  delta_color="normal")
+                _hk2.metric("Worst Sector (3M)", _worst_sec["Sector"], f"{_worst_sec['3M %']:+.1f}%", delta_color="inverse")
+                _hk3.metric(
+                    "Your Top Exposure",
+                    _top_exp["Sector"] if _top_exp is not None else "—",
+                    f"{_top_exp['My Exposure']:.1f}% weight · {_top_exp['3M %']:+.1f}% (3M)" if _top_exp is not None else "",
+                    delta_color="off",
+                )
+                _positive_3m = int((_heat_df["3M %"] > 0).sum())
+                _hk4.metric("Sectors in Green (3M)", f"{_positive_3m}/{len(_heat_df)}")
+
+                # ── Heatmap ───────────────────────────────────────────────────────
+                _z      = _heat_df[["1W %", "1M %", "3M %", "6M %"]].values.tolist()
+                _y_lbls = [
+                    f"◀ {r['Sector']}  {r['My Exposure']:.0f}%" if r["My Exposure"] > 0
+                    else f"   {r['Sector']}"
+                    for _, r in _heat_df.iterrows()
+                ]
+                _text   = [
+                    [f"{v:+.1f}%" if v is not None else "—" for v in row]
+                    for row in _z
+                ]
+
+                _hmap = go.Figure(go.Heatmap(
+                    z=_z,
+                    x=["1 Week", "1 Month", "3 Month", "6 Month"],
+                    y=_y_lbls,
+                    text=_text,
+                    texttemplate="%{text}",
+                    textfont=dict(size=12, color="white"),
+                    colorscale=[
+                        [0.0,  "#8b0000"],
+                        [0.3,  "#cc3333"],
+                        [0.45, "#996633"],
+                        [0.5,  "#444444"],
+                        [0.55, "#336633"],
+                        [0.7,  "#00aa44"],
+                        [1.0,  "#006622"],
+                    ],
+                    zmid=0,
+                    colorbar=dict(
+                        title="Return %",
+                        ticksuffix="%",
+                        thickness=14,
+                        len=0.8,
+                    ),
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        "Period: %{x}<br>"
+                        "Return: %{text}<extra></extra>"
+                    ),
+                ))
+                # Gold highlight band for every row where the user holds this sector
+                for _hi, (_, _hr) in enumerate(_heat_df.iterrows()):
+                    if _hr["My Exposure"] > 0:
+                        _hmap.add_shape(
+                            type="rect",
+                            xref="paper", x0=0, x1=1,
+                            yref="y", y0=_hi - 0.5, y1=_hi + 0.5,
+                            fillcolor="rgba(255,200,0,0.07)",
+                            line=dict(color="rgba(255,200,0,0.45)", width=1.5),
+                            layer="below",
+                        )
+                _hmap.update_layout(
+                    template="plotly_dark",
+                    height=max(280, len(_heat_df) * 42 + 80),
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    xaxis=dict(side="top"),
+                    yaxis=dict(autorange="reversed"),
+                    plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
+                )
+                st.plotly_chart(_hmap, use_container_width=True)
+                st.caption("◀ = sector you hold (weight % shown) · gold border = your position · sorted by 3M return")
+
+                # ── Exposure vs momentum table ────────────────────────────────────
+                st.markdown("#### Your Exposure vs Sector Momentum")
+                _exp_tbl = _heat_df[_heat_df["My Exposure"] > 0].copy()
+                if not _exp_tbl.empty:
+                    _exp_tbl["Alignment"] = _exp_tbl.apply(
+                        lambda r: (
+                            "✅ In momentum"   if r["My Exposure"] >= 5 and r["3M %"] > 2 else
+                            "⚠️ Heavy in laggard" if r["My Exposure"] >= 10 and r["3M %"] < 0 else
+                            "🟡 Watch"         if r["3M %"] < 0 else
+                            "🟢 Aligned"
+                        ), axis=1,
+                    )
+                    st.dataframe(
+                        _exp_tbl[["Sector", "ETF", "1W %", "1M %", "3M %", "6M %", "My Exposure", "Alignment"]],
+                        width='stretch', hide_index=True,
+                    )
+                else:
+                    st.info("None of your holdings map to a tracked sector ETF.")
+
+                st.caption(
+                    "Sector ETFs: SOXX (Semis) · IGV (AI/Cloud/Tech) · XLV (Healthcare) · "
+                    "XLE (Energy) · XLF (Financials) · ITA (Defense) · XLY (Consumer) · "
+                    "CIBR (Cybersecurity) · ICLN (Clean Energy) · DRIV (EV).  "
+                    "Data cached 1 hour."
+                )
+            elif _sr_df is None:
+                st.info("Click **Load Sector Heatmap** to fetch live sector ETF performance.")
+
+        with _an_t3:
+        # ═══════════════════════════════════════════════════════════════════════════
+        # REAL-SECTOR BENCHMARK TILT vs S&P 500 (Analytics tab)
+        # ═══════════════════════════════════════════════════════════════════════════
+
+            st.subheader("🏛️ Portfolio vs. S&P 500 (Real Sector)")
+            st.caption(
+                "Uses each holding's REAL market sector (Technology, Financials, Health Care, "
+                "etc.) — not this app's thematic groupings (Consumer Tech, AI & Cloud, "
+                "Cybersecurity, etc.) used on the Sector Exposure / Sector Gaps charts "
+                "elsewhere on this page. The two taxonomies won't sum the same way; this view "
+                "answers a different question — \"are we over/underweight the actual market,\" "
+                "not \"which thematic sectors are we diversified across.\""
+            )
+            _rsx_df = real_sector_exposure(port_df, held_data)
+            if _rsx_df.empty:
+                st.info("No holdings with a resolvable sector.")
+            else:
+                _tilt_df = sector_benchmark_tilt(_rsx_df)
+                _tilt_colors = ["#00C851" if t > 0 else "#ff4444" if t < 0 else "#888888" for t in _tilt_df["Tilt"]]
+                _tilt_fig = go.Figure(go.Bar(
+                    x=_tilt_df["Sector"], y=_tilt_df["Tilt"],
+                    marker_color=_tilt_colors,
+                    text=[f"{t:+.1f}pp" for t in _tilt_df["Tilt"]],
+                    textposition="outside",
+                    customdata=list(zip(_tilt_df["Portfolio Pct"], _tilt_df["Benchmark Pct"])),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>"
+                        "Portfolio: %{customdata[0]:.1f}%<br>"
+                        "S&P 500: %{customdata[1]:.1f}%<br>"
+                        "Tilt: %{y:+.1f}pp<extra></extra>"
+                    ),
+                ))
+                _tilt_fig.add_hline(y=0, line_color="white", line_dash="dot", line_width=1)
+                _tilt_fig.update_layout(
+                    title="Sector Tilt vs. S&P 500 (percentage points)",
+                    template="plotly_dark", height=320,
+                    yaxis_title="Portfolio − S&P 500 (pp)",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                )
+                st.plotly_chart(_tilt_fig, use_container_width=True)
+                st.caption(
+                    "🟢 Green = overweight this real sector vs. the S&P 500  |  "
+                    "🔴 Red = underweight  |  "
+                    "S&P 500 GICS weights: Wikipedia \"S&P 500\" article, as of 2026-07-01 "
+                    "(static reference — refresh periodically)."
+                )
+                st.dataframe(
+                    _tilt_df.rename(columns={"Tilt": "Tilt (pp)"}),
+                    width='stretch', hide_index=True,
+                    # Explicit height: default st.dataframe sizing clips to ~10 rows
+                    # with an internal scrollbar, hiding the top (highest-tilt) row
+                    # for the full 11-sector table — always show every row.
+                    height=(len(_tilt_df) + 1) * 35 + 3,
+                )
+
+        with _an_t4:
+        # RANKINGS (Analytics tab)
+        # ═══════════════════════════════════════════════════════════════════════════
+
+            st.caption(
+                "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
+                "Shows whether you're holding the best names in each sector or just familiar ones. "
+                "Institutional uses universe-relative ranking to identify rotation candidates."
+            )
+
+            if st.button("🔍 Scan full universe & rank my holdings", key="_rank_scan_btn"):
+                with st.spinner("Scanning universe…"):
+                    try:
+                        _full_scan = scan_sectors(
+                            list(SECTOR_UNIVERSE.keys()),
+                            extra_tickers=st.session_state.get("watchlist", []) or [],
+                        )
+                        st.session_state["_rank_scan_df"] = _full_scan
+                    except Exception as _e:
+                        st.error(f"Scan failed: {_e}")
+                        st.session_state["_rank_scan_df"] = pd.DataFrame()
+
+            if st.session_state.get("_rank_scan_df") is not None and not st.session_state["_rank_scan_df"].empty:
+                _scan_df  = st.session_state["_rank_scan_df"]
+                _rank_df  = rank_holdings_in_universe(port_df, _scan_df)
+
+                if _rank_df.empty:
+                    st.info("Could not match any holdings to the scanned universe.")
+                else:
+                    _total     = int(_rank_df["of"].iloc[0])
+                    _in_univ   = _rank_df["Universe Rank"].notna().sum()
+                    _top_q     = int((_rank_df["Percentile"] >= 75).sum())
+                    _bot_q     = int((_rank_df["Percentile"] <= 25).sum())
+
+                    _rk1, _rk2, _rk3, _rk4 = st.columns(4)
+                    _rk1.metric("Universe size",    _total,    help="Tickers scanned")
+                    _rk2.metric("Holdings ranked",  _in_univ,  help="Holdings found in universe")
+                    _rk3.metric("Top quartile",     _top_q,    help="Percentile ≥ 75")
+                    _rk4.metric("Bottom quartile",  _bot_q,    help="Percentile ≤ 25 — rotation candidates")
+
+                    # Percentile bar chart
+                    _rk_valid = _rank_df.dropna(subset=["Percentile"]).sort_values("Percentile", ascending=False)
+                    _pct_colors = [
+                        tier_label(p)[1] for p in _rk_valid["Percentile"]
+                    ]
+                    pct_fig = go.Figure(go.Bar(
+                        x=_rk_valid["Ticker"],
+                        y=_rk_valid["Percentile"],
+                        marker_color=_pct_colors,
+                        text=[f"#{int(r)}" for r in _rk_valid["Universe Rank"]],
                         textposition="outside",
                         customdata=list(zip(
-                            _rs_sorted["ETF"],
-                            _rs_sorted["6mo Return (%)"],
-                            _rs_sorted["ETF Return (%)"],
+                            _rk_valid["Universe Rank"],
+                            _rk_valid["of"],
+                            _rk_valid["Scanner Score"],
+                            _rk_valid["Tier"],
                         )),
                         hovertemplate=(
                             "<b>%{x}</b><br>"
-                            "Alpha: %{y:+.1f}%<br>"
-                            "Holding 6mo: %{customdata[1]:+.1f}%<br>"
-                            "Benchmark (%{customdata[0]}): %{customdata[2]:+.1f}%"
+                            "Rank: #%{customdata[0]} of %{customdata[1]}<br>"
+                            "Percentile: %{y:.0f}th<br>"
+                            "Scanner Score: %{customdata[2]:.0f}/100<br>"
+                            "Tier: %{customdata[3]}"
                             "<extra></extra>"
                         ),
                     ))
-                    alpha_fig.add_hline(y=0, line_color="white", line_dash="dot", line_width=1)
-                    alpha_fig.update_layout(
-                        title="Alpha vs Sector ETF",
+                    pct_fig.add_hline(y=75, line_dash="dash", line_color="#4CAF50",
+                                      annotation_text="Top quartile", annotation_position="right")
+                    pct_fig.add_hline(y=50, line_dash="dot", line_color="#aaaaaa",
+                                      annotation_text="Median", annotation_position="right")
+                    pct_fig.add_hline(y=25, line_dash="dash", line_color="#ff8800",
+                                      annotation_text="Bottom quartile", annotation_position="right")
+                    pct_fig.update_layout(
+                        title=f"Holdings — Universe Percentile Rank (out of {_total} tickers)",
                         template="plotly_dark", height=300,
-                        yaxis_title="Alpha (%)",
-                        margin=dict(l=0, r=0, t=40, b=0),
+                        yaxis_title="Percentile", yaxis_range=[0, 110],
+                        margin=dict(l=0, r=60, t=40, b=0),
                     )
-                    st.plotly_chart(alpha_fig, use_container_width=True)
-                    st.caption(
-                        "🟢 Green = outperforming sector (genuine alpha)  |  "
-                        "⬜ Gray = in line with sector  |  "
-                        "🔴 Red = lagging sector (riding the tide or underperforming)"
-                    )
+                    st.plotly_chart(pct_fig, use_container_width=True)
 
-                    # Styled table
-                    def _alpha_col(val):
+                    # Styled ranking table
+                    def _tier_col(val):
+                        s = str(val)
+                        if "Top Decile"     in s: return "color:#00C851;font-weight:bold"
+                        if "Top Quartile"   in s: return "color:#4CAF50"
+                        if "Bottom Decile"  in s: return "color:#ff4444;font-weight:bold"
+                        if "Bottom Quartile"in s: return "color:#ff8800"
+                        if "Below Median"   in s: return "color:#ffbb33"
+                        return "color:#aaaaaa"
+
+                    def _pct_col(val):
                         if isinstance(val, float):
-                            if val >= PERF_ALPHA_BAND_PCT:  return "color:#00C851;font-weight:bold"
-                            if val <= -PERF_ALPHA_BAND_PCT: return "color:#ff4444"
+                            if val >= 75: return "color:#4CAF50;font-weight:bold"
+                            if val <= 25: return "color:#ff8800"
                         return ""
 
-                    def _status_col(val):
-                        s = str(val)
-                        if "Outperforming" in s: return "color:#00C851;font-weight:bold"
-                        if "Underperforming" in s: return "color:#ff4444"
-                        return "color:#888888"
-
-                    _rs_disp = rs_df[["Ticker", "Sector", "6mo Return (%)", "ETF", "ETF Return (%)", "Alpha (%)", "Status"]]
-                    _fmt = {"6mo Return (%)": "{:+.1f}%", "ETF Return (%)": "{:+.1f}%", "Alpha (%)": "{:+.1f}%"}
-                    _styled_rs = (
-                        _rs_disp.style
-                        .map(_alpha_col,  subset=["Alpha (%)"])
-                        .map(_status_col, subset=["Status"])
-                        .format(_fmt, na_rep="—")
+                    _disp = _rank_df[[
+                        "Ticker", "Sector", "Universe Rank", "of", "Percentile",
+                        "Tier", "Scanner Score", "Composite Score", "Sector Rank",
+                    ]].copy()
+                    _styled_rank = (
+                        _disp.style
+                        .map(_tier_col, subset=["Tier"])
+                        .map(_pct_col,  subset=["Percentile"])
+                        .format({
+                            "Percentile":      "{:.0f}th",
+                            "Scanner Score":   "{:.0f}",
+                            "Composite Score": "{:.0f}",
+                        }, na_rep="—")
                     )
-                    st.dataframe(_styled_rs, width='stretch')
-
-                    # Institutional-style insight callouts
-                    _valid = rs_df.dropna(subset=["Alpha (%)"])
-                    if n_under > 0:
-                        _worst = _valid.loc[_valid["Alpha (%)"].idxmin()]
-                        st.warning(
-                            f"⚠️ **{_worst['Ticker']}** is lagging its sector ETF ({_worst['ETF']}) "
-                            f"by **{abs(_worst['Alpha (%)']):+.1f}%** over 6 months — "
-                            f"the sector rallied but this position did not keep pace. "
-                            f"Best practice would flag this for rotation review."
-                        )
-                    if n_out > 0:
-                        _best = _valid.loc[_valid["Alpha (%)"].idxmax()]
-                        st.success(
-                            f"✅ **{_best['Ticker']}** is generating genuine alpha: "
-                            f"**{_best['Alpha (%)']:+.1f}%** above its sector ETF ({_best['ETF']}) — "
-                            f"stock-specific strength, not just a sector tailwind."
-                        )
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SECTOR ROTATION HEATMAP (Performance tab)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-        st.caption(
-            "Multi-period return heatmap for every sector ETF. "
-            "Green = outperforming, red = underperforming. "
-            "Your portfolio's sector exposure is shown in the last column — "
-            "use this to spot where money is rotating and whether you're positioned correctly."
-        )
-
-        if st.button("🔥 Load Sector Heatmap", key="_heat_btn", type="primary"):
-            st.session_state["_sector_rets"] = _fetch_sector_returns()
-
-        _sr_df = st.session_state.get("_sector_rets")
-
-        if _sr_df is not None and not _sr_df.empty:
-            # Reverse map: ETF → sector name(s) — use first match
-            _etf_to_sector = {}
-            for sec, etf in SECTOR_ETF.items():
-                if etf not in _etf_to_sector:
-                    _etf_to_sector[etf] = sec
-
-            # Portfolio sector exposure — convert DataFrame → dict {sector: weight%}
-            _sec_exp_df = sector_exposure(port_df)
-            _sec_exp = (
-                dict(zip(_sec_exp_df["Sector"], _sec_exp_df["Pct"]))
-                if not _sec_exp_df.empty else {}
-            )
-
-            # Build display table
-            _periods = ["1W", "1M", "3M", "6M"]
-            _heat_rows = []
-            for _, row in _sr_df.iterrows():
-                etf     = row["ETF"]
-                sector  = _etf_to_sector.get(etf, etf)
-                exp_pct = _sec_exp.get(sector, 0.0)
-                _heat_rows.append({
-                    "Sector":     sector,
-                    "ETF":        etf,
-                    "1W %":       row.get("1W"),
-                    "1M %":       row.get("1M"),
-                    "3M %":       row.get("3M"),
-                    "6M %":       row.get("6M"),
-                    "My Exposure": round(exp_pct, 1),
-                })
-            _heat_df = pd.DataFrame(_heat_rows).sort_values("3M %", ascending=False).reset_index(drop=True)
-
-            # KPI strip
-            _best_sec  = _heat_df.loc[_heat_df["3M %"].idxmax()]
-            _worst_sec = _heat_df.loc[_heat_df["3M %"].idxmin()]
-            _my_sectors = _heat_df[_heat_df["My Exposure"] > 0].sort_values("My Exposure", ascending=False)
-            _top_exp    = _my_sectors.iloc[0] if not _my_sectors.empty else None
-
-            _hk1, _hk2, _hk3, _hk4 = st.columns(4)
-            _hk1.metric("Best Sector (3M)",  _best_sec["Sector"],  f"{_best_sec['3M %']:+.1f}%",  delta_color="normal")
-            _hk2.metric("Worst Sector (3M)", _worst_sec["Sector"], f"{_worst_sec['3M %']:+.1f}%", delta_color="inverse")
-            _hk3.metric(
-                "Your Top Exposure",
-                _top_exp["Sector"] if _top_exp is not None else "—",
-                f"{_top_exp['My Exposure']:.1f}% weight · {_top_exp['3M %']:+.1f}% (3M)" if _top_exp is not None else "",
-                delta_color="off",
-            )
-            _positive_3m = int((_heat_df["3M %"] > 0).sum())
-            _hk4.metric("Sectors in Green (3M)", f"{_positive_3m}/{len(_heat_df)}")
-
-            # ── Heatmap ───────────────────────────────────────────────────────
-            _z      = _heat_df[["1W %", "1M %", "3M %", "6M %"]].values.tolist()
-            _y_lbls = [
-                f"◀ {r['Sector']}  {r['My Exposure']:.0f}%" if r["My Exposure"] > 0
-                else f"   {r['Sector']}"
-                for _, r in _heat_df.iterrows()
-            ]
-            _text   = [
-                [f"{v:+.1f}%" if v is not None else "—" for v in row]
-                for row in _z
-            ]
-
-            _hmap = go.Figure(go.Heatmap(
-                z=_z,
-                x=["1 Week", "1 Month", "3 Month", "6 Month"],
-                y=_y_lbls,
-                text=_text,
-                texttemplate="%{text}",
-                textfont=dict(size=12, color="white"),
-                colorscale=[
-                    [0.0,  "#8b0000"],
-                    [0.3,  "#cc3333"],
-                    [0.45, "#996633"],
-                    [0.5,  "#444444"],
-                    [0.55, "#336633"],
-                    [0.7,  "#00aa44"],
-                    [1.0,  "#006622"],
-                ],
-                zmid=0,
-                colorbar=dict(
-                    title="Return %",
-                    ticksuffix="%",
-                    thickness=14,
-                    len=0.8,
-                ),
-                hovertemplate=(
-                    "<b>%{y}</b><br>"
-                    "Period: %{x}<br>"
-                    "Return: %{text}<extra></extra>"
-                ),
-            ))
-            # Gold highlight band for every row where the user holds this sector
-            for _hi, (_, _hr) in enumerate(_heat_df.iterrows()):
-                if _hr["My Exposure"] > 0:
-                    _hmap.add_shape(
-                        type="rect",
-                        xref="paper", x0=0, x1=1,
-                        yref="y", y0=_hi - 0.5, y1=_hi + 0.5,
-                        fillcolor="rgba(255,200,0,0.07)",
-                        line=dict(color="rgba(255,200,0,0.45)", width=1.5),
-                        layer="below",
-                    )
-            _hmap.update_layout(
-                template="plotly_dark",
-                height=max(280, len(_heat_df) * 42 + 80),
-                margin=dict(l=0, r=0, t=20, b=0),
-                xaxis=dict(side="top"),
-                yaxis=dict(autorange="reversed"),
-                plot_bgcolor="#0d1117", paper_bgcolor="#0d1117",
-            )
-            st.plotly_chart(_hmap, use_container_width=True)
-            st.caption("◀ = sector you hold (weight % shown) · gold border = your position · sorted by 3M return")
-
-            # ── Exposure vs momentum table ────────────────────────────────────
-            st.markdown("#### Your Exposure vs Sector Momentum")
-            _exp_tbl = _heat_df[_heat_df["My Exposure"] > 0].copy()
-            if not _exp_tbl.empty:
-                _exp_tbl["Alignment"] = _exp_tbl.apply(
-                    lambda r: (
-                        "✅ In momentum"   if r["My Exposure"] >= 5 and r["3M %"] > 2 else
-                        "⚠️ Heavy in laggard" if r["My Exposure"] >= 10 and r["3M %"] < 0 else
-                        "🟡 Watch"         if r["3M %"] < 0 else
-                        "🟢 Aligned"
-                    ), axis=1,
-                )
-                st.dataframe(
-                    _exp_tbl[["Sector", "ETF", "1W %", "1M %", "3M %", "6M %", "My Exposure", "Alignment"]],
-                    width='stretch', hide_index=True,
-                )
-            else:
-                st.info("None of your holdings map to a tracked sector ETF.")
-
-            st.caption(
-                "Sector ETFs: SOXX (Semis) · IGV (AI/Cloud/Tech) · XLV (Healthcare) · "
-                "XLE (Energy) · XLF (Financials) · ITA (Defense) · XLY (Consumer) · "
-                "CIBR (Cybersecurity) · ICLN (Clean Energy) · DRIV (EV).  "
-                "Data cached 1 hour."
-            )
-        elif _sr_df is None:
-            st.info("Click **Load Sector Heatmap** to fetch live sector ETF performance.")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # REAL-SECTOR BENCHMARK TILT vs S&P 500 (Analytics tab)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-        st.subheader("🏛️ Portfolio vs. S&P 500 (Real Sector)")
-        st.caption(
-            "Uses each holding's REAL market sector (Technology, Financials, Health Care, "
-            "etc.) — not this app's thematic groupings (Consumer Tech, AI & Cloud, "
-            "Cybersecurity, etc.) used on the Sector Exposure / Sector Gaps charts "
-            "elsewhere on this page. The two taxonomies won't sum the same way; this view "
-            "answers a different question — \"are we over/underweight the actual market,\" "
-            "not \"which thematic sectors are we diversified across.\""
-        )
-        _rsx_df = real_sector_exposure(port_df, held_data)
-        if _rsx_df.empty:
-            st.info("No holdings with a resolvable sector.")
-        else:
-            _tilt_df = sector_benchmark_tilt(_rsx_df)
-            _tilt_colors = ["#00C851" if t > 0 else "#ff4444" if t < 0 else "#888888" for t in _tilt_df["Tilt"]]
-            _tilt_fig = go.Figure(go.Bar(
-                x=_tilt_df["Sector"], y=_tilt_df["Tilt"],
-                marker_color=_tilt_colors,
-                text=[f"{t:+.1f}pp" for t in _tilt_df["Tilt"]],
-                textposition="outside",
-                customdata=list(zip(_tilt_df["Portfolio Pct"], _tilt_df["Benchmark Pct"])),
-                hovertemplate=(
-                    "<b>%{x}</b><br>"
-                    "Portfolio: %{customdata[0]:.1f}%<br>"
-                    "S&P 500: %{customdata[1]:.1f}%<br>"
-                    "Tilt: %{y:+.1f}pp<extra></extra>"
-                ),
-            ))
-            _tilt_fig.add_hline(y=0, line_color="white", line_dash="dot", line_width=1)
-            _tilt_fig.update_layout(
-                title="Sector Tilt vs. S&P 500 (percentage points)",
-                template="plotly_dark", height=320,
-                yaxis_title="Portfolio − S&P 500 (pp)",
-                margin=dict(l=0, r=0, t=40, b=0),
-            )
-            st.plotly_chart(_tilt_fig, use_container_width=True)
-            st.caption(
-                "🟢 Green = overweight this real sector vs. the S&P 500  |  "
-                "🔴 Red = underweight  |  "
-                "S&P 500 GICS weights: Wikipedia \"S&P 500\" article, as of 2026-07-01 "
-                "(static reference — refresh periodically)."
-            )
-            st.dataframe(
-                _tilt_df.rename(columns={"Tilt": "Tilt (pp)"}),
-                width='stretch', hide_index=True,
-                # Explicit height: default st.dataframe sizing clips to ~10 rows
-                # with an internal scrollbar, hiding the top (highest-tilt) row
-                # for the full 11-sector table — always show every row.
-                height=(len(_tilt_df) + 1) * 35 + 3,
-            )
-
-    # RANKINGS (Performance tab)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-        st.caption(
-            "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
-            "Shows whether you're holding the best names in each sector or just familiar ones. "
-            "Institutional uses universe-relative ranking to identify rotation candidates."
-        )
-
-        if st.button("🔍 Scan full universe & rank my holdings", key="_rank_scan_btn"):
-            with st.spinner("Scanning universe…"):
-                try:
-                    _full_scan = scan_sectors(
-                        list(SECTOR_UNIVERSE.keys()),
-                        extra_tickers=st.session_state.get("watchlist", []) or [],
-                    )
-                    st.session_state["_rank_scan_df"] = _full_scan
-                except Exception as _e:
-                    st.error(f"Scan failed: {_e}")
-                    st.session_state["_rank_scan_df"] = pd.DataFrame()
-
-        if st.session_state.get("_rank_scan_df") is not None and not st.session_state["_rank_scan_df"].empty:
-            _scan_df  = st.session_state["_rank_scan_df"]
-            _rank_df  = rank_holdings_in_universe(port_df, _scan_df)
-
-            if _rank_df.empty:
-                st.info("Could not match any holdings to the scanned universe.")
-            else:
-                _total     = int(_rank_df["of"].iloc[0])
-                _in_univ   = _rank_df["Universe Rank"].notna().sum()
-                _top_q     = int((_rank_df["Percentile"] >= 75).sum())
-                _bot_q     = int((_rank_df["Percentile"] <= 25).sum())
-
-                _rk1, _rk2, _rk3, _rk4 = st.columns(4)
-                _rk1.metric("Universe size",    _total,    help="Tickers scanned")
-                _rk2.metric("Holdings ranked",  _in_univ,  help="Holdings found in universe")
-                _rk3.metric("Top quartile",     _top_q,    help="Percentile ≥ 75")
-                _rk4.metric("Bottom quartile",  _bot_q,    help="Percentile ≤ 25 — rotation candidates")
-
-                # Percentile bar chart
-                _rk_valid = _rank_df.dropna(subset=["Percentile"]).sort_values("Percentile", ascending=False)
-                _pct_colors = [
-                    tier_label(p)[1] for p in _rk_valid["Percentile"]
-                ]
-                pct_fig = go.Figure(go.Bar(
-                    x=_rk_valid["Ticker"],
-                    y=_rk_valid["Percentile"],
-                    marker_color=_pct_colors,
-                    text=[f"#{int(r)}" for r in _rk_valid["Universe Rank"]],
-                    textposition="outside",
-                    customdata=list(zip(
-                        _rk_valid["Universe Rank"],
-                        _rk_valid["of"],
-                        _rk_valid["Scanner Score"],
-                        _rk_valid["Tier"],
-                    )),
-                    hovertemplate=(
-                        "<b>%{x}</b><br>"
-                        "Rank: #%{customdata[0]} of %{customdata[1]}<br>"
-                        "Percentile: %{y:.0f}th<br>"
-                        "Scanner Score: %{customdata[2]:.0f}/100<br>"
-                        "Tier: %{customdata[3]}"
-                        "<extra></extra>"
-                    ),
-                ))
-                pct_fig.add_hline(y=75, line_dash="dash", line_color="#4CAF50",
-                                  annotation_text="Top quartile", annotation_position="right")
-                pct_fig.add_hline(y=50, line_dash="dot", line_color="#aaaaaa",
-                                  annotation_text="Median", annotation_position="right")
-                pct_fig.add_hline(y=25, line_dash="dash", line_color="#ff8800",
-                                  annotation_text="Bottom quartile", annotation_position="right")
-                pct_fig.update_layout(
-                    title=f"Holdings — Universe Percentile Rank (out of {_total} tickers)",
-                    template="plotly_dark", height=300,
-                    yaxis_title="Percentile", yaxis_range=[0, 110],
-                    margin=dict(l=0, r=60, t=40, b=0),
-                )
-                st.plotly_chart(pct_fig, use_container_width=True)
-
-                # Styled ranking table
-                def _tier_col(val):
-                    s = str(val)
-                    if "Top Decile"     in s: return "color:#00C851;font-weight:bold"
-                    if "Top Quartile"   in s: return "color:#4CAF50"
-                    if "Bottom Decile"  in s: return "color:#ff4444;font-weight:bold"
-                    if "Bottom Quartile"in s: return "color:#ff8800"
-                    if "Below Median"   in s: return "color:#ffbb33"
-                    return "color:#aaaaaa"
-
-                def _pct_col(val):
-                    if isinstance(val, float):
-                        if val >= 75: return "color:#4CAF50;font-weight:bold"
-                        if val <= 25: return "color:#ff8800"
-                    return ""
-
-                _disp = _rank_df[[
-                    "Ticker", "Sector", "Universe Rank", "of", "Percentile",
-                    "Tier", "Scanner Score", "Composite Score", "Sector Rank",
-                ]].copy()
-                _styled_rank = (
-                    _disp.style
-                    .map(_tier_col, subset=["Tier"])
-                    .map(_pct_col,  subset=["Percentile"])
-                    .format({
-                        "Percentile":      "{:.0f}th",
-                        "Scanner Score":   "{:.0f}",
-                        "Composite Score": "{:.0f}",
-                    }, na_rep="—")
-                )
-                st.dataframe(_styled_rank, width='stretch')
-                st.caption(
-                    "**Scanner Score** = momentum-only (consistent across all 80 tickers).  "
-                    "**Composite Score** = technical + fundamental + sentiment (your holdings only).  "
-                    "**Sector Rank** = position within its scanner sector grouping."
-                )
-
-                # Rotation candidates with alternatives
-                _bot_rows = _rank_df[_rank_df["Percentile"].notna() & (_rank_df["Percentile"] <= 25)]
-                if not _bot_rows.empty:
-                    st.markdown("### 🔄 Rotation Candidates")
+                    st.dataframe(_styled_rank, width='stretch')
                     st.caption(
-                        "These holdings rank in the bottom quartile of the universe. "
-                        "Best practice would review for rotation into higher-ranked names in the same sector."
+                        "**Scanner Score** = momentum-only (consistent across all 80 tickers).  "
+                        "**Composite Score** = technical + fundamental + sentiment (your holdings only).  "
+                        "**Sector Rank** = position within its scanner sector grouping."
                     )
-                    for _, brow in _bot_rows.iterrows():
-                        alts = sector_alternatives(
-                            brow["Ticker"], str(brow["_scanner_sector"]), _scan_df, n=3
+
+                    # Rotation candidates with alternatives
+                    _bot_rows = _rank_df[_rank_df["Percentile"].notna() & (_rank_df["Percentile"] <= 25)]
+                    if not _bot_rows.empty:
+                        st.markdown("### 🔄 Rotation Candidates")
+                        st.caption(
+                            "These holdings rank in the bottom quartile of the universe. "
+                            "Best practice would review for rotation into higher-ranked names in the same sector."
                         )
-                        with st.container(border=True):
-                            _bc1, _bc2 = st.columns([3, 1])
-                            with _bc1:
-                                st.markdown(
-                                    f"🔴 **{brow['Ticker']}** — ranked "
-                                    f"#{int(brow['Universe Rank'])} of {int(brow['of'])} "
-                                    f"({brow['Percentile']:.0f}th percentile · {brow['Tier']})"
-                                )
-                                st.caption(
-                                    f"Scanner score: {brow['Scanner Score']:.0f}/100 · "
-                                    f"Sector rank: {brow['Sector Rank']} · "
-                                    f"Composite: {brow['Composite Score']:.0f}/100"
-                                )
-                            with _bc2:
-                                st.metric("Sector rank", brow["Sector Rank"])
-                            if alts:
-                                st.markdown("**Higher-ranked alternatives in same sector:**")
-                                _ac = st.columns(len(alts))
-                                for _col, alt in zip(_ac, alts):
-                                    au = universe.get(alt["ticker"]) if (universe := {r["Ticker"]: r for _, r in _scan_df.iterrows()}) else None
-                                    _alt_rank = int(au["Rank"]) if au is not None else "—"
-                                    _alt_pct  = round((int(brow["of"]) - int(_alt_rank) + 1) / int(brow["of"]) * 100, 0) if isinstance(_alt_rank, int) else "—"
-                                    _col.markdown(
-                                        f"**{alt['ticker']}**  \n"
-                                        f"Score: {alt['score']:.0f}/100  \n"
-                                        f"Rank: #{_alt_rank}  \n"
-                                        f"Pct: {_alt_pct}th  \n"
-                                        f"{alt['signal']}"
+                        for _, brow in _bot_rows.iterrows():
+                            alts = sector_alternatives(
+                                brow["Ticker"], str(brow["_scanner_sector"]), _scan_df, n=3
+                            )
+                            with st.container(border=True):
+                                _bc1, _bc2 = st.columns([3, 1])
+                                with _bc1:
+                                    st.markdown(
+                                        f"🔴 **{brow['Ticker']}** — ranked "
+                                        f"#{int(brow['Universe Rank'])} of {int(brow['of'])} "
+                                        f"({brow['Percentile']:.0f}th percentile · {brow['Tier']})"
                                     )
+                                    st.caption(
+                                        f"Scanner score: {brow['Scanner Score']:.0f}/100 · "
+                                        f"Sector rank: {brow['Sector Rank']} · "
+                                        f"Composite: {brow['Composite Score']:.0f}/100"
+                                    )
+                                with _bc2:
+                                    st.metric("Sector rank", brow["Sector Rank"])
+                                if alts:
+                                    st.markdown("**Higher-ranked alternatives in same sector:**")
+                                    _ac = st.columns(len(alts))
+                                    for _col, alt in zip(_ac, alts):
+                                        au = universe.get(alt["ticker"]) if (universe := {r["Ticker"]: r for _, r in _scan_df.iterrows()}) else None
+                                        _alt_rank = int(au["Rank"]) if au is not None else "—"
+                                        _alt_pct  = round((int(brow["of"]) - int(_alt_rank) + 1) / int(brow["of"]) * 100, 0) if isinstance(_alt_rank, int) else "—"
+                                        _col.markdown(
+                                            f"**{alt['ticker']}**  \n"
+                                            f"Score: {alt['score']:.0f}/100  \n"
+                                            f"Rank: #{_alt_rank}  \n"
+                                            f"Pct: {_alt_pct}th  \n"
+                                            f"{alt['signal']}"
+                                        )
 
-                # Top performer callout
-                _top_rows = _rank_df[_rank_df["Percentile"].notna() & (_rank_df["Percentile"] >= 90)]
-                if not _top_rows.empty:
-                    _best_r = _top_rows.loc[_top_rows["Percentile"].idxmax()]
-                    st.success(
-                        f"✅ **{_best_r['Ticker']}** ranks #{int(_best_r['Universe Rank'])} of {int(_best_r['of'])} "
-                        f"({_best_r['Percentile']:.0f}th percentile — {_best_r['Tier']}) — "
-                        f"top-decile momentum score across the full universe. High-conviction hold."
-                    )
+                    # Top performer callout
+                    _top_rows = _rank_df[_rank_df["Percentile"].notna() & (_rank_df["Percentile"] >= 90)]
+                    if not _top_rows.empty:
+                        _best_r = _top_rows.loc[_top_rows["Percentile"].idxmax()]
+                        st.success(
+                            f"✅ **{_best_r['Ticker']}** ranks #{int(_best_r['Universe Rank'])} of {int(_best_r['of'])} "
+                            f"({_best_r['Percentile']:.0f}th percentile — {_best_r['Tier']}) — "
+                            f"top-decile momentum score across the full universe. High-conviction hold."
+                        )
 
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# PAGE — PORTFOLIO HEALTH SCORE
-# ═════════════════════════════════════════════════════════════════════════════
+    # ═════════════════════════════════════════════════════════════════════════════
+    # PAGE — PORTFOLIO HEALTH SCORE
+    # ═════════════════════════════════════════════════════════════════════════════
 elif page == "🏆 Health":
     from stock_analyzer.portfolio_health import (
         compute_health_score, compute_portfolio_dynamics,

@@ -213,7 +213,7 @@ _Note (2026-07-13): this section's F-IDs describe functionality that originated 
 
 ### 3.1a Portfolio Overview
 
-Standalone page (PORTFOLIO nav group, positioned first) extracted from Home in the 2026-07-12/13 nav cleanup. Five internal tabs (restructured 2026-07-15 per the I2 UX remediation): **📊 Overview**, **⚖️ Rebalancing**, **💰 Tax**, **📈 Performance** — distributing the functionality formerly in the single "Portfolio Overview" tab (F-06, F-06a, F-07, F-10, and the F-22c rebalance plan) across four focused tabs — and **📈 Analytics** (F-171–F-173 below, unchanged from the original split). Same "haven't visited Home this session" empty-state gate as every other extracted page (`_render_portfolio_not_loaded`).
+Standalone page (PORTFOLIO nav group, positioned first) extracted from Home in the 2026-07-12/13 nav cleanup. Five internal tabs (restructured 2026-07-15 per the I2 UX remediation): **📊 Overview**, **⚖️ Rebalancing**, **💰 Tax**, **📈 Performance** — distributing the functionality formerly in the single "Portfolio Overview" tab (F-06, F-06a, F-07, F-10, and the F-22c rebalance plan) across four focused tabs — and **📈 Analytics** (F-171–F-173 below, unchanged from the original split). Same "haven't visited Home this session" empty-state gate as every other extracted page (`_render_portfolio_not_loaded`). Both **📈 Performance** and **📈 Analytics** gained their own internal sub-tabs (2026-08-04 UX remediation, I2): Performance → vs S&P 500 / Diagnostics / Sector Attribution; Analytics → Relative Strength / Sector Heatmap / vs S&P 500 (Real Sector) / Rankings — pure UI reorganization of already-shipped content, no new feature.
 
 | ID | Requirement |
 |----|-------------|
