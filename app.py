@@ -3462,6 +3462,24 @@ if page == "🏠 Home":
 
     _price_strip(held_tickers)
 
+    # ── Unified alert stack (2026-08-04 UX audit I1) — 4 reserved placeholders
+    # so Day Shock / Price cross-check / Stock Split / Structural alert all
+    # visually group together right after the price strip, even though
+    # Structural alert's compute can't happen until much later (needs corr_df
+    # from the synthesis block below — see its own placement comment). Each
+    # placeholder is filled at its banner's existing, unmoved compute
+    # position; st.empty() renders content at the RESERVED slot, not the
+    # fill-in call site, so nothing about the careful data-dependency
+    # ordering below changes — only where each banner visually lands.
+    # Each fill uses .container() (not a direct st.empty() call) because a
+    # bare st.empty() slot holds exactly one element — Day Shock and Stock
+    # Split each render several (a summary line plus one row/card per
+    # ticker), so .container() is required, not a simplification to undo.
+    _alert_ph_dayshock   = st.empty()
+    _alert_ph_xcheck     = st.empty()
+    _alert_ph_split      = st.empty()
+    _alert_ph_structural = st.empty()
+
     # ── Day Shock awareness banner — AWARENESS ONLY, never gates ──────────────
     # A single-day move can happen well above the 50-day trend line, where
     # classify_deterioration_tier's trend-break condition stays silent (see
@@ -3480,30 +3498,31 @@ if page == "🏠 Home":
             _day_shock_cache[_t] = {"price": _px, "prev_close": _prev, "chg_pct": _chg}
     st.session_state["_day_shock_cache"] = _day_shock_cache
 
-    if _day_shock_cache:
-        st.warning(
-            f"⚠️ **Day Shock — {len(_day_shock_cache)} position"
-            f"{'s' if len(_day_shock_cache) != 1 else ''} moved "
-            f"≥{DAY_SHOCK_PCT:.0f}% today**  \n"
-            "Awareness only — not a recommendation change. Deterioration tier "
-            "(WATCH/TRIM/EXIT) is unaffected unless the 50-day trend is also broken."
-        )
-        _shock_rows = []
-        for _t, _d in sorted(_day_shock_cache.items(), key=lambda kv: -abs(kv[1]["chg_pct"])):
-            _is_up = _d["chg_pct"] >= 0
-            _fg = "#00C851" if _is_up else "#ff4444"
-            _bg = "rgba(0,200,81,0.18)" if _is_up else "rgba(255,68,68,0.18)"
-            _arrow = "🔺" if _is_up else "🔻"
-            _shock_rows.append(
-                "<div style='display:flex;align-items:center;gap:12px;padding:4px 0;'>"
-                f"<span style='display:inline-flex;align-items:center;gap:7px;padding:4px 12px;"
-                f"border-radius:999px;font-weight:700;font-size:0.9em;"
-                f"background:{_bg};color:{_fg};border:1px solid {_fg}80;'>"
-                f"{_arrow} {_t} {_d['chg_pct']:+.2f}%</span>"
-                f"<span style='color:#94a3b8;font-size:0.88em;'>"
-                f"${_d['prev_close']:.2f} → ${_d['price']:.2f}</span></div>"
+    with _alert_ph_dayshock.container():
+        if _day_shock_cache:
+            st.warning(
+                f"⚠️ **Day Shock — {len(_day_shock_cache)} position"
+                f"{'s' if len(_day_shock_cache) != 1 else ''} moved "
+                f"≥{DAY_SHOCK_PCT:.0f}% today**  \n"
+                "Awareness only — not a recommendation change. Deterioration tier "
+                "(WATCH/TRIM/EXIT) is unaffected unless the 50-day trend is also broken."
             )
-        st.markdown("".join(_shock_rows), unsafe_allow_html=True)
+            _shock_rows = []
+            for _t, _d in sorted(_day_shock_cache.items(), key=lambda kv: -abs(kv[1]["chg_pct"])):
+                _is_up = _d["chg_pct"] >= 0
+                _fg = "#00C851" if _is_up else "#ff4444"
+                _bg = "rgba(0,200,81,0.18)" if _is_up else "rgba(255,68,68,0.18)"
+                _arrow = "🔺" if _is_up else "🔻"
+                _shock_rows.append(
+                    "<div style='display:flex;align-items:center;gap:12px;padding:4px 0;'>"
+                    f"<span style='display:inline-flex;align-items:center;gap:7px;padding:4px 12px;"
+                    f"border-radius:999px;font-weight:700;font-size:0.9em;"
+                    f"background:{_bg};color:{_fg};border:1px solid {_fg}80;'>"
+                    f"{_arrow} {_t} {_d['chg_pct']:+.2f}%</span>"
+                    f"<span style='color:#94a3b8;font-size:0.88em;'>"
+                    f"${_d['prev_close']:.2f} → ${_d['price']:.2f}</span></div>"
+                )
+            st.markdown("".join(_shock_rows), unsafe_allow_html=True)
 
     # ── Price cross-check guardrail (fail loud on source disagreement) ───────
     # The settled prev_close should match across independent sources; a breach
@@ -3540,52 +3559,53 @@ if page == "🏠 Home":
             st.session_state["_price_xcheck_logged_date"] = _xc_today_str
 
         _xc_bad = {t: r for t, r in _xc.items() if not r.get("ok", True)}
-        if _xc_bad:
-            _xc_lines = []
-            for t, r in _xc_bad.items():
-                _bits = []
-                if r.get("prev_ok") is False:
-                    _bits.append(
-                        f"prior-close gap {r.get('prev_gap_pct')}% "
-                        f"(>{DATA_XCHECK_PREVCLOSE_TOL_PCT}% limit)"
+        with _alert_ph_xcheck.container():
+            if _xc_bad:
+                _xc_lines = []
+                for t, r in _xc_bad.items():
+                    _bits = []
+                    if r.get("prev_ok") is False:
+                        _bits.append(
+                            f"prior-close gap {r.get('prev_gap_pct')}% "
+                            f"(>{DATA_XCHECK_PREVCLOSE_TOL_PCT}% limit)"
+                        )
+                    if r.get("live_ok") is False:
+                        _bits.append(f"live-price gap {r.get('live_gap_pct')}%")
+
+                    _xc_prior = db.load_price_xcheck_history(t, _xc_today_str, days_back=21)
+                    if _xc_prior:
+                        if r.get("prev_ok") is False and divergence_widened(
+                            r.get("prev_gap_pct"), _xc_prior.get("prev_gap_pct")
+                        ):
+                            _bits.append(
+                                f"prior-close gap widened from {_xc_prior.get('prev_gap_pct')}% to "
+                                f"{r.get('prev_gap_pct')}% since {_xc_prior.get('check_date')}"
+                            )
+                        if r.get("live_ok") is False and divergence_widened(
+                            r.get("live_gap_pct"), _xc_prior.get("live_gap_pct")
+                        ):
+                            _bits.append(
+                                f"live-price gap widened from {_xc_prior.get('live_gap_pct')}% to "
+                                f"{r.get('live_gap_pct')}% since {_xc_prior.get('check_date')}"
+                            )
+
+                    _xc_lines.append(
+                        f"- **{t}**: {r.get('primary_source')} vs {r.get('validator', 'independent source')} "
+                        f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
                     )
-                if r.get("live_ok") is False:
-                    _bits.append(f"live-price gap {r.get('live_gap_pct')}%")
-
-                _xc_prior = db.load_price_xcheck_history(t, _xc_today_str, days_back=21)
-                if _xc_prior:
-                    if r.get("prev_ok") is False and divergence_widened(
-                        r.get("prev_gap_pct"), _xc_prior.get("prev_gap_pct")
-                    ):
-                        _bits.append(
-                            f"prior-close gap widened from {_xc_prior.get('prev_gap_pct')}% to "
-                            f"{r.get('prev_gap_pct')}% since {_xc_prior.get('check_date')}"
-                        )
-                    if r.get("live_ok") is False and divergence_widened(
-                        r.get("live_gap_pct"), _xc_prior.get("live_gap_pct")
-                    ):
-                        _bits.append(
-                            f"live-price gap widened from {_xc_prior.get('live_gap_pct')}% to "
-                            f"{r.get('live_gap_pct')}% since {_xc_prior.get('check_date')}"
-                        )
-
-                _xc_lines.append(
-                    f"- **{t}**: {r.get('primary_source')} vs {r.get('validator', 'independent source')} "
-                    f"(${r.get('other_price')}) — {', '.join(_bits) or 'disagree'}"
+                st.error(
+                    "⚠️ **Price unverified — sources disagree.** The primary price feed "
+                    "differs from an independent source beyond tolerance for:\n\n"
+                    + "\n".join(_xc_lines)
+                    + "\n\nTreat stops / P&L for these names with caution and verify against your broker."
                 )
-            st.error(
-                "⚠️ **Price unverified — sources disagree.** The primary price feed "
-                "differs from an independent source beyond tolerance for:\n\n"
-                + "\n".join(_xc_lines)
-                + "\n\nTreat stops / P&L for these names with caution and verify against your broker."
-            )
-        elif _xc_validator_down:
-            # Cross-check skipped because its validator is the degraded source —
-            # surface why (don't silently drop the integrity readout). Clears on recovery.
-            st.caption(
-                f"ℹ️ Price cross-check paused — an independent source ({_provider_label(_xc_validator_down)}) "
-                "is degraded; the integrity check resumes automatically when it recovers."
-            )
+            elif _xc_validator_down:
+                # Cross-check skipped because its validator is the degraded source —
+                # surface why (don't silently drop the integrity readout). Clears on recovery.
+                st.caption(
+                    f"ℹ️ Price cross-check paused — an independent source ({_provider_label(_xc_validator_down)}) "
+                    "is degraded; the integrity check resumes automatically when it recovers."
+                )
 
     # Merge live prices into held_data so P&L uses the freshest price
     for ticker, lp in st.session_state.get("_live_prices", {}).items():
@@ -3684,103 +3704,104 @@ if page == "🏠 Home":
             )
     _pending_splits = st.session_state.get(_sp_check_key, [])
 
-    for _sp in _pending_splits:
-        _sp_key = f"{_sp['ticker']}_{_sp['split_date']}"
-        _sp_color = "#f59e0b"
-        st.markdown(
-            f"<div style='background:#1a1200;border:1px solid {_sp_color};"
-            f"border-left:4px solid {_sp_color};border-radius:8px;"
-            f"padding:16px 20px;margin-bottom:12px'>"
-            f"<span style='color:{_sp_color};font-weight:700;font-size:1.05em'>"
-            f"⚠️ Stock Split Detected — {_sp['ticker']} {_sp['ratio_str']} {_sp['split_type']} Split"
-            f"</span>"
-            f"<span style='color:#aaa;font-size:0.85em;margin-left:12px'>"
-            f"detected on {_sp['split_date']}</span>"
-            f"<div style='display:flex;gap:40px;margin-top:12px;font-size:0.9em'>"
-            f"<div><span style='color:#ef4444'>❌ Before adjustment</span><br>"
-            f"<b>{_sp['orig_shares']:g} shares</b> @ <b>${_sp['orig_avg_cost']:,.2f}</b><br>"
-            f"<span style='color:#ef4444'>P&L: {_sp['orig_pnl_pct']:+.1f}%</span></div>"
-            f"<div style='color:#aaa;font-size:1.4em;align-self:center'>→</div>"
-            f"<div><span style='color:#22c55e'>✅ After adjustment</span><br>"
-            f"<b>{_sp['adj_shares']:g} shares</b> @ <b>${_sp['adj_avg_cost']:,.2f}</b><br>"
-            f"<span style='color:#22c55e'>P&L: {_sp['adj_pnl_pct']:+.1f}%</span></div>"
-            f"<div style='color:#aaa;font-size:0.82em;align-self:center;max-width:260px'>"
-            f"Current price: <b>${_sp['current_price']:,.2f}</b><br>"
-            f"This adjusts your cost basis and share count to reflect the {_sp['ratio_str']} split. "
-            f"Your actual investment value is unchanged.</div>"
-            f"</div></div>",
-            unsafe_allow_html=True,
-        )
-        _sp_c1, _sp_c2, _sp_c3 = st.columns([2, 2, 8])
-        with _sp_c1:
-            if st.button(f"✅ Apply Adjustment", key=f"_sp_apply_{_sp_key}",
-                         type="primary", use_container_width=True,
-                         disabled=st.session_state.get("_readonly", False),
-                         help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
-                _hdf = st.session_state.holdings_df.copy()
-                _mask = _hdf["Ticker"] == _sp["ticker"]
-                _hdf.loc[_mask, "Shares"]      = _sp["adj_shares"]
-                _hdf.loc[_mask, "Avg Cost ($)"] = _sp["adj_avg_cost"]
-                st.session_state.holdings_df = _hdf
-                if db.save_holdings(_hdf):
-                    # Record a synthetic SPLIT row in the trades table so the
-                    # Rebuild flow (recalculate_from_trades) can reproduce the
-                    # post-split holdings on replay. Without this, a future
-                    # Rebuild would replay the pre-split BUYs and silently
-                    # overwrite the user's approved post-split state.
-                    # action='SPLIT' is special-cased in recalculate_from_trades
-                    # to overwrite (not accumulate) the holding.
-                    try:
-                        db.save_trade({
-                            "ticker":       str(_sp["ticker"]).upper(),
-                            "action":       "SPLIT",
-                            "shares":       float(_sp["adj_shares"]),
-                            "price":        float(_sp["adj_avg_cost"]),
-                            "cost_basis":   None,
-                            "realized_pnl": None,
-                            "notes":        (
-                                f"{_sp.get('ratio_str','')} {_sp.get('split_type','')} split — "
-                                f"adjusted from {_sp['orig_shares']:g}sh @ ${_sp['orig_avg_cost']:,.2f} "
-                                f"to {_sp['adj_shares']:g}sh @ ${_sp['adj_avg_cost']:,.2f}"
-                            ),
-                            "trigger_type": "REBALANCE",
-                        })
-                        st.session_state.trades_df = db.load_trades()
-                    except Exception as _split_err:
-                        st.warning(
-                            f"Split applied to holdings but the SPLIT history row was not saved "
-                            f"({_split_err}). Do not use 'Rebuild from trades' until this is "
-                            f"corrected — replaying pre-split BUYs would overwrite your holdings."
+    with _alert_ph_split.container():
+        for _sp in _pending_splits:
+            _sp_key = f"{_sp['ticker']}_{_sp['split_date']}"
+            _sp_color = "#f59e0b"
+            st.markdown(
+                f"<div style='background:#1a1200;border:1px solid {_sp_color};"
+                f"border-left:4px solid {_sp_color};border-radius:8px;"
+                f"padding:16px 20px;margin-bottom:12px'>"
+                f"<span style='color:{_sp_color};font-weight:700;font-size:1.05em'>"
+                f"⚠️ Stock Split Detected — {_sp['ticker']} {_sp['ratio_str']} {_sp['split_type']} Split"
+                f"</span>"
+                f"<span style='color:#aaa;font-size:0.85em;margin-left:12px'>"
+                f"detected on {_sp['split_date']}</span>"
+                f"<div style='display:flex;gap:40px;margin-top:12px;font-size:0.9em'>"
+                f"<div><span style='color:#ef4444'>❌ Before adjustment</span><br>"
+                f"<b>{_sp['orig_shares']:g} shares</b> @ <b>${_sp['orig_avg_cost']:,.2f}</b><br>"
+                f"<span style='color:#ef4444'>P&L: {_sp['orig_pnl_pct']:+.1f}%</span></div>"
+                f"<div style='color:#aaa;font-size:1.4em;align-self:center'>→</div>"
+                f"<div><span style='color:#22c55e'>✅ After adjustment</span><br>"
+                f"<b>{_sp['adj_shares']:g} shares</b> @ <b>${_sp['adj_avg_cost']:,.2f}</b><br>"
+                f"<span style='color:#22c55e'>P&L: {_sp['adj_pnl_pct']:+.1f}%</span></div>"
+                f"<div style='color:#aaa;font-size:0.82em;align-self:center;max-width:260px'>"
+                f"Current price: <b>${_sp['current_price']:,.2f}</b><br>"
+                f"This adjusts your cost basis and share count to reflect the {_sp['ratio_str']} split. "
+                f"Your actual investment value is unchanged.</div>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+            _sp_c1, _sp_c2, _sp_c3 = st.columns([2, 2, 8])
+            with _sp_c1:
+                if st.button(f"✅ Apply Adjustment", key=f"_sp_apply_{_sp_key}",
+                             type="primary", use_container_width=True,
+                             disabled=st.session_state.get("_readonly", False),
+                             help="Read-only viewer — changes are disabled" if st.session_state.get("_readonly", False) else None):
+                    _hdf = st.session_state.holdings_df.copy()
+                    _mask = _hdf["Ticker"] == _sp["ticker"]
+                    _hdf.loc[_mask, "Shares"]      = _sp["adj_shares"]
+                    _hdf.loc[_mask, "Avg Cost ($)"] = _sp["adj_avg_cost"]
+                    st.session_state.holdings_df = _hdf
+                    if db.save_holdings(_hdf):
+                        # Record a synthetic SPLIT row in the trades table so the
+                        # Rebuild flow (recalculate_from_trades) can reproduce the
+                        # post-split holdings on replay. Without this, a future
+                        # Rebuild would replay the pre-split BUYs and silently
+                        # overwrite the user's approved post-split state.
+                        # action='SPLIT' is special-cased in recalculate_from_trades
+                        # to overwrite (not accumulate) the holding.
+                        try:
+                            db.save_trade({
+                                "ticker":       str(_sp["ticker"]).upper(),
+                                "action":       "SPLIT",
+                                "shares":       float(_sp["adj_shares"]),
+                                "price":        float(_sp["adj_avg_cost"]),
+                                "cost_basis":   None,
+                                "realized_pnl": None,
+                                "notes":        (
+                                    f"{_sp.get('ratio_str','')} {_sp.get('split_type','')} split — "
+                                    f"adjusted from {_sp['orig_shares']:g}sh @ ${_sp['orig_avg_cost']:,.2f} "
+                                    f"to {_sp['adj_shares']:g}sh @ ${_sp['adj_avg_cost']:,.2f}"
+                                ),
+                                "trigger_type": "REBALANCE",
+                            })
+                            st.session_state.trades_df = db.load_trades()
+                        except Exception as _split_err:
+                            st.warning(
+                                f"Split applied to holdings but the SPLIT history row was not saved "
+                                f"({_split_err}). Do not use 'Rebuild from trades' until this is "
+                                f"corrected — replaying pre-split BUYs would overwrite your holdings."
+                            )
+                        # Invalidate caches so portfolio rebuilds with new values
+                        for _k in list(st.session_state.keys()):
+                            if _k.startswith("_split_check_") or _k.startswith("_live_prices"):
+                                del st.session_state[_k]
+                        # Also invalidate the Trade Journal drift-detection flag so
+                        # next visit re-checks against the new synthetic SPLIT row
+                        st.session_state.pop("_tj_drift_checked", None)
+                        st.session_state.pop("_tj_drift_state",  None)
+                        st.success(
+                            f"{_sp['ticker']} adjusted: {_sp['orig_shares']:g} shares @ "
+                            f"${_sp['orig_avg_cost']:,.2f} → {_sp['adj_shares']:g} shares @ "
+                            f"${_sp['adj_avg_cost']:,.2f}"
                         )
-                    # Invalidate caches so portfolio rebuilds with new values
-                    for _k in list(st.session_state.keys()):
-                        if _k.startswith("_split_check_") or _k.startswith("_live_prices"):
-                            del st.session_state[_k]
-                    # Also invalidate the Trade Journal drift-detection flag so
-                    # next visit re-checks against the new synthetic SPLIT row
-                    st.session_state.pop("_tj_drift_checked", None)
-                    st.session_state.pop("_tj_drift_state",  None)
-                    st.success(
-                        f"{_sp['ticker']} adjusted: {_sp['orig_shares']:g} shares @ "
-                        f"${_sp['orig_avg_cost']:,.2f} → {_sp['adj_shares']:g} shares @ "
-                        f"${_sp['adj_avg_cost']:,.2f}"
-                    )
+                        st.rerun()
+                    else:
+                        st.error("Failed to save — check Supabase connection.")
+            with _sp_c2:
+                if st.button("Dismiss", key=f"_sp_dismiss_{_sp_key}",
+                             use_container_width=True):
+                    _dismissed = st.session_state.get("_dismissed_splits", set())
+                    _dismissed.add(_sp_key)
+                    st.session_state["_dismissed_splits"] = _dismissed
+                    # Remove from today's cache
+                    if _sp_check_key in st.session_state:
+                        st.session_state[_sp_check_key] = [
+                            s for s in st.session_state[_sp_check_key]
+                            if f"{s['ticker']}_{s['split_date']}" != _sp_key
+                        ]
                     st.rerun()
-                else:
-                    st.error("Failed to save — check Supabase connection.")
-        with _sp_c2:
-            if st.button("Dismiss", key=f"_sp_dismiss_{_sp_key}",
-                         use_container_width=True):
-                _dismissed = st.session_state.get("_dismissed_splits", set())
-                _dismissed.add(_sp_key)
-                st.session_state["_dismissed_splits"] = _dismissed
-                # Remove from today's cache
-                if _sp_check_key in st.session_state:
-                    st.session_state[_sp_check_key] = [
-                        s for s in st.session_state[_sp_check_key]
-                        if f"{s['ticker']}_{s['split_date']}" != _sp_key
-                    ]
-                st.rerun()
 
     total_val   = port_df["Market Value"].sum()
     total_cost  = (port_df["Avg Cost"] * port_df["Shares"]).sum()
@@ -5147,24 +5168,25 @@ if page == "🏠 Home":
 
     st.session_state["_structural_alert_cache"] = _struct_alert_new_clusters
 
-    if _struct_alert_new_clusters:
-        _struct_alert_baseline_date = _struct_alert_baseline.get("scan_date")
-        st.warning(
-            f"🧬 **Structural alert — {len(_struct_alert_new_clusters)} new correlation "
-            f"cluster{'s' if len(_struct_alert_new_clusters) != 1 else ''} formed since your "
-            f"last Structural Scan ({_struct_alert_baseline_date})**  \n"
-            "Awareness only — composite scores and gates are unaffected. "
-            "See 🧩 Intelligence → 🧬 Structural Scan for the full picture."
-        )
-        for _struct_alert_c in _struct_alert_new_clusters:
-            _struct_alert_pairs_str = ", ".join(
-                f"{a}-{b}" for a, b in _struct_alert_c["new_pairs"]
+    with _alert_ph_structural.container():
+        if _struct_alert_new_clusters:
+            _struct_alert_baseline_date = _struct_alert_baseline.get("scan_date")
+            st.warning(
+                f"🧬 **Structural alert — {len(_struct_alert_new_clusters)} new correlation "
+                f"cluster{'s' if len(_struct_alert_new_clusters) != 1 else ''} formed since your "
+                f"last Structural Scan ({_struct_alert_baseline_date})**  \n"
+                "Awareness only — composite scores and gates are unaffected. "
+                "See 🧩 Intelligence → 🧬 Structural Scan for the full picture."
             )
-            st.caption(
-                f"**{', '.join(_struct_alert_c['tickers'])}** ({_struct_alert_c['tier']}, "
-                f"{_struct_alert_c['combined_weight_pct']:.1f}% combined weight) — "
-                f"new pairing: {_struct_alert_pairs_str}"
-            )
+            for _struct_alert_c in _struct_alert_new_clusters:
+                _struct_alert_pairs_str = ", ".join(
+                    f"{a}-{b}" for a, b in _struct_alert_c["new_pairs"]
+                )
+                st.caption(
+                    f"**{', '.join(_struct_alert_c['tickers'])}** ({_struct_alert_c['tier']}, "
+                    f"{_struct_alert_c['combined_weight_pct']:.1f}% combined weight) — "
+                    f"new pairing: {_struct_alert_pairs_str}"
+                )
 
     # Next 3 HIGH-impact events for the Command Center strip (future only)
     _cc_catalysts = [
