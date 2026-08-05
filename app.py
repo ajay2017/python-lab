@@ -9708,15 +9708,20 @@ elif page == "🧾 Summary":
                                           _sm_daily_brief.get("review_list") or [])
         _sm_act_bucket = _sm_split["act"]
         if not _sm_act_bucket:
-            st.markdown(
-                "<div style='display:flex;align-items:center;gap:10px;background:#13201a;"
-                "border:1px solid #1e3a2a;border-left:3px solid #22c55e;border-radius:9px;"
-                "padding:10px 14px'>"
-                "🟢 <b style='color:#57d98a'>Nothing to act on today</b>"
-                "<span style='color:#8b94a7;font-size:0.9em'> — you're clear</span>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
+            with st.container(border=True, key="sm_act_clear"):
+                st.markdown(
+                    "<style>.st-key-sm_act_clear{"
+                    "background:#13201a;border-left:3px solid #22c55e !important}"
+                    "</style>",
+                    unsafe_allow_html=True,
+                )
+                _sm_act_col, _ = st.columns([6, 1], vertical_alignment="center")
+                with _sm_act_col:
+                    st.markdown(
+                        "🟢 <b style='color:#57d98a'>Nothing to act on today</b>"
+                        "<span style='color:#8b94a7;font-size:0.9em'> — you're clear</span>",
+                        unsafe_allow_html=True,
+                    )
         else:
             # Build a one-line summary from the first item (algorithmic labels
             # and ticker symbols only — no user-entered free text).
@@ -9735,19 +9740,28 @@ elif page == "🧾 Summary":
             )
             if len(_sm_act_bucket) > 1:
                 _sm_act_summary += f" + {len(_sm_act_bucket) - 1} more"
-            st.markdown(
-                f"<div style='display:flex;align-items:center;gap:10px;background:#1e1416;"
-                f"border:1px solid #3a2226;border-left:3px solid #ef4444;border-radius:9px;"
-                f"padding:10px 14px'>"
-                f"🔴 <b style='color:#fca5a5'>Act Today ({len(_sm_act_bucket)})</b>"
-                f"&nbsp; {_sm_act_summary}"
-                f"<span style='color:#8b94a7;font-size:0.9em'> — full detail on Home</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("→ Home", key="sm_act_home_btn"):
-                st.session_state["_pending_page"] = "🏠 Home"
-                st.rerun()
+            with st.container(border=True, key="sm_act_urgent"):
+                st.markdown(
+                    "<style>.st-key-sm_act_urgent{"
+                    "background:#1e1416;border-left:3px solid #ef4444 !important}"
+                    "</style>",
+                    unsafe_allow_html=True,
+                )
+                # Text + button share one row, vertically centered, so the
+                # "→ Home" action sits inline with "Act Today (N)" instead of
+                # dropping to an orphaned line below the strip.
+                _sm_act_col, _sm_act_btn_col = st.columns([5, 1], vertical_alignment="center")
+                with _sm_act_col:
+                    st.markdown(
+                        f"🔴 <b style='color:#fca5a5'>Act Today ({len(_sm_act_bucket)})</b>"
+                        f"&nbsp; {_sm_act_summary}"
+                        f"<span style='color:#8b94a7;font-size:0.9em'> — full detail on Home</span>",
+                        unsafe_allow_html=True,
+                    )
+                with _sm_act_btn_col:
+                    if st.button("→ Home", key="sm_act_home_btn", type="tertiary"):
+                        st.session_state["_pending_page"] = "🏠 Home"
+                        st.rerun()
 
     # ── 🧭 Elsewhere in DRISHTA — 2×2 pointer grid (plan:
     # docs/plans/summary-page-pointer-cards.md). Four cards: Engine Track
