@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — 🧾 Summary page restructure · DRISHTA</title>
+<!--
+  STATIC MOCKUP for review — the PROPOSED restructured 🧾 Summary page.
+  Goal: match the clean 2x2 pointer-grid aesthetic we already agreed on
+  (engine-track-record-pointer.html), de-clutter the current stacked-text
+  layout, pull Risk Posture into the grid, and collapse the big Act Today
+  card into a slim pointer (Home remains the authoritative Act Today surface).
+  Numbers illustrative. Nothing here changes any computation — layout only.
+-->
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161a23; --panel2:#1b2130; --border:#2a3140;
+    --ink:#e6e9ef; --muted:#8b94a7; --muted2:#5f6779;
+    --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --accent:#6ea8fe;
+    --chip:#232a38;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;padding:26px 20px 60px;}
+  .wrap{max-width:1080px;margin:0 auto;}
+  h1{font-size:19px;font-weight:650;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 20px;}
+  .lbl{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted2);
+    margin:24px 0 9px;font-weight:600;}
+
+  /* KPI row (unchanged — shown compact as context) */
+  .kpi{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;}
+  .kpi .k{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 9px;}
+  .kpi .kt{font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:.03em;line-height:1.2;}
+  .kpi .kv{font-size:13px;font-weight:600;margin-top:3px;}
+  .kpi .kd{font-size:9.5px;color:var(--muted);margin-top:1px;}
+  @media(max-width:820px){.kpi{grid-template-columns:repeat(4,1fr);}}
+
+  /* Alpha tile */
+  .alpha{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px 15px;max-width:340px;margin-top:10px;}
+  .alpha .at{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em;}
+  .alpha .av{font-size:22px;font-weight:700;color:var(--green);margin-top:2px;}
+  .alpha .achip{display:inline-block;font-size:10px;color:#57d98a;background:rgba(34,197,94,.12);
+    border:1px solid rgba(34,197,94,.3);border-radius:12px;padding:1px 8px;margin-top:5px;}
+  .alpha .acap{font-size:10px;color:var(--muted2);font-style:italic;margin-top:8px;}
+
+  /* Act Today — collapsed to a slim pointer strip */
+  .act{display:flex;align-items:center;gap:12px;background:#1e1416;border:1px solid #3a2226;
+    border-left:3px solid var(--red);border-radius:9px;padding:11px 15px;margin-top:14px;}
+  .act .adot{font-size:14px;}
+  .act .atext{font-size:13px;}
+  .act .atext b{color:#fca5a5;}
+  .act .asub{color:var(--muted);font-size:11.5px;}
+  .act .ago{margin-left:auto;font-size:11.5px;color:var(--accent);border:1px solid #2b3a55;
+    border-radius:7px;padding:5px 11px;background:rgba(110,168,254,.06);white-space:nowrap;}
+  .act.zero{background:#13201a;border-color:#1e3a2a;border-left-color:var(--green);}
+  .act.zero .atext b{color:#57d98a;}
+
+  /* 2x2 pointer grid — the agreed aesthetic */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px;}
+  @media(max-width:720px){.grid{grid-template-columns:1fr;}.kpi{grid-template-columns:repeat(2,1fr);}}
+  .card{background:var(--panel2);border:1px solid var(--border);border-radius:11px;padding:15px 16px;position:relative;}
+  .card .ch{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:9px;}
+  .card .ch .tag{margin-left:auto;font-size:9px;color:var(--muted2);border:1px solid var(--border);border-radius:12px;padding:0 7px;}
+  .card .cv{font-size:15px;font-weight:600;}
+  .card .cd{font-size:11.5px;color:var(--muted);margin-top:3px;}
+  .card .clink{font-size:11px;color:var(--accent);margin-top:11px;display:inline-block;}
+
+  /* hero (Engine Track Record) */
+  .card.hero{border-color:#2c4a34;background:linear-gradient(180deg,#15211a 0%,#141a24 100%);}
+  .card.hero::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green);border-radius:11px 0 0 11px;}
+  .card.hero .badge{margin-left:auto;font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:12px;
+    background:rgba(34,197,94,.14);color:#57d98a;border:1px solid rgba(34,197,94,.35);}
+  .card.hero .hero-num{font-size:22px;font-weight:700;color:var(--green);margin:2px 0 1px;}
+  .card.hero .hero-num .u{font-size:12px;color:var(--muted);font-weight:600;}
+  .card.hero .whenline{font-size:11.5px;color:#c7d2e2;}
+  .card.hero .verdict{font-size:11.5px;color:#9ca3af;margin-top:5px;}
+  .card.hero .contrast{font-size:11px;color:var(--muted);margin-top:7px;border-top:1px solid var(--border);padding-top:7px;}
+  .card.hero .cov{font-size:10px;color:var(--muted2);font-style:italic;margin-top:6px;}
+
+  .holdings{background:var(--panel);border:1px dashed var(--border);border-radius:10px;padding:14px;margin-top:18px;color:var(--muted);font-size:12px;text-align:center;}
+  .note{background:#12202e;border:1px solid #234;border-radius:8px;padding:10px 14px;font-size:12px;color:#9db6cf;margin:0 0 22px;}
+  .note b{color:#cfe3f5;}
+  .cmp{font-size:11.5px;color:var(--muted);margin-top:8px;}
+  .cmp b{color:#cfe3f5;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧾 Summary — proposed restructure</h1>
+  <p class="sub">Static mockup · layout only, no computation changes · plan: <code>docs/plans/</code></p>
+
+  <div class="note">
+    <b>Five moves vs the current live page:</b> (1) <b>merge Alpha vs SPY into the KPI row</b> (it's a trend
+    tile like Portfolio Value); (2) <b>remove the Alerts KPI</b> (its detail lives on 📡 Signals &amp; Advice,
+    which still flags a 🔴 via the sidebar nav badge); (3) collapse the big <b>Act Today</b> card → a slim
+    pointer to Home; (4) pull <b>Risk Posture</b> into the grid; (5) render all four pointers as one clean
+    <b>2×2 boxed grid</b>. Layout only — every number reads the same cache as today.
+  </div>
+
+  <!-- KPI row — Alpha merged in, Alerts removed, still 8 tiles -->
+  <div class="lbl">KPI row — Alpha vs SPY merged in (pos 4), Alerts removed · still 8 tiles</div>
+  <div class="kpi">
+    <div class="k"><div class="kt">Portfolio Value</div><div class="kv">$—</div><div class="kd">▁▃▅▆</div></div>
+    <div class="k"><div class="kt">Unrealized P&L</div><div class="kv">+$—</div><div class="kd">+—%</div></div>
+    <div class="k"><div class="kt">Today's P&L</div><div class="kv">+$—</div><div class="kd">+—%</div></div>
+    <div class="k" style="border-color:#2c4a34;">
+      <div class="kt">Alpha vs SPY (29d)</div>
+      <div class="kv" style="color:var(--green)">+85.1%</div>
+      <div class="kd">▁▃▅▆ · <span style="color:var(--amber)">⚠ incl. flows</span></div>
+    </div>
+    <div class="k"><div class="kt">Avg Score</div><div class="kv">—/100</div></div>
+    <div class="k"><div class="kt">Diversification</div><div class="kv">—/100</div></div>
+    <div class="k"><div class="kt">Best</div><div class="kv">TICK</div><div class="kd">+—%</div></div>
+    <div class="k"><div class="kt">Worst</div><div class="kv">TICK</div><div class="kd">−—%</div></div>
+  </div>
+  <div class="cmp" style="margin-top:7px;">↑ Alpha keeps its <b style="color:var(--amber)">⚠ incl. flows</b>
+    flag <b>visible</b> (not hidden in a hover) — the +85% is capital-flow-inflated, so the caveat stays on the face of the tile.</div>
+
+  <!-- Act Today collapsed to a slim pointer -->
+  <div class="lbl">Act Today — collapsed to a slim pointer (Home stays the full surface)</div>
+  <div class="act">
+    <span class="adot">🔴</span>
+    <span class="atext"><b>Act Today (1)</b> &nbsp; Trim TSLA · Non-Farm Payrolls in 2d
+      <span class="asub"> — full detail on Home</span></span>
+    <span class="ago">→ Home</span>
+  </div>
+  <div class="cmp">When there are no urgent actions, this becomes a calm green one-liner:</div>
+  <div class="act zero" style="margin-top:7px;">
+    <span class="adot">🟢</span>
+    <span class="atext"><b>Nothing to act on today</b> <span class="asub"> — you're clear</span></span>
+  </div>
+
+  <!-- The 2x2 pointer grid -->
+  <div class="lbl">🧭 Elsewhere in DRISHTA — clean 2×2 grid (Risk Posture now included)</div>
+  <div class="grid">
+
+    <!-- hero -->
+    <div class="card hero">
+      <div class="ch">🎯 Engine Track Record <span class="badge">WORKING</span></div>
+      <div class="hero-num">+5.6<span class="u"> pp vs S&P</span></div>
+      <div class="whenline">when you acted on the App's new-position calls</div>
+      <div class="verdict">Acting on the App's new-position calls has beaten the benchmark.</div>
+      <div class="contrast">The ones you skipped: <b style="color:#d7deea;">−0.2pp</b></div>
+      <div class="cov">17 matured calls · measures calls surfaced to you, not every possible call.</div>
+      <a class="clink" href="#">Full report card → 📜 Recommendations History</a>
+    </div>
+
+    <div class="card">
+      <div class="ch">🩺 Thesis Review</div>
+      <div class="cv" style="color:var(--amber);">4 Weakening</div>
+      <div class="cd">of 8 reviewed</div>
+      <a class="clink" href="#">→ AI Insights</a>
+    </div>
+
+    <div class="card">
+      <div class="ch">🔔 Catalyst Watch</div>
+      <div class="cv" style="color:var(--green);">None soon</div>
+      <div class="cd">within 7 days</div>
+      <a class="clink" href="#">→ Catalyst Watch</a>
+    </div>
+
+    <div class="card">
+      <div class="ch">🔗 Risk Posture</div>
+      <div class="cv">☀️ Steady</div>
+      <div class="cd">book moves roughly with the market; regime calm</div>
+      <a class="clink" href="#">→ Risk Analysis</a>
+    </div>
+
+  </div>
+
+  <div class="holdings">📋 Holdings table — unchanged (shared function, identical to Home)</div>
+
+  <p class="cmp" style="margin-top:20px;">
+    <b>Net effect:</b> the page reads top-to-bottom as KPIs → one alpha tile → one urgent-action line →
+    one tidy 2×2 pointer grid → holdings. No orphaned half-rows, no duplicated action card, Risk Posture no
+    longer stranded. Pure layout change — every number still comes from the same cache it does today.
+  </p>
+</div>
+</body>
+</html>

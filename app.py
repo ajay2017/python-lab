@@ -9646,8 +9646,46 @@ elif page == "🧾 Summary":
     else:
         _s3.metric("Today's P&L", "Updating…",
                     help="Loads once live prices are cached — visit 🏠 Home, or wait ~60s.")
-    _s4.metric("Alerts", f"{_sm_n_danger}🔴 {_sm_n_warning}🟡",
-               help="See 📡 Signals & Advice for detail.")
+    with _s4:
+        # Alpha vs SPY replaces Alerts in the KPI row (Alerts detail lives
+        # on 📡 Signals & Advice; the sidebar nav badge already flags danger).
+        if _sm_alpha is None:
+            st.metric(
+                "Alpha vs SPY", "—",
+                help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
+                     "adjusted for any buys/sells during that time. For the precise "
+                     "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+            )
+            st.caption("Building history")
+        elif _sm_alpha.get("has_flows"):
+            # Honesty guard: a BUY/SELL within the window inflates the equity-
+            # level return (confirmed live 2026-07-27 — +85% was capital-flow-
+            # inflated). The money-weighted read on 💰 Account is the honest
+            # figure; suppress the number here rather than mislead.
+            st.metric(
+                f"Alpha vs SPY ({_sm_alpha['n_days']}d)", "n/a",
+                "capital moved — see 💰 Capital Trend",
+                delta_color="off",
+                help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
+                     "adjusted for any buys/sells during that time. For the precise "
+                     "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+            )
+        else:
+            st.metric(
+                f"Alpha vs SPY ({_sm_alpha['n_days']}d)",
+                f"{_sm_alpha['pct']:+.1f}%",
+                "beating SPY" if _sm_alpha["pct"] >= 0 else "trailing SPY",
+                delta_color="normal" if _sm_alpha["pct"] >= 0 else "inverse",
+                help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
+                     "adjusted for any buys/sells during that time. For the precise "
+                     "money-weighted return, see 💰 Account → 📈 Capital Trend.",
+            )
+            if len(_sm_alpha["series"]) >= 2:
+                _render_sparkline(
+                    _sm_alpha["series"],
+                    color=_HOME_GAIN if _sm_alpha["pct"] >= 0 else _HOME_LOSS,
+                    key="sm_alpha_spark",
+                )
     _s5.metric("Avg Score", f"{_sm_avg_score:.0f}/100")
     _s6.metric("Diversification", f"{_sm_div_score:.0f}/100" if _sm_div_score is not None else "—",
                _sm_div_label, delta_color="off")
@@ -9656,55 +9694,11 @@ elif page == "🧾 Summary":
     _s8.metric(f"Worst: {_sm_worst['Ticker']}",
                _m(f"${_sm_worst['P&L ($)']:,.0f}"), f"{_sm_worst['P&L (%)']:+.1f}%", delta_color="normal")
 
-    # ── Alpha vs SPY + Risk Posture — Tier 3, second row (approved mockup).
-    # A new row rather than widening the 8-tile row above (unchanged).
-    if _sm_alpha is not None or _sm_posture is not None:
-        st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
-        _t1, _t2 = st.columns(2)
-        with _t1:
-            if _sm_alpha is not None:
-                st.metric(
-                    f"Alpha vs SPY ({_sm_alpha['n_days']}d)",
-                    f"{_sm_alpha['pct']:+.1f}%",
-                    "beating SPY" if _sm_alpha["pct"] >= 0 else "trailing SPY",
-                    delta_color="normal" if _sm_alpha["pct"] >= 0 else "inverse",
-                    help="Approximate — portfolio equity vs SPY over the trailing window, NOT "
-                         "adjusted for any buys/sells during that time. For the precise "
-                         "money-weighted return, see 💰 Account → 📈 Capital Trend.",
-                )
-                if len(_sm_alpha["series"]) >= 2:
-                    _render_sparkline(
-                        _sm_alpha["series"],
-                        color=_HOME_GAIN if _sm_alpha["pct"] >= 0 else _HOME_LOSS,
-                        key="sm_alpha_spark",
-                    )
-                if _sm_alpha.get("has_flows"):
-                    st.caption(
-                        "⚠️ Capital added/removed during this window — not a pure "
-                        "performance read."
-                    )
-            else:
-                st.caption("Alpha vs SPY — building history (needs a few more days of snapshots).")
-        with _t2:
-            if _sm_posture is not None:
-                st.markdown("**🔗 Risk Posture**")
-                # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
-                # which collides with the risk-off de-risk TRIM card's own 🛡️
-                # (2026-08-04 UX audit CA10) — ☀️ here instead, producer untouched.
-                _sm_posture_icon = "☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"]
-                st.markdown(
-                    f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture_icon} {_sm_posture['label']}</div>"
-                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
-                    unsafe_allow_html=True,
-                )
-                if st.button("→ Risk Analysis", key="sm_ptr_riskposture"):
-                    st.session_state["_pending_page"] = "🔗 Risk Analysis"
-                    st.rerun()
-
-    # ── Act Today — reads the same daily-brief data Home computed this
-    # session (published via _home_synth_cache) and calls the identical pure
-    # split_defensive(); never recomputes recommendations independently.
-    st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
+    # ── Act Today — slim pointer. Full card detail lives on 🏠 Home; this
+    # strip signals whether action is needed and links there. Reads the
+    # IDENTICAL split_defensive() call via _home_synth_cache — same source,
+    # same count, never under-reports. See docs/mockups/summary-page-restructure.html.
+    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
     _sm_daily_brief = _sm_bundle.get("_daily_brief")
     if _sm_daily_brief is None:
         st.info("Act Today needs today's Brief to be built first — visit 🏠 Home once this "
@@ -9713,26 +9707,55 @@ elif page == "🧾 Summary":
         _sm_split      = split_defensive(_sm_daily_brief.get("act_today") or [],
                                           _sm_daily_brief.get("review_list") or [])
         _sm_act_bucket = _sm_split["act"]
-        st.subheader(f"🔴 Act Today ({len(_sm_act_bucket)})" if _sm_act_bucket
-                     else "✅ Act Today — you're set")
         if not _sm_act_bucket:
-            st.success("Nothing to act on today.")
+            st.markdown(
+                "<div style='display:flex;align-items:center;gap:10px;background:#13201a;"
+                "border:1px solid #1e3a2a;border-left:3px solid #22c55e;border-radius:9px;"
+                "padding:10px 14px'>"
+                "🟢 <b style='color:#57d98a'>Nothing to act on today</b>"
+                "<span style='color:#8b94a7;font-size:0.9em'> — you're clear</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
         else:
-            # 3-column grid, matching the approved Option-A mockup — reused
-            # across rows when there are more than 3 items (Streamlit lets a
-            # column be written to more than once per rerun).
-            _sm_act_cols = st.columns(3)
-            for _sm_idx, _sm_item in enumerate(_sm_act_bucket):
-                with _sm_act_cols[_sm_idx % 3]:
-                    _render_simple_action_card(_sm_item, urgent=True)
+            # Build a one-line summary from the first item (algorithmic labels
+            # and ticker symbols only — no user-entered free text).
+            _sm_first = _sm_act_bucket[0]
+            _sm_first_ticker = str(
+                _sm_first.get("ticker") or _sm_first.get("event") or ""
+            ).strip()
+            _sm_first_act_raw = _sm_first.get("action", "")
+            if isinstance(_sm_first_act_raw, dict):
+                _sm_first_label = _fmt_action(_sm_first_act_raw)[1]
+            else:
+                _sm_first_label = str(_sm_first_act_raw).upper()
+            _sm_act_summary = (
+                f"{_sm_first_label} {_sm_first_ticker}".strip()
+                if _sm_first_ticker else _sm_first_label
+            )
+            if len(_sm_act_bucket) > 1:
+                _sm_act_summary += f" + {len(_sm_act_bucket) - 1} more"
+            st.markdown(
+                f"<div style='display:flex;align-items:center;gap:10px;background:#1e1416;"
+                f"border:1px solid #3a2226;border-left:3px solid #ef4444;border-radius:9px;"
+                f"padding:10px 14px'>"
+                f"🔴 <b style='color:#fca5a5'>Act Today ({len(_sm_act_bucket)})</b>"
+                f"&nbsp; {_sm_act_summary}"
+                f"<span style='color:#8b94a7;font-size:0.9em'> — full detail on Home</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("→ Home", key="sm_act_home_btn"):
+                st.session_state["_pending_page"] = "🏠 Home"
+                st.rerun()
 
-    # ── 🧭 Elsewhere in DRISHTA — bounded pointer section (plan:
-    # docs/plans/summary-page-pointer-cards.md). Card #1 (Risk Posture)
-    # already lives in the Tier-3 row above; this holds the remaining cards
-    # as they ship. Read-only pointers only — never a second independent
-    # computation of anything another page already owns.
+    # ── 🧭 Elsewhere in DRISHTA — 2×2 pointer grid (plan:
+    # docs/plans/summary-page-pointer-cards.md). Four cards: Engine Track
+    # Record (hero, top-left), Thesis Review (top-right), Catalyst Watch
+    # (bottom-left), Risk Posture (bottom-right). Read-only pointers only —
+    # never a second independent computation of anything another page owns.
     #
-    # Card #2 — Thesis Review status. Reuses the SAME "most recent review
+    # Thesis Review status. Reuses the SAME "most recent review
     # per ticker" logic + WEAKENING/BROKEN predicate as the AI Insights
     # page's own "🩺 Positions" header count and the Act Today "Thesis
     # broken" button's `_broken_thesis_tickers` set — never a second
@@ -9906,50 +9929,12 @@ elif page == "🧾 Summary":
 
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
     st.markdown("**🧭 Elsewhere in DRISHTA**")
-    _sm_ptr_cols = st.columns(2)
-    with _sm_ptr_cols[0]:
-        if _sm_n_reviewed > 0:
-            st.markdown("**🩺 Thesis Review**")
-            if _sm_n_broken or _sm_n_weakening:
-                _sm_tr_parts = []
-                if _sm_n_broken:
-                    _sm_tr_parts.append(f"{_sm_n_broken} Broken")
-                if _sm_n_weakening:
-                    _sm_tr_parts.append(f"{_sm_n_weakening} Weakening")
-                _sm_tr_line  = ", ".join(_sm_tr_parts)
-                _sm_tr_color = "#ef4444" if _sm_n_broken else "#f59e0b"
-            else:
-                _sm_tr_line  = "All Intact"
-                _sm_tr_color = "#22c55e"
-            st.markdown(
-                f"<div style='font-size:1.1em;font-weight:600;color:{_sm_tr_color}'>{_sm_tr_line}</div>"
-                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>of {_sm_n_reviewed} reviewed</div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("→ AI Insights", key="sm_ptr_thesis"):
-                st.session_state["_pending_page"] = "🧠 AI Insights"
-                st.rerun()
-    with _sm_ptr_cols[1]:
-        st.markdown("**🔔 Catalyst Watch**")
-        if _sm_n_earnings_soon:
-            _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
-            _sm_cw_color = "#f59e0b"
-        else:
-            _sm_cw_line  = "None soon"
-            _sm_cw_color = "#22c55e"
-        st.markdown(
-            f"<div style='font-size:1.1em;font-weight:600;color:{_sm_cw_color}'>{_sm_cw_line}</div>"
-            f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
-            st.session_state["_pending_page"] = "🔔 Catalyst Watch"
-            st.rerun()
-
-    # ── 🎯 Engine Track Record card ───────────────────────────────────────────
-    # Second row of pointer-cards; left column only (right stays empty for now).
-    _sm_ptr_cols2 = st.columns(2)
-    with _sm_ptr_cols2[0]:
+    # ── Row 1: Engine Track Record (hero, top-left) · Thesis Review (top-right)
+    _sm_ptr_row1 = st.columns(2)
+    with _sm_ptr_row1[0]:
+        # 🎯 Engine Track Record — hero card, top-left. Same data as
+        # 📜 Recommendations History "All time" New Position row; cached for
+        # the day so re-renders don't re-hit the DB.
         _etr_band    = _etr_h["band"]
         _etr_alpha   = _etr_h["acted_alpha"]
         _etr_m_alpha = _etr_h["missed_alpha"]
@@ -10026,6 +10011,79 @@ elif page == "🧾 Summary":
             )
         if st.button("→ Recommendations History", key="sm_ptr_etr"):
             st.session_state["_pending_page"] = "📜 Recommendations History"
+            st.rerun()
+    with _sm_ptr_row1[1]:
+        # 🩺 Thesis Review — top-right. Never a second independent verdict;
+        # reads the same "most recent review per ticker" the AI Insights page
+        # uses. Shows a "No reviews yet" note when _sm_n_reviewed == 0 so this
+        # cell is never empty in the 2×2 grid.
+        st.markdown("**🩺 Thesis Review**")
+        if _sm_n_reviewed > 0:
+            if _sm_n_broken or _sm_n_weakening:
+                _sm_tr_parts = []
+                if _sm_n_broken:
+                    _sm_tr_parts.append(f"{_sm_n_broken} Broken")
+                if _sm_n_weakening:
+                    _sm_tr_parts.append(f"{_sm_n_weakening} Weakening")
+                _sm_tr_line  = ", ".join(_sm_tr_parts)
+                _sm_tr_color = "#ef4444" if _sm_n_broken else "#f59e0b"
+            else:
+                _sm_tr_line  = "All Intact"
+                _sm_tr_color = "#22c55e"
+            st.markdown(
+                f"<div style='font-size:1.1em;font-weight:600;color:{_sm_tr_color}'>{_sm_tr_line}</div>"
+                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>of {_sm_n_reviewed} reviewed</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("No held position with a saved review yet.")
+        if st.button("→ AI Insights", key="sm_ptr_thesis"):
+            st.session_state["_pending_page"] = "🧠 AI Insights"
+            st.rerun()
+    # ── Row 2: Catalyst Watch (bottom-left) · Risk Posture (bottom-right)
+    _sm_ptr_row2 = st.columns(2)
+    with _sm_ptr_row2[0]:
+        # 🔔 Catalyst Watch — bottom-left. Reads the same cached earnings
+        # dates as the Catalyst Watch page — first-cached wins; no second fetch.
+        st.markdown("**🔔 Catalyst Watch**")
+        if _sm_n_earnings_soon:
+            _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
+            _sm_cw_color = "#f59e0b"
+        else:
+            _sm_cw_line  = "None soon"
+            _sm_cw_color = "#22c55e"
+        st.markdown(
+            f"<div style='font-size:1.1em;font-weight:600;color:{_sm_cw_color}'>{_sm_cw_line}</div>"
+            f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
+            st.session_state["_pending_page"] = "🔔 Catalyst Watch"
+            st.rerun()
+    with _sm_ptr_row2[1]:
+        # 🔗 Risk Posture — bottom-right (moved from the old Tier-3 row so no
+        # cell is empty and the grid is complete). Same _sm_posture computed
+        # above; never a second independent verdict.
+        st.markdown("**🔗 Risk Posture**")
+        if _sm_posture is not None:
+            # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
+            # which collides with the risk-off de-risk TRIM card's own 🛡️
+            # (2026-08-04 UX audit CA10) — ☀️ here instead, producer untouched.
+            _sm_posture_icon = "☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"]
+            st.markdown(
+                f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture_icon} {_sm_posture['label']}</div>"
+                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='color:#9ca3af;font-size:0.95em'>—</div>"
+                "<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
+                "Visit 🔗 Risk Analysis to compute.</div>",
+                unsafe_allow_html=True,
+            )
+        if st.button("→ Risk Analysis", key="sm_ptr_riskposture"):
+            st.session_state["_pending_page"] = "🔗 Risk Analysis"
             st.rerun()
 
     # ── Holdings — identical table to Home's (shared function, same output).
@@ -27368,7 +27426,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
             st.markdown(
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
-- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions: an 8-metric KPI row (Portfolio Value, Unrealized P&L, Today's P&L, Alerts, Avg Score, Diversification, Best/Worst position — Portfolio Value also carries a trailing sparkline once a few days of history exist), a second row with **Alpha vs SPY** (an approximate trailing-window read vs SPY — see 💰 Account for the precise money-weighted return; flags "capital added/removed" when a trade during the window means the number isn't a pure performance read) and a **Risk Posture** pointer badge (links to 🔗 Risk Analysis, never a second independent read), a leaner Act Today card list, a **"🧭 Elsewhere in DRISHTA"** section with a **🩺 Thesis Review** pointer (how many held names' thesis review needs attention, linking to 🧠 AI Insights — never a second independent verdict) and a **🔔 Catalyst Watch** pointer (how many holdings report earnings within the week, linking to 🔔 Catalyst Watch), and the full Holdings table. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
+- **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions. **8 KPI tiles** (Portfolio Value, Unrealized P&L, Today's P&L, **Alpha vs SPY**, Avg Score, Diversification, Best/Worst) — Alpha vs SPY sits in tile 4 where Alerts used to be; Alerts detail lives on 📡 Signals & Advice. Alpha shows "n/a" when a trade during the window means the equity-level return is flow-inflated (the precise money-weighted read is on 💰 Account → Capital Trend). A slim **Act Today** strip below the KPI row shows the count + first item and links to 🏠 Home for the full detail — the same `split_defensive()` call as Home, so it can never under-report. A **2×2 pointer grid** ("🧭 Elsewhere in DRISHTA") shows four cards: **🎯 Engine Track Record** (hero — top-left: whether acting on the app's new-position calls has beaten SPY, same data as 📜 Recommendations History "All time" row, cached for the day), **🩺 Thesis Review** (top-right: how many held names' review needs attention, never a second verdict), **🔔 Catalyst Watch** (bottom-left: holdings reporting earnings within the week), and **🔗 Risk Posture** (bottom-right: the market-risk posture dial, never a second independent verdict). Full Holdings table at the bottom. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
 - **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
