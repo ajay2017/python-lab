@@ -64,8 +64,37 @@ The card shows:
 - **Link-through:** *"See the full breakdown → 📜 Recommendations History"* (and optionally → Predictive Analytics Score Calibration).
 - **Empty state:** below min sample → *"Building the App's track record — N more mature calls needed."*
 
-### Phase 2 (deferred, flagged as NEW measurement — not MVP)
-**Protective-side track record:** "Did WATCH/TRIM/EXIT calls avoid further drawdown?" Uses the cron-complete `exit_signals` log (better coverage than BUY-side), but needs a **new outcome-rollup** (drawdown-avoided vs a hold counterfactual). New measurement ⇒ its own design pass + Opus review. Named here so it isn't lost; do not build in MVP.
+### Phase 2 — DESIGNED 2026-08-05 (planner/Opus design pass), awaiting mock approval before code
+
+**Design verdict: PROCEED, no blocker.** Full spec below; design pass ID: `docs/plans/next-evolution-2026-08-05.md` follow-on. The originally-worried-about "acted counterfactual" trade-log join is NOT needed for the primary metric — deferred to an optional Phase 2b instead.
+
+**Core formula (sign-flipped mirror of BUY-side alpha):**
+```
+protect_alpha_pct = spy_return_pct(signal_date → today) − name_return_pct(signal_date → today)
+```
+Anchor = `exit_signals.signal_date` / `price_at_signal` (already stored — no new fetch). **Positive** = the flagged name underperformed SPY after the warning ⇒ the caution was right. Reuses `_spy_return_pct()` verbatim. Measures "when the App warned, was it right?" — independent of whether the user acted, so it inherits `exit_signals`' **complete cron coverage** (unlike BUY-side's visit-dependent `recommendations` log).
+
+**Critical dedup invariant (do not skip):** cron writes one row per day a name stays flagged — a 15-day EXIT episode is 15 rows. Averaging per-row double-counts and biases toward whichever name stayed flagged longest. **Must collapse to one row per distinct ticker** (earliest mature signal, highest-severity type reached) before averaging — the exact class of inflation `distinct_missed()` already guards against on the BUY side.
+
+**Decisions LOCKED 2026-08-05 (with user):**
+1. **Signal scope:** ✅ **EXIT + TRIM only.** WATCH excluded (awareness, not a call to act — mirrors excluding `buy_candidate`). RISK_OFF excluded (portfolio-wide macro call, not per-ticker — grading it per-ticker-vs-SPY would conflate two different objects).
+2. **Window:** ✅ **Open-horizon** (signal date → today), maturity floor = reuse `REC_SCORE_MIN_DAYS` (=5) — symmetric with BUY-side, no new OHLC data needed.
+3. **Sample-gate constants:** ✅ `PROTECT_TRACK_MIN_CALLS = 8`, `PROTECT_TRACK_FIRM_CALLS = 15` — same values as `ENGINE_TRACK_*` for cognitive consistency. **Flag:** distinct flagged tickers may accrue slower than buy calls; the card may sit in "Building" longer than the BUY facet did.
+4. **Acted-dodge secondary line:** ✅ **Deferred to Phase 2b.** Ship the validation headline alone. (Would need an `exit_signals`→SELL join and risks reading as a duplicate of Behavioral Fingerprint's "Exit Signal Response," which measures a DIFFERENT dimension — your behavior, not the engine's call accuracy.)
+
+**Placement:** fold into the EXISTING 🎯 Engine Track Record card as a second facet (⚔️ Offense = BUY alpha, already shipped; 🛡️ Defense = protective alpha, new) — NOT a new sibling card. Passes the "does this decrease decision load?" test; avoids competing "can I trust the engine?" surfaces. Each facet independently sample-gated. **No link-through for the Defense facet in v1** — no existing detail page to send it to (must NOT point to Behavioral Fingerprint; different dimension, would mislead).
+
+**Honest-render rules (carried forward from F-229's 3 review rounds):**
+- Never dress an absent/insufficient-data result as a negative — `exit_signals.load_exit_signals()` returns an **empty DataFrame, not `None`**, on DB failure, so the card cannot distinguish "offline" from "no deterioration yet." Both must render as neutral "Building" — caption must NEVER claim "no deterioration in your portfolio" (would be a false all-clear during an outage).
+- Flat/negative real result → honest amber ("flagged names have mostly recovered — protective calls ran early"), never dressed green, never suppressed.
+- The sample count driving the band must describe the SAME distinct-ticker population the alpha is averaged over (the exact F-229 Phase-1 bug — do not repeat it).
+- Methodology caption must frame this as "what flagged names did *after* the warning" (forward calibration) — not a claim the engine predicted the initial weakness (selection-bias honesty).
+
+**New pure-logic module (not `recommendations_history.py` — different substrate/semantics):** `stock_analyzer/protective_track_record.py` — `compute_protective_outcomes()`, `collapse_by_ticker()` (the dedup step), `protective_headline()` (mirrors `engine_trust_headline()`).
+
+**Coordination:** does NOT collide with Behavioral Fingerprint's "Exit Signal Response" (`behavioral_fingerprint.py:247`) — that measures the RESPONSE dimension (did you act, how fast); this measures the ACCURACY dimension (was the call right). Dedupe by dimension per `feedback_single_surface_priority`, not by ticker.
+
+**Mock reviewed and APPROVED 2026-08-05** — `docs/mockups/engine-track-record-phase2.html` (one round of correction: the Recommendations History link-through was mispositioned under Defense in the first draft, moved to Offense; Defense's "no link" state given precise placeholder copy distinguishing the Phase 2b acted-dodge metric from a hypothetical — never actually committed — Defense detail page). Design + visual are both locked. **Next step: build.**
 
 ---
 

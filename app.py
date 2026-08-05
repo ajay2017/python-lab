@@ -9851,9 +9851,11 @@ elif page == "🧾 Summary":
     # visit needed).
     _etr_today_d = _today_et()
     from stock_analyzer.constants import (
-        ENGINE_TRACK_MIN_CALLS  as _etr_min_calls,
-        ENGINE_TRACK_FIRM_CALLS as _etr_firm_calls,
-        REC_SCORE_MIN_DAYS      as _etr_min_days,
+        ENGINE_TRACK_MIN_CALLS   as _etr_min_calls,
+        ENGINE_TRACK_FIRM_CALLS  as _etr_firm_calls,
+        REC_SCORE_MIN_DAYS       as _etr_min_days,
+        PROTECT_TRACK_MIN_CALLS  as _etr_prot_min_calls,
+        PROTECT_TRACK_FIRM_CALLS as _etr_prot_firm_calls,
     )
     _etr_cache = st.session_state.get("_etr_cache", {})
     if _etr_cache.get("date") != _etr_today_d.isoformat():
@@ -9935,12 +9937,83 @@ elif page == "🧾 Summary":
                 )
         except Exception:
             pass   # DB offline or error — card falls back to building state
+
+        # ── Card data: 🛡️ Defense facet (protective EXIT/TRIM track record) ──
+        # Scoped to EXIT/TRIM only — WATCH/RISK_OFF are OUT OF SCOPE (locked
+        # decision, docs/plans/engine-track-record-meter.md Phase 2). Reuses
+        # _etr_spy (already built above) and reuses any ticker price already
+        # fetched into the Offense facet's shared _rh_prices_cache dict — only
+        # fetches the remainder. Stored under its OWN dedicated session key
+        # (_protect_prices_cache_{today}) — never written into _rh_prices_cache
+        # itself (different table / ticker-universe from the recs price cache).
+        # load_exit_signals() returns an EMPTY DataFrame (never None) on DB
+        # failure, so an offline DB and "no deterioration yet" are
+        # indistinguishable here by design — both degrade to the SAME
+        # "building" headline rather than a false all-clear or a false alarm.
+        _etr_prot_headline_d: dict = {
+            "protect_alpha": None, "n_mature": 0, "since_date": None, "band": "building",
+        }
+        try:
+            from stock_analyzer.protective_track_record import (
+                compute_protective_outcomes as _etr_prot_compute,
+                collapse_by_ticker          as _etr_prot_collapse,
+                protective_headline         as _etr_prot_headline_fn,
+            )
+            _etr_prot_signals_df = db.load_exit_signals()
+            _etr_prot_scoped = (
+                _etr_prot_signals_df[
+                    _etr_prot_signals_df["signal_type"].isin(["EXIT", "TRIM"])
+                ]
+                if not _etr_prot_signals_df.empty else _etr_prot_signals_df
+            )
+            if not _etr_prot_scoped.empty:
+                _etr_prot_tickers = sorted({
+                    str(t).strip().upper()
+                    for t in _etr_prot_scoped["ticker"].dropna().tolist()
+                    if str(t).strip()
+                })
+                # Reuse prices already fetched moments earlier for the Offense
+                # facet's shared cache; only fetch tickers not covered there.
+                _etr_prot_known = st.session_state.get(_etr_ph_key, {})
+                _etr_prot_missing = [
+                    t for t in _etr_prot_tickers if t not in _etr_prot_known
+                ]
+                _etr_prot_fresh: dict = {}
+                if _etr_prot_missing:
+                    try:
+                        _px2 = fetch_live_prices(_etr_prot_missing)
+                        _etr_prot_fresh = {
+                            t: float(d.get("price", 0))
+                            for t, d in (_px2 or {}).items()
+                            if d and d.get("price")
+                        }
+                    except Exception:
+                        _etr_prot_fresh = {}
+                _etr_prot_prices = {
+                    t: _etr_prot_known[t] for t in _etr_prot_tickers if t in _etr_prot_known
+                }
+                _etr_prot_prices.update(_etr_prot_fresh)
+                st.session_state[f"_protect_prices_cache_{_etr_today_d.isoformat()}"] = _etr_prot_prices
+
+                _etr_prot_enriched = _etr_prot_compute(
+                    _etr_prot_scoped, _etr_prot_prices, today=_etr_today_d,
+                    spy_close_by_date=_etr_spy, min_days=_etr_min_days,
+                )
+                _etr_prot_collapsed = _etr_prot_collapse(_etr_prot_enriched)
+                _etr_prot_headline_d = _etr_prot_headline_fn(
+                    _etr_prot_collapsed, _etr_prot_min_calls, _etr_prot_firm_calls,
+                )
+        except Exception:
+            pass   # DB offline or error — degrades to the same "building" state
+
         st.session_state["_etr_cache"] = {
-            "date":     _etr_today_d.isoformat(),
-            "headline": _etr_headline_d,
+            "date":                _etr_today_d.isoformat(),
+            "headline":            _etr_headline_d,
+            "protective_headline": _etr_prot_headline_d,
         }
 
-    _etr_h = st.session_state["_etr_cache"]["headline"]
+    _etr_h      = st.session_state["_etr_cache"]["headline"]
+    _etr_prot_h = st.session_state["_etr_cache"]["protective_headline"]
 
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
     st.markdown("**🧭 Elsewhere in DRISHTA**")
@@ -10075,6 +10148,121 @@ elif page == "🧾 Summary":
             ):
                 st.session_state["_pending_page"] = "📜 Recommendations History"
                 st.rerun()
+
+            # ── 🛡️ Defense facet — protective (EXIT/TRIM) call track record.
+            # Folded into the SAME hero card as a second facet, per the locked
+            # decision (docs/plans/engine-track-record-meter.md Phase 2) — not
+            # a new sibling card. No link-through here: no detail page exists
+            # for this facet yet (unlike Offense's Recommendations History).
+            st.markdown(
+                "<div style='border-top:1px dashed #2a3140;margin:13px 0 12px'></div>",
+                unsafe_allow_html=True,
+            )
+            _etr_prot_band  = _etr_prot_h["band"]
+            _etr_prot_alpha = _etr_prot_h["protect_alpha"]
+            _etr_prot_n     = _etr_prot_h["n_mature"]
+            _etr_prot_since = _etr_prot_h["since_date"]
+
+            # Badge colors reuse the SAME green/amber/grey tokens as Offense —
+            # only the label text differs, per the "distinct badge vocabulary,
+            # same visual language" rule (VALIDATED/RAN EARLY vs WORKING/LAGGING).
+            _etr_prot_color = "#6b7280"
+            if _etr_prot_band == "building" or _etr_prot_alpha is None:
+                _etr_prot_badge        = "BUILDING" if _etr_prot_band == "building" else "NO DATA"
+                _etr_prot_badge_color  = "#8b94a7"
+                _etr_prot_badge_bg     = "#232a38"
+                _etr_prot_badge_border = "#2a3140"
+            elif _etr_prot_band == "firm" and _etr_prot_alpha > 0:
+                _etr_prot_badge        = "VALIDATED"
+                _etr_prot_color        = "#22c55e"
+                _etr_prot_badge_color  = "#57d98a"
+                _etr_prot_badge_bg     = "rgba(34,197,94,.14)"
+                _etr_prot_badge_border = "rgba(34,197,94,.35)"
+            elif _etr_prot_band == "firm":
+                _etr_prot_badge        = "RAN EARLY"
+                _etr_prot_color        = "#f59e0b"
+                _etr_prot_badge_color  = "#f0c24b"
+                _etr_prot_badge_bg     = "rgba(240,180,41,.13)"
+                _etr_prot_badge_border = "rgba(240,180,41,.3)"
+            else:   # early, alpha is not None
+                _etr_prot_badge        = "EARLY READ"
+                _etr_prot_color        = "#f59e0b"
+                _etr_prot_badge_color  = "#f0c24b"
+                _etr_prot_badge_bg     = "rgba(240,180,41,.13)"
+                _etr_prot_badge_border = "rgba(240,180,41,.3)"
+
+            st.markdown(
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:center;margin-bottom:6px'>"
+                f"<span style='font-size:0.78em;font-weight:700;letter-spacing:.03em;"
+                f"text-transform:uppercase;color:#8b94a7'>🛡️ Defense — protective calls</span>"
+                f"<span style='font-size:0.7em;font-weight:600;padding:2px 8px;"
+                f"border-radius:12px;background:{_etr_prot_badge_bg};"
+                f"color:{_etr_prot_badge_color};border:1px solid {_etr_prot_badge_border}'>"
+                f"{_etr_prot_badge}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+            if _etr_prot_band == "building":
+                _etr_prot_need = max(0, _etr_prot_min_calls - _etr_prot_n)
+                st.markdown(
+                    f"<div style='color:#9ca3af;font-size:0.95em'>Building protective track record</div>"
+                    f"<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
+                    f"The App needs {_etr_prot_need} more matured EXIT/TRIM call(s) before it "
+                    f"can report whether its warnings have been right.</div>",
+                    unsafe_allow_html=True,
+                )
+            elif _etr_prot_alpha is None:
+                # Sample floor cleared but nothing priced yet — neutral, not a
+                # verdict (mirrors Offense's own NO DATA edge case).
+                st.markdown(
+                    "<div style='color:#9ca3af;font-size:0.95em'>Not enough priced outcomes yet.</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                if _etr_prot_band == "firm" and _etr_prot_alpha > 0:
+                    _etr_prot_verdict = (
+                        "Flagged names lagged the S&P after the warning — the caution was right."
+                    )
+                elif _etr_prot_band == "firm":
+                    _etr_prot_verdict = (
+                        "Flagged names have mostly recovered — protective calls ran early vs the S&P."
+                    )
+                else:   # early
+                    _etr_prot_verdict = (
+                        "Directionally right but a thin sample — treat as a read."
+                        if _etr_prot_alpha > 0 else
+                        "Directionally early but a thin sample — treat as a read."
+                    )
+                _etr_prot_since_str = (
+                    _etr_prot_since.strftime("%b %d, %Y") if _etr_prot_since else ""
+                )
+                _etr_prot_caption = (
+                    f"{_etr_prot_n} flagged name(s)"
+                    + (f" since {_etr_prot_since_str}" if _etr_prot_since_str else "")
+                    + "."
+                )
+                st.markdown(
+                    f"<div><span style='font-size:1.3em;font-weight:700;color:{_etr_prot_color}'>"
+                    f"{_etr_prot_alpha:+.1f}"
+                    f"<span style='font-size:0.6em;color:#8b94a7'> pp vs S&P</span>"
+                    f"</span></div>"
+                    f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
+                    f"{_etr_prot_verdict}</div>"
+                    f"<div style='color:#6b7280;font-size:0.78em;margin-top:5px;"
+                    f"font-style:italic'>{_etr_prot_caption}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ALWAYS — methodology caption, regardless of band: this is a
+            # forward-calibration measure (what happened AFTER the warning),
+            # never a claim the App predicted the initial weakness.
+            st.markdown(
+                "<div style='color:#5f6779;font-size:0.72em;font-style:italic;margin-top:4px'>"
+                "Measures what flagged names did AFTER the warning, not whether the App "
+                "predicted the initial weakness.</div>",
+                unsafe_allow_html=True,
+            )
     with _sm_ptr_row1[1]:
         # 🩺 Thesis Review — top-right. Never a second independent verdict;
         # reads the same "most recent review per ticker" the AI Insights page

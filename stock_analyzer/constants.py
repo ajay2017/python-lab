@@ -1027,6 +1027,15 @@ MONTHLY_REPORT_MIN_GRADED = 5
 ENGINE_TRACK_MIN_CALLS = 8    # below → "building" band (no verdict shown)
 ENGINE_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" band
 
+# ── Engine Track Record — 🛡️ Defense facet (protective EXIT/TRIM calls) ──────
+# DISPLAY-ONLY band thresholds for the Defense facet of the same pointer card,
+# mirroring ENGINE_TRACK_MIN_CALLS/ENGINE_TRACK_FIRM_CALLS above but scoped to
+# distinct flagged tickers (EXIT/TRIM) instead of acted BUY calls. These are
+# NOT investment decision gates — they never feed into any alert, the exit
+# advisor, or the composite score. Safe to tune from observation.
+PROTECT_TRACK_MIN_CALLS = 8    # below → "building" band (no verdict shown)
+PROTECT_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" band
+
 # ── Predictive Analytics — Signal Calibration ─────────────────────────────────
 # Minimum number of mature outcomes in a composite-score band before the band
 # is shown in the Signal Calibration chart. Below this, the band is labelled
