@@ -17,10 +17,24 @@ Rules (each an AST signature, low false-positive by design):
       "couldn't compute" into "checked, no risk." The single most-repeated
       finding in the 2026-08-04 audit (hit by 3 of 9 passes). Read with an
       explicit `is None` check (or the shared get_or_offline helper) instead.
+      NOTE: deliberately does NOT flag the two-arg default form
+      `<something>.get(key, [])` — unlike `or []`, dict.get()'s default only
+      fires when the key is genuinely absent, not when it's present and set
+      to `None`; since this project's producers set a failed cache key to
+      `None` (never omit it), the two-arg form actually preserves the offline
+      signal correctly. A 2026-08-05 audit pass proposed widening this rule to
+      catch the two-arg form too and was reverted after breaking
+      `test_ignores_safe_reads` — that test's `# default arg is fine` comment
+      already captured this exact distinction; investigate a prior test
+      before broadening a rule's AST match, not just the docstring.
   UNSAFE_HTML_DYNAMIC        — `unsafe_allow_html=True` on a call whose HTML arg
-      is dynamic (f-string / concat / name), i.e. a possible XSS injection. This
-      project has paid the XSS class down 7 times on different surfaces. Escape
-      interpolated values (safe_html/html.escape) before rendering.
+      is dynamic: an f-string / concatenation / bare variable / `.format()`
+      or `.join()` call / a call to a locally-defined helper function (the
+      last one was a detector blind spot found by the 2026-08-05 audit — a
+      helper can build interpolated markup just as easily as an inline
+      f-string). This project has paid the XSS class down 7+ times on
+      different surfaces. Escape interpolated values (safe_html/html.escape)
+      before rendering.
   NAIVE_UTCNOW               — `datetime.utcnow()` (naive AND deprecated); the
       project convention is NY-tz-aware time (pytz / America/New_York).
   NAIVE_DATE_TODAY           — bare `date.today()` / `datetime.today()`; off-by-
@@ -87,6 +101,12 @@ def _is_dynamic_html(node: ast.AST) -> bool:
             "format",
             "join",
         }:
+            return True
+        # A call to a locally-defined helper (e.g. `_row(t)`) that builds and
+        # returns markup internally is just as dynamic as an inline f-string —
+        # the interpolation happens one frame away, not absent (2026-08-05
+        # audit: app.py's _tr_evidence_row() went uncaught this way).
+        if isinstance(node.func, ast.Name):
             return True
     return False
 

@@ -388,6 +388,10 @@
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_header, unsafe_allow_html=True)": 1,
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_ph_eff_html, unsafe_allow_html=True)": 1,
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_ph_gauge, unsafe_allow_html=True)": 1,
+      "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_tr_evidence_row(_t), unsafe_allow_html=True)": 6,
+      "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_tr_evidence_row(_t, show_hold=True), unsafe_allow_html=True)": 2,
+      "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_tr_evidence_row(_t, show_signal=True), unsafe_allow_html=True)": 2,
+      "UNSAFE_HTML_DYNAMIC\u001fst.markdown(_tr_evidence_row(_t, show_vs_spy=True, show_hold=True), unsafe_allow_html=True)": 2,
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(f\"- {_s} &nbsp; *(rate sensitivity {rs:+.2f})*\", unsafe_allow_html=True)": 2,
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(f\"<div style='font-size:0.82em;line-height:1.6'>{_leg}</div>\", unsafe_allow_html=True)": 1,
       "UNSAFE_HTML_DYNAMIC\u001fst.markdown(f\"<small style='color:#ff8800'>\u25bc **{k}**: {v}</small>\", unsafe_allow_html=True)": 1
