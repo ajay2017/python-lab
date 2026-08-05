@@ -9799,6 +9799,111 @@ elif page == "🧾 Summary":
     except Exception:
         _sm_n_earnings_soon = 0
 
+    # ── Card data: 🎯 Engine Track Record ─────────────────────────────────────
+    # Loads all-time new_pick recs, runs the same match → compute_outcomes →
+    # engine_trust_headline chain as the 📜 Recommendations History page, and
+    # caches the result for the day so re-renders (widget changes elsewhere on
+    # this page) don't re-hit the DB.
+    # Price parity: the card fetches live prices for ALL new_pick rec tickers
+    # and stores them under the shared key _rh_prices_cache_2020-01-01_{today},
+    # which is the SAME key the 📜 Recommendations History page uses for "All
+    # time".  When either surface runs first it populates the cache; the other
+    # reuses it — guaranteeing card α = Rec History "All time" New Position row
+    # on every cold session (direct-to-Summary navigation, no prior Rec History
+    # visit needed).
+    _etr_today_d = _today_et()
+    from stock_analyzer.constants import (
+        ENGINE_TRACK_MIN_CALLS  as _etr_min_calls,
+        ENGINE_TRACK_FIRM_CALLS as _etr_firm_calls,
+        REC_SCORE_MIN_DAYS      as _etr_min_days,
+    )
+    _etr_cache = st.session_state.get("_etr_cache", {})
+    if _etr_cache.get("date") != _etr_today_d.isoformat():
+        from stock_analyzer.recommendations_history import (
+            match_recs_to_trades  as _etr_match,
+            compute_outcomes      as _etr_compute_o,
+            engine_trust_headline as _etr_headline_fn,
+        )
+        _etr_start_d = date(2020, 1, 1)
+        _etr_ph_key  = f"_rh_prices_cache_{_etr_start_d.isoformat()}_{_etr_today_d.isoformat()}"
+        # Build SPY close-by-date series (same approach as Rec History page).
+        _etr_spy: dict = {}
+        try:
+            _etr_spy_hist = _cached_spy("6mo")
+            if (_etr_spy_hist is not None and not _etr_spy_hist.empty
+                    and "Close" in _etr_spy_hist.columns):
+                for _ei, _er in _etr_spy_hist.iterrows():
+                    _ed = _ei.date() if hasattr(_ei, "date") else None
+                    try:
+                        _ec = float(_er["Close"])
+                    except (TypeError, ValueError):
+                        _ec = None
+                    if _ed is not None and _ec and _ec > 0:
+                        _etr_spy[_ed] = _ec
+        except Exception:
+            _etr_spy = {}
+        # Load all-time recs (all rec_types), fetch prices for the full ticker
+        # universe (shared cache), then enrich + headline over new_picks only.
+        _etr_headline_d: dict = {
+            "acted_alpha": None, "missed_alpha": None,
+            "n_acted_mature": 0, "since_date": None, "band": "building",
+        }
+        try:
+            _etr_recs_df = db.load_recommendations(
+                start_date=_etr_start_d, end_date=_etr_today_d,
+            )
+            _etr_np_df = (
+                _etr_recs_df[_etr_recs_df["rec_type"] == "new_pick"]
+                if not _etr_recs_df.empty else _etr_recs_df
+            )
+            # Fetch live prices for the FULL rec-ticker universe (ALL rec_types),
+            # not just new_pick.  This dict is written under the SHARED cache key
+            # Rec History also reads (first-writer-wins), so it must be a proper
+            # superset — a new_pick-only subset would poison Rec History's
+            # add_winner / buy_candidate rows on a Summary-first visit.  The
+            # headline itself is still computed over new_picks only (_etr_np_df).
+            if st.session_state.get(_etr_ph_key) is None:
+                _etr_all_tickers = sorted({
+                    str(t).strip().upper()
+                    for t in _etr_recs_df["ticker"].dropna().tolist()
+                    if str(t).strip()
+                }) if not _etr_recs_df.empty else []
+                _etr_prices_fresh: dict = {}
+                if _etr_all_tickers:
+                    try:
+                        _px = fetch_live_prices(_etr_all_tickers)
+                        _etr_prices_fresh = {
+                            t: float(d.get("price", 0))
+                            for t, d in (_px or {}).items()
+                            if d and d.get("price")
+                        }
+                    except Exception:
+                        _etr_prices_fresh = {}
+                st.session_state[_etr_ph_key] = _etr_prices_fresh
+            _etr_prices = st.session_state[_etr_ph_key]
+            # NB: trades_df is a DataFrame — `x or fallback` triggers the
+            # ambiguous-truth-value ValueError, so branch on `is None` explicitly.
+            _etr_trades = st.session_state.get("trades_df")
+            if _etr_trades is None:
+                _etr_trades = db.load_trades()
+            if not _etr_np_df.empty:
+                _etr_matched  = _etr_match(_etr_np_df, _etr_trades)
+                _etr_enriched = _etr_compute_o(
+                    _etr_matched, _etr_prices, today=_etr_today_d,
+                    spy_close_by_date=_etr_spy, min_days=_etr_min_days,
+                )
+                _etr_headline_d = _etr_headline_fn(
+                    _etr_enriched, _etr_min_calls, _etr_firm_calls,
+                )
+        except Exception:
+            pass   # DB offline or error — card falls back to building state
+        st.session_state["_etr_cache"] = {
+            "date":     _etr_today_d.isoformat(),
+            "headline": _etr_headline_d,
+        }
+
+    _etr_h = st.session_state["_etr_cache"]["headline"]
+
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
     st.markdown("**🧭 Elsewhere in DRISHTA**")
     _sm_ptr_cols = st.columns(2)
@@ -9839,6 +9944,88 @@ elif page == "🧾 Summary":
         )
         if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
             st.session_state["_pending_page"] = "🔔 Catalyst Watch"
+            st.rerun()
+
+    # ── 🎯 Engine Track Record card ───────────────────────────────────────────
+    # Second row of pointer-cards; left column only (right stays empty for now).
+    _sm_ptr_cols2 = st.columns(2)
+    with _sm_ptr_cols2[0]:
+        _etr_band    = _etr_h["band"]
+        _etr_alpha   = _etr_h["acted_alpha"]
+        _etr_m_alpha = _etr_h["missed_alpha"]
+        _etr_n       = _etr_h["n_acted_mature"]
+        _etr_since   = _etr_h["since_date"]
+        st.markdown("**🎯 Engine Track Record**")
+        if _etr_band == "building":
+            _etr_need = max(0, _etr_min_calls - _etr_n)
+            st.markdown(
+                f"<div style='color:#9ca3af;font-size:0.95em'>Building history</div>"
+                f"<div style='color:#6b7280;font-size:0.82em;margin-top:3px'>"
+                f"The App needs {_etr_need} more matured BUY call(s) before it can "
+                f"report a track record.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            # Alpha unknown — show neutral grey rather than asserting a
+            # performance verdict.  LAGGING would falsely claim underperformance
+            # when the truth is simply "not enough priced outcomes yet."
+            if _etr_alpha is None:
+                _etr_badge   = "NO DATA"
+                _etr_color   = "#6b7280"
+                _etr_verdict = (
+                    "Not enough priced data yet — outcomes will appear as calls mature."
+                )
+            elif _etr_band == "firm" and _etr_alpha > 0:
+                _etr_badge   = "WORKING"
+                _etr_color   = "#22c55e"
+                _etr_verdict = (
+                    "Acting on the App's new-position calls has beaten the benchmark."
+                )
+            elif _etr_band == "firm":
+                _etr_badge   = "LAGGING"
+                _etr_color   = "#f59e0b"
+                _etr_verdict = (
+                    "Acting on the App's new-position calls hasn't beaten the "
+                    "benchmark over this sample."
+                )
+            else:   # early, alpha is not None
+                _etr_badge = "EARLY READ"
+                _etr_color = "#f59e0b"
+                _etr_verdict = (
+                    "Directionally positive but a thin sample — treat as a read."
+                    if _etr_alpha > 0
+                    else "Thin sample — more matured calls needed before a firm read."
+                )
+            _etr_hero = f"{_etr_alpha:+.1f} pp vs S&P" if _etr_alpha is not None else "—"
+            _etr_contrast_html = (
+                f"<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
+                f"The ones you skipped: {_etr_m_alpha:+.1f}pp</div>"
+                if _etr_m_alpha is not None else ""
+            )
+            _etr_since_str = (
+                _etr_since.strftime("%b %d, %Y") if _etr_since else ""
+            )
+            _etr_caption = (
+                f"{_etr_n} matured call(s)"
+                + (f" since {_etr_since_str}" if _etr_since_str else "")
+                + " · measures calls surfaced to you, not every possible call."
+            )
+            st.markdown(
+                f"<div style='font-size:1.05em;font-weight:600;color:{_etr_color}'>"
+                f"<span style='font-size:0.75em;background:rgba(255,255,255,.08);"
+                f"border-radius:10px;padding:1px 7px;margin-right:6px'>"
+                f"{_etr_badge}</span>{_etr_hero}</div>"
+                f"<div style='color:#c7d2e2;font-size:0.85em;margin-top:2px'>"
+                f"when you acted on the App's new-position calls</div>"
+                f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
+                f"{_etr_verdict}</div>"
+                f"{_etr_contrast_html}"
+                f"<div style='color:#6b7280;font-size:0.78em;margin-top:5px;"
+                f"font-style:italic'>{_etr_caption}</div>",
+                unsafe_allow_html=True,
+            )
+        if st.button("→ Recommendations History", key="sm_ptr_etr"):
+            st.session_state["_pending_page"] = "📜 Recommendations History"
             st.rerun()
 
     # ── Holdings — identical table to Home's (shared function, same output).

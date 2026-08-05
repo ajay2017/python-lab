@@ -730,6 +730,85 @@ def engine_trust_by_band(enriched: list[dict]) -> list[dict]:
     return rows
 
 
+def engine_trust_headline(
+    enriched: list[dict],
+    min_calls: int,
+    firm_calls: int,
+) -> dict:
+    """
+    Compact trust-headline for the 🎯 Engine Track Record pointer card on the
+    🧾 Summary page.  Scopes to ``rec_type == "new_pick"`` only —
+    ``buy_candidate`` and ``add_winner`` are excluded from the headline.
+
+    Operates on *enriched* — the output of :func:`compute_outcomes`; the
+    caller is responsible for running the full ``match_recs_to_trades`` →
+    ``compute_outcomes`` chain.  ``min_calls`` and ``firm_calls`` drive
+    the band classification.
+
+    Returns a dict:
+        acted_alpha    float | None — avg alpha_pct for mature acted new_picks
+                                      (sourced from summary_stats, not reimplemented)
+        missed_alpha   float | None — avg alpha_pct for mature missed new_picks
+        n_acted_mature int          — count of acted new_picks that are both mature
+                                      AND have a priced outcome — the same population
+                                      that summary_stats uses for avg_acted_alpha, so
+                                      band classification, caption count, and alpha all
+                                      describe one consistent set of calls
+        since_date     date | None  — earliest rec_date in the new_pick set
+        band           str          — "building" | "early" | "firm"
+    """
+    _empty: dict = {
+        "acted_alpha":    None,
+        "missed_alpha":   None,
+        "n_acted_mature": 0,
+        "since_date":     None,
+        "band":           "building",
+    }
+    if not enriched:
+        return _empty
+
+    # Scope to new_pick only — buy_candidate and add_winner excluded.
+    new_picks = [r for r in enriched if r.get("rec_type") == "new_pick"]
+    if not new_picks:
+        return _empty
+
+    # Aggregate via the existing summary_stats helper — no reimplementation of
+    # outcome / alpha math.
+    stats = summary_stats(new_picks)
+
+    # n_acted_mature: acted recs that have cleared the maturity window AND have
+    # a priced outcome — the identical population that summary_stats uses for
+    # avg_acted_alpha, so band classification, caption count, and alpha all
+    # describe one consistent set of calls.  Unpriced acted rows (no current
+    # price available) are excluded so they cannot inflate the band or count
+    # beyond what the alpha is actually computed from.
+    n_acted_mature = sum(
+        1 for r in new_picks
+        if r.get("acted_on") and not r.get("outcome_maturing")
+        and r.get("outcome_pct") is not None
+    )
+
+    # since_date: earliest rec_date across all new_picks.
+    rec_dates = [r["rec_date"] for r in new_picks if r.get("rec_date") is not None]
+    since_date = min(rec_dates) if rec_dates else None
+
+    # Band classification based on how many matured acted calls we have.
+    if n_acted_mature < min_calls:
+        band = "building"
+    elif n_acted_mature < firm_calls:
+        band = "early"
+    else:
+        band = "firm"
+
+    return {
+        "acted_alpha":    stats.get("avg_acted_alpha"),
+        "missed_alpha":   stats.get("avg_missed_alpha"),
+        "n_acted_mature": n_acted_mature,
+        "since_date":     since_date,
+        "band":           band,
+    }
+
+
 def daily_volume(enriched: list[dict]) -> list[dict]:
     """
     For the recs-per-day chart: count of recs surfaced per rec_date, split

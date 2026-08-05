@@ -1017,6 +1017,16 @@ REC_SCORE_MIN_DAYS = 5
 # the report has enough graded history to comment. Safe to tune from observation.
 MONTHLY_REPORT_MIN_GRADED = 5
 
+# ── Engine Track Record — 🎯 pointer card (🧾 Summary page) ──────────────────
+# DISPLAY-ONLY band thresholds for the Engine Track Record pointer card.
+# They control which band-label the card shows: "building" (below MIN),
+# "early" (MIN–FIRM-1), or "firm" (at/above FIRM).  These are NOT investment
+# decision gates — they never feed into the new-position pipeline, the
+# composite score, or any recommendation engine.  Safe to tune from
+# observation.
+ENGINE_TRACK_MIN_CALLS = 8    # below → "building" band (no verdict shown)
+ENGINE_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" band
+
 # ── Predictive Analytics — Signal Calibration ─────────────────────────────────
 # Minimum number of mature outcomes in a composite-score band before the band
 # is shown in the Signal Calibration chart. Below this, the band is labelled

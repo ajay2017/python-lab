@@ -875,3 +875,186 @@ def test_daily_volume_groups_by_date_skips_none_and_sorts():
     assert day2["total"] == 1
     assert day2["acted"] == 1
     assert day2["missed"] == 0
+
+
+# ─── engine_trust_headline ───────────────────────────────────────────────────
+
+def test_engine_trust_headline_empty_input_returns_building():
+    out = rh.engine_trust_headline([], 8, 15)
+    assert out["band"] == "building"
+    assert out["acted_alpha"] is None
+    assert out["missed_alpha"] is None
+    assert out["n_acted_mature"] == 0
+    assert out["since_date"] is None
+
+
+def test_engine_trust_headline_no_new_pick_rows_returns_building():
+    """buy_candidate and add_winner rows are excluded; with none left → building."""
+    rows = [
+        _erow(rec_type="buy_candidate", acted_on=True, outcome_maturing=False, alpha_pct=3.0),
+        _erow(rec_type="add_winner",    acted_on=True, outcome_maturing=False, alpha_pct=2.0),
+    ]
+    out = rh.engine_trust_headline(rows, 8, 15)
+    assert out["band"] == "building"
+    assert out["n_acted_mature"] == 0
+
+
+def test_engine_trust_headline_buy_candidate_add_winner_ignored_in_scoping():
+    """new_pick rows are counted; buy_candidate/add_winner don't inflate n_acted_mature."""
+    np_rows = [
+        _erow(ticker="A", rec_type="new_pick",     acted_on=True,  outcome_maturing=False, alpha_pct=5.0,  outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, 1)),
+        _erow(ticker="B", rec_type="new_pick",     acted_on=True,  outcome_maturing=False, alpha_pct=3.0,  outcome_pct=3.0, outcome_label="win", rec_date=date(2026, 1, 2)),
+        _erow(ticker="C", rec_type="buy_candidate",acted_on=True,  outcome_maturing=False, alpha_pct=10.0, rec_date=date(2026, 1, 3)),
+        _erow(ticker="D", rec_type="add_winner",   acted_on=True,  outcome_maturing=False, alpha_pct=8.0,  rec_date=date(2026, 1, 4)),
+    ]
+    # Only 2 new_pick acted mature priced rows → below min_calls=8 → building
+    out = rh.engine_trust_headline(np_rows, 8, 15)
+    assert out["band"] == "building"
+    assert out["n_acted_mature"] == 2
+
+
+def test_engine_trust_headline_building_band_when_below_min_calls():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
+              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 8)   # 7 rows — below min_calls=8
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["band"] == "building"
+    assert out["n_acted_mature"] == 7
+
+
+def test_engine_trust_headline_early_band_at_min_calls_boundary():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
+              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 9)   # exactly 8 rows — at min_calls=8 → early
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["band"] == "early"
+    assert out["n_acted_mature"] == 8
+
+
+def test_engine_trust_headline_early_band_below_firm_calls():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
+              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 15)   # 14 rows — above min=8, below firm=15 → early
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["band"] == "early"
+    assert out["n_acted_mature"] == 14
+
+
+def test_engine_trust_headline_firm_band_at_firm_calls_boundary():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
+              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 16)   # exactly 15 rows — at firm_calls=15 → firm
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["band"] == "firm"
+    assert out["n_acted_mature"] == 15
+
+
+def test_engine_trust_headline_firm_band_above_firm_calls():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
+              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 20)   # 19 rows — above firm_calls=15 → firm
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["band"] == "firm"
+    assert out["n_acted_mature"] == 19
+
+
+def test_engine_trust_headline_alpha_values_from_summary_stats():
+    """acted_alpha and missed_alpha are sourced from summary_stats, not reimplemented."""
+    rows = [
+        # 10 acted, mature, with computable alpha
+        _erow(rec_type="new_pick", acted_on=True,  outcome_maturing=False,
+              alpha_pct=6.0,  outcome_pct=8.0, outcome_label="win",
+              rec_date=date(2026, 1, i))
+        for i in range(1, 11)
+    ] + [
+        # 5 missed, mature, with computable alpha
+        _erow(ticker=f"M{i}", rec_type="new_pick", acted_on=False, outcome_maturing=False,
+              alpha_pct=-2.0, outcome_pct=-1.0, outcome_label="loss",
+              rec_date=date(2026, 1, i))
+        for i in range(1, 6)
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["band"] == "early"   # 10 acted mature (priced) → ≥8, <15
+    assert out["acted_alpha"] == pytest.approx(6.0)
+    assert out["missed_alpha"] == pytest.approx(-2.0)
+
+
+def test_engine_trust_headline_maturing_rows_excluded_from_n_acted_mature():
+    """Maturing rows (outcome_maturing=True) do not count toward n_acted_mature."""
+    rows = [
+        # 7 mature acted WITH priced outcomes
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, alpha_pct=5.0,
+              outcome_pct=5.0, outcome_label="win", rec_date=date(2026, 1, i))
+        for i in range(1, 8)
+    ] + [
+        # 5 still-maturing acted — should NOT count even if priced
+        _erow(ticker=f"NEW{i}", rec_type="new_pick", acted_on=True, outcome_maturing=True,
+              alpha_pct=None, outcome_pct=None, rec_date=date(2026, 1, i))
+        for i in range(8, 13)
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["n_acted_mature"] == 7    # only the non-maturing+priced ones
+    assert out["band"] == "building"     # 7 < min_calls=8
+
+
+def test_engine_trust_headline_since_date_is_earliest_rec_date():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, rec_date=date(2026, 3, 15)),
+        _erow(ticker="B", rec_type="new_pick", acted_on=False, outcome_maturing=False, rec_date=date(2026, 1, 5)),
+        _erow(ticker="C", rec_type="new_pick", acted_on=True, outcome_maturing=False, rec_date=date(2026, 2, 20)),
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["since_date"] == date(2026, 1, 5)
+
+
+def test_engine_trust_headline_none_rec_date_handled_safely():
+    """Rows with rec_date=None are excluded from since_date without crashing."""
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, rec_date=None),
+        _erow(ticker="B", rec_type="new_pick", acted_on=True, outcome_maturing=False, rec_date=date(2026, 6, 1)),
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["since_date"] == date(2026, 6, 1)   # only the non-None date
+
+
+def test_engine_trust_headline_all_rows_have_none_rec_date():
+    rows = [
+        _erow(rec_type="new_pick", acted_on=True, outcome_maturing=False, rec_date=None),
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    assert out["since_date"] is None
+
+
+def test_engine_trust_headline_acted_unpriced_excluded_from_n_acted_mature():
+    """Acted rows without a priced outcome (outcome_pct is None) do not count toward
+    n_acted_mature, so they cannot inflate the band or the caption count beyond what
+    the alpha is actually computed from (BLOCKING 3 alignment)."""
+    rows = [
+        # 10 acted + mature + PRICED → n_acted_mature=10, band=early (≥8, <15)
+        _erow(ticker=f"P{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=4.0, outcome_pct=5.0, outcome_label="win",
+              rec_date=date(2026, 1, i))
+        for i in range(1, 11)
+    ] + [
+        # 6 acted + mature but UNPRICED — must NOT push the count to 16 (firm territory)
+        _erow(ticker=f"U{i}", rec_type="new_pick", acted_on=True, outcome_maturing=False,
+              alpha_pct=None, outcome_pct=None, outcome_label="unknown",
+              rec_date=date(2026, 1, i))
+        for i in range(1, 7)
+    ]
+    out = rh.engine_trust_headline(rows, min_calls=8, firm_calls=15)
+    # 10 priced ≥ min_calls=8 but < firm_calls=15 → early (not firm despite 16 total rows)
+    assert out["band"] == "early"
+    assert out["n_acted_mature"] == 10
+    # Alpha computed only over the 10 priced rows
+    assert out["acted_alpha"] == pytest.approx(4.0)

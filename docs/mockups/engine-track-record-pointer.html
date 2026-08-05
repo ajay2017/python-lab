@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — Engine Track Record COMPACT POINTER · DRISHTA</title>
+<!--
+  STATIC MOCKUP — not wired to data. Uses the user's REAL by_rec_type() numbers (2026-08-05):
+    New Position (new_pick): 148 total · 17 acted · acted α +5.2pp · missed α -1.0pp
+  Purpose: review the COMPACT POINTER design + the acted-vs-blended framing fork before build.
+  Decided placement: 🧾 Summary "🧭 Elsewhere in DRISHTA" pointer grid → links to 📜 Recommendations History.
+  Plan: docs/plans/engine-track-record-meter.md   (supersedes the full-card mock for placement)
+-->
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161a23; --panel2:#1b2130; --border:#2a3140;
+    --ink:#e6e9ef; --muted:#8b94a7; --muted2:#5f6779;
+    --green:#2ecc71; --amber:#f0b429; --red:#e74c3c; --accent:#6ea8fe;
+    --chip:#232a38;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;padding:28px 20px 60px;}
+  .wrap{max-width:980px;margin:0 auto;}
+  h1{font-size:20px;font-weight:650;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 22px;}
+  .note{background:#12202e;border:1px solid #234;border-radius:8px;padding:10px 14px;
+    font-size:12.5px;color:#9db6cf;margin:0 0 26px;}
+  .note b{color:#cfe3f5;}
+  .section-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);
+    margin:32px 0 10px;font-weight:600;}
+
+  .page{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;}
+  .page-title{font-size:15px;font-weight:600;margin:0 0 2px;}
+  .page-cap{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  .grid-lbl{font-size:12.5px;font-weight:600;color:#c7d2e2;margin:2px 0 10px;}
+
+  /* pointer grid = 2 cols, matches Summary "Elsewhere in DRISHTA" */
+  .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:720px){.pgrid{grid-template-columns:1fr;}}
+
+  .pcard{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px 15px;}
+  .pcard .ph{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+  .pcard .pv{font-size:15px;font-weight:600;}
+  .pcard .pd{font-size:11.5px;color:var(--muted);margin-top:3px;}
+  .pcard .plink{font-size:11px;color:var(--accent);margin-top:10px;display:inline-block;}
+  .existing{opacity:.6;}
+  .existing .tag{font-size:9.5px;color:var(--muted2);border:1px solid var(--border);border-radius:12px;padding:0 7px;margin-left:auto;}
+
+  /* THE new pointer — highlighted */
+  .track{border:1px solid #2c4a34;background:linear-gradient(180deg,#15211a 0%,#141a24 100%);position:relative;overflow:hidden;}
+  .track::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green);}
+  .track .ph .badge{margin-left:auto;font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:12px;
+    background:rgba(46,204,113,.14);color:#57d98a;border:1px solid rgba(46,204,113,.35);}
+  .track .hero{font-size:24px;font-weight:700;letter-spacing:-.02em;color:var(--green);margin:2px 0 1px;}
+  .track .hero .u{font-size:13px;font-weight:600;color:var(--muted);}
+  .track .whenline{font-size:11.5px;color:#c7d2e2;}
+  .track .contrast{font-size:11.5px;color:var(--muted);margin-top:8px;border-top:1px solid var(--border);padding-top:8px;}
+  .track .contrast b{color:#d7deea;}
+  .track .cov{font-size:10.5px;color:var(--muted2);font-style:italic;margin-top:7px;}
+  .track .plink{color:var(--accent);}
+
+  /* framing comparison */
+  .fcompare{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  @media(max-width:720px){.fcompare{grid-template-columns:1fr;}}
+  .fc{border:1px solid var(--border);border-radius:10px;padding:13px 14px;background:var(--panel2);}
+  .fc.win{border-color:#2c4a34;background:#15211a;}
+  .fc.bad{border-color:#4a2c2c;background:#211515;}
+  .fc .fh{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted2);margin-bottom:6px;}
+  .fc .fbig{font-size:22px;font-weight:700;}
+  .fc .fbig.g{color:var(--green);} .fc .fbig.r{color:var(--red);} .fc .fbig.m{color:var(--muted);}
+  .fc .fnote{font-size:11px;color:var(--muted);margin-top:6px;}
+  .fc .verdict{font-size:10.5px;font-weight:600;margin-top:9px;padding-top:8px;border-top:1px solid var(--border);}
+  .fc.win .verdict{color:#57d98a;} .fc.bad .verdict{color:#e08585;} .fc .verdict.neutral{color:var(--muted2);}
+
+  .legend{font-size:11.5px;color:var(--muted);margin-top:10px;}
+  .legend code{background:var(--chip);padding:1px 5px;border-radius:4px;color:#b9c4d6;}
+  .legend b{color:#cfe3f5;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 Engine Track Record — compact pointer (real numbers)</h1>
+  <p class="sub">Static mockup · uses your actual <code>by_rec_type()</code> data from 2026-08-05 · plan: <code>docs/plans/engine-track-record-meter.md</code></p>
+
+  <div class="note">
+    <b>Decided design:</b> a <b>compact pointer</b> in the 🧾 Summary "🧭 Elsewhere in DRISHTA" grid that links to
+    📜 Recommendations History (the existing hub). It <b>reads</b> the numbers you're already seeing on Rec History —
+    it never recomputes. Awareness-only; never gates or ranks.
+  </div>
+
+  <!-- ===== IN CONTEXT: the Summary pointer grid ===== -->
+  <div class="section-label">In context — 🧾 Summary "Elsewhere in DRISHTA" grid</div>
+  <div class="page">
+    <div class="page-title">🧭 Elsewhere in DRISHTA</div>
+    <div class="page-cap">Read-only pointers · never a second computation of anything another page owns.</div>
+    <div class="pgrid">
+
+      <!-- NEW pointer -->
+      <div class="pcard track">
+        <div class="ph">🎯 Engine Track Record <span class="badge">WORKING</span></div>
+        <div class="hero">+5.2<span class="u"> pp vs S&amp;P</span></div>
+        <div class="whenline">when you acted on the App's new-position calls</div>
+        <div class="contrast">The ones you skipped: <b>−1.0pp</b> — acting on the App paid off.</div>
+        <div class="cov">17 matured calls · measures calls surfaced to you, not every possible call.</div>
+        <a class="plink" href="#">Full report card → 📜 Recommendations History</a>
+      </div>
+
+      <!-- existing pointers for scale -->
+      <div class="pcard existing">
+        <div class="ph">🩺 Thesis Review <span class="tag">existing</span></div>
+        <div class="pv">2 Weakening</div>
+        <div class="pd">of 21 reviewed</div>
+        <a class="plink" href="#">→ AI Insights</a>
+      </div>
+
+      <div class="pcard existing">
+        <div class="ph">🔔 Catalyst Watch <span class="tag">existing</span></div>
+        <div class="pv">3 reporting</div>
+        <div class="pd">within 7 days</div>
+        <a class="plink" href="#">→ Catalyst Watch</a>
+      </div>
+
+      <div class="pcard existing">
+        <div class="ph">🔗 Risk Posture <span class="tag">existing</span></div>
+        <div class="pv">Balanced</div>
+        <div class="pd">beta 1.05 vs regime target</div>
+        <a class="plink" href="#">→ Risk Analysis</a>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== THE FRAMING FORK ===== -->
+  <div class="section-label">The framing fork your real data creates — which number is the headline?</div>
+  <div class="fcompare">
+    <div class="fc win">
+      <div class="fh">A · Acted new-position α &nbsp;(recommended)</div>
+      <div class="fbig g">+5.2pp</div>
+      <div class="fnote">n = 17 · "did acting on the App's calls beat the market?" Positive &amp; honest — you can only judge advice you could act on.</div>
+      <div class="verdict">✅ Use this — pairs with the −1.0pp skipped contrast</div>
+    </div>
+    <div class="fc bad">
+      <div class="fh">B · All 148 matured, blended</div>
+      <div class="fbig m">≈ flat <span style="font-size:12px;">(est.)</span></div>
+      <div class="fnote">131 skips (−1.0pp) drown the 17 acted (+5.2pp). Misleading: you <i>can't</i> buy 148 names — caps, capital &amp; gates bind. Understates the engine.</div>
+      <div class="verdict">❌ Avoid — averages unactable calls</div>
+    </div>
+    <div class="fc">
+      <div class="fh">C · Contrast (acted vs skipped)</div>
+      <div class="fbig g">+5.2 <span style="font-size:14px;color:var(--muted);">vs</span> <span class="r" style="font-size:16px;">−1.0</span></div>
+      <div class="fnote">Shows both. Matches the app's own engine-health method: acted α beats missed α ⇒ the verdict layer earns its keep.</div>
+      <div class="verdict neutral">◐ Baked into A as the supporting line</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>What's encoded here (all your locked rules):</b><br>
+    • <b>Alpha, not raw %</b> — hero is +5.2pp vs S&amp;P (raw +8.2% is on the destination page).<br>
+    • <b>new_pick scope</b> — "Opportunity Watch" (541, the <code>buy_candidate</code> feed) and "Add to Winner" (n=2) are excluded from the headline.<br>
+    • <b>Acted-focused</b> — headline judges calls you could act on; skipped α shown as honest contrast, not blended away.<br>
+    • <b>Coverage caption</b> — states plainly it measures surfaced calls (BUY log is visit-dependent).<br>
+    • <b>Sample</b> — 17 acted matured calls clears a floor of 8 ⇒ real verdict today, no "Building" state.<br>
+    • <b>No recompute</b> — reads <code>summary_stats()</code>/<code>by_rec_type()</code>; links to Rec History instead of duplicating.<br>
+    <span style="color:var(--muted2);">Note: hit-rate ("N of M beat S&amp;P") isn't in the by_rec_type table — it comes from <code>summary_stats()</code>; kept off the compact pointer to stay glanceable, shown on the destination page.</span>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — Engine Track Record (Calibration Meter) · DRISHTA</title>
+<!--
+  STATIC MOCKUP — not wired to data. Numbers are illustrative only.
+  Purpose: review the CARD DESIGN + its PLACEMENT on the 🧾 Summary page before any code.
+  Plan: docs/plans/engine-track-record-meter.md
+  Per feedback_mockup_first_ux: mock first, saved into repo, reviewed before build.
+-->
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161a23; --panel2:#1b2130; --border:#2a3140;
+    --ink:#e6e9ef; --muted:#8b94a7; --muted2:#5f6779;
+    --green:#2ecc71; --greendim:#1e7d4a; --amber:#f0b429; --red:#e74c3c;
+    --accent:#6ea8fe; --chip:#232a38;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;padding:28px 20px 60px;}
+  .wrap{max-width:1080px;margin:0 auto;}
+  h1{font-size:20px;font-weight:650;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 22px;}
+  .note{background:#12202e;border:1px solid #234;border-radius:8px;padding:10px 14px;
+    font-size:12.5px;color:#9db6cf;margin:0 0 26px;}
+  .note b{color:#cfe3f5;}
+  .section-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);
+    margin:30px 0 10px;font-weight:600;}
+
+  /* Summary-page context framing */
+  .page{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 18px 22px;}
+  .page-title{font-size:15px;font-weight:600;margin:0 0 2px;}
+  .page-cap{color:var(--muted);font-size:12px;margin:0 0 16px;}
+
+  /* Tier-3 metric row (existing surface, shown greyed for context) */
+  .tier3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:8px;}
+  .ghost{background:var(--panel2);border:1px dashed var(--border);border-radius:10px;padding:12px 14px;opacity:.55;}
+  .ghost .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+  .ghost .v{font-size:19px;font-weight:600;margin-top:3px;}
+  .ghost .d{font-size:11px;color:var(--muted2);margin-top:2px;}
+  .ctxtag{display:inline-block;font-size:10px;color:var(--muted2);border:1px solid var(--border);
+    border-radius:20px;padding:1px 9px;margin-left:8px;vertical-align:middle;}
+
+  /* THE CARD */
+  .track{background:linear-gradient(180deg,#18202c 0%,#141a24 100%);
+    border:1px solid #2c3646;border-radius:12px;padding:18px 20px;position:relative;overflow:hidden;}
+  .track::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--green);}
+  .track.amber::before{background:var(--amber);}
+  .track.empty::before{background:var(--muted2);}
+  .track-head{display:flex;align-items:center;gap:8px;margin-bottom:2px;}
+  .track-head .t{font-size:13.5px;font-weight:650;letter-spacing:.01em;}
+  .track-head .badge{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;margin-left:auto;}
+  .badge.ok{background:rgba(46,204,113,.14);color:#57d98a;border:1px solid rgba(46,204,113,.35);}
+  .badge.early{background:rgba(240,180,41,.13);color:#f0c24b;border:1px solid rgba(240,180,41,.3);}
+  .badge.build{background:#232a38;color:var(--muted);border:1px solid var(--border);}
+
+  .headline{display:flex;align-items:baseline;gap:12px;margin:12px 0 4px;flex-wrap:wrap;}
+  .big{font-size:30px;font-weight:700;letter-spacing:-.02em;}
+  .big .unit{font-size:16px;font-weight:600;color:var(--muted);margin-left:2px;}
+  .pos{color:var(--green);}
+  .hit{font-size:13px;color:var(--ink);}
+  .hit b{color:#57d98a;}
+
+  .verdict{font-size:12.5px;color:#c7d2e2;margin:8px 0 2px;}
+  .sample{font-size:11.5px;color:var(--muted);margin-top:9px;display:flex;gap:14px;flex-wrap:wrap;}
+  .sample .s{display:flex;align-items:center;gap:5px;}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--muted2);display:inline-block;}
+
+  .coverage{font-size:11px;color:var(--muted2);font-style:italic;margin-top:11px;
+    border-top:1px solid var(--border);padding-top:9px;}
+  .cta{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;}
+  .link{font-size:11.5px;color:var(--accent);text-decoration:none;border:1px solid #2b3a55;
+    border-radius:7px;padding:5px 11px;background:rgba(110,168,254,.06);}
+  .link:hover{background:rgba(110,168,254,.14);}
+
+  /* empty state */
+  .empty .big{color:var(--muted2);font-size:20px;}
+  .empty .verdict{color:var(--muted);}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr;}.tier3{grid-template-columns:1fr;}}
+  .caption{font-size:11.5px;color:var(--muted);margin:7px 2px 0;}
+  .legend{font-size:11.5px;color:var(--muted);margin-top:8px;}
+  .legend code{background:var(--chip);padding:1px 5px;border-radius:4px;color:#b9c4d6;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 Engine Track Record — placement &amp; card mockup</h1>
+  <p class="sub">Static mockup for review · numbers illustrative · plan: <code>docs/plans/engine-track-record-meter.md</code></p>
+
+  <div class="note">
+    <b>What this shows:</b> a standing "does the App's advice actually work?" card on the <b>🧾 Summary page</b>,
+    reading the alpha/hit-rate already computed in <code>recommendations_history.py</code> — it never recomputes,
+    it points through to the full 📜 Recommendations History page. Awareness-only; it never gates or ranks anything.
+  </div>
+
+  <!-- ===================== PLACEMENT CONTEXT ===================== -->
+  <div class="section-label">Placement — on the 🧾 Summary page (existing tiles greyed for context)</div>
+  <div class="page">
+    <div class="page-title">🧾 Summary</div>
+    <div class="page-cap">Read-only pointers. Never a second computation of anything another page owns.</div>
+
+    <div class="tier3">
+      <div class="ghost"><div class="k">Alpha vs SPY (30d)</div><div class="v">+1.8%</div><div class="d">portfolio, existing tile</div></div>
+      <div class="ghost"><div class="k">🔗 Risk Posture</div><div class="v">Balanced</div><div class="d">existing pointer-card</div></div>
+      <div class="ghost"><div class="k">🩺 Thesis Review</div><div class="v">2 Weakening</div><div class="d">existing pointer-card</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--muted2);margin:6px 2px 16px;">↑ existing Tier-3 / pointer surfaces &nbsp;·&nbsp; ↓ the new card slots in here</div>
+
+    <!-- THE NEW CARD — healthy state -->
+    <div class="track">
+      <div class="track-head">
+        <span class="t">🎯 Engine Track Record</span>
+        <span class="badge ok">WORKING</span>
+      </div>
+      <div class="headline">
+        <span class="big pos">+2.3<span class="unit">pp vs S&amp;P</span></span>
+        <span class="hit">avg on the App's BUY calls · <b>11 of 18</b> beat the S&amp;P</span>
+      </div>
+      <div class="verdict">Acting on <b>Confirmed</b> new-position calls has beaten the benchmark. The App's entry selection is earning its keep.</div>
+      <div class="sample">
+        <span class="s"><span class="dot"></span>18 mature calls</span>
+        <span class="s"><span class="dot"></span>since May 28</span>
+        <span class="s"><span class="dot"></span>calls older than 5 days only</span>
+        <span class="s"><span class="dot"></span>new-position calls (excl. watch-only candidates)</span>
+      </div>
+      <div class="coverage">Measures the calls the App surfaced to you — not every call it could theoretically have made.</div>
+      <div class="cta">
+        <a class="link" href="#">Full breakdown → 📜 Recommendations History</a>
+        <a class="link" href="#">Alpha by score band → 📊 Score Calibration</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== STATE VARIANTS ===================== -->
+  <div class="section-label">Card states</div>
+  <div class="grid2">
+
+    <!-- amber / too early -->
+    <div>
+      <div class="track amber">
+        <div class="track-head">
+          <span class="t">🎯 Engine Track Record</span>
+          <span class="badge early">TOO EARLY</span>
+        </div>
+        <div class="headline">
+          <span class="big" style="color:var(--amber);">+0.4<span class="unit">pp vs S&amp;P</span></span>
+          <span class="hit">avg on the App's BUY calls · <b style="color:var(--amber);">5 of 9</b> beat the S&amp;P</span>
+        </div>
+        <div class="verdict">Directionally positive, but the sample is still thin — treat as a read, not a verdict.</div>
+        <div class="sample">
+          <span class="s"><span class="dot"></span>9 mature calls</span>
+          <span class="s"><span class="dot"></span>since Jul 12</span>
+          <span class="s"><span class="dot"></span>calls older than 5 days only</span>
+        </div>
+        <div class="coverage">Measures the calls the App surfaced to you — not every call it could theoretically have made.</div>
+        <div class="cta"><a class="link" href="#">Full breakdown → 📜 Recommendations History</a></div>
+      </div>
+      <p class="caption"><b>Amber / "too early":</b> above the display floor but below a confidence bar — shows the number, softens the verdict.</p>
+    </div>
+
+    <!-- empty / building -->
+    <div>
+      <div class="track empty">
+        <div class="track-head">
+          <span class="t">🎯 Engine Track Record</span>
+          <span class="badge build">BUILDING</span>
+        </div>
+        <div class="headline">
+          <span class="big">Building history…</span>
+        </div>
+        <div class="verdict">The App needs a few more matured BUY calls before it can honestly report a track record. <b>4 more</b> to go.</div>
+        <div class="sample">
+          <span class="s"><span class="dot"></span>2 mature calls so far</span>
+          <span class="s"><span class="dot"></span>need ≥ 6</span>
+        </div>
+        <div class="cta"><a class="link" href="#">See raw calls → 📜 Recommendations History</a></div>
+      </div>
+      <p class="caption"><b>Empty state:</b> below <code>ENGINE_TRACK_MIN_CALLS</code> (display-only constant, TBD with you) — never a confident verdict on a handful of calls.</p>
+    </div>
+  </div>
+
+  <div class="section-label">Honesty rules encoded in the design</div>
+  <div class="legend">
+    • <b>Alpha, not raw %</b> — headline is vs-S&amp;P, per <code>feedback_analytics_integrity</code>.<br>
+    • <b>new_pick scope</b> — excludes the awareness-only <code>buy_candidate</code> feed (skipping those is correct, not a miss).<br>
+    • <b>Maturity-gated</b> — only calls older than <code>REC_SCORE_MIN_DAYS</code> (=5) count.<br>
+    • <b>Coverage caption</b> — states plainly that the BUY log is visit-dependent, so it measures surfaced calls, not all theoretical calls.<br>
+    • <b>Sample floor</b> — "Building history" empty state below a minimum call count; "Too early" softening just above it.<br>
+    • <b>No recompute</b> — reads <code>summary_stats()</code>/<code>by_verdict()</code>; links through instead of duplicating.
+  </div>
+</div>
+</body>
+</html>
