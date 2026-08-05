@@ -9744,6 +9744,7 @@ elif page == "🧾 Summary":
                 st.markdown(
                     "<style>.st-key-sm_act_urgent{"
                     "background:#1e1416;border-left:3px solid #ef4444 !important}"
+                    ".st-key-sm_act_urgent button{color:#6ea8fe !important}"
                     "</style>",
                     unsafe_allow_html=True,
                 )
@@ -9959,6 +9960,7 @@ elif page == "🧾 Summary":
                 "<style>.st-key-etr_hero{"
                 "border-left:3px solid #22c55e !important;"
                 "background:rgba(34,197,94,.04)}"
+                ".st-key-etr_hero button{color:#6ea8fe !important}"
                 "</style>",
                 unsafe_allow_html=True,
             )
@@ -10078,7 +10080,12 @@ elif page == "🧾 Summary":
         # reads the same "most recent review per ticker" the AI Insights page
         # uses. Shows a "No reviews yet" note when _sm_n_reviewed == 0 so this
         # cell is never empty in the 2×2 grid.
-        with st.container(border=True):
+        with st.container(border=True, key="sm_ptr_thesis_box"):
+            st.markdown(
+                "<style>.st-key-sm_ptr_thesis_box{background:#1b2130}"
+                ".st-key-sm_ptr_thesis_box button{color:#6ea8fe !important}</style>",
+                unsafe_allow_html=True,
+            )
             st.markdown("**🩺 Thesis Review**")
             if _sm_n_reviewed > 0:
                 if _sm_n_broken or _sm_n_weakening:
@@ -10107,7 +10114,12 @@ elif page == "🧾 Summary":
     with _sm_ptr_row2[0]:
         # 🔔 Catalyst Watch — bottom-left. Reads the same cached earnings
         # dates as the Catalyst Watch page — first-cached wins; no second fetch.
-        with st.container(border=True):
+        with st.container(border=True, key="sm_ptr_catalyst_box"):
+            st.markdown(
+                "<style>.st-key-sm_ptr_catalyst_box{background:#1b2130}"
+                ".st-key-sm_ptr_catalyst_box button{color:#6ea8fe !important}</style>",
+                unsafe_allow_html=True,
+            )
             st.markdown("**🔔 Catalyst Watch**")
             if _sm_n_earnings_soon:
                 _sm_cw_line  = f"{_sm_n_earnings_soon} reporting"
@@ -10127,7 +10139,12 @@ elif page == "🧾 Summary":
         # 🔗 Risk Posture — bottom-right (moved from the old Tier-3 row so no
         # cell is empty and the grid is complete). Same _sm_posture computed
         # above; never a second independent verdict.
-        with st.container(border=True):
+        with st.container(border=True, key="sm_ptr_riskposture_box"):
+            st.markdown(
+                "<style>.st-key-sm_ptr_riskposture_box{background:#1b2130}"
+                ".st-key-sm_ptr_riskposture_box button{color:#6ea8fe !important}</style>",
+                unsafe_allow_html=True,
+            )
             st.markdown("**🔗 Risk Posture**")
             if _sm_posture is not None:
                 # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
