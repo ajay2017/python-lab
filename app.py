@@ -5996,7 +5996,9 @@ if page == "🏠 Home":
             _frag = st.session_state.get("_fragility_cache")
             if _frag:
                 _fg_sev       = _frag["severity"]
-                _fg_icon      = {"calm": "🛡️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
+                # "calm" uses ☀️, not 🛡️ — 🛡️ is reserved for the risk-off
+                # de-risk TRIM card (2026-08-04 UX audit CA10).
+                _fg_icon      = {"calm": "☀️", "caution": "⚠️", "fragile": "🌊"}[_fg_sev]
                 _fg_lead      = {
                     "calm":    "Your book moves roughly with the market.",
                     "caution": "Your book is more volatile than the market.",
@@ -9686,8 +9688,12 @@ elif page == "🧾 Summary":
         with _t2:
             if _sm_posture is not None:
                 st.markdown("**🔗 Risk Posture**")
+                # Display-only override: exit_advisor's "Steady" tier icon is 🛡️,
+                # which collides with the risk-off de-risk TRIM card's own 🛡️
+                # (2026-08-04 UX audit CA10) — ☀️ here instead, producer untouched.
+                _sm_posture_icon = "☀️" if _sm_posture["score"] == 0 else _sm_posture["emoji"]
                 st.markdown(
-                    f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture['emoji']} {_sm_posture['label']}</div>"
+                    f"<div style='font-size:1.3em;font-weight:600'>{_sm_posture_icon} {_sm_posture['label']}</div>"
                     f"<div style='color:#9ca3af;font-size:0.85em;margin-top:4px'>{_sm_posture['summary']}</div>",
                     unsafe_allow_html=True,
                 )
@@ -10913,9 +10919,13 @@ elif page == "🔗 Risk Analysis":
                     )
                     st.plotly_chart(_pfig, use_container_width=True)
                 with _pg2:
+                    # Display-only override: exit_advisor's "Steady" tier icon is
+                    # 🛡️, which collides with the risk-off de-risk TRIM card's own
+                    # 🛡️ (2026-08-04 UX audit CA10) — ☀️ here, producer untouched.
+                    _posture_icon = "☀️" if _posture["score"] == 0 else _posture["emoji"]
                     st.markdown(
                         f"<div style='font-size:1.3em;font-weight:700;color:{_pcolor}'>"
-                        f"{_posture['emoji']} {_posture['label']}</div>",
+                        f"{_posture_icon} {_posture['label']}</div>",
                         unsafe_allow_html=True,
                     )
                     st.markdown(_posture["summary"])
@@ -26918,7 +26928,7 @@ It reads two things together: how far a name has fallen **from its highest point
 
 **If you averaged down:** when you add materially to a position, it re-measures the decline **from your add**, not from an old pre-add high — so doubling down won't trigger a false exit signal.
 
-**Two layers — idiosyncratic *and* market-wide:** the calls above flag a name weakening *on its own*. A second layer handles **broad market-wide down days** (when everything falls together): when the market is in a genuine **risk-off regime** — its long-term trend has broken (price below the 200-day line) *or* volatility has spiked (VIX ≥ 25) — **and** your book is fragile (carries outsized market exposure), it names the few highest-risk positions (your biggest beta drivers) and suggests a modest trim *or* a tighter stop. It deliberately waits for a *regime*, not a single red day, so it doesn't sell the dip. You can read this at a glance on the **🧭 Market-Risk Posture** dial (**🔗 Risk Analysis** page): it folds *how fragile your book is* together with *whether the market is risk-off* into one posture — 🛡️ Steady → 🌥️ Watchful → ⚠️ Defensive → 🔴 Risk-off & fragile. It's a *posture read, not a forecast* (it never predicts a pullback's timing), and when both legs are elevated it simply points you back to the de-risk suggestions above.
+**Two layers — idiosyncratic *and* market-wide:** the calls above flag a name weakening *on its own*. A second layer handles **broad market-wide down days** (when everything falls together): when the market is in a genuine **risk-off regime** — its long-term trend has broken (price below the 200-day line) *or* volatility has spiked (VIX ≥ 25) — **and** your book is fragile (carries outsized market exposure), it names the few highest-risk positions (your biggest beta drivers) and suggests a modest trim *or* a tighter stop. It deliberately waits for a *regime*, not a single red day, so it doesn't sell the dip. You can read this at a glance on the **🧭 Market-Risk Posture** dial (**🔗 Risk Analysis** page): it folds *how fragile your book is* together with *whether the market is risk-off* into one posture — ☀️ Steady → 🌥️ Watchful → ⚠️ Defensive → 🔴 Risk-off & fragile. It's a *posture read, not a forecast* (it never predicts a pullback's timing), and when both legs are elevated it simply points you back to the de-risk suggestions above.
 
 **Every call is advisory — you decide and act; nothing is auto-sold.** If a name already has a hard stop breach or a full Sell signal, that takes precedence and you'll see *that* instead (one card per position, strongest call wins). Most risk is still managed at *entry* (position sizing + concentration caps), where it's cheapest to control.
 
