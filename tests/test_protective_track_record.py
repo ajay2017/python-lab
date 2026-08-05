@@ -13,6 +13,7 @@ Covers the invariants called out in the design doc
   - maturity boundary (min_days - 1 excluded, min_days included)
 """
 
+import math
 from datetime import date
 
 import pytest
@@ -121,6 +122,92 @@ def test_missing_spy_series_yields_none_alpha():
     )
     assert out[0]["spy_return_pct"] is None
     assert out[0]["protect_alpha_pct"] is None
+
+
+# ─── NaN safety — live bug reproduction ────────────────────────────────────
+# A legacy exit_signals row with a NULL price_at_signal reads back from the
+# DataFrame as float('nan'), NOT None (pandas convention for missing numeric
+# data). NaN is truthy in Python (only 0.0 is falsy for floats), so a bare
+# `if pas else None` guard let it through as a "valid" price, poisoning the
+# downstream mean and rendering the literal string "nan" on the live card.
+
+def test_nan_price_at_signal_treated_as_missing_not_valid_price():
+    """A NaN price_at_signal (legacy NULL row read back via pandas) must be
+    treated exactly like None — missing data, not a valid zero-ish price."""
+    signals = [_sig_row(ticker="NANPX", price_at_signal=float("nan"))]
+    out = ptr.compute_protective_outcomes(
+        signals, current_prices={"NANPX": 50.0}, today=date(2026, 2, 1),
+        spy_close_by_date={date(2026, 1, 1): 100.0, date(2026, 2, 1): 110.0},
+        min_days=5,
+    )
+    assert out[0]["price_at_signal"] is None
+    assert out[0]["name_return_pct"] is None
+    assert out[0]["protect_alpha_pct"] is None
+
+
+def test_nan_current_price_treated_as_missing_not_valid_price():
+    """A NaN current price (e.g. a bad live-price fetch) must be treated
+    exactly like a missing entry in current_prices — the OTHER entry point
+    that must be NaN-guarded, not just price_at_signal."""
+    signals = [_sig_row(ticker="NANCUR", price_at_signal=100.0)]
+    out = ptr.compute_protective_outcomes(
+        signals, current_prices={"NANCUR": float("nan")}, today=date(2026, 2, 1),
+        spy_close_by_date={date(2026, 1, 1): 100.0, date(2026, 2, 1): 110.0},
+        min_days=5,
+    )
+    assert out[0]["name_return_pct"] is None
+    assert out[0]["protect_alpha_pct"] is None
+
+
+def test_nan_price_at_signal_excluded_from_headline_average_live_scenario():
+    """Reproduces the exact live scenario: 9 flagged names, 1 with a NaN
+    price_at_signal mixed in among otherwise-valid mature+priced rows. The
+    NaN row must be excluded from n_mature/the average (same as if it were
+    None), and protect_alpha must be a real float — NEVER nan."""
+    signals = (
+        [
+            _sig_row(ticker=f"GOOD{i}", signal_date=date(2026, 1, 1),
+                      price_at_signal=100.0)
+            for i in range(8)
+        ]
+        + [_sig_row(ticker="NANONE", signal_date=date(2026, 1, 1),
+                      price_at_signal=float("nan"))]
+    )
+    current_prices = {f"GOOD{i}": 80.0 for i in range(8)}
+    current_prices["NANONE"] = 80.0
+    spy = {date(2026, 1, 1): 100.0, date(2026, 2, 1): 110.0}
+
+    enriched = ptr.compute_protective_outcomes(
+        signals, current_prices, today=date(2026, 2, 1),
+        spy_close_by_date=spy, min_days=5,
+    )
+    assert len(enriched) == 9
+    collapsed = ptr.collapse_by_ticker(enriched)
+    assert len(collapsed) == 9
+
+    headline = ptr.protective_headline(collapsed, min_calls=8, firm_calls=15)
+    assert headline["n_mature"] == 8   # the NaN row is excluded, not counted
+    assert headline["protect_alpha"] is not None
+    assert headline["protect_alpha"] == headline["protect_alpha"]   # not NaN
+    assert not math.isnan(headline["protect_alpha"])
+    assert headline["protect_alpha"] == pytest.approx(30.0)
+
+
+def test_headline_defensive_guard_strips_nan_protect_alpha_pct():
+    """Belt-and-suspenders: even if a NaN protect_alpha_pct somehow reaches
+    protective_headline directly (bypassing compute_protective_outcomes'
+    own guards), the population filter must still exclude it rather than
+    let it poison the mean."""
+    enriched = [
+        _erow(ticker=f"P{i}", protect_alpha_pct=5.0, maturing=False) for i in range(8)
+    ] + [
+        _erow(ticker="NANDIRECT", protect_alpha_pct=float("nan"), maturing=False),
+    ]
+    collapsed = ptr.collapse_by_ticker(enriched)
+    headline = ptr.protective_headline(collapsed, min_calls=8, firm_calls=15)
+    assert headline["n_mature"] == 8
+    assert headline["protect_alpha"] == pytest.approx(5.0)
+    assert not math.isnan(headline["protect_alpha"])
 
 
 def test_empty_input_returns_building_never_computed_negative():

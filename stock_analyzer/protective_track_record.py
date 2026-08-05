@@ -37,7 +37,7 @@ Pure logic — no Streamlit, no DB or API calls. Caller supplies:
 
 from datetime import date
 
-from stock_analyzer.recommendations_history import _spy_return_pct, _to_date
+from stock_analyzer.recommendations_history import _f, _spy_return_pct, _to_date
 
 # Locked scope (see module docstring) — WATCH and RISK_OFF are OUT OF SCOPE.
 _PROTECTIVE_SCOPE = ("EXIT", "TRIM")
@@ -92,16 +92,15 @@ def compute_protective_outcomes(
         ticker = str(r.get("ticker", "") or "").strip().upper()
         signal_date = _to_date(r.get("signal_date"))
 
-        pas = r.get("price_at_signal")
-        try:
-            price_at_signal = float(pas) if pas else None
-        except (TypeError, ValueError):
-            price_at_signal = None
+        # _f(..., default=None) treats both None AND NaN as "missing" — a
+        # legacy exit_signals row with a NULL price_at_signal reads back from
+        # the DataFrame as float('nan'), not None (pandas convention), and
+        # NaN is truthy in Python so a bare `if pas else None` guard let it
+        # through; _f's `x != x` NaN check closes that gap.
+        price_at_signal = _f(r.get("price_at_signal"), default=None)
 
-        cur = current_prices.get(ticker)
-        try:
-            cur = float(cur) if (cur is not None and float(cur) > 0) else None
-        except (TypeError, ValueError):
+        cur = _f(current_prices.get(ticker), default=None)
+        if cur is not None and cur <= 0:
             cur = None
 
         if cur is not None and price_at_signal:
@@ -217,9 +216,16 @@ def protective_headline(
     if not enriched_collapsed:
         return _empty
 
+    # Belt-and-suspenders: `protect_alpha_pct` should never be NaN by the
+    # time it reaches here (see compute_protective_outcomes' _f guards), but
+    # this is a trust-surface number — a single NaN poisons the whole mean
+    # and renders as the literal string "nan", so don't rely on a single
+    # upstream fix point. `x != x` is True only for NaN.
     mature_priced = [
         r for r in enriched_collapsed
-        if not r.get("maturing") and r.get("protect_alpha_pct") is not None
+        if not r.get("maturing")
+        and r.get("protect_alpha_pct") is not None
+        and r["protect_alpha_pct"] == r["protect_alpha_pct"]
     ]
     n_mature = len(mature_priced)
     protect_alpha = (
