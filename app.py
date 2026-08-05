@@ -9948,8 +9948,13 @@ elif page == "🧾 Summary":
                 "</style>",
                 unsafe_allow_html=True,
             )
-            st.markdown("**🎯 Engine Track Record**")
             if _etr_band == "building":
+                # No badge in building state — just the title
+                st.markdown(
+                    "<div style='font-weight:600;margin-bottom:6px'>"
+                    "🎯 Engine Track Record</div>",
+                    unsafe_allow_html=True,
+                )
                 _etr_need = max(0, _etr_min_calls - _etr_n)
                 st.markdown(
                     f"<div style='color:#9ca3af;font-size:0.95em'>Building history</div>"
@@ -9963,32 +9968,55 @@ elif page == "🧾 Summary":
                 # performance verdict.  LAGGING would falsely claim underperformance
                 # when the truth is simply "not enough priced outcomes yet."
                 if _etr_alpha is None:
-                    _etr_badge   = "NO DATA"
-                    _etr_color   = "#6b7280"
+                    _etr_badge        = "NO DATA"
+                    _etr_color        = "#6b7280"
+                    _etr_badge_color  = "#8b94a7"
+                    _etr_badge_bg     = "#232a38"
+                    _etr_badge_border = "#2a3140"
                     _etr_verdict = (
                         "Not enough priced data yet — outcomes will appear as calls mature."
                     )
                 elif _etr_band == "firm" and _etr_alpha > 0:
-                    _etr_badge   = "WORKING"
-                    _etr_color   = "#22c55e"
+                    _etr_badge        = "WORKING"
+                    _etr_color        = "#22c55e"
+                    _etr_badge_color  = "#57d98a"
+                    _etr_badge_bg     = "rgba(34,197,94,.14)"
+                    _etr_badge_border = "rgba(34,197,94,.35)"
                     _etr_verdict = (
                         "Acting on the App's new-position calls has beaten the benchmark."
                     )
                 elif _etr_band == "firm":
-                    _etr_badge   = "LAGGING"
-                    _etr_color   = "#f59e0b"
+                    _etr_badge        = "LAGGING"
+                    _etr_color        = "#f59e0b"
+                    _etr_badge_color  = "#f0c24b"
+                    _etr_badge_bg     = "rgba(240,180,41,.13)"
+                    _etr_badge_border = "rgba(240,180,41,.3)"
                     _etr_verdict = (
                         "Acting on the App's new-position calls hasn't beaten the "
                         "benchmark over this sample."
                     )
                 else:   # early, alpha is not None
-                    _etr_badge = "EARLY READ"
-                    _etr_color = "#f59e0b"
+                    _etr_badge        = "EARLY READ"
+                    _etr_color        = "#f59e0b"
+                    _etr_badge_color  = "#f0c24b"
+                    _etr_badge_bg     = "rgba(240,180,41,.13)"
+                    _etr_badge_border = "rgba(240,180,41,.3)"
                     _etr_verdict = (
                         "Directionally positive but a thin sample — treat as a read."
                         if _etr_alpha > 0
                         else "Thin sample — more matured calls needed before a firm read."
                     )
+                # Header row: title left, band badge right
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"align-items:center;margin-bottom:6px'>"
+                    f"<span style='font-weight:600'>🎯 Engine Track Record</span>"
+                    f"<span style='font-size:0.7em;font-weight:600;padding:2px 8px;"
+                    f"border-radius:12px;background:{_etr_badge_bg};"
+                    f"color:{_etr_badge_color};border:1px solid {_etr_badge_border}'>"
+                    f"{_etr_badge}</span></div>",
+                    unsafe_allow_html=True,
+                )
                 _etr_hero = f"{_etr_alpha:+.1f} pp vs S&P" if _etr_alpha is not None else "—"
                 _etr_contrast_html = (
                     f"<div style='color:#9ca3af;font-size:0.82em;margin-top:4px'>"
@@ -10003,11 +10031,18 @@ elif page == "🧾 Summary":
                     + (f" since {_etr_since_str}" if _etr_since_str else "")
                     + " · measures calls surfaced to you, not every possible call."
                 )
+                # Hero number: large+bold numeric, small muted unit
+                _etr_num_html = (
+                    f"<span style='font-size:1.9em;font-weight:700;color:{_etr_color}'>"
+                    f"{_etr_alpha:+.1f}"
+                    f"<span style='font-size:0.6em;color:#8b94a7'> pp vs S&P</span>"
+                    f"</span>"
+                    if _etr_alpha is not None else
+                    f"<span style='font-size:1.9em;font-weight:700;color:{_etr_color}'>"
+                    f"—</span>"
+                )
                 st.markdown(
-                    f"<div style='font-size:1.05em;font-weight:600;color:{_etr_color}'>"
-                    f"<span style='font-size:0.75em;background:rgba(255,255,255,.08);"
-                    f"border-radius:10px;padding:1px 7px;margin-right:6px'>"
-                    f"{_etr_badge}</span>{_etr_hero}</div>"
+                    f"<div>{_etr_num_html}</div>"
                     f"<div style='color:#c7d2e2;font-size:0.85em;margin-top:2px'>"
                     f"when you acted on the App's new-position calls</div>"
                     f"<div style='color:#9ca3af;font-size:0.85em;margin-top:3px'>"
@@ -10017,7 +10052,11 @@ elif page == "🧾 Summary":
                     f"font-style:italic'>{_etr_caption}</div>",
                     unsafe_allow_html=True,
                 )
-            if st.button("→ Recommendations History", key="sm_ptr_etr"):
+            if st.button(
+                "Full report card → 📜 Recommendations History",
+                key="sm_ptr_etr",
+                type="tertiary",
+            ):
                 st.session_state["_pending_page"] = "📜 Recommendations History"
                 st.rerun()
     with _sm_ptr_row1[1]:
@@ -10046,7 +10085,7 @@ elif page == "🧾 Summary":
                 )
             else:
                 st.caption("No held position with a saved review yet.")
-            if st.button("→ AI Insights", key="sm_ptr_thesis"):
+            if st.button("→ AI Insights", key="sm_ptr_thesis", type="tertiary"):
                 st.session_state["_pending_page"] = "🧠 AI Insights"
                 st.rerun()
     # ── Row 2: Catalyst Watch (bottom-left) · Risk Posture (bottom-right)
@@ -10067,7 +10106,7 @@ elif page == "🧾 Summary":
                 f"<div style='color:#9ca3af;font-size:0.85em;margin-top:2px'>within {CATALYST_WATCH_WINDOW_DAYS}d</div>",
                 unsafe_allow_html=True,
             )
-            if st.button("→ Catalyst Watch", key="sm_ptr_catalyst"):
+            if st.button("→ Catalyst Watch", key="sm_ptr_catalyst", type="tertiary"):
                 st.session_state["_pending_page"] = "🔔 Catalyst Watch"
                 st.rerun()
     with _sm_ptr_row2[1]:
@@ -10093,7 +10132,7 @@ elif page == "🧾 Summary":
                     "Visit 🔗 Risk Analysis to compute.</div>",
                     unsafe_allow_html=True,
                 )
-            if st.button("→ Risk Analysis", key="sm_ptr_riskposture"):
+            if st.button("→ Risk Analysis", key="sm_ptr_riskposture", type="tertiary"):
                 st.session_state["_pending_page"] = "🔗 Risk Analysis"
                 st.rerun()
 
