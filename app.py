@@ -9951,6 +9951,14 @@ elif page == "📡 Signals & Advice":
 
         # Check triggers outside the expander — fired alerts stay visible without
         # the user having to open the config form.
+        #
+        # Dismiss + re-flag-on-change (2026-08-04 UX audit I4): this list used
+        # to just re-render identically every visit with no way to acknowledge
+        # it. `_pa_dismissed` keys each dismissal to the exact trigger value
+        # that fired ("kind", ticker, target/floor $) — so re-dismissing stays
+        # dismissed as long as nothing changed, but a moved target/floor or a
+        # newly-breached level shows again (never silently suppressed).
+        _pa_dismissed = st.session_state.setdefault("_pa_dismissed", {})
         _pa_fired = []
         for _, _pr in port_df.iterrows():
             _t   = _pr["Ticker"]
@@ -9959,14 +9967,40 @@ elif page == "📡 Signals & Advice":
             _tgt = _pa.get("target") or 0.0
             _flr = _pa.get("floor")  or 0.0
             if _tgt > 0 and _px >= _tgt:
-                _pa_fired.append(("warning", f"🎯 **{_t}** hit take-profit target **${_tgt:.2f}** (current ${_px:.2f}) — consider locking in gains"))
+                _pa_fired.append({
+                    "kind": "target", "ticker": _t, "level": "warning",
+                    "trigger_value": _tgt,
+                    "msg": f"🎯 **{_t}** hit take-profit target **${_tgt:.2f}** (current ${_px:.2f}) — consider locking in gains",
+                })
             if _flr > 0 and _px <= _flr:
-                _pa_fired.append(("danger",  f"🚨 **{_t}** breached floor alert **${_flr:.2f}** (current ${_px:.2f}) — review position now"))
-        if _pa_fired:
+                _pa_fired.append({
+                    "kind": "floor", "ticker": _t, "level": "danger",
+                    "trigger_value": _flr,
+                    "msg": f"🚨 **{_t}** breached floor alert **${_flr:.2f}** (current ${_px:.2f}) — review position now",
+                })
+
+        def _pa_dismiss_key(_f):
+            return f"{_f['kind']}_{_f['ticker']}"
+
+        _pa_shown  = [f for f in _pa_fired if _pa_dismissed.get(_pa_dismiss_key(f)) != f["trigger_value"]]
+        _pa_hidden_n = len(_pa_fired) - len(_pa_shown)
+
+        if _pa_shown:
             st.markdown("#### 🔔 Active Price Alerts")
-            for _lvl, _msg in _pa_fired:
-                if _lvl == "danger":   st.error(_msg)
-                else:                  st.warning(_msg)
+            for _pf in _pa_shown:
+                _pa_msg_col, _pa_dis_col = st.columns([6, 1])
+                with _pa_msg_col:
+                    if _pf["level"] == "danger": st.error(_pf["msg"])
+                    else:                        st.warning(_pf["msg"])
+                with _pa_dis_col:
+                    if st.button("✓ Dismiss", key=f"_pa_dismiss_btn_{_pa_dismiss_key(_pf)}"):
+                        _pa_dismissed[_pa_dismiss_key(_pf)] = _pf["trigger_value"]
+                        st.rerun()
+        if _pa_hidden_n:
+            st.caption(
+                f"{_pa_hidden_n} alert{'s' if _pa_hidden_n != 1 else ''} dismissed this session "
+                "— will reappear if the underlying target/floor changes or a new one fires."
+            )
 
         with st.expander(
             "⚙️ Custom Price Alerts — configure take-profit targets and floor alerts",
@@ -27027,7 +27061,7 @@ DRISHTA uses AI across **fourteen touchpoints** organised into two tracks. A **f
 
 - **🧭 Monthly Intelligence Report — "is the engine picking well, and am I acting well?"** A once-a-month retrospective on two questions: **Entry quality** — of the names the engine surfaced as high-conviction picks, did they beat the market? Broken down by conviction tier so you can see whether the highest-conviction calls really did best. **Signal discipline** — of those names, which did you act on, and did acting help or hurt? Shows what you skipped and what that cost or saved. The report is visual (funnel chart, conviction-tier bar, "what you skipped" table), counts distinct names, and is **frozen as an immutable artifact** the moment it's generated — a month picker lets you browse past reports without them changing.
 
-- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
+- **⚠️ Red Team — "what's the strongest case against each thesis I hold?"** Every trading day, each held position is scored 0–100 on four adversarial signals: whether a deterioration tier (WATCH/TRIM/EXIT) is active, how much the stock is lagging the market over 20 sessions, whether the composite score is falling, and whether analyst price targets have been cut. The score drives a label — **Intact / Softening / Eroding / Breaking** — and every signal shows a plain-English interpretation (🔴 pushing the score up, 🟢 supporting the thesis). A position whose label changed since the last day it was scored auto-expands with a **"🆕 Changed since your last visit"** badge, so a real tier shift can't get missed just because this tab only recomputes once per trading day. Once a position's score crosses a materiality threshold **and** you have a thesis on record, written **counter-evidence** appears — 2–3 specific counter-arguments Claude finds in the current signals, each citing the exact number behind it (distinct from the ⚔️ Debate feature's "Bull/Bear score," a different mechanism). If you ran **🔍 Run Pre-Mortem** at buy time, your own "what would make me wrong" commitment is read back as context, and the counter-evidence explicitly calls it out when today's data supports it — closing the loop between what you worried about and what's actually happening. The same counter-evidence also appears as a read-only "⚠️ Red Team" note on 🏠 Home's Act Today deterioration cards, next to ⚔️ Challenge This Exit. A third surface, **"⚠️ Thesis Under Pressure,"** appears at the end of Today's Brief on 🏠 Home when a held position's score newly crosses into Eroding-or-worse territory (or jumps sharply in a single day) — a nudge to go check the tab, shown only once you've actually visited Red Team that day and only for names not already called out in Act Today/Awareness above. **Awareness only: neither the score, the counter-evidence, nor this Brief nudge ever feeds a gate or changes a recommendation.**
 
 - **⚔️ Debate — "make me the strongest case on both sides before I buy this"** On any 📈 Grow Today entry candidate, click **⚔️ Debate** to run a structured 4-round argument: a Bull agent opens the case for the position, a Bear agent counters, Bull rebuts, Bear delivers its closing concern — then an impartial Judge scores both sides and names the **one specific claim** they disagree on most. Verdict reads as 🟢 Bull wins, 🔴 Bear wins, or ⚖️ Contested (the most common and most useful outcome — it tells you exactly what to research further before deciding). Both agents debate the same evidence — composite score, momentum, and relative strength vs the market — so neither side is arguing from information you don't also have. Runs once per candidate per day (results are cached — reopen the card any time to reread it), capped at 3 new debates per session. **The debate never reorders candidates or changes the composite score — it's a second opinion you read before deciding, not a vote that counts.**
 
@@ -27115,7 +27149,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
 - **🔗 Risk Analysis** — portfolio-level risk diagnostics: beta/Sharpe/Sortino/VaR, the Market-Risk Posture dial, correlation heatmap, rate sensitivity, stress testing (including an optional **🎯 Regime-Aware Adversarial Scenario** — see below), and (Action Plan tab) **🧭 Regime Fit** — compares your current beta and cash cushion to a target that shifts with the detected macro regime, naming your top beta contributors on a breach. Awareness only — it never resizes, trims, or gates anything; you decide whether and how fast to close the gap.
 - **🧩 Intelligence** — what your ownership MEANS in aggregate, not position-by-position. **🕸️ Correlation Clusters** groups positions that tend to move together, even through an indirect chain (A correlates with B, B correlates with C → shown as one 3-name cluster) — the pairwise heatmap on Risk Analysis never shows this transitive grouping. **⚖️ Risk Budget** shows which positions consume the most portfolio *volatility*, not just capital — a small, volatile, correlated position can quietly dominate your risk even at a modest dollar weight; the chart compares each position's capital weight against its share of realized portfolio risk. **📐 Factor Tilt** (button-gated — the one panel here that fetches fresh data) shows directional exposure to 5 style factors (Momentum, Value, Quality, Low Volatility, Growth) via correlation to factor-proxy ETFs over a trailing 6-month window — a book can look sector-diversified while still being deeply exposed to one factor. **🧬 Structural Scan** composes the three panels above into a Blast Radius Map (live, no click needed — estimates what a -20% shock to your biggest risk contributors would cost the whole book) plus an on-demand Haiku narrative naming your portfolio's single most dangerous structural pattern in plain English, and (further down the same tab) a **Hidden Same-Bet Detector** — an on-demand check for positions that look diversified by sector and price correlation but secretly bet on the same underlying assumption, classifying each finding as unverified/possible/confirmed against the correlation data above. **🧭 Signal Coherence** (a 5th tab) mechanically joins three existing per-ticker surfaces — the composite score's own direction, the weekly Thesis Review status, and the most recent Bull/Bear debate verdict — and surfaces only names where they genuinely disagree; no synthesized explanation, just the raw signals side by side. Explicitly directional, not precise. Awareness only — never gates or reorders; composite score still decides which name to act on.
-- **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it. Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
+- **📡 Signals & Advice** — two tabs: **📡 Active Signals** (active alerts by category — stops, signals, concentration, earnings, revisions; custom price alerts; signal-driven actions) and **🧩 Diversification** (sector reduce/rebalance and add-for-diversification recommendations). Custom Price Alerts (user-set take-profit and floor triggers) live in a collapsed ⚙️ expander on the Active Signals tab — fired alerts surface above it, each dismissible for the session (a dismissed alert reappears if the target/floor changes or a new one fires, so nothing is silently suppressed permanently). Note: weight-*target* rebalancing (drift vs. a target allocation %) lives on 🥧 Portfolio Overview's ⚖️ Rebalancing tab — a different feature from this page's score-driven actions.
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
@@ -29768,11 +29802,31 @@ elif page == "🧠 AI Insights":
                         return "Analyst price target raised — bullish revision", False
                     return "No analyst price target revision", False
 
+                # "Changed since your last visit" (2026-08-04 UX audit I4) —
+                # this tab only recomputes once per trading day and otherwise
+                # renders identically, so a real tier change is easy to miss if
+                # you don't revisit daily. Baseline = most recent PRIOR day
+                # that actually has a scored row for this ticker — same walk-
+                # back convention as Home's "Thesis Under Pressure" banner
+                # (THESIS_EROSION_BASELINE_LOOKBACK_DAYS), since a cache row
+                # only exists on a day this tab was actually visited. No new
+                # threshold: flags on a tier LABEL change, not a score delta.
+                from stock_analyzer.constants import THESIS_EROSION_BASELINE_LOOKBACK_DAYS as _RT_BL_DAYS
                 for _rr in _rt_results:
                     _rl   = _rr.get("erosion_label", "Intact")
                     _rscr = _rr.get("erosion_score") or 0
                     _icon = _LABEL_COLORS.get(_rl, "")
                     _rsnap = _rr.get("signals_snapshot") or {}
+
+                    _rt_baseline_label = None
+                    _rt_probe = _today_et() - timedelta(days=1)
+                    for _ in range(_RT_BL_DAYS):
+                        _rt_probe_row = db.load_thesis_erosion_cache(_rr["ticker"], str(_rt_probe))
+                        if _rt_probe_row and _rt_probe_row.get("erosion_label"):
+                            _rt_baseline_label = _rt_probe_row["erosion_label"]
+                            break
+                        _rt_probe -= timedelta(days=1)
+                    _rt_changed = _rt_baseline_label is not None and _rt_baseline_label != _rl
 
                     # Count how many signals are under pressure for the summary line
                     _rt_tier_msg,  _rt_tier_bad  = _rt_tier_text(_rsnap.get("tier"))
@@ -29788,7 +29842,14 @@ elif page == "🧠 AI Insights":
                     )
 
                     _rl_display = _RT_DISPLAY_LABEL.get(_rl, _rl)
-                    with st.expander(f"{_icon} {_rr['ticker']} — {_rl_display} ({_rscr:.0f}/100)  ·  {_summary}"):
+                    _rt_changed_badge = "  ·  🆕 Changed since your last visit" if _rt_changed else ""
+                    with st.expander(
+                        f"{_icon} {_rr['ticker']} — {_rl_display} ({_rscr:.0f}/100)  ·  {_summary}{_rt_changed_badge}",
+                        expanded=_rt_changed,
+                    ):
+                        if _rt_changed:
+                            _rt_bl_display = _RT_DISPLAY_LABEL.get(_rt_baseline_label, _rt_baseline_label)
+                            st.caption(f"🆕 Was **{_rt_bl_display}** the last time this tab had a scored row — now **{_rl_display}**.")
                         _rt_breakdown_caption = (
                             "**Signal breakdown** — signals in 🔴 are pushing the score up"
                             if _rt_pressure_n > 0 else
