@@ -186,6 +186,7 @@ from stock_analyzer.thesis_red_team import (
     compute_erosion_score, build_counter_evidence_inputs, generate_counter_evidence,
     pt_points_from_signal, EROSION_LABELS,
 )
+from stock_analyzer.severity import ACT_NOW, WATCH as _SEV_WATCH, STEADY, SEVERITY_RANK, style as _severity_style
 from stock_analyzer.analyst_targets import detect_pt_cut
 from stock_analyzer.position_lifecycle import lifecycle_badge
 from stock_analyzer.decision_bucket import (
@@ -2117,7 +2118,7 @@ with st.sidebar:
     _NAV_ICON = {
         "MAIN":      "🏠",
         "RESEARCH":  "📈",
-        "PORTFOLIO": "🧩",
+        "PORTFOLIO": "🗂️",
         "SIGNALS":   "🔔",
         "AI":        "🧠",
     }
@@ -11243,9 +11244,18 @@ elif page == "🔗 Risk Analysis":
     """
                 )
 
+            # Priority -> canonical display tier (2026-08-04 UX audit CA1).
+            # risk_advisor.py's own literals (HIGH/MEDIUM/OK/LOW) are untouched
+            # -- this maps them to a shared display tier at the render
+            # boundary only, same discipline as the CA4 verdict-bucket fix.
+            # LOW (the unclassified-holdings check) previously had no entry
+            # in the old sort/icon dicts: it sorted last and rendered as a
+            # full amber card instead of the compact green one it should get.
+            _PRIORITY_TIER = {"HIGH": ACT_NOW, "MEDIUM": _SEV_WATCH, "OK": STEADY, "LOW": STEADY}
+
             _n_high = sum(1 for r in _risk_advisor_recs if r["priority"] == "HIGH")
             _n_med  = sum(1 for r in _risk_advisor_recs if r["priority"] == "MEDIUM")
-            _n_ok   = sum(1 for r in _risk_advisor_recs if r["priority"] == "OK")
+            _n_ok   = sum(1 for r in _risk_advisor_recs if _PRIORITY_TIER[r["priority"]] == STEADY)
 
             _rac1, _rac2, _rac3 = st.columns(3)
             _rac1.metric("🔴 Act Today",        _n_high, help="Requires attention this week")
@@ -11254,27 +11264,28 @@ elif page == "🔗 Risk Analysis":
 
             st.markdown("")
 
-            # Sort: HIGH → MEDIUM → OK
-            _priority_order = {"HIGH": 0, "MEDIUM": 1, "OK": 2}
+            # Sort: Act Now → Watch → Steady
             _sorted_recs = sorted(
                 _risk_advisor_recs,
-                key=lambda x: _priority_order.get(x["priority"], 3),
+                key=lambda x: SEVERITY_RANK[_PRIORITY_TIER[x["priority"]]],
             )
 
             for _rec in _sorted_recs:
                 _pri   = _rec["priority"]
                 _rtype = _rec["type"]
+                _tier  = _PRIORITY_TIER[_pri]
 
-                # ── OK cards — compact, collapsed ────────────────────────────
-                if _pri == "OK":
+                # ── Steady cards — compact, collapsed ────────────────────────
+                if _tier == STEADY:
                     with st.expander(f"✅  {_rec['title']}", expanded=False):
                         st.caption(_rec["institutional_lens"])
                     continue
 
-                # ── HIGH / MEDIUM action cards ────────────────────────────────
-                _icon        = "🔴" if _pri == "HIGH" else "🟡"
-                _border_clr  = "#ff4444" if _pri == "HIGH" else "#ffbb33"
-                _expand      = _pri == "HIGH"
+                # ── Act Now / Watch action cards ─────────────────────────────
+                _sty         = _severity_style(_tier)
+                _icon        = _sty["icon"]
+                _border_clr  = _sty["color"]
+                _expand      = _tier == ACT_NOW
 
                 with st.expander(
                     f"{_icon} **{_pri}** · {_rec['title']}",
@@ -25632,7 +25643,7 @@ elif page == "🔔 Catalyst Watch":
     # (stashed in session) — so this is the SAME rich content the old Home
     # 'Earnings' tab showed, now living here. If Home hasn't been opened this
     # session, prompt rather than re-deriving (avoids a heavy duplicate load).
-    _cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Positions", "📡 Radar", "🎯 Entry Candidates"])
+    _cw_tab_hold, _cw_tab_radar, _cw_tab_entry = st.tabs(["📋 Positions", "📡 Radar", "🧭 Entry Candidates"])
 
     with _cw_tab_hold:
         st.markdown("## 📊 Your Positions — Earnings")
@@ -25771,7 +25782,7 @@ elif page == "🔔 Catalyst Watch":
 
     with _cw_tab_entry:
         # ── Phase 3 — Catalyst Scanner: watchlist entry candidates ──────────────
-        st.markdown("## 🎯 Entry Candidates")
+        st.markdown("## 🧭 Entry Candidates")
         st.caption(
             "Watchlist names near earnings with a strong historical beat rate, a positive or "
             "mixed post-earnings reaction pattern, and a composite score above the entry threshold. "
@@ -26236,7 +26247,7 @@ elif page == "📅 Economic Calendar":
                     _pk4.metric("🛡️ PROTECT",        _pb["protect_count"],
                                 delta="action needed" if _pb["protect_count"] > 0 else None,
                                 delta_color="inverse" if _pb["protect_count"] > 0 else "off")
-                    _pk5.metric("🎯 Opportunities",  _pb["opp_count"])
+                    _pk5.metric("🎯 Add",  _pb["opp_count"])
 
                     # ── Scenario cards ─────────────────────────────────────
                     _sc_bull = _pb["scenarios"]["bull"]
@@ -27175,7 +27186,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📒 Trade Journal** — three tabs: **📝 Log Trade** (log by hand or **📥 import a Robinhood statement**), **📊 Performance** (dashboard, behavioral analytics, decision patterns, engine trust), **📋 History** (your logged trades — the source of truth for holdings, P&L, position age).
 - **🪞 Trade Review** — behavioural retrospective on every recorded trade, over a selectable look-back window (2wk/30d/60d/90d/all-time). Categorizes each trade *App-Followed* (aligned with the app's recommendation), *Deviated* (external info/discretionary), or *Discretionary* (neither recorded) — inferred from the Journal columns, no manual tagging — and flags panic-window trades (made on a day the S&P 500 closed ≤ -1.5%) plus a vs-SPY benchmark per trade. **💡 What the Data Says** turns the raw numbers into a verdict, concrete findings, and one next move. **📈 Performance Trends** charts cumulative P&L and rolling win rate over the window. **⚖ Risk Discipline** checks position-size discipline against your single-name ceiling and sector mix. **🎯 Course-Correction Recommendations** and a **📜 Per-Trade Scorecard** round it out for drilling into individual trades.
 - **📜 Recommendations History** — every recommendation the app surfaced over time (the audit trail).
-- **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🎯 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
+- **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). Anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
@@ -27242,7 +27253,7 @@ The **🔔 Catalyst Watch** page lists **upcoming earnings dates** so a report n
 
 It is **awareness, not a buy signal** — an upcoming earnings date is a *reason to be careful*, not a reason to act. It actually works *with* the gates: when a name you'd otherwise be told to buy reports within a few days, the app **holds that entry back** (an earnings print is a coin-flip you don't need to step into) and tells you why. For names you already hold, it surfaces a short pre-earnings checklist so you can decide whether to trim or hold into the print.
 
-The page has three tabs: **📋 Positions** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🎯 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
+The page has three tabs: **📋 Positions** (your positions' earnings + pre-earnings playbook), **📡 Radar** (watchlist & universe upcoming reports), and **🧭 Entry Candidates** — watchlist names near earnings that have historically beaten estimates *and* clear the composite bar. Entry Candidates is still **awareness only** (never a buy recommendation) and only populates once you've pasted CNBC earnings previews via 🧠 AI Insights → Ideas Inbox → 📅 Pre-Earnings.
 """
             )
 

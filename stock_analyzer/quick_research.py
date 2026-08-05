@@ -224,12 +224,12 @@ def research_ticker(ticker: str, data: dict, portfolio_ctx: dict | None = None) 
         sig_label, sig_icon, sig_color, sig_score = rec["label"], rec["icon"], rec["color"], score
     else:
         b1 = (
-            "**Signal: 🚫 Verdict withheld** — fundamentals couldn't be sourced "
+            "**Signal: ❔ Verdict withheld** — fundamentals couldn't be sourced "
             "(company data unavailable from all providers), so a composite score "
             "would be guessing rather than measuring. Momentum and entry timing "
             "below are still valid."
         )
-        sig_label, sig_icon, sig_color, sig_score = "Verdict withheld", "🚫", "#dc2626", None
+        sig_label, sig_icon, sig_color, sig_score = "Verdict withheld", "❔", "#dc2626", None
 
     # Bullet 2: momentum snapshot
     b2_parts = [p for p in [
