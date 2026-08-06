@@ -12995,11 +12995,18 @@ elif page == "🧩 Intelligence":
                                 f"**{_cus_delta['avg_stress']:.2f}** "
                                 "(during this crash)"
                             )
-                            st.caption(
-                                "In this window, your book moved as one — much of "
-                                "the diversification you rely on in calm markets "
-                                "disappeared."
-                            )
+                            if _cus_delta["avg_stress"] > _cus_delta["avg_calm"]:
+                                st.caption(
+                                    "In this window, your book moved as one — much of "
+                                    "the diversification you rely on in calm markets "
+                                    "disappeared."
+                                )
+                            else:
+                                st.caption(
+                                    "Your portfolio's overall correlation didn't rise in "
+                                    "this window — broad diversification held up, though "
+                                    "see below for any specific pairs that converged anyway."
+                                )
 
                             _cus_conv = _cus_delta["newly_converged"]
                             if _cus_conv:
