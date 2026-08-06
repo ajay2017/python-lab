@@ -2403,7 +2403,11 @@ def _cached_tlt(period: str = "3mo"):
 # so opening the tab twice in a session, or two picks sharing a date range,
 # don't re-hit the provider chain. See stock_analyzer.predictive_analytics
 # .forward_alpha_at_horizon, which takes this in as its historical_close_fn.
-@st.cache_data(ttl=1800)
+# max_entries bounds the key space: (ticker, start, end) has unbounded
+# cardinality across a session's distinct picks/date pairs, and TTL alone
+# doesn't proactively evict — an untouched entry sits in memory until its
+# TTL happens to be re-checked on access (2026-08-06 perf investigation).
+@st.cache_data(ttl=1800, max_entries=500)
 def _cached_historical_close(ticker: str, start, end):
     from stock_analyzer.providers.orchestrator import get_historical_close
     return get_historical_close(ticker, start, end)
@@ -2422,6 +2426,27 @@ def _cached_vix(period: str = "1mo"):
         return float(_c.iloc[-1]) if not _c.empty else None
     except Exception:
         return None
+
+
+# ── Live-price / index dedup cache (memory & perf) ───────────────────────────
+# _index_strip / _price_strip are @st.fragment(run_every=60) — they tick every
+# 60s with NO user input, AND (by Streamlit fragment semantics) still execute
+# inline on every full-script rerun the rest of the app triggers (any button
+# click, nav, or the Home freshness watchdog's forced st.rerun(scope="app")).
+# So an actively-used session can call the raw fetch several times within the
+# same minute. ttl is deliberately SHORTER than the 60s fragment timer so the
+# steady-state auto-refresh cadence is unaffected — this only collapses
+# REDUNDANT calls stacked within a window, cutting both provider-call volume
+# and the per-call yfinance object churn that was the leading suspect behind
+# the Railway memory staircase (2026-08-06 perf investigation).
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_market_indices() -> list[dict]:
+    return fetch_market_indices()
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_live_prices(tickers_tuple: tuple) -> dict[str, dict]:
+    return fetch_live_prices(list(tickers_tuple))
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -2632,7 +2657,7 @@ def _get_premarket_brief(held_tickers: tuple, watchlist: tuple) -> dict:
     }
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False, max_entries=20)
 def _cached_monte_carlo(
     tickers_tuple: tuple, weights_tuple: tuple, market_values_tuple: tuple,
     horizon_days: int,
@@ -2642,7 +2667,13 @@ def _cached_monte_carlo(
     port_df directly, so an unrelated page rerun doesn't force a fresh multi-
     year re-fetch. Takes primitive tuples (not port_df) to keep the cache key
     stable and cheap to hash. See stock_analyzer/monte_carlo.py for the pure
-    simulation logic — this is a thin Streamlit-caching wrapper only."""
+    simulation logic — this is a thin Streamlit-caching wrapper only.
+
+    max_entries=20: market_values_tuple drifts on every live price tick during
+    market hours, so this key can churn many times a day; the 24h ttl alone
+    would let every distinct tick's full 2000-trial result sit retained for a
+    full day. This bounds the worst case to a fixed number of the most-recent
+    simulations (LRU) rather than an unbounded set (2026-08-06 perf investigation)."""
     port_df = pd.DataFrame({
         "Ticker":       list(tickers_tuple),
         "Weight (%)":   list(weights_tuple),
@@ -2667,13 +2698,20 @@ def _cache_age_in_days(fetched_at_iso: str | None) -> int | None:
         return None
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=300)
 def load_all(ticker: str, period: str = "6mo") -> dict:
     """Thin Streamlit-cached wrapper over bundle_loader.load_bundle (the shared
     pure pipeline, also used by the headless email-alerts cron). Supplies the
     cached SPY benchmark + risk-free rate so the heavy single-ticker analysis runs
     once per 30-min TTL per ticker. Logic lives in stock_analyzer/bundle_loader.py
-    so the app and the cron never drift."""
+    so the app and the cron never drift.
+
+    max_entries=300: the curated + discovery universe is ~275 tickers
+    (SECTOR_UNIVERSE 73 + DISCOVERY_UNIVERSE 202); this covers that whole
+    known universe plus headroom for held/watchlist names and one-off
+    "analyze any ticker" (F-40) lookups, while still bounding the worst case —
+    each entry is the heaviest cached object in the app (full history + info +
+    news + earnings + revisions bundle) (2026-08-06 perf investigation)."""
     try:
         _spy = _cached_spy(period)
     except Exception:
@@ -2833,7 +2871,7 @@ def _fetch_factor_etf_returns() -> dict:
 # ── Market index strip — shown on every page ─────────────────────────────────
 @st.fragment(run_every=60)
 def _index_strip():
-    indices = fetch_market_indices()
+    indices = _cached_market_indices()
     if not indices:
         return
     tiles = ""
@@ -3420,7 +3458,7 @@ if page == "🏠 Home":
     @st.fragment(run_every=60)
     def _price_strip(tickers: list[str]):
         mkt = market_status()
-        live = fetch_live_prices(tickers)
+        live = _cached_live_prices(tuple(tickers))
         st.session_state["_live_prices"] = live   # share with P&L table
         if not live:
             return
@@ -30369,12 +30407,17 @@ elif page == "🧠 AI Insights":
                 "save new research or after the backfill script runs."
             )
         else:
-            @st.cache_data(ttl=3600, show_spinner=False)
+            @st.cache_data(ttl=3600, show_spinner=False, max_entries=2000)
             def _sc_cached_ohlc(ticker: str, start_iso: str, end_iso: str) -> dict | None:
                 """One OHLC fetch for [start, end]. Derives the endpoint close AND
                 the window's max High from the same frame — directional accuracy
                 (endpoint close) and PT-hit (intra-window high) use different price
-                series for the same call, but share this one fetch."""
+                series for the same call, but share this one fetch.
+
+                max_entries bounds the (ticker, start, end) key space against
+                load_analyst_coverage(limit=5000)'s row count — entries are tiny
+                (two floats) but unbounded count still isn't free
+                (2026-08-06 perf investigation)."""
                 try:
                     import yfinance as _sc_yf
                     _raw = _sc_yf.download(
