@@ -369,3 +369,162 @@ def test_escalation_ignored_pattern_total_below_min_n_returns_none():
         {"ticker": "AAA", "signal_date": "2024-01-10", "signal_type": "TRIM"},
     ])
     assert bf.escalation_ignored_pattern(signals, _trades([]), act_window_days=5, min_n=5) is None
+
+
+# ─── momentum_recency_pattern — "median" key (F-behavioral-fingerprint-live) ─
+
+def test_momentum_recency_pattern_return_includes_median_key():
+    matched = [
+        {"momentum_score": 1, "acted_on": False},
+        {"momentum_score": 2, "acted_on": False},
+        {"momentum_score": 3, "acted_on": True},
+        {"momentum_score": 4, "acted_on": True},
+        {"momentum_score": 5, "acted_on": True},
+    ]
+    result = bf.momentum_recency_pattern(matched, min_n=2)
+    assert result["median"] == pytest.approx(3.0)
+
+
+# ─── classify_live_buy_momentum ───────────────────────────────────────────────
+
+def test_classify_live_buy_momentum_score_at_median_lands_in_high_bucket():
+    # 5 distinct scores [1,2,3,4,5] (odd) -> median = 3 (the same >= median
+    # boundary momentum_recency_pattern uses internally). A score EXACTLY at
+    # the median must land in "high", not "low".
+    matched = [
+        {"momentum_score": 1, "acted_on": False},
+        {"momentum_score": 2, "acted_on": False},
+        {"momentum_score": 3, "acted_on": True},
+        {"momentum_score": 4, "acted_on": True},
+        {"momentum_score": 5, "acted_on": True},
+    ]
+    pattern = bf.momentum_recency_pattern(matched, min_n=2)
+    result = bf.classify_live_buy_momentum(3, matched, min_n=2)
+    assert result is not None
+    assert result["bucket"] == "high"
+    # The live classifier's high-bucket rate must be IDENTICAL to what the
+    # retrospective card itself reports on the same input -- a boundary-
+    # coherence drift here would let the two surfaces silently disagree.
+    assert result["high"]["action_rate"] == pytest.approx(pattern["high"]["action_rate"])
+    assert result["median"] == pytest.approx(pattern["median"])
+
+
+def test_classify_live_buy_momentum_score_below_median_lands_in_low_bucket():
+    matched = [
+        {"momentum_score": 1, "acted_on": False},
+        {"momentum_score": 2, "acted_on": False},
+        {"momentum_score": 3, "acted_on": True},
+        {"momentum_score": 4, "acted_on": True},
+        {"momentum_score": 5, "acted_on": True},
+    ]
+    result = bf.classify_live_buy_momentum(2, matched, min_n=2)
+    assert result is not None
+    assert result["bucket"] == "low"
+
+
+def test_classify_live_buy_momentum_none_score_returns_none():
+    matched = [{"momentum_score": i, "acted_on": True} for i in range(10)]
+    assert bf.classify_live_buy_momentum(None, matched, min_n=2) is None
+
+
+def test_classify_live_buy_momentum_nan_score_returns_none():
+    matched = [{"momentum_score": i, "acted_on": True} for i in range(10)]
+    assert bf.classify_live_buy_momentum(float("nan"), matched, min_n=2) is None
+
+
+def test_classify_live_buy_momentum_sub_min_n_pattern_returns_none():
+    # Only 15 scored rows supplied; min_n=10 requires >=20 total.
+    matched = [{"momentum_score": i, "acted_on": True} for i in range(15)]
+    assert bf.classify_live_buy_momentum(7, matched, min_n=10) is None
+
+
+def test_classify_live_buy_momentum_never_raises_on_malformed_input():
+    assert bf.classify_live_buy_momentum(50, [], min_n=3) is None
+    assert bf.classify_live_buy_momentum(50, None, min_n=3) is None
+    assert bf.classify_live_buy_momentum("not-a-number", [{"momentum_score": 1, "acted_on": True}], min_n=3) is None
+    assert bf.classify_live_buy_momentum(50, [{"not_a_dict": True}], min_n=3) is None
+
+
+# ─── latest_active_signal_type ────────────────────────────────────────────────
+
+def test_latest_active_signal_type_exactly_at_window_boundary_is_active():
+    signals = _exit_signals([
+        {"ticker": "AAA", "signal_date": "2024-01-01", "signal_type": "WATCH"},
+    ])
+    as_of = dt.date(2024, 1, 8)  # exactly 7 days old
+    assert bf.latest_active_signal_type(signals, "AAA", as_of, act_window_days=7) == "WATCH"
+
+
+def test_latest_active_signal_type_one_day_beyond_window_is_not_active():
+    signals = _exit_signals([
+        {"ticker": "AAA", "signal_date": "2024-01-01", "signal_type": "WATCH"},
+    ])
+    as_of = dt.date(2024, 1, 9)  # 8 days old -- one day past the window
+    assert bf.latest_active_signal_type(signals, "AAA", as_of, act_window_days=7) is None
+
+
+def test_latest_active_signal_type_returns_most_recent_among_multiple_types():
+    signals = _exit_signals([
+        {"ticker": "AAA", "signal_date": "2024-01-01", "signal_type": "WATCH"},
+        {"ticker": "AAA", "signal_date": "2024-01-05", "signal_type": "TRIM"},
+    ])
+    as_of = dt.date(2024, 1, 6)  # both within a 7-day window; TRIM is more recent
+    assert bf.latest_active_signal_type(signals, "AAA", as_of, act_window_days=7) == "TRIM"
+
+
+def test_latest_active_signal_type_no_row_for_ticker_returns_none():
+    signals = _exit_signals([
+        {"ticker": "BBB", "signal_date": "2024-01-01", "signal_type": "WATCH"},
+    ])
+    as_of = dt.date(2024, 1, 2)
+    assert bf.latest_active_signal_type(signals, "AAA", as_of, act_window_days=7) is None
+
+
+def test_latest_active_signal_type_never_raises_on_malformed_input():
+    assert bf.latest_active_signal_type(None, "AAA", dt.date(2024, 1, 1), act_window_days=7) is None
+    assert bf.latest_active_signal_type(pd.DataFrame(), "AAA", dt.date(2024, 1, 1), act_window_days=7) is None
+    assert bf.latest_active_signal_type(_exit_signals([]), "", dt.date(2024, 1, 1), act_window_days=7) is None
+    assert bf.latest_active_signal_type(_exit_signals([]), "AAA", None, act_window_days=7) is None
+    _missing_cols = pd.DataFrame({"foo": [1, 2]})
+    assert bf.latest_active_signal_type(_missing_cols, "AAA", dt.date(2024, 1, 1), act_window_days=7) is None
+
+
+# ─── classify_live_sell_signal ────────────────────────────────────────────────
+
+def test_classify_live_sell_signal_falsy_type_returns_none():
+    signals = _exit_signals([{"ticker": "AAA", "signal_date": "2024-01-01", "signal_type": "WATCH"}])
+    assert bf.classify_live_sell_signal(None, signals, _trades([]), act_window_days=7, min_n=1) is None
+    assert bf.classify_live_sell_signal("", signals, _trades([]), act_window_days=7, min_n=1) is None
+
+
+def test_classify_live_sell_signal_sub_min_n_returns_none():
+    # Only 1 WATCH signal supplied; min_n=5 excludes it from both underlying
+    # patterns' result dicts.
+    signals = _exit_signals([{"ticker": "AAA", "signal_date": "2024-01-01", "signal_type": "WATCH"}])
+    trades = _trades([{"ticker": "AAA", "action": "SELL", "traded_at": "2024-01-02"}])
+    assert bf.classify_live_sell_signal("WATCH", signals, trades, act_window_days=7, min_n=5) is None
+
+
+def test_classify_live_sell_signal_matches_underlying_patterns():
+    signals = _exit_signals([
+        {"ticker": t, "signal_date": "2024-01-01", "signal_type": "WATCH"}
+        for t in ("AAA", "BBB", "CCC")
+    ])
+    trades = _trades([
+        {"ticker": "AAA", "action": "SELL", "traded_at": "2024-01-02"},  # lag 1
+        {"ticker": "BBB", "action": "SELL", "traded_at": "2024-01-03"},  # lag 2
+        {"ticker": "CCC", "action": "SELL", "traded_at": "2024-01-04"},  # lag 3
+    ])
+    result = bf.classify_live_sell_signal("WATCH", signals, trades, act_window_days=7, min_n=3)
+    rate_pattern = bf.signal_response_rate_pattern(signals, trades, act_window_days=7, min_n=3)
+    lag_pattern = bf.signal_lag_pattern(signals, trades, act_window_days=7, min_n=3)
+    assert result is not None
+    assert result["action_rate"] == pytest.approx(rate_pattern["WATCH"]["action_rate"])
+    assert result["n_signals"] == rate_pattern["WATCH"]["n_signals"]
+    assert result["median_lag_days"] == pytest.approx(lag_pattern["WATCH"]["median_lag_days"])
+
+
+def test_classify_live_sell_signal_never_raises_on_malformed_input():
+    assert bf.classify_live_sell_signal("WATCH", None, _trades([]), act_window_days=7, min_n=1) is None
+    assert bf.classify_live_sell_signal("WATCH", pd.DataFrame(), None, act_window_days=7, min_n=1) is None
+    assert bf.classify_live_sell_signal("WATCH", _exit_signals([]), _trades([]), act_window_days=7, min_n=1) is None

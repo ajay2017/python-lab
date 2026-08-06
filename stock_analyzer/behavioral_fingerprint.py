@@ -106,6 +106,47 @@ def momentum_recency_pattern(
             "low": low_stats,
             "delta_pp": delta_pp,
             "direction": direction,
+            "median": median_val,
+        }
+    except Exception:
+        return None
+
+
+# ── Live decision-moment mirror — BUY side (momentum) ────────────────────────
+# Classifies a SINGLE ticker's momentum score into the SAME >= median
+# high/low bucket boundary momentum_recency_pattern uses internally, so the
+# 📒 Log Trade page can mirror this pattern at the instant a BUY is logged —
+# not only retrospectively on the 🧬 Behavioral Fingerprint tab. Never reads
+# the engine's recommendation, never gates the trade write.
+
+def classify_live_buy_momentum(
+    this_momentum_score, matched: list[dict], min_n: int, meaningful_delta_pp: float = 5.0
+) -> Optional[dict]:
+    """
+    Returns None when `this_momentum_score` is None/NaN, or when the
+    underlying momentum_recency_pattern is below `min_n` per bucket (the
+    same sample-size floor as the retrospective card). Otherwise:
+        {"bucket": "high" | "low",
+         "high": {n, n_acted, action_rate},
+         "low":  {n, n_acted, action_rate},
+         "median": float}
+    `bucket` is which side THIS score falls on (>= median -> "high"); the
+    caller renders both buckets' rates regardless, per the locked copy spec.
+    """
+    try:
+        score = _safe_float(this_momentum_score)
+        if score is None:
+            return None
+        pattern = momentum_recency_pattern(matched, min_n, meaningful_delta_pp=meaningful_delta_pp)
+        if pattern is None:
+            return None
+        median_val = pattern["median"]
+        bucket = "high" if score >= median_val else "low"
+        return {
+            "bucket": bucket,
+            "high": pattern["high"],
+            "low": pattern["low"],
+            "median": median_val,
         }
     except Exception:
         return None
@@ -381,6 +422,99 @@ def signal_lag_pattern(
             }
 
         return result if result else None
+    except Exception:
+        return None
+
+
+# ── Live decision-moment mirror — SELL side (active exit signal) ────────────
+# Mirrors the Exit Signal Response cards at the instant a SELL is logged on
+# 📒 Log Trade — reuses signal_response_rate_pattern / signal_lag_pattern for
+# the specific signal_type currently active on this ticker rather than
+# introducing a parallel computation. Never gates the trade write.
+
+def latest_active_signal_type(
+    exit_signals_df, ticker, as_of_date, act_window_days: int
+) -> Optional[str]:
+    """
+    Most recent `signal_type` for `ticker` in `exit_signals_df` whose
+    `signal_date` is within `act_window_days` days of `as_of_date`
+    (inclusive boundary — exactly `act_window_days` old still counts as
+    active; `act_window_days + 1` does not). Defensive: bad/empty/missing-
+    column input or a lookup error returns None, never raises.
+    """
+    try:
+        if exit_signals_df is None or (hasattr(exit_signals_df, "empty") and exit_signals_df.empty):
+            return None
+        if not ticker or as_of_date is None:
+            return None
+        for col in ("ticker", "signal_date", "signal_type"):
+            if col not in exit_signals_df.columns:
+                return None
+
+        ticker_u = str(ticker).upper()
+        rows = exit_signals_df[exit_signals_df["ticker"].astype(str).str.upper() == ticker_u]
+        if rows.empty:
+            return None
+
+        best_date = None
+        best_type = None
+        for _, row in rows.iterrows():
+            try:
+                sig_date = pd.to_datetime(row["signal_date"]).date()
+            except Exception:
+                continue
+            age = (as_of_date - sig_date).days
+            if age < 0 or age > act_window_days:
+                continue
+            sig_type = row.get("signal_type")
+            if not sig_type:
+                continue
+            if best_date is None or sig_date > best_date:
+                best_date = sig_date
+                best_type = str(sig_type)
+
+        return best_type
+    except Exception:
+        return None
+
+
+def classify_live_sell_signal(
+    signal_type, exit_signals_df, trades_df, act_window_days: int, min_n: int
+) -> Optional[dict]:
+    """
+    Reuses signal_response_rate_pattern + signal_lag_pattern for the single
+    `signal_type` currently active on the ticker being sold, so the live
+    mirror can never disagree with the retrospective Exit Signal Response
+    cards on the same underlying computation.
+
+    Returns None when `signal_type` is falsy, or when that type's sample is
+    below `min_n` in either underlying pattern. Otherwise:
+        {"action_rate": float (0-1 fraction, same scale as
+                                signal_response_rate_pattern),
+         "n_signals": int,
+         "median_lag_days": float}
+    """
+    try:
+        if not signal_type:
+            return None
+        rate_pattern = signal_response_rate_pattern(
+            exit_signals_df, trades_df, act_window_days, min_n
+        )
+        if rate_pattern is None or signal_type not in rate_pattern:
+            return None
+        lag_pattern = signal_lag_pattern(
+            exit_signals_df, trades_df, act_window_days, min_n
+        )
+        if lag_pattern is None or signal_type not in lag_pattern:
+            return None
+
+        rate_stats = rate_pattern[signal_type]
+        lag_stats = lag_pattern[signal_type]
+        return {
+            "action_rate": rate_stats["action_rate"],
+            "n_signals": rate_stats["n_signals"],
+            "median_lag_days": lag_stats["median_lag_days"],
+        }
     except Exception:
         return None
 

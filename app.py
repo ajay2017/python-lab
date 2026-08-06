@@ -20903,6 +20903,104 @@ elif page == "📒 Trade Journal":
                 key="_tj_lesson",
                 placeholder="e.g. Held past earnings because I expected a beat — didn't pan out",
             )
+
+        # ── Behavioral Fingerprint — live decision-moment mirror ─────────────
+        # Quiet, one-line-per-side mirror of the retrospective 🧬 Behavioral
+        # Fingerprint patterns (BUY momentum-chasing / SELL signal-response),
+        # surfaced at the instant a trade is logged instead of only after the
+        # fact. Structurally OUTSIDE st.form("log_trade_form") below, so it can
+        # never gate or slow the submit path. Whole block wrapped in one
+        # try/except (mirrors the lesson-category chip precedent above) — a
+        # classification failure degrades to silence, never a crash. Silence
+        # is correct on every degrade path here (off-universe ticker, sample
+        # below BEHAVIORAL_MIN_SAMPLE_N, no active exit signal) — no
+        # "insufficient data" placeholder, unlike the retrospective tab.
+        # See docs/plans/behavioral-fingerprint-decision-moment.md.
+        try:
+            from stock_analyzer import behavioral_fingerprint as _bfl
+            from stock_analyzer.market_time import today_et as _bfl_today_et
+
+            if _live_action == "BUY" and _live_ticker:
+                _bfl_score = None
+                _bfl_pf = st.session_state.get("_last_port_df")
+                if _bfl_pf is not None and not _bfl_pf.empty and "Score" in _bfl_pf.columns:
+                    _bfl_row = _bfl_pf[_bfl_pf["Ticker"] == _live_ticker]
+                    if not _bfl_row.empty:
+                        _bfl_score = _bfl_row.iloc[0].get("Score")
+                if _bfl_score is None:
+                    _bfl_sr = st.session_state.get("scanner_results")
+                    if _bfl_sr is not None and not _bfl_sr.empty and "Score" in _bfl_sr.columns:
+                        _bfl_sr_row = _bfl_sr[_bfl_sr["Ticker"] == _live_ticker]
+                        if not _bfl_sr_row.empty:
+                            _bfl_score = _bfl_sr_row.iloc[0].get("Score")
+
+                if _bfl_score is not None:
+                    @st.cache_data(ttl=300, show_spinner=False)
+                    def _tj_bf_matched_actionable():
+                        # Same data-loading chain as the retrospective 🧬
+                        # Behavioral Fingerprint tab's momentum-chasing card
+                        # (My Edge → Tab D) — cached so a keystroke rerun on
+                        # this page doesn't re-hit the DB on every char typed.
+                        from stock_analyzer.recommendations_history import (
+                            match_recs_to_trades as _bfl_match,
+                        )
+                        _recs_df = db.load_recommendations()
+                        _trades_df = db.load_trades()
+                        _matched_all = _bfl_match(_recs_df, _trades_df)
+                        return [
+                            r for r in _matched_all
+                            if r.get("rec_type") in ("new_pick", "add_winner")
+                        ]
+
+                    _bfl_matched = _tj_bf_matched_actionable()
+                    _bfl_cls = _bfl.classify_live_buy_momentum(
+                        _bfl_score, _bfl_matched, BEHAVIORAL_MIN_SAMPLE_N,
+                        meaningful_delta_pp=BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
+                    )
+                    if _bfl_cls is not None:
+                        _bfl_kind = "high" if _bfl_cls["bucket"] == "high" else "low"
+                        st.caption(
+                            f"📊 This is a {_bfl_kind}-momentum entry (Score {float(_bfl_score):.0f})."
+                        )
+                        st.caption(
+                            f"Historically you've acted on **{_bfl_cls['high']['action_rate']:.0f}%** "
+                            f"of your high-momentum signals vs **{_bfl_cls['low']['action_rate']:.0f}%** "
+                            "of low-momentum ones."
+                        )
+                        st.caption("An observed correlation in your own decisions, not a verdict on it.")
+
+            elif _live_action == "SELL" and _live_ticker:
+                # Same lazy, session-cached exit-signals load the retrospective
+                # tab uses (_exit_signals_cache) — never a second cache for the
+                # same data.
+                if "_exit_signals_cache" not in st.session_state:
+                    st.session_state["_exit_signals_cache"] = db.load_exit_signals()
+                _bfl_exit_df = st.session_state.get("_exit_signals_cache")
+
+                _bfl_trades_df = st.session_state.get("trades_df")
+                if _bfl_trades_df is None:
+                    _bfl_trades_df = db.load_trades()
+
+                _bfl_sig_type = _bfl.latest_active_signal_type(
+                    _bfl_exit_df, _live_ticker, _bfl_today_et(), EXIT_SIGNAL_ACT_WINDOW_DAYS
+                )
+                if _bfl_sig_type:
+                    _bfl_sell = _bfl.classify_live_sell_signal(
+                        _bfl_sig_type, _bfl_exit_df, _bfl_trades_df,
+                        EXIT_SIGNAL_ACT_WINDOW_DAYS, BEHAVIORAL_MIN_SAMPLE_N,
+                    )
+                    if _bfl_sell is not None:
+                        st.caption(f"⏱️ This SELL matches an active {_bfl_sig_type} signal.")
+                        st.caption(
+                            f"Historically you act on {_bfl_sig_type} signals "
+                            f"**{_bfl_sell['action_rate']:.0%}** of the time within "
+                            f"{EXIT_SIGNAL_ACT_WINDOW_DAYS} days (typically "
+                            f"~{_bfl_sell['median_lag_days']:.0f} days)."
+                        )
+                        st.caption("An observed correlation in your own decisions, not a verdict on it.")
+        except Exception:
+            pass
+
         _cost_basis_hint = 0.01
         _cost_hint_label = "Cost Basis / share ($)"
         _cb_info = ""
@@ -28160,6 +28258,8 @@ Directional, sample-gated observations over your own Buy-side decisions (new_pic
 Every card requires at least 8 decisions in **each** side of the comparison before it shows a finding — below that, it reads "insufficient data" rather than guessing from too little history. Given how few trades most investors log, expect most cards to start out this way; they fill in as more decisions accumulate. **These are observed correlations in your own past decisions, never verdicts or accusations, and the engine never reads them** — nothing here changes a score, a rank, or a gate. Below the three Buy-side cards, an **Exit Signal Response** section covers how you react to TRIM/EXIT/WATCH/RISK_OFF signals: response rate (how often a signal is followed by a SELL within a window), response lag (median days to act), and escalation-ignored (holding through a WATCH→TRIM/EXIT or TRIM→EXIT escalation without selling) — built from the `exit_signals` history persisted since 2026-07-18, forward-only from that date.
 
 At the top of this tab, a **🔭 Your Winning Entry Profile** card runs that same analysis FORWARD: what did a typical *realized winning* entry look like (composite score band, momentum score band, top sector), built from your closed round-trips matched back to the recommendation that triggered them. Requires the same 8-decision floor, reporting "not enough closed winning trades yet" below it. This profile feeds a same-day match badge — **🧬 Matches your historical winning profile** — on 🏠 Home's Grow Today picks, when a fresh pick shares at least 2 of the 3 traits with your own past winners. Silence (no badge), never a warning, when it doesn't match — a non-match isn't a negative signal on a pick that already cleared every other gate. **Awareness only — never re-ranks, re-scores, or gates a pick.**
+
+These same momentum-chasing and signal-response patterns also mirror **at the moment you log a matching trade** on 📒 Trade Journal → 📝 Log Trade — not just retrospectively here. Logging a BUY on a high/low-momentum name, or a SELL against an active WATCH/TRIM/EXIT/RISK_OFF signal, shows one quiet line reporting your own historical action-rate for that exact situation, with the same "observed correlation, not a verdict" framing. It renders outside the trade form and can never gate, slow, or block recording the trade — and shows nothing at all when the sample is too thin or the ticker is off-universe, rather than an "insufficient data" placeholder.
 
 ---
 
