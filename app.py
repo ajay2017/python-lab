@@ -10480,12 +10480,46 @@ elif page == "🧾 Summary":
                         return f"{v.get('n_buy_plus')} Buy+ / {v.get('n_below')} below"
                     return str(v).replace("_", " ")
 
+                # Cosmetic-only severity color for the VALUE line — reuses this
+                # app's existing green/amber/red vocabulary (same meaning as the
+                # RAG label / chip styling elsewhere) via Streamlit's NATIVE
+                # ":color[...]" markdown directive — no custom HTML, so this
+                # never touches the unsafe_allow_html surface at all. Purely
+                # visual — never feeds back into any claim value, grade, or gate.
+                _PTH_GREY = "grey"
+
+                def _pth_severity(k, v):
+                    if v == "unavailable":
+                        return _PTH_GREY
+                    if k == "risk_posture":
+                        return {"All Clear": "green", "Monitor": "orange",
+                                "Action Required": "red"}.get(v, _PTH_GREY)
+                    if k == "concentration":
+                        return {"within": "green", "single_name_elevated": "orange",
+                                "sector_elevated": "red"}.get(v, _PTH_GREY)
+                    if k == "correlation_structure":
+                        return {"diversified": "green", "elevated": "orange",
+                                "concentrated_cluster": "red"}.get(v, _PTH_GREY)
+                    if k == "holdings_health" and isinstance(v, dict):
+                        n_below = v.get("n_below", 0) or 0
+                        n_buy   = v.get("n_buy_plus", 0) or 0
+                        if n_below == 0:
+                            return "green"
+                        return "red" if n_below > n_buy else "orange"
+                    if k == "action_posture":
+                        return {"deploying": "green", "holding": _PTH_GREY,
+                                "de_risking": "orange"}.get(v, _PTH_GREY)
+                    return _PTH_GREY
+
                 with st.expander(_pth_headline, expanded=False):
                     _pth_cols = st.columns(5)
                     for _pth_i, _pth_k in enumerate(_pth.CLAIM_KEYS):
                         with _pth_cols[_pth_i]:
-                            st.caption(f"**{_pth_labels[_pth_k]}**")
-                            st.caption(_pth_disp(_pth_claims.get(_pth_k, "unavailable")))
+                            _pth_v = _pth_claims.get(_pth_k, "unavailable")
+                            st.markdown(f"**{_pth_labels[_pth_k]}**")
+                            st.markdown(
+                                f":{_pth_severity(_pth_k, _pth_v)}[{_pth_disp(_pth_v)}]"
+                            )
 
                     st.markdown(_pth_this_week["prose"])
 
