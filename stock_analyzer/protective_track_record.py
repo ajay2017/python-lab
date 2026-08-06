@@ -23,8 +23,9 @@ Critical dedup invariant: cron writes one `exit_signals` row per day a name
 stays flagged, so a 15-day EXIT episode is 15 rows for one ticker. Averaging
 per-row double-counts and biases toward whichever name stayed flagged longest.
 `collapse_by_ticker()` collapses to exactly one row per distinct ticker
-(earliest signal_date = longest/most-mature window, highest-severity type
-reached) before any aggregate is computed.
+(earliest signal_date among that ticker's usably-priced rows, falling back to
+the true-earliest dated row when none are priced; highest-severity type
+reached across ALL rows) before any aggregate is computed.
 
 Pure logic — no Streamlit, no DB or API calls. Caller supplies:
   - signals_df       exit_signals rows (DataFrame or list of dicts), already
@@ -137,15 +138,24 @@ def collapse_by_ticker(enriched: list[dict]) -> list[dict]:
     THE DEDUP INVARIANT. Cron writes one row per day a name stays flagged —
     a 15-day EXIT episode is 15 rows for the same ticker. Group by ticker and
     keep exactly ONE representative row per distinct ticker: the row with the
-    EARLIEST `signal_date` (longest/most-mature window, avoids recency bias).
+    EARLIEST `signal_date` among that ticker's rows that carry a usable
+    (truthy) `price_at_signal`, falling back to the true-earliest dated row
+    when none of a ticker's rows are priced. A ticker whose earliest-ever
+    flagged row was written before pricing was reliable (legacy NULL price)
+    is no longer permanently anchored to that unpriced row once a later,
+    correctly-priced row for the same ticker exists.
+
+    Note this means a ticker's reported `since_date`/maturity window now
+    starts from when it was first *reliably measured*, not merely first
+    flagged — an intentional, more honest framing shift, not a bug.
 
     The representative row's anchor fields (signal_date, price_at_signal, and
-    all outcome fields derived from them) are kept AS-IS from that earliest
-    row — but a `severity` field is added/overridden to the HIGHEST-severity
+    all outcome fields derived from them) are kept AS-IS from that row — but
+    a `severity` field is added/overridden to the HIGHEST-severity
     `signal_type` seen across ALL of that ticker's rows in the input (EXIT
     outranks TRIM), so a ticker first flagged TRIM then later escalated to
-    EXIT is labeled by the worse outcome even though the anchor date/price
-    is still from the earlier TRIM row.
+    EXIT is labeled by the worse outcome regardless of which row became the
+    anchor.
 
     Returns one dict per distinct ticker (order not guaranteed).
     """
@@ -159,7 +169,20 @@ def collapse_by_ticker(enriched: list[dict]) -> list[dict]:
     collapsed: list[dict] = []
     for tk, rows in by_ticker.items():
         dated = [r for r in rows if r.get("signal_date") is not None]
-        rep = min(dated, key=lambda r: r["signal_date"]) if dated else rows[0]
+        # "Priced" means TRUTHY price_at_signal, not merely "is not None" —
+        # a stored 0.0 price would pass an is-not-None check but the outcome
+        # math (compute_protective_outcomes, `if cur is not None and
+        # price_at_signal:`) ALSO gates on truthiness, so a 0.0-priced row
+        # would still yield protect_alpha_pct = None downstream. Matching
+        # that here avoids re-anchoring on a row that outcome math treats
+        # as unpriced anyway.
+        priced_dated = [r for r in dated if r.get("price_at_signal")]
+        if priced_dated:
+            rep = min(priced_dated, key=lambda r: r["signal_date"])
+        elif dated:
+            rep = min(dated, key=lambda r: r["signal_date"])
+        else:
+            rep = rows[0]
 
         severities = [
             r.get("signal_type") for r in rows

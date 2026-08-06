@@ -293,6 +293,96 @@ def test_severity_no_escalation_when_only_trim():
     assert collapsed[0]["severity"] == "TRIM"
 
 
+# ─── collapse_by_ticker — anchor selection skips unpriced rows ─────────────
+# Live bug: a separate write-path bug (now fixed) meant historical rows were
+# often NULL-priced. `min(dated, key=signal_date)` always re-selected the
+# same earliest row, so any ticker whose EARLIEST row happened to be
+# NULL-priced was PERMANENTLY stuck as unpriced even after later rows for
+# the same ticker got correctly priced. The anchor must skip unpriced rows
+# when a priced alternative exists for that ticker.
+
+def test_anchor_skips_unpriced_earliest_row_picks_earliest_priced():
+    """Early unpriced row (D1) + the earliest-PRICED row (D2, lower severity)
+    + a LATER, non-anchor row (D3, higher severity) → the anchor must be D2
+    (not D1, not D3), and severity must still escalate to D3's higher
+    severity even though D3 is neither the earliest row nor the anchor —
+    this is what actually proves severity-escalation scans ALL rows
+    independent of which one becomes the anchor (a prior version of this
+    test coincidentally made the anchor row itself the highest-severity
+    one, which would have passed even with the escalation logic deleted)."""
+    enriched = [
+        _erow(ticker="STUCK", signal_date=date(2026, 1, 1), signal_type="TRIM",
+              price_at_signal=None, name_return_pct=None, spy_return_pct=None,
+              protect_alpha_pct=None),
+        _erow(ticker="STUCK", signal_date=date(2026, 1, 10), signal_type="TRIM",
+              price_at_signal=90.0, name_return_pct=-10.0, spy_return_pct=2.0,
+              protect_alpha_pct=12.0),
+        _erow(ticker="STUCK", signal_date=date(2026, 1, 20), signal_type="EXIT",
+              price_at_signal=80.0, name_return_pct=-20.0, spy_return_pct=5.0,
+              protect_alpha_pct=25.0),
+    ]
+    collapsed = ptr.collapse_by_ticker(enriched)
+    assert len(collapsed) == 1
+    row = collapsed[0]
+    # anchor fields come from D2 (the earliest PRICED row) — not D1 (unpriced)
+    # and not D3 (later, higher severity, but not the earliest-priced row)
+    assert row["signal_date"] == date(2026, 1, 10)
+    assert row["price_at_signal"] == pytest.approx(90.0)
+    assert row["protect_alpha_pct"] == pytest.approx(12.0)
+    # severity escalates to D3's EXIT even though D3 is NOT the anchor —
+    # this only holds if the scan genuinely looks beyond rep
+    assert row["severity"] == "EXIT"
+
+
+def test_anchor_treats_stored_zero_price_as_unpriced():
+    """A stored 0.0 price_at_signal (NOT None) must be treated as unpriced
+    for anchor-selection, matching how the outcome math (truthy-gated)
+    already treats a 0.0 price as unusable."""
+    enriched = [
+        _erow(ticker="ZERO", signal_date=date(2026, 1, 1), signal_type="TRIM",
+              price_at_signal=0.0, name_return_pct=None, spy_return_pct=None,
+              protect_alpha_pct=None),
+        _erow(ticker="ZERO", signal_date=date(2026, 1, 15), signal_type="TRIM",
+              price_at_signal=50.0, name_return_pct=-5.0, spy_return_pct=1.0,
+              protect_alpha_pct=6.0),
+    ]
+    collapsed = ptr.collapse_by_ticker(enriched)
+    assert len(collapsed) == 1
+    row = collapsed[0]
+    assert row["signal_date"] == date(2026, 1, 15)
+    assert row["price_at_signal"] == pytest.approx(50.0)
+
+
+def test_anchor_all_unpriced_falls_back_to_true_earliest():
+    """When every row for a ticker is unpriced, the fallback is unchanged:
+    the true-earliest dated row, with protect_alpha_pct still None."""
+    enriched = [
+        _erow(ticker="NOPX", signal_date=date(2026, 1, 5), signal_type="TRIM",
+              price_at_signal=None, protect_alpha_pct=None),
+        _erow(ticker="NOPX", signal_date=date(2026, 1, 1), signal_type="EXIT",
+              price_at_signal=None, protect_alpha_pct=None),
+    ]
+    collapsed = ptr.collapse_by_ticker(enriched)
+    assert len(collapsed) == 1
+    row = collapsed[0]
+    assert row["signal_date"] == date(2026, 1, 1)   # true-earliest, unchanged
+    assert row["protect_alpha_pct"] is None
+
+
+def test_anchor_single_row_ticker_priced_and_unpriced_variants():
+    """A single-row ticker trivially returns that row as rep, whether
+    priced or unpriced."""
+    priced = [_erow(ticker="ONE", signal_date=date(2026, 1, 1), price_at_signal=42.0)]
+    collapsed_priced = ptr.collapse_by_ticker(priced)
+    assert len(collapsed_priced) == 1
+    assert collapsed_priced[0]["price_at_signal"] == pytest.approx(42.0)
+
+    unpriced = [_erow(ticker="ONE", signal_date=date(2026, 1, 1), price_at_signal=None)]
+    collapsed_unpriced = ptr.collapse_by_ticker(unpriced)
+    assert len(collapsed_unpriced) == 1
+    assert collapsed_unpriced[0]["price_at_signal"] is None
+
+
 # ─── protective_headline — population parity ──────────────────────────────
 
 def test_population_parity_n_mature_matches_alpha_population_exactly():
@@ -409,6 +499,30 @@ def test_protective_headline_since_date_is_earliest_across_all_collapsed_rows():
     collapsed = ptr.collapse_by_ticker(enriched)
     out = ptr.protective_headline(collapsed, min_calls=8, firm_calls=15)
     assert out["since_date"] == date(2026, 1, 5)
+
+
+def test_protective_headline_since_date_uses_earliest_priced_not_earliest_ever():
+    """Regression lock for the anchor-selection fix's downstream effect:
+    the GLOBAL earliest signal_date across the whole input belongs to an
+    UNPRICED row on ticker A. Ticker A's own earliest-PRICED row is later,
+    and ticker B has an earlier priced date than ticker A's earliest-priced
+    date. since_date must reflect the earliest-priced date across the
+    collapsed population (ticker B's date) — NOT the unpriced date that
+    used to leak through pre-fix."""
+    enriched = [
+        # Ticker A: globally-earliest row is UNPRICED (the leak pre-fix).
+        _erow(ticker="A", signal_date=date(2026, 1, 1), signal_type="TRIM",
+              price_at_signal=None, protect_alpha_pct=None, maturing=True),
+        # A's own earliest-PRICED row is later than B's priced date below.
+        _erow(ticker="A", signal_date=date(2026, 2, 1), signal_type="TRIM",
+              price_at_signal=100.0, protect_alpha_pct=5.0, maturing=False),
+        # Ticker B: single priced row, earlier than A's earliest-priced date.
+        _erow(ticker="B", signal_date=date(2026, 1, 15), signal_type="EXIT",
+              price_at_signal=50.0, protect_alpha_pct=3.0, maturing=False),
+    ]
+    collapsed = ptr.collapse_by_ticker(enriched)
+    out = ptr.protective_headline(collapsed, min_calls=8, firm_calls=15)
+    assert out["since_date"] == date(2026, 1, 15)   # B's priced date, not A's Jan-1 unpriced date
 
 
 def test_protective_headline_negative_alpha_at_firm_band_is_honest_not_suppressed():
