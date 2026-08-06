@@ -2396,6 +2396,95 @@ def load_judgment_grades(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# ── State of the Portfolio standing thesis (Summary page — see
+# docs/plans/state-of-portfolio-standing-thesis.md) ──────────────────────────
+# Ships inert until the DDL below is applied — degrades silently, same
+# convention as judgment_opinions/analyst_target_snapshots. RLS: FOR ALL TO
+# service_role. One row per ISO week; a second write in the same ISO week
+# overwrites (idempotent) rather than duplicating.
+#
+# CREATE TABLE IF NOT EXISTS portfolio_thesis (
+#     id             BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+#     thesis_date    DATE NOT NULL,
+#     iso_year       INT NOT NULL,
+#     iso_week       INT NOT NULL,
+#     schema_version INT NOT NULL,
+#     claims         JSONB NOT NULL,
+#     prose          TEXT NOT NULL,
+#     created_at     TIMESTAMPTZ DEFAULT NOW(),
+#     CONSTRAINT portfolio_thesis_unique UNIQUE (iso_year, iso_week)
+# );
+#
+# ALTER TABLE portfolio_thesis ENABLE ROW LEVEL SECURITY;
+# CREATE POLICY "service_role_all_portfolio_thesis" ON portfolio_thesis
+#     FOR ALL TO service_role USING (true) WITH CHECK (true);
+def save_portfolio_thesis(record: dict) -> bool:
+    """Upsert one standing-thesis row, keyed by (iso_year, iso_week).
+
+    Idempotent: a second write in the same ISO week overwrites rather than
+    duplicating — the once-per-ISO-week write guard on the Summary page is a
+    coarse app-side check; this UNIQUE(iso_year, iso_week) upsert is the real
+    backstop. Never raises — a capture failure must never break the Summary
+    page. `record` must be shaped by
+    stock_analyzer.portfolio_thesis.compose_thesis()'s output
+    ({"v", "thesis_date", "iso_year", "iso_week", "claims", "prose"}).
+    """
+    if is_readonly():
+        return False
+    if not record:
+        return False
+    if not has_db():
+        return False
+    try:
+        import json
+        row = {
+            "thesis_date":    record["thesis_date"],
+            "iso_year":       int(record["iso_year"]),
+            "iso_week":       int(record["iso_week"]),
+            "schema_version": int(record.get("v", 1)),
+            "claims":         json.dumps(record.get("claims", {})),
+            "prose":          record.get("prose", ""),
+        }
+        _client().table("portfolio_thesis").upsert(
+            row, on_conflict="iso_year,iso_week",
+        ).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_portfolio_thesis: {e}")
+        return False
+
+
+def load_portfolio_thesis(lookback_days: int) -> list[dict]:
+    """Read persisted standing-thesis rows within `lookback_days` calendar
+    days, most-recent-first.
+
+    Returns [] on any DB failure or table-not-yet-created (this table needs
+    the DDL above applied manually) — same "ships inert until DDL" contract
+    as judgment_opinions/analyst_target_snapshots, so a pre-DDL session never
+    crashes the Summary page.
+    """
+    if not has_db():
+        return []
+    try:
+        from datetime import timedelta
+
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=lookback_days)).isoformat()
+        rows = (
+            _client()
+            .table("portfolio_thesis")
+            .select("*")
+            .gte("thesis_date", cutoff)
+            .order("thesis_date", desc=True)
+            .execute()
+            .data
+        )
+        return rows or []
+    except Exception:
+        return []
+
+
 # ── Price cross-check history (ticker × date) ────────────────────────────────
 # System cache → NOT _READONLY-gated (mirrors sector_cache / sentiment_llm_cache).
 # A viewer-only session still benefits from a warm cross-check history rather

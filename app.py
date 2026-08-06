@@ -10357,6 +10357,154 @@ elif page == "🧾 Summary":
                 st.session_state["_pending_page"] = "🔗 Risk Analysis"
                 st.rerun()
 
+    # ── 📜 State of the Portfolio — standing thesis (full-width, below the
+    # 2×2 pointer grid, collapsed by default). Weekly 5-claim stability ledger
+    # composed ONLY from already-decided sources (never a new computation, no
+    # LLM anywhere — see stock_analyzer/portfolio_thesis.py). Offline branch:
+    # when _home_synth_cache is None this session, render nothing at all —
+    # composing from a known-offline bundle would mean guessing (mirrors the
+    # mock's 3rd state). Whole block wrapped in try/except: a failure here
+    # must never break the rest of this page.
+    try:
+        if st.session_state.get("_home_synth_cache") is not None:
+            from stock_analyzer import portfolio_thesis as _pth
+            from stock_analyzer.constants import PORTFOLIO_THESIS_BASELINE_LOOKBACK_DAYS
+            from stock_analyzer.market_time import today_et as _pth_today_et
+
+            # Concentration input — same equity-weight basis the concentration-
+            # discipline gate uses elsewhere (port_df's "Weight (%)" column),
+            # not a new computation. None when port_df/columns aren't available.
+            _pth_max_name_wt   = None
+            _pth_max_sector_wt = None
+            try:
+                if not port_df.empty and "Weight (%)" in port_df.columns:
+                    _pth_max_name_wt = float(port_df["Weight (%)"].max())
+                    if "Sector" in port_df.columns:
+                        _pth_sector_wts = port_df.groupby("Sector")["Weight (%)"].sum()
+                        _pth_max_sector_wt = (
+                            float(_pth_sector_wts.max()) if not _pth_sector_wts.empty else None
+                        )
+            except Exception:
+                _pth_max_name_wt = _pth_max_sector_wt = None
+            _pth_acct_gate = (
+                {"max_name_wt": _pth_max_name_wt, "max_sector_wt": _pth_max_sector_wt}
+                if _pth_max_name_wt is not None and _pth_max_sector_wt is not None
+                else None
+            )
+
+            _pth_holdings_scores = (
+                port_df["Score"].dropna().tolist()
+                if not port_df.empty and "Score" in port_df.columns else None
+            )
+            _pth_bundle = {
+                "rag_label":               _sm_bundle.get("_rag_label"),
+                "div_label":               _sm_bundle.get("_div_label"),
+                "structural_new_clusters": st.session_state.get("_structural_alert_cache"),
+                "holdings_scores":         _pth_holdings_scores,
+                "buy_candidates":          (
+                    _sm_bundle["_daily_brief"].get("buy_candidates")
+                    if _sm_bundle.get("_daily_brief") is not None else None
+                ),
+            }
+            # Cited as context only, never graded — reuses the SAME headline
+            # already computed above for the Engine Track Record card (no
+            # second DB round-trip).
+            _pth_engine_trust = {"band": _etr_h.get("band"), "acted_alpha": _etr_h.get("acted_alpha")}
+
+            _pth_today = _pth_today_et()
+            _pth_iso_year, _pth_iso_week, _ = _pth_today.isocalendar()
+
+            # Once-per-ISO-week write guard — coarse app-side check only; the
+            # real backstop is the DB's UNIQUE(iso_year, iso_week) + upsert
+            # (a same-week re-write overwrites, never duplicates).
+            _pth_recent = db.load_portfolio_thesis(lookback_days=1)
+            _pth_already_written_this_week = any(
+                r.get("iso_year") == _pth_iso_year and r.get("iso_week") == _pth_iso_week
+                for r in _pth_recent
+            )
+            _pth_this_week = _pth.compose_thesis(
+                _pth_bundle, _pth_acct_gate, st.session_state.get("_reduce_calls"),
+                engine_trust=_pth_engine_trust, today=_pth_today,
+            )
+            if _pth_this_week is not None and not _pth_already_written_this_week:
+                db.save_portfolio_thesis(_pth_this_week)
+
+            if _pth_this_week is not None:
+                _pth_history = db.load_portfolio_thesis(PORTFOLIO_THESIS_BASELINE_LOOKBACK_DAYS)
+                _pth_prior_row = next(
+                    (r for r in _pth_history
+                     if not (r.get("iso_year") == _pth_iso_year and r.get("iso_week") == _pth_iso_week)),
+                    None,
+                )
+                # DB rows store claims as a JSON string (jsonb round-trips as
+                # str via the client) — normalise before grading, which expects
+                # a plain dict shape matching compose_thesis's own output.
+                _pth_prior_norm = None
+                if _pth_prior_row is not None:
+                    _pth_prior_claims = _pth_prior_row.get("claims")
+                    if isinstance(_pth_prior_claims, str):
+                        try:
+                            _pth_prior_claims = json.loads(_pth_prior_claims)
+                        except Exception:
+                            _pth_prior_claims = {}
+                    _pth_prior_norm = {"claims": _pth_prior_claims}
+
+                _pth_ledger = _pth.grade_prior(_pth_this_week, _pth_prior_norm)
+                _pth_claims = _pth_this_week["claims"]
+                _pth_risk_disp = _pth_claims.get("risk_posture", "unavailable")
+
+                if _pth_ledger:
+                    _pth_n_held    = sum(1 for v in _pth_ledger.values() if v["status"] == "held")
+                    _pth_n_shifted = sum(1 for v in _pth_ledger.values() if v["status"] == "shifted")
+                    _pth_headline = (
+                        f"📜 This week's standing view — {_pth_risk_disp} posture · "
+                        f"{_pth_n_held} of {len(_pth.CLAIM_KEYS)} held"
+                        + (f", {_pth_n_shifted} shift(s)" if _pth_n_shifted else "")
+                    )
+                else:
+                    _pth_headline = (
+                        f"📜 This week's standing view — {_pth_risk_disp} posture · "
+                        f"first standing view of the record"
+                    )
+
+                _pth_labels = {
+                    "risk_posture":          "Risk posture",
+                    "concentration":         "Concentration",
+                    "correlation_structure": "Correlation",
+                    "holdings_health":       "Holdings health",
+                    "action_posture":        "Action posture",
+                }
+
+                def _pth_disp(v):
+                    if isinstance(v, dict):
+                        return f"{v.get('n_buy_plus')} Buy+ / {v.get('n_below')} below"
+                    return str(v).replace("_", " ")
+
+                with st.expander(_pth_headline, expanded=False):
+                    _pth_cols = st.columns(5)
+                    for _pth_i, _pth_k in enumerate(_pth.CLAIM_KEYS):
+                        with _pth_cols[_pth_i]:
+                            st.caption(f"**{_pth_labels[_pth_k]}**")
+                            st.caption(_pth_disp(_pth_claims.get(_pth_k, "unavailable")))
+
+                    st.markdown(_pth_this_week["prose"])
+
+                    st.markdown("**Since last week**")
+                    if _pth_ledger is None:
+                        st.caption("First standing view of the record — nothing to compare yet.")
+                    else:
+                        _pth_status_badge = {
+                            "held": "✅ HELD", "shifted": "🔁 SHIFTED", "not_comparable": "— n/a",
+                        }
+                        for _pth_k in _pth.CLAIM_KEYS:
+                            _pth_g = _pth_ledger[_pth_k]
+                            st.caption(
+                                f"{_pth_labels[_pth_k]} — {_pth_status_badge[_pth_g['status']]} "
+                                f"({_pth_disp(_pth_g['from'])} → {_pth_disp(_pth_g['to'])})"
+                            )
+    except Exception:
+        pass
+
     # ── Holdings — identical table to Home's (shared function, same output).
     st.markdown("<div style='margin-bottom:10px'></div>", unsafe_allow_html=True)
     _render_holdings_table(port_df)

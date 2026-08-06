@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — State of the Portfolio standing thesis · DRISHTA</title>
+<!--
+  STATIC MOCKUP — not wired to data. All numbers illustrative.
+  Purpose: review placement (🧾 Summary page, near Engine Track Record),
+  the deterministic-composition tone (no LLM voice), and the 3 states
+  (fresh thesis + ledger / first-ever view, no comparison / offline)
+  before any code. Plan: docs/plans/state-of-portfolio-standing-thesis.md
+-->
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161a23; --panel2:#1b2130; --border:#2a3140;
+    --ink:#e6e9ef; --muted:#8b94a7; --muted2:#5f6779;
+    --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --accent:#6ea8fe;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;padding:26px 20px 60px;}
+  .wrap{max-width:860px;margin:0 auto;}
+  h1{font-size:19px;font-weight:650;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 20px;}
+  .note{background:#12202e;border:1px solid #234;border-radius:8px;padding:10px 14px;
+    font-size:12px;color:#9db6cf;margin:0 0 22px;}
+  .note b{color:#cfe3f5;}
+  .state-hdr{font-size:14px;font-weight:650;margin:34px 0 3px;display:flex;align-items:center;gap:8px;}
+  .state-hdr .n{background:var(--panel2);border:1px solid var(--border);border-radius:50%;
+    width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;}
+  .state-sub{font-size:11.5px;color:var(--muted);margin-bottom:10px;}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;}
+  .head{display:flex;align-items:center;justify-content:space-between;cursor:default;}
+  .htitle{font-size:13.5px;font-weight:650;display:flex;align-items:center;gap:7px;}
+  .hline{font-size:12.5px;color:#cbd5e1;margin-top:6px;}
+  .hline b{color:#eef1f6;}
+  .chev{color:var(--muted2);font-size:12px;}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px;}
+  .chip{font-size:11px;background:var(--panel2);border:1px solid var(--border);border-radius:14px;
+    padding:4px 10px 4px 8px;display:flex;align-items:center;gap:5px;}
+  .chip .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+  .dot.ok{background:var(--green);} .dot.warn{background:var(--amber);} .dot.bad{background:var(--red);}
+
+  .para{font-size:12.5px;color:#cbd5e1;background:var(--panel2);border:1px solid var(--border);
+    border-radius:8px;padding:11px 13px;margin-top:12px;}
+
+  .ledger-lbl{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2);
+    margin:16px 0 8px;font-weight:600;}
+  .ledger-row{display:flex;align-items:center;gap:10px;font-size:12px;padding:6px 0;
+    border-bottom:1px solid #20262f;}
+  .ledger-row:last-child{border-bottom:none;}
+  .ledger-row .claim{flex:0 0 170px;color:var(--muted);}
+  .ledger-row .verdict{font-size:10.5px;border-radius:10px;padding:2px 8px;flex-shrink:0;}
+  .verdict.held{color:#57d98a;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);}
+  .verdict.shift{color:#f0c24b;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);}
+  .verdict.na{color:var(--muted2);background:#20262f;border:1px solid var(--border);}
+  .ledger-row .detail{color:#9aa5b8;font-size:11.5px;}
+
+  .cite{font-size:11px;color:var(--muted2);margin-top:12px;font-style:italic;}
+
+  .empty-note{border:1px dashed var(--border);border-radius:8px;padding:14px 16px;
+    font-size:12px;color:var(--muted2);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>State of the Portfolio — standing thesis</h1>
+  <p class="sub">🧾 Summary page — new standing card, weekly cadence, near 🎯 Engine Track Record</p>
+  <div class="note"><b>Not wired to data.</b> Numbers illustrative. Deterministic composition only — no LLM voice. Reviewing tone, placement, and the 3 states before any code.</div>
+
+  <div class="state-hdr"><span class="n">1</span> Fresh thesis + stability ledger</div>
+  <div class="state-sub">A prior week's thesis exists — the card shows this week's read, then what held vs shifted since last week</div>
+  <div class="card">
+    <div class="head">
+      <div class="htitle">📜 This week's standing view</div>
+      <div class="chev">▾</div>
+    </div>
+    <div class="hline">Monitor posture · concentration elevated · <b>4 of 5 held</b> since last week</div>
+
+    <div class="chips">
+      <span class="chip"><span class="dot warn"></span>Risk posture: Monitor</span>
+      <span class="chip"><span class="dot warn"></span>Concentration: sector-elevated (Tech 38%)</span>
+      <span class="chip"><span class="dot warn"></span>Correlation: elevated (avg 0.58)</span>
+      <span class="chip"><span class="dot ok"></span>Holdings health: 6 Buy+ / 2 below bar</span>
+      <span class="chip"><span class="dot ok"></span>Action posture: holding</span>
+    </div>
+
+    <div class="para">As of Aug 6, your portfolio sits in Monitor posture. Tech is elevated at 38% (above the 35% ceiling); correlation is running elevated. Of 8 holdings, 6 remain at Buy or better and 2 have slipped below the entry bar. No new deployments and no active reduce calls — a hold-and-watch week.</div>
+
+    <div class="ledger-lbl">Since last week (Jul 30 → Aug 6)</div>
+    <div class="ledger-row"><span class="claim">Risk posture</span><span class="verdict held">HELD</span><span class="detail">Monitor → Monitor</span></div>
+    <div class="ledger-row"><span class="claim">Concentration</span><span class="verdict shift">SHIFTED</span><span class="detail">within ceiling → sector-elevated</span></div>
+    <div class="ledger-row"><span class="claim">Correlation & structure</span><span class="verdict held">HELD</span><span class="detail">elevated → elevated</span></div>
+    <div class="ledger-row"><span class="claim">Holdings composite-health</span><span class="verdict held">HELD</span><span class="detail">6 Buy+ → 6 Buy+</span></div>
+    <div class="ledger-row"><span class="claim">Action posture</span><span class="verdict held">HELD</span><span class="detail">holding → holding</span></div>
+
+    <div class="cite">Context (not graded): market tone — cautious · Engine Track Record — WORKING, +3.2pp acted alpha · fragility — moderate.</div>
+  </div>
+
+  <div class="state-hdr"><span class="n">2</span> First-ever view — nothing to compare yet</div>
+  <div class="state-sub">No prior thesis within the 14-day lookback (first week the feature has run, or a long gap in visits)</div>
+  <div class="card">
+    <div class="head">
+      <div class="htitle">📜 This week's standing view</div>
+      <div class="chev">▾</div>
+    </div>
+    <div class="hline">All Clear posture · within ceilings · <i style="color:var(--muted2)">first standing view of the record</i></div>
+    <div class="chips">
+      <span class="chip"><span class="dot ok"></span>Risk posture: All Clear</span>
+      <span class="chip"><span class="dot ok"></span>Concentration: within ceilings</span>
+      <span class="chip"><span class="dot ok"></span>Correlation: diversified</span>
+      <span class="chip"><span class="dot ok"></span>Holdings health: 7 Buy+ / 1 below bar</span>
+      <span class="chip"><span class="dot ok"></span>Action posture: holding</span>
+    </div>
+    <div class="para">As of Jul 23, your portfolio sits in All Clear posture, within both concentration ceilings, with diversified correlation structure. Of 8 holdings, 7 remain at Buy or better. No new deployments and no active reduce calls.</div>
+    <div class="ledger-lbl">Since last week</div>
+    <div class="empty-note">First standing view of the record — nothing to compare yet. A stability ledger will appear here starting next week.</div>
+  </div>
+
+  <div class="state-hdr"><span class="n">3</span> Offline — no card at all</div>
+  <div class="state-sub"><code>_home_synth_cache</code> is None this session (producer failed) — nothing is written or shown, same offline contract as every other Home-fed surface</div>
+  <div class="empty-note" style="text-align:center;">(no card renders here at all — not even an "unavailable" placeholder. Silence is intentional: composing a thesis from a known-offline bundle would mean guessing.)</div>
+</div>
+</body>
+</html>

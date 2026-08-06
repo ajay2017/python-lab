@@ -1177,6 +1177,11 @@ THESIS_EROSION_BRIEF_MIN  = 50   # erosion score threshold for Daily Brief annot
 THESIS_EROSION_BRIEF_JUMP = 15   # same-day score jump that triggers Brief annotation (Phase 3)
 THESIS_EROSION_BASELINE_LOOKBACK_DAYS = 10   # calendar days to walk back for the Phase 3 baseline row before treating a ticker as a first-ever observation
 
+# ── State of the Portfolio standing thesis (portfolio_thesis.py) ─────────────
+# Weekly 5-claim stability ledger (HELD/SHIFTED/not_comparable) on 🧾 Summary —
+# never a predictive score. See docs/plans/state-of-portfolio-standing-thesis.md.
+PORTFOLIO_THESIS_BASELINE_LOOKBACK_DAYS = 14   # calendar days to walk back for the most recent prior thesis row before grading as "nothing to compare yet" — mirrors THESIS_EROSION_BASELINE_LOOKBACK_DAYS's precedent, sized to cover exactly one missed week of app visits (weekly cadence)
+
 # ── Day Shock awareness banner (Home) ─────────────────────────────────────────
 # Flags any held position moving ≥ this % (up or down) same-day, independent of
 # classify_deterioration_tier's trend-break condition. AWARENESS ONLY — never
