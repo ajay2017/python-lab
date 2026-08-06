@@ -1,6 +1,6 @@
 # Plan: Exit Signal Forward Capture + Behavioral Fingerprint v2 (Concept A Exit-Side)
 
-**Status: Phase 1 SHIPPED 2026-07-18 (commit `f86147d`); cron capture gap closed 2026-07-21 (see below). Phase 2 pending ≥30 days data accumulation.**
+**Status: Phase 1 SHIPPED 2026-07-18 (commit `f86147d`); cron capture gap closed 2026-07-21 (see below). Phase 2 SHIPPED 2026-07-18 (commit `bb4ca8a`, same day as Phase 1) — `signal_response_rate_pattern`/`signal_lag_pattern`/`escalation_ignored_pattern` in `stock_analyzer/behavioral_fingerprint.py`, rendered under My Edge's "Exit Signal Response" section. Corrected 2026-08-06: this line previously said "pending ≥30 days data accumulation," conflating the code-shipped/not-shipped question with the runtime per-card data-sufficiency gate (`BEHAVIORAL_MIN_SAMPLE_N`=8 per bucket) — the feature was built forward-only the same day as Phase 1, not gated on a 30-day wait; individual cards simply read "insufficient data" until their own sample floor clears, same precedent as every other Behavioral Fingerprint card.**
 **Author:** Ajay Kumar
 **Date:** 2026-07-18
 

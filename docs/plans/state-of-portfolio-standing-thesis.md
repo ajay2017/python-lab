@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 **Design pass:** `planner` (Opus 4.8, 1M context) — verdict **PROCEED WITH REDUCED SCOPE**, two reframes locked by the user.
-**Status:** DESIGN LOCKED — mock pending approval, no code written yet.
+**Status:** SHIPPED 2026-08-06 as F-232 — mock approved (including a follow-up placement decision: full-width collapsed card, not a new Summary tab), built, Opus review FIX-FIRST on the first pass (docs-sync gap, not a logic defect) → SHIP after closing, live-validated + a follow-up cosmetic severity-coloring fix. See `docs/requirements.md` F-232, `docs/shipped-log.md`, memory `project_state_of_portfolio_thesis`.
 
 Picked up from `docs/plans/next-evolution-2026-08-05.md` Lens 3, item 3 — the third and last of the brainstorm's boundary-pushing items (after Behavioral Fingerprint's decision-moment mirror, F-231, shipped 2026-08-06).
 

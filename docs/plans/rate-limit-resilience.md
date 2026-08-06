@@ -33,7 +33,7 @@ degrades visibly to offline/cached.
 
 ## Phases (each independently shippable + validatable)
 
-### Phase 1 — Refresh cooldown · low risk · IN PROGRESS
+### Phase 1 — Refresh cooldown · low risk · SHIPPED
 Gate the three heavy price-path buttons behind a shared cooldown
 (`REFRESH_COOLDOWN_SEC`); disabled state shows "available in Ns" + why.
 - Buttons: Refresh All Data (`app.py:825`), Refresh Signals (`app.py:3041`),
@@ -42,7 +42,7 @@ Gate the three heavy price-path buttons behind a shared cooldown
 - Out of Phase 1: the two calendar refreshes (FRED / earnings — different
   providers, not part of the incident). Trivial to add later if wanted.
 
-### Phase 2 — Provider circuit-breaker · medium risk · mandatory Opus review
+### Phase 2 — Provider circuit-breaker · medium risk · SHIPPED 2026-06-19 (`d400e7a`)
 Orchestrator skips a provider that's tripped (reuse `api_health` red:
 `rate_limits ≥ 3`) for `PROVIDER_RL_COOLDOWN_SEC`; auto-recovers after the
 window. Guard: if ALL providers are in cooldown, fall through and try anyway

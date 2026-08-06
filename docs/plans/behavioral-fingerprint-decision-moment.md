@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-06
 **Design pass:** `planner` (Opus 4.8, 1M context) — verdict **PROCEED**, scope reduced from 6 patterns to 1-per-side.
-**Status:** DESIGN LOCKED (user confirmed both open decisions 2026-08-06) — mock pending approval, no code written yet.
+**Status:** SHIPPED 2026-08-06 as F-231 — mock approved, built, Opus review SHIP 0 blocking, live-validated on a real BUY (DELL). See `docs/requirements.md` F-231, `docs/shipped-log.md`, memory `project_behavioral_fingerprint`.
 
 Picked up from `docs/plans/next-evolution-2026-08-05.md` Lens 2, item 1 — closing the gap where the app diagnoses the user's own historical decision patterns (🧬 Behavioral Fingerprint tab, `stock_analyzer/behavioral_fingerprint.py`) but only shows them retrospectively, never *at the instant* a matching trade is being logged.
 
