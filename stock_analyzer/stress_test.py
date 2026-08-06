@@ -6,6 +6,8 @@ under predefined and custom market shock scenarios, using individual
 position betas (vs SPY) and sector-specific historical drawdown data.
 """
 
+from datetime import date
+
 import pandas as pd
 
 
@@ -386,6 +388,139 @@ def fetch_historical_drawdowns(
             results[ticker] = None
 
     return results
+
+
+# ── Correlation Under Stress — display-only measurement floors ─────────────
+# Neither of these is an investment-policy threshold (never moves a
+# recommendation or gate) — they only decide whether an awareness-only
+# stress-correlation reading is shown vs. withheld as statistically
+# meaningless. Kept local to this module rather than constants.py, same
+# rationale as account.py's _ANNUALIZE_CAVEAT_MAX_DAYS.
+_MIN_STRESS_WINDOW_DAYS = 10          # aligned-return trading-day floor
+_EARLIEST_STRESS_START = date(2007, 1, 1)   # just before the oldest preset (GFC 2007-10-09)
+
+
+def fetch_stress_window_returns(
+    tickers: list[str],
+    start: str,
+    end: str,
+) -> pd.DataFrame | None:
+    """
+    Fetch each ticker's daily Close over [start, end] (ISO date strings) and
+    build an aligned daily-return frame across the tickers that produced a
+    usable series.
+
+    Mirrors fetch_historical_drawdowns's per-ticker yfinance fetch + <5
+    valid-closes exclusion guard, but RETAINS each Close series (instead of
+    collapsing to a scalar peak-to-trough %) so the caller can compute a
+    correlation matrix across tickers.
+
+    Returns None when every ticker fails / is excluded — the offline
+    contract (never an empty DataFrame as a silent "nothing wrong" signal).
+    Standalone from fetch_historical_drawdowns by design — this function is
+    NOT called by it and does not refactor it.
+    """
+    import yfinance as _yf
+
+    closes: dict[str, pd.Series] = {}
+    for ticker in tickers:
+        try:
+            df = _yf.download(
+                ticker, start=start, end=end,
+                auto_adjust=True, progress=False, multi_level_index=False,
+            )
+            if df.empty or len(df) < 5:
+                continue
+            close = df["Close"]
+            if hasattr(close, "columns"):   # guard against multi-level columns
+                close = close.iloc[:, 0]
+            close = close.dropna()
+            if len(close) < 5:
+                continue
+            closes[ticker] = close
+        except Exception:
+            continue
+
+    if not closes:
+        return None
+
+    prices = pd.DataFrame(closes)
+    returns = prices.pct_change().dropna()
+    if returns.empty:
+        return None
+    return returns
+
+
+def stress_correlation_matrix(
+    tickers: list[str],
+    start: str,
+    end: str,
+) -> pd.DataFrame | None:
+    """Thin wrapper: fetch_stress_window_returns(...).corr().round(3), or
+    None when the fetch itself failed / produced nothing usable."""
+    returns = fetch_stress_window_returns(tickers, start, end)
+    if returns is None:
+        return None
+    return returns.corr().round(3)
+
+
+def validate_custom_stress_range(
+    start: date | None,
+    end: date | None,
+    today: date,
+) -> tuple[bool, str | None]:
+    """
+    Pure validator for the Correlation Under Stress custom date-range picker
+    (app.py). NOT a decision threshold — same display-floor status as
+    _MIN_STRESS_WINDOW_DAYS / _EARLIEST_STRESS_START above, just checked
+    before a fetch instead of after. Takes `today` as a parameter rather
+    than reading the clock itself, so this stays pure/testable and the
+    caller supplies it via market-aware `_today_et()` (never a naive
+    date.today()).
+
+    Returns (True, None) when the range is usable, else (False, reason) —
+    the caller shows `reason` verbatim rather than silently falling back.
+
+    Order of checks mirrors the layered validation in the plan doc: missing
+    dates (transient widget state) -> future end date -> inverted range ->
+    the cheap ~14-calendar-day pre-check -> the earliest-supported start.
+    This ~14-day check is a fast UX pre-check only; the AUTHORITATIVE floor
+    is correlation_regime_delta's `too_short` (computed post-fetch on the
+    real aligned trading-day count) — this function cannot guarantee the
+    fetched window clears that floor, only that it's not obviously too short.
+    """
+    if start is None or end is None:
+        return False, "Pick both a start and end date."
+    if end > today:
+        return False, "End date can't be in the future."
+    if start >= end:
+        return False, "Start date must be before end date."
+    if (end - start).days < 14:
+        return False, (
+            "Pick a range of at least ~2 weeks — shorter windows can't "
+            "produce a meaningful correlation."
+        )
+    if start < _EARLIEST_STRESS_START:
+        return False, f"Earliest supported start date is {_EARLIEST_STRESS_START.isoformat()}."
+    return True, None
+
+
+def stress_cache_key(
+    scenario_id: str,
+    start: str | None = None,
+    end: str | None = None,
+) -> str:
+    """
+    Session-state cache-key naming scheme for the Correlation Under Stress
+    section (app.py). A preset keeps the unchanged `_stress_corr_{scenario_id}`
+    scheme; a custom range gets `_stress_corr_custom_{start}_{end}` — each
+    distinct custom range memoizes independently within the session, and
+    this can never collide with a preset key (no entry in HISTORICAL_WINDOWS
+    is literally the string "custom").
+    """
+    if scenario_id == "custom":
+        return f"_stress_corr_custom_{start}_{end}"
+    return f"_stress_corr_{scenario_id}"
 
 
 def assess_fragility(

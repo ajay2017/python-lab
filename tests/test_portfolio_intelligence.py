@@ -10,6 +10,7 @@ import pytest
 
 from stock_analyzer import portfolio_intelligence as pi
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
+from stock_analyzer.stress_test import _MIN_STRESS_WINDOW_DAYS
 
 
 # ─── correlation_clusters — builders ─────────────────────────────────────────
@@ -186,6 +187,184 @@ def test_correlation_clusters_malformed_duplicate_index_returns_empty_list():
         index=["A", "A", "B"], columns=["A", "A", "B"],
     )
     assert pi.correlation_clusters(df) == []
+
+
+# ─── correlation_regime_delta — None-propagation / degenerate input ─────────
+# Correlation Under Stress (docs/plans/correlation-under-stress.md).
+
+def test_correlation_regime_delta_none_when_calm_is_none():
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    assert pi.correlation_regime_delta(None, stress, n_window_days=25) is None
+
+
+def test_correlation_regime_delta_none_when_stress_is_none():
+    calm = _corr_df(["A", "B"], [])
+    assert pi.correlation_regime_delta(calm, None, n_window_days=25) is None
+
+
+def test_correlation_regime_delta_degenerate_intersection_returns_empty_payload_no_raise():
+    calm = _corr_df(["A", "B", "C"], [])
+    stress = _corr_df(["A", "X"], [])   # only "A" overlaps calm -> intersection size 1
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+    assert result is not None
+    assert result["avg_calm"] is None
+    assert result["avg_stress"] is None
+    assert result["newly_converged"] == []
+    assert result["stress_clusters"] == []
+    assert result["coverage"] == {"included": 1, "excluded": 2, "total": 3}
+
+
+# ─── correlation_regime_delta — intersection integrity ───────────────────────
+
+def test_correlation_regime_delta_averages_and_deltas_only_over_common_tickers():
+    # calm covers A,B,C,D; stress only covers A,B,C (D didn't trade through
+    # the stress window, e.g. IPO after it started). If D's calm pairs
+    # leaked into the average/newly_converged, avg_calm and the flagged
+    # pairs below would be wrong.
+    calm = _corr_df(
+        ["A", "B", "C", "D"],
+        [("A", "B", 0.10), ("A", "C", 0.10), ("B", "C", 0.10),
+         ("A", "D", 0.99), ("B", "D", 0.99), ("C", "D", 0.99)],
+    )
+    stress = _corr_df(["A", "B", "C"], [("A", "B", 0.80), ("A", "C", 0.80), ("B", "C", 0.80)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+    assert result["avg_calm"] == pytest.approx(0.10, abs=1e-6)
+    assert result["avg_stress"] == pytest.approx(0.80, abs=1e-6)
+    assert result["coverage"] == {"included": 3, "excluded": 1, "total": 4}
+    pairs = {(c["a"], c["b"]) for c in result["newly_converged"]}
+    assert not any("D" in (a, b) for a, b in pairs)   # D can't appear -- excluded from stress
+
+
+# ─── correlation_regime_delta — "newly converged" boundary, exact ───────────
+
+def test_correlation_regime_delta_newly_converged_flagged_at_exact_threshold():
+    calm = _corr_df(["A", "B"], [("A", "B", CORR_HIGH_PAIRS_THRESHOLD - 0.20)])
+    stress = _corr_df(["A", "B"], [("A", "B", CORR_HIGH_PAIRS_THRESHOLD)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+    assert len(result["newly_converged"]) == 1
+    assert result["newly_converged"][0]["stress"] == pytest.approx(CORR_HIGH_PAIRS_THRESHOLD)
+
+
+def test_correlation_regime_delta_newly_converged_not_flagged_just_below_threshold():
+    calm = _corr_df(["A", "B"], [("A", "B", CORR_HIGH_PAIRS_THRESHOLD - 0.20)])
+    stress = _corr_df(["A", "B"], [("A", "B", CORR_HIGH_PAIRS_THRESHOLD - 0.001)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+    assert result["newly_converged"] == []
+
+
+def test_correlation_regime_delta_newly_converged_not_flagged_when_already_correlated_in_calm():
+    # calm already at/above threshold -- not "newly" converged, even if
+    # stress is also high.
+    calm = _corr_df(["A", "B"], [("A", "B", CORR_HIGH_PAIRS_THRESHOLD)])
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+    assert result["newly_converged"] == []
+
+
+def test_correlation_regime_delta_newly_converged_sorted_by_delta_descending():
+    calm = _corr_df(["A", "B", "C"], [("A", "B", 0.10), ("A", "C", 0.30), ("B", "C", 0.20)])
+    stress = _corr_df(["A", "B", "C"], [("A", "B", 0.90), ("A", "C", 0.70), ("B", "C", 0.80)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+    deltas = [c["delta"] for c in result["newly_converged"]]
+    assert deltas == sorted(deltas, reverse=True)
+
+
+# ─── correlation_regime_delta — min-window boundary, exact ───────────────────
+
+def test_correlation_regime_delta_too_short_false_at_exact_floor():
+    calm = _corr_df(["A", "B"], [("A", "B", 0.10)])
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=_MIN_STRESS_WINDOW_DAYS)
+    assert result["too_short"] is False
+
+
+def test_correlation_regime_delta_too_short_true_one_below_floor():
+    calm = _corr_df(["A", "B"], [("A", "B", 0.10)])
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=_MIN_STRESS_WINDOW_DAYS - 1)
+    assert result["too_short"] is True
+
+
+def test_correlation_regime_delta_too_short_defaults_true_when_n_window_days_not_supplied():
+    calm = _corr_df(["A", "B"], [("A", "B", 0.10)])
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    result = pi.correlation_regime_delta(calm, stress)   # n_window_days omitted
+    assert result["too_short"] is True
+
+
+def test_correlation_regime_delta_still_computes_newly_converged_when_too_short():
+    # Pure function -- newly_converged is still computed even when too_short
+    # is True; the UI layer (not this function) decides whether to withhold
+    # it from display.
+    calm = _corr_df(["A", "B"], [("A", "B", 0.10)])
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=5)
+    assert result["too_short"] is True
+    assert len(result["newly_converged"]) == 1
+
+
+# ─── correlation_regime_delta — purity regression guard ─────────────────────
+
+def test_correlation_regime_delta_purity_calm_matrix_and_own_clusters_unchanged():
+    calm = _corr_df(["A", "B", "C"], [("A", "B", 0.10), ("A", "C", 0.10), ("B", "C", 0.10)])
+    stress = _corr_df(["A", "B", "C"], [("A", "B", 0.90), ("A", "C", 0.90), ("B", "C", 0.90)])
+    calm_before = calm.copy()
+    calm_clusters_before = pi.correlation_clusters(calm)   # all-0.10 -> no cluster
+
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+
+    pd.testing.assert_frame_equal(calm, calm_before)
+    assert pi.correlation_clusters(calm) == calm_clusters_before
+    # Confirms the SECOND correlation_clusters() call (on the stress matrix,
+    # inside correlation_regime_delta) actually ran and found the stress-only cluster.
+    assert result["stress_clusters"] != []
+    assert result["stress_clusters"][0]["tickers"] == ["A", "B", "C"]
+
+
+def test_correlation_regime_delta_nan_stress_cell_excluded_from_average_and_convergence():
+    """A NaN correlation cell (e.g. a zero-variance/constant-price ticker
+    during the stress window) must be skipped by BOTH _off_diag_mean and the
+    newly_converged loop — never enter an average, never get spuriously
+    flagged as 'converged'. This is the exact NaN-vs-None bug class that hit
+    the Engine Track Record feature earlier the same day (a NaN silently
+    passing an `is not None`-only guard and poisoning a mean) — code-reviewed
+    as correct here, this test locks the boundary rather than leaving it as
+    reasoning only."""
+    calm = _corr_df(["A", "B", "C"],
+                     [("A", "B", 0.10), ("A", "C", 0.10), ("B", "C", 0.10)])
+    stress = _corr_df(["A", "B", "C"],
+                       [("A", "B", 0.50), ("A", "C", 0.90), ("B", "C", 0.90)])
+    # Simulate a zero-variance ticker pair producing a NaN correlation cell
+    # during the stress window (pandas .corr() does this for a constant
+    # price series) -- overwrite AFTER construction since _corr_df only
+    # accepts numeric overrides.
+    stress.loc["A", "B"] = np.nan
+    stress.loc["B", "A"] = np.nan
+
+    result = pi.correlation_regime_delta(calm, stress, n_window_days=25)
+
+    # avg_stress must be the mean of ONLY the two non-NaN pairs (0.90, 0.90),
+    # never contaminated by the NaN A-B cell -- a single NaN in a naive
+    # mean would poison the whole average to NaN.
+    assert result["avg_stress"] == pytest.approx(0.90)
+    assert not np.isnan(result["avg_stress"])
+
+    # A-B is calm=0.10 (below threshold) but stress=NaN -- it must NOT be
+    # flagged as "newly converged" just because calm was low. Only the two
+    # genuinely-converged, non-NaN pairs should appear.
+    converged_pairs = {frozenset((c["a"], c["b"])) for c in result["newly_converged"]}
+    assert frozenset(("A", "B")) not in converged_pairs
+    assert frozenset(("A", "C")) in converged_pairs
+    assert frozenset(("B", "C")) in converged_pairs
+    assert len(result["newly_converged"]) == 2
+
+
+def test_correlation_regime_delta_weights_threaded_into_stress_clusters():
+    calm = _corr_df(["A", "B"], [("A", "B", 0.10)])
+    stress = _corr_df(["A", "B"], [("A", "B", 0.90)])
+    weights = {"A": 30.0, "B": 20.0}
+    result = pi.correlation_regime_delta(calm, stress, weights, n_window_days=25)
+    assert result["stress_clusters"][0]["combined_weight_pct"] == pytest.approx(50.0)
 
 
 # ─── risk_budget — builders ──────────────────────────────────────────────────

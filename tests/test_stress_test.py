@@ -9,6 +9,8 @@ batch. `fetch_historical_drawdowns` locally imports `yfinance` inside the
 function — the real installed module is monkeypatched directly (its local
 import resolves to the same cached module object).
 """
+from datetime import date, timedelta
+
 import pandas as pd
 import pytest
 import yfinance
@@ -307,3 +309,184 @@ def test_assess_fragility_mult_computed_correctly():
 def test_assess_fragility_mult_none_when_pullback_pct_zero():
     result = st.assess_fragility(BASE_SCENARIO_RESULT, 1.6, elevated_beta=1.2, ceiling_beta=1.5, pullback_pct=0.0)
     assert result["mult"] is None
+
+
+# ─── fetch_stress_window_returns ────────────────────────────────────────────────
+# Correlation Under Stress (docs/plans/correlation-under-stress.md) — date-based
+# (not scenario_id-based), retains each Close series instead of collapsing to a
+# scalar, so a caller can build a multi-ticker correlation matrix.
+
+_GOOD_CLOSE = pd.DataFrame({"Close": [100.0, 102.0, 99.0, 101.0, 103.0, 104.0]})
+_SHORT_CLOSE = pd.DataFrame({"Close": [100.0, 95.0, 90.0]})   # <5 valid closes
+
+
+def test_fetch_stress_window_returns_all_downloads_fail_returns_none(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("network error")
+    monkeypatch.setattr(yfinance, "download", _boom)
+    result = st.fetch_stress_window_returns(["AAPL", "MSFT"], "2020-02-19", "2020-03-23")
+    assert result is None
+
+
+def test_fetch_stress_window_returns_empty_df_for_every_ticker_returns_none(monkeypatch):
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: pd.DataFrame())
+    result = st.fetch_stress_window_returns(["AAPL"], "2020-02-19", "2020-03-23")
+    assert result is None
+
+
+def test_fetch_stress_window_returns_never_returns_empty_dataframe_as_fine_signal(monkeypatch):
+    # Guard against the exact offline-sentinel-collapse antipattern: total
+    # failure must be None, never an empty (but non-None) DataFrame.
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: pd.DataFrame())
+    result = st.fetch_stress_window_returns(["AAPL", "MSFT"], "2020-02-19", "2020-03-23")
+    assert result is None
+    assert not isinstance(result, pd.DataFrame)
+
+
+def test_fetch_stress_window_returns_ticker_with_fewer_than_5_closes_dropped(monkeypatch):
+    def fake_download(ticker, **kwargs):
+        return _SHORT_CLOSE if ticker == "SHORT" else _GOOD_CLOSE
+    monkeypatch.setattr(yfinance, "download", fake_download)
+    result = st.fetch_stress_window_returns(["SHORT", "AAPL"], "2020-02-19", "2020-03-23")
+    assert result is not None
+    assert "SHORT" not in result.columns
+    assert "AAPL" in result.columns
+
+
+def test_fetch_stress_window_returns_aligned_return_frame_shape(monkeypatch):
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: _GOOD_CLOSE)
+    result = st.fetch_stress_window_returns(["AAPL", "MSFT"], "2020-02-19", "2020-03-23")
+    assert result is not None
+    assert list(result.columns) == ["AAPL", "MSFT"]
+    # 6 closes -> 5 pct_change rows after dropna()
+    assert len(result) == 5
+
+
+def test_fetch_stress_window_returns_reparametrized_over_custom_window(monkeypatch):
+    # Same <5-closes exclusion re-parametrized over an arbitrary custom
+    # (non-preset) date range, not just a named-crash preset window.
+    def fake_download(ticker, **kwargs):
+        return _SHORT_CLOSE if ticker == "SHORT" else _GOOD_CLOSE
+    monkeypatch.setattr(yfinance, "download", fake_download)
+    result = st.fetch_stress_window_returns(["SHORT", "AAPL"], "2026-06-01", "2026-06-22")
+    assert result is not None
+    assert "SHORT" not in result.columns
+    assert "AAPL" in result.columns
+
+
+# ─── stress_correlation_matrix ──────────────────────────────────────────────────
+
+def test_stress_correlation_matrix_none_propagates_on_total_failure(monkeypatch):
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: pd.DataFrame())
+    result = st.stress_correlation_matrix(["AAPL", "MSFT"], "2020-02-19", "2020-03-23")
+    assert result is None
+
+
+def test_stress_correlation_matrix_returns_square_corr_df(monkeypatch):
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: _GOOD_CLOSE)
+    result = st.stress_correlation_matrix(["AAPL", "MSFT"], "2020-02-19", "2020-03-23")
+    assert result is not None
+    assert sorted(result.index) == ["AAPL", "MSFT"]
+    assert sorted(result.columns) == ["AAPL", "MSFT"]
+    assert result.loc["AAPL", "AAPL"] == 1.0
+
+
+def test_stress_correlation_matrix_date_based_signature_matches_preset_resolved_dates(monkeypatch):
+    # Behavior-preservation: calling with a preset's resolved (start, end)
+    # produces the same shape of output the scenario_id-based approach would
+    # have (fetch_historical_drawdowns used the same HISTORICAL_WINDOWS
+    # window internally; this is the new date-based path serving the exact
+    # same window for a preset).
+    monkeypatch.setattr(yfinance, "download", lambda *a, **k: _GOOD_CLOSE)
+    start, end = st.HISTORICAL_WINDOWS["covid_crash"]
+    result = st.stress_correlation_matrix(["AAPL", "MSFT"], start, end)
+    assert result is not None
+    assert result.shape == (2, 2)
+
+
+# ─── validate_custom_stress_range ───────────────────────────────────────────────
+
+_date, _td = date, timedelta
+_TODAY = _date(2026, 8, 5)
+
+
+def test_validate_custom_stress_range_missing_dates_invalid():
+    ok, reason = st.validate_custom_stress_range(None, _TODAY, _TODAY)
+    assert ok is False
+    assert reason
+
+
+def test_validate_custom_stress_range_inverted_range_invalid():
+    ok, reason = st.validate_custom_stress_range(_TODAY, _TODAY - _td(days=30), _TODAY)
+    assert ok is False
+
+
+def test_validate_custom_stress_range_equal_start_end_invalid():
+    ok, reason = st.validate_custom_stress_range(_TODAY, _TODAY, _TODAY)
+    assert ok is False
+
+
+def test_validate_custom_stress_range_end_equal_today_allowed():
+    start = _TODAY - _td(days=30)
+    ok, reason = st.validate_custom_stress_range(start, _TODAY, _TODAY)
+    assert ok is True
+    assert reason is None
+
+
+def test_validate_custom_stress_range_end_after_today_rejected():
+    start = _TODAY - _td(days=30)
+    future_end = _TODAY + _td(days=1)
+    ok, reason = st.validate_custom_stress_range(start, future_end, _TODAY)
+    assert ok is False
+    assert "future" in reason.lower()
+
+
+def test_validate_custom_stress_range_shorter_than_14_days_invalid():
+    start = _TODAY - _td(days=13)
+    ok, reason = st.validate_custom_stress_range(start, _TODAY, _TODAY)
+    assert ok is False
+    assert "2 weeks" in reason
+
+
+def test_validate_custom_stress_range_at_least_14_days_valid():
+    start = _TODAY - _td(days=14)
+    ok, reason = st.validate_custom_stress_range(start, _TODAY, _TODAY)
+    assert ok is True
+
+
+def test_validate_custom_stress_range_before_earliest_start_invalid():
+    start = st._EARLIEST_STRESS_START - _td(days=1)
+    end = start + _td(days=30)
+    ok, reason = st.validate_custom_stress_range(start, end, end + _td(days=1))
+    assert ok is False
+
+
+def test_validate_custom_stress_range_at_earliest_start_valid():
+    start = st._EARLIEST_STRESS_START
+    end = start + _td(days=30)
+    ok, reason = st.validate_custom_stress_range(start, end, end + _td(days=1))
+    assert ok is True
+
+
+# ─── stress_cache_key ────────────────────────────────────────────────────────────
+
+def test_stress_cache_key_preset_scheme_unchanged():
+    assert st.stress_cache_key("covid_crash") == "_stress_corr_covid_crash"
+
+
+def test_stress_cache_key_custom_ranges_distinct():
+    key1 = st.stress_cache_key("custom", "2026-06-01", "2026-06-22")
+    key2 = st.stress_cache_key("custom", "2026-07-01", "2026-07-22")
+    assert key1 != key2
+
+
+def test_stress_cache_key_same_custom_range_same_key():
+    key1 = st.stress_cache_key("custom", "2026-06-01", "2026-06-22")
+    key2 = st.stress_cache_key("custom", "2026-06-01", "2026-06-22")
+    assert key1 == key2
+
+
+def test_stress_cache_key_custom_never_collides_with_a_preset_key():
+    preset_keys = {st.stress_cache_key(sid) for sid in st.HISTORICAL_WINDOWS}
+    custom_key = st.stress_cache_key("custom", "2026-06-01", "2026-06-22")
+    assert custom_key not in preset_keys

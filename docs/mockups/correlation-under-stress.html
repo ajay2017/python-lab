@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — Correlation Under Stress · DRISHTA</title>
+<!--
+  STATIC MOCKUP — not wired to data. All numbers illustrative.
+  Purpose: review placement (below the existing calm Correlation Clusters
+  section on 🧩 Intelligence) + the two states (unloaded / loaded) before
+  any code. Plan: docs/plans/correlation-under-stress.md
+-->
+<style>
+  :root{
+    --bg:#0e1117; --panel:#161a23; --panel2:#1b2130; --border:#2a3140;
+    --ink:#e6e9ef; --muted:#8b94a7; --muted2:#5f6779;
+    --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --accent:#6ea8fe;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.45;padding:26px 20px 60px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  h1{font-size:19px;font-weight:650;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 20px;}
+  .note{background:#12202e;border:1px solid #234;border-radius:8px;padding:10px 14px;
+    font-size:12px;color:#9db6cf;margin:0 0 22px;}
+  .note b{color:#cfe3f5;}
+  .lbl{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted2);
+    margin:26px 0 9px;font-weight:600;}
+
+  .page{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;}
+
+  /* existing calm section, shown dimmed as context */
+  .existing{opacity:.55;}
+  .existing .h{font-size:14px;font-weight:600;margin-bottom:8px;}
+  .cluster-chip{display:inline-block;background:var(--panel2);border:1px solid var(--border);
+    border-radius:8px;padding:6px 10px;margin:0 6px 6px 0;font-size:12px;}
+  .divider{border-top:1px solid var(--border);margin:20px 0;}
+
+  /* new section */
+  .newsec .h{font-size:15px;font-weight:650;display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+  .newsec .tag{font-size:9.5px;color:var(--muted2);border:1px solid var(--border);border-radius:12px;padding:1px 8px;}
+  .newsec .cap{font-size:12px;color:var(--muted);margin-bottom:14px;}
+
+  .controls{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+  .selectbox{background:var(--panel2);border:1px solid var(--border);border-radius:7px;
+    padding:7px 12px;font-size:12.5px;color:var(--ink);display:flex;align-items:center;gap:6px;}
+  .selectbox .arrow{color:var(--muted2);font-size:10px;}
+  .btn{font-size:12.5px;color:#e6e9ef;background:#232a38;border:1px solid #2a3140;
+    border-radius:7px;padding:7px 14px;cursor:pointer;}
+  .btn.primary{background:#1d3a2a;border-color:#2c4a34;color:#8fe3ac;}
+
+  .card{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:14px;}
+  .headline{font-size:14px;margin-bottom:4px;}
+  .headline b{font-size:1.15em;}
+  .headline .arrow-txt{color:var(--muted);}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px;}
+  th{text-align:left;color:var(--muted2);font-weight:600;font-size:11px;text-transform:uppercase;
+    letter-spacing:.03em;padding:6px 8px;border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid #20262f;}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  .delta-hi{color:#f0c24b;font-weight:600;}
+
+  .stress-cluster{background:#241a14;border:1px solid #4a2c1a;border-radius:8px;padding:10px 12px;margin-top:8px;}
+  .stress-cluster .tickers{font-weight:600;font-size:13px;}
+  .stress-cluster .meta{font-size:11.5px;color:var(--muted);margin-top:3px;}
+
+  .coverage-cap{font-size:11px;color:var(--muted2);margin-top:10px;font-style:italic;}
+  .caveat{background:#241708;border:1px solid #4a3218;border-radius:8px;padding:10px 12px;
+    margin-top:14px;font-size:11.5px;color:#e0b980;}
+  .caveat b{color:#f0c24b;}
+
+  .empty-state{background:var(--panel2);border:1px dashed var(--border);border-radius:10px;
+    padding:20px;text-align:center;color:var(--muted);font-size:12.5px;}
+
+  .legend{font-size:11.5px;color:var(--muted);margin-top:16px;}
+  .legend code{background:#232a38;padding:1px 5px;border-radius:4px;color:#b9c4d6;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🌩️ Correlation Under Stress — placement &amp; states</h1>
+  <p class="sub">Static mockup · numbers illustrative · plan: <code>docs/plans/correlation-under-stress.md</code></p>
+
+  <div class="note">
+    <b>Decided placement:</b> extends the existing 🧩 Intelligence → 🕸️ Correlation Clusters tab, as a new
+    section BELOW the calm clusters already there (shown dimmed above, for context) — the delta is only
+    legible sitting next to its calm baseline. <b>Addendum:</b> a "Custom range" option was added to the
+    window selectbox so any personally-remembered event (e.g. a sector-specific selloff, not just the
+    3 fixed macro-crash presets) can be tested — with a 10-trading-day minimum enforced honestly
+    (disabled button + reason caption, never a silent fallback).
+  </div>
+
+  <!-- ===== IN CONTEXT: existing calm section (dimmed) ===== -->
+  <div class="lbl">Existing — 🕸️ Correlation Clusters tab (calm, 6-month window)</div>
+  <div class="page existing">
+    <div class="h">🕸️ Correlation Clusters</div>
+    <div class="cluster-chip">🟡 AAPL · MSFT · NVDA <span style="color:var(--muted2)">avg 0.71</span></div>
+    <div class="cluster-chip">🔴 XOM · CVX <span style="color:var(--muted2)">avg 0.84</span></div>
+    <div class="cluster-chip">— GOOG, AMD, ISRG, LLY, MRVL, MU, NOW: no high-corr pairs</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ===== NEW SECTION — unloaded state ===== -->
+  <div class="lbl">New section — unloaded state (default view, preset selected)</div>
+  <div class="page newsec">
+    <div class="h">🌩️ Correlation Under Stress <span class="tag">NEW</span></div>
+    <div class="cap">How did these same holdings move together during a real historical crash — not the calm 6-month window above?</div>
+    <div class="controls">
+      <div class="selectbox">Stress window: <b>COVID 2020 Crash</b> <span class="arrow">▾</span></div>
+      <button class="btn primary">Load stress correlations</button>
+    </div>
+    <div class="empty-state">Click "Load stress correlations" to fetch historical prices for this window and compare.</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ===== NEW SECTION — custom range: valid ===== -->
+  <div class="lbl">New section — "Custom range" selected, valid dates entered</div>
+  <div class="page newsec">
+    <div class="h">🌩️ Correlation Under Stress <span class="tag">NEW</span></div>
+    <div class="cap">How did these same holdings move together during a real historical crash — not the calm 6-month window above?</div>
+    <div class="controls">
+      <div class="selectbox">Stress window: <b>Custom range</b> <span class="arrow">▾</span></div>
+      <div class="selectbox">📅 <b>2026-06-01</b> → <b>2026-06-22</b></div>
+      <button class="btn primary">Load stress correlations</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted2);margin-top:-6px;">Test any period you remember — e.g. a sector-specific selloff that wasn't a broad market crash.</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ===== NEW SECTION — custom range: invalid (too short) ===== -->
+  <div class="lbl">New section — "Custom range" selected, range too short (Load disabled)</div>
+  <div class="page newsec">
+    <div class="h">🌩️ Correlation Under Stress <span class="tag">NEW</span></div>
+    <div class="cap">How did these same holdings move together during a real historical crash — not the calm 6-month window above?</div>
+    <div class="controls">
+      <div class="selectbox">Stress window: <b>Custom range</b> <span class="arrow">▾</span></div>
+      <div class="selectbox">📅 <b>2026-06-01</b> → <b>2026-06-04</b></div>
+      <button class="btn" style="opacity:.4;cursor:not-allowed;">Load stress correlations</button>
+    </div>
+    <div style="font-size:11.5px;color:#f0c24b;margin-top:-6px;">⚠️ Pick a range of at least ~2 weeks — shorter windows can't produce a meaningful correlation.</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ===== NEW SECTION — loaded state ===== -->
+  <div class="lbl">New section — loaded state</div>
+  <div class="page newsec">
+    <div class="h">🌩️ Correlation Under Stress <span class="tag">NEW</span></div>
+    <div class="cap">How did these same holdings move together during a real historical crash — not the calm 6-month window above?</div>
+    <div class="controls">
+      <div class="selectbox">Stress window: <b>COVID 2020 Crash</b> <span class="arrow">▾</span></div>
+      <button class="btn">↻ Refresh</button>
+    </div>
+
+    <div class="card">
+      <div class="headline">Avg pairwise correlation: <b style="color:#8fe3ac;">0.31</b> <span class="arrow-txt">(calm)</span> → <b style="color:#f0c24b;">0.78</b> <span class="arrow-txt">(during this crash)</span></div>
+      <div style="font-size:12px;color:var(--muted);">In the COVID 2020 crash, your book moved as one — most of the diversification you rely on in calm markets disappeared.</div>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:2px;">Pairs that newly converged under stress</div>
+      <div style="font-size:11.5px;color:var(--muted);">Uncorrelated in calm, highly correlated once the crash hit</div>
+      <table>
+        <tr><th>Pair</th><th>Calm</th><th>Stress</th><th>Δ</th></tr>
+        <tr><td>GOOG ↔ ISRG</td><td class="num">0.12</td><td class="num delta-hi">0.86</td><td class="num delta-hi">+0.74</td></tr>
+        <tr><td>MU ↔ MRVL</td><td class="num">0.28</td><td class="num delta-hi">0.81</td><td class="num delta-hi">+0.53</td></tr>
+        <tr><td>NOW ↔ LLY</td><td class="num">0.09</td><td class="num delta-hi">0.69</td><td class="num delta-hi">+0.60</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Clusters that formed under stress</div>
+      <div class="stress-cluster">
+        <div class="tickers">🔴 GOOG · ISRG · MU · MRVL · NOW</div>
+        <div class="meta">avg 0.79 during the crash · avg 0.19 in calm markets — a cluster that only exists under stress</div>
+      </div>
+    </div>
+
+    <div class="coverage-cap">11 of 13 held names traded through this window (Feb 19 – Mar 23, 2020, 25 trading days); 2 excluded — AAPL, MSFT lacked full price history for this period.</div>
+
+    <div style="font-size:11.5px;color:var(--accent);margin-top:8px;">For the P&amp;L impact of this scenario, see 🔥 Stress Testing.</div>
+
+    <div class="caveat">
+      <b>⚠️ Read this directionally, not as a hidden link.</b> A sharp ~25-day crash mechanically pushes correlations
+      up because everything drops together — this shows how your book actually moved during that specific
+      crash, not that these names are secretly connected.
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>Honesty rules encoded here:</b><br>
+    • <b>Window length always shown</b> — "25 trading days" — so a short window's mechanical correlation-inflation isn't mistaken for a real structural finding.<br>
+    • <b>Coverage caption</b> — which held names are excluded and why (didn't trade through the window), never silently dropped.<br>
+    • <b>Calm-advisor framing</b> — "your book moved as one" / "read directionally," never "these names are secretly linked."<br>
+    • <b>Lazy-load, not automatic</b> — a button click, not a fetch-on-every-rerun (same pattern as the existing Stress Testing tab).<br>
+    • <b>Reuses existing thresholds</b> — the same 0.65/0.80 tiers as the calm clusters above, no new constant.<br>
+    • <b>Custom range never silently falls back</b> — an invalid/too-short range disables the Load button with an explicit reason caption, unlike a similar picker already shipped elsewhere in the app that this deliberately does NOT repeat.<br>
+    • <b>Preset windows can never regress</b> — the 10-trading-day floor is measured on actual aligned trading rows, and all 3 presets comfortably clear it; only custom ranges can hit the floor.<br>
+    • <b>Cross-references 🔥 Stress Testing</b> — shown only for the 3 presets (not custom ranges, which have no P&amp;L lookup there) — pure discoverability, no coupling.
+  </div>
+</div>
+</body>
+</html>

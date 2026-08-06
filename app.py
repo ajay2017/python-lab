@@ -72,6 +72,8 @@ from stock_analyzer.trade_analytics import build_full_analytics
 from stock_analyzer.stress_test import (
     SCENARIOS, run_scenario, run_all_scenarios, assess_fragility,
     HISTORICAL_WINDOWS, fetch_historical_drawdowns,
+    fetch_stress_window_returns, validate_custom_stress_range, stress_cache_key,
+    _EARLIEST_STRESS_START,
 )
 from stock_analyzer import monte_carlo as _mc
 from stock_analyzer.personalized_discovery import build_winner_profile
@@ -12852,6 +12854,229 @@ elif page == "🧩 Intelligence":
                     "usually trimming within your biggest cluster — composite score decides "
                     "**which** name, not correlation alone."
                 )
+
+            # ── Correlation Under Stress (docs/plans/correlation-under-stress.md) ──
+            # Extends this tab below the calm clusters above with the SAME
+            # holdings' correlation during a real (or custom) historical crash
+            # window — awareness-only, terminal display, nothing downstream
+            # consumes it. Guarded by the SAME `_pi_corr_df is None` branch
+            # above (this whole block only reached when calm data is loaded).
+            st.divider()
+            st.subheader("🌩️ Correlation Under Stress")
+            st.caption(
+                "How did these same holdings move together during a real "
+                "historical crash — not the calm window above?"
+            )
+
+            _cus_labels = {
+                "covid_crash":     "COVID 2020 Crash",
+                "rate_shock_2022": "2022 Rate Shock",
+                "gfc_2008":        "2008 GFC",
+                "custom":          "Custom range",
+            }
+            _cus_scenario_ids = list(HISTORICAL_WINDOWS.keys()) + ["custom"]
+            _cus_c1, _cus_c2 = st.columns([1.2, 1.8])
+            with _cus_c1:
+                _cus_scenario_id = st.selectbox(
+                    "Stress window",
+                    _cus_scenario_ids,
+                    index=_cus_scenario_ids.index("covid_crash"),
+                    format_func=lambda v: _cus_labels.get(v, v),
+                    key="_cus_scenario_id",
+                )
+
+            _cus_is_custom = _cus_scenario_id == "custom"
+            if _cus_is_custom:
+                with _cus_c2:
+                    _cus_range = st.date_input(
+                        "Custom range",
+                        value=(_today_et() - timedelta(days=30), _today_et()),
+                        min_value=_EARLIEST_STRESS_START,
+                        max_value=_today_et(),
+                        key="_cus_custom_range",
+                    )
+                if isinstance(_cus_range, (tuple, list)) and len(_cus_range) == 2:
+                    _cus_start_d, _cus_end_d = _cus_range[0], _cus_range[1]
+                else:
+                    # Transient widget state — user has only picked one date so
+                    # far. Never silently fall back to a default range here
+                    # (the gap this build deliberately does NOT repeat from the
+                    # Research Track Record page's _rh_custom_range).
+                    _cus_start_d, _cus_end_d = None, None
+                _cus_valid, _cus_invalid_reason = validate_custom_stress_range(
+                    _cus_start_d, _cus_end_d, _today_et()
+                )
+                if _cus_valid:
+                    _cus_start_iso = _cus_start_d.isoformat()
+                    _cus_end_iso   = _cus_end_d.isoformat()
+                    _cus_cache_key = stress_cache_key("custom", _cus_start_iso, _cus_end_iso)
+                else:
+                    _cus_start_iso = _cus_end_iso = None
+                    _cus_cache_key = None
+            else:
+                # Presets are always valid — the floor can only ever bite a
+                # custom range.
+                _cus_valid, _cus_invalid_reason = True, None
+                _cus_start_iso, _cus_end_iso = HISTORICAL_WINDOWS[_cus_scenario_id]
+                _cus_cache_key = stress_cache_key(_cus_scenario_id)
+
+            _cus_has_cache = _cus_cache_key is not None and _cus_cache_key in st.session_state
+
+            _cus_btn_col, _cus_refresh_col = st.columns([1, 1])
+            with _cus_btn_col:
+                _cus_load_clicked = st.button(
+                    "📥 Load stress correlations",
+                    disabled=not _cus_valid,
+                    key="_cus_load_btn",
+                )
+            with _cus_refresh_col:
+                if _cus_has_cache and st.button("↻ Refresh", key="_cus_refresh_btn"):
+                    del st.session_state[_cus_cache_key]
+                    st.rerun()
+
+            if not _cus_valid:
+                st.caption(f"⚠️ {_cus_invalid_reason}")
+
+            if _cus_load_clicked and _cus_valid:
+                _cus_tickers = _pi_pdf["Ticker"].tolist()
+                with st.spinner("Fetching historical prices for this window…"):
+                    _cus_returns = fetch_stress_window_returns(_cus_tickers, _cus_start_iso, _cus_end_iso)
+                    if _cus_returns is not None:
+                        _cus_stress_corr = _cus_returns.corr().round(3)
+                        _cus_n_days = int(len(_cus_returns))
+                    else:
+                        _cus_stress_corr = None
+                        _cus_n_days = None
+                st.session_state[_cus_cache_key] = {
+                    "stress_corr":   _cus_stress_corr,
+                    "n_window_days": _cus_n_days,
+                }
+                st.rerun()
+
+            if _cus_valid and not _cus_has_cache:
+                st.caption(
+                    'Click "Load stress correlations" to fetch historical prices '
+                    "for this window and compare."
+                )
+            elif _cus_has_cache:
+                _cus_cached      = st.session_state[_cus_cache_key]
+                _cus_stress_corr = _cus_cached["stress_corr"]
+                _cus_n_days      = _cus_cached["n_window_days"]
+
+                if _cus_stress_corr is None:
+                    st.warning(
+                        "Couldn't fetch historical prices for this window — "
+                        "try again or pick a different range."
+                    )
+                else:
+                    _cus_delta = portfolio_intelligence.correlation_regime_delta(
+                        _pi_corr_df, _cus_stress_corr, _pi_weights_map,
+                        n_window_days=_cus_n_days,
+                    )
+                    if _cus_delta is None or _cus_delta["avg_calm"] is None:
+                        st.info(
+                            "Not enough overlapping held names traded through "
+                            "this window to compute a stress correlation this "
+                            "session."
+                        )
+                    else:
+                        if _cus_delta["too_short"]:
+                            st.warning(
+                                f"⚠️ This window ({_cus_n_days} aligned trading day"
+                                f"{'s' if _cus_n_days != 1 else ''}) is too short "
+                                "for a meaningful stress-correlation reading — "
+                                "withholding the comparison rather than showing a "
+                                "number a short window would mechanically inflate."
+                            )
+                        else:
+                            st.markdown(
+                                f"Avg pairwise correlation: "
+                                f"**{_cus_delta['avg_calm']:.2f}** (calm) → "
+                                f"**{_cus_delta['avg_stress']:.2f}** "
+                                "(during this crash)"
+                            )
+                            st.caption(
+                                "In this window, your book moved as one — much of "
+                                "the diversification you rely on in calm markets "
+                                "disappeared."
+                            )
+
+                            _cus_conv = _cus_delta["newly_converged"]
+                            if _cus_conv:
+                                st.markdown("**Pairs that newly converged under stress**")
+                                st.caption("Uncorrelated in calm, highly correlated once the crash hit")
+                                _cus_conv_df = pd.DataFrame([
+                                    {
+                                        "Pair":   f"{c['a']} ↔ {c['b']}",
+                                        "Calm":   c["calm"],
+                                        "Stress": c["stress"],
+                                        "Δ":      c["delta"],
+                                    }
+                                    for c in _cus_conv
+                                ])
+                                st.dataframe(
+                                    _cus_conv_df.style.format({
+                                        "Calm": "{:.2f}", "Stress": "{:.2f}", "Δ": "{:+.2f}",
+                                    }),
+                                    width='stretch', hide_index=True,
+                                )
+                            else:
+                                st.caption("No pairs newly converged under this stress window.")
+
+                            _cus_sclusters = _cus_delta["stress_clusters"]
+                            if _cus_sclusters:
+                                st.markdown("**Clusters that formed under stress**")
+                                for _cus_sc in _cus_sclusters:
+                                    _cus_sc_names = ", ".join(_cus_sc["tickers"])
+                                    _cus_sc_wt = (
+                                        f", **{_cus_sc['combined_weight_pct']:.1f}%** combined weight"
+                                        if _cus_sc["combined_weight_pct"] else ""
+                                    )
+                                    _cus_sc_msg = (
+                                        f"🌩️ **{_cus_sc['size']} positions move together "
+                                        f"under stress:** {_cus_sc_names} — avg internal "
+                                        f"correlation **{_cus_sc['avg_internal_corr']:.2f}**"
+                                        f"{_cus_sc_wt}"
+                                    )
+                                    if _cus_sc["tier"] == "danger":
+                                        st.warning(_cus_sc_msg)
+                                    else:
+                                        st.info(_cus_sc_msg)
+                            else:
+                                st.caption("No new clusters formed under this stress window.")
+
+                            _cus_cov = _cus_delta["coverage"]
+                            _cus_cov_msg = (
+                                f"{_cus_cov['included']} of {_cus_cov['total']} held names "
+                                f"traded through this window ({_cus_start_iso} → "
+                                f"{_cus_end_iso}, {_cus_n_days} trading days)"
+                            )
+                            if _cus_cov["excluded"]:
+                                _cus_cov_msg += (
+                                    f"; {_cus_cov['excluded']} excluded — lacked full "
+                                    "price history for this period."
+                                )
+                            else:
+                                _cus_cov_msg += "."
+                            st.caption(_cus_cov_msg)
+
+                            if not _cus_is_custom:
+                                st.caption(
+                                    "For the P&L impact of this scenario, see 🔥 Stress Testing."
+                                )
+
+                        # Mandatory calm-advisor framing caveat — shown for BOTH
+                        # the too-short and full-render branches above (any time
+                        # a real reading, however short, is shown at all), never
+                        # skipped just because the window was thin.
+                        st.info(
+                            "⚠️ Read this directionally, not as a hidden link. A "
+                            "sharp crash mechanically pushes correlations up "
+                            "because everything drops together — this shows how "
+                            "your book actually moved during that specific "
+                            f"{'window' if _cus_is_custom else 'crash'}, not that "
+                            "these names are secretly connected."
+                        )
 
     with _pi_tab_risk:
         st.caption(

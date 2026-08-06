@@ -25,6 +25,7 @@ import pandas as pd
 
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
 from stock_analyzer.portfolio import _to_tz_naive
+from stock_analyzer.stress_test import _MIN_STRESS_WINDOW_DAYS
 
 
 def correlation_clusters(
@@ -141,6 +142,127 @@ def correlation_clusters(
         return clusters
     except Exception:
         return []
+
+
+def correlation_regime_delta(
+    calm_corr: pd.DataFrame | None,
+    stress_corr: pd.DataFrame | None,
+    weights: dict | None = None,
+    n_window_days: int | None = None,
+) -> dict | None:
+    """
+    Compare the portfolio's existing CALM correlation structure against the
+    same holdings' correlation during a real (or custom) stress window —
+    "Correlation Under Stress" (docs/plans/correlation-under-stress.md).
+    Pure / awareness-only: never gates, resizes, or reorders a recommendation.
+
+    Returns None when either input matrix is None — offline propagation,
+    matching stress_test.fetch_stress_window_returns /
+    stress_correlation_matrix's own None-on-total-failure contract.
+
+    Restricts BOTH matrices to the ticker INTERSECTION first — every average
+    and pair delta is computed over the identical set, so a ticker with
+    partial coverage in only one regime (e.g. an IPO after the stress window
+    started) can't skew the headline.
+
+    n_window_days: the aligned-return row count that produced stress_corr —
+    a correlation matrix itself carries no trading-day information, so the
+    caller (the UI, right after calling fetch_stress_window_returns) must
+    thread this through explicitly. When not supplied, too_short defaults
+    to True — the conservative "withhold rather than assume the window was
+    long enough" reading; too_short must be computed from a REAL aligned
+    row count, never assumed favorable.
+
+    Returns a dict:
+        {
+            "avg_calm": float | None, "avg_stress": float | None,
+            "n_window_days": int | None, "too_short": bool,
+            "newly_converged": [{"a", "b", "calm", "stress", "delta"}, ...]
+                — pairs where calm < CORR_HIGH_PAIRS_THRESHOLD and
+                stress >= CORR_HIGH_PAIRS_THRESHOLD, sorted by delta desc.
+                Still computed even when too_short is True (pure function,
+                no cosmetic branching) — the UI layer decides whether to
+                withhold it from display.
+            "stress_clusters": correlation_clusters() output run on the
+                intersected stress matrix — same tiering as the calm view.
+            "coverage": {"included": int, "excluded": int, "total": int}
+                — of the tickers in calm_corr (the originally-requested
+                held universe), how many made it into the stress
+                intersection vs. were excluded (didn't trade through the
+                window / <5 valid closes).
+        }
+    Degenerate case (intersection has <2 tickers) returns a well-formed
+    empty-ish payload — never raises.
+    """
+    if calm_corr is None or stress_corr is None:
+        return None
+
+    try:
+        calm_tickers = calm_corr.index.tolist()
+        stress_tickers = set(stress_corr.index.tolist())
+        common = sorted(set(calm_tickers) & stress_tickers)
+
+        total = len(calm_tickers)
+        included = len(common)
+        excluded = total - included
+        coverage = {"included": included, "excluded": excluded, "total": total}
+
+        too_short = n_window_days is None or n_window_days < _MIN_STRESS_WINDOW_DAYS
+
+        if len(common) < 2:
+            return {
+                "avg_calm": None,
+                "avg_stress": None,
+                "n_window_days": n_window_days,
+                "too_short": too_short,
+                "newly_converged": [],
+                "stress_clusters": [],
+                "coverage": coverage,
+            }
+
+        calm_i = calm_corr.loc[common, common]
+        stress_i = stress_corr.loc[common, common]
+
+        def _off_diag_mean(df: pd.DataFrame) -> float | None:
+            vals = []
+            for i, t1 in enumerate(common):
+                for t2 in common[i + 1:]:
+                    v = float(df.loc[t1, t2])
+                    if not np.isnan(v):
+                        vals.append(v)
+            return round(float(np.mean(vals)), 3) if vals else None
+
+        avg_calm = _off_diag_mean(calm_i)
+        avg_stress = _off_diag_mean(stress_i)
+
+        newly_converged: list[dict] = []
+        for i, t1 in enumerate(common):
+            for t2 in common[i + 1:]:
+                c = float(calm_i.loc[t1, t2])
+                s = float(stress_i.loc[t1, t2])
+                if np.isnan(c) or np.isnan(s):
+                    continue
+                if c < CORR_HIGH_PAIRS_THRESHOLD and s >= CORR_HIGH_PAIRS_THRESHOLD:
+                    newly_converged.append({
+                        "a": t1, "b": t2,
+                        "calm": round(c, 3), "stress": round(s, 3),
+                        "delta": round(s - c, 3),
+                    })
+        newly_converged.sort(key=lambda d: -d["delta"])
+
+        stress_clusters = correlation_clusters(stress_i, weights)
+
+        return {
+            "avg_calm": avg_calm,
+            "avg_stress": avg_stress,
+            "n_window_days": n_window_days,
+            "too_short": too_short,
+            "newly_converged": newly_converged,
+            "stress_clusters": stress_clusters,
+            "coverage": coverage,
+        }
+    except Exception:
+        return None
 
 
 def risk_budget(
