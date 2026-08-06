@@ -28465,6 +28465,12 @@ Two diagnostic lenses — not recommendations, not gates.
 Each card suppresses to "insufficient data" until enough closed trades accumulate. **None of these observations change a score, a rank, or a recommendation — the engine never reads them.** The methodology note at the bottom of each section explains caveats (today's composite scores only; some patterns reflect deliberate risk management, not psychology).
 
 **📏 Sizing Alpha** asks whether your own dollar-sizing tracks your own realized outcomes. Since there's no reliable record of "conviction at the moment of a specific buy," this splits your closed trades into Small/Medium/Large dollar terciles (based on your own historical range, not a fixed threshold) and shows each tercile's real average realized gain. Shown in absolute dollars, not adjusted for portfolio growth over your account's history — descriptive context, never a rule to size up next time.
+
+---
+
+**🧭 Self vs Engine — "Is my OWN instinct good, separate from whether the engine is good?"**
+
+A different question than 🎯 Engine Track Record on 🧾 Summary — that card grades the app's own picks; this tab grades **your** self-initiated BUYs. Every BUY is independently classified from the actual recommendation history (never from the self-reported "Reason" dropdown on Log Trade, which turned out not to be a reliable signal for this): **app-aligned** (a matching app recommendation existed shortly before you bought), **self-initiated** (no matching recommendation — either the ticker was entirely outside the app's scanned universe, or the app covered it and simply didn't flag it), and a separate **not-graded** count for older trades from before recommendation-log coverage was reliable — those are disclosed but never averaged into either side, since a missing record from that period doesn't prove anything either way. The headline compares each side's average alpha vs SPY, gated at the same 8-decision floor as Behavioral Fingerprint, with the logged thesis text shown next to your biggest self-initiated winners and losers. **Awareness only — read-only, no gates, no buy/sell prompts, and a self-initiated buy outperforming doesn't contradict the engine's own track record; they're answering different questions.**
 """
             )
 
