@@ -889,7 +889,7 @@ def _deterioration_item(tier, shares):
         "dd_from_peak_pct": -12.0, "peak": 10.0, "trend_ma": 50,
         "below_ma_count": 3, "rel_strength": -2.0,
         "trim_floor": 10.0, "exit_floor": 20.0,
-        "pnl_pct": -5.0, "weight_pct": 2.0,
+        "pnl_pct": -5.0, "weight_pct": 2.0, "price": 95.5,
     }
 
 
@@ -935,3 +935,86 @@ def test_act_today_exit_directive_includes_share_count_when_shares_present():
     )
     directive = items[0]["directive"]
     assert "of 10 shares" in directive
+
+
+# ── Act Today / Review — deterioration items must carry price/dd_from_peak_pct/
+# below_ma_count/rel_strength forward (2026-08-05 bug fix). exit_advisor.py's
+# deterioration_signals() already computes all of these, but the Act Today
+# (TRIM/EXIT) and Review WATCH item literals dropped them, so app.py's
+# exit-signal capture block (which reads item.get("price") etc. off these
+# same dicts) always persisted NULLs for a field the engine actually knew.
+
+def test_act_today_trim_item_carries_price_and_deterioration_fields_forward():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("TRIM", 10)],
+    )
+    item = find_item(items, "ABC")
+    assert item is not None
+    assert item["price"] == 95.5
+    assert item["dd_from_peak_pct"] == -12.0
+    assert item["below_ma_count"] == 3
+    assert item["rel_strength"] == -2.0
+
+
+def test_act_today_exit_item_carries_price_and_deterioration_fields_forward():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("EXIT", 10)],
+    )
+    item = find_item(items, "ABC")
+    assert item is not None
+    assert item["price"] == 95.5
+    assert item["dd_from_peak_pct"] == -12.0
+    assert item["below_ma_count"] == 3
+    assert item["rel_strength"] == -2.0
+
+
+def test_review_watch_item_carries_price_pnl_and_deterioration_fields_forward():
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _review_list(
+        port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+        deterioration=[_deterioration_item("WATCH", 10)],
+    )
+    item = find_item(items, "ABC")
+    assert item is not None
+    assert item["price"] == 95.5
+    assert item["dd_from_peak_pct"] == -12.0
+    assert item["below_ma_count"] == 3
+    assert item["rel_strength"] == -2.0
+    assert item["pnl_pct"] == -5.0
+
+
+def test_review_watch_item_deduped_when_ticker_already_in_act_today():
+    # act_today dedup: a WATCH-tier deterioration item is suppressed here when
+    # its ticker already appears in act_today (single-surface rule) -- this
+    # must still hold with the new fields carried forward.
+    port_df = make_port_df([{"ticker": "ZZZ"}])
+    items = _review_list(
+        port_df, [], [], {}, _TODAY, portfolio_value=100_000.0,
+        act_today=[{"ticker": "ABC"}],
+        deterioration=[_deterioration_item("WATCH", 10)],
+    )
+    assert find_item(items, "ABC") is None
+
+
+# ── Act Today — mechanical exit wins over deterioration_exit on the same
+# ticker (dedup at build time, before consolidation). This is the boundary
+# case the exit-signal capture block (app.py) relies on: it only persists
+# rows for kind in {deterioration_trim, deterioration_exit, risk_off_derisk},
+# so a ticker whose consolidated card ends up "stop_breach" must never have
+# also entered act_today as a deterioration_exit -- otherwise the capture
+# loop's `continue` on the mechanical kind would correctly skip it, but only
+# because the deterioration item was never added in the first place.
+
+def test_stop_breach_suppresses_deterioration_exit_on_same_ticker():
+    port_df = make_port_df([{"ticker": "ABC", "gap_to_stop": -1.0}])
+    items = _act_today(
+        port_df, [], [], [], [], _TODAY,
+        deterioration=[_deterioration_item("EXIT", 10)],
+    )
+    matches = [i for i in items if i.get("ticker") == "ABC"]
+    assert len(matches) == 1
+    assert matches[0]["kind"] == "stop_breach"

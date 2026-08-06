@@ -2093,6 +2093,15 @@ def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
         return empty
 
 
+# Nullable exit_signals columns eligible for coalesce-on-write (see
+# save_exit_signals_batch). Not a policy threshold — just the set of
+# optional columns this table happens to have.
+_EXIT_SIGNAL_NULLABLE_COLS = (
+    "price_at_signal", "dd_from_peak_pct", "pnl_pct", "below_ma_count", "rel_strength",
+    "composite_score",
+)
+
+
 def save_exit_signals_batch(signals: list[dict]) -> None:
     """Persist exit signals emitted by the Daily Brief for Behavioral Fingerprint
     exit-side analysis.
@@ -2104,6 +2113,18 @@ def save_exit_signals_batch(signals: list[dict]) -> None:
     Each dict in `signals` must have at minimum: ticker, signal_date, signal_type.
     All other columns (composite_score, price_at_signal, dd_from_peak_pct,
     pnl_pct, below_ma_count, rel_strength) are nullable and may be omitted.
+
+    Coalesce-on-write: a same-day rebuild that (for whatever reason) re-derives
+    a row with a NULL in one of the nullable columns must never clobber a
+    non-null value a prior build already captured for that same (ticker,
+    signal_date, signal_type) key — the upsert's "last write wins" default
+    would otherwise silently blank a previously-captured value.  Before the
+    upsert, read any existing rows matching this batch's keys and fill any
+    incoming NULL from the existing non-null value (last-NON-NULL wins: a
+    genuine new non-null value still overwrites). The pre-read is best-effort
+    — if it fails (DB offline, etc.) the batch is upserted as-is rather than
+    dropping the write entirely; losing a write is worse than the rare
+    possible clobber in that one failure case.
     """
     if is_readonly():
         return
@@ -2111,6 +2132,36 @@ def save_exit_signals_batch(signals: list[dict]) -> None:
         return
     if not has_db():
         return
+
+    try:
+        tickers = sorted({str(s["ticker"]) for s in signals if s.get("ticker")})
+        dates   = sorted({str(s["signal_date"]) for s in signals if s.get("signal_date")})
+        types   = sorted({str(s["signal_type"]) for s in signals if s.get("signal_type")})
+        if tickers and dates and types:
+            cols = "ticker,signal_date,signal_type," + ",".join(_EXIT_SIGNAL_NULLABLE_COLS)
+            existing_rows = (
+                _client().table("exit_signals").select(cols)
+                .in_("ticker", tickers)
+                .in_("signal_date", dates)
+                .in_("signal_type", types)
+                .execute()
+            ).data or []
+            existing_by_key = {
+                (r.get("ticker"), str(r.get("signal_date")), r.get("signal_type")): r
+                for r in existing_rows
+            }
+            for s in signals:
+                key = (s.get("ticker"), str(s.get("signal_date")), s.get("signal_type"))
+                existing = existing_by_key.get(key)
+                if not existing:
+                    continue
+                for col in _EXIT_SIGNAL_NULLABLE_COLS:
+                    if s.get(col) is None and existing.get(col) is not None:
+                        s[col] = existing[col]
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_exit_signals_batch: pre-read merge skipped ({e}); upserting batch as-is")
+
     try:
         _client().table("exit_signals").upsert(
             signals,

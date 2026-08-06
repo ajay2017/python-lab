@@ -20,6 +20,7 @@ from stock_analyzer.exit_advisor import (
     WATCH,
     _exit_floor,
     _trim_floor,
+    assess_risk_off_derisk,
     classify_deterioration_tier,
     market_risk_posture,
     risk_off_regime,
@@ -266,3 +267,57 @@ def test_market_risk_posture_fragile_and_risk_off_is_worst_case():
     assert result["score"] == 3
     assert result["label"] == "Risk-off & fragile"
     assert result["armed"] is True
+
+
+# ── assess_risk_off_derisk — per-contributor "price" field (2026-08-05 bug fix) ─
+# c["price"] was already computed internally (falls back to 0.0 on a missing
+# "Price" row) and used for dollar_risk, but never exposed on the returned
+# card dict, so downstream exit-signal persistence always wrote a NULL
+# price_at_signal for RISK_OFF rows even when the row's price was known.
+
+def _risk_off_port_df(rows):
+    return pd.DataFrame([
+        {
+            "Ticker": r["ticker"], "Weight (%)": r.get("weight", 20.0),
+            "Price": r.get("price"), "Shares": r.get("shares", 10.0),
+            "P&L (%)": r.get("pnl_pct", 5.0),
+        }
+        for r in rows
+    ])
+
+
+_RISK_OFF_CLOSES = [200.0 - i * 0.5 for i in range(250)]  # trips the trend leg
+
+
+def _risk_off_call(port_df, held_data):
+    return assess_risk_off_derisk(
+        port_df, held_data,
+        fragility={"severity": "fragile"},
+        spy_trend_df=_spy_df(_RISK_OFF_CLOSES),
+        vix_level=14.0,
+    )
+
+
+def test_risk_off_card_exposes_known_price():
+    port_df = _risk_off_port_df([{"ticker": "NVDA", "price": 123.456, "shares": 10}])
+    held_data = {"NVDA": {"risk_metrics": {"beta": 1.8}}}
+    cards = _risk_off_call(port_df, held_data)
+    assert len(cards) == 1
+    assert cards[0]["ticker"] == "NVDA"
+    assert cards[0]["price"] == 123.46  # rounded to 2dp, matches dollar_risk's basis
+
+
+def test_risk_off_card_price_none_when_missing():
+    port_df = _risk_off_port_df([{"ticker": "NVDA", "price": None, "shares": 10}])
+    held_data = {"NVDA": {"risk_metrics": {"beta": 1.8}}}
+    cards = _risk_off_call(port_df, held_data)
+    assert len(cards) == 1
+    assert cards[0]["price"] is None  # never the silent-lie 0.0 fallback
+
+
+def test_risk_off_card_price_none_when_non_positive():
+    port_df = _risk_off_port_df([{"ticker": "NVDA", "price": 0.0, "shares": 10}])
+    held_data = {"NVDA": {"risk_metrics": {"beta": 1.8}}}
+    cards = _risk_off_call(port_df, held_data)
+    assert len(cards) == 1
+    assert cards[0]["price"] is None

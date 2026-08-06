@@ -1413,6 +1413,15 @@ def _act_today(port_df, alert_list, risk_recs, news_items, macro_events, today,
             "weight":  d.get("weight_pct"),
             "pnl_pct": d.get("pnl_pct"),
             "dollar_risk": d.get("dollar_risk"),
+            # Carried forward so the exit-signal capture block (app.py) can
+            # persist them to exit_signals — previously dropped here, which
+            # meant every deterioration_exit/deterioration_trim row was
+            # written with these columns NULL despite exit_advisor.py already
+            # computing them.
+            "price": d.get("price"),
+            "dd_from_peak_pct": d.get("dd_from_peak_pct"),
+            "below_ma_count": d.get("below_ma_count"),
+            "rel_strength": d.get("rel_strength"),
             # Only meaningful for the EXIT tier — a full-position quantity the
             # directive already names ("exit most/all of N shares"). TRIM's
             # directive text now names an approximate suggested quantity too
@@ -1944,6 +1953,14 @@ def _review_list(port_df, news_items, macro_events, held_data, today,
             "trigger": "A 2-of-3 close below the trend with market underperformance → TRIM.",
             "weight":  d.get("weight_pct"),
             "lifecycle": "",
+            # Carried forward so the exit-signal capture block (app.py) can
+            # persist them to exit_signals for the WATCH signal_type — same
+            # gap as the Act Today deterioration items above.
+            "pnl_pct": d.get("pnl_pct"),
+            "price": d.get("price"),
+            "dd_from_peak_pct": d.get("dd_from_peak_pct"),
+            "below_ma_count": d.get("below_ma_count"),
+            "rel_strength": d.get("rel_strength"),
         })
 
     # 1 — Approaching stop (0–8% gap)

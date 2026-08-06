@@ -539,5 +539,12 @@ def assess_risk_off_derisk(
             "weight": round(c["weight"], 1),
             "pnl_pct": c["pnl_pct"],
             "dollar_risk": round(c["price"] * c["shares"], 0),
+            # Persisted as price_at_signal by the exit-signal capture block
+            # (app.py). c["price"] falls back to 0.0 above when "Price" was
+            # missing on the row -- writing 0.0 here would be a silent lie
+            # (and a future divide-by-zero for any consumer computing
+            # (cur - price_at_signal)/price_at_signal), so None (unavailable)
+            # is the honest value, never 0.0.
+            "price": round(c["price"], 2) if c["price"] and c["price"] > 0 else None,
         })
     return cards
