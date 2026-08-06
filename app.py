@@ -28499,6 +28499,21 @@ The taxonomy is fixed so patterns stay comparable across months and years — it
             )
 
     with _ug_tab4:
+        with st.expander("📘 Full system reference (the complete manual)", expanded=False):
+            st.markdown(
+                """
+This in-app guide is the **short form**. The complete, portable **System Reference manual** —
+a page-by-page tour of every surface *plus* how the engine decides behind the scenes (the
+composite score, every gate/threshold, the exit ladder, the data layer, the cron jobs) —
+lives in the repository:
+
+**[📖 DRISHTA User Manual & System Reference ↗](https://github.com/ajay2017/python-lab/blob/main/docs/user-manual.md)**
+
+It's kept in sync with the code and is the single map to the whole app. Read it when you want
+the full "how it works," not just the quick version here.
+"""
+            )
+
         with st.expander("📚 Glossary & external references", expanded=False):
             st.markdown(
                 """

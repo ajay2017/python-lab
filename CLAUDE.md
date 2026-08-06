@@ -102,6 +102,7 @@ Only #1 is mechanically guarded; #2–#6 are the author's checklist. When wrappi
 
 | Need | Where |
 |---|---|
+| Single portable map of the whole app (usage + mechanics) | [docs/user-manual.md](docs/user-manual.md) |
 | Full dev context after time away | [DEVELOPMENT.md](DEVELOPMENT.md) |
 | All decision thresholds | [stock_analyzer/constants.py](stock_analyzer/constants.py) |
 | Functional requirements + operating policy | [docs/requirements.md](docs/requirements.md) |
