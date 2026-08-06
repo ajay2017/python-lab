@@ -177,6 +177,7 @@ from stock_analyzer.constants import (
     PERSONALIZED_DISCOVERY_MIN_MATCH_TRAITS,
     PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW,
     PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
+    PREDICTION_MIN_MATURED_N,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -267,6 +268,7 @@ from stock_analyzer.decision_journal import compute_patterns
 from stock_analyzer import broker_import as _bimp
 from stock_analyzer import broker_screenshot as _bscr
 from stock_analyzer import debate_agent
+from stock_analyzer.prediction_scoring import score_predictions as _model_lab_score
 
 # Brand: DRISHTA (Sanskrit for "vision/insight") — "Beyond Noise".
 # page_icon falls back to an emoji if the logo file isn't deployed yet so
@@ -2140,6 +2142,7 @@ with st.sidebar:
             ("Watchlist","📋 Watchlist",               ":material/bookmarks:"),
             ("Macro",    "🌐 Macro",                    ":material/public:"),
             ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
+            ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
         ]),
         ("PORTFOLIO", [
             ("Overview", "🥧 Portfolio Overview", ":material/pie_chart:"),
@@ -2160,6 +2163,20 @@ with st.sidebar:
             ("AI Insights", "🧠 AI Insights", ":material/psychology:"),
         ]),
     ]
+
+    # 🔬 Model Lab is the FIRST nav entry ever fully hidden (not just
+    # disabled-for-writes) from a read-only viewer — it's an owner-only
+    # experimental measurement surface (design spec, F-234), not a shared
+    # portfolio view. Smallest-change approach: filter it out of the group
+    # list before any rendering happens below, rather than special-casing
+    # the button loop itself. Flagged here explicitly since every other
+    # `is_readonly()` use in this app only disables a write control, never
+    # removes a whole nav item — this is a new pattern, not a copy of one.
+    if db.is_readonly():
+        _NAV_GROUPS = [
+            (_g_label, [item for item in _g_items if item[1] != "🔬 Model Lab"])
+            for _g_label, _g_items in _NAV_GROUPS
+        ]
 
     # Determine which group the current page belongs to, for accent-colored active state
     _active_accent = "#3b82f6"  # fallback to MAIN blue
@@ -26244,6 +26261,177 @@ elif page == "📊 Predictive Analytics":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PAGE — MODEL LAB (Predictive Modeling Shadow Layer, Phase 1 — F-234)
+# Owner-only, EXPERIMENTAL, MEASUREMENT-ONLY. Feeds NO gate, NO recommendation,
+# NO composite score, NO threshold. A dead end by design — consumes nothing
+# from st.session_state, publishes nothing. See
+# docs/plans/predictive-modeling-shadow-layer.md and
+# docs/mockups/predictive-model-lab.html (the approved UI reference).
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🔬 Model Lab":
+    st.title("🔬 Model Lab — forecast calibration")
+    st.caption("Owner-only · experimental · the shadow layer's own track record (Phase 1, F-234)")
+
+    if db.is_readonly():
+        # Defense in depth: the sidebar nav entry is already hidden for a
+        # read-only viewer (see the _NAV_GROUPS filter above), but a session
+        # that downgraded mid-session (or a stale nav_page from before
+        # downgrade) could still land `page` on this value.
+        st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
+        st.stop()
+
+    st.warning(
+        "⚗️ **EXPERIMENTAL — measurement only.** Every forecast on this page feeds "
+        "**no gate, no recommendation, no composite, no threshold.** It exists to "
+        "answer one question before any of that is ever considered: *does the model "
+        "beat doing nothing?*"
+    )
+    st.caption(
+        "Consumes nothing from `st.session_state`, publishes nothing — a dead end by "
+        "design. Not shown to a read-only viewer. Predicts **risk (volatility), not "
+        "direction** — no stock-level return forecast anywhere in this layer."
+    )
+
+    _ml_df = db.load_model_predictions(model_name="vol_forecast_ewma")
+
+    if _ml_df is None:
+        st.markdown("---")
+        st.info(
+            "**Producer offline — nothing written.** Either the `model_predictions` "
+            "table hasn't been created yet (inert until its one-time DDL is applied — "
+            "see `docs/architecture.md` §6.31), or the database is unreachable this "
+            "session. No forecast is fabricated when the inputs are offline — a "
+            "prediction built from a known-offline bundle would be a guess with a "
+            "fake track record."
+        )
+    elif _ml_df.empty:
+        st.markdown("---")
+        st.info(
+            "**No predictions logged yet.** The daily cron writes one row per held "
+            "ticker + the portfolio aggregate going forward. For immediate per-ticker "
+            "history, run the one-off backfill script "
+            "(`python scripts/backfill_vol_predictions.py`) from a terminal with the "
+            "app's Supabase credentials."
+        )
+    else:
+        _ml_matured = (
+            _ml_df[_ml_df["realized_value"].notna()].copy()
+            if "realized_value" in _ml_df.columns else _ml_df.iloc[0:0].copy()
+        )
+        _ml_pending = len(_ml_df) - len(_ml_matured)
+        _ml_score = _model_lab_score(_ml_matured)
+
+        st.markdown("---")
+        st.markdown("##### 📈 Forward volatility — `vol_forecast_ewma · v1`")
+        st.caption(
+            "Target: **20-day forward realized volatility** (annualized) · "
+            "Baseline: trailing-20d realized vol (persistence)"
+        )
+
+        if _ml_score["n_matured"] < PREDICTION_MIN_MATURED_N:
+            _c1, _c2, _c3 = st.columns(3)
+            _c1.metric("Skill vs baseline", "—",
+                       help=f"Withheld until n ≥ {PREDICTION_MIN_MATURED_N}")
+            _c2.metric("Matured predictions",
+                       f"{_ml_score['n_matured']} / {PREDICTION_MIN_MATURED_N} needed")
+            _c3.metric("Pending (not yet matured)", f"{_ml_pending}")
+            st.info(
+                f"A skill score on {_ml_score['n_matured']} outcome(s) would be noise "
+                "dressed as a verdict. The harness withholds it on purpose until enough "
+                "predictions mature — the same discipline as the engine's other "
+                "≥N-row calibration floors. Nothing here is actionable regardless; "
+                "this page never touches a decision."
+            )
+        else:
+            _skill = _ml_score["skill_score"]
+            if _skill is not None and _skill > 0:
+                st.success(f"● BEATS BASELINE — skill {_skill * 100:+.1f}%")
+            elif _skill is not None:
+                st.warning(f"● DOES NOT BEAT BASELINE — skill {_skill * 100:+.1f}%")
+            _c1, _c2, _c3 = st.columns(3)
+            _c1.metric("Skill vs baseline",
+                       f"{_skill * 100:+.1f}%" if _skill is not None else "—",
+                       help="1 − MAE(model) / MAE(persistence)")
+            _mae_model = _ml_score["mae_model"]
+            _mae_baseline = _ml_score["mae_baseline"]
+            _c2.metric(
+                "Mean abs error (model vs baseline)",
+                f"{_mae_model:.1f} vs {_mae_baseline:.1f}"
+                if _mae_model is not None and _mae_baseline is not None else "—",
+            )
+            _c3.metric("Matured predictions", f"{_ml_score['n_matured']}")
+            st.caption(
+                f"Live: {_ml_score['n_matured_live']} · backfilled: "
+                f"{_ml_score['n_matured_backfill']} · {_ml_score['effective_n_note']}"
+            )
+
+            _live_skill = _ml_score["skill_score_live_only"]
+            if _live_skill is not None:
+                st.caption(
+                    f"**Live-only skill (excludes backfill):** {_live_skill * 100:+.1f}% "
+                    f"· n={_ml_score['n_matured_live']}"
+                )
+            else:
+                st.caption(
+                    f"Live-only skill: withheld — fewer than {PREDICTION_MIN_MATURED_N} "
+                    f"matured LIVE rows so far ({_ml_score['n_matured_live']}). The "
+                    "headline number above is never quietly 100%-backfilled."
+                )
+
+            st.markdown("###### By regime — is the edge real, or just calm-weather?")
+            _regime_bd = _ml_score.get("regime_breakdown", {})
+            if not _regime_bd:
+                st.caption("No regime tag recorded on matured rows yet.")
+            else:
+                for _rg in sorted(_regime_bd.keys()):
+                    _rd = _regime_bd[_rg]
+                    _rs = _rd.get("skill_score")
+                    _rs_txt = f"{_rs * 100:+.1f}%" if _rs is not None else "—"
+                    st.markdown(f"- **{_rg}** — skill {_rs_txt} · n={_rd.get('n')}")
+
+            st.markdown("###### Predicted vs. realized (each matured forecast)")
+            _pv_fig = go.Figure()
+            _pv_colors = [
+                "#a78bfa" if str(t).upper() == "PORTFOLIO" else "#6ea8fe"
+                for t in _ml_matured.get("ticker", [])
+            ]
+            _pv_fig.add_trace(go.Scatter(
+                x=_ml_matured["predicted_value"], y=_ml_matured["realized_value"],
+                mode="markers", marker=dict(color=_pv_colors, size=9),
+                text=_ml_matured.get("ticker"),
+                hovertemplate="%{text}<br>predicted=%{x:.1%}<br>realized=%{y:.1%}<extra></extra>",
+                name="matured forecasts",
+            ))
+            _pv_lo = float(min(_ml_matured["predicted_value"].min(), _ml_matured["realized_value"].min()))
+            _pv_hi = float(max(_ml_matured["predicted_value"].max(), _ml_matured["realized_value"].max()))
+            _pv_fig.add_trace(go.Scatter(
+                x=[_pv_lo, _pv_hi], y=[_pv_lo, _pv_hi], mode="lines",
+                line=dict(dash="dash", color="#5f6779"), name="perfect calibration",
+            ))
+            _pv_fig.update_layout(
+                height=380, xaxis_title="predicted vol", yaxis_title="realized vol",
+                showlegend=False, margin=dict(l=10, r=10, t=10, b=10),
+            )
+            st.plotly_chart(_pv_fig, use_container_width=True)
+
+            st.markdown("###### Recently matured")
+            _sort_col = "scored_at" if "scored_at" in _ml_matured.columns else "made_at"
+            _ml_recent = _ml_matured.sort_values(_sort_col, ascending=False).head(15)
+            _ml_disp_cols = [
+                c for c in ["ticker", "made_at", "scored_at", "predicted_value",
+                            "baseline_value", "realized_value", "abs_error", "source"]
+                if c in _ml_recent.columns
+            ]
+            st.dataframe(_ml_recent[_ml_disp_cols], use_container_width=True, hide_index=True)
+
+        st.caption(
+            "Baseline logged at prediction time (never recomputed at scoring). "
+            "Realized computed from actual bars over the matured window. Regime tag "
+            "stored at make-time. All out-of-sample."
+        )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PAGE — ACCOUNT (account-baseline: equity + signed net cash)
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "💰 Account":
@@ -28266,6 +28454,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **🔔 Catalyst Watch** — three tabs: **📋 Positions** and **📡 Radar** (upcoming earnings for held + watchlist + sector names — awareness, not a buy signal), plus **🧭 Entry Candidates** (watchlist names near earnings with a strong beat rate and a passing composite — still awareness only, never a buy recommendation).
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
+- **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer testing whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. Feeds **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. The skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated. Predicts risk (volatility), never a stock-level direction/return call.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). Anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )

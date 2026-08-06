@@ -2574,6 +2574,130 @@ def load_price_xcheck_history(ticker: str, before_date: str, days_back: int = 21
         return None
 
 
+# ── Predictive Modeling Shadow Layer — model_predictions ledger (Phase 1, ──
+# F-234, MEASUREMENT-ONLY). Ships inert until the DDL below is applied —
+# degrades silently, same "ships inert" convention as
+# judgment_opinions/analyst_target_snapshots/portfolio_thesis. RLS: FOR ALL
+# TO service_role. See docs/architecture.md §6.31 for the full DDL and
+# docs/plans/predictive-modeling-shadow-layer.md for the design. Writers are
+# the cron (`cron_runner.py`) and the one-off backfill script
+# (`scripts/backfill_vol_predictions.py`) ONLY — there is no interactive
+# user-write path for this table, so the `is_readonly()` guards below are
+# precautionary defense-in-depth (consistent with every other writer in this
+# file), not load-bearing for this particular table.
+_MODEL_PREDICTIONS_COLS = [
+    "id", "model_name", "model_version", "scope", "ticker", "made_at",
+    "horizon_days", "target_metric", "predicted_value", "predicted_low",
+    "predicted_high", "baseline_value", "regime_at_make", "features_snapshot",
+    "realized_value", "scored_at", "abs_error", "baseline_abs_error",
+    "source", "created_at",
+]
+
+
+def save_model_predictions_batch(rows: list[dict]) -> bool:
+    """Upsert new prediction rows into `model_predictions`. Idempotent on
+    (model_name, model_version, scope, ticker, made_at) — a rerun of the
+    backfill script, or the daily cron re-firing, never duplicates. Never
+    raises: a pre-DDL "relation does not exist" error is caught identically
+    to any other failure — logged and reported via the return value, never
+    surfaced as an exception to the caller."""
+    if is_readonly():
+        return False
+    if not rows:
+        return False
+    if not has_db():
+        return False
+    try:
+        _client().table("model_predictions").upsert(
+            rows, on_conflict="model_name,model_version,scope,ticker,made_at",
+        ).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"save_model_predictions_batch: {e}")
+        return False
+
+
+def load_model_predictions(model_name: str | None = None, days_back: int = 400) -> "pd.DataFrame | None":
+    """Read `model_predictions` rows with `made_at` within the trailing
+    `days_back` calendar days, optionally filtered to one `model_name`.
+
+    Returns `None` (the offline sentinel) on ANY failure — no credentials,
+    the table not yet existing (pre-DDL), or a raised query exception — kept
+    distinct from a genuinely empty DataFrame (the query succeeded, zero
+    rows exist yet). The 🔬 Model Lab page's own offline-state banner
+    depends on this distinction: `None` renders "producer offline" (mockup
+    state 3), an empty-but-real DataFrame renders "warming up" (mockup
+    state 2) via `prediction_scoring.score_predictions()`'s own n=0 read."""
+    if not has_db():
+        return None
+    try:
+        from datetime import timedelta
+
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
+        q = _client().table("model_predictions").select("*").gte("made_at", cutoff)
+        if model_name:
+            q = q.eq("model_name", model_name)
+        rows = q.execute().data
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_MODEL_PREDICTIONS_COLS)
+    except Exception:
+        return None
+
+
+def load_unmatured_model_predictions(model_name: str | None = None) -> "pd.DataFrame | None":
+    """Read every `model_predictions` row not yet matured (`realized_value
+    IS NULL`), optionally filtered to one `model_name` — the maturation
+    cron's own input query. Unbounded by date (the table is small by
+    construction: one row per held ticker + the portfolio aggregate, per
+    day) — the caller decides which of the returned rows are actually due
+    for maturation (trading-day-aware; see `cron_runner._trading_days_elapsed`).
+
+    Returns `None` on ANY failure (offline sentinel), matching
+    `load_model_predictions` — a transient failure here must never be
+    silently treated as "nothing pending"."""
+    if not has_db():
+        return None
+    try:
+        q = _client().table("model_predictions").select("*").is_("realized_value", "null")
+        if model_name:
+            q = q.eq("model_name", model_name)
+        rows = q.execute().data
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_MODEL_PREDICTIONS_COLS)
+    except Exception:
+        return None
+
+
+def mature_model_predictions_batch(updates: list[dict]) -> bool:
+    """Write maturation results for already-existing `model_predictions`
+    rows, keyed by `id`. Each dict must have at minimum `id` and
+    `realized_value`; `scored_at`/`abs_error`/`baseline_abs_error` are
+    written when present in the dict, left untouched otherwise. Never
+    raises — a capture failure here must never break the cron's other
+    steps; the caller (`cron_runner`) also wraps its own call in
+    try/except for defense in depth."""
+    if is_readonly():
+        return False
+    if not updates:
+        return False
+    if not has_db():
+        return False
+    try:
+        for u in updates:
+            row_id = u.get("id")
+            if row_id is None:
+                continue
+            patch = {k: v for k, v in u.items() if k != "id"}
+            if not patch:
+                continue
+            _client().table("model_predictions").update(patch).eq("id", row_id).execute()
+        return True
+    except Exception as e:
+        import warnings
+        warnings.warn(f"mature_model_predictions_batch: {e}")
+        return False
+
+
 def save_watchlist(tickers: list[str]) -> bool:
     """Atomic-ish replace via upsert + sweep — same pattern as save_holdings.
 

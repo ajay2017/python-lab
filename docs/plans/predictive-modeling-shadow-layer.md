@@ -122,9 +122,18 @@ Look-ahead bias is the #1 killer of retail models; the harness is worthless if i
 4. **Out-of-sample only.** The ledger is inherently OOS; **no in-sample metric is ever computed or shown.**
 5. **Regime tag stored at make-time**, so calibration is always stratifiable and a benign-weather track record is visibly labeled as such.
 
+### 1.6b Backfill — CONFIRMED 2026-08-06 (user)
+
+DRISHTA itself is ~3 months old, but that does **not** bound how far back this layer can backfill — clarified with the user after initial confusion:
+
+- **Per-ticker scope: backfill is bounded only by public market-bar history, not by DRISHTA's age.** A backfilled row with `made_at = 2026-03-15` uses only bars up to 3/15 and a target computed from bars after 3/15 — both now safely in the past, so this is a correct point-in-time backtest, not a leak. **v1 (`vol_forecast_ewma`) has no fitted parameters** (λ=0.94 is the fixed RiskMetrics constant, not tuned on this data), so there is no in-sample/backtest-leakage risk the way there would be for a *fitted* model (flag this explicitly for any Phase 2 model design — GARCH-MLE or gradient-boosted trees would need a true walk-forward holdout if backfilled). **Depth: `PREDICTION_BACKFILL_PERIOD = "5y"`**, matching the existing `MC_HISTORY_PERIOD` constant and fetch path (`data.fetch_price_history`, `stock_analyzer/monte_carlo.py:56`) — reuses a precedent, not a new fetch pattern. A multi-year window very likely already contains a real stress episode "for free," which matters for the Phase 3 gate below.
+- **`PORTFOLIO` scope: bounded to known holdings history — genuinely ~3 months (verify earliest `trades` row before locking).** Forecasting the *portfolio's* aggregate forward vol requires actual historical weights, which only exist as far back as the logged trade history (`db.load_trades()`), not 5 years. Per-ticker rows get the deep backfill; `PORTFOLIO`-scope rows do not, and will stay thin until more calendar time passes — same maturation pattern as every other portfolio-level calibration in this app (`composite_score_at_save`, Engine Track Record).
+- **Every row is tagged `source = 'live' | 'backfill'`.** The scorer (§1.4) reports skill both blended and **live-only** — the headline skill number must never be quietly 100%-backfilled with zero live validation behind it.
+- **Overlapping-window caveat, surfaced not hidden.** Backfilling (or live-logging) daily `made_at` points against a 20-day horizon means consecutive rows share ~19 of 20 days of window — nominal `n_matured` overstates independent information. The backfill script strides sampled `as_of` dates (e.g. every `VOL_FORECAST_HORIZON_DAYS / 4` trading days, not every single day) to reduce artificial overlap, and the scorer reports raw `n_matured` alongside a stride-based effective-n note rather than letting row count alone look more convincing than it is.
+
 ### 1.7 Constants to add (`stock_analyzer/constants.py`) — model params, NOT gates
 
-`VOL_FORECAST_HORIZON_DAYS = 20`, `VOL_FORECAST_EWMA_LAMBDA = 0.94`, `PREDICTION_MIN_MATURED_N` (≈20). These are display/model parameters and gate nothing — but they still live in `constants.py` (hard rule #1) and still need a `docs/architecture.md` constants-table row at build (Definition-of-Done #1, mechanically enforced). Staging `constants.py` also trips the commit hook's Opus-review-citation requirement → consistent with §Governance below.
+`VOL_FORECAST_HORIZON_DAYS = 20`, `VOL_FORECAST_EWMA_LAMBDA = 0.94`, `PREDICTION_MIN_MATURED_N` (≈20), `PREDICTION_BACKFILL_PERIOD = "5y"` (§1.6b, per-ticker scope only). These are display/model parameters and gate nothing — but they still live in `constants.py` (hard rule #1) and still need a `docs/architecture.md` constants-table row at build (Definition-of-Done #1, mechanically enforced). Staging `constants.py` also trips the commit hook's Opus-review-citation requirement → consistent with §Governance below.
 
 ---
 

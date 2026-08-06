@@ -36,7 +36,7 @@ FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_F
 import hashlib
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 
@@ -314,9 +314,11 @@ def _run_eod(now_et, force: bool) -> int:
     # 3. Daily regime persistence — one row/day, portfolio-independent, so a
     # future "regime changed since yesterday" annotation has a real day-over-day
     # series instead of only ever the current session's ephemeral cache.
+    _regime_tag = None
     try:
         from stock_analyzer.macro_calendar import detect_macro_regime
         regime = detect_macro_regime(os.environ.get("FRED_API_KEY") or None)
+        _regime_tag = regime.get("regime")
         if db.save_daily_regime(now_et.date(), regime):
             _log(f"daily_regime written (regime={regime.get('regime')}, date={today_str}).")
         else:
@@ -346,8 +348,238 @@ def _run_eod(now_et, force: bool) -> int:
                 _log(f"state saved (row={_EOD_ROW}, date={today_str}).")
             elif not sent:
                 _log("pullback email not sent (inert/failed) — state NOT saved so later slot can retry.")
+
+    # 5. Predictive Modeling Shadow Layer (Phase 1, F-234) — LIVE vol forecast.
+    # MEASUREMENT-ONLY: writes one quarantined model_predictions row per held
+    # ticker + the portfolio aggregate. Feeds NO gate/recommendation/composite —
+    # see docs/plans/predictive-modeling-shadow-layer.md. Reuses the SAME 6mo
+    # bars this run's _build_context already fetched (payload["held_data"][t]
+    # ["df"]["Close"]) — no new fetch. Skips (writes nothing) for any ticker
+    # whose bars are too thin/unavailable, rather than logging a guessed
+    # forecast from a known-offline bundle (design doc §1.6b, mockup state 3).
+    try:
+        _n_pred = _write_live_vol_predictions(now_et, payload, _regime_tag)
+        _log(f"model_predictions (live): {_n_pred} row(s) written.")
+    except Exception as e:
+        _log(f"model_predictions (live) FAILED — {str(e)[:120]} — continuing.")
+
+    # 6. Predictive Modeling Shadow Layer — maturation. Independent of step 5
+    # (a PRIOR day's live/backfill prediction can mature today even if today's
+    # live forecast above failed). A maturing ticker may no longer be held, so
+    # this step fetches its own targeted price history rather than reusing
+    # payload["held_data"] (which only covers CURRENTLY held tickers).
+    try:
+        _n_mat = _mature_vol_predictions(now_et)
+        _log(f"model_predictions (maturation): {_n_mat} row(s) matured.")
+    except Exception as e:
+        _log(f"model_predictions (maturation) FAILED — {str(e)[:120]} — continuing.")
+
     _log(f"eod done · snapshot={bool(rows)} · sentiment={bool(_snap_sentiment_rows)} · pullback_sent={sent}")
     return 0
+
+
+def _write_live_vol_predictions(now_et, payload: dict, regime_tag: str | None) -> int:
+    """Compute + persist one 'live' model_predictions row per held ticker +
+    the portfolio aggregate, from the bars already fetched by this EOD run's
+    _build_context (payload['held_data'][t]['df']) — NO new fetch. Returns the
+    count of rows written (0 on any structural miss — insufficient bars,
+    nothing held, etc — never raises; the caller already wraps this call in
+    its own try/except for defense in depth)."""
+    import pandas as pd
+
+    from stock_analyzer.constants import VOL_FORECAST_EWMA_LAMBDA, VOL_FORECAST_HORIZON_DAYS
+    from stock_analyzer.vol_forecast import forecast_vol_ewma, realized_vol
+
+    held_data = payload.get("held_data", {})
+    if not held_data:
+        return 0
+
+    # Normalized to the ET *date* at midnight, NOT now_et.isoformat() (wall-
+    # clock time) — the EOD lane is demonstrably re-entrant within a day (any
+    # post-close slot, or a `force` re-run; the daily_snapshot step a few
+    # lines above this one upserts keyed by date for exactly this reason). A
+    # wall-clock made_at would defeat the (model_name, model_version, scope,
+    # ticker, made_at) upsert key on a same-day re-run, INSERTING a second,
+    # 0-day-stride duplicate row per ticker instead of upserting the same
+    # one — inflating n_matured with fully-redundant observations.
+    made_at = datetime.combine(now_et.date(), datetime.min.time(), tzinfo=now_et.tzinfo).isoformat()
+    rows: list[dict] = []
+    returns_by_ticker: dict[str, "pd.Series"] = {}
+
+    for t, bundle in held_data.items():
+        if not isinstance(bundle, dict):
+            continue
+        df = bundle.get("df")
+        if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
+            continue
+        closes = df["Close"].dropna()
+        rets = closes.pct_change().dropna()
+        if rets.empty:
+            continue
+        returns_by_ticker[t] = rets
+        forecast = forecast_vol_ewma(rets, lam=VOL_FORECAST_EWMA_LAMBDA)
+        baseline = realized_vol(rets.tail(VOL_FORECAST_HORIZON_DAYS))
+        if forecast is None or baseline is None:
+            continue
+        rows.append({
+            "model_name":      "vol_forecast_ewma",
+            "model_version":   "v1",
+            "scope":           "ticker",
+            "ticker":          t,
+            "made_at":         made_at,
+            "horizon_days":    VOL_FORECAST_HORIZON_DAYS,
+            "target_metric":   "realized_vol_20d_annualized",
+            "predicted_value": forecast,
+            "baseline_value":  baseline,
+            "regime_at_make":  regime_tag,
+            "source":          "live",
+        })
+
+    # Portfolio aggregate — a weighted return series built from the SAME bars
+    # above, weights from this run's own snapshot_rows (shares x close_price at
+    # this EOD's build), never a re-fetch or a re-derivation of holdings.
+    snapshot_rows = payload.get("snapshot_rows", [])
+    market_values: dict[str, float] = {}
+    for r in snapshot_rows:
+        t = str(r.get("ticker") or "").upper()
+        mv = (r.get("shares") or 0) * (r.get("close_price") or 0)
+        if t and mv and mv > 0:
+            market_values[t] = mv
+    total_mv = sum(market_values.values())
+    usable = [t for t in market_values if t in returns_by_ticker]
+    if total_mv > 0 and usable:
+        aligned = pd.DataFrame({t: returns_by_ticker[t] for t in usable}).dropna()
+        if not aligned.empty:
+            weights = pd.Series({t: market_values[t] for t in aligned.columns}, dtype=float)
+            weights = weights / weights.sum()
+            port_rets = (aligned * weights).sum(axis=1)
+            p_forecast = forecast_vol_ewma(port_rets, lam=VOL_FORECAST_EWMA_LAMBDA)
+            p_baseline = realized_vol(port_rets.tail(VOL_FORECAST_HORIZON_DAYS))
+            if p_forecast is not None and p_baseline is not None:
+                rows.append({
+                    "model_name":      "vol_forecast_ewma",
+                    "model_version":   "v1",
+                    "scope":           "portfolio",
+                    "ticker":          "PORTFOLIO",
+                    "made_at":         made_at,
+                    "horizon_days":    VOL_FORECAST_HORIZON_DAYS,
+                    "target_metric":   "realized_vol_20d_annualized",
+                    "predicted_value": p_forecast,
+                    "baseline_value":  p_baseline,
+                    "regime_at_make":  regime_tag,
+                    "source":          "live",
+                })
+
+    if not rows:
+        return 0
+    return len(rows) if db.save_model_predictions_batch(rows) else 0
+
+
+def _trading_days_elapsed(start_date, end_date) -> int:
+    """Count ET trading sessions strictly AFTER `start_date` up to and
+    including `end_date` — used to decide whether a model_predictions row's
+    `horizon_days` (trading days) has fully elapsed. A simple day-by-day walk
+    is deliberate here (never a large range in practice — this table gains
+    one row per held ticker + portfolio per day, so a pending row is at most
+    ~horizon_days+few trading days old before this catches it)."""
+    n = 0
+    d = start_date
+    while d < end_date:
+        d = d + timedelta(days=1)
+        if is_trading_day(d):
+            n += 1
+    return n
+
+
+def _mature_vol_predictions(now_et) -> int:
+    """Find `model_predictions` rows whose horizon has fully elapsed
+    (trading-day aware) and write their realized outcome. Fetches a fresh,
+    targeted price history per maturing ticker — deliberately NOT this run's
+    held-tickers bar context, since a maturing prediction's ticker may no
+    longer be held. PORTFOLIO-scope rows are left unmatured for now (this
+    cron does not reconstruct historical portfolio weights; same scoping
+    limit as the backfill script — design doc §1.6b). Never raises; the
+    caller wraps this call in its own try/except for defense in depth."""
+    import pandas as pd
+
+    from stock_analyzer import data as _data
+    from stock_analyzer.vol_forecast import realized_vol
+
+    pending = db.load_unmatured_model_predictions(model_name="vol_forecast_ewma")
+    if pending is None or pending.empty:
+        return 0
+
+    today = now_et.date()
+    updates: list[dict] = []
+
+    for _, row in pending.iterrows():
+        ticker = str(row.get("ticker") or "").upper()
+        if row.get("scope") == "portfolio" or ticker == "PORTFOLIO":
+            continue
+        try:
+            made_at_raw = str(row.get("made_at"))
+            made_date = datetime.fromisoformat(made_at_raw.replace("Z", "+00:00")).date()
+        except Exception:
+            continue
+        horizon = row.get("horizon_days")
+        if horizon is None:
+            continue
+        try:
+            horizon_int = int(horizon)
+        except (TypeError, ValueError):
+            continue
+        if _trading_days_elapsed(made_date, today) < horizon_int:
+            continue  # not due yet
+
+        try:
+            hist = _data.fetch_price_history(ticker, period="3mo")
+            if hist is None or hist.empty or "Close" not in hist.columns:
+                continue
+            closes = hist["Close"].dropna()
+            # pct_change() on the FULL series first, then filter to the
+            # forward window — filtering closes to (made_date, today] before
+            # computing pct_change would drop the made_date -> made_date+1
+            # return (no predecessor left inside the filtered slice), silently
+            # scoring one fewer trading day than the stated horizon. Mirrors
+            # the same full-series-then-slice order _write_live_vol_predictions
+            # already uses for its baseline.
+            rets_full = closes.pct_change().dropna()
+            idx_dates = pd.to_datetime(rets_full.index).date
+            # Cap the upper edge to exactly `horizon_int` forward returns —
+            # NOT to `today`. If a cron slot gets skipped (this project has
+            # a documented multi-week cron-outage precedent), maturation
+            # runs late and an uncapped (made_date, today] window would
+            # silently score realized vol over MORE than the stated horizon,
+            # making late-matured live rows non-comparable to the backfill
+            # script's always-exactly-`horizon`-day rows. `rets_full` is
+            # chronological-ascending, so `.head(horizon_int)` on the
+            # forward-filtered slice = the earliest `horizon_int` returns
+            # after made_date — identical to the old behaviour when
+            # maturation runs on time, protective only when it's late.
+            forward = rets_full[idx_dates > made_date].head(horizon_int)
+            if len(forward) < horizon_int:
+                continue  # window not fully realized yet (or fetch too short) — retry later
+            realized = realized_vol(forward)
+        except Exception:
+            realized = None
+        if realized is None:
+            continue
+
+        predicted = row.get("predicted_value")
+        baseline = row.get("baseline_value")
+        abs_error = abs(float(predicted) - realized) if predicted is not None else None
+        baseline_abs_error = abs(float(baseline) - realized) if baseline is not None else None
+        updates.append({
+            "id":                 row.get("id"),
+            "realized_value":     realized,
+            "scored_at":          now_et.isoformat(),
+            "abs_error":          abs_error,
+            "baseline_abs_error": baseline_abs_error,
+        })
+
+    if not updates:
+        return 0
+    return len(updates) if db.mature_model_predictions_batch(updates) else 0
 
 
 def _daily_action_fingerprint(top_pick: dict, exit_alerts: list[dict]) -> str:

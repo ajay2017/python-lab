@@ -438,6 +438,11 @@ though Phase 1 has no authority to act on them yet (read-only, no gating). Confi
 before tuning. See §6.29 (`judgment_opinions` table) and
 `docs/plans/judgment-layer.md` for the full design.
 
+| `VOL_FORECAST_HORIZON_DAYS` | 20 | Predictive Modeling Shadow Layer, Phase 1 (F-234, MEASUREMENT-ONLY) — forecast target: N-trading-day forward realized volatility (annualized), per held ticker + the portfolio aggregate. Matches the maturation cron's `made_at + horizon_days` window and the backfill script's target-window length. **Model parameter, NOT a decision gate** — see §6.31 (`model_predictions`) and `docs/plans/predictive-modeling-shadow-layer.md`. |
+| `VOL_FORECAST_EWMA_LAMBDA` | 0.94 | Predictive Modeling Shadow Layer — RiskMetrics' fixed EWMA decay factor for the v1 volatility forecaster (`vol_forecast.forecast_vol_ewma`). NOT fitted to this app's data — a classical constant, so v1 carries no backtest-leakage risk the way a fitted model (GARCH-MLE, gradient-boosted trees) would if it were ever backfilled. Model parameter, not a gate. |
+| `PREDICTION_MIN_MATURED_N` | 20 | Predictive Modeling Shadow Layer — minimum matured (`realized_value` populated) `model_predictions` rows before `prediction_scoring.score_predictions()` reports a real `skill_score` number; below this, skill is withheld (`None`), same "not yet meaningful" discipline as `ENGINE_TRACK_MIN_CALLS`/`BEHAVIORAL_MIN_SAMPLE_N` elsewhere. Also reused (deliberately, not a parallel constant) as the floor for `skill_score_live_only`, so a headline skill number can't be inflated by a handful of live rows behind a mostly-backfilled sample. Measurement floor only — never a decision gate. |
+| `PREDICTION_BACKFILL_PERIOD` | "5y" | Predictive Modeling Shadow Layer — depth of `scripts/backfill_vol_predictions.py`'s price-history fetch, per-ticker scope only (PORTFOLIO-scope backfill needs actual historical weights, bounded to known `trades` history, not 5 years — deliberately not built). Matches the existing `MC_HISTORY_PERIOD` constant/fetch-path precedent (Outcome Range simulator) rather than inventing a new one. |
+
 ### 4.0.2 Cross-feature coordination caches
 
 Features publish to `st.session_state` when they own a piece of decision state; downstream features read it. When the producer fails, the consumer treats the absence as an "offline" state — not as "no constraint."
@@ -1538,6 +1543,83 @@ display, always visible on the Judge page (not gated behind the button — reads
 whatever's already graded). `_READONLY`-gated, same class as `judgment_opinions`.
 RLS: `FOR ALL TO service_role`. **Nothing reads this table's history for
 weighting yet** — Phase 3 is what would.
+
+### 6.31 `model_predictions` table
+
+```sql
+CREATE TABLE IF NOT EXISTS model_predictions (
+    id                 BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    model_name         TEXT NOT NULL,
+    model_version      TEXT NOT NULL,
+    scope              TEXT NOT NULL,           -- 'ticker' | 'portfolio'
+    ticker             TEXT,                    -- 'PORTFOLIO' sentinel for scope='portfolio'
+    made_at            TIMESTAMPTZ NOT NULL,
+    horizon_days       INT NOT NULL,            -- trading days
+    target_metric      TEXT NOT NULL,           -- e.g. 'realized_vol_20d_annualized'
+    predicted_value    NUMERIC NOT NULL,
+    predicted_low       NUMERIC,
+    predicted_high      NUMERIC,
+    baseline_value     NUMERIC NOT NULL,        -- naive-persistence baseline, logged at make-time
+    regime_at_make     TEXT,
+    features_snapshot  JSONB,
+    realized_value     NUMERIC,                 -- written at maturation
+    scored_at          TIMESTAMPTZ,
+    abs_error          NUMERIC,
+    baseline_abs_error NUMERIC,
+    source             TEXT NOT NULL DEFAULT 'live',  -- 'live' | 'backfill'
+    created_at         TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT model_predictions_unique UNIQUE (model_name, model_version, scope, ticker, made_at)
+);
+
+ALTER TABLE model_predictions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_model_predictions" ON model_predictions
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**Predictive Modeling Shadow Layer — Phase 1 (F-234), MEASUREMENT-ONLY.** See
+`docs/plans/predictive-modeling-shadow-layer.md` for the full design and
+leakage-guard rationale. This is a quarantined prediction ledger + scoring
+harness — **nothing that reads or writes this table is consumed by any
+existing gate, recommendation function, or the composite score.** The `id`
+IDENTITY column is required so `mature_model_predictions_batch()`
+(`stock_analyzer/db.py`) can target individual rows for update at maturation;
+the natural key for idempotent writes is the `UNIQUE` constraint above, not
+`id`. `ticker` uses the literal string `'PORTFOLIO'` (not NULL) for
+`scope='portfolio'` rows so the UNIQUE constraint's NULL-handling ambiguity
+(Postgres treats each NULL as distinct, which would silently defeat the
+upsert's idempotency for portfolio-scope rows) never applies.
+
+Ships **inert until this DDL is applied manually** via the Supabase
+dashboard — same "ships inert" convention as every other table added this
+way (`judgment_opinions` §6.29, `analyst_target_snapshots` §6.23,
+`portfolio_thesis`). `stock_analyzer/db.py`'s loaders return `None` (the
+offline sentinel, distinct from a genuinely-empty result) on a pre-DDL
+"relation does not exist" error, identically to any other failure — the
+🔬 Model Lab page renders its "producer offline" state in that case.
+
+**Writers:** the daily cron (`cron_runner.py`, EOD lane) writes `source=
+'live'` rows for every currently-held ticker + the `'PORTFOLIO'` aggregate,
+reusing the SAME 6-month bars that lane's other steps already fetched (no new
+fetch); the one-off, rerunnable `scripts/backfill_vol_predictions.py` writes
+`source='backfill'` rows for currently-held tickers only, using
+`PREDICTION_BACKFILL_PERIOD` ("5y") of history via the same
+`data.fetch_price_history` path Outcome Range (`monte_carlo.py`) uses.
+**PORTFOLIO-scope backfill is deliberately NOT built** — it would need
+historical portfolio weights, which only exist as far back as the logged
+`trades` history (~3 months), not 5 years of market data; portfolio-scope
+rows accumulate only going forward via the live cron. There is no
+interactive/user-write path to this table at all — `is_readonly()` guards on
+the writers are precautionary defense-in-depth, not load-bearing.
+
+**Readers:** `stock_analyzer/prediction_scoring.py::score_predictions()`
+(pure logic — MAE/skill-score vs the logged baseline, live-only skill,
+regime-stratified breakdown, a stride-based effective-n note) is the only
+consumer, and the 🔬 Model Lab page (owner-only, hidden from a read-only
+viewer — the first nav entry ever fully hidden rather than merely
+write-disabled) is the only renderer. Model v1 (`vol_forecast_ewma`) is a
+fixed-λ RiskMetrics EWMA forecaster (`stock_analyzer/vol_forecast.py`) with
+no fitted parameters, so backfilled rows carry no in-sample/backtest-leakage
+risk the way a fitted model would.
 
 ### `stock_analyzer/portfolio_health.py`
 

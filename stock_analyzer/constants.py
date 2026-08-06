@@ -1374,3 +1374,42 @@ TRADE_DUP_SUBMIT_WINDOW_SEC   = 15    # identical (ticker, action, shares) resub
 # decompose realized alpha meaningfully. Was 8 bare literal copies of "180"
 # (2026-08-04 audit finding); feature not yet active.
 ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS = 180
+
+# ── Predictive Modeling Shadow Layer — Phase 1 (F-234, MEASUREMENT-ONLY) ──────
+# Model/scoring PARAMETERS for the quarantined 🔬 Model Lab page — NOT
+# investment-decision gates. Nothing in this layer feeds any gate,
+# recommendation, or the composite score (see docs/plans/
+# predictive-modeling-shadow-layer.md). Still living here per hard rule #1
+# (every threshold/parameter lives in constants.py, even a non-gating one)
+# and still requiring an Opus review citation before ship, since staging
+# constants.py trips that requirement mechanically regardless of the
+# non-gating status.
+
+# Forecast target: 20-trading-day forward realized volatility (annualized),
+# per held ticker + the portfolio aggregate. Matches the maturation cron's
+# "made_at + horizon_days" window and the backfill script's target-window
+# length.
+VOL_FORECAST_HORIZON_DAYS = 20
+
+# RiskMetrics' fixed EWMA decay factor for the v1 volatility forecaster
+# (forecast_vol_ewma). NOT fitted to this app's data — a fixed classical
+# constant, so v1 carries no backtest-leakage risk the way a fitted model
+# (GARCH-MLE, gradient-boosted trees) would if it were ever backfilled.
+VOL_FORECAST_EWMA_LAMBDA = 0.94
+
+# Minimum matured (realized_value populated) model_predictions rows before
+# prediction_scoring.score_predictions() will report a real skill_score
+# number — below this, skill is withheld (None), same "not yet meaningful"
+# discipline as ENGINE_TRACK_MIN_CALLS / BEHAVIORAL_MIN_SAMPLE_N elsewhere.
+# Also reused (not a parallel constant) as the floor for skill_score_live_only,
+# so the live-only headline can't be inflated by a handful of live rows either.
+PREDICTION_MIN_MATURED_N = 20
+
+# Depth of the one-off backfill script's price-history fetch, per-ticker scope
+# only (§1.6b — portfolio-scope backfill needs actual historical weights,
+# bounded to known `trades` history, not 5 years, and is deliberately NOT
+# built in this script). Matches the existing MC_HISTORY_PERIOD constant/
+# fetch-path precedent (Outcome Range simulator) rather than inventing a new
+# one. v1 (vol_forecast_ewma) has no fitted parameters, so a 5-year backfill
+# carries no in-sample leakage risk the way a fitted model would.
+PREDICTION_BACKFILL_PERIOD = "5y"
