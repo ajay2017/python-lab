@@ -58,6 +58,46 @@ _BUY_ROW = 3          # alert_state lane: morning buy-list dedup
 _INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
 
 
+def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
+    """Pure row-shaping helper (Self Track Record — cron coverage fix): turn
+    today's `new_picks` list from compute_morning_picks into the same row
+    shape app.py's interactive path builds for save_recommendations (app.py
+    ~line 4763), minus the pillar-score columns (s_score/avg_sent/t_score/
+    bq_score/val_score) — those live in session_state caches
+    (_grow_composites / _last_held_data) that only exist in a live
+    interactive session; they're optional/nullable columns on save, so
+    leaving them unset here is safe, not a data loss. Skips any pick with no
+    ticker. No local dedup — db.save_recommendations' own upsert
+    (on_conflict="ticker,rec_date,rec_type", ignore_duplicates=True) is the
+    idempotency guarantee, so calling this twice for the same day and
+    feeding both outputs to save_recommendations is safe by construction."""
+    rows: list[dict] = []
+    for p in picks:
+        tk = p.get("ticker")
+        if not tk:
+            continue
+        # Explicit is-None/type check rather than `p.get("xref") or {}` — the
+        # antipattern gate (check_antipatterns.py OFFLINE_SENTINEL_COLLAPSE)
+        # flags that idiom regardless of context; here "xref" simply may not
+        # be a dict, not a producer-cache offline signal, but the fix is the
+        # same either way per CLAUDE.md's recurring-defect-gate guidance.
+        _xref = p.get("xref")
+        _verdict = _xref.get("verdict") if isinstance(_xref, dict) else None
+        rows.append({
+            "ticker":           str(tk),
+            "rec_date":         rec_date,
+            "rec_type":         "new_pick",
+            "price_at_surface": p.get("price"),
+            "composite_score":  p.get("composite_score"),
+            "momentum_score":   p.get("score"),
+            "sector":           p.get("sector", ""),
+            "conviction":       p.get("conviction", ""),
+            "verdict":          _verdict or "",
+            "thesis":           p.get("thesis", ""),
+        })
+    return rows
+
+
 def _log(msg: str) -> None:
     print(f"[alerts-cron] {msg}", flush=True)
 
@@ -364,6 +404,33 @@ def _run_scan(now_et, force: bool) -> int:
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
     picks = payload.get("picks", [])
+
+    # ── Recommendation logging (Self Track Record — cron coverage fix) ─────────
+    # The interactive app only logs a "new_pick" row when a real Streamlit
+    # session visits Home and builds Grow Today (app.py ~line 4763). On a day
+    # nobody opens the app, this headless scan is the ONLY place a New
+    # Positions to Initiate pick gets surfaced at all — so without this,
+    # `recommendations` silently under-covers those days and every BUY that
+    # matches one of today's picks would wrongly read as "no rec on file"
+    # (see SELF_TRACK_RELIABLE_LOG_START). Only "new_pick" is logged — the
+    # cron has no held-portfolio context to compute add_winner rows, and no
+    # buy_candidate list at all. save_recommendations is an idempotent upsert
+    # (on_conflict="ticker,rec_date,rec_type", ignore_duplicates=True), so a
+    # same-day interactive re-write later can't double-count. Wrapped so a DB
+    # hiccup here can NEVER abort the scan or block the higher-priority
+    # buy-list email built below.
+    try:
+        _rec_rows = _build_new_pick_rows(picks, now_et.date())
+        if _rec_rows:
+            _rec_save_result = db.save_recommendations(_rec_rows)
+            _log(f"rec log: saved={_rec_save_result.get('saved', 0)}/"
+                 f"{_rec_save_result.get('attempted', 0)} new_pick row(s)"
+                 + (f" — {_rec_save_result.get('error')}" if _rec_save_result.get("error") else ""))
+        else:
+            _log("rec log: no new_pick rows to save today.")
+    except Exception as _rec_log_err:
+        _log(f"rec log: FAILED — {str(_rec_log_err)[:120]} — continuing (email unaffected).")
+
     # High-conviction = the green "✅ Go — Composite Confirms" set. Key on the SAME
     # field the Home badge reads — the reconciliation engine's verdict
     # (xref.verdict_reconciled.verdict == "go", signal_reconciliation.py) — so the

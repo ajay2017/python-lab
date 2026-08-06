@@ -8,6 +8,8 @@ policy decisions, not code tuning. When changing any value below, update
 project_decision_thresholds.md (memory) with the rationale.
 """
 
+from datetime import date
+
 # ── Portfolio beta ───────────────────────────────────────────────────────────
 PORTFOLIO_BETA_TARGET   = 1.0    # baseline equity-portfolio target
 PORTFOLIO_BETA_ELEVATED = 1.3    # soft warning above this
@@ -1035,6 +1037,34 @@ ENGINE_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" ban
 # advisor, or the composite score. Safe to tune from observation.
 PROTECT_TRACK_MIN_CALLS = 8    # below → "building" band (no verdict shown)
 PROTECT_TRACK_FIRM_CALLS = 15  # at/above → "firm" band; 8–14 → "early" band
+
+# ── Self Track Record ("is my own instinct good?", MEASUREMENT-ONLY) ─────────
+# Answers a DIFFERENT question than the Engine Track Record card above ("is
+# the engine good?") — this measures the user's own self-initiated BUYs
+# against the ones that followed an app recommendation. NEVER gates, sizes, or
+# suppresses a recommendation; reuses BEHAVIORAL_MIN_SAMPLE_N (above) for its
+# sample-size floor rather than a parallel constant, same reuse precedent as
+# Personalized Discovery / The Judge for that exact constant.
+#
+# A BUY counts as `app_aligned` only if a matching recommendation ("new_pick"
+# or "buy_candidate") exists within this many days before (inclusive) the
+# trade date — a rec from further back is a distinct, later decision, not
+# "following" the rec. Mirrors the same-day-only philosophy of
+# recommendations_history.match_recs_to_trades, widened slightly because a
+# self-initiated buy naturally lags a day or two behind noticing the rec
+# (unlike the RECOMMENDATION trigger_type flow, which is same-day by
+# construction).
+SELF_TRACK_MATCH_LOOKBACK_DAYS = 3
+# Ship date of the cron-side recommendation-logging fix (item 3 of the Self
+# Track Record build — cron_runner.py._run_scan now persists today's new_pick
+# rows even when no interactive Streamlit session ran that day). Before this
+# date, an in-scope ticker (universe or watchlist) bought with no matching rec
+# on file is AMBIGUOUS — coverage could be missing rather than the buy
+# genuinely being self-initiated — so it's bucketed `coverage_limited`
+# (disclosed, never graded either way). On/at this date and after, missing
+# coverage is a real absence, not a logging gap, so the same shape is
+# bucketed `self_in_scope` and graded. Boundary is inclusive (`>=`).
+SELF_TRACK_RELIABLE_LOG_START = date(2026, 8, 6)
 
 # ── Predictive Analytics — Signal Calibration ─────────────────────────────────
 # Minimum number of mature outcomes in a composite-score band before the band

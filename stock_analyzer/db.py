@@ -2073,8 +2073,14 @@ def save_recommendations(records: list[dict]) -> dict:
 
 def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
     """
-    Read recommendation history. Defaults to last 30 days when no range given.
-    Returns a DataFrame ordered by surfaced_at descending.
+    Read recommendation history. No date filter applied when start_date/
+    end_date are both None (full history) -- callers wanting a bounded
+    window must pass explicit dates. Returns a DataFrame ordered by
+    surfaced_at descending. Degrades to an EMPTY DataFrame both when no recs
+    exist and when the query itself fails -- the two are indistinguishable
+    here by design (existing consumers all treat "empty" as a harmless
+    "nothing to show" state). A consumer that must NOT conflate "zero recs"
+    with "load failed" needs load_recommendations_or_none() instead.
     """
     empty = pd.DataFrame(columns=_REC_COLS)
     if not has_db():
@@ -2091,6 +2097,36 @@ def load_recommendations(start_date=None, end_date=None) -> pd.DataFrame:
         return pd.DataFrame(rows) if rows else empty
     except Exception:
         return empty
+
+
+def load_recommendations_or_none(start_date=None, end_date=None) -> pd.DataFrame | None:
+    """
+    Same query as load_recommendations(), but distinguishes a genuine
+    zero-row result (returns an empty DataFrame) from a failed load --
+    missing credentials or a raised exception during the query (returns
+    None). load_recommendations() itself cannot make this distinction (its
+    except branch returns the same empty DataFrame either way), which is
+    fine for its existing consumers but unsafe for a consumer where "load
+    failed" must never be treated as "zero recommendations exist" (e.g.
+    Self Track Record's classify_buys, which would otherwise silently
+    misclassify every app-aligned BUY as self-initiated on a transient
+    Supabase hiccup -- the offline-sentinel-collapse bug class).
+    """
+    empty = pd.DataFrame(columns=_REC_COLS)
+    if not has_db():
+        return None
+    try:
+        q = _client().table("recommendations").select("*")
+        if start_date is not None:
+            sd = start_date.isoformat() if hasattr(start_date, "isoformat") else str(start_date)[:10]
+            q = q.gte("rec_date", sd)
+        if end_date is not None:
+            ed = end_date.isoformat() if hasattr(end_date, "isoformat") else str(end_date)[:10]
+            q = q.lte("rec_date", ed)
+        rows = q.order("surfaced_at", desc=True).execute().data
+        return pd.DataFrame(rows) if rows else empty
+    except Exception:
+        return None
 
 
 # Nullable exit_signals columns eligible for coalesce-on-write (see

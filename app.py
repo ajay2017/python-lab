@@ -31316,13 +31316,14 @@ elif page == "🎯 My Edge":
         st.session_state["_mirror_overexp"]   = None
         st.session_state["_mirror_overhangs"] = None
 
-    # ── 5 tabs ────────────────────────────────────────────────────────────────
-    _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d, _me_tab_e = st.tabs([
+    # ── 6 tabs ────────────────────────────────────────────────────────────────
+    _me_tab_a, _me_tab_c, _me_tab_b, _me_tab_d, _me_tab_e, _me_tab_f = st.tabs([
         "📐 Benchmark Mirror",
         "🔬 Workflow ROI",
         "📅 Decision Quality",
         "🧬 Behavioral Fingerprint",
         "🪞 Investor Mirror",
+        "🧭 Self vs Engine",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -33311,4 +33312,171 @@ elif page == "🎯 My Edge":
                 "a handful of trades doesn't prove a durable skill either way."
             )
 
-st.caption("Data: Yahoo Finance · Algorithmic analysis · Not financial advice")
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB F — Self vs Engine
+    # ═════════════════════════════════════════════════════════════════════════
+    with _me_tab_f:
+        st.subheader("🧭 Self vs Engine")
+        st.caption(
+            "Splits your own BUY trades into ones that matched an app recommendation "
+            "within a few days (app-aligned) vs ones you initiated entirely on your "
+            "own (self-initiated), then compares each group's alpha vs SPY. "
+            "**This answers a DIFFERENT question than the 🎯 Engine Track Record card "
+            "on 🧾 Summary** — that card asks \"is the ENGINE good?\"; this tab asks "
+            "\"is MY OWN instinct good?\" A self-initiated buy beating the engine's own "
+            "alpha is a good sign about your judgment, not a contradiction of the "
+            "engine's track record. Read-only — awareness only, no gates, no "
+            "buy/sell prompts."
+        )
+
+        from stock_analyzer import self_track_record as _stv
+        from stock_analyzer.constants import (
+            SELF_TRACK_MATCH_LOOKBACK_DAYS as _stv_lookback,
+            SELF_TRACK_RELIABLE_LOG_START  as _stv_reliable_start,
+            REC_SCORE_MIN_DAYS             as _stv_min_days,
+        )
+        from stock_analyzer.recommendations_history import compute_outcomes as _stv_compute_outcomes
+
+        # Offline-sentinel guard: db.load_recommendations() itself cannot tell
+        # "zero recs exist" apart from "the query failed" (both return an
+        # empty DataFrame) — has_db() alone doesn't cover a failure INSIDE
+        # the query (transient Supabase error) with creds present, which
+        # would silently misclassify every app-aligned BUY as self-initiated.
+        # load_recommendations_or_none() makes that distinction explicit:
+        # None on any failure, empty DataFrame only on a genuine zero-row
+        # result (2026-08-06 Opus review finding, fixed pre-ship).
+        _stv_recs_df = db.load_recommendations_or_none()
+
+        # SPY close series — same build as the Engine Track Record card
+        # (_cached_spy("6mo")), not a second parallel price-fetch path.
+        _stv_spy: dict | None = None
+        try:
+            _stv_spy_hist = _cached_spy("6mo")
+            if (_stv_spy_hist is not None and not _stv_spy_hist.empty
+                    and "Close" in _stv_spy_hist.columns):
+                _stv_spy_build: dict = {}
+                for _si, _sr in _stv_spy_hist.iterrows():
+                    _sd = _si.date() if hasattr(_si, "date") else None
+                    try:
+                        _sc = float(_sr["Close"])
+                    except (TypeError, ValueError):
+                        _sc = None
+                    if _sd is not None and _sc and _sc > 0:
+                        _stv_spy_build[_sd] = _sc
+                _stv_spy = _stv_spy_build or None
+        except Exception:
+            _stv_spy = None
+
+        if _stv_recs_df is None or _stv_spy is None:
+            st.info(
+                "Self vs Engine comparison needs recommendation/price history — "
+                "currently unavailable."
+            )
+        else:
+            _stv_trades_df = st.session_state.get("trades_df")
+            if _stv_trades_df is None:
+                _stv_trades_df = db.load_trades()
+
+            _stv_universe  = set().union(*SECTOR_UNIVERSE.values())
+            _stv_watchlist = set(st.session_state.get("watchlist", []))
+
+            _stv_classified = _stv.classify_buys(
+                _stv_trades_df, _stv_recs_df, _stv_universe, _stv_watchlist,
+                _stv_reliable_start, _stv_lookback,
+            )
+
+            _stv_tickers = sorted({r["ticker"] for r in (_stv_classified or [])})
+            _stv_prices: dict = {}
+            if _stv_tickers:
+                try:
+                    _stv_px = fetch_live_prices(_stv_tickers)
+                    _stv_prices = {
+                        t: float(d.get("price", 0))
+                        for t, d in (_stv_px or {}).items()
+                        if d and d.get("price")
+                    }
+                except Exception:
+                    _stv_prices = {}
+
+            _stv_summary = _stv.self_vs_engine_summary(
+                _stv_classified, _stv_prices, _stv_spy, _me_today, BEHAVIORAL_MIN_SAMPLE_N,
+            )
+
+            if not _stv_summary.get("available"):
+                st.info(
+                    "Self vs Engine comparison needs recommendation/price history — "
+                    "currently unavailable."
+                )
+            else:
+                _stv_self_stats = _stv_summary["self_graded"]
+                _stv_app_stats  = _stv_summary["app_aligned"]
+
+                if _stv_self_stats["n"] < BEHAVIORAL_MIN_SAMPLE_N:
+                    st.caption(
+                        f"Building — need ≥{BEHAVIORAL_MIN_SAMPLE_N} matured self-initiated "
+                        f"BUYs to compare (have {_stv_self_stats['n']}). "
+                        "An observed pattern in your own decisions, not a verdict on it."
+                    )
+                else:
+                    _stv_c1, _stv_c2 = st.columns(2)
+                    _stv_c1.metric(
+                        "Self-initiated — avg alpha vs SPY",
+                        f"{_stv_self_stats['avg_alpha_pct']:+.1f}pp"
+                        if _stv_self_stats["avg_alpha_pct"] is not None else "n/a",
+                        help="Per-trade outcome minus SPY's return over the same "
+                             "holding window — never a portfolio-% framing.",
+                    )
+                    if _stv_app_stats["sufficient"] and _stv_app_stats["avg_alpha_pct"] is not None:
+                        _stv_c2.metric(
+                            "App-aligned — avg alpha vs SPY",
+                            f"{_stv_app_stats['avg_alpha_pct']:+.1f}pp",
+                        )
+                    else:
+                        _stv_c2.metric("App-aligned — avg alpha vs SPY", "building")
+                        _stv_c2.caption(
+                            f"Need ≥{BEHAVIORAL_MIN_SAMPLE_N} matured app-aligned BUYs "
+                            f"(have {_stv_app_stats['n']})."
+                        )
+                    st.caption(
+                        "An observed correlation in your own decisions, not a verdict on it."
+                    )
+
+                if _stv_summary["n_coverage_limited"]:
+                    st.caption(
+                        f"{_stv_summary['n_coverage_limited']} additional trade(s) from before "
+                        f"{_stv_reliable_start} are excluded — recommendation coverage from "
+                        "that period is unreliable, not graded either way."
+                    )
+
+                # ── Biggest self-initiated winners/losers, with the logged thesis ──
+                # Cheap pure recompute (same "recompute beats cross-page order-
+                # dependency" precedent used elsewhere on this page) rather than
+                # threading the enriched per-trade rows back out of
+                # self_vs_engine_summary, which deliberately returns only the
+                # aggregate shape.
+                if _stv_classified:
+                    _stv_enriched = _stv_compute_outcomes(
+                        _stv_classified, _stv_prices, _me_today,
+                        spy_close_by_date=_stv_spy, min_days=_stv_min_days,
+                    )
+                    _stv_self_rows = [
+                        r for r in _stv_enriched
+                        if r["bucket"] in ("self_out_of_scope", "self_in_scope")
+                        and r.get("outcome_pct") is not None
+                        and not r.get("outcome_maturing")
+                        and r.get("user_thesis")
+                    ]
+                    if _stv_self_rows:
+                        st.markdown("---")
+                        st.markdown("**Biggest self-initiated winners/losers**")
+                        _stv_self_rows.sort(
+                            key=lambda r: r["outcome_pct"] if r["outcome_pct"] is not None else 0.0,
+                            reverse=True,
+                        )
+                        _stv_top = _stv_self_rows[:3]
+                        _stv_bottom = [r for r in _stv_self_rows[-3:] if r not in _stv_top]
+                        for _sr in _stv_top + _stv_bottom:
+                            st.caption(
+                                f"**{_sr['ticker']}** ({_sr['trade_date']}) "
+                                f"{_sr['outcome_pct']:+.1f}% — \"{str(_sr['user_thesis'])[:200]}\""
+                            )
