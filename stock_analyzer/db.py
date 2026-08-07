@@ -2033,7 +2033,20 @@ def save_recommendations(records: list[dict]) -> dict:
 
     def _col_missing(err_str):
         low = (err_str or "").lower()
-        return ("does not exist" in low or "unknown column" in low) and \
+        # PostgREST's actual missing-column wording is "Could not find the
+        # 'X' column of 'Y' in the schema cache" (code PGRST204) — NOT "does
+        # not exist" / "unknown column". Those two were the only patterns
+        # checked here until a live PGRST204 on 2026-08-07 slipped past this
+        # match entirely, so the strip-and-retry cascade below never
+        # triggered and every pillar-score-bearing recommendation row failed
+        # outright (saved=0) instead of degrading gracefully.
+        # Note: PGRST204 can also fire transiently when a column DOES exist
+        # but PostgREST's schema cache hasn't refreshed yet post-DDL — this
+        # still strips the pillar scores for that one request (saved=N,
+        # error=None). Acceptable: it only ever drops the optional score
+        # columns, never the row itself that F-233 depends on.
+        return ("does not exist" in low or "unknown column" in low
+                or "could not find the" in low or "pgrst204" in low) and \
                any(c in low for c in _OPTIONAL_COLS)
 
     def _with_retry(call_fn, rows):
