@@ -26287,9 +26287,10 @@ elif page == "🔬 Model Lab":
         "beat doing nothing?*"
     )
     st.caption(
-        "Consumes nothing from `st.session_state`, publishes nothing — a dead end by "
-        "design. Not shown to a read-only viewer. Predicts **risk (volatility), not "
-        "direction** — no stock-level return forecast anywhere in this layer."
+        "This page doesn't read from or feed into any other page or feature in the "
+        "app — a dead end by design. Not shown to a read-only viewer. Predicts "
+        "**risk (volatility), not direction** — no stock-level return forecast "
+        "anywhere in this layer."
     )
 
     _ml_df = db.load_model_predictions(model_name="vol_forecast_ewma")
@@ -26322,10 +26323,11 @@ elif page == "🔬 Model Lab":
         _ml_score = _model_lab_score(_ml_matured)
 
         st.markdown("---")
-        st.markdown("##### 📈 Forward volatility — `vol_forecast_ewma · v1`")
+        st.markdown("##### 📈 Forward Volatility Forecaster")
         st.caption(
             "Target: **20-day forward realized volatility** (annualized) · "
-            "Baseline: trailing-20d realized vol (persistence)"
+            "Baseline: trailing-20d realized vol (persistence) · "
+            "Method: exponentially-weighted moving average (v1)"
         )
 
         if _ml_score["n_matured"] < PREDICTION_MIN_MATURED_N:
