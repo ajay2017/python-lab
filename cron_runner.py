@@ -1,36 +1,48 @@
 #!/usr/bin/env python3
 """
 Headless alert cron entry point (exit-discipline Phase 3 + pullback Phase 2 +
-Today's-P&L EOD snapshot). Run by GitHub Actions (.github/workflows/alerts.yml).
+Today's-P&L EOD snapshot). Scheduled via 5 dedicated Railway native Cron Job
+services (project `endearing-magic`: cron-premarket/cron-scan/cron-intraday/
+cron-eod/cron-thesis), migrated off GitHub Actions on 2026-08-07 after a
+platform-wide GitHub Actions incident (2026-08-06) exposed the `schedule`
+trigger's documented best-effort delivery (delayed/dropped runs under load).
+.github/workflows/alerts.yml is now workflow_dispatch-only — manual re-runs /
+ad hoc testing only, no longer the scheduled entry point. See memory
+`project_cron_railway_migration` for the full history and per-service config.
 
-THREE modes (one per ET trading day each):
+FIVE modes (one per ET trading day/week each):
   • premarket (~08:00 ET) — recompute PROTECTIVE signals (stop / EXIT / risk-off)
     and email only when the action set changed. (exit-discipline Phase 3)
-  • scan (~10:00 ET, post-open) — run the sector scanner headlessly and persist
+  • scan (~09:45 ET, post-open) — run the sector scanner headlessly and persist
     the result to scanner_cache so the Home buy-candidate / Grow-Today new-pick
     lists populate on a COLD load without the user running the ~20s scanner.
+  • intraday (~11:30 ET) — mid-morning pullback entry-window check.
   • eod (~16:30 ET, post-close) — (a) write today's daily_snapshot so the
     Today's-P&L baseline is deterministic even on unviewed days; (b) a REACTIVE
     pullback email if the market actually fell ≥ threshold today. (pullback P2 +
     Today's-P&L EOD)
+  • thesis (~18:00 ET Sunday) — AI thesis reviews for all open positions that
+    have a user_thesis written at BUY entry (one LLM call per position, saves
+    to thesis_reviews table; inert without ANTHROPIC_API_KEY), followed by the
+    weekly debrief and (first Sunday of the month only) the monthly report.
 
-Mode = $ALERT_RUN_MODE if it's one of scan|intraday|thesis|debrief|monthly
-(workflow_dispatch input selects one of these directly), else derived from the
-ET hour (≥12:00 ET ⇒ eod, else premarket) — premarket/eod are never taken as a
-direct override value, only ever hour-derived. All output → stdout (the
-Actions log). Ships INERT: no RESEND_API_KEY ⇒ compute + log, send nothing.
-Exits 0 on every mode except a Sunday thesis-lane sub-job failure (thesis/
-debrief/monthly), which deliberately returns 1 so GitHub Actions marks the
-run failed — the dead-man's-switch failure notification depends on this.
+Mode = $ALERT_RUN_MODE if it's one of scan|intraday|thesis|debrief|monthly —
+set directly as a fixed per-service variable on the scan/intraday/thesis
+Railway services (or via the workflow_dispatch mode input on a manual GitHub
+run) — else derived from the ET hour (≥12:00 ET ⇒ eod, else premarket);
+premarket/eod are never taken as a direct override value, only ever
+hour-derived, so those two Railway services set no ALERT_RUN_MODE at all.
+All output → stdout (the Railway/Actions deploy log). Ships INERT: no
+RESEND_API_KEY ⇒ compute + log, send nothing. Exits 0 on every mode except a
+Sunday thesis-lane sub-job failure (thesis/debrief/monthly), which
+deliberately returns 1 so a manual GitHub Actions run's dead-man's-switch
+failure notification fires — Railway's cron services have no equivalent
+failure-email wired up yet.
 
 Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
 FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_FROM
 · ALERT_RUN_MODE (scan|intraday|thesis|debrief|monthly) · ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1
 (synthetic delivery test) · ALERT_PROTECTIVE_ROW=1 / EOD lane uses row 2 in alert_state.
-  • thesis (~18:00 ET Sunday) — AI thesis reviews for all open positions that
-    have a user_thesis written at BUY entry. One LLM call per position, saves to
-    thesis_reviews table. Inert without ANTHROPIC_API_KEY.
-
 """
 
 import hashlib
