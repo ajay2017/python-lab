@@ -139,6 +139,29 @@ def _send_email(label: str, subject: str, html: str) -> bool:
     return ok
 
 
+def _notify_failure(mode: str, detail: str) -> None:
+    """In-script dead-man's-switch — GitHub Actions had a workflow-level
+    `if: failure()` step for this; Railway's native Cron Jobs have no
+    equivalent, so a lane that raises or returns non-zero would otherwise
+    fail completely silently (see memory project_cron_railway_migration).
+    Reuses the same Resend path as every other email here — INERT without
+    RESEND_API_KEY, and this function itself must NEVER raise, since it's
+    always called from inside an except block right before the original
+    failure is re-raised; a second exception here would clobber that
+    traceback instead of just failing to notify."""
+    try:
+        subject = f"⚠️ DRISHTA cron FAILED — {mode}"
+        html = (
+            f"<p>The <b>{mode}</b> cron lane failed.</p>"
+            f"<p><b>Error:</b> {detail or '(no detail captured)'}</p>"
+            f"<p>Check the <code>cron-{mode}</code> Railway service's Deploy Logs "
+            f"for the full traceback.</p>"
+        )
+        _send_email("cron-failure", subject, html)
+    except Exception as exc:
+        _log(f"cron-failure notify: UNCAUGHT — {str(exc)[:160]} (original failure still propagates)")
+
+
 def _run_test_email(now_et) -> int:
     """Synthetic delivery test (any mode) — proves Resend → inbox, leaves dedup
     state untouched so a later real alert still sends."""
@@ -1215,6 +1238,7 @@ def main() -> int:
         # A non-zero aggregate exit lets Actions mark the run failed → feeds the
         # failure notification (dead-man's-switch).
         rc = 0
+        _failures: list[str] = []
         for _job, _fn in (("thesis", _run_thesis), ("debrief", _run_debrief),
                           ("monthly", _run_monthly_report)):
             try:
@@ -1222,6 +1246,9 @@ def main() -> int:
             except Exception as exc:
                 _log(f"{_job}: UNCAUGHT — {str(exc)[:160]}")
                 rc = 1
+                _failures.append(f"{_job}: {str(exc)[:160]}")
+        if _failures:
+            _notify_failure(mode, "; ".join(_failures))
         return rc
 
     # Every other mode dispatches exactly one job per invocation. Wrap it in
@@ -1241,6 +1268,7 @@ def main() -> int:
         return _job_fn(now_et, force)
     except Exception as exc:
         _log(f"{_job_name}: UNCAUGHT — {str(exc)[:160]}")
+        _notify_failure(_job_name, str(exc)[:160])
         raise
 
 
