@@ -6,7 +6,7 @@ A directive distillation for any Claude session working in this repo. Read first
 
 ## Project orientation
 
-Personal portfolio intelligence app for a single user. Primary deploy is Streamlit Community Cloud, auto-deploying from `main`. A Railway Hobby pilot (`drishta.up.railway.app`) has run in parallel since 2026-07-24 against the same Supabase DB — see [docs/plans/railway-migration.md](docs/plans/railway-migration.md) for status and [DEVELOPMENT.md](DEVELOPMENT.md) for the secrets architecture. Never run locally — both deploys assume their respective hosted secrets delivery, not a local `.env`/`secrets.toml` dev loop.
+Personal portfolio intelligence app for a single user. Primary deploy is Streamlit Community Cloud, auto-deploying from `main`. A Railway Hobby pilot (`drishta.up.railway.app`) has run in parallel since 2026-07-24 against the same Supabase DB — see [docs/plans/railway-migration.md](docs/plans/railway-migration.md) for status and [DEVELOPMENT.md](DEVELOPMENT.md) for the secrets architecture. As of 2026-08-07, that same Railway project also owns all 5 scheduled cron lanes (premarket/scan/intraday/eod/weekly thesis) via dedicated native Cron Job services, migrated off GitHub Actions after a platform-wide GitHub Actions incident exposed its `schedule` trigger's best-effort delivery — see memory `project_cron_railway_migration`; `.github/workflows/alerts.yml` is now manual-dispatch-only. Never run locally — both deploys assume their respective hosted secrets delivery, not a local `.env`/`secrets.toml` dev loop.
 
 ## Operating posture
 

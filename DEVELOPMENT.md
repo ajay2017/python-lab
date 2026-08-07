@@ -133,6 +133,8 @@ Rationale for each value: memory file `project_decision_thresholds.md` (Claude's
 | Force a session reset (when a cached_resource is stale) | Streamlit Cloud → app → **Manage app → Reboot** |
 | View deploy logs | Streamlit Cloud → app → Manage app → Logs |
 
+**Scheduled cron jobs run on Railway, not GitHub Actions** (migrated 2026-08-07 — GitHub's `schedule` trigger is best-effort and was hit by a platform-wide incident on 2026-08-06). Five dedicated Railway Cron Job services in project `endearing-magic` (`cron-premarket`, `cron-scan`, `cron-intraday`, `cron-eod`, `cron-thesis`) each run `python cron_runner.py` with their own schedule + `ALERT_RUN_MODE`, sharing the web service's Supabase/API secrets via Railway **Shared Variables**. `.github/workflows/alerts.yml` is now `workflow_dispatch`-only — manual re-runs / ad hoc testing, no longer the scheduled entry point. Full rationale, per-service cron expressions, and setup gotchas (config-as-code precedence, variable-reference fragility on service rename) in memory `project_cron_railway_migration`.
+
 ---
 
 ## Secrets (set in Streamlit Cloud dashboard, never committed)
