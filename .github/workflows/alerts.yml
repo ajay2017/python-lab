@@ -8,23 +8,14 @@ name: Protective Alerts (daily)
 # is documented as best-effort and was hit by a platform-wide incident on
 # 2026-08-06 that silently dropped/cancelled runs. See memory
 # `project_cron_railway_migration` for the full rationale and per-lane cron
-# expressions. premarket is DONE (now runs on Railway service
-# `cron-premarket`, project `endearing-magic`) — its schedule entries below
-# are removed. Remaining lanes here still use the old GitHub dual-UTC-slot
-# DST trick: (trading-day + ET-hour gate + a once-per-day Supabase flag)
-# ensure exactly one run fires per ET day, never twice.
+# expressions. premarket and scan are DONE (now run on Railway services
+# `cron-premarket`/`cron-scan`, project `endearing-magic`) — their schedule
+# entries below are removed. Remaining lanes here still use the old GitHub
+# dual-UTC-slot DST trick: (trading-day + ET-hour gate + a once-per-day
+# Supabase flag) ensure exactly one run fires per ET day, never twice.
 
 on:
   schedule:
-    # Mid-morning SCAN + buy-list run (~9:45 ET). Scans the sector universe,
-    # persists it to scanner_cache (cold-load buy candidates) AND emails the
-    # high-conviction "New Positions to Initiate". Two UTC slots straddle EST/EDT;
-    # cron_runner gates on post-open (ET ≥ 9:30) so the pre-open winter slot is
-    # skipped, and the buy-email dedups (alert_state row 3) so the redundant
-    # post-open slot doesn't double-send. The ALERT_RUN_MODE mapping forces
-    # mode=scan for these cron strings (their ET hour < 12 would else derive premarket).
-    - cron: "45 13 * * 1-5"  # 13:45 UTC — 09:45 EDT (summer run) / 08:45 EST (gated pre-open)
-    - cron: "45 14 * * 1-5"  # 14:45 UTC — 10:45 EDT (already-done) / 09:45 EST (winter run)
     # Mid-morning INTRADAY pullback entry window (~11:30 ET). Two UTC slots straddle
     # EST/EDT; cron_runner gates on ET hour ≥ 10 (opening volatility settled).
     # ALERT_RUN_MODE=intraday forces mode. Deduplicates via alert_state row 4.
@@ -93,7 +84,6 @@ jobs:
           # all other slots leave it blank so the cron derives premarket/eod by hour.
           ALERT_RUN_MODE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
-            || ((github.event.schedule == '45 13 * * 1-5' || github.event.schedule == '45 14 * * 1-5') && 'scan')
             || ((github.event.schedule == '30 15 * * 1-5' || github.event.schedule == '30 16 * * 1-5') && 'intraday')
             || ((github.event.schedule == '0 22 * * 0'   || github.event.schedule == '0 23 * * 0')   && 'thesis')
             || '' }}
