@@ -8,19 +8,15 @@ name: Protective Alerts (daily)
 # is documented as best-effort and was hit by a platform-wide incident on
 # 2026-08-06 that silently dropped/cancelled runs. See memory
 # `project_cron_railway_migration` for the full rationale and per-lane cron
-# expressions. premarket and scan are DONE (now run on Railway services
-# `cron-premarket`/`cron-scan`, project `endearing-magic`) — their schedule
-# entries below are removed. Remaining lanes here still use the old GitHub
-# dual-UTC-slot DST trick: (trading-day + ET-hour gate + a once-per-day
-# Supabase flag) ensure exactly one run fires per ET day, never twice.
+# expressions. premarket, scan and intraday are DONE (now run on Railway
+# services `cron-premarket`/`cron-scan`/`cron-intraday`, project
+# `endearing-magic`) — their schedule entries below are removed. Remaining
+# lanes here still use the old GitHub dual-UTC-slot DST trick: (trading-day
+# + ET-hour gate + a once-per-day Supabase flag) ensure exactly one run
+# fires per ET day, never twice.
 
 on:
   schedule:
-    # Mid-morning INTRADAY pullback entry window (~11:30 ET). Two UTC slots straddle
-    # EST/EDT; cron_runner gates on ET hour ≥ 10 (opening volatility settled).
-    # ALERT_RUN_MODE=intraday forces mode. Deduplicates via alert_state row 4.
-    - cron: "30 15 * * 1-5"  # 15:30 UTC — 11:30 EDT (summer run) / 10:30 EST
-    - cron: "30 16 * * 1-5"  # 16:30 UTC — 12:30 EDT (already-done) / 11:30 EST (winter run)
     # EOD run (~16:30 ET, post-close) — snapshot write + reactive pullback. Two UTC
     # slots straddle EST/EDT; the cron derives mode=eod for ET hour >= 12 and gates
     # on ET hour >= 16 so the close is final.
@@ -84,7 +80,6 @@ jobs:
           # all other slots leave it blank so the cron derives premarket/eod by hour.
           ALERT_RUN_MODE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
-            || ((github.event.schedule == '30 15 * * 1-5' || github.event.schedule == '30 16 * * 1-5') && 'intraday')
             || ((github.event.schedule == '0 22 * * 0'   || github.event.schedule == '0 23 * * 0')   && 'thesis')
             || '' }}
         run: python cron_runner.py
