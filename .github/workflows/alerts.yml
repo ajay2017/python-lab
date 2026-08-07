@@ -3,17 +3,19 @@ name: Protective Alerts (daily)
 # Exit-discipline Phase 3 — recompute protective signals headlessly and email
 # the user once per ET trading day when the action set changes.
 #
-# DST: GitHub cron is UTC with no DST. We schedule TWO slots straddling EST/EDT
-# (08:00 ET = 13:00 UTC in winter / 12:00 UTC in summer). cron_runner's guards
-# (trading-day + ET-hour >= ALERT_EMAIL_HOUR_ET + a once-per-day Supabase flag)
-# ensure exactly one run fires per ET day at ~08:00 local, never twice.
+# MIGRATION IN PROGRESS (2026-08-07): scheduled lanes are moving to Railway
+# native Cron Job services, one at a time, because GitHub's `schedule` trigger
+# is documented as best-effort and was hit by a platform-wide incident on
+# 2026-08-06 that silently dropped/cancelled runs. See memory
+# `project_cron_railway_migration` for the full rationale and per-lane cron
+# expressions. premarket is DONE (now runs on Railway service
+# `cron-premarket`, project `endearing-magic`) — its schedule entries below
+# are removed. Remaining lanes here still use the old GitHub dual-UTC-slot
+# DST trick: (trading-day + ET-hour gate + a once-per-day Supabase flag)
+# ensure exactly one run fires per ET day, never twice.
 
 on:
   schedule:
-    # Pre-market PROTECTIVE run (~08:00 ET). Two UTC slots straddle EST/EDT; the
-    # cron derives mode=premarket for ET hour < 12.
-    - cron: "0 12 * * 1-5"   # 12:00 UTC — 08:00 EDT / 07:00 EST (gated too-early in winter)
-    - cron: "0 13 * * 1-5"   # 13:00 UTC — 09:00 EDT (already-done) / 08:00 EST (winter run)
     # Mid-morning SCAN + buy-list run (~9:45 ET). Scans the sector universe,
     # persists it to scanner_cache (cold-load buy candidates) AND emails the
     # high-conviction "New Positions to Initiate". Two UTC slots straddle EST/EDT;
