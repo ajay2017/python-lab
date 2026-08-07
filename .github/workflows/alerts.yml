@@ -1,25 +1,22 @@
-name: Protective Alerts (daily)
+name: Protective Alerts (manual)
 
 # Exit-discipline Phase 3 — recompute protective signals headlessly and email
 # the user once per ET trading day when the action set changes.
 #
-# MIGRATION IN PROGRESS (2026-08-07): scheduled lanes are moving to Railway
-# native Cron Job services, one at a time, because GitHub's `schedule` trigger
-# is documented as best-effort and was hit by a platform-wide incident on
-# 2026-08-06 that silently dropped/cancelled runs. See memory
-# `project_cron_railway_migration` for the full rationale and per-lane cron
-# expressions. premarket, scan, intraday and eod are DONE (now run on
-# Railway services `cron-premarket`/`cron-scan`/`cron-intraday`/`cron-eod`,
-# project `endearing-magic`) — their schedule entries below are removed.
-# Only the weekly thesis lane remains here, still using the old GitHub
-# dual-UTC-slot DST trick.
+# MIGRATED 2026-08-07: all 5 scheduled lanes (premarket, scan, intraday, eod,
+# weekly thesis→debrief→monthly) now run on dedicated Railway native Cron Job
+# services (`cron-premarket`/`cron-scan`/`cron-intraday`/`cron-eod`/
+# `cron-thesis`, project `endearing-magic`), because GitHub's `schedule`
+# trigger is documented as best-effort and was hit by a platform-wide
+# incident on 2026-08-06 that silently dropped/cancelled runs. See memory
+# `project_cron_railway_migration` for the full rationale, per-lane cron
+# expressions, and the Railway setup gotchas (config-as-code precedence,
+# variable-reference fragility on rename, wrong-project creation). This
+# workflow is now workflow_dispatch-only — kept for manual re-runs / ad hoc
+# testing (force/test_email/mode inputs) and its dead-man's-switch failure
+# notification, which still applies to a manual run.
 
 on:
-  schedule:
-    # Weekly THESIS REVIEW — Sunday evening. Two UTC slots straddle EST/EDT;
-    # cron_runner gates on mode=thesis and runs only on Sunday (weekday=6).
-    - cron: "0 22 * * 0"     # 22:00 UTC Sunday — 18:00 EDT / 17:00 EST
-    - cron: "0 23 * * 0"     # 23:00 UTC Sunday — 19:00 EDT / 18:00 EST (winter run)
   workflow_dispatch:          # manual button (Actions tab → Run workflow)
     inputs:
       mode:
@@ -70,11 +67,11 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ALERT_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '' }}
           ALERT_TEST_EMAIL: ${{ github.event_name == 'workflow_dispatch' && inputs.test_email && '1' || '' }}
-          # workflow_dispatch input wins; else named schedule slots force their mode;
-          # all other slots leave it blank so the cron derives premarket/eod by hour.
+          # workflow_dispatch-only now (no more schedule trigger) — the mode
+          # input wins when explicitly chosen; 'auto' leaves it blank so
+          # cron_runner derives premarket/eod by ET hour, same as before.
           ALERT_RUN_MODE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.mode != 'auto' && inputs.mode
-            || ((github.event.schedule == '0 22 * * 0'   || github.event.schedule == '0 23 * * 0')   && 'thesis')
             || '' }}
         run: python cron_runner.py
 
