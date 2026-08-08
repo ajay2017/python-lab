@@ -115,6 +115,10 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 **📊 Predictive Analytics** (F-178) — *Your personal edge map.* Six tabs: 🎯 Score Calibration | ⚖️ Decision Quality | 🏷️ Signal Breakdown | 🌐 Sector Alpha | 🧭 Sentiment Alignment (F-179) | ⏱️ Entry Timing (F-220). Measurement-only — none of it feeds back into the engine. Look to learn where *your* edge actually comes from.
 
+**🔬 Model Lab** (F-234) — *Owner-only, experimental.* Quarantined forward-volatility shadow layer: 20-day EWMA vol forecast per held ticker + portfolio, scored against a naive persistence baseline. Feeds no gate, no recommendation, no composite. Dead-end by design — a measurement harness to validate before any signal is ever wired in.
+
+**🩺 System Trust** (F-235) — *Owner-only, pipeline-health diagnostic.* Answers "can I trust what the app told me today?" Four live checks at page load: ① Cron liveness (did each Railway lane fire?), ② Data stores (does every expected table exist with fresh data — catches unapplied DDL and silent write failures), ③ Data providers (source health this session), ④ In-session caches (what loaded this run). Each row is green/amber/red. A one-line chip appears at the top of 🏠 Home only when something is degraded; invisible when healthy. Reports only — changes no recommendation, no gate, nothing.
+
 ### Group: PORTFOLIO
 
 **🥧 Portfolio Overview** — *Composition & rebalancing.* Tabs: 📊 Overview (sector pie, P&L bar, Composition Sankey F-06a) | ⚖️ Rebalancing (target weights, trim/add, F-13) | 💰 Tax (per-lot analysis + HARVEST, F-16/F-186) | 📈 Performance (attribution, F-10) | 📈 Analytics (Relative Strength F-171, Sector Rotation Heatmap F-172, Rankings F-173, Portfolio vs S&P 500 real-sector tilt F-223).
