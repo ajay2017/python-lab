@@ -101,15 +101,17 @@ Why first: it's almost free, it changes nothing, and it directly cauterizes the 
 
 **The one genuinely-open Phase 1 task (load-bearing):** the **table → lane → cadence inventory** — which cron lane is responsible for writing which table, and on what cadence, so the freshness check knows what "should exist today" means. This is the map that makes the DDL detector real; without it, check ② is guesswork. Build this inventory from `cron_runner.py` + the DB schema *before* writing the check. (Do NOT hardcode "today" — freshness/"now" comes from `market_time.now_et`/`today_et`, per the recurring-defect gate; a naive `date.today()` would fail the antipattern check anyway.)
 
-### Phase 2 — the meta-gate (behavior-changing, real design risk)
+### Phase 2 — the meta-gate — CLOSED 2026-08-07, not warranted
 
-The amber/red banners that dent confidence or scope-suppress a call. This **touches decision behavior** → by Hard Rule #4 it needs a **`planner` (Opus) design pass + `reviewer` (Opus) before ship**, and it needs at least one **new policy constant** (the freshness threshold at which an input counts as "dead" — a policy decision to set *with the user*, in `constants.py`).
+A `planner` (Opus) provable-input audit ran the same session Phase 1 shipped and returned a definitive verdict: **do not build Phase 2.**
 
-Deliberately second, deliberately slower. The prerequisite is having watched the Phase-1 panel long enough to know:
-1. Which degradations actually occur, and how often (so Red doesn't fire on noise).
-2. **Which existing decisions have a single, provable required input** whose absence would justify a scoped Red suppression. *This list is what tells us whether Phase 2 is worth building at all* — if almost no decision has a cleanly-provable single input, the honest answer is "stay at Phase 1 / amber-only."
+**Finding:** every high-value decision surface — deterioration EXIT/TRIM/WATCH, risk-off de-risk, risk advisor, composite score, watchlist buy-readiness — recomputes live at render time from the resilient multi-source provider layer. None reads a cron-written store as its decision input. The original motivating example ("EXIT calls read from `exit_signals`") does not match the code: `exit_signals` is a history capture consumed by retrospective features (velocity, red team tiers, behavioral fingerprint, protective track record); the live EXIT/TRIM decision comes from `assess_holding(held_data[t]["df"], ...)`. A dead premarket lane darkens the email and the history series, not the in-app protective call.
 
-**Phase 2 is NOT approved by this doc.** It is scoped here so the discipline is on record; it earns a build only after Phase 1 has run and the provable-input list is real.
+The only in-app surface with a single provable cron input is the cold-load buy list via `scanner_cache` — and it already fails safe to an empty list, never a wrong pick. The high-value protective calls have no single provable input; a Phase-2 gate could not touch them without violating its own "named input provably missing" invariant.
+
+**The live-recompute architecture is Phase 2's resilience.** The plan doc's predicted landing ("if almost none do, the honest answer is stay at Phase 1 / amber-only") is the correct one.
+
+**Trigger to reconsider (high bar):** a new decision surface is added that explicitly reads a single cron-written store as its gating input — not multi-source, not live-recompute. Absent that structural change, do not re-propose Phase 2.
 
 ---
 
