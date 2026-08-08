@@ -26510,7 +26510,10 @@ elif page == "🩺 System Trust":
             "confidence is dented (a stale store, a backup data provider, or a late lane)."
         )
     else:
-        st.success("🟢 All systems nominal — decisions are running on complete, fresh data.")
+        st.success(
+            "🟢 All systems nominal — today's decisions are running on complete, "
+            "fresh data from the primary source."
+        )
 
     def _sysh_row(severity: str, label: str, detail: str, tech: str | None = None) -> None:
         _c1, _c2, _c3 = st.columns([0.5, 4, 6])
@@ -26518,24 +26521,64 @@ elif page == "🩺 System Trust":
         _c2.markdown(f"**{label}**  \n`{tech}`" if tech else f"**{label}**")
         _c3.caption(detail or "")
 
+    def _sysh_healthy(rows: list) -> bool:
+        # "Nothing to look at": no proven fault (warn/down). Unknown (⚪, not
+        # yet observed this session) is explicitly NOT a fault — see the
+        # severity vocabulary in system_health.py — so a section with only
+        # ok/unknown rows still collapses, per the mockup's "deliberately
+        # boring on a healthy day" design (docs/plans/system-proprioception.md).
+        return bool(rows) and not any(r.get("severity") in ("warn", "down") for r in rows)
+
+    def _sysh_ok_count(rows: list) -> int:
+        return sum(1 for r in rows if r.get("severity") == "ok")
+
+    def _sysh_section(title: str, rows: list, noun: str, all_ok_text: str, partial_text: str,
+                       tech_key: str | None = None) -> None:
+        st.markdown(title)
+        if not rows:
+            return
+        if _sysh_healthy(rows):
+            _n, _n_ok = len(rows), _sysh_ok_count(rows)
+            _label = f"All {_n} {noun}" if _n != 1 else f"The 1 {noun}"
+            _detail = all_ok_text if _n_ok == _n else partial_text.format(n_ok=_n_ok, n=_n)
+            _sysh_row("ok", _label, _detail)
+        else:
+            for _r in rows:
+                _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""),
+                          tech=_r.get(tech_key) if tech_key else None)
+
     st.markdown("---")
-    st.markdown("##### ① Cron liveness — did each Railway lane fire?")
-    for _r in _health.get("lanes", []):
-        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""))
+    _sysh_section(
+        "##### ① Cron liveness — did each Railway lane fire?",
+        _health.get("lanes", []), noun="lanes",
+        all_ok_text="Fired on schedule (" + " · ".join(
+            _r.get("key", "") for _r in _health.get("lanes", [])) + ")",
+        partial_text="No failures — {n_ok}/{n} lanes confirmed fired this session, rest not yet due",
+    )
 
-    st.markdown("##### ② Data stores — existence & freshness (the DDL-catcher)")
-    for _r in _health.get("stores", []):
-        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""),
-                  tech=_r.get("table"))
+    _sysh_section(
+        "##### ② Data stores — existence & freshness (the DDL-catcher)",
+        _health.get("stores", []), noun="tracked data stores",
+        all_ok_text="Present, with fresh data for their expected cadence",
+        partial_text="No missing/stale stores — {n_ok}/{n} confirmed fresh, rest exist "
+                     "(conditionally-written, not due this cycle)",
+        tech_key="table",
+    )
 
-    st.markdown("##### ③ Data providers — health this session")
-    for _r in _health.get("providers", []):
-        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""))
+    _sysh_section(
+        "##### ③ Data providers — health this session",
+        _health.get("providers", []), noun="providers",
+        all_ok_text="All providers responding normally this session",
+        partial_text="No failures — {n_ok}/{n} providers confirmed healthy, rest not called yet this session",
+    )
 
-    st.markdown("##### ④ In-session data — what loaded this run")
-    for _r in _health.get("caches", []):
-        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""),
-                  tech=_r.get("key"))
+    _sysh_section(
+        "##### ④ In-session data — what loaded this run",
+        _health.get("caches", []), noun="analyses",
+        all_ok_text="Loaded this run — nothing came back offline",
+        partial_text="{n_ok}/{n} loaded this run; rest not visited yet this session (not a fault)",
+        tech_key="key",
+    )
 
     _sysh_ca = _health.get("computed_at")
     if _sysh_ca:
