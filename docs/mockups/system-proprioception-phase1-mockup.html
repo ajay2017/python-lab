@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>System Proprioception — Phase 1 mockup (owner-only 🩺 System Trust)</title>
+<style>
+  body { background:#0b0f19; color:#e5e7eb; font-family:-apple-system, Segoe UI, sans-serif; padding:24px; max-width:940px; margin:0 auto; line-height:1.4; }
+  h2.doc { color:#f9fafb; margin-top:34px; }
+  p.doc { color:#94a3b8; font-size:0.9em; }
+  .frame-label { color:#64748b; font-size:0.74em; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; margin:26px 0 8px; border-top:1px dashed #334155; padding-top:14px; }
+
+  .card { background:#111827; border:1px solid #334155; border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+  .hdr { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .title { font-size:1.1em; font-weight:700; color:#f9fafb; }
+  .badge { background:#1e293b; border:1px solid #64748b; color:#94a3b8; font-size:0.7em; font-weight:700; padding:2px 9px; border-radius:999px; }
+  .sub { color:#94a3b8; font-size:0.82em; margin-bottom:12px; }
+
+  /* headline verdict banners */
+  .verdict { display:flex; align-items:center; gap:10px; padding:11px 15px; border-radius:8px; margin:6px 0 16px; font-weight:700; font-size:0.95em; }
+  .v-green  { background:#14532d33; border-left:3px solid #4ade80; color:#86efac; }
+  .v-amber  { background:#78350f33; border-left:3px solid #f59e0b; color:#fcd34d; }
+  .v-red    { background:#7f1d1d33; border-left:3px solid #ef4444; color:#fca5a5; }
+
+  /* check sections */
+  .section-label { color:#64748b; font-size:0.72em; font-weight:700; letter-spacing:0.05em; margin:16px 0 6px; text-transform:uppercase; }
+  .row { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid #1e293b; font-size:0.86em; }
+  .row:last-child { border-bottom:none; }
+  .dot { width:9px; height:9px; border-radius:999px; flex-shrink:0; }
+  .d-green { background:#4ade80; }
+  .d-amber { background:#f59e0b; }
+  .d-red   { background:#ef4444; box-shadow:0 0 6px #ef4444; }
+  .r-name { color:#e5e7eb; width:210px; flex-shrink:0; font-weight:600; display:flex; flex-direction:column; gap:1px; }
+  .r-tech { color:#475569; font-size:0.76em; font-weight:400; font-family:ui-monospace, Menlo, Consolas, monospace; }
+  .r-detail { color:#94a3b8; flex:1; }
+  .r-detail b { color:#cbd5e1; font-weight:600; }
+  .r-stamp { color:#64748b; font-size:0.82em; width:150px; flex-shrink:0; text-align:right; }
+  .red-text { color:#fca5a5; }
+  .amber-text { color:#fcd34d; }
+
+  /* home chip */
+  .home-chip-amber { display:flex; align-items:center; gap:9px; background:#78350f26; border:1px solid #b45309; border-radius:8px; padding:9px 14px; font-size:0.86em; color:#fcd34d; margin-bottom:8px; }
+  .home-chip-amber a { color:#7dd3fc; text-decoration:none; font-weight:700; }
+  .home-healthy-note { color:#334155; font-size:0.8em; font-style:italic; }
+
+  .callout { background:#0f172a; border:1px dashed #475569; border-radius:8px; padding:10px 14px; color:#94a3b8; font-size:0.82em; margin:10px 0; }
+  .callout b { color:#cbd5e1; }
+  code { background:#1e293b; color:#7dd3fc; padding:1px 5px; border-radius:4px; font-size:0.85em; }
+</style>
+</head>
+<body>
+
+<h2 class="doc" style="margin-top:0;">System Proprioception — Phase 1 mockup</h2>
+<p class="doc">Owner-only <b>🩺 System Trust</b> diagnostic page + a top-of-Home degraded-only chip. Phase 1 <b>informs only</b> — it changes no gate, no recommendation. Pull-based / render-time (no dependence on its own cron). Reuses the <code>🔬 Model Lab</code> owner-only-hidden nav pattern (app.py:2175). Content below is illustrative.</p>
+
+<!-- ============================================================= -->
+<div class="frame-label">Frame A · Top-of-Home chip — DEGRADED state (only renders when something is wrong)</div>
+<div class="home-chip-amber">
+  ⚠ <span><b>2 pipeline checks degraded today</b> — 1 expected data table is missing and marks are running on a backup source.
+  <a href="#">Open System Trust →</a></span>
+</div>
+<p class="doc">This is the only thing proprioception adds to a decision surface in Phase 1: one line, at the top of Home, <b>only</b> when a check is amber/red. It informs and links — it does not suppress anything.</p>
+
+<div class="frame-label">Frame B · Top-of-Home — HEALTHY state (the dog that doesn't bark)</div>
+<span class="home-healthy-note">— nothing renders. When every check is green, Home looks exactly as it does today. Zero added clutter. —</span>
+
+<!-- ============================================================= -->
+<div class="frame-label">Frame C · The 🩺 System Trust page — DEGRADED (reproducing the real DDL bug that started this)</div>
+
+<div class="card">
+  <div class="hdr">
+    <span class="title">🩺 System Trust</span>
+    <span class="badge">OWNER-ONLY · DIAGNOSTIC · CHANGES NO DECISION</span>
+  </div>
+  <div class="sub">Can I trust what the app told me today? Every check below is read live at page load — nothing here depends on a background job having run.</div>
+
+  <div class="verdict v-amber">⚠ 2 checks degraded — decisions still have their inputs, but confidence is dented. See red/amber rows below.</div>
+
+  <div class="section-label">① Cron liveness — did each lane fire?</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Premarket (9:15 ET)</span><span class="r-detail">Fired — buy-list email sent</span><span class="r-stamp">today 09:15 ET</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Scan (9:45 ET)</span><span class="r-detail">Fired — protective exit signals written</span><span class="r-stamp">today 09:45 ET</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Intraday (13:00 ET)</span><span class="r-detail">Fired</span><span class="r-stamp">today 13:00 ET</span></div>
+  <div class="row"><span class="dot d-amber"></span><span class="r-name">EOD (16:30 ET)</span><span class="r-detail amber-text">Not yet fired — expected 16:30 ET (it is 14:10 ET now, not overdue)</span><span class="r-stamp">pending</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Weekly thesis (Sun)</span><span class="r-detail">Fired</span><span class="r-stamp">Sun 07:00 ET</span></div>
+
+  <div class="section-label">② Data freshness / existence — the DDL catcher</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Protective exit scan<span class="r-tech">exit_signals</span></span><span class="r-detail">Fresh data for today</span><span class="r-stamp">today</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Market regime read<span class="r-tech">daily_regime</span></span><span class="r-detail">Fresh data for today</span><span class="r-stamp">today</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Buy recommendations log<span class="r-tech">recommendations</span></span><span class="r-detail">Fresh data for today</span><span class="r-stamp">today</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Analyst price-target history<span class="r-tech">analyst_target_snapshots</span></span><span class="r-detail">Fresh data (cadence OK)</span><span class="r-stamp">today</span></div>
+  <div class="row"><span class="dot d-red"></span><span class="r-name red-text">Volatility forecast (Model Lab)<span class="r-tech">model_predictions</span></span><span class="r-detail red-text"><b>DATA STORE MISSING</b> — expected a daily volatility-forecast write, but its data store does not exist. <b>Setup step (DDL) never applied?</b></span><span class="r-stamp red-text">— no data —</span></div>
+
+  <div class="callout">
+    <b>This red row is the whole reason this feature exists.</b> On 2026-08-07 exactly this — a table the app writes to that didn't exist because its DDL was never applied — failed silently for weeks and was only found by accident during the cron migration. This check turns that class of silent failure into a red dot on day one, <b>without needing to know the cause</b> (unapplied DDL, dead cron, and a crash all present identically as "expected write did not happen").
+  </div>
+
+  <div class="section-label">③ Data source — which provider served today's marks?</div>
+  <div class="row"><span class="dot d-amber"></span><span class="r-name amber-text">Price marks</span><span class="r-detail amber-text">Served by <b>FMP</b> (tertiary) — Finnhub &amp; yfinance both failed today. Marks are valid but from the 3rd-choice source; price cross-check still passed.</span><span class="r-stamp">now</span></div>
+
+  <div class="section-label">④ In-session data — which analyses loaded this run?</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Portfolio holdings<span class="r-tech">_port_df_enriched</span></span><span class="r-detail">Loaded</span><span class="r-stamp">this run</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Risk alerts<span class="r-tech">_risk_advisor_recs_cache</span></span><span class="r-detail">Loaded</span><span class="r-stamp">this run</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Correlation analysis<span class="r-tech">_corr_df_cache</span></span><span class="r-detail">Loaded</span><span class="r-stamp">this run</span></div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Daily Brief<span class="r-tech">_daily_brief_offline</span></span><span class="r-detail">Built cleanly (not offline)</span><span class="r-stamp">this run</span></div>
+</div>
+
+<!-- ============================================================= -->
+<div class="frame-label">Frame D · The 🩺 System Trust page — HEALTHY (the calm, normal day)</div>
+
+<div class="card">
+  <div class="hdr">
+    <span class="title">🩺 System Trust</span>
+    <span class="badge">OWNER-ONLY · DIAGNOSTIC · CHANGES NO DECISION</span>
+  </div>
+  <div class="sub">Can I trust what the app told me today? Every check below is read live at page load.</div>
+
+  <div class="verdict v-green">✅ All systems nominal — today's decisions are running on complete, fresh data from the primary source.</div>
+
+  <div class="section-label">① Cron liveness</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">All 5 lanes</span><span class="r-detail">Fired on schedule (premarket · scan · intraday · eod · weekly)</span><span class="r-stamp">✓</span></div>
+  <div class="section-label">② Data freshness / existence</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">All tracked data stores</span><span class="r-detail">Present, with fresh data for their expected cadence</span><span class="r-stamp">✓</span></div>
+  <div class="section-label">③ Data source</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">Price marks</span><span class="r-detail">Served by <b>Finnhub</b> (primary)</span><span class="r-stamp">✓</span></div>
+  <div class="section-label">④ In-session data</div>
+  <div class="row"><span class="dot d-green"></span><span class="r-name">All analyses</span><span class="r-detail">Loaded this run — nothing came back offline</span><span class="r-stamp">✓</span></div>
+
+  <div class="callout">On a healthy day the page is deliberately boring — collapsed to one green row per section. Detail expands only where there's something to look at. And on a healthy day, Home shows <b>no chip at all</b> (Frame B).</div>
+</div>
+
+<!-- ============================================================= -->
+<div class="frame-label">Placement</div>
+<p class="doc">
+  Proposed home: a new owner-only <b>🩺 System Trust</b> nav entry, hidden from read-only viewers via the same
+  <code>db.is_readonly()</code> filter that already hides <code>🔬 Model Lab</code> (app.py:2175). The two are natural neighbours —
+  both owner-only, both operational/experimental rather than shared portfolio views. Open question for you: which nav group it sits in
+  (RESEARCH beside Model Lab, MAIN near User Guide, or a small new owner-only cluster), and whether Phase 1 ships the Home chip (Frame A)
+  now or stays page-only.
+</p>
+
+</body>
+</html>

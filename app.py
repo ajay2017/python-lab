@@ -2143,6 +2143,7 @@ with st.sidebar:
             ("Macro",    "🌐 Macro",                    ":material/public:"),
             ("Predictive Analytics", "📊 Predictive Analytics", ":material/insights:"),
             ("Model Lab", "🔬 Model Lab",              ":material/experiment:"),
+            ("System Trust", "🩺 System Trust",        ":material/health_and_safety:"),
         ]),
         ("PORTFOLIO", [
             ("Overview", "🥧 Portfolio Overview", ":material/pie_chart:"),
@@ -2164,17 +2165,19 @@ with st.sidebar:
         ]),
     ]
 
-    # 🔬 Model Lab is the FIRST nav entry ever fully hidden (not just
-    # disabled-for-writes) from a read-only viewer — it's an owner-only
-    # experimental measurement surface (design spec, F-234), not a shared
-    # portfolio view. Smallest-change approach: filter it out of the group
-    # list before any rendering happens below, rather than special-casing
-    # the button loop itself. Flagged here explicitly since every other
-    # `is_readonly()` use in this app only disables a write control, never
-    # removes a whole nav item — this is a new pattern, not a copy of one.
+    # Owner-only nav entries — fully hidden (not just disabled-for-writes) from
+    # a read-only viewer. 🔬 Model Lab (experimental measurement surface, F-234)
+    # was the first; 🩺 System Trust (pipeline-health diagnostic, System
+    # Proprioception Phase 1) is the second — both are owner-only operational
+    # views, not shared portfolio views. Smallest-change approach: filter them
+    # out of the group list before any rendering happens below, rather than
+    # special-casing the button loop itself. Flagged here explicitly since every
+    # other `is_readonly()` use in this app only disables a write control, never
+    # removes a whole nav item.
+    _OWNER_ONLY_PAGES = ("🔬 Model Lab", "🩺 System Trust")
     if db.is_readonly():
         _NAV_GROUPS = [
-            (_g_label, [item for item in _g_items if item[1] != "🔬 Model Lab"])
+            (_g_label, [item for item in _g_items if item[1] not in _OWNER_ONLY_PAGES])
             for _g_label, _g_items in _NAV_GROUPS
         ]
 
@@ -3324,6 +3327,41 @@ if page == "🏠 Home":
     # (Phase 0) persists the same opinions separately for Phase 2's future
     # grading harness.
     st.session_state["_judgment_opinions_today"] = []
+
+    # ── System Trust chip (System Proprioception Phase 1) — owner-only, degraded-
+    # only. One line at the top of Home ONLY when a pipeline check is amber/red,
+    # linking to the 🩺 System Trust page. INFORMS ONLY — suppresses nothing.
+    # Rolls up checks ①②③ (cron liveness / data-store existence+freshness /
+    # provider health), deliberately NOT ④ (session caches are legitimately unset
+    # this early in a cold Home run, so gating on them would false-positive every
+    # cold load). Memoized ~5min. Wrapped so proprioception can never break Home.
+    if not db.is_readonly():
+        try:
+            from stock_analyzer import system_health as _sysh_home
+            _sh = _sysh_home.get_health()
+            _sh_sev = _sh.get("chip_severity", "ok")
+            if _sh_sev in ("warn", "down"):
+                if _sh_sev == "down":
+                    _sh_msg = (
+                        f"🔴 {_sh.get('n_down', 0)} pipeline check(s) failing — an expected data "
+                        "store is missing or a cron lane has died. Today's decisions may be running "
+                        "on incomplete data."
+                    )
+                else:
+                    _sh_msg = (
+                        f"🟡 {_sh.get('n_warn', 0)} pipeline check(s) degraded — decisions still "
+                        "have their inputs, but confidence is dented."
+                    )
+                _sh_c1, _sh_c2 = st.columns([5, 1])
+                with _sh_c1:
+                    (st.error if _sh_sev == "down" else st.warning)(_sh_msg)
+                with _sh_c2:
+                    if st.button("Open →", key="_sysh_chip_open", use_container_width=True,
+                                 help="Open the System Trust diagnostic page"):
+                        st.session_state["_pending_page"] = "🩺 System Trust"
+                        st.rerun()
+        except Exception:
+            pass  # proprioception must never break the Home decision surface
 
     # Load data for all held tickers
     held_tickers = [
@@ -26434,6 +26472,83 @@ elif page == "🔬 Model Lab":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# PAGE — SYSTEM TRUST (System Proprioception Phase 1 — owner-only diagnostic)
+# ═════════════════════════════════════════════════════════════════════════════
+elif page == "🩺 System Trust":
+    st.title("🩺 System Trust — pipeline health")
+    st.caption("Owner-only · diagnostic · changes no gate, no recommendation, no composite")
+
+    if db.is_readonly():
+        # Defense in depth: the sidebar nav entry is already hidden for a
+        # read-only viewer (see the _OWNER_ONLY_PAGES filter above), but a stale
+        # nav_page from before a mid-session downgrade could still land here.
+        st.info("🔒 This page is owner-only and isn't available in read-only viewer mode.")
+        st.stop()
+
+    from stock_analyzer import system_health as _sysh
+
+    st.caption(
+        "*Can I trust what the app told me today?* Every check below is read live "
+        "at page load — nothing here depends on a background job having run."
+    )
+    _sysh_refresh = st.button("🔄 Refresh checks", key="_sysh_refresh")
+    _health = _sysh.get_health(force=_sysh_refresh)
+
+    _DOT = {"ok": "🟢", "warn": "🟡", "down": "🔴", "unknown": "⚪"}
+    _chip = _health.get("chip_severity", "ok")
+    _n_down = _health.get("n_down", 0)
+    _n_warn = _health.get("n_warn", 0)
+    if _chip == "down":
+        st.error(
+            f"🔴 {_n_down} check(s) failing — an expected data store is missing, or a "
+            "cron lane ran and failed. The app may be operating on incomplete data; "
+            "see the red rows below."
+        )
+    elif _chip == "warn":
+        st.warning(
+            f"🟡 {_n_warn} check(s) degraded — decisions still have their inputs, but "
+            "confidence is dented (a stale store, a backup data provider, or a late lane)."
+        )
+    else:
+        st.success("🟢 All systems nominal — decisions are running on complete, fresh data.")
+
+    def _sysh_row(severity: str, label: str, detail: str, tech: str | None = None) -> None:
+        _c1, _c2, _c3 = st.columns([0.5, 4, 6])
+        _c1.markdown(_DOT.get(severity, "⚪"))
+        _c2.markdown(f"**{label}**  \n`{tech}`" if tech else f"**{label}**")
+        _c3.caption(detail or "")
+
+    st.markdown("---")
+    st.markdown("##### ① Cron liveness — did each Railway lane fire?")
+    for _r in _health.get("lanes", []):
+        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""))
+
+    st.markdown("##### ② Data stores — existence & freshness (the DDL-catcher)")
+    for _r in _health.get("stores", []):
+        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""),
+                  tech=_r.get("table"))
+
+    st.markdown("##### ③ Data providers — health this session")
+    for _r in _health.get("providers", []):
+        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""))
+
+    st.markdown("##### ④ In-session data — what loaded this run")
+    for _r in _health.get("caches", []):
+        _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""),
+                  tech=_r.get("key"))
+
+    _sysh_ca = _health.get("computed_at")
+    if _sysh_ca:
+        st.caption(f"Computed {str(_sysh_ca)[:19].replace('T', ' ')} ET · cached ~5 min · Refresh to re-probe.")
+    st.caption(
+        "🔴 red = a data store is provably missing (its one-time DDL may be unapplied) or a "
+        "lane ran and failed — the app may be deciding on incomplete data. 🟡 amber = degraded "
+        "but inputs present. ⚪ = not observed yet this session (not a fault). This page reports "
+        "only; it changes nothing."
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PAGE — ACCOUNT (account-baseline: equity + signed net cash)
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "💰 Account":
@@ -28457,6 +28572,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer testing whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. Feeds **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. The skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated. Predicts risk (volatility), never a stock-level direction/return call.
+- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Four checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session?), and **④ In-session data** (which analyses loaded this run). Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). Anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )

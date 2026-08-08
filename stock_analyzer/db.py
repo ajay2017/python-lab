@@ -2711,6 +2711,71 @@ def mature_model_predictions_batch(updates: list[dict]) -> bool:
         return False
 
 
+# ── Cron heartbeat (System Proprioception Phase 1 — pipeline liveness) ─────────
+# One row per cron lane, upserted at the END of every lane invocation by
+# cron_runner.main(). OBSERVABILITY ONLY — nothing reads this for a decision,
+# gate, recommendation, or composite; it exists so the owner-only 🩺 System
+# Trust page can prove each Railway cron lane is actually firing (the whole
+# motivation for the GitHub Actions → Railway migration was execution
+# certainty). One-time DDL (apply once via the Supabase dashboard, same
+# convention as model_predictions / daily_regime — see docs/architecture.md):
+#
+#   create table if not exists cron_heartbeat (
+#     lane        text primary key,
+#     last_run_at timestamptz not null,
+#     status      text not null default 'ok',   -- 'ok' | 'failed'
+#     detail      text,
+#     updated_at  timestamptz not null default now()
+#   );
+#   alter table cron_heartbeat enable row level security;
+#   create policy "cron_heartbeat service_role all" on cron_heartbeat
+#     for all to service_role using (true) with check (true);
+
+def save_cron_heartbeat(lane: str, status: str = "ok",
+                        detail: str | None = None, ran_at: str | None = None) -> bool:
+    """Upsert one heartbeat row for a cron `lane` (one row per lane, last run
+    wins). `ran_at` is an ISO-8601 string — cron_runner passes its own ET-aware
+    `now_et.isoformat()`; when omitted, an ET-aware timestamp is used (never a
+    naive `utcnow()`). Never raises: a pre-DDL "relation does not exist" is
+    caught like any other failure and reported via the return value, because a
+    heartbeat write must never break the lane's real work. Read-only viewers
+    no-op (only the headless cron writes heartbeats; the app only reads them)."""
+    if is_readonly():
+        return False
+    if not has_db() or not lane:
+        return False
+    try:
+        if ran_at is None:
+            import pytz as _pytz
+            from datetime import datetime as _dt
+            ran_at = _dt.now(_pytz.timezone("America/New_York")).isoformat()
+        row = {
+            "lane":        str(lane),
+            "last_run_at": ran_at,
+            "status":      str(status or "ok"),
+            "detail":      (str(detail)[:200] if detail else None),
+        }
+        _client().table("cron_heartbeat").upsert(row, on_conflict="lane").execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_cron_heartbeats() -> "list[dict] | None":
+    """Return every cron-lane heartbeat row, or `None` (the offline sentinel)
+    on ANY failure — no credentials, the table not yet created (pre-DDL), or a
+    raised query error. `None` = "heartbeat store unavailable" (the 🩺 System
+    Trust page shows liveness as unverifiable), kept distinct from `[]` (table
+    exists, no lane has written yet)."""
+    if not has_db():
+        return None
+    try:
+        rows = _client().table("cron_heartbeat").select("*").execute().data
+        return rows or []
+    except Exception:
+        return None
+
+
 def save_watchlist(tickers: list[str]) -> bool:
     """Atomic-ish replace via upsert + sweep — same pattern as save_holdings.
 

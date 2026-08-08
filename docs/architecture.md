@@ -1621,6 +1621,57 @@ fixed-λ RiskMetrics EWMA forecaster (`stock_analyzer/vol_forecast.py`) with
 no fitted parameters, so backfilled rows carry no in-sample/backtest-leakage
 risk the way a fitted model would.
 
+### 6.32 `cron_heartbeat` table
+
+```sql
+CREATE TABLE IF NOT EXISTS cron_heartbeat (
+    lane        TEXT PRIMARY KEY,               -- 'premarket'|'scan'|'intraday'|'eod'|'thesis'
+    last_run_at TIMESTAMPTZ NOT NULL,           -- ET-aware ISO timestamp of the last invocation
+    status      TEXT NOT NULL DEFAULT 'ok',     -- 'ok' | 'failed'
+    detail      TEXT,                           -- failure detail (truncated), NULL on success
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE cron_heartbeat ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_cron_heartbeat" ON cron_heartbeat
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**System Proprioception — Phase 1.** See `docs/plans/system-proprioception.md`.
+One row per cron lane, upserted (`on_conflict="lane"`) at the END of every lane
+invocation by `cron_runner.main()` — including trading-day-skip no-ops, because a
+skip is still proof the Railway scheduler fired the service (the whole point of
+the GitHub Actions → Railway migration was execution certainty). **OBSERVABILITY
+ONLY — nothing reads this for a gate, recommendation, composite, or threshold.**
+
+Ships **inert until this DDL is applied manually** via the Supabase dashboard —
+same convention as `model_predictions` §6.31 / `daily_regime` §6.22.
+`save_cron_heartbeat()` swallows the pre-DDL "relation does not exist" error and
+returns `False` (the lane logs "heartbeat NOT saved" and continues — a heartbeat
+write can never affect a lane's real work or exit code); `load_cron_heartbeats()`
+returns `None` (offline sentinel) on any failure. **Reader:** the owner-only
+🩺 System Trust page via `stock_analyzer/system_health.py::check_cron_liveness()`
+— which reads a lane's heartbeat as "unknown" (⚪, not degraded) when no row
+exists yet, so a freshly-applied table or a lane's first run is never a false
+alarm; only a stale-but-present timestamp (or a `status='failed'` row) degrades.
+
+### `stock_analyzer/system_health.py`
+
+Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System
+Proprioception Phase 1). **INFORMS ONLY — every function is read-only and feeds
+no gate, recommendation, composite, or threshold.** Pull-based / render-time:
+nothing depends on its own background job. Four never-raising checks — ① cron
+liveness (`cron_heartbeat`), ② data-store existence + freshness (the "DDL-catcher":
+a provably-missing table reads red/"down"; the inventory maps each cron lane to
+the stores it writes and whether the write is unconditional-daily or conditional),
+③ provider health (`api_health`), ④ in-session `session_state` producer caches —
+rolled up by `compute_health()` into a `chip_severity` (worst of ①②③ only; ④ is
+excluded so a cold Home run, before Home populates its caches, can't false-positive
+the chip). `get_health()` memoizes in `st.session_state["_system_health_cache"]`
+(~5-min TTL). The recency windows (`_DAILY_LANE_OK_HOURS` etc.) are **observability
+thresholds, not investment policy** — deliberately local to this module, not in
+`constants.py`.
+
 ### `stock_analyzer/portfolio_health.py`
 
 Pure-logic module for the 🏆 Health page. No I/O, no Streamlit imports.

@@ -162,6 +162,23 @@ def _notify_failure(mode: str, detail: str) -> None:
         _log(f"cron-failure notify: UNCAUGHT — {str(exc)[:160]} (original failure still propagates)")
 
 
+def _record_heartbeat(lane: str, now_et, status: str = "ok", detail: str | None = None) -> None:
+    """Write one cron_heartbeat row (System Proprioception Phase 1) so the
+    owner-only 🩺 System Trust page can prove each Railway lane is firing.
+    OBSERVABILITY ONLY — nothing reads this for a decision. Called at the END
+    of every lane invocation (including trading-day-skip no-ops — a skip is
+    still proof the scheduler fired the service). Like _notify_failure, this
+    must NEVER raise: a heartbeat write failure can't be allowed to affect the
+    lane's real work or its exit code. Inert (returns False) until the
+    cron_heartbeat table's one-time DDL is applied — see stock_analyzer/db.py."""
+    try:
+        ok = db.save_cron_heartbeat(lane, status=status, detail=detail, ran_at=now_et.isoformat())
+        _log(f"heartbeat {lane}={status}"
+             + ("" if ok else " (NOT saved — DB offline / table not created)"))
+    except Exception as exc:
+        _log(f"heartbeat {lane}: UNCAUGHT — {str(exc)[:120]} (ignored — lane unaffected)")
+
+
 def _run_test_email(now_et) -> int:
     """Synthetic delivery test (any mode) — proves Resend → inbox, leaves dedup
     state untouched so a later real alert still sends."""
@@ -1249,6 +1266,9 @@ def main() -> int:
                 _failures.append(f"{_job}: {str(exc)[:160]}")
         if _failures:
             _notify_failure(mode, "; ".join(_failures))
+        _record_heartbeat("thesis", now_et,
+                          status="failed" if _failures else "ok",
+                          detail="; ".join(_failures) if _failures else None)
         return rc
 
     # Every other mode dispatches exactly one job per invocation. Wrap it in
@@ -1265,11 +1285,17 @@ def main() -> int:
         "eod":      ("eod",      _run_eod),
     }.get(mode, ("premarket", _run_premarket))
     try:
-        return _job_fn(now_et, force)
+        rc = _job_fn(now_et, force)
     except Exception as exc:
         _log(f"{_job_name}: UNCAUGHT — {str(exc)[:160]}")
+        # Fire the human alert BEFORE the heartbeat: _record_heartbeat does a
+        # network upsert, so if the DB is the thing that's down, doing it first
+        # would delay the dead-man's-switch email behind a connection timeout.
         _notify_failure(_job_name, str(exc)[:160])
+        _record_heartbeat(_job_name, now_et, status="failed", detail=str(exc)[:160])
         raise
+    _record_heartbeat(_job_name, now_et, status="ok")
+    return rc
 
 
 if __name__ == "__main__":
