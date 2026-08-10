@@ -579,13 +579,17 @@ def _email_section(title: str, content: str, section_colours: dict) -> str:
     )
 
 
-def render_debrief_email(debrief: dict, week_had_trades: bool = False) -> str:
+def render_debrief_email(debrief: dict, week_had_trades: bool = False, prior: dict | None = None) -> str:
     """Render the weekly portfolio debrief as a professional HTML email (light-mode-first).
 
     week_had_trades: True when a BUY/SELL landed inside the joined week — the
     equity-value tiles then reflect position-size changes as well as price
     moves, not price performance alone (same class of caveat as the Summary
     page's Alpha vs SPY tile, added 2026-07-26).
+    prior: last week's saved weekly_debriefs row (or None), for a week-over-week
+    alpha trend annotation on the Alpha tile. The delta is computed here in code,
+    not narrated by the LLM — arithmetic on two numbers has zero business being
+    left to a text-generation model when Python can just do it exactly.
     """
 
     week_ending  = debrief.get("week_ending", "—")
@@ -593,6 +597,16 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False) -> str:
     perf  = debrief.get("performance_pct")
     spy   = debrief.get("spy_pct")
     alpha = debrief.get("alpha_pct")
+
+    alpha_subtitle = "vs benchmark"
+    if prior is not None:
+        prior_alpha = prior.get("alpha_pct")
+        if (alpha is not None and prior_alpha is not None
+                and not (isinstance(alpha, float) and alpha != alpha)
+                and not (isinstance(prior_alpha, float) and prior_alpha != prior_alpha)):
+            _delta = float(alpha) - float(prior_alpha)
+            _arrow = "▲" if _delta >= 0 else "▼"
+            alpha_subtitle = f"vs benchmark &nbsp;·&nbsp; {_arrow} {_delta:+.1f}pp vs last wk"
 
     def _pct_cell(label: str, v: float | None, bold: bool = False, subtitle: str = "") -> str:
         if v is None or (isinstance(v, float) and v != v):   # NaN != NaN
@@ -617,13 +631,26 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False) -> str:
 
     perf_block = ""
     if perf is not None:
-        perf_block = (
+        # The trades caveat renders BEFORE the KPI tiles (not after) — a reader
+        # sees the eye-catching % numbers first regardless of layout order, so
+        # the caveat needs to land ahead of them to actually frame the read,
+        # not trail behind it as a footnote nobody scrolls back up for.
+        if week_had_trades:
+            perf_block += (
+                "<p style='font-size:0.75em;color:#b45309;background:#fffbeb;"
+                "border:1px solid #fde68a;border-radius:6px;padding:8px 12px;"
+                "margin:0 0 4px;text-align:center'>"
+                "⚠️ Trades occurred this week — the figures below reflect position-size "
+                "changes as well as price moves, not price performance alone."
+                "</p>"
+            )
+        perf_block += (
             "<table width='100%' style='border-collapse:collapse;background:#f8fafc;"
             "border:1px solid #e5e7eb;border-radius:8px;margin:20px 0 4px;overflow:hidden'>"
             "<tr>"
             + _pct_cell("Portfolio", perf, bold=True, subtitle="this week · equity positions")
             + _pct_cell("S&P 500", spy, subtitle="this week · SPY")
-            + _pct_cell("Alpha (portfolio, unadjusted)", alpha, bold=True, subtitle="vs benchmark").replace("border-right:1px solid #e5e7eb", "border-right:none")
+            + _pct_cell("Alpha (unadjusted)", alpha, bold=True, subtitle=alpha_subtitle).replace("border-right:1px solid #e5e7eb", "border-right:none")
             + "</tr></table>"
             "<p style='font-size:0.72em;color:#9ca3af;margin:0 0 20px;text-align:center'>"
             "Weekly change in equity position value (Mon&#8202;–&#8202;Fri). "
@@ -631,15 +658,6 @@ def render_debrief_email(debrief: dict, week_had_trades: bool = False) -> str:
             "Different from Account page&#8202;'s all-time money-weighted return."
             "</p>"
         )
-        if week_had_trades:
-            perf_block += (
-                "<p style='font-size:0.75em;color:#b45309;background:#fffbeb;"
-                "border:1px solid #fde68a;border-radius:6px;padding:8px 12px;"
-                "margin:0 0 20px;text-align:center'>"
-                "⚠️ Trades occurred this week — these figures reflect position-size "
-                "changes as well as price moves, not price performance alone."
-                "</p>"
-            )
 
     # Section accent colours (left-border strip)
     _SECTION_COLOURS = {

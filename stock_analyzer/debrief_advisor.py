@@ -27,10 +27,11 @@ Performance vs benchmark. Name the top contributors and detractors from the data
 IMPORTANT — metric framing: the "Portfolio return" figure is the week's equity-position value change (Mon–Fri), not a money-weighted investment return. Say "equity positions gained/fell X%" or "portfolio value moved X% this week" — never "the portfolio returned X%" or imply it is a true investment-return metric. Do NOT reference or compare against the Account page's all-time figure; they measure different things.
 
 Section 2 — DECISIONS YOU MADE (bullet list):
-For each actionable signal surfaced this week: did the investor act or not, and what happened to the name by week-end? Be specific.
-Example: "• NVDA: New position signal (confirmed, surfaced 3×). You did not act. Name fell 6.8% by Friday."
+For each actionable signal surfaced this week — both new-position entry signals AND protective WATCH/TRIM/EXIT signals — did the investor act or not, and what happened to the name by week-end? Be specific. When a conviction tier (Strong Buy / Buy) is given for an entry signal, name it.
+Example (entry): "• NVDA: Strong Buy new position signal (confirmed, surfaced 3×). You did not act. Name fell 6.8% by Friday."
+Example (protective): "• TSLA: TRIM signal (surfaced 2×). You held — not acted on. Position is down 9.2% from peak."
 If a ticker appears under "Positions fully closed this week", write ONLY: "• TICKER: Position closed this week." — do NOT describe it as a price loss or wipeout; closing a position on a signal is correct behaviour.
-If no signals were surfaced, write "• No actionable signals were surfaced this week."
+If no signals of either kind were surfaced, write "• No actionable signals were surfaced this week."
 
 Section 3 — PATTERNS THIS WEEK (1–3 bullets, or "No clear pattern this week." if none):
 What behavioural pattern, if any, showed up? Combine this week's signals with any "Behavioral pattern" and "Decision quality" blocks in the data package:
@@ -84,6 +85,7 @@ def build_debrief_package(
     spy_week_pct: float | None = None,
     broken_theses: list[str] | None = None,
     all_recs_df=None,
+    exit_signals_df=None,
 ) -> dict:
     """
     Assemble the structured data package for the LLM.
@@ -94,6 +96,9 @@ def build_debrief_package(
     trades_df:    DataFrame of all trades (to detect acted-on signals).
     spy_week_pct: SPY % return for the same period (optional).
     broken_theses: list of tickers with BROKEN thesis status (from F-1).
+    exit_signals_df: DataFrame from db.load_exit_signals() — WATCH/TRIM/EXIT
+                  protective signals, the symmetric counterpart to recs_df's
+                  entry signals. Optional; omitted gracefully when absent.
 
     Returns a dict consumed by generate_debrief().
     """
@@ -126,6 +131,7 @@ def build_debrief_package(
         "closed_positions":       [],
         "recs_surfaced":          [],
         "signals_ignored":        [],
+        "protective_signals":     [],
         "broken_theses":          broken_theses or [],
         "behavioral":             {},
         "decision_quality_month": None,
@@ -246,12 +252,14 @@ def build_debrief_package(
                 tk       = str(rec.get("ticker", "")).upper()
                 if not tk:
                     continue
-                verdict  = str(rec.get("verdict") or "")
-                rec_type = str(rec.get("rec_type") or "")
+                verdict    = str(rec.get("verdict") or "")
+                rec_type   = str(rec.get("rec_type") or "")
+                conviction = str(rec.get("conviction") or "")
                 if tk not in by_ticker:
                     by_ticker[tk] = {
                         "ticker":         tk,
                         "rec_type":       rec_type,
+                        "conviction":     conviction,
                         "_verdicts":      [verdict] if verdict else [],
                         "times_surfaced": 1,
                         "acted":          tk in acted_tickers,
@@ -271,6 +279,59 @@ def build_debrief_package(
                 package["recs_surfaced"].append(entry)
                 if not entry["acted"]:
                     package["signals_ignored"].append(entry)
+
+    # ── Protective signals (WATCH/TRIM/EXIT) surfaced this week ──────────────
+    # Symmetric counterpart to recs_surfaced above — without this, the debrief
+    # only ever narrates entry-signal responsiveness, never exit-signal
+    # responsiveness (did the investor act when told to TRIM/EXIT, or hold
+    # through it?). Sourced from exit_signals, which the premarket cron has
+    # captured daily since 2026-07-21. Tickers closed this week are excluded
+    # here — closed_positions above already narrates them as "position closed"
+    # and a second bullet from this block would conflict with that wording.
+    if exit_signals_df is not None and not (hasattr(exit_signals_df, "empty") and exit_signals_df.empty):
+        _week_sig = exit_signals_df[
+            (exit_signals_df["signal_date"].astype(str).str[:10] >= str(week_start)) &
+            (exit_signals_df["signal_date"].astype(str).str[:10] <= str(week_ending)) &
+            (exit_signals_df["signal_type"].isin(["WATCH", "TRIM", "EXIT"]))
+        ].copy()
+        if not _week_sig.empty:
+            week_sells: set[str] = set()
+            if trades_df is not None and not (hasattr(trades_df, "empty") and trades_df.empty):
+                _week_sells_df = trades_df[
+                    (trades_df["traded_at"].astype(str).str[:10] >= str(week_start)) &
+                    (trades_df["traded_at"].astype(str).str[:10] <= str(week_ending)) &
+                    (trades_df["action"].str.upper() == "SELL")
+                ]
+                week_sells = set(_week_sells_df["ticker"].astype(str).str.upper())
+
+            _tier_rank = {"WATCH": 1, "TRIM": 2, "EXIT": 3}
+            _prot_by_tk: dict[str, dict] = {}
+            for _, sig in _week_sig.iterrows():
+                tk = str(sig.get("ticker", "")).upper()
+                if not tk or tk in closed_tickers:
+                    continue
+                tier = str(sig.get("signal_type") or "")
+                if tk not in _prot_by_tk:
+                    _prot_by_tk[tk] = {
+                        "ticker":           tk,
+                        "tier":             tier,
+                        "times_surfaced":   1,
+                        "sold":             tk in week_sells,
+                        "pnl_pct":          sig.get("pnl_pct"),
+                        "dd_from_peak_pct": sig.get("dd_from_peak_pct"),
+                    }
+                else:
+                    _prot_by_tk[tk]["times_surfaced"] += 1
+                    # Keep the most severe tier seen this week (EXIT > TRIM > WATCH).
+                    if _tier_rank.get(tier, 0) > _tier_rank.get(_prot_by_tk[tk]["tier"], 0):
+                        _prot_by_tk[tk]["tier"]             = tier
+                        _prot_by_tk[tk]["pnl_pct"]           = sig.get("pnl_pct")
+                        _prot_by_tk[tk]["dd_from_peak_pct"]  = sig.get("dd_from_peak_pct")
+            package["protective_signals"] = sorted(
+                _prot_by_tk.values(),
+                key=lambda x: _tier_rank.get(x["tier"], 0),
+                reverse=True,
+            )
 
     # ── Behavioral fingerprint patterns (all-time, buy-side) ─────────────────
     # Uses the full rec history (all_recs_df) rather than the week-scoped recs_df
@@ -381,9 +442,28 @@ def _format_prompt(package: dict) -> str:
             label      = _rec_type_label.get(r.get("rec_type", ""), r.get("rec_type", "Signal"))
             verdict    = r.get("verdict", "")
             verdict_str = f" [{verdict}]" if verdict else ""
-            lines.append(f"  {r['ticker']}: {label}{verdict_str}{times_str} — {acted_str}{end_str}")
+            conviction  = r.get("conviction", "")
+            conv_str    = f" ({conviction})" if conviction else ""
+            lines.append(f"  {r['ticker']}: {label}{conv_str}{verdict_str}{times_str} — {acted_str}{end_str}")
     else:
         lines.append("No actionable signals were surfaced this week.")
+
+    if package.get("protective_signals"):
+        lines.append("")
+        lines.append(
+            f"Protective signals fired this week ({len(package['protective_signals'])} name(s),"
+            " WATCH/TRIM/EXIT from the risk/exit engine — distinct from the entry signals above):"
+        )
+        for p in package["protective_signals"]:
+            action_str = "sold" if p["sold"] else "held — NOT acted on"
+            dd_str  = f"; {_pct(p.get('dd_from_peak_pct'))} from peak" if p.get("dd_from_peak_pct") is not None else ""
+            pnl_str = f"; P&L {_pct(p.get('pnl_pct'))}" if p.get("pnl_pct") is not None else ""
+            times     = p.get("times_surfaced", 1)
+            times_str = f" (surfaced {times}× this week)" if times > 1 else ""
+            lines.append(f"  {p['ticker']}: {p['tier']} signal{times_str} — {action_str}{dd_str}{pnl_str}")
+    else:
+        lines.append("")
+        lines.append("No protective (WATCH/TRIM/EXIT) signals fired this week.")
 
     if package.get("closed_positions"):
         lines.append("")

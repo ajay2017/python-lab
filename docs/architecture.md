@@ -2114,7 +2114,7 @@ DB / session data
 |---------|-------------|---------------|-------|
 | F-1 Thesis Review | ~600 | ~150 | Technical + fundamentals + 12 headlines |
 | F-5 Thesis Draft | ~750 | ~150 | Engine verdict + catalyst + regime added |
-| F-3 Weekly Debrief | ~1 000 | ~300 | Portfolio-vs-SPY + contributors + recs surfaced |
+| F-3 Weekly Debrief | ~1 000 | ~300 | Portfolio-vs-SPY + contributors + entry recs surfaced (+ conviction tier) + protective WATCH/TRIM/EXIT signals (2026-08-10, `exit_signals`) |
 | F-4 Monthly Report | ~1 600 | ~400 | Band/verdict breakdowns; largest prompt |
 | Pre-market Stance | ~600 | ~200 | Futures + macro regime + top 5 holdings |
 

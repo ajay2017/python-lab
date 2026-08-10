@@ -1042,6 +1042,10 @@ def _run_debrief(now_et, force: bool) -> int:
     trades_df = db.load_trades()
     # Full recommendation history for behavioral fingerprint patterns (all-time).
     all_recs_df = db.load_recommendations()
+    # Protective (WATCH/TRIM/EXIT) signals for the week — the symmetric
+    # counterpart to recs_df above. days_back=10 comfortably covers the
+    # 7-day window; build_debrief_package does the exact date filtering.
+    exit_signals_df = db.load_exit_signals(days_back=10)
 
     # Fetch SPY return for the week
     spy_week_pct = None
@@ -1079,6 +1083,7 @@ def _run_debrief(now_et, force: bool) -> int:
         spy_week_pct  = spy_week_pct,
         broken_theses = broken_theses,
         all_recs_df   = all_recs_df,
+        exit_signals_df = exit_signals_df,
     )
     _log(f"debrief: {days_available} snapshot day(s) · "
          f"{len(recs_df) if not recs_df.empty else 0} rec(s) · "
@@ -1091,6 +1096,20 @@ def _run_debrief(now_et, force: bool) -> int:
         _log("debrief: LLM call failed or insufficient snapshot data — skip.")
         return 0
 
+    # Prior week's debrief, for the email's week-over-week alpha trend — loaded
+    # BEFORE this week's save below, so it can't accidentally read back the row
+    # this run is about to write. Deterministic delta computed in notify.py, not
+    # narrated by the LLM (arithmetic belongs in code, not in a text generation).
+    prior_debrief = None
+    try:
+        _prior_df = db.load_weekly_debriefs(limit=1)
+        if _prior_df is not None and not _prior_df.empty:
+            _prior_row = _prior_df.iloc[0]
+            if str(_prior_row.get("week_ending")) != str(result["week_ending"]):
+                prior_debrief = _prior_row.to_dict()
+    except Exception as _pe:
+        _log(f"debrief: prior-week lookup failed — {str(_pe)[:80]} — trend line omitted.")
+
     saved = db.save_weekly_debrief(result)
     _log(f"debrief: saved={saved} · week_ending={result['week_ending']} · "
          f"perf={result.get('performance_pct')} · alpha={result.get('alpha_pct')}")
@@ -1100,7 +1119,9 @@ def _run_debrief(now_et, force: bool) -> int:
     email_to   = os.environ.get("ALERT_EMAIL_TO", "").strip()
     email_from = os.environ.get("ALERT_EMAIL_FROM", "").strip()
     if resend_key and email_to and email_from:
-        html    = _notify.render_debrief_email(result, week_had_trades=package.get("week_had_trades", False))
+        html    = _notify.render_debrief_email(
+            result, week_had_trades=package.get("week_had_trades", False), prior=prior_debrief,
+        )
         subject = f"DRISHTA Weekly Debrief — week of {result['week_ending']}"
         ok, detail = _notify.send_email_resend(
             api_key=resend_key, sender=email_from, to=email_to,
