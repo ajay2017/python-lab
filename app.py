@@ -26500,9 +26500,9 @@ elif page == "🩺 System Trust":
     _n_warn = _health.get("n_warn", 0)
     if _chip == "down":
         st.error(
-            f"🔴 {_n_down} check(s) failing — an expected data store is missing, or a "
-            "cron lane ran and failed. The app may be operating on incomplete data; "
-            "see the red rows below."
+            f"🔴 {_n_down} check(s) failing — an expected data store is missing, a "
+            "cron lane ran and failed, or a data provider is still actively erroring. "
+            "The app may be operating on incomplete data; see the red rows below."
         )
     elif _chip == "warn":
         st.warning(
@@ -26584,10 +26584,11 @@ elif page == "🩺 System Trust":
     if _sysh_ca:
         st.caption(f"Computed {str(_sysh_ca)[:19].replace('T', ' ')} ET · cached ~5 min · Refresh to re-probe.")
     st.caption(
-        "🔴 red = a data store is provably missing (its one-time DDL may be unapplied) or a "
-        "lane ran and failed — the app may be deciding on incomplete data. 🟡 amber = degraded "
-        "but inputs present. ⚪ = not observed yet this session (not a fault). This page reports "
-        "only; it changes nothing."
+        "🔴 red = a data store is provably missing (its one-time DDL may be unapplied), a "
+        "lane ran and failed, or a provider is still actively erroring right now — the app may "
+        "be deciding on incomplete data. 🟡 amber = degraded but inputs present (includes a "
+        "provider that hit errors earlier this session but has since recovered). ⚪ = not "
+        "observed yet this session (not a fault). This page reports only; it changes nothing."
     )
 
 

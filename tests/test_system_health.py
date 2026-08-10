@@ -154,6 +154,31 @@ def test_providers_success_is_ok():
     assert provs["finnhub"]["severity"] == "ok"
 
 
+def test_providers_recovered_rate_limit_burst_regrades_to_warn():
+    # rate_limits >= 3 makes api_health.get_health() report "red" for the rest
+    # of the session (that counter never decays) — but if the most recent call
+    # actually succeeded, the diagnostic must not keep flagging it as currently
+    # down. This is the exact 2026-08-10 live case: Finnhub hit 429s, Yahoo
+    # failover covered it, and a later Finnhub call itself succeeded.
+    api_health.reset()
+    api_health.record("finnhub", "rate_limit")
+    api_health.record("finnhub", "rate_limit")
+    api_health.record("finnhub", "rate_limit")
+    api_health.record("finnhub", "success")
+    assert api_health.get_health("finnhub")["level"] == "red"  # underlying counter still red
+    provs = {p["source"]: p for p in sh.check_providers()}
+    assert provs["finnhub"]["severity"] == "warn"
+    assert "recovered" in provs["finnhub"]["detail"]
+
+
+def test_providers_still_erroring_stays_down():
+    api_health.reset()
+    for _ in range(5):
+        api_health.record("finnhub", "error", "boom")  # consecutive_errors >= 5 → red, last call is NOT a success
+    provs = {p["source"]: p for p in sh.check_providers()}
+    assert provs["finnhub"]["severity"] == "down"
+
+
 # ── ④ caches ──────────────────────────────────────────────────────────────────
 def test_caches_none_is_unknown_value_is_ok():
     container = {"_port_df_enriched": object(), "_risk_advisor_recs_cache": None}

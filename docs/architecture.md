@@ -1670,7 +1670,12 @@ excluded so a cold Home run, before Home populates its caches, can't false-posit
 the chip). `get_health()` memoizes in `st.session_state["_system_health_cache"]`
 (~5-min TTL). The recency windows (`_DAILY_LANE_OK_HOURS` etc.) are **observability
 thresholds, not investment policy** — deliberately local to this module, not in
-`constants.py`.
+`constants.py`. `check_providers()` re-grades a "down" `api_health` read to "warn"
+when the provider's most recent call actually succeeded (`consec_err == 0`) — fixed
+2026-08-10 after a live premarket session showed Finnhub stuck red from an earlier
+rate-limit burst (`rate_limits >= 3` never decays within a session) minutes after
+it had already recovered via the Yahoo Finance failover; see memory
+`project_system_proprioception`.
 
 ### `stock_analyzer/portfolio_health.py`
 

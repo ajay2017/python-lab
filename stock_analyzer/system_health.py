@@ -20,9 +20,11 @@ Severity vocabulary:
   "ok"      (🟢) — healthy / fresh.
   "warn"    (🟡) — degraded but the app still has the input (stale row, provider
                    on a backup, weekly lane a touch late). Amber, never suppresses.
-  "down"    (🔴) — the input is provably GONE: a missing data store (the DDL bug)
-                   or a lane that ran and FAILED. The classes that mean the app
-                   may be deciding blind.
+  "down"    (🔴) — the input is provably GONE: a missing data store (the DDL bug),
+                   a lane that ran and FAILED, or a provider still actively
+                   erroring (its most recent call did NOT succeed — a resolved
+                   burst re-grades to "warn", see check_providers()). The classes
+                   that mean the app may be deciding blind.
   "unknown" (⚪) — not observed yet this session (no provider call made, a lane
                    with no heartbeat row yet, a page not visited). NEVER counted
                    as degraded — silence is not failure.
@@ -377,9 +379,21 @@ def check_providers() -> list[dict]:
                 severity = "unknown"
                 detail = "no calls this session"
             else:
+                # api_health's "red" is a cumulative session-lifetime read (e.g.
+                # rate_limits >= 3 never decays) — it can stay red long after the
+                # provider actually recovered. consec_err == 0 means the MOST
+                # RECENT call succeeded, so re-grade that as "warn" (recovered),
+                # matching this module's own vocabulary ("warn = degraded but the
+                # app still has the input... provider on a backup") instead of
+                # showing a stale alarm for a live page.
+                recovered = severity == "down" and (h.get("consec_err", 0) or 0) == 0
+                if recovered:
+                    severity = "warn"
                 detail = f"{h.get('successes', 0)}/{calls} ok · last success {h.get('freshness', '—')}"
                 if severity in ("warn", "down") and h.get("last_error"):
                     detail += f" · {str(h.get('last_error'))[:80]}"
+                if recovered:
+                    detail += " · recovered — most recent call succeeded"
         except Exception as exc:
             severity, detail = "unknown", str(exc)[:120]
         out.append({"source": source, "label": label, "severity": severity, "detail": detail})
