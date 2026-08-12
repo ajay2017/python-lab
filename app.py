@@ -178,6 +178,7 @@ from stock_analyzer.constants import (
     PERSONALIZED_DISCOVERY_PROFILE_PCTL_LOW,
     PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
     PREDICTION_MIN_MATURED_N,
+    COMPOSITE_FIRMNESS_MARGIN,
 )
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
@@ -248,6 +249,8 @@ from stock_analyzer.account import (
     annualization_caveat,
 )
 from stock_analyzer import api_health as _ah
+from stock_analyzer import grow_dropoff as _grow_dropoff
+from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
 from stock_analyzer.evening_debrief import build_evening_debrief
@@ -6674,6 +6677,18 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+            # Pre-open note (panel-level, single line, NOT per-card).
+            # Shows only in Pre-Market — prices are provisional until the
+            # 9:30 ET open. On weekends/holidays/after-hours/closed we omit
+            # the "open" framing entirely (no open is imminent). Drives off
+            # the real market_status() helper — no naive datetime check.
+            _np_mkt_label = market_status().get("label", "")
+            if _np_mkt_label == "Pre-Market":
+                st.caption(
+                    "⚠️ Pre-market read — prices provisional until the "
+                    "9:30 ET open; picks may re-price at the open."
+                )
+
             # Layer 1 — sort by composite descending, momentum as tiebreaker
             new_picks.sort(key=lambda p: (-(p.get("composite_score") or 0), -(p.get("score") or 0)))
             # Layer 3 — tier count summary: "★ 2 Strong Buy · 3 Buy · sorted by composite ↓"
@@ -6789,6 +6804,36 @@ if page == "🏠 Home":
                     f"↔ Steady vs yesterday</span>"
                 )
 
+            # Firmness badge (display-only — does NOT gate or suppress anything).
+            # "at_line": composite is within COMPOSITE_FIRMNESS_MARGIN pts of its
+            # tier floor — a normal intraday reprice could flip it below the bar.
+            # "well_clear": comfortably above the floor — muted positive signal.
+            _firmness_chip = ""
+            if _comp_sc is not None:
+                _firm_floor = _grow_dropoff.tier_floor_for(_comp_sc)
+                _firm_label = _grow_dropoff.firmness(
+                    _comp_sc, _firm_floor, COMPOSITE_FIRMNESS_MARGIN
+                )
+                if _firm_label == "at_line":
+                    _firm_margin_pts = _comp_sc - _firm_floor
+                    _firm_tip = _safe_html(
+                        f"composite {_comp_sc:.0f}, {_firm_margin_pts:.0f} above "
+                        f"the {_firm_floor:.0f} line — a normal intraday move "
+                        f"could flip this."
+                    )
+                    _firmness_chip = (
+                        f"<span style='background:#431407;border:1px solid #f59e0b;"
+                        f"color:#f59e0b;padding:1px 8px;border-radius:10px;"
+                        f"font-size:0.74em;font-weight:600'"
+                        f" title='{_firm_tip}'>at the line</span>"
+                    )
+                else:
+                    _firmness_chip = (
+                        "<span style='background:#052e16;border:1px solid #059669;"
+                        "color:#34d399;padding:1px 8px;border-radius:10px;"
+                        "font-size:0.74em'>firm</span>"
+                    )
+
             st.markdown(
                 f"<div style='background:#111827;border-left:3px solid {_vc};"
                 f"border-radius:6px;padding:10px 14px;margin-bottom:6px'>"
@@ -6805,6 +6850,7 @@ if page == "🏠 Home":
                 f"<span style='background:{_conv_clr}22;border:1px solid {_conv_clr};color:{_conv_clr};"
                 f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:700'>{_conv_txt}</span>"
                 + _steady_chip
+                + _firmness_chip
                 + f"</div>"
                 # Resolution one-liner — explicit verdict that reconciles
                 # momentum vs composite vs news vs earnings into one sentence.
@@ -6957,6 +7003,112 @@ if page == "🏠 Home":
                         else:
                             st.warning("Debate could not complete — API unavailable or rate-limited. Session slot not consumed.")
                         st.rerun()
+
+        # ── Drop-off trace (panel footer — only for new_pick; never for
+        # add_winner or buy_candidate per spec) ─────────────────────────────
+        # Picks that surfaced as new_pick today but are no longer clearing
+        # this pass. Muted grey block — deliberately NOT a pick card. The
+        # copy points to the reach funnel for context and explicitly states
+        # this is not a retraction or a buy signal.
+        #
+        # Offline contract: only render when the rec-log load is known good
+        # (_rec_log_load_state set with no error). If the load failed OR
+        # never ran this session, absence is the safe choice — we must never
+        # imply "nothing dropped off today" when we don't actually know.
+        _do_load_state = st.session_state.get("_rec_log_load_state")
+        if _do_load_state is not None and not _do_load_state.get("error"):
+            try:
+                # Filter to new_pick rows; find earliest row per ticker.
+                _do_np_df = (
+                    _rec_today_df[_rec_today_df["rec_type"] == "new_pick"]
+                    if not _rec_today_df.empty and "rec_type" in _rec_today_df.columns
+                    else pd.DataFrame()
+                )
+                _do_surfaced: list[dict] = []
+                if not _do_np_df.empty:
+                    for _do_t, _do_grp in _do_np_df.groupby("ticker"):
+                        _do_earliest = _do_grp.sort_values("surfaced_at").iloc[0]
+                        _do_surfaced.append({
+                            "ticker":               str(_do_t).upper(),
+                            "first_seen_at":        str(_do_earliest.get("surfaced_at") or ""),
+                            "composite_at_surface": _do_earliest.get("composite_score"),
+                        })
+
+                # Build input sets.
+                _do_current = {str(_p.get("ticker", "")).upper() for _p in new_picks}
+                _do_held: set[str] = set()
+                if not port_df.empty and "Ticker" in port_df.columns:
+                    _do_held = {str(_tt).upper() for _tt in port_df["Ticker"].tolist()}
+                _do_buys_today: set[str] = set()
+                _do_tdf = st.session_state.get("trades_df")
+                if _do_tdf is not None and not _do_tdf.empty:
+                    if "traded_at" in _do_tdf.columns and "action" in _do_tdf.columns:
+                        _do_tdf_c = _do_tdf.copy()
+                        _do_tdf_c["_do_date"] = (
+                            pd.to_datetime(_do_tdf_c["traded_at"], utc=True, errors="coerce")
+                            .dt.tz_convert("America/New_York").dt.date
+                        )
+                        _do_buys = _do_tdf_c[
+                            (_do_tdf_c["_do_date"] == _today_et())
+                            & (_do_tdf_c["action"].str.upper() == "BUY")
+                        ]
+                        if not _do_buys.empty and "ticker" in _do_buys.columns:
+                            _do_buys_today = {str(_tt).upper() for _tt in _do_buys["ticker"].tolist()}
+                _do_acted_held = _do_held | _do_buys_today
+
+                _do_buckets = {
+                    "composite_skipped":     comp_skipped,
+                    "sector_blocked_picks":  grow.get("sector_blocked_picks", []),
+                    "macro_blocked_picks":   macro_blocked,
+                    "composite_unavailable": comp_unavail,
+                }
+                _do_reduce_calls = st.session_state.get("_reduce_calls")
+
+                _do_dropped = _grow_dropoff.derive_dropoffs(
+                    _do_surfaced,
+                    _do_current,
+                    _do_buckets,
+                    _do_reduce_calls,
+                    _do_acted_held,
+                )
+
+                if _do_dropped:
+                    _do_rows_html = "".join(
+                        "<div style='color:#94a3b8;font-size:0.79em;margin-bottom:3px'>"
+                        f"<b>{_safe_html(_d['ticker'])}</b>"
+                        f" · first surfaced {_safe_html(_fmt_first_seen(_d['first_seen_at']))}"
+                        + (
+                            f" at composite {_safe_html(str(int(round(_d['composite_at_surface']))))} · "
+                            if pd.notna(_d.get("composite_at_surface")) else " · "
+                        )
+                        + f"{_safe_html(_d['reason_text'])}</div>"
+                        for _d in _do_dropped
+                    )
+                    _do_body = (
+                        "<div style='background:#111827;border:1px solid #374151;"
+                        "border-radius:6px;padding:10px 14px;margin-top:8px'>"
+                        "<div style='color:#6b7280;font-size:0.78em;font-weight:600;"
+                        "margin-bottom:6px'>Was showing earlier today, no longer clearing:</div>"
+                        + _do_rows_html
+                        + "<div style='color:#6b7280;font-size:0.76em;margin-top:8px;"
+                        "font-style:italic'>Not a retraction — a marginal name re-priced. "
+                        "These are not buy signals.</div>"
+                        "<div style='color:#475569;font-size:0.74em;margin-top:4px'>"
+                        "See 🔎 How today's screen funnelled down to picks for the "
+                        "full reach story.</div>"
+                        "</div>"
+                    )
+                    if len(_do_dropped) > 5:
+                        with st.expander(
+                            f"📉 {len(_do_dropped)} picks no longer clearing "
+                            f"(was showing earlier today)",
+                            expanded=False,
+                        ):
+                            st.markdown(_do_body, unsafe_allow_html=True)
+                    else:
+                        st.markdown(_do_body, unsafe_allow_html=True)
+            except Exception:
+                pass  # never crash the panel over trace logic
 
         # Add-to-winner
         if add_pos:
@@ -28275,6 +28427,8 @@ The **🔭 reach line** on Grow Today shows the live counts — *"Screened N tra
 **Two entry triggers in "New Positions to Initiate":** curated scanner picks that passed the momentum gate show **"Momentum X/100"** in the header, while movers surfaced from the discovery universe show **"Breakout today"** with the day-change badge (e.g. "+7.6% today"). Both types pass the same portfolio-level gates (composite ≥ 65, sector diversity, concentration limits, macro event check).
 
 **⏱️ Entry Timing caution.** A card may show a small caption when momentum is running well ahead of the composite score for that specific pick — in your own history, similar cases have often looked calm in the first few days but underperformed by the time the position matured. This never changes the recommendation or blocks anything; it's the same pattern the 📊 Predictive Analytics → ⏱️ Entry Timing tab tracks in full, with current numbers.
+
+**This list recomputes live — it is *not* a fixed morning list.** Every time Home refreshes, prices re-score and every gate re-evaluates, so a name can appear and later drop off *within the same day*. That is expected, not an error. Three cues make it legible: **(a) a firmness badge** — a pick "at the line" (amber) is clearing the entry bar by only a few points and a normal intraday move could flip it below; a "firm" pick is comfortably clear. **(b) a "was showing earlier today" footer** — if a name surfaced earlier but is no longer clearing this pass, it's listed with *why* (its composite re-priced below the bar, a sector cap, a macro event, or a fresh Reduce/Exit call), so a name leaving the list is never silent. These are **not** retractions or buy signals — the earlier read was correct for its moment. **(c) a pre-market note** — before the 9:30 ET open, prices are provisional and picks may re-price at the open. Every name that surfaced today is also kept permanently on the 📜 Recommendations History page.
 
 **"More Buy Candidates" are *not* recommendations.** They're momentum names from the *same scan* that did **not** clear the gates — most often *"composite contradicts momentum"* (hot price, but the full Technical + Fundamental + Sentiment picture says Hold). They're shown as **research leads to verify on the Analysis page — not buy calls.** A 🔥 badge marks a candidate that surfaced from the discovery sweep (a fresh breakout outside your tracked list).
 

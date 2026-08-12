@@ -217,6 +217,11 @@ COMPOSITE_BUY        = 65        # Buy boundary — entry + add-to-winner gates
 COMPOSITE_HOLD       = 44        # Hold floor — below this = Sell zone
 COMPOSITE_SELL       = 30        # Sell floor — below this = Strong Sell
 
+# Firmness badge band — how many composite points above its tier floor a
+# new_pick must be before it is shown as "well clear" rather than "at the
+# line". Display-only: does NOT gate, suppress, or alter any recommendation.
+COMPOSITE_FIRMNESS_MARGIN = 3
+
 # Conviction tiers (Grow Today new-pick label only — not a hard gate).
 # A pick that clears COMPOSITE_BUY but doesn't yet reach STRONG_BUY is
 # "moderate" conviction; STRONG_BUY+ is "high."
