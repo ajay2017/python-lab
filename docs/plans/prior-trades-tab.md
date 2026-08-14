@@ -220,16 +220,15 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
 - **Phase 1 — the tab.** Everything in §4/§5. Ships alone so it can be reviewed
   against real DELL data before anything points at it.
 - **Phase 1 carry-over — four accepted deferrals** (Opus re-review 2026-08-14 confirmed
-  none can produce a wrong number today; pick these up whenever this file is next
-  touched). Listed here rather than only in a memory, because a gate that lives in one
-  place drifts — the class `feedback_doc_integrity_zero_hallucination` warns about:
-  1. **SPY-window guard (highest value).** `_pt_per` caps at `5y`, and
-     `trade_review._spy_return_between` takes the first close *at or after* `start_d`
-     — so an entry older than the fetched SPY window silently yields a
-     **truncated-window** vs-SPY figure rather than `None`. This is the one remaining
-     path where `vs_spy_pct` can be *wrong* instead of absent. One-line fix: skip
-     attaching SPY when `_pt_first < spy.index[0].date()`. Unreachable at the journal's
-     current age.
+  none can produce a wrong number today). Listed here rather than only in a memory,
+  because a gate that lives in one place drifts — the class
+  `feedback_doc_integrity_zero_hallucination` warns about:
+  1. ~~**SPY-window guard**~~ — ✅ **DONE 2026-08-14**, shipped with Phase 2 as F-237d.
+     Closed via `_spy_covers()` in `ticker_history.py`, checked **per episode** (an old
+     trip reports `—` while a recent one still gets a real figure) rather than the
+     all-or-nothing app-side skip originally sketched here. Was the only remaining path
+     by which `vs_spy_pct` could be *wrong* rather than absent, so it was pulled forward
+     to ship alongside the pointer that makes that number more prominent.
   2. **Cropped-chart caption.** §4a requires that when the price fetch degrades to
      `r["df"]`'s window, the UI names which trips fall outside it. The degrade works;
      the caption is missing (the only caption fires when the figure is `None`, not when
@@ -242,11 +241,15 @@ Per `feedback_phased_ux_rollout_cadence` — one phase per deploy, pause for liv
      ticker on every rerun. I/O is cached; the pandas/plotly work isn't. Relevant to
      `project_perf_cache_bounding` — a session-state memo keyed on
      `(ticker, trades signature)` would close it.
-- **Phase 2 — the Trade Plan pointer** (separate deploy, after Phase 1 is confirmed
-  correct on live data). A one-line factual chip under the R:R banner so the history
-  is discoverable at the decision moment rather than requiring a tab click. Factual
-  only, never gates. Gated on: Phase 1's numbers verified correct against at least one
-  real multi-episode ticker.
+- **Phase 2 — the Trade Plan pointer.** ✅ **SHIPPED 2026-08-14** as F-237c. A one-line
+  `st.info` after the R:R caveat banner (Buy branch) and after the ATR-level caption
+  (Exit branch), so the history is discoverable at the decision moment rather than
+  requiring a tab click. Factual only — count, net realized dollars, first-entry month,
+  last exit vs today; **no alpha figure and no verdict on the user's skill in the name**
+  (the rejected class — see §2). Never gates. Its gate cleared the same day: DELL
+  produced 3 closed round trips + 1 open, and the open position's unrealized −$36.96
+  reconciled to the cent with the Summary Scorecard (4 sh @ $499.68 avg vs $490.44 =
+  −1.8%), confirming the "cannot disagree with Portfolio" property on real data.
 
 ## 8. Known judgment call, flagged for the user
 

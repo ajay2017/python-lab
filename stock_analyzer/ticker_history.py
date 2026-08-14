@@ -81,6 +81,28 @@ def _to_date(v: Any) -> date | None:
         return None
 
 
+def _spy_covers(spy_history_df: Any, start_d: date | None) -> bool:
+    """True when the SPY frame actually reaches back to `start_d`.
+
+    `_spy_return_between` anchors on the first close AT OR AFTER `start_d`, so
+    a frame that begins after an episode's entry silently returns a return
+    measured over a TRUNCATED window — a *wrong* vs-SPY number rather than an
+    absent one. That is the one way this module can report a wrong figure
+    instead of `None`, so the coverage is checked per episode: an old trip
+    correctly reports `—` while a recent one still gets a real comparison.
+    """
+    if spy_history_df is None or start_d is None:
+        return False
+    try:
+        idx = spy_history_df.index
+        if len(idx) == 0:
+            return False
+        first = _to_date(idx[0])
+        return first is not None and first <= start_d
+    except Exception:
+        return False
+
+
 def _parse_context(raw: Any) -> dict | None:
     """Parse decision_context: accepts dict or JSON string; None on failure."""
     if raw is None:
@@ -280,7 +302,8 @@ def _build_episode(
     # ── vs-SPY (closed only; NEVER 0 as stand-in for "unknown") ────────────────
     vs_spy_pct: float | None = None
     if status == "closed" and entry_date is not None and exit_date is not None:
-        spy_ret = _spy_return_between(spy_history_df, entry_date, exit_date)
+        spy_ret = (_spy_return_between(spy_history_df, entry_date, exit_date)
+                   if _spy_covers(spy_history_df, entry_date) else None)
         if realized_pct is not None and spy_ret is not None:
             vs_spy_pct = realized_pct - spy_ret
 

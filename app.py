@@ -1762,6 +1762,89 @@ def _pt_pct(v, signed: bool = True) -> str:
     return f"{v:+.1f}%" if signed else f"{v:.1f}%"
 
 
+def _prior_trades_pointer(ticker: str, hist: dict | None, price,
+                          include_last_exit: bool = True) -> str:
+    """F-237 Phase 2: the one-line Trade Plan pointer to a ticker's own history.
+
+    Exists because Prior Trades only helps if the user thinks to click the tab;
+    this surfaces the same facts on the surface they actually land on.
+
+    STRICTLY FACTUAL — a count, a net dollar figure, and the last exit price
+    against today's. It deliberately carries **no alpha or vs-SPY number and no
+    verdict on the user's skill in the name**: an outcome/alpha judgment at the
+    decision moment is the class explicitly rejected for Self Track Record
+    (memory `project_self_track_record`), because it editorialises on the very
+    decision the user is weighing. Ticker-specific *facts* are the accepted
+    class — F-195 already feeds prior lessons into the Pre-Mortem at BUY.
+
+    Never gates: the caller renders this as an info note and nothing reads it.
+    Returns "" when there's nothing truthful to say, so callers can render
+    unconditionally.
+    """
+    if not hist:
+        return ""
+    _eps = hist.get("episodes", [])
+    if not _eps:
+        return ""
+    _t     = hist.get("totals", {})
+    _n_rt  = _t.get("n_round_trips", 0)
+    _n_op  = _t.get("n_open", 0)
+    _net   = _t.get("net_realized")
+    _first = _t.get("first_entry_date")
+
+    # Most recent CLOSED exit (episodes are newest-first)
+    _xp, _xd = None, None
+    for _ep in _eps:
+        if _ep.get("status") == "closed":
+            _xp, _xd = _ep.get("exit_avg"), _ep.get("exit_date")
+            break
+
+    # A journal gap means net_realized is UNDERSTATED, not merely uncertain:
+    # orphan SELLs and unparseable rows are skipped outright, so their P&L never
+    # enters the total. The tab surfaces every warning as a visible banner; the
+    # pointer must not state the bare figure with more confidence than the tab
+    # one click away. (`oversell` / `split_in_window` are excluded here — those
+    # distort percentages and per-share prices, neither of which this prints.)
+    _gap = {_w.get("kind") for _w in hist.get("warnings", [])} & {
+        "orphan_sell", "bad_row"
+    }
+
+    if not _n_rt:
+        # Held, never closed. Suppressed on the exit branch: it says nothing
+        # about an exit decision and reads as a remark on the user's selling.
+        if _n_op and _first and include_last_exit:
+            return (f"🧾 You've held **{ticker}** since "
+                    f"**{_first.strftime('%d %b %Y')}** — no prior round trips "
+                    f"in this name. → see the **🧾 Prior Trades** tab.")
+        return ""
+
+    _bits = [
+        f"🧾 **You've traded {ticker} before** — "
+        f"**{_n_rt}** closed round trip{'s' if _n_rt != 1 else ''}"
+        + (" plus the position you hold now" if _n_op else "")
+    ]
+    if _first:
+        _bits.append(f", first entered {_first.strftime('%b %Y')}")
+    if _net is not None:
+        _bits.append(f". Net realized **{_pt_money(_net)}**"
+                     + (" *(journal gap — see the tab)*" if _gap else ""))
+    _bits.append(".")
+    # The exit→today comparison is deliberately SUPPRESSED on the Exit Plan.
+    # Under a protective "exit this position" call, "your last exit was $118;
+    # it's $160 today" reads as "last time you sold, it kept going up" — a
+    # counter-argument to the recommendation it sits beneath. On the Buy side
+    # the same fact is the accepted anchoring trade-off (plan §8); on the Sell
+    # side it would undercut protect-capital-overrides-deploy-capital.
+    if include_last_exit and _xp and _xd and price:
+        _bits.append(
+            f" Your last exit was **{_pt_money(_xp, signed=False)}** on "
+            f"{_xd.strftime('%d %b %Y')}; it's "
+            f"**{_pt_money(price, signed=False)}** today."
+        )
+    _bits.append(" → see the **🧾 Prior Trades** tab.")
+    return "".join(_bits)
+
+
 def _prior_trades_figure(hist: dict, px_df, series: list):
     """Two-row Plotly figure for the 🧾 Prior Trades tab (F-237).
 
@@ -19045,6 +19128,15 @@ elif page == "📈 Analysis":
                                 "momentum has reversed. Exit before stop is tested."
                             )
 
+                    # F-237 Phase 2 pointer — Exit Plan side. include_last_exit
+                    # is False here: the count / net-realized facts are useful,
+                    # but the "last exit vs today" comparison would argue
+                    # against the protective call this sits under.
+                    _pt_ptr_x = _prior_trades_pointer(ticker, _ph_hist, price,
+                                                      include_last_exit=False)
+                    if _pt_ptr_x:
+                        st.info(_pt_ptr_x)
+
                     # Downside scenarios (reframed for exit context)
                     if targets:
                         st.markdown("#### Downside Risk — If You Hold")
@@ -19215,6 +19307,14 @@ elif page == "📈 Analysis":
                             + "If you already hold it, this is a **KEEP, not an add here** — "
                             "your judgment call."
                         )
+
+                    # ── F-237 Phase 2: your own history in this name, at the
+                    # decision moment. Facts only (count, net $, last exit vs
+                    # today) — deliberately no alpha figure and no verdict on
+                    # the user's skill here. Awareness only; never gates.
+                    _pt_ptr = _prior_trades_pointer(ticker, _ph_hist, price)
+                    if _pt_ptr:
+                        st.info(_pt_ptr)
 
                     # Stop-breach gate (mirrors Act Today's detector: Gap to Stop ≤ 0,
                     # i.e. price has fallen to/through the stop). A held position whose
@@ -29193,7 +29293,9 @@ When a ticker surfaces as a new position to initiate, the one thing you often al
 
 **When the journal has gaps, it says so.** A sell with no matching buy — from a rebaselined holding or history that pre-dates your imports — raises a visible banner and is left out of the totals rather than quietly producing a wrong number. A stock split inside a round trip is flagged too, because the per-share prices either side of it aren't comparable (the P&L figures still are).
 
-**Awareness only.** Nothing on this tab changes the composite, the verdict, or any gate. It tells you what happened; the Trade Plan tab is still where the decision is.
+**You don't have to go looking for it.** When a ticker you've traded before comes up, a one-line note appears on the **📋 Trade Plan** tab itself (and on **🚪 Exit Plan** when the verdict is a Sell), telling you how many round trips you've closed in that name, what they netted, and what your last exit price was against today's. It's deliberately **facts only** — a count and a number. It will never tell you whether your instinct in this name is good or bad, because that's a judgement about the decision you're in the middle of making, and it isn't the app's place to put its thumb on that scale.
+
+**Awareness only.** Nothing on this tab, or in that note, changes the composite, the verdict, or any gate. It tells you what happened; the Trade Plan tab is still where the decision is.
 """
             )
 

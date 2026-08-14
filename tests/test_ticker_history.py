@@ -328,6 +328,53 @@ def test_split_does_not_rescale_a_recomputed_dollar_pnl():
     assert ep["realized_estimated"] is True
 
 
+def test_vs_spy_is_none_when_spy_history_starts_after_entry():
+    """Phase-1 carry-over #1: _spy_return_between anchors on the first close AT
+    OR AFTER start_d, so a SPY frame beginning after the entry would return a
+    TRUNCATED-window figure — wrong rather than absent. Coverage is checked per
+    episode, so an uncovered trip reports None while a covered one still gets a
+    real number."""
+    rows = [
+        # Old trip — outside the SPY frame below.
+        _trade_row(id_=1, action="BUY",  shares=10.0, price=100.0,
+                   traded_at="2026-01-05T09:30:00Z"),
+        _trade_row(id_=2, action="SELL", shares=10.0, price=110.0,
+                   traded_at="2026-01-25T09:30:00Z", realized_pnl=100.0),
+        # Recent trip — inside it.
+        _trade_row(id_=3, action="BUY",  shares=10.0, price=120.0,
+                   traded_at="2026-03-05T09:30:00Z"),
+        _trade_row(id_=4, action="SELL", shares=10.0, price=132.0,
+                   traded_at="2026-03-25T09:30:00Z", realized_pnl=120.0),
+    ]
+    spy_idx = pd.date_range("2026-03-01", "2026-04-01", freq="D")
+    spy = pd.DataFrame({"Close": [400.0 + i for i in range(len(spy_idx))]},
+                       index=spy_idx)
+    eps = build_ticker_history(_df(rows), "AAA", spy_history_df=spy,
+                               today=date(2026, 4, 1))["episodes"]
+    recent, old = eps[0], eps[1]           # newest first
+    assert old["entry_date"]  == date(2026, 1, 5)
+    assert old["vs_spy_pct"]  is None      # NOT a truncated-window number
+    assert recent["entry_date"] == date(2026, 3, 5)
+    assert recent["vs_spy_pct"] is not None
+
+
+def test_vs_spy_covered_when_spy_starts_exactly_on_entry_date():
+    """Boundary: coverage is `first <= start_d`, so a SPY frame beginning on the
+    entry date itself counts as covered and must still produce a figure."""
+    rows = [
+        _trade_row(id_=1, action="BUY",  shares=10.0, price=100.0,
+                   traded_at="2026-03-02T09:30:00Z"),
+        _trade_row(id_=2, action="SELL", shares=10.0, price=110.0,
+                   traded_at="2026-03-20T09:30:00Z", realized_pnl=100.0),
+    ]
+    spy_idx = pd.date_range("2026-03-02", "2026-04-01", freq="D")   # starts ON entry
+    spy = pd.DataFrame({"Close": [400.0 + i for i in range(len(spy_idx))]},
+                       index=spy_idx)
+    ep = build_ticker_history(_df(rows), "AAA", spy_history_df=spy,
+                              today=date(2026, 4, 1))["episodes"][0]
+    assert ep["vs_spy_pct"] is not None
+
+
 def test_sell_before_split_keeps_dollars_and_rescales_shares():
     """REGRESSION (Opus re-review, 2026-08-14): a sell that happens BEFORE the
     split is the ordering that proves freezing each leg's dollar P&L at append
