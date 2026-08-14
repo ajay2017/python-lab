@@ -20477,16 +20477,49 @@ elif page == "📈 Analysis":
                                 + "]"
                             )
 
+                            # Attribute the ENTRY and the EXIT separately.
+                            #
+                            # A single episode-level badge was a union of every
+                            # trigger on the trip, so a position the engine
+                            # flagged to buy but that the user chose to sell
+                            # read as "ENGINE SIGNAL" outright — while the chart
+                            # correctly marked the exit "Sold yourself". On a
+                            # tab whose whole job is telling the user who
+                            # decided what, that blur is the defect.
+                            _pt_fills_b = [
+                                _fl for _fl in _pt_ep.get("fills", [])
+                                if "BUY" in str(_fl.get("action", "")).upper()
+                            ]
+                            _pt_fills_s = [
+                                _fl for _fl in _pt_ep.get("fills", [])
+                                if "SELL" in str(_fl.get("action", "")).upper()
+                            ]
+                            # Episode-level triggers are the fallback for legacy
+                            # rows written before per-fill trigger capture.
+                            _pt_trg = [str(_t).upper()
+                                       for _t in _pt_ep.get("trigger_types", [])]
+                            _pt_btrg = [str(_fl.get("trigger_type") or "").upper()
+                                        for _fl in _pt_fills_b]
+                            _pt_strg = [str(_fl.get("trigger_type") or "").upper()
+                                        for _fl in _pt_fills_s]
+                            _pt_bsrc = _pt_btrg if any(_pt_btrg) else _pt_trg
+                            _pt_ssrc = _pt_strg if any(_pt_strg) else _pt_trg
+
                             _pt_badges = []
                             if _pt_open:
                                 _pt_badges.append(":blue-background[OPEN]")
-                            _pt_trg = _pt_ep.get("trigger_types", [])
-                            if any("STOP" in str(_t).upper() for _t in _pt_trg):
-                                _pt_badges.append(":red-background[STOP HIT]")
-                            if any("RECOMMENDATION" in str(_t).upper() for _t in _pt_trg):
-                                _pt_badges.append(":blue-background[ENGINE SIGNAL]")
-                            elif any("MANUAL" in str(_t).upper() for _t in _pt_trg):
-                                _pt_badges.append(":violet-background[SELF-INITIATED]")
+                            _pt_badges.append(
+                                ":blue-background[ENTRY: ENGINE]"
+                                if any("RECOMMENDATION" in _t for _t in _pt_bsrc)
+                                else ":violet-background[ENTRY: YOUR CALL]"
+                            )
+                            if _pt_fills_s:
+                                if any("STOP" in _t for _t in _pt_ssrc):
+                                    _pt_badges.append(":red-background[EXIT: STOP HIT]")
+                                elif any("RECOMMENDATION" in _t for _t in _pt_ssrc):
+                                    _pt_badges.append(":blue-background[EXIT: ENGINE]")
+                                else:
+                                    _pt_badges.append(":violet-background[EXIT: YOUR CALL]")
                             _pt_fs = _pt_ep.get("followed_signal")
                             if _pt_fs is True:
                                 _pt_badges.append(":green-background[FOLLOWED]")
