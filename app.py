@@ -1736,8 +1736,9 @@ def _build_premortem_case(ticker: str) -> dict | None:
 
 _PT_CLR = {
     "price": "#94a3b8", "win": "#22c55e", "loss": "#ef4444",
-    "signal": "#60a5fa", "open": "#3b82f6", "surface": "#111827",
-    "grid": "#1f2937", "zero": "#4b5563", "muted": "#6b7280",
+    "signal": "#60a5fa", "self": "#a78bfa", "open": "#3b82f6",
+    "surface": "#111827", "grid": "#1f2937", "zero": "#4b5563",
+    "muted": "#6b7280", "ghost": "#9ca3af",
 }
 
 
@@ -1811,25 +1812,36 @@ def _prior_trades_figure(hist: dict, px_df, series: list):
             _band = _PT_CLR["loss"]
         else:
             _band = _PT_CLR["muted"]
-        try:
-            fig.add_vrect(
-                x0=_ep["entry_date"],
-                x1=_ep["exit_date"] if _ep.get("exit_date") else _last_x,
-                fillcolor=_band, opacity=0.08, line_width=0,
-                layer="below", row="all", col=1,
-            )
-        except Exception:
-            pass
+        # Added per-row rather than row="all": with shared_xaxes the "all"
+        # form only painted the price panel, so the band stopped at the
+        # bottom of row 1 and the two panels didn't visually read together.
+        for _band_row in (1, 2):
+            try:
+                fig.add_vrect(
+                    x0=_ep["entry_date"],
+                    x1=_ep["exit_date"] if _ep.get("exit_date") else _last_x,
+                    fillcolor=_band, opacity=0.08, line_width=0,
+                    layer="below", row=_band_row, col=1,
+                )
+            except Exception:
+                pass
 
     # ── Fill markers. Shape carries buy/sell as well as colour, so identity
-    # survives colour-vision deficiency. A sell is a STOP-OUT when its own
-    # trigger_type says so, falling back to the episode's trigger set for
-    # rows that pre-date per-fill trigger capture.
+    # survives colour-vision deficiency.
+    #
+    # Sells split THREE ways, not two. The earlier two-way split (stop-out vs
+    # "sold on signal") put every MANUAL exit in the signal bucket, so a
+    # self-initiated sell was labelled as one the engine called — on a card
+    # whose own badge said SELF-INITIATED. That misrepresents the user's own
+    # history, which is the one thing this tab exists to get right.
     _buys: list = []
     _sell_sig: list = []
+    _sell_self: list = []
     _sell_stop: list = []
     for _ep in episodes:
-        _ep_stop = any("STOP" in str(_t).upper() for _t in _ep.get("trigger_types", []))
+        _ep_trg = [str(_t).upper() for _t in _ep.get("trigger_types", [])]
+        _ep_stop = any("STOP" in _t for _t in _ep_trg)
+        _ep_rec  = any("RECOMMENDATION" in _t for _t in _ep_trg)
         for _fl in _ep.get("fills", []):
             _act = str(_fl.get("action", "")).upper()
             _trg = str(_fl.get("trigger_type", "") or "").upper()
@@ -1837,13 +1849,20 @@ def _prior_trades_figure(hist: dict, px_df, series: list):
             if "BUY" in _act:
                 _buys.append(_pt_row)
             elif "SELL" in _act:
-                (_sell_stop if ("STOP" in _trg or (not _trg and _ep_stop))
-                 else _sell_sig).append(_pt_row)
+                # Per-fill trigger wins; fall back to the episode's trigger set
+                # only for legacy rows with no per-fill trigger captured.
+                if "STOP" in _trg or (not _trg and _ep_stop):
+                    _sell_stop.append(_pt_row)
+                elif "RECOMMENDATION" in _trg or (not _trg and _ep_rec):
+                    _sell_sig.append(_pt_row)
+                else:
+                    _sell_self.append(_pt_row)
 
     for _pts, _nm, _sym, _clr in (
-        (_buys,      "Your buy",      "triangle-up",   _PT_CLR["win"]),
+        (_buys,      "Your buy",       "triangle-up",   _PT_CLR["win"]),
         (_sell_sig,  "Sold on signal", "triangle-down", _PT_CLR["signal"]),
-        (_sell_stop, "Stopped out",   "triangle-down", _PT_CLR["loss"]),
+        (_sell_self, "Sold yourself",  "triangle-down", _PT_CLR["self"]),
+        (_sell_stop, "Stopped out",    "triangle-down", _PT_CLR["loss"]),
     ):
         if not _pts:
             continue
@@ -1889,13 +1908,30 @@ def _prior_trades_figure(hist: dict, px_df, series: list):
             hovertemplate="%{x|%d %b %Y}<br>%{y:+.1f}%<extra></extra>",
         ), row=2, col=1)
         if _s.get("ghost_dates"):
+            # Neutral grey, NOT the episode's win/loss colour. The ghost is a
+            # hypothetical, not an outcome — and inheriting the colour drew a
+            # RISING line in the loss red when a sold-at-a-loss name recovered,
+            # which reads as a contradiction.
             fig.add_trace(go.Scatter(
                 x=_s["ghost_dates"], y=_s["ghost_pct"], mode="lines",
-                name="After you exited", opacity=0.4,
-                line=dict(color=_c, width=2, dash="dash"),
+                name="Had you held (vs your cost)", opacity=0.55,
+                line=dict(color=_PT_CLR["ghost"], width=2, dash="dash"),
                 hovertemplate=("had you held<br>%{x|%d %b %Y}"
                                "<br>%{y:+.1f}%<extra></extra>"),
             ), row=2, col=1)
+            # Direct end-label, so the hypothetical's magnitude is readable
+            # without hovering (the mockup had this; the first build lost it).
+            if _s["ghost_pct"]:
+                fig.add_trace(go.Scatter(
+                    x=[_s["ghost_dates"][-1]], y=[_s["ghost_pct"][-1]],
+                    mode="markers+text", showlegend=False,
+                    marker=dict(size=7, color="rgba(0,0,0,0)",
+                                line=dict(color=_PT_CLR["ghost"], width=2)),
+                    text=[f"  had you held: {_s['ghost_pct'][-1]:+.1f}%"],
+                    textposition="middle left",
+                    textfont=dict(size=11, color=_PT_CLR["ghost"]),
+                    hoverinfo="skip",
+                ), row=2, col=1)
 
     fig.add_hline(y=0, line_color=_PT_CLR["zero"], line_width=1.5,
                   row=2, col=1)
@@ -20285,20 +20321,30 @@ elif page == "📈 Analysis":
                     # under a separate row of tiles.
                     with st.container(border=True):
                         st.markdown(f"##### 🧾 Your {ticker} journey")
+                        # Label the trade span as the TRADE span. The chart
+                        # below routinely shows more history than this (the
+                        # price fetch has a 6-month floor), and an unqualified
+                        # date range read as a mismatched chart axis.
                         _pt_span = []
                         if _pt_first:
                             _pt_span.append(
-                                f"{_pt_first.strftime('%b %Y')} – "
+                                f"your history: {_pt_first.strftime('%b %Y')} – "
                                 f"{_today_et().strftime('%b %Y')}"
                             )
                         if _pt_days is not None and _pt_age:
                             _pt_span.append(f"held {_pt_days} of {_pt_age} days")
                         if _pt_span:
-                            st.caption(" · ".join(_pt_span))
+                            st.caption(
+                                " · ".join(_pt_span)
+                                + "  ·  chart shows a wider price window for context"
+                            )
 
                         _pt_rt_txt = str(_pt_n_rt)
                         if _pt_n_op:
                             _pt_rt_txt += f" (+{_pt_n_op} open)"
+                        _pt_rt_lbl = ("round trip"
+                                      if (_pt_n_rt == 1 and not _pt_n_op)
+                                      else "round trips")
                         _pt_net_txt = _pt_money(_pt_net)
                         if _pt_net is not None:
                             _pt_net_txt = (
@@ -20313,7 +20359,7 @@ elif page == "📈 Analysis":
                         if _pt_n_op:
                             _pt_net_sub += ", closed trips only"
                         st.markdown(
-                            f"**{_pt_rt_txt}** :gray[round trips] &nbsp;·&nbsp; "
+                            f"**{_pt_rt_txt}** :gray[{_pt_rt_lbl}] &nbsp;·&nbsp; "
                             f"**{_pt_net_txt}** :gray[net realized"
                             f"{_pt_net_sub}] &nbsp;·&nbsp; "
                             f"**{_pt_w}W · {_pt_l}L** :gray[record] &nbsp;·&nbsp; "
@@ -20334,6 +20380,20 @@ elif page == "📈 Analysis":
                                 _pt_fig, use_container_width=True,
                                 key=f"_pt_fig_{ticker}",
                             )
+                            # The dashed line and the per-card "since you
+                            # exited" figure use DIFFERENT denominators and
+                            # will not match. Both are right; say so, or they
+                            # read as a contradiction.
+                            if any(_s.get("ghost_dates") for _s in _pt_series):
+                                st.caption(
+                                    "The dashed line measures against your "
+                                    "**cost basis** (what the position would be "
+                                    "worth). The “since you exited” figure on "
+                                    "each card below measures against your "
+                                    "**exit price** (how far the stock has run "
+                                    "since you sold). Both are correct — they "
+                                    "answer different questions."
+                                )
                         else:
                             st.caption(
                                 "Price history for the chart isn't available "
@@ -20374,10 +20434,13 @@ elif page == "📈 Analysis":
                         _pt_vs = _pt_tot.get("vs_spy_pct")
                         _pt_sr = _pt_tot.get("spy_return_pct")
                         if _pt_vs is not None and _pt_sr is not None:
+                            # "of that was stock-specific" read badly on a loss;
+                            # and the window word must agree with the trip count.
                             _pt_summary += (
                                 f", versus **SPY {_pt_pct(_pt_sr)}** over the same "
-                                f"windows — **{_pt_pct(_pt_vs)}** of that was "
-                                "stock-specific."
+                                f"{'window' if _pt_n_rt == 1 else 'windows'} — a "
+                                f"**{_pt_pct(_pt_vs)}** difference down to the "
+                                "stock rather than the market."
                             )
                         else:
                             _pt_summary += "."
@@ -20435,33 +20498,41 @@ elif page == "📈 Analysis":
                             _c1, _c2, _c3, _c4 = st.columns(4)
                             _pt_nb = _pt_ep.get("n_buys", 0)
                             _pt_ns = _pt_ep.get("n_sells", 0)
+                            # st.metric's `delta` ALWAYS draws a direction arrow
+                            # — delta_color="off" only greys it. On the purely
+                            # informational columns that produced nonsense like
+                            # "↑ 5 sh · 1 buy" and "↑ same window", so those
+                            # sub-lines are captions instead. The delta is kept
+                            # only where direction genuinely means something
+                            # (realized / unrealized P&L).
                             _c1.metric(
                                 "Entry",
                                 _pt_money(_pt_ep.get("entry_avg"), signed=False) + " avg",
+                            )
+                            _c1.caption(
                                 f"{_pt_ep.get('shares_total', 0):,.0f} sh · "
-                                f"{_pt_nb} buy{'s' if _pt_nb != 1 else ''}",
-                                delta_color="off",
+                                f"{_pt_nb} buy{'s' if _pt_nb != 1 else ''}"
                             )
                             if _pt_open:
-                                _c2.metric(
-                                    "Now", _pt_money(price, signed=False),
-                                    f"{_pt_ep.get('shares_open', 0):,.0f} sh held",
-                                    delta_color="off",
+                                _c2.metric("Now", _pt_money(price, signed=False))
+                                _c2.caption(
+                                    f"{_pt_ep.get('shares_open', 0):,.0f} sh held"
                                 )
                                 _c3.metric(
                                     "Unrealized",
                                     _pt_money(_pt_ep.get("unrealized_pnl")),
                                     _pt_pct(_pt_ep.get("unrealized_pct")),
                                 )
-                                _c4.metric("vs SPY", "—", "shown when closed",
-                                           delta_color="off")
+                                _c4.metric("vs SPY", "—")
+                                _c4.caption("shown once the position closes")
                             else:
                                 _c2.metric(
                                     "Exit",
                                     _pt_money(_pt_ep.get("exit_avg"), signed=False) + " avg",
+                                )
+                                _c2.caption(
                                     f"{_pt_ep.get('shares_sold', 0):,.0f} sh · "
-                                    f"{_pt_ns} sell{'s' if _pt_ns != 1 else ''}",
-                                    delta_color="off",
+                                    f"{_pt_ns} sell{'s' if _pt_ns != 1 else ''}"
                                 )
                                 _c3.metric(
                                     "Realized",
@@ -20470,10 +20541,12 @@ elif page == "📈 Analysis":
                                 )
                                 _pt_v = _pt_ep.get("vs_spy_pct")
                                 _c4.metric(
-                                    "vs SPY", _pt_pct(_pt_v) if _pt_v is not None else "—",
-                                    "no SPY data for this window"
-                                    if _pt_v is None else "same window",
-                                    delta_color="off",
+                                    "vs SPY",
+                                    _pt_pct(_pt_v) if _pt_v is not None else "—",
+                                )
+                                _c4.caption(
+                                    "no SPY data for this window" if _pt_v is None
+                                    else "your return minus SPY's, same window"
                                 )
                             if _pt_ep.get("realized_estimated"):
                                 st.caption(
