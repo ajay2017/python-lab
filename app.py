@@ -250,6 +250,7 @@ from stock_analyzer.account import (
 )
 from stock_analyzer import api_health as _ah
 from stock_analyzer import grow_dropoff as _grow_dropoff
+from stock_analyzer import ticker_history as _ticker_history
 from stock_analyzer.util import safe_html as _safe_html
 from stock_analyzer.news_intelligence import build_news_intelligence
 from stock_analyzer.daily_briefing import build_daily_briefing, deterioration_signals
@@ -1733,6 +1734,190 @@ def _build_premortem_case(ticker: str) -> dict | None:
     return _pm_advisor.generate_case_against(ticker, _pm_inputs, _pm_api_key)
 
 
+_PT_CLR = {
+    "price": "#94a3b8", "win": "#22c55e", "loss": "#ef4444",
+    "signal": "#60a5fa", "open": "#3b82f6", "surface": "#111827",
+    "grid": "#1f2937", "zero": "#4b5563", "muted": "#6b7280",
+}
+
+
+def _pt_money(v, signed: bool = True) -> str:
+    """Format money for Streamlit *markdown* (not HTML).
+
+    The '$' is backslash-escaped because Streamlit's markdown treats a bare
+    `$...$` pair as LaTeX — two unescaped dollar amounts on the same line
+    silently render as maths instead of prices.
+    """
+    if v is None:
+        return "—"
+    _sign = ("+" if v >= 0 else "−") if signed else ""
+    return f"{_sign}\\${abs(v):,.2f}" if abs(v) < 1000 else f"{_sign}\\${abs(v):,.0f}"
+
+
+def _pt_pct(v, signed: bool = True) -> str:
+    """Percent for markdown; '—' when genuinely unknown (never 0 as a stand-in)."""
+    if v is None:
+        return "—"
+    return f"{v:+.1f}%" if signed else f"{v:.1f}%"
+
+
+def _prior_trades_figure(hist: dict, px_df, series: list):
+    """Two-row Plotly figure for the 🧾 Prior Trades tab (F-237).
+
+    Row 1 — the ticker's price with the user's own fills marked and each
+    holding period shaded (green/red by that round trip's outcome).
+    Row 2 — position P&L % while held, plus a dashed "had you held"
+    continuation running from the most recent exit to today.
+
+    Deliberately TWO ROWS sharing one x-axis, never one plot with two y-axes:
+    a dual-axis chart aligns two arbitrary scales and manufactures a
+    correlation that isn't in the data.
+
+    Awareness only — nothing here feeds a score, a gate, or a verdict.
+    Returns None when there is nothing chartable (no price history, or no
+    reconstructed episodes) so the caller falls back to the cards alone.
+    """
+    if px_df is None or getattr(px_df, "empty", True) or "Close" not in px_df.columns:
+        return None
+    episodes = hist["episodes"] if hist else []
+    if not episodes:
+        return None
+    _close = px_df["Close"].dropna()
+    if _close.empty:
+        return None
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.62, 0.38], vertical_spacing=0.08,
+        subplot_titles=("", "Position P&L while held"),
+    )
+
+    # ── Row 1: price line ────────────────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        x=_close.index, y=_close.values, mode="lines", name=hist["ticker"],
+        line=dict(color=_PT_CLR["price"], width=2),
+        hovertemplate="%{x|%d %b %Y}<br>$%{y:.2f}<extra></extra>",
+    ), row=1, col=1)
+
+    # ── Held bands, spanning BOTH rows so the panels read together ───────
+    _last_x = _close.index[-1]
+    for _ep in episodes:
+        _rp = _ep.get("realized_pnl")
+        if _ep.get("status") == "open":
+            _band = _PT_CLR["open"]
+        elif _rp is not None and _rp > 0:
+            _band = _PT_CLR["win"]
+        elif _rp is not None and _rp < 0:
+            _band = _PT_CLR["loss"]
+        else:
+            _band = _PT_CLR["muted"]
+        try:
+            fig.add_vrect(
+                x0=_ep["entry_date"],
+                x1=_ep["exit_date"] if _ep.get("exit_date") else _last_x,
+                fillcolor=_band, opacity=0.08, line_width=0,
+                layer="below", row="all", col=1,
+            )
+        except Exception:
+            pass
+
+    # ── Fill markers. Shape carries buy/sell as well as colour, so identity
+    # survives colour-vision deficiency. A sell is a STOP-OUT when its own
+    # trigger_type says so, falling back to the episode's trigger set for
+    # rows that pre-date per-fill trigger capture.
+    _buys: list = []
+    _sell_sig: list = []
+    _sell_stop: list = []
+    for _ep in episodes:
+        _ep_stop = any("STOP" in str(_t).upper() for _t in _ep.get("trigger_types", []))
+        for _fl in _ep.get("fills", []):
+            _act = str(_fl.get("action", "")).upper()
+            _trg = str(_fl.get("trigger_type", "") or "").upper()
+            _pt_row = (_fl.get("date"), _fl.get("price"), _fl.get("shares"))
+            if "BUY" in _act:
+                _buys.append(_pt_row)
+            elif "SELL" in _act:
+                (_sell_stop if ("STOP" in _trg or (not _trg and _ep_stop))
+                 else _sell_sig).append(_pt_row)
+
+    for _pts, _nm, _sym, _clr in (
+        (_buys,      "Your buy",      "triangle-up",   _PT_CLR["win"]),
+        (_sell_sig,  "Sold on signal", "triangle-down", _PT_CLR["signal"]),
+        (_sell_stop, "Stopped out",   "triangle-down", _PT_CLR["loss"]),
+    ):
+        if not _pts:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[p[0] for p in _pts], y=[p[1] for p in _pts],
+            mode="markers", name=_nm,
+            marker=dict(symbol=_sym, size=12, color=_clr,
+                        line=dict(color=_PT_CLR["surface"], width=2)),
+            customdata=[p[2] for p in _pts],
+            hovertemplate=(_nm + "<br>%{x|%d %b %Y}<br>"
+                           "%{customdata:,.0f} sh @ $%{y:.2f}<extra></extra>"),
+        ), row=1, col=1)
+
+    # Today's close — the anchor for "is it expensive vs what I've paid?"
+    fig.add_trace(go.Scatter(
+        x=[_last_x], y=[float(_close.iloc[-1])], mode="markers+text",
+        name="Today", showlegend=False,
+        marker=dict(size=9, color="#f9fafb",
+                    line=dict(color=_PT_CLR["surface"], width=2)),
+        text=[f"  ${float(_close.iloc[-1]):.2f} today"],
+        textposition="middle left", textfont=dict(size=11, color="#f9fafb"),
+        hoverinfo="skip",
+    ), row=1, col=1)
+
+    # ── Row 2: one P&L arc per episode ───────────────────────────────────
+    for _s in (series or []):
+        if not _s.get("dates"):
+            continue
+        # is_win is None for an exactly-breakeven trip — paint it neutral
+        # rather than red, matching the vrect band logic above.
+        _win = _s.get("is_win")
+        if _s.get("status") == "open":
+            _c = _PT_CLR["open"]
+        elif _win is True:
+            _c = _PT_CLR["win"]
+        elif _win is False:
+            _c = _PT_CLR["loss"]
+        else:
+            _c = _PT_CLR["muted"]
+        fig.add_trace(go.Scatter(
+            x=_s["dates"], y=_s["pct"], mode="lines", showlegend=False,
+            line=dict(color=_c, width=2.5),
+            hovertemplate="%{x|%d %b %Y}<br>%{y:+.1f}%<extra></extra>",
+        ), row=2, col=1)
+        if _s.get("ghost_dates"):
+            fig.add_trace(go.Scatter(
+                x=_s["ghost_dates"], y=_s["ghost_pct"], mode="lines",
+                name="After you exited", opacity=0.4,
+                line=dict(color=_c, width=2, dash="dash"),
+                hovertemplate=("had you held<br>%{x|%d %b %Y}"
+                               "<br>%{y:+.1f}%<extra></extra>"),
+            ), row=2, col=1)
+
+    fig.add_hline(y=0, line_color=_PT_CLR["zero"], line_width=1.5,
+                  row=2, col=1)
+
+    fig.update_layout(
+        template="plotly_dark", height=520, hovermode="x unified",
+        margin=dict(l=10, r=10, t=46, b=10),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.04,
+                    xanchor="left", x=0, font=dict(size=11)),
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(gridcolor=_PT_CLR["grid"], zeroline=False,
+                     tickprefix="$", row=1, col=1)
+    fig.update_yaxes(gridcolor=_PT_CLR["grid"], zeroline=False,
+                     ticksuffix="%", row=2, col=1)
+    for _ann in fig.layout.annotations:
+        _ann.font.size = 11
+        _ann.font.color = "#9ca3af"
+    return fig
+
+
 def _tax_exit_note_html(ticker: str | None) -> str:
     """Concept F: amber holding-period note for an EXIT/TRIM card when the
     position is within TAX_LONGTERM_WINDOW_DAYS of long-term-gains eligibility.
@@ -2418,6 +2603,22 @@ def _cached_spy(period: str = "6mo"):
 @st.cache_data(ttl=1800)
 def _cached_tlt(period: str = "3mo"):
     return fetch_tlt(period)
+
+
+# Ticker price history at an explicit span — Prior Trades (F-237) needs bars
+# reaching back to the FIRST entry in a name, which is routinely older than the
+# Analysis sidebar's "History period" selector (default 6mo, app.py ~18134).
+# Reusing r["df"] there would silently crop older round trips out of the chart,
+# so the tab resolves its own span. Only called when the ticker actually HAS
+# trade history and r["df"] doesn't already cover it, so most tickers cost
+# nothing. max_entries bounds the (ticker, period) key space the same way
+# _cached_historical_close does (2026-08-06 perf investigation).
+@st.cache_data(ttl=1800, max_entries=200, show_spinner=False)
+def _cached_ticker_history_px(ticker: str, period: str):
+    try:
+        return fetch_price_history(ticker, period=period)
+    except Exception:
+        return None
 
 
 # Per-ticker forward close for an arbitrary historical date range — Predictive
@@ -18725,8 +18926,31 @@ elif page == "📈 Analysis":
                 _sa_holding = _sa_port[_sa_port["Ticker"] == ticker].iloc[0].to_dict()
 
             _plan_label = "🚪 Exit Plan" if _sa_is_sell else "📋 Trade Plan"
-            plan_tab, chart_tab, risk_tab, deep_tab, coverage_tab = st.tabs(
-                [_plan_label, "📈 Chart", "⚖️ Risk", "🔬 Deep Dive", "🏦 Analyst Coverage"]
+
+            # ── Prior Trades (F-237): build the ticker's own round-trip history
+            # BEFORE the tab strip, because the tab label carries the count.
+            # Pure pandas over the user's own trades — no fetch, no DB call
+            # (trades_df is loaded once at bootstrap, app.py ~2028). Returns
+            # None when trade history is unavailable (offline sentinel), which
+            # is deliberately distinct from "checked, never traded this name".
+            _ph_hist = None
+            try:
+                _ph_hist = _ticker_history.build_ticker_history(
+                    st.session_state.get("trades_df"),
+                    ticker,
+                    current_price=price,
+                    spy_history_df=None,   # SPY resolved lazily inside the tab
+                    today=_today_et(),
+                )
+            except Exception:
+                _ph_hist = None
+            _ph_n = len(_ph_hist["episodes"]) if _ph_hist else 0
+            _ph_label = f"🧾 Prior Trades ({_ph_n})" if _ph_n else "🧾 Prior Trades"
+
+            (plan_tab, chart_tab, risk_tab, deep_tab,
+             coverage_tab, history_tab) = st.tabs(
+                [_plan_label, "📈 Chart", "⚖️ Risk", "🔬 Deep Dive",
+                 "🏦 Analyst Coverage", _ph_label]
             )
 
             # ── Trade Plan / Exit Plan ─────────────────────────────────────
@@ -19954,6 +20178,389 @@ elif page == "📈 Analysis":
                     "Awareness only — analyst targets never move a gate or "
                     "the engine's verdict."
                 )
+
+            # ── 🧾 Prior Trades (F-237) ─────────────────────────────────────
+            # A read-only record of the user's OWN past positions in this name:
+            # what they paid, what they made, and what they wrote at the time.
+            # Awareness only — it never gates, scores, or annotates a verdict;
+            # the Trade Plan tab remains the decision surface.
+            #
+            # Rendered with NATIVE Streamlit components on purpose (no
+            # unsafe_allow_html): `ticker` is free user text from the sidebar's
+            # "Add ticker" box, so interpolating it into raw markup would be a
+            # fresh instance of the XSS class this repo has paid down 7×.
+            with history_tab:
+                # An EMPTY journal is indeterminate, not evidence of a first
+                # position: db.load_trades() returns an empty DataFrame on a
+                # read failure (RLS / Supabase down) exactly as it does for a
+                # genuinely empty journal (db.py:1198 + the except path at
+                # ~1229), so `episodes == []` alone cannot distinguish "you've
+                # never traded this" from "the journal didn't load." Asserting
+                # the confident first-position line there would be the
+                # offline-sentinel-collapse class, at the one moment it matters.
+                # Only claim "never traded" when the journal HAS trades in it.
+                _pt_tdf = st.session_state.get("trades_df")
+                _pt_journal_empty = _pt_tdf is None or len(_pt_tdf) == 0
+                if _ph_hist is None or _pt_journal_empty:
+                    st.info(
+                        f"🧾 No **{ticker}** trades are recorded — and your "
+                        "journal has no trades loaded at all right now, so this "
+                        "may be a first position, or the journal may not have "
+                        "loaded. Visit 🏠 Home to reload it."
+                    )
+                elif not _ph_hist["episodes"]:
+                    st.info(
+                        f"🧾 **No prior trades in {ticker}.** This would be your "
+                        "first position in this name — there's no personal "
+                        "history to weigh against the engine's call."
+                    )
+                    for _ptw in _ph_hist["warnings"]:
+                        st.warning(f"⚠️ {_ptw['msg']}")
+                else:
+                    _pt_tot   = _ph_hist["totals"]
+                    _pt_first = _pt_tot.get("first_entry_date")
+
+                    # Span the chart across the WHOLE history in this name. The
+                    # sidebar's "History period" (default 6mo) routinely stops
+                    # short of the first entry, which would silently crop older
+                    # round trips out of the chart — so resolve our own span and
+                    # only pay for a fetch when the loaded bundle can't reach.
+                    _pt_age = (_today_et() - _pt_first).days if _pt_first else 0
+                    _pt_per = ("6mo" if _pt_age <= 150 else
+                               "1y"  if _pt_age <= 330 else
+                               "2y"  if _pt_age <= 700 else "5y")
+                    _pt_px = r["df"]
+                    try:
+                        _pt_have = _pt_px.index[0]
+                        _pt_have = (_pt_have.date() if hasattr(_pt_have, "date")
+                                    else _pt_have)
+                        _pt_short = _pt_first is not None and _pt_have > _pt_first
+                    except Exception:
+                        _pt_short = True
+                    if _pt_short:
+                        _pt_alt = _cached_ticker_history_px(ticker, _pt_per)
+                        if _pt_alt is not None and not getattr(_pt_alt, "empty", True):
+                            _pt_px = _pt_alt
+
+                    # vs-SPY over each episode's own window. Rebuild once with
+                    # SPY attached (the pre-tab build runs without it, since the
+                    # tab label only needs the episode count).
+                    _pt_spy = None
+                    try:
+                        _pt_spy = _cached_spy(_pt_per)
+                    except Exception:
+                        _pt_spy = None
+                    if _pt_spy is not None:
+                        try:
+                            _pt_re = _ticker_history.build_ticker_history(
+                                st.session_state.get("trades_df"), ticker,
+                                current_price=price, spy_history_df=_pt_spy,
+                                today=_today_et(),
+                            )
+                            if _pt_re is not None:
+                                _ph_hist = _pt_re
+                                _pt_tot  = _ph_hist["totals"]
+                        except Exception:
+                            pass
+
+                    _pt_series: list = []
+                    try:
+                        _pt_series = _ticker_history.build_pnl_series(
+                            _ph_hist["episodes"], _pt_px
+                        )
+                    except Exception:
+                        _pt_series = []
+
+                    _pt_n_rt = _pt_tot.get("n_round_trips", 0)
+                    _pt_n_op = _pt_tot.get("n_open", 0)
+                    _pt_net  = _pt_tot.get("net_realized")
+                    _pt_netp = _pt_tot.get("net_realized_pct")
+                    _pt_w    = _pt_tot.get("wins", 0)
+                    _pt_l    = _pt_tot.get("losses", 0)
+                    _pt_avgh = _pt_tot.get("avg_hold_days")
+                    _pt_days = _pt_tot.get("total_days_in_name")
+
+                    # ── Chart card: the stats strip lives in the header, so the
+                    # chart is the first thing on the tab rather than sitting
+                    # under a separate row of tiles.
+                    with st.container(border=True):
+                        st.markdown(f"##### 🧾 Your {ticker} journey")
+                        _pt_span = []
+                        if _pt_first:
+                            _pt_span.append(
+                                f"{_pt_first.strftime('%b %Y')} – "
+                                f"{_today_et().strftime('%b %Y')}"
+                            )
+                        if _pt_days is not None and _pt_age:
+                            _pt_span.append(f"held {_pt_days} of {_pt_age} days")
+                        if _pt_span:
+                            st.caption(" · ".join(_pt_span))
+
+                        _pt_rt_txt = str(_pt_n_rt)
+                        if _pt_n_op:
+                            _pt_rt_txt += f" (+{_pt_n_op} open)"
+                        _pt_net_txt = _pt_money(_pt_net)
+                        if _pt_net is not None:
+                            _pt_net_txt = (
+                                f":green[{_pt_net_txt}]" if _pt_net > 0
+                                else f":red[{_pt_net_txt}]" if _pt_net < 0
+                                else _pt_net_txt
+                            )
+                        _pt_net_sub = (f" ({_pt_pct(_pt_netp)})"
+                                       if _pt_netp is not None else "")
+                        # Net / record / avg-hold all exclude the open trip —
+                        # say so rather than letting the strip imply otherwise.
+                        if _pt_n_op:
+                            _pt_net_sub += ", closed trips only"
+                        st.markdown(
+                            f"**{_pt_rt_txt}** :gray[round trips] &nbsp;·&nbsp; "
+                            f"**{_pt_net_txt}** :gray[net realized"
+                            f"{_pt_net_sub}] &nbsp;·&nbsp; "
+                            f"**{_pt_w}W · {_pt_l}L** :gray[record] &nbsp;·&nbsp; "
+                            + (f"**{_pt_avgh:.0f}d** " if _pt_avgh is not None
+                               else "**—** ")
+                            + ":gray[avg hold]"
+                        )
+
+                        _pt_fig = None
+                        try:
+                            _pt_fig = _prior_trades_figure(
+                                _ph_hist, _pt_px, _pt_series
+                            )
+                        except Exception:
+                            _pt_fig = None
+                        if _pt_fig is not None:
+                            st.plotly_chart(
+                                _pt_fig, use_container_width=True,
+                                key=f"_pt_fig_{ticker}",
+                            )
+                        else:
+                            st.caption(
+                                "Price history for the chart isn't available "
+                                "right now — the round trips below are "
+                                "unaffected."
+                            )
+
+                    # ── Data-integrity banners: say what's missing, never show
+                    # a confident number over an incomplete journal.
+                    for _ptw in _ph_hist["warnings"]:
+                        st.warning(f"⚠️ {_ptw['msg']}")
+
+                    # Held but never closed — the headline strip would otherwise
+                    # read "0 round trips · +$0.00 net realized · 0W · 0L", and
+                    # that +$0.00 is a confident zero for "nothing realized yet".
+                    if _pt_n_op and not _pt_n_rt:
+                        st.info(
+                            f"You hold {ticker} now but have never closed a "
+                            "position in it — realized stats appear after your "
+                            "first exit."
+                        )
+
+                    # ── Neutral summary line ────────────────────────────────
+                    _pt_bits = [
+                        f"You've held **{ticker}** "
+                        f"{'once' if (_pt_n_rt + _pt_n_op) == 1 else str(_pt_n_rt + _pt_n_op) + ' times'}"
+                    ]
+                    if _pt_n_op:
+                        _pt_bits.append("and hold it today")
+                    else:
+                        _pt_bits.append("and hold none today")
+                    _pt_summary = " ".join(_pt_bits) + "."
+                    if _pt_net is not None and _pt_n_rt:
+                        _pt_summary += (
+                            f" Across {'that round trip' if _pt_n_rt == 1 else 'those round trips'} "
+                            f"you realized **{_pt_money(_pt_net)}**"
+                        )
+                        _pt_vs = _pt_tot.get("vs_spy_pct")
+                        _pt_sr = _pt_tot.get("spy_return_pct")
+                        if _pt_vs is not None and _pt_sr is not None:
+                            _pt_summary += (
+                                f", versus **SPY {_pt_pct(_pt_sr)}** over the same "
+                                f"windows — **{_pt_pct(_pt_vs)}** of that was "
+                                "stock-specific."
+                            )
+                        else:
+                            _pt_summary += "."
+                    st.markdown(_pt_summary)
+                    st.write("")
+
+                    # ── Round-trip cards, newest first ──────────────────────
+                    _pt_seq = _pt_n_rt
+                    for _pt_ep in _ph_hist["episodes"]:
+                        _pt_open = _pt_ep.get("status") == "open"
+                        if _pt_open:
+                            _pt_hdr = "Current position"
+                        else:
+                            _pt_hdr = f"Round trip #{_pt_seq}"
+                            _pt_seq -= 1
+                        _pt_ed = _pt_ep.get("entry_date")
+                        _pt_xd = _pt_ep.get("exit_date")
+                        _pt_hd = _pt_ep.get("hold_days")
+
+                        with st.container(border=True):
+                            _pt_when = (
+                                f"opened {_pt_ed.strftime('%d %b %Y')}" if _pt_open
+                                else f"{_pt_ed.strftime('%d %b %Y')} → "
+                                     f"{_pt_xd.strftime('%d %b %Y')}"
+                                if (_pt_ed and _pt_xd) else "—"
+                            )
+                            _pt_held = (
+                                f"{_pt_hd} days and counting" if _pt_open
+                                else f"held {_pt_hd} days"
+                            ) if _pt_hd is not None else ""
+                            st.markdown(
+                                f"**{_pt_hdr}** &nbsp; :gray[{_pt_when}"
+                                + (f" · {_pt_held}" if _pt_held else "")
+                                + "]"
+                            )
+
+                            _pt_badges = []
+                            if _pt_open:
+                                _pt_badges.append(":blue-background[OPEN]")
+                            _pt_trg = _pt_ep.get("trigger_types", [])
+                            if any("STOP" in str(_t).upper() for _t in _pt_trg):
+                                _pt_badges.append(":red-background[STOP HIT]")
+                            if any("RECOMMENDATION" in str(_t).upper() for _t in _pt_trg):
+                                _pt_badges.append(":blue-background[ENGINE SIGNAL]")
+                            elif any("MANUAL" in str(_t).upper() for _t in _pt_trg):
+                                _pt_badges.append(":violet-background[SELF-INITIATED]")
+                            _pt_fs = _pt_ep.get("followed_signal")
+                            if _pt_fs is True:
+                                _pt_badges.append(":green-background[FOLLOWED]")
+                            elif _pt_fs is False:
+                                _pt_badges.append(":orange-background[DEVIATED]")
+                            if _pt_badges:
+                                st.markdown(" ".join(_pt_badges))
+
+                            _c1, _c2, _c3, _c4 = st.columns(4)
+                            _pt_nb = _pt_ep.get("n_buys", 0)
+                            _pt_ns = _pt_ep.get("n_sells", 0)
+                            _c1.metric(
+                                "Entry",
+                                _pt_money(_pt_ep.get("entry_avg"), signed=False) + " avg",
+                                f"{_pt_ep.get('shares_total', 0):,.0f} sh · "
+                                f"{_pt_nb} buy{'s' if _pt_nb != 1 else ''}",
+                                delta_color="off",
+                            )
+                            if _pt_open:
+                                _c2.metric(
+                                    "Now", _pt_money(price, signed=False),
+                                    f"{_pt_ep.get('shares_open', 0):,.0f} sh held",
+                                    delta_color="off",
+                                )
+                                _c3.metric(
+                                    "Unrealized",
+                                    _pt_money(_pt_ep.get("unrealized_pnl")),
+                                    _pt_pct(_pt_ep.get("unrealized_pct")),
+                                )
+                                _c4.metric("vs SPY", "—", "shown when closed",
+                                           delta_color="off")
+                            else:
+                                _c2.metric(
+                                    "Exit",
+                                    _pt_money(_pt_ep.get("exit_avg"), signed=False) + " avg",
+                                    f"{_pt_ep.get('shares_sold', 0):,.0f} sh · "
+                                    f"{_pt_ns} sell{'s' if _pt_ns != 1 else ''}",
+                                    delta_color="off",
+                                )
+                                _c3.metric(
+                                    "Realized",
+                                    _pt_money(_pt_ep.get("realized_pnl")),
+                                    _pt_pct(_pt_ep.get("realized_pct")),
+                                )
+                                _pt_v = _pt_ep.get("vs_spy_pct")
+                                _c4.metric(
+                                    "vs SPY", _pt_pct(_pt_v) if _pt_v is not None else "—",
+                                    "no SPY data for this window"
+                                    if _pt_v is None else "same window",
+                                    delta_color="off",
+                                )
+                            if _pt_ep.get("realized_estimated"):
+                                st.caption(
+                                    "↳ One leg's realized P&L was missing from the "
+                                    "journal and has been recomputed from the "
+                                    "replayed cost basis."
+                                )
+
+                            # "Since you exited" — a fact, stated neutrally.
+                            _pt_xa = _pt_ep.get("exit_avg")
+                            if (not _pt_open) and _pt_xa and price and _pt_xa > 0:
+                                _pt_move = (price / _pt_xa - 1) * 100
+                                st.caption(
+                                    f"📈 Since you exited, {ticker} is at "
+                                    f"{_pt_money(price, signed=False)} — "
+                                    f"{_pt_pct(_pt_move)} versus your "
+                                    f"{_pt_money(_pt_xa, signed=False)} exit."
+                                )
+
+                            # ── What you wrote at the time ──────────────────
+                            _pt_j = _pt_ep.get("journal", {})
+                            _pt_cx = _pt_ep.get("context")
+                            if any(_pt_j.get(_k) for _k in _pt_j) or _pt_cx:
+                                with st.expander("What you wrote at the time"):
+                                    for _lbl, _key in (
+                                        ("**Your thesis (entry)**", "user_thesis"),
+                                        ("**Pre-mortem — what would make me wrong**",
+                                         "premortem_case_against"),
+                                        ("**Commitment**", "premortem_commitment"),
+                                        ("**Why you deviated**", "deviation_reason"),
+                                        ("**Lesson (exit)**", "lesson"),
+                                        ("**Notes**", "notes"),
+                                    ):
+                                        _pt_v2 = _pt_j.get(_key)
+                                        if _pt_v2:
+                                            st.markdown(f"{_lbl}  \n> {_pt_v2}")
+                                    _pt_tp = _pt_j.get("premortem_trigger_price")
+                                    _pt_td = _pt_j.get("premortem_trigger_direction")
+                                    if _pt_tp:
+                                        st.markdown(
+                                            f"**Trigger** — exit if it closes "
+                                            f"{'below' if str(_pt_td).lower().startswith('d') else 'above'} "
+                                            f"{_pt_money(_pt_tp, signed=False)}"
+                                        )
+                                    _pt_lc = _pt_j.get("lesson_category")
+                                    if _pt_lc:
+                                        st.markdown(f":gray-background[{_pt_lc}]")
+                                    if isinstance(_pt_cx, dict):
+                                        _pt_cbits = []
+                                        _pt_rg = _pt_cx.get("macro_regime")
+                                        if isinstance(_pt_rg, dict) and _pt_rg.get("regime"):
+                                            _pt_cbits.append(f"regime {_pt_rg['regime']}")
+                                        if _pt_cx.get("market_tone"):
+                                            _pt_cbits.append(f"tone {_pt_cx['market_tone']}")
+                                        if _pt_cx.get("portfolio_value") is not None:
+                                            _pt_cbits.append(
+                                                "portfolio "
+                                                + _pt_money(_pt_cx["portfolio_value"],
+                                                            signed=False)
+                                            )
+                                        if _pt_cx.get("n_positions") is not None:
+                                            _pt_cbits.append(
+                                                f"{_pt_cx['n_positions']} positions"
+                                            )
+                                        _pt_ts = _pt_cx.get("top_sector")
+                                        if isinstance(_pt_ts, dict) and _pt_ts.get("sector"):
+                                            _pt_cbits.append(
+                                                f"top sector {_pt_ts['sector']}"
+                                                + (f" {_pt_ts['weight_pct']:.0f}%"
+                                                   if _pt_ts.get("weight_pct") is not None
+                                                   else "")
+                                            )
+                                        if _pt_cx.get("portfolio_beta") is not None:
+                                            _pt_cbits.append(
+                                                f"beta {_pt_cx['portfolio_beta']:.2f}"
+                                            )
+                                        if _pt_cbits:
+                                            st.caption(
+                                                "Conditions at entry: "
+                                                + " · ".join(_pt_cbits)
+                                            )
+
+                    st.caption(
+                        "Awareness only — your prior results describe what "
+                        "happened, not what will happen. Nothing on this tab "
+                        f"changes {ticker}'s composite, verdict, or any gate."
+                    )
 
     # Correlation matrix
     if len(results) >= 2:
@@ -28464,6 +29071,23 @@ This is why a name can show up in Grow Today in the morning (bull open) and quie
             st.markdown(
                 """
 The **verdict upgrade/downgrade expander** ("📈 What would change this signal?") appears below the verdict banner on every Analysis page. On the left, it shows how many composite points separate the current verdict from the next tier up, and which of the four pillars — Technical, Business Quality, Valuation, or Sentiment — would most easily close that gap (the smallest lift shown first). On the right, it shows your downgrade buffer: how many points above the current verdict floor, and which pillar carries the most weight (most impactful if it deteriorates). This lets you see exactly what the engine considers the core case for a stock — and what would break it.
+"""
+            )
+
+        with st.expander("🧾 Prior Trades — your own history in a name", expanded=False):
+            st.markdown(
+                """
+When a ticker surfaces as a new position to initiate, the one thing you often already have — and couldn't see — is **your own record in that name.** The **🧾 Prior Trades** tab (last tab on 📈 Analysis, after 🏦 Analyst Coverage) closes that gap. The tab label carries a count, so you can tell at a glance whether there's history to read.
+
+**Round trips, not rows.** Your journal is grouped into complete positions — from the first buy that opened it to the sell that closed it out. Multiple buys average into one entry price, so "the last time I owned DELL" is one card, not five ledger lines. Each card shows entry avg, exit avg, realized P&L in dollars and percent, how long you held, and **how that trip did versus SPY over its own window** — so a +20% trip in a market that rose 18% is shown for what it was.
+
+**The journey chart** sits at the top: your price history with your own buys and sells marked and each holding period shaded, and below it — sharing the same timeline — how the position's P&L moved while you held it. After your most recent exit, a faded dashed line continues to today, showing what the position *would* have done had you held. That line is there deliberately: it's the honest answer to "should I get back in?", even when it's uncomfortable reading.
+
+**"What you wrote at the time."** Expand any card to replay your own words from that trade — the thesis you typed at entry, the pre-mortem ("what would make me wrong") and the trigger price you committed to, why you deviated from a signal if you did, and the lesson you recorded at exit. It also shows the conditions you bought into: the macro regime, market tone, your portfolio size and beta that day. This is the only place in the app where your pre-mortem is put side by side with what actually happened.
+
+**When the journal has gaps, it says so.** A sell with no matching buy — from a rebaselined holding or history that pre-dates your imports — raises a visible banner and is left out of the totals rather than quietly producing a wrong number. A stock split inside a round trip is flagged too, because the per-share prices either side of it aren't comparable (the P&L figures still are).
+
+**Awareness only.** Nothing on this tab changes the composite, the verdict, or any gate. It tells you what happened; the Trade Plan tab is still where the decision is.
 """
             )
 

@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<!--
+  MOCKUP — Analysis page → "🧾 Prior Trades" tab (F-237, proposed)
+  Status: PRE-APPROVAL. Static HTML only, no code written yet.
+  Purpose: show the ticker's own trade history at the moment the engine
+  surfaces it as a new position to initiate.
+  Numbers below are ILLUSTRATIVE, not from the live DB.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRISHTA — Prior Trades tab mockup</title>
+<style>
+  :root{
+    --bg:#0e1117; --card:#111827; --line:#374151; --line-soft:#1f2937;
+    --txt:#f9fafb; --dim:#9ca3af; --mid:#d1d5db;
+    --grn:#22c55e; --grn-d:#052e16; --red:#ef4444; --red-d:#450a0a;
+    --amb:#f59e0b; --amb-d:#422006; --blu:#60a5fa; --blu-d:#0c1e3a;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--txt);margin:0;padding:28px 32px 80px;
+       font-family:"Source Sans Pro",-apple-system,Segoe UI,Roboto,sans-serif;
+       font-size:15px;line-height:1.5}
+  .wrap{max-width:1180px;margin:0 auto}
+  .mocknote{background:#1e1b4b;border-left:4px solid #818cf8;border-radius:8px;
+       padding:10px 14px;margin:0 0 22px;color:#c7d2fe;font-size:.86em}
+
+  /* ── tab bar ─────────────────────────────────────────────── */
+  .tabs{display:flex;gap:26px;border-bottom:1px solid var(--line);margin-bottom:22px}
+  .tab{padding:10px 2px 12px;color:var(--dim);font-size:.98em;white-space:nowrap}
+  .tab.on{color:var(--blu);border-bottom:2px solid var(--blu);font-weight:600}
+  .cnt{background:#1f2937;border:1px solid var(--line);border-radius:10px;
+       padding:1px 7px;font-size:.78em;margin-left:6px;color:var(--mid)}
+
+  /* ── headline strip ──────────────────────────────────────── */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:6px}
+  .kpi .lbl{color:var(--dim);font-size:.72em;font-weight:700;letter-spacing:.08em;
+       text-transform:uppercase;margin-bottom:4px}
+  .kpi .val{font-size:1.72em;font-weight:600;letter-spacing:-.01em}
+  .kpi .sub{color:var(--dim);font-size:.8em;margin-top:2px}
+  .pos{color:var(--grn)} .neg{color:var(--red)} .neu{color:var(--mid)}
+
+  .summary{color:var(--mid);font-size:.9em;margin:14px 0 20px;
+       border-left:3px solid var(--line);padding-left:12px}
+
+  /* ── chart card with merged KPI header ───────────────────── */
+  .chart{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:14px 18px 16px;margin-bottom:16px}
+  .chead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .ctitle{font-weight:700;font-size:1.06em}
+  .cspan{color:var(--dim);font-size:.82em}
+  .cstats{display:flex;align-items:baseline;gap:0;flex-wrap:wrap;
+       margin:9px 0 2px;padding-bottom:11px;border-bottom:1px solid var(--line-soft)}
+  .stat{display:inline-flex;align-items:baseline;gap:6px}
+  .stat .n{font-size:1.24em;font-weight:600;letter-spacing:-.01em}
+  .stat .l{color:var(--dim);font-size:.79em}
+  .dot{color:#4b5563;margin:0 14px}
+  .clegend{display:flex;gap:16px;flex-wrap:wrap;font-size:.75em;
+       color:var(--dim);margin:10px 0 2px}
+  .plabel{color:var(--dim);font-size:.72em;font-weight:700;letter-spacing:.08em;
+       text-transform:uppercase;margin:12px 0 -4px}
+
+  /* ── episode card ────────────────────────────────────────── */
+  .ep{background:var(--card);border:1px solid var(--line);border-radius:10px;
+      padding:14px 16px;margin-bottom:12px}
+  .ep.open{border-color:#1d4ed8;background:#0f172a}
+  .ephead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .epnum{color:var(--dim);font-size:.74em;font-weight:700;letter-spacing:.08em;
+      text-transform:uppercase}
+  .epdate{font-weight:700;font-size:1.02em}
+  .epheld{color:var(--dim);font-size:.86em}
+  .badge{border-radius:10px;padding:2px 9px;font-size:.72em;font-weight:700;
+      letter-spacing:.02em;white-space:nowrap}
+  .b-eng{background:var(--blu-d);color:#93c5fd;border:1px solid #1e40af}
+  .b-self{background:#3b0764;color:#d8b4fe;border:1px solid #6b21a8}
+  .b-stop{background:var(--red-d);color:#fca5a5;border:1px solid #7f1d1d}
+  .b-fol{background:var(--grn-d);color:#86efac;border:1px solid #14532d}
+  .b-dev{background:var(--amb-d);color:#fcd34d;border:1px solid #78350f}
+  .b-open{background:#172554;color:#93c5fd;border:1px solid #1d4ed8}
+
+  .legs{display:grid;grid-template-columns:1.15fr 1.15fr 1fr 1fr;gap:10px;
+      padding:10px 0;border-top:1px solid var(--line-soft);
+      border-bottom:1px solid var(--line-soft)}
+  .leg .lbl{color:var(--dim);font-size:.7em;font-weight:700;letter-spacing:.07em;
+      text-transform:uppercase;margin-bottom:3px}
+  .leg .v{font-size:1.04em;font-weight:600}
+  .leg .s{color:var(--dim);font-size:.78em}
+
+  .since{font-size:.86em;color:var(--mid);margin-top:10px}
+  .since b{color:var(--txt)}
+
+  /* ── expander ────────────────────────────────────────────── */
+  details{margin-top:10px;border-top:1px solid var(--line-soft);padding-top:8px}
+  summary{cursor:pointer;color:var(--blu);font-size:.86em;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary:before{content:"▸ ";}
+  details[open] summary:before{content:"▾ ";}
+  .jrow{display:flex;gap:10px;margin-top:10px;font-size:.86em;line-height:1.55}
+  .jlbl{color:var(--dim);min-width:150px;flex:none;font-weight:600}
+  .jval{color:var(--mid)}
+  .quote{border-left:3px solid var(--line);padding-left:10px;color:var(--mid);
+      font-style:italic}
+  .ctx{color:var(--dim);font-size:.82em;margin-top:10px;
+      border-top:1px dashed var(--line-soft);padding-top:8px}
+
+  /* ── banners / states ────────────────────────────────────── */
+  .banner{border-radius:8px;padding:11px 15px;margin:0 0 14px;font-size:.88em;
+      line-height:1.55}
+  .b-warn{background:var(--amb-d);border-left:4px solid var(--amb);color:#fde68a}
+  .b-info{background:#0f172a;border-left:4px solid #475569;color:var(--mid)}
+  .b-none{background:var(--card);border:1px dashed var(--line);border-radius:10px;
+      padding:26px;text-align:center;color:var(--dim)}
+  h3.sec{font-size:.78em;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+      color:var(--dim);margin:30px 0 10px}
+  hr.sep{border:0;border-top:1px solid var(--line);margin:44px 0 0}
+  .variant{color:#818cf8;font-size:.76em;font-weight:700;letter-spacing:.09em;
+      text-transform:uppercase;margin:34px 0 10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="mocknote">
+  <b>MOCKUP — not built yet.</b> Proposed <b>F-237 · 🧾 Prior Trades</b> tab on
+  📈 Analysis. All figures illustrative. Three states are shown: <b>A</b> the main
+  case (ticker traded before, not currently held), <b>B</b> currently-held,
+  <b>C</b> no history / incomplete history.
+</div>
+
+<!-- ══════════════════ VARIANT A ══════════════════ -->
+<div class="variant">Variant A — DELL, traded twice before, not currently held</div>
+
+<div class="tabs">
+  <div class="tab">📋 Trade Plan</div>
+  <div class="tab">📈 Chart</div>
+  <div class="tab">⚖️ Risk</div>
+  <div class="tab">🔬 Deep Dive</div>
+  <div class="tab">🏦 Analyst Coverage</div>
+  <div class="tab on">🧾 Prior Trades <span class="cnt">2</span></div>
+</div>
+
+<!-- ═══ chart card — KPI strip merged into the header ═══ -->
+<div class="chart">
+  <div class="chead">
+    <span class="ctitle">🧾 Your DELL journey</span>
+    <span class="cspan">Nov 2025 – Aug 2026 · held 118 of 286 days</span>
+  </div>
+  <div class="cstats">
+    <span class="stat"><span class="n neu">2</span><span class="l">round trips</span></span>
+    <span class="dot">·</span>
+    <span class="stat"><span class="n pos">+$948</span><span class="l">net realized (+11.4%)</span></span>
+    <span class="dot">·</span>
+    <span class="stat"><span class="n neu">1W · 1L</span><span class="l">record</span></span>
+    <span class="dot">·</span>
+    <span class="stat"><span class="n neu">57d</span><span class="l">avg hold</span></span>
+  </div>
+
+  <div class="clegend">
+    <span><svg width="20" height="8"><line x1="0" y1="4" x2="20" y2="4" stroke="#94a3b8" stroke-width="2"/></svg> DELL price</span>
+    <span><svg width="12" height="12"><polygon points="6,1 11,10 1,10" fill="#22c55e" stroke="#111827" stroke-width="1.5"/></svg> Your buy</span>
+    <span><svg width="12" height="12"><polygon points="6,11 11,2 1,2" fill="#60a5fa" stroke="#111827" stroke-width="1.5"/></svg> Sold on signal</span>
+    <span><svg width="12" height="12"><polygon points="6,11 11,2 1,2" fill="#ef4444" stroke="#111827" stroke-width="1.5"/></svg> Stopped out</span>
+    <span><svg width="20" height="10"><rect width="20" height="10" fill="#22c55e" opacity=".14"/></svg> Held (profitable trip)</span>
+    <span><svg width="20" height="10"><rect width="20" height="10" fill="#ef4444" opacity=".14"/></svg> Held (losing trip)</span>
+    <span><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#22c55e" stroke-width="2" stroke-dasharray="4 3" opacity=".45"/></svg> After you exited</span>
+  </div>
+
+  <!-- ── PANEL 1 : PRICE ── -->
+  <svg viewBox="0 0 1100 280" style="width:100%;height:auto;display:block">
+    <rect x="105" y="20" width="125" height="230" fill="#ef4444" opacity=".08"/>
+    <rect x="413" y="20" width="277" height="230" fill="#22c55e" opacity=".08"/>
+    <line x1="60" y1="250" x2="1060" y2="250" stroke="#374151" stroke-width="1"/>
+    <line x1="60" y1="197" x2="1060" y2="197" stroke="#1f2937" stroke-width="1"/>
+    <line x1="60" y1="145" x2="1060" y2="145" stroke="#1f2937" stroke-width="1"/>
+    <line x1="60" y1="92"  x2="1060" y2="92"  stroke="#1f2937" stroke-width="1"/>
+    <line x1="60" y1="40"  x2="1060" y2="40"  stroke="#1f2937" stroke-width="1"/>
+    <text x="52" y="254" fill="#6b7280" font-size="11" text-anchor="end">$105</text>
+    <text x="52" y="201" fill="#6b7280" font-size="11" text-anchor="end">$120</text>
+    <text x="52" y="149" fill="#6b7280" font-size="11" text-anchor="end">$135</text>
+    <text x="52" y="96"  fill="#6b7280" font-size="11" text-anchor="end">$150</text>
+    <text x="52" y="44"  fill="#6b7280" font-size="11" text-anchor="end">$165</text>
+    <polyline fill="none" stroke="#94a3b8" stroke-width="2" stroke-linejoin="round"
+      points="60,169 80,160 105,156 130,168 155,178 180,172 205,186 230,182 255,196
+              280,205 305,218 320,232 345,226 370,230 390,222 413,216 435,205 460,198
+              485,190 510,182 535,168 560,158 585,150 610,138 640,132 665,124 690,120
+              715,112 745,105 775,98 800,104 842,92 875,84 905,78 935,70 970,64
+              1010,58 1050,55"/>
+    <polygon points="105,148 112,162 98,162"  fill="#22c55e" stroke="#111827" stroke-width="2"/>
+    <polygon points="230,190 237,176 223,176" fill="#ef4444" stroke="#111827" stroke-width="2"/>
+    <polygon points="413,208 420,222 406,222" fill="#22c55e" stroke="#111827" stroke-width="2"/>
+    <polygon points="510,174 517,188 503,188" fill="#22c55e" stroke="#111827" stroke-width="2"/>
+    <polygon points="690,128 697,114 683,114" fill="#60a5fa" stroke="#111827" stroke-width="2"/>
+    <circle cx="1050" cy="55" r="5" fill="#f9fafb" stroke="#111827" stroke-width="2"/>
+    <text x="105" y="140" fill="#86efac" font-size="11" text-anchor="middle">$131.90</text>
+    <text x="230" y="205" fill="#fca5a5" font-size="11" text-anchor="middle">$124.30</text>
+    <text x="413" y="237" fill="#86efac" font-size="11" text-anchor="middle">$114.60</text>
+    <text x="510" y="203" fill="#86efac" font-size="11" text-anchor="middle">+add $124</text>
+    <text x="690" y="106" fill="#93c5fd" font-size="11" text-anchor="middle">$142.10</text>
+    <text x="1044" y="42" fill="#f9fafb" font-size="12" text-anchor="end" font-weight="700">$160.77 today</text>
+    <text x="105"  y="270" fill="#6b7280" font-size="11" text-anchor="middle">Nov ’25</text>
+    <text x="255"  y="270" fill="#6b7280" font-size="11" text-anchor="middle">Jan ’26</text>
+    <text x="413"  y="270" fill="#6b7280" font-size="11" text-anchor="middle">Feb</text>
+    <text x="560"  y="270" fill="#6b7280" font-size="11" text-anchor="middle">Apr</text>
+    <text x="715"  y="270" fill="#6b7280" font-size="11" text-anchor="middle">May</text>
+    <text x="875"  y="270" fill="#6b7280" font-size="11" text-anchor="middle">Jul</text>
+    <text x="1040" y="270" fill="#6b7280" font-size="11" text-anchor="middle">Aug</text>
+  </svg>
+
+  <!-- ── PANEL 2 : P&L ── -->
+  <div class="plabel">Position P&amp;L while held</div>
+  <svg viewBox="0 0 1100 200" style="width:100%;height:auto;display:block">
+    <rect x="105" y="15" width="125" height="150" fill="#ef4444" opacity=".08"/>
+    <rect x="413" y="15" width="277" height="150" fill="#22c55e" opacity=".08"/>
+    <line x1="60" y1="160" x2="1060" y2="160" stroke="#1f2937" stroke-width="1"/>
+    <line x1="60" y1="132" x2="1060" y2="132" stroke="#4b5563" stroke-width="1.5"/>
+    <line x1="60" y1="76"  x2="1060" y2="76"  stroke="#1f2937" stroke-width="1"/>
+    <line x1="60" y1="20"  x2="1060" y2="20"  stroke="#1f2937" stroke-width="1"/>
+    <text x="52" y="164" fill="#6b7280" font-size="11" text-anchor="end">−10%</text>
+    <text x="52" y="136" fill="#9ca3af" font-size="11" text-anchor="end">0%</text>
+    <text x="52" y="80"  fill="#6b7280" font-size="11" text-anchor="end">+20%</text>
+    <text x="52" y="24"  fill="#6b7280" font-size="11" text-anchor="end">+40%</text>
+    <polyline fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linejoin="round"
+      points="105,132 130,139 155,145 180,142 205,150 230,148"/>
+    <circle cx="105" cy="132" r="4" fill="#ef4444" stroke="#111827" stroke-width="2"/>
+    <circle cx="230" cy="148" r="5" fill="#ef4444" stroke="#111827" stroke-width="2"/>
+    <text x="243" y="152" fill="#fca5a5" font-size="12" font-weight="700">−5.8%</text>
+    <polyline fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linejoin="round"
+      points="413,141 435,133 460,128 485,123 510,119 535,108 560,101 585,96
+              610,88 640,84 665,78 690,76"/>
+    <circle cx="413" cy="141" r="4" fill="#22c55e" stroke="#111827" stroke-width="2"/>
+    <circle cx="690" cy="76"  r="5" fill="#22c55e" stroke="#111827" stroke-width="2"/>
+    <text x="702" y="70" fill="#86efac" font-size="12" font-weight="700">+20.0% realized</text>
+    <polyline fill="none" stroke="#22c55e" stroke-width="2" stroke-dasharray="5 4" opacity=".4"
+      points="690,76 715,70 745,66 775,61 800,65 842,57 875,52 905,47 935,42
+              970,38 1010,34 1050,32"/>
+    <circle cx="1050" cy="32" r="4" fill="none" stroke="#22c55e" stroke-width="2" opacity=".55"/>
+    <text x="1044" y="24" fill="#6b7280" font-size="11" text-anchor="end">had you held: +35.8%</text>
+  </svg>
+</div>
+
+<div class="summary">
+  You've held <b>DELL</b> twice and hold none today. Across both round trips you
+  realized <b class="pos">+$948</b> versus <b>SPY +6.2%</b> over the same windows —
+  <b class="pos">+5.2%</b> of that was stock-specific.
+  Your only loss came from a stop-out; the win came from a signal you followed.
+</div>
+
+<div class="ep">
+  <div class="ephead">
+    <span class="epnum">Round trip #2</span>
+    <span class="epdate">11 Feb 2026 → 02 May 2026</span>
+    <span class="epheld">· held 81 days</span>
+    <span class="badge b-eng">ENGINE SIGNAL</span>
+    <span class="badge b-fol">FOLLOWED</span>
+  </div>
+  <div class="legs">
+    <div class="leg">
+      <div class="lbl">Entry</div>
+      <div class="v">$118.40 avg</div>
+      <div class="s">40 sh · 2 buys · $4,736</div>
+    </div>
+    <div class="leg">
+      <div class="lbl">Exit</div>
+      <div class="v">$142.10 avg</div>
+      <div class="s">40 sh · 1 sell · TRIM signal</div>
+    </div>
+    <div class="leg">
+      <div class="lbl">Realized</div>
+      <div class="v pos">+$948</div>
+      <div class="s">+20.0%</div>
+    </div>
+    <div class="leg">
+      <div class="lbl">vs SPY</div>
+      <div class="v pos">+15.9%</div>
+      <div class="s">SPY +4.1% same window</div>
+    </div>
+  </div>
+  <div class="since">
+    📈 Since you exited, DELL has run to <b>$160.77</b> —
+    <b class="pos">+13.1%</b> above your $142.10 exit.
+  </div>
+
+  <details open>
+    <summary>What you wrote at the time</summary>
+    <div class="jrow"><div class="jlbl">Your thesis (entry)</div>
+      <div class="jval quote">AI server backlog is real and under-priced; margin
+      compression fear is overdone. Holding through one earnings print.</div></div>
+    <div class="jrow"><div class="jlbl">Pre-mortem — what<br>would make me wrong</div>
+      <div class="jval quote">Backlog conversion slips, or gross margin drops below
+      21% on the next print.</div></div>
+    <div class="jrow"><div class="jlbl">Commitment</div>
+      <div class="jval">Exit if it closes below <b>$104</b> (↓ trigger).</div></div>
+    <div class="jrow"><div class="jlbl">Lesson (exit)</div>
+      <div class="jval">
+        <span class="badge b-fol" style="margin-right:6px">Trimmed on signal</span>
+        Taking the engine's TRIM instead of holding for the top worked — I don't
+        need the last 10%.
+      </div></div>
+    <div class="ctx">
+      <b>Conditions at entry:</b> macro regime <i>Risk-On (conf. 0.71)</i> ·
+      market tone <i>constructive</i> · portfolio $184k, 11 positions ·
+      top sector Technology 31% · portfolio beta 1.18
+    </div>
+  </details>
+</div>
+
+<div class="ep">
+  <div class="ephead">
+    <span class="epnum">Round trip #1</span>
+    <span class="epdate">14 Nov 2025 → 20 Dec 2025</span>
+    <span class="epheld">· held 36 days</span>
+    <span class="badge b-self">SELF-INITIATED</span>
+    <span class="badge b-stop">STOP HIT</span>
+  </div>
+  <div class="legs">
+    <div class="leg">
+      <div class="lbl">Entry</div>
+      <div class="v">$131.90 avg</div>
+      <div class="s">25 sh · 1 buy · $3,298</div>
+    </div>
+    <div class="leg">
+      <div class="lbl">Exit</div>
+      <div class="v">$124.30 avg</div>
+      <div class="s">25 sh · 1 sell · stop</div>
+    </div>
+    <div class="leg">
+      <div class="lbl">Realized</div>
+      <div class="v neg">−$190</div>
+      <div class="s">−5.8%</div>
+    </div>
+    <div class="leg">
+      <div class="lbl">vs SPY</div>
+      <div class="v neg">−7.9%</div>
+      <div class="s">SPY +2.1% same window</div>
+    </div>
+  </div>
+  <div class="since">
+    📈 Since you exited, DELL has run to <b>$160.77</b> —
+    <b class="pos">+29.3%</b> above your $124.30 exit.
+  </div>
+
+  <details>
+    <summary>What you wrote at the time</summary>
+    <div class="jrow"><div class="jlbl">Your thesis (entry)</div>
+      <div class="jval quote">Bought the dip after the guidance cut — felt oversold.</div></div>
+    <div class="jrow"><div class="jlbl">Pre-mortem</div>
+      <div class="jval" style="color:#6b7280">— not captured (pre-dates the
+      pre-mortem requirement)</div></div>
+    <div class="jrow"><div class="jlbl">Lesson (exit)</div>
+      <div class="jval">
+        <span class="badge b-dev" style="margin-right:6px">Bought a falling knife</span>
+        No catalyst, just a price I liked. Stop did its job.
+      </div></div>
+    <div class="ctx">
+      <b>Conditions at entry:</b> macro regime <i>Neutral</i> ·
+      market tone <i>cautious</i> · portfolio $171k, 9 positions ·
+      top sector Technology 27% · portfolio beta 1.09
+    </div>
+  </details>
+</div>
+
+<div class="banner b-info" style="margin-top:16px">
+  ℹ️ Prior results describe what happened, not what will happen. This tab never
+  changes DELL's composite, verdict, or any gate — the Trade Plan tab is still
+  the decision.
+</div>
+
+<hr class="sep">
+
+<!-- ══════════════════ VARIANT B ══════════════════ -->
+<div class="variant">Variant B — currently held, with one closed round trip behind it</div>
+
+<div class="chart">
+  <div class="chead">
+    <span class="ctitle">🧾 Your DELL journey</span>
+    <span class="cspan">Nov 2025 – Aug 2026 · 1 closed trip + 1 open</span>
+  </div>
+  <div class="cstats">
+    <span class="stat"><span class="n neu">1<span style="font-size:.62em;color:var(--dim);margin-left:5px">+1 open</span></span><span class="l">round trips</span></span>
+    <span class="dot">·</span>
+    <span class="stat"><span class="n pos">+$948</span><span class="l">net realized (closed only)</span></span>
+    <span class="dot">·</span>
+    <span class="stat"><span class="n neu">1W · 0L</span><span class="l">record</span></span>
+    <span class="dot">·</span>
+    <span class="stat"><span class="n neu">81d</span><span class="l">avg hold (closed only)</span></span>
+  </div>
+  <div style="color:var(--dim);font-size:.83em;padding:14px 0 4px">
+    ↳ Same two-panel chart as Variant A, plus an <b style="color:#93c5fd">open</b>
+    held-band running to today's edge with no exit marker. The P&amp;L arc for the
+    live position is drawn solid to today and simply stops — no dashed
+    "had you held" line, because you still do.
+  </div>
+</div>
+
+<div class="ep open">
+  <div class="ephead">
+    <span class="epnum">Current position</span>
+    <span class="epdate">opened 03 Jul 2026</span>
+    <span class="epheld">· 42 days and counting</span>
+    <span class="badge b-open">OPEN</span>
+    <span class="badge b-eng">ENGINE SIGNAL</span>
+  </div>
+  <div class="legs">
+    <div class="leg"><div class="lbl">Entry</div><div class="v">$151.20 avg</div>
+      <div class="s">30 sh · 1 buy · $4,536</div></div>
+    <div class="leg"><div class="lbl">Now</div><div class="v">$160.77</div>
+      <div class="s">30 sh held</div></div>
+    <div class="leg"><div class="lbl">Unrealized</div><div class="v pos">+$287</div>
+      <div class="s">+6.3%</div></div>
+    <div class="leg"><div class="lbl">vs SPY</div><div class="v neu">—</div>
+      <div class="s">shown when closed</div></div>
+  </div>
+  <div class="since">
+    ⚖️ This is the position the <b>Trade Plan</b> tab is talking about —
+    a KEEP/ADD call lives there, not here.
+  </div>
+  <details>
+    <summary>What you wrote at the time</summary>
+    <div class="jrow"><div class="jlbl">Your thesis (entry)</div>
+      <div class="jval quote">Re-entering after the trim worked. Same backlog thesis,
+      better balance sheet commentary.</div></div>
+    <div class="jrow"><div class="jlbl">Commitment</div>
+      <div class="jval">Exit if it closes below <b>$138</b> (↓ trigger).</div></div>
+  </details>
+</div>
+
+<div class="ep">
+  <div class="ephead">
+    <span class="epnum">Round trip #1</span>
+    <span class="epdate">11 Feb 2026 → 02 May 2026</span>
+    <span class="epheld">· held 81 days</span>
+    <span class="badge b-eng">ENGINE SIGNAL</span>
+    <span class="badge b-fol">FOLLOWED</span>
+  </div>
+  <div class="legs">
+    <div class="leg"><div class="lbl">Entry</div><div class="v">$118.40 avg</div><div class="s">40 sh · 2 buys</div></div>
+    <div class="leg"><div class="lbl">Exit</div><div class="v">$142.10 avg</div><div class="s">40 sh · 1 sell</div></div>
+    <div class="leg"><div class="lbl">Realized</div><div class="v pos">+$948</div><div class="s">+20.0%</div></div>
+    <div class="leg"><div class="lbl">vs SPY</div><div class="v pos">+15.9%</div><div class="s">SPY +4.1%</div></div>
+  </div>
+</div>
+
+<hr class="sep">
+
+<!-- ══════════════════ VARIANT C ══════════════════ -->
+<div class="variant">Variant C — edge states</div>
+
+<h3 class="sec">C1 · Never traded this name</h3>
+<div class="b-none">
+  <div style="font-size:1.6em;margin-bottom:6px">🧾</div>
+  <div style="color:var(--mid)"><b>No prior trades in NVDA.</b></div>
+  <div style="margin-top:6px;font-size:.9em">
+    This would be your first position in this name — there's no personal history
+    to weigh against the engine's call.
+  </div>
+</div>
+
+<h3 class="sec">C2 · History is incomplete (gap in the journal)</h3>
+<div class="banner b-warn">
+  ⚠️ <b>Partial history for DELL.</b> A sell on <b>20 Dec 2025</b> has no matching
+  buy in your trade journal, so the round trips below start from
+  <b>11 Feb 2026</b>. Realized P&amp;L and win/loss counts cover only what the
+  journal can account for — earlier activity (pre-import, or a rebaselined
+  holding) isn't included.
+</div>
+<div class="banner b-warn">
+  ⚠️ <b>Stock split inside this window.</b> DELL split on <b>14 Mar 2026</b>.
+  Entry and exit prices below are as-recorded and are <b>not</b> split-adjusted —
+  compare the P&amp;L figures, not the per-share prices.
+</div>
+
+<h3 class="sec">C3 · Traded, but every round trip is still open (no closed history)</h3>
+<div class="banner b-info">
+  You hold DELL now (opened 03 Jul 2026, +6.3%) but have never closed a position
+  in it. Realized stats appear after your first exit.
+</div>
+
+<hr class="sep">
+
+<!-- ══════════════════ CHART NOTE ══════════════════ -->
+<div class="variant">Chart — build note</div>
+
+<div class="banner b-warn" style="margin-top:16px">
+  ⚠️ <b>One cost to know about.</b> The Analysis sidebar's <b>History period</b>
+  selector defaults to <b>6mo</b> — that wouldn't reach your Nov 2025 DELL trip, so
+  the chart would silently cut it off. Fix: the tab fetches its own price history at
+  whatever span actually covers your first entry (6mo → 1y → 2y → 5y), independent of
+  the sidebar. One extra cached price fetch per ticker, 30-min TTL.
+</div>
+
+<!-- ══════════════════ PHASE 2 ══════════════════ -->
+<div class="variant">Phase 2 (separate deploy) — the pointer that makes it discoverable</div>
+<div style="color:var(--dim);font-size:.86em;margin-bottom:10px">
+  Rendered on the <b>📋 Trade Plan</b> tab, directly under the R:R banner. Factual
+  only — a count and a net figure, never a "your instinct is good/bad here" verdict.
+  Never gates.
+</div>
+<div class="banner b-info" style="border-left-color:#818cf8">
+  🧾 <b>You've traded DELL before</b> — 2 round trips (Nov 2025, Feb–May 2026),
+  net <b class="pos">+$948</b>. Your last exit was at <b>$142.10</b>; it's
+  <b>$160.77</b> today. → <span style="color:var(--blu)">See 🧾 Prior Trades</span>
+</div>
+
+</div>
+</body>
+</html>

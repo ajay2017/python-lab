@@ -337,9 +337,14 @@ def test_run_debate_no_api_key_no_anthropic_import_attempted():
     }
 
 
-def test_run_debate_anthropic_import_failure_returns_partial():
-    # No fake anthropic module installed -- the real `import anthropic` fails
-    # in this dev venv (see module docstring), exercising that except branch.
+def test_run_debate_anthropic_import_failure_returns_partial(monkeypatch):
+    # Force the import to fail rather than relying on `anthropic` being absent
+    # from the dev venv. It IS installed here now (requirements.txt pins
+    # anthropic>=0.40.0), so the old "no fake installed" assumption silently
+    # stopped exercising this branch and the test failed on error="round1_failed"
+    # instead. Binding sys.modules["anthropic"] to None makes `import anthropic`
+    # raise ImportError deterministically, in any venv.
+    monkeypatch.setitem(sys.modules, "anthropic", None)
     result = da.run_debate({"ticker": "AAPL"}, "entry", api_key="fake-key")
     assert result["transcript"] == []
     assert result["verdict"] is None

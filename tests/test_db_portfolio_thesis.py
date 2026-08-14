@@ -201,15 +201,34 @@ def test_load_returns_empty_list_when_no_db():
 
 
 def test_load_returns_rows_most_recent_first_shape():
+    # Dates are derived from today_et(), NOT hardcoded. load_portfolio_thesis
+    # filters on a rolling `today - lookback_days` cutoff, so fixed calendar
+    # dates silently age out of the window and the test starts failing on a
+    # date unrelated to any code change. That is exactly what happened on
+    # 2026-08-14: the hardcoded 2026-07-30 row fell outside the 14-day window
+    # and only 1 of the 2 rows came back.
+    # 9 days apart guarantees two distinct ISO weeks (a week is 7 days), which
+    # the fake store needs — it is keyed on (iso_year, iso_week), so two rows
+    # in the same week would collapse to one via the upsert.
+    from datetime import timedelta
+
+    from stock_analyzer.market_time import today_et
+    _older  = today_et() - timedelta(days=9)
+    _recent = today_et() - timedelta(days=2)
+    _oy, _ow, _ = _older.isocalendar()
+    _ry, _rw, _ = _recent.isocalendar()
+
     fake = _FakeClient()
     _install(fake)
     try:
-        db.save_portfolio_thesis(_record(iso_year=2026, iso_week=31, thesis_date="2026-07-30"))
-        db.save_portfolio_thesis(_record(iso_year=2026, iso_week=32, thesis_date="2026-08-06"))
+        db.save_portfolio_thesis(_record(iso_year=_oy, iso_week=_ow,
+                                         thesis_date=_older.isoformat()))
+        db.save_portfolio_thesis(_record(iso_year=_ry, iso_week=_rw,
+                                         thesis_date=_recent.isoformat()))
         rows = db.load_portfolio_thesis(14)
         assert len(rows) == 2
         iso_weeks = {r["iso_week"] for r in rows}
-        assert iso_weeks == {31, 32}
+        assert iso_weeks == {_ow, _rw}
     finally:
         _teardown()
 
