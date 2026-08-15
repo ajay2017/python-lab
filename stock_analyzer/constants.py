@@ -859,16 +859,33 @@ DATA_LOAD_STAGGER_SEC = 0.1   # gap between thread submits so starts aren't sync
 # Added 2026-08-15 after an audit found three tables drifting with no staleness
 # detection and, in two cases, no recorded date at all — `SECTOR_UNIVERSE` (the
 # ~70 names Grow Today scans DAILY) had not been refreshed since 2026-05-05.
+#
+# All four are 90 as of 2026-08-15 (three were tightened from 180 the same day
+# they shipped, at the user's call: market leadership turns over fast enough in
+# the current tech cycle that a semi-annual cadence lets a roster go visibly
+# stale).
+#
+# On nag fatigue, stated precisely: tightening costs nothing on the HOME CHIP,
+# because check ⑤ is excluded from it by design — that protects the chip's
+# discriminating power. It does NOT make the check ⑤ page itself free. At 90d
+# the page shows 3 of 6 amber today, 4 of 6 from 2026-08-27 and 5 of 6 from
+# 2026-09-29 if nothing is refreshed, and a permanently-mostly-amber page is the
+# same desensitization mechanism relocated. That cost is accepted deliberately:
+# it self-corrects the moment the rosters are actually refreshed, which is the
+# behaviour we want. Revisit if ⑤ ever gains a push surface, or if the page sits
+# mostly-amber for months (which would mean the cadence is unrealistic, not that
+# the tables are fine).
 REFERENCE_SHELF_LIFE_DAYS = {
     "sector_universe":       90,   # scanned daily by Grow Today — highest leverage
-    # Its docstring says BOTH "quarterly is plenty" (=90) and "a manual refresh
-    # a few times a year" (=~120-180). Taking the looser end deliberately: this
-    # net fails only by being slightly narrow on an awareness surface (Movers),
-    # so a 90d cadence would nag 4x/yr for little gain. Tighten to 90 if Movers
-    # starts visibly missing breakouts.
-    "discovery_universe":   180,
-    "sp500_sector_weights": 180,   # short end of its documented 6-12 month band
-    "sector_candidates":    180,   # diversification ADD seed roster
+    "discovery_universe":    90,   # matches its docstring's literal "quarterly is plenty"
+    # Deliberately BELOW this table's own documented 6-12 month band (see the
+    # source comment at portfolio.py's SP500_SECTOR_WEIGHTS): it's the one table
+    # that renders a WRONG NUMBER rather than a silent absence, and sector
+    # weights move fast in a concentrated market (Info Tech at 37.4%). Kept the
+    # source comment's band as-is — that describes how often the *publisher*
+    # revises it; this is how often WE want to re-check.
+    "sp500_sector_weights":  90,
+    "sector_candidates":     90,   # seeds ADD recs — a delisted name here is visible
 }
 
 # Minimum remaining runway (days) on a FORWARD-DATED table before it's flagged.
