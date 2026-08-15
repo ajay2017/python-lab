@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRISHTA — ⚙️ App Settings (mockup, 2026-08-15)</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#11161d; --line:#232c37;
+    --text:#e6edf3; --muted:#8b949e; --code:#4ade80; --codebg:#122a1c;
+    --amber:#f0b429; --green:#3dd68c; --red:#f85149; --blue:#58a6ff;
+    --accent:#2f81f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:28px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:19px;margin:34px 0 6px;padding-top:20px;border-top:1px solid var(--line)}
+  h3{font-size:15px;margin:20px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .sub{color:var(--muted);margin:0 0 20px}
+  code{background:var(--codebg);color:var(--code);padding:1px 6px;border-radius:4px;
+       font:13px/1.4 "SF Mono",Consolas,monospace}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:12px 0}
+  .note{border-left:3px solid var(--accent);background:#0f1a26;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .warnbox{border-left:3px solid var(--amber);background:#231c0c;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .redbox{border-left:3px solid var(--red);background:#2a1416;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:9px;vertical-align:-1px}
+  .a{background:var(--amber)} .g{background:var(--green)} .r{background:var(--red)} .u{background:#6e7681}
+  table{width:100%;border-collapse:collapse;margin:10px 0}
+  th{text-align:left;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
+     padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600}
+  td{padding:10px;border-bottom:1px solid var(--panel2);vertical-align:top;font-size:14px}
+  tr:last-child td{border-bottom:none}
+  .grid td{background:var(--panel2)}
+  .cell{background:#0b0f14;border:1px solid var(--line);border-radius:6px;padding:7px 10px;
+        font:13px/1.5 "SF Mono",Consolas,monospace;color:var(--text)}
+  .cell.edited{border-color:var(--amber);background:#1b1710}
+  .cell.bad{border-color:var(--red);background:#1e1214}
+  .btn{display:inline-block;background:var(--accent);color:#fff;border:none;border-radius:7px;
+       padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+  .btn.disabled{background:#21262d;color:#6e7681;cursor:not-allowed}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;font-weight:600;
+       letter-spacing:.03em;vertical-align:1px}
+  .tag.code{background:#1f2937;color:#9ca3af} .tag.db{background:#0f2a1c;color:var(--green)}
+  .tag.add{background:#0f2a1c;color:var(--green)} .tag.rm{background:#2a1416;color:var(--red)}
+  .muted{color:var(--muted)} .small{font-size:13px}
+  .row{display:flex;gap:14px;align-items:flex-start;justify-content:space-between}
+  .cap{color:var(--muted);font-size:13px;margin-top:8px}
+  .kbd{border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:1px 6px;
+       font:12px monospace;color:var(--muted)}
+  .state{font-size:12px;color:var(--muted);margin-left:10px}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>⚙️ App Settings</h1>
+<p class="sub">Mockup — 2026-08-15 · <strong>not built</strong> · design doc: <code>docs/plans/app-settings.md</code><br>
+Owner-only page (hidden from the read-only viewer via <code>_OWNER_ONLY_PAGES</code>, same as 🔬 Model Lab and 🩺 System Trust).</p>
+
+<div class="redbox">
+  <strong>What is deliberately NOT on this page</strong><br>
+  <span class="small">No gate, threshold, scoring weight or <code>COMPOSITE_BUY</code>. Those change the
+  <strong>decision rule</strong> and stay in code, where git is their audit trail — a UI edit leaves no diff,
+  no review and no way to reconstruct what the engine believed when it made a past call.
+  This page only changes the <strong>input set</strong> the rules are applied to.</span>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>📋 Reference tables</h2>
+<p class="sub small">The curated lists the engine reads. Status mirrors 🩺 System Trust check ⑤.</p>
+
+<div class="panel">
+<table>
+  <tr><th style="width:30%">Table</th><th style="width:14%">Source</th><th>Status</th><th style="width:96px"></th></tr>
+  <tr>
+    <td><strong>Grow Today scan universe</strong><br><code>SECTOR_UNIVERSE</code> · 68 tickers / 9 buckets</td>
+    <td><span class="tag code">from code</span></td>
+    <td><span class="dot a"></span>Last curated 2026-05-05 — <strong>102d ago</strong> (refresh every 90d)</td>
+    <td><button class="btn">Edit</button></td>
+  </tr>
+  <tr>
+    <td><strong>Movers discovery universe</strong><br><code>DISCOVERY_UNIVERSE</code> · 204 tickers / 12 buckets</td>
+    <td><span class="tag code">from code</span></td>
+    <td><span class="dot g"></span>Last curated 2026-05-29 — 78d ago</td>
+    <td><button class="btn ghost">Edit</button></td>
+  </tr>
+  <tr>
+    <td><strong>Diversification candidate roster</strong><br><code>_SECTOR_CANDIDATES</code> · 44 tickers / 11 sectors</td>
+    <td><span class="tag code">from code</span></td>
+    <td><span class="dot a"></span>Last curated 2026-05-05 — <strong>102d ago</strong> (refresh every 90d)</td>
+    <td><button class="btn">Edit</button></td>
+  </tr>
+</table>
+<p class="cap"><span class="tag code">from code</span> means no saved override exists yet — the engine is
+reading the hardcoded list in the repo. Editing here creates a database override; the code list stays
+permanently as the fallback, so a Supabase outage behaves exactly like today.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h3>Editing · Grow Today scan universe</h3>
+
+<div class="panel">
+  <div class="row">
+    <div><strong>SECTOR_UNIVERSE</strong> <span class="muted small">— one row per bucket, comma-separated symbols</span></div>
+    <div class="muted small">68 → <strong>69</strong> tickers</div>
+  </div>
+
+  <table class="grid">
+    <tr><th style="width:22%">Bucket</th><th>Tickers</th><th style="width:60px">Count</th></tr>
+    <tr>
+      <td>AI &amp; Cloud</td>
+      <td><div class="cell">MSFT, GOOGL, META, AMZN, CRM, NOW, DDOG, WDAY</div></td>
+      <td class="muted">8</td>
+    </tr>
+    <tr>
+      <td>Cybersecurity</td>
+      <td><div class="cell edited">PANW, CRWD, ZS, NET, FTNT, OKTA, S, <strong style="color:var(--green)">CYBR</strong></div>
+          <div class="cap"><span class="tag add">+ CYBR</span> added — validated, resolves on Finnhub</div></td>
+      <td class="muted">7 → 8</td>
+    </tr>
+    <tr>
+      <td>Semiconductors</td>
+      <td><div class="cell">NVDA, AMD, AVGO, MU, QCOM, AMAT, ASML, INTC</div></td>
+      <td class="muted">8</td>
+    </tr>
+    <tr>
+      <td>Consumer Tech</td>
+      <td><div class="cell bad">AAPL, NFLX, SHOP, UBER, ABNB, <strong style="color:var(--red)">SQ</strong></div>
+          <div class="cap" style="color:var(--red)">⛔ <strong>SQ</strong> does not resolve on any provider —
+          renamed to <strong>XYZ</strong> in 2026. Fix or remove before saving.</div></td>
+      <td class="muted">6</td>
+    </tr>
+    <tr><td colspan="3" class="muted small" style="text-align:center">… 5 more buckets …</td></tr>
+  </table>
+
+  <div class="row" style="margin-top:14px;align-items:center">
+    <div>
+      <button class="btn disabled">Save changes</button>
+      <span class="state">⛔ Blocked — 1 symbol failed validation</span>
+    </div>
+    <button class="btn ghost">Discard</button>
+  </div>
+</div>
+
+<div class="warnbox">
+  <strong>Validation is not optional, and a typo is not a decision.</strong><br>
+  <span class="small">A mistyped symbol silently narrows the daily scan — the exact silent-absence failure
+  check ⑤ exists to catch. Every symbol is resolved against the provider layer before a save is accepted.
+  A large drop in ticker count also asks for confirmation, so a truncated paste can't wholesale-replace
+  a roster by accident.</span>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h3>The save states — this is the important bit</h3>
+
+<div class="panel">
+  <table>
+    <tr><th style="width:30%">You did this</th><th>What happens to the date</th></tr>
+    <tr>
+      <td><span class="dot g"></span><strong>Changed the list, saved</strong></td>
+      <td><code>as_of</code> → <strong>today</strong>. Amber clears. The date is now backed by a real edit.</td>
+    </tr>
+    <tr>
+      <td><span class="dot u"></span><strong>Opened it, changed nothing, saved</strong></td>
+      <td><strong><code>as_of</code> does not move.</strong> Button reads
+          <em>"No changes to save"</em>. The amber stays.</td>
+    </tr>
+    <tr>
+      <td><span class="dot u"></span><strong>Reordered tickers only</strong></td>
+      <td><strong><code>as_of</code> does not move.</strong> Payload is canonicalized (sorted, upper-cased)
+          before hashing — reordering is not a refresh.</td>
+    </tr>
+    <tr>
+      <td><span class="dot r"></span><strong>Looked for a "mark as reviewed" button</strong></td>
+      <td>There isn't one, and there won't be. See below.</td>
+    </tr>
+  </table>
+</div>
+
+<div class="redbox">
+  <strong>Why there is no "mark as refreshed" button</strong><br>
+  <span class="small">It would be a snooze button. If the date can move without the list changing, the amber
+  becomes dismissible and the date stops being <em>evidence</em> and becomes a <em>claim</em> — strictly worse
+  than today, where the date cannot lie because the only way to move it is to edit the file.
+  <code>as_of</code> is stamped only on a real content change (hash comparison), never by a control you can press.</span>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h3>History</h3>
+<div class="panel">
+  <table>
+    <tr><th style="width:130px">Date</th><th>Change</th><th style="width:110px"></th></tr>
+    <tr><td>2026-08-15</td><td><span class="tag add">+CYBR</span> <span class="tag rm">−SQ</span> <span class="muted">Cybersecurity, Consumer Tech</span></td><td><button class="btn ghost">Restore</button></td></tr>
+    <tr><td>2026-05-05</td><td class="muted">Initial curation (from code)</td><td></td></tr>
+  </table>
+  <p class="cap">Append-only. This is a <strong>requirement, not a nicety</strong>: the reason investment
+  thresholds stay in code is that you must be able to reconstruct what the engine believed when it made a
+  past call. A mutable scan universe would break that same property — so edits are versioned.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>⏱️ Refresh reminders</h2>
+<p class="sub small">How long each table stays trustworthy before check ⑤ flags it. Changes only when a
+reminder appears — never what the engine decides.</p>
+<div class="panel">
+  <table>
+    <tr><th style="width:44%">Table</th><th style="width:150px">Remind me after</th><th>Currently</th></tr>
+    <tr><td>Grow Today scan universe</td><td><div class="cell" style="width:90px">90 days</div></td><td><span class="dot a"></span>102d — due</td></tr>
+    <tr><td>Movers discovery universe</td><td><div class="cell" style="width:90px">90 days</div></td><td><span class="dot g"></span>78d</td></tr>
+    <tr><td>S&amp;P 500 benchmark sector weights</td><td><div class="cell" style="width:90px">90 days</div></td><td><span class="dot g"></span>45d</td></tr>
+    <tr><td>Diversification candidate roster</td><td><div class="cell" style="width:90px">90 days</div></td><td><span class="dot a"></span>102d — due</td></tr>
+  </table>
+  <p class="cap">Forward-dated tables (macro event calendar, NYSE holidays) use <em>runway remaining</em>
+  instead and aren't editable here — they're extended by adding dates, not by changing a number.</p>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>Open design questions this mockup does <em>not</em> answer</h2>
+<div class="panel small">
+  <p style="margin-top:0"><strong>1. Does the cron read the override?</strong> <code>cron_runner.py</code>
+  imports <code>SECTOR_UNIVERSE</code> directly. If the app reads a database override and the cron doesn't,
+  the 9:45 ET morning-picks email and in-app Grow Today would silently scan
+  <strong>different universes</strong>. Must be decided before any code.</p>
+  <p><strong>2. Bucket renames.</strong> <code>_DIVERSIFY_TO_DISCOVERY</code> is keyed on both universes'
+  bucket labels — renaming one here would silently degrade diversification suggestions. The UI must block
+  a rename that orphans that map (a test catches it in CI, but a UI edit bypasses CI).</p>
+  <p><strong>3. Replace vs merge.</strong> A save with 3 of 12 buckets populated is non-empty and would
+  wholesale-replace the roster. Needs explicit semantics.</p>
+  <p style="margin-bottom:0"><strong>4. Editor ergonomics for ~200 tickers.</strong> The comma-separated
+  per-bucket grid above is <code>st.data_editor</code>-shaped and buildable natively. A nicer chip UI would
+  need interpolated HTML, which the repo's anti-pattern gate blocks for XSS reasons — so this grid is the
+  honest, shippable version rather than the prettiest one.</p>
+</div>
+
+<p class="cap" style="margin-top:28px">Mockup only. No code written. Approve, amend, or reject before any build begins.</p>
+
+</div></body></html>
