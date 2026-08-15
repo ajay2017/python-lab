@@ -46,6 +46,23 @@ What changed in the repo at cutover:
 | `docs/architecture.md` | §1 tech-stack row, §2 diagram, §9 deployment section rewritten (incl. fixing a stale claim that the cron still ran on GitHub Actions). |
 | `cron_runner.py`, `stock_analyzer/system_health.py`, `scripts/*` | The new `maintenance` lane — see decision 3 above. |
 
+**Verified live 2026-08-15.** `cron-maintenance` created in `endearing-magic` (Saturday
+`0 12 * * 6` UTC — a Saturday UTC time before 05:00 would land on Friday ET and the lane's
+`weekday() != 5` equality guard would skip forever, unlike the other lanes' lower-bound
+hour gates). First manual run: `mode=maintenance`, 16 held tickers, 0 already done, 3936
+rows written (246 per ticker — the expected full-window count at stride
+`VOL_FORECAST_HORIZON_DAYS // 4` = 5 over ~1250 trading days; uniform across all 16, which
+is the signature of complete history rather than a truncated fetch), 0 skipped,
+`heartbeat maintenance=ok`. The `scripts.` namespace-package import resolved correctly in
+the real container, so no `__init__.py` was needed.
+
+One transient artifact worth knowing: the very first manual trigger ran *before* the push,
+so the deployed `cron_runner.py` didn't yet recognise `ALERT_RUN_MODE=maintenance`, fell
+through to the ET-hour inference, and ran as `premarket` — writing a `premarket` heartbeat
+from the maintenance service (`save_cron_heartbeat` upserts on `lane`). Self-healed on the
+next real weekday premarket fire. A reminder that the hour-based fallback is the loose
+path: an unrecognised `ALERT_RUN_MODE` silently runs *a different lane* rather than failing.
+
 Deliberately **not** changed: the `# Streamlit Cloud runs UTC` rationale comments in
 `market_time.py`, `tax_advisor.py`, `earnings_advisor.py`, `watchlist_advisor.py`,
 `fmp_provider.py` and `investor_mirror.py`. The reasoning still holds verbatim (Railway's
