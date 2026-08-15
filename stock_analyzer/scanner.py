@@ -3,6 +3,7 @@ import pandas as pd
 from stock_analyzer.indicators import sma, rsi as calc_rsi
 from stock_analyzer.constants import MOVER_MIN_DAY_GAIN_PCT
 
+# Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
 SECTOR_UNIVERSE = {
     "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "WDAY"],
     "Cybersecurity": ["PANW", "CRWD", "ZS", "NET", "FTNT", "OKTA", "S"],

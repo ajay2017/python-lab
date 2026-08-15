@@ -749,6 +749,7 @@ def relative_strength_table(
 # otherwise. NOT a decision threshold (never gates), so it stays here next to
 # SECTOR_ETF rather than in constants.py, matching the _SECTOR_PROFILES
 # precedent above.
+# Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
 SP500_SECTOR_WEIGHTS = {
     "Information Technology":  37.4,
     "Financials":              12.0,
@@ -1092,6 +1093,7 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
 # Curated fallback roster per sector. Kept as the seed of the candidate pool
 # (always unioned in FIRST so well-known names are never dropped by the scan
 # cap), and as the sole source if the discovery-universe bucket is unavailable.
+# Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
 _SECTOR_CANDIDATES = {
     "Healthcare":      ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
     "Energy":          ["XOM", "CVX", "COP", "OXY"],

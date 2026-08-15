@@ -847,6 +847,39 @@ DATA_MULTISOURCE_ENABLED = True
 DATA_LOAD_MAX_WORKERS = 2     # was 4 — halve the simultaneous heavy requests to Yahoo
 DATA_LOAD_STAGGER_SEC = 0.1   # gap between thread submits so starts aren't synchronized
 
+# ── Reference-data shelf life (observability — NOT an investment threshold) ──
+# How long a hand-maintained STATIC reference table stays trustworthy before the
+# owner-only 🩺 System Trust page flags it for a human refresh. AWARENESS ONLY:
+# nothing here gates a recommendation, suppresses a pick, or changes a score.
+# The registry that says what each key refers to (and where the table lives) is
+# `stock_analyzer/reference_shelf.py` — a test asserts these key sets and the
+# registry stay in sync in BOTH directions, so a new table can't be registered
+# without a shelf life and a shelf life can't outlive its table.
+#
+# Added 2026-08-15 after an audit found three tables drifting with no staleness
+# detection and, in two cases, no recorded date at all — `SECTOR_UNIVERSE` (the
+# ~70 names Grow Today scans DAILY) had not been refreshed since 2026-05-05.
+REFERENCE_SHELF_LIFE_DAYS = {
+    "sector_universe":       90,   # scanned daily by Grow Today — highest leverage
+    # Its docstring says BOTH "quarterly is plenty" (=90) and "a manual refresh
+    # a few times a year" (=~120-180). Taking the looser end deliberately: this
+    # net fails only by being slightly narrow on an awareness surface (Movers),
+    # so a 90d cadence would nag 4x/yr for little gain. Tighten to 90 if Movers
+    # starts visibly missing breakouts.
+    "discovery_universe":   180,
+    "sp500_sector_weights": 180,   # short end of its documented 6-12 month band
+    "sector_candidates":    180,   # diversification ADD seed roster
+}
+
+# Minimum remaining runway (days) on a FORWARD-DATED table before it's flagged.
+# Converts a hard expiry cliff into advance notice: the existing
+# MARKET_CALENDAR_LAST_YEAR mechanism only warns AFTER the calendar has run out,
+# by which point the app has already mis-scored holidays as trading days.
+REFERENCE_HORIZON_MIN_DAYS = {
+    "macro_event_calendar": 90,    # one quarter to hand-enter a year of releases
+    "nyse_calendar":       365,    # extending 3 years of holidays is a rare chore
+}
+
 # Per-call wall-clock cap (seconds) on each yfinance request. yfinance exposes no
 # request-level timeout, so a TCP-level hang would otherwise block until the OS
 # socket timeout (minutes) or — in the headless cron — the 15-min job kill. The
@@ -951,6 +984,7 @@ FUNDAMENTALS_CACHE_MAX_AGE_DAYS = 7
 # silently treating future holidays as open trading days.
 MARKET_CALENDAR_LAST_YEAR = 2028
 
+# Shelf life: registered in stock_analyzer/reference_shelf.py — its horizon is DERIVED from MARKET_CALENDAR_LAST_YEAR, so extending the list here clears the warning automatically.
 NYSE_HOLIDAYS = frozenset({
     # 2026
     "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",

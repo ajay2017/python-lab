@@ -3657,7 +3657,10 @@ if page == "🏠 Home":
     # Rolls up checks ①②③ (cron liveness / data-store existence+freshness /
     # provider health), deliberately NOT ④ (session caches are legitimately unset
     # this early in a cold Home run, so gating on them would false-positive every
-    # cold load). Memoized ~5min. Wrapped so proprioception can never break Home.
+    # cold load) and NOT ⑤ (reference-data shelf life is a STANDING condition
+    # that stays amber for weeks until a human refreshes a list — a permanent
+    # amber here would train the user to ignore the chip that also reports a
+    # dead cron lane). Memoized ~5min. Wrapped so proprioception can never break Home.
     if not db.is_readonly():
         try:
             from stock_analyzer import system_health as _sysh_home
@@ -27475,10 +27478,31 @@ elif page == "🩺 System Trust":
             "confidence is dented (a stale store, a backup data provider, or a late lane)."
         )
     else:
-        st.success(
-            "🟢 All systems nominal — today's decisions are running on complete, "
-            "fresh data from the primary source."
-        )
+        # The pipeline banner must account for check ⑤ even though ⑤ is
+        # deliberately OUT of the chip rollup. Without this, an unqualified
+        # "All systems nominal" renders directly above a section showing an
+        # overdue reference table — the headline telling you to stop reading
+        # right above the thing the page exists to say. Checks ①-④ can't cause
+        # this (④ only reaches ok/unknown); ⑤ is the first page-only section
+        # that can reach warn/down. This reads `reference` for DISPLAY only and
+        # never feeds chip_severity/n_warn/n_down, so the Home-chip invariant
+        # (and its test) are untouched.
+        _ref_degraded = [
+            _r for _r in _health.get("reference", [])
+            if _r.get("severity") in ("warn", "down")
+        ]
+        if _ref_degraded:
+            st.info(
+                f"🟢 Pipeline nominal — decisions are running on complete, fresh data. "
+                f"Separately, {len(_ref_degraded)} hand-maintained reference table(s) "
+                "are due for a refresh (see ⑤ below). That's a chore, not an outage — "
+                "nothing is mis-scored, the app just sees a slightly older list."
+            )
+        else:
+            st.success(
+                "🟢 All systems nominal — today's decisions are running on complete, "
+                "fresh data from the primary source."
+            )
 
     def _sysh_row(severity: str, label: str, detail: str, tech: str | None = None) -> None:
         _c1, _c2, _c3 = st.columns([0.5, 4, 6])
@@ -27543,6 +27567,22 @@ elif page == "🩺 System Trust":
         all_ok_text="Loaded this run — nothing came back offline",
         partial_text="{n_ok}/{n} loaded this run; rest not visited yet this session (not a fault)",
         tech_key="key",
+    )
+
+    _sysh_section(
+        "##### ⑤ Reference data — is any hand-maintained table overdue?",
+        _health.get("reference", []), noun="reference tables",
+        all_ok_text="All within their refresh window",
+        partial_text="{n_ok}/{n} within their refresh window",
+        tech_key="location",
+    )
+    st.caption(
+        "These are **manual-refresh chores**, not faults — a stale table never "
+        "changes a recommendation or a score, it just quietly narrows what the "
+        "app can see. Deliberately excluded from the Home status chip: unlike a "
+        "dead cron lane, this is a standing condition that stays amber for weeks "
+        "until you refresh the list, and a permanent amber would train you to "
+        "ignore the chip that also reports real outages."
     )
 
     _sysh_ca = _health.get("computed_at")

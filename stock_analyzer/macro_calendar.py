@@ -49,6 +49,7 @@ LOW    = "LOW"
 
 # ── Static backbone ───────────────────────────────────────────────────────────
 # (date, time_ET, event, category, impact, description)
+# Shelf life: registered in stock_analyzer/reference_shelf.py — its horizon is DERIVED per event series, so extending any series here clears the warning automatically.
 _STATIC: list[tuple] = [
 
     # FOMC 2025
@@ -86,6 +87,29 @@ _STATIC: list[tuple] = [
      "Oct 2026 — Fed rate decision + statement."),
     ("2026-12-09", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
      "Dec 2026 — Quarterly dot-plot and SEP released."),
+
+    # FOMC 2027 — transcribed from the Fed's tentative 2027 schedule
+    # (federalreserve.gov press release 2025-09-05, monetary20250905a). Each is a
+    # TWO-DAY meeting; the date below is the SECOND day, when the policy
+    # statement is released at 14:00 ET — matching how 2025/2026 are recorded
+    # here (e.g. the Jan 27-28 2026 meeting is stored as 2026-01-28). Dot-plot /
+    # SEP accompanies the Mar / Jun / Sep / Dec meetings.
+    ("2027-01-27", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Jan 2027 — Fed rate decision + statement."),
+    ("2027-03-17", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Mar 2027 — Quarterly dot-plot and SEP released."),
+    ("2027-04-28", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Apr 2027 — Fed rate decision + statement."),
+    ("2027-06-09", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Jun 2027 — Quarterly dot-plot and SEP released."),
+    ("2027-07-28", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Jul 2027 — Fed rate decision + statement."),
+    ("2027-09-15", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Sep 2027 — Quarterly dot-plot and SEP released."),
+    ("2027-10-27", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Oct 2027 — Fed rate decision + statement."),
+    ("2027-12-08", "14:00", "FOMC Rate Decision",   "Fed Policy",  HIGH,
+     "Dec 2027 — Quarterly dot-plot and SEP released."),
 
     # CPI 2025 (BLS ~10th–15th each month)
     ("2025-01-15", "08:30", "CPI Inflation",        "Inflation",   HIGH,   "Dec 2024 CPI"),

@@ -34,6 +34,15 @@ worse than none, so every check swallows its own errors and returns a structured
 result. The recency windows below are OBSERVABILITY thresholds (how stale is
 "stale"), not investment-policy boundaries — deliberately local to this module
 rather than in constants.py, which is reserved for values that move a decision.
+
+DELIBERATE EXCEPTION (F-238, 2026-08-15): check ⑤'s reference-data shelf lives
+live in `constants.py` (`REFERENCE_SHELF_LIFE_DAYS` / `REFERENCE_HORIZON_MIN_DAYS`)
+rather than here, even though they are observability values by the rule above.
+Two reasons the user accepted when shown the conflict: Hard Rule #1 is stated
+without an observability carve-out, and — the deciding one — those values are
+keyed to a registry in `stock_analyzer/reference_shelf.py`, so keeping keys and
+values in one visible place is what lets a test assert that no table can be
+registered without a shelf life. Don't "fix" one convention to match the other.
 """
 from __future__ import annotations
 
@@ -455,13 +464,58 @@ def _worst(*severities: str) -> str:
     return worst
 
 
+# ── ⑤ reference-data shelf life ───────────────────────────────────────────────
+def check_reference_data() -> list[dict]:
+    """Grade hand-maintained static reference tables for staleness.
+
+    Thin adapter over `reference_shelf.shelf_status()` into this module's row
+    shape. AWARENESS ONLY, and reported OFF the Home chip (see compute_health)
+    — a stale table is a chore to schedule, not an incident to react to.
+
+    Each row states the CONSEQUENCE, not just an age: per
+    `feedback_recommendation_transparency`, never surface a bare number the
+    user has to interpret."""
+    try:
+        from stock_analyzer.reference_shelf import shelf_status
+        rows = shelf_status()
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for row in rows or []:
+        detail = row.get("detail") or ""
+        consequence = row.get("consequence") or ""
+        if row.get("severity") in ("warn", "down") and consequence:
+            detail = f"{detail} — {consequence}"
+        out.append({
+            "key":      row.get("key"),
+            "label":    row.get("label"),
+            "severity": row.get("severity", "unknown"),
+            "detail":   detail,
+            "location": row.get("location"),
+        })
+    return out
+
+
 def compute_health(session_state: Any = None) -> dict:
-    """Run all four checks and roll up a chip severity. Never raises.
+    """Run all five checks and roll up a chip severity. Never raises.
 
     `chip_severity` is the worst of checks ①②③ ONLY (cron / data stores /
-    providers) — check ④ (session caches) is reported on the page but excluded
-    from the chip to avoid cold-load false positives. Returns "ok" | "warn" |
-    "down"; the Home chip renders only for "warn"/"down"."""
+    providers). Two checks are reported on the page but deliberately EXCLUDED
+    from the chip:
+
+      ④ session caches — excluded to avoid cold-load false positives.
+      ⑤ reference-data shelf life — excluded because it is a STANDING
+        CONDITION, not a transient fault. Every other check reports something
+        that is either broken now or fine now; a stale ticker universe stays
+        stale for weeks until a human does manual work. Rolling it into the
+        chip would park a permanent amber on Home that the user cannot clear
+        today — and they would learn to ignore the chip that ALSO says "a cron
+        lane has died." Desensitizing the safety instrument costs far more than
+        the drift being reported.
+
+    Returns "ok" | "warn" | "down"; the Home chip renders only for
+    "warn"/"down"."""
     try:
         from stock_analyzer import market_time
         computed_at = market_time.now_et().isoformat()
@@ -478,7 +532,11 @@ def compute_health(session_state: Any = None) -> dict:
     stores = _safe(check_data_stores)
     providers = _safe(check_providers)
     caches = _safe(check_caches, session_state)
+    reference = _safe(check_reference_data)
 
+    # NB: `reference` is deliberately absent from `pipeline` — see the docstring.
+    # A test asserts chip_severity/n_warn/n_down are byte-identical with every
+    # reference table forced maximally overdue, so this can't regress quietly.
     pipeline = [x["severity"] for x in lanes] + \
                [x["severity"] for x in stores] + \
                [x["severity"] for x in providers]
@@ -492,6 +550,7 @@ def compute_health(session_state: Any = None) -> dict:
         "stores": stores,
         "providers": providers,
         "caches": caches,
+        "reference": reference,
         "chip_severity": chip,
         "n_down": n_down,
         "n_warn": n_warn,

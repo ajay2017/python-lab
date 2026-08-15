@@ -22,6 +22,7 @@ a manual refresh a few times a year.
 # Grouped by sector purely for human readability — the Movers scan flattens
 # this into one ticker list. Keep names liquid (avoid thin micro-caps where a
 # 10% move is noise, not signal).
+# Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
 DISCOVERY_UNIVERSE: dict[str, list[str]] = {
     "Mega-cap Tech": [
         "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "AVGO",
