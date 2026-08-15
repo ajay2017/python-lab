@@ -1,12 +1,27 @@
 #!/usr/bin/env python3
-"""Pre-tool-use hook: mechanically enforce hard rules #3 and #4 from CLAUDE.md,
-plus a regression-test gate on `git commit`/`git push` (docs/testing-strategy.md).
+"""Pre-tool-use hook: mechanically enforce hard rules #3, #4 and #5 from
+CLAUDE.md, plus a regression-test gate on `git commit`/`git push`
+(docs/testing-strategy.md).
+
+  #3  never run the app locally
+  #4  decision-engine-core / DB-write commits need an Opus review citation
+  #5  `feat(` commits need Design = / Build = provenance trailers
+
+What this CANNOT do: prove a reviewer subagent actually ran. It verifies a
+correctly-formatted citation is present. See CLAUDE.md "Review & test economy"
+for the honesty caveat and the SubagentStop-hook upgrade path.
 """
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+
+# Seconds the full pytest suite may take before the hook calls it a hang. Sized
+# at ~3x the observed runtime (~110s for 3573 tests as of 2026-08-15) so a
+# merely-growing suite never blocks a commit as a false hang. See _run_pytest.
+_PYTEST_TIMEOUT_SEC = 300
 
 
 def main() -> None:
@@ -22,7 +37,7 @@ def main() -> None:
     # Hard rule #3: Never run the app locally
     if re.search(r"\bstreamlit\s+run\b", command, re.IGNORECASE):
         print(
-            "BLOCKED (Hard rule #3): App runs on Streamlit Cloud only.\n"
+            "BLOCKED (Hard rule #3): App runs on Railway (drishta.up.railway.app), not locally.\n"
             "Push to `main` and wait ~2 min for auto-redeploy, then hard-refresh (Ctrl+F5).",
             file=sys.stderr,
         )
@@ -33,15 +48,52 @@ def main() -> None:
 
     # Hard rule #4: Commits touching gate files require an Opus review citation
     if is_commit:
-        staged = _get_staged_files()
+        staged = _get_staged_files(command)
         triggered = _gate_files_staged(staged)
+        message = _commit_message_text(command)
+
+        # An unresolvable message (editor-driven commit, `-F -` heredoc, a
+        # mis-encoded file) fails CLOSED for the citation gate but OPEN for the
+        # provenance gate -- "" doesn't start with "feat". Say so out loud
+        # rather than let a policy check evaporate silently.
+        if not message.strip():
+            print(
+                "WARNING (workflow gates): could not read this commit's message "
+                "(editor-driven commit, `-F -` heredoc, or an unreadable/mis-encoded "
+                "file), so the feature-provenance check was SKIPPED. Use "
+                "`-F <file>` or `-m` if this is a feat( commit.",
+                file=sys.stderr,
+            )
 
         if triggered:
-            if not _has_review_citation(command):
+            if not _has_review_citation(message):
                 print(
                     f"BLOCKED (Hard rule #4): Staged gate file(s) {triggered} require an Opus review before commit.\n"
-                    "Add 'Review = Opus reviewer: SHIP/FIX-FIRST, N blocking; ...' to the commit body.\n"
-                    "Invoke the `reviewer` subagent first, then cite its verdict.",
+                    "Invoke the `reviewer` subagent first, then cite its verdict in the commit body as:\n"
+                    "  Review = Opus reviewer (<resolved model>): SHIP|FIX-FIRST, N blocking; <notes>\n"
+                    "e.g.  Review = Opus reviewer (Opus 5): SHIP, 0 blocking; verified offline sentinels\n"
+                    "The model, verdict and blocking count are all required -- copy the reviewer's own\n"
+                    "MODEL: line rather than assuming a version.\n"
+                    "(`--amend --no-edit` cannot be verified since the message is unreadable here --\n"
+                    "re-supply the existing body via `-F` if HEAD already carries a valid citation.)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+
+        # Plan/build provenance (2026-08-15): a `feat(` commit must state who
+        # designed it and who built it, so the workflow split is auditable in
+        # git history rather than only in a session transcript. "lead" is an
+        # accepted answer -- this forces a deliberate statement, not a handoff.
+        if _is_feature_commit(message):
+            missing = _missing_provenance_trailers(message)
+            if missing:
+                print(
+                    f"BLOCKED (workflow provenance): feature commit is missing {' and '.join(missing)} trailer(s).\n"
+                    "Add to the commit body:\n"
+                    "  Design = planner (<model>): <verdict>   OR   Design = lead -- <why no planner>\n"
+                    "  Build  = implementer (<model>)          OR   Build  = lead -- <why no implementer>\n"
+                    "Per CLAUDE.md: new user-facing features route design through `planner` (Opus) and\n"
+                    "the build through `implementer` (Sonnet) so the author is not the reviewer.",
                     file=sys.stderr,
                 )
                 sys.exit(2)
@@ -124,15 +176,34 @@ def _run_antipatterns() -> tuple:
     return False, "\n".join((r.stdout or "").strip().splitlines()[-20:])
 
 
-def _get_staged_files() -> list[str]:
+def _git_names(*args: str) -> list[str]:
     try:
         r = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            capture_output=True, text=True, timeout=5,
+            ["git", *args], capture_output=True, text=True, timeout=5,
         )
         return r.stdout.strip().splitlines() if r.returncode == 0 else []
     except Exception:
         return []
+
+
+def _get_staged_files(command: str = "") -> list[str]:
+    """Files this commit will actually contain.
+
+    `git commit -a` stages tracked modifications AS PART OF the commit, so at
+    PreToolUse time `git diff --cached` is still empty -- which silently voided
+    the review-citation, pytest and antipattern gates for any `-am` commit
+    (2026-08-15 review finding; it compounded with `-am` not being recognised
+    as `-m`). When -a/--all is present we union in tracked-but-unstaged files
+    so the gates see the real contents. `--amend` likewise pulls in HEAD's own
+    files, since the resulting commit carries them.
+    """
+    staged = _git_names("diff", "--cached", "--name-only")
+    tokens = _tokens(command)
+    if _has_flag(tokens, "a", "--all"):
+        staged += _git_names("diff", "--name-only")
+    if "--amend" in tokens:
+        staged += _git_names("show", "--pretty=", "--name-only", "HEAD")
+    return sorted(set(staged))
 
 
 # Files whose presence in a commit requires an Opus review citation (CLAUDE.md
@@ -162,6 +233,16 @@ _GATE_FILES = {
     "stock_analyzer/risk.py",           # portfolio risk metrics behind risk gates
     "stock_analyzer/bundle_loader.py",  # verdict assembly + availability gates
     "stock_analyzer/watchlist_advisor.py",  # emits REMOVE / ENTER_NOW verdicts
+    # DB-write / data-integrity + pipeline-trust (added 2026-08-15). CLAUDE.md's
+    # review policy already listed "DB-write / data-integrity" as review-required,
+    # but the hook didn't implement it -- so the Railway-cutover work (db.py,
+    # cron_runner.py, system_health.py) went through a review only because it was
+    # flagged by hand. Prose and hook now agree. Deliberately NOT extended to
+    # every module that merely *calls* db: db.py is the write choke-point, and
+    # gating consumers would add friction without protecting an invariant.
+    "stock_analyzer/db.py",             # every persisted write goes through here
+    "cron_runner.py",                   # unattended scheduled writer + email
+    "stock_analyzer/system_health.py",  # the surface that proves the pipeline ran
 }
 
 
@@ -181,18 +262,157 @@ def _touches_scanned_code(staged: list[str]) -> bool:
     )
 
 
-def _has_review_citation(command: str) -> bool:
-    if re.search(r"Review\s*=\s*Opus reviewer", command):
-        return True
-    # Also check commit message file when -F flag is used
-    m = re.search(r"-F\s+[\"']?(\S+?)[\"']?(?:\s|$)", command)
-    if m:
-        try:
-            with open(m.group(1), encoding="utf-8") as f:
-                return bool(re.search(r"Review\s*=\s*Opus reviewer", f.read()))
-        except Exception:
-            pass
+_SHELL_SEPARATORS = ("&&", "||", ";", "|", "&")
+
+
+def _tokens(command: str) -> list:
+    """Tokens of the `git commit` SEGMENT only, not the whole compound command.
+
+    Scoping matters: option scanning over an entire `A && git commit -m "..."`
+    string lets an EARLIER segment's flags win. Verified cases this prevents --
+    `sort -m a.txt && git commit -m "feat(x): y"` would collect BOTH -m values,
+    so the joined message no longer starts with "feat" and the provenance gate
+    silently passes with no warning (the message isn't empty); and
+    `ls -la && git commit` would see the `-a` from `ls` and union unstaged
+    files. Same fail-open class as the `-am` bug, just lower probability.
+    """
+    try:
+        toks = shlex.split(command, posix=True)
+    except ValueError:
+        return []
+
+    start = 0
+    for i, t in enumerate(toks):
+        if t == "git" and i + 1 < len(toks) and toks[i + 1] == "commit":
+            start = i
+    toks = toks[start:]
+
+    for i, t in enumerate(toks):
+        if t in _SHELL_SEPARATORS and i > 0:
+            return toks[:i]
+    return toks
+
+
+def _is_short_opt(token: str, letter: str) -> bool:
+    """True for a short option carrying `letter`, INCLUDING inside a cluster.
+
+    `-am` is one token, not two, so a whole-token `== "-m"` comparison misses
+    it entirely. That gap let `git commit -am "feat(x): y"` skip the provenance
+    gate outright (2026-08-15 review finding). Matches `-m` and `-am`, and for
+    value-taking options only when `letter` is LAST in the cluster -- `-am`
+    takes its value as the next argv element, whereas in `-ma` the `a` would be
+    consumed as the message text by git itself.
+    """
+    return bool(re.fullmatch(rf"-[A-Za-z]*{letter}", token))
+
+
+def _has_flag(tokens: list, letter: str, *long_forms: str) -> bool:
+    """True if a short flag (bare or clustered) or any long form is present."""
+    for t in tokens:
+        if t in long_forms or re.fullmatch(rf"-[A-Za-z]*{letter}[A-Za-z]*", t):
+            return True
     return False
+
+
+def _read_message_file(path: str) -> str:
+    """Read a commit-message file. `utf-8-sig` transparently strips a BOM, and
+    errors='replace' keeps a mis-encoded file (e.g. UTF-16 from PowerShell 5.1
+    Out-File) from collapsing to "" and silently skipping the provenance gate."""
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def _commit_message_text(command: str) -> str:
+    """Best-effort recovery of the full commit message from the git command.
+
+    Covers `-F <file>` / `--file <file>` / `--file=<file>` (the project's
+    convention is `-F .git/COMMIT_MSG.txt`) and `-m` / `--message` /
+    `--message=`, each including clustered short forms like `-am`.
+
+    Returns "" when the message genuinely cannot be resolved -- an unreadable
+    named file, or `-F -` (heredoc piped to stdin, which the hook cannot see).
+    Callers must treat "" as "cannot verify" and WARN, because it fails CLOSED
+    for the review-citation gate but OPEN for the provenance gate (an empty
+    string doesn't start with "feat"). That asymmetry is why `main()` prints an
+    explicit warning rather than relying on the empty value alone.
+    """
+    tokens = _tokens(command)
+
+    for i, t in enumerate(tokens):
+        if t.startswith("--file="):
+            return _read_message_file(t.split("=", 1)[1])
+        if (_is_short_opt(t, "F") or t == "--file") and i + 1 < len(tokens):
+            path = tokens[i + 1]
+            # `-F -` reads the message from stdin (heredoc). git succeeds; the
+            # hook has no way to see it. Unresolvable, not empty-and-fine.
+            return "" if path == "-" else _read_message_file(path)
+
+    msgs = []
+    for i, t in enumerate(tokens):
+        if t.startswith("--message="):
+            msgs.append(t.split("=", 1)[1])
+        elif (_is_short_opt(t, "m") or t == "--message") and i + 1 < len(tokens):
+            msgs.append(tokens[i + 1])
+    if msgs:
+        # git joins repeated -m blocks with a blank line
+        return "\n\n".join(msgs)
+    return ""
+
+
+# Hardened 2026-08-15. The old check was a bare `Review = Opus reviewer`
+# substring, which any commit body could satisfy by accident or habit. It now
+# requires the reviewer's RESOLVED model in parens, an explicit verdict, and a
+# blocking count -- i.e. the three facts you only have after actually reading a
+# reviewer's output. This narrows lazy/accidental citations; it cannot stop a
+# deliberately fabricated one (THIS hook cannot prove a subagent ran -- a
+# SubagentStop hook could, and CLAUDE.md names that upgrade path as available
+# but unbuilt). An honesty mechanism, not a guarantee -- see CLAUDE.md.
+#   e.g. Review = Opus reviewer (Opus 5): SHIP, 0 blocking; ...
+#
+# Two subtleties, both found in review rather than by reading:
+#   • the model group is `[^\n]+` (greedy, line-bounded), NOT `[^)\n]+` -- a
+#     resolved MODEL: line can itself contain parens, e.g.
+#     "(Opus 4.8 (1M context))", and Hard Rule #4 tells the author to copy that
+#     line verbatim. The stricter class rejected a legitimate citation, which
+#     would be an unexplainable false block.
+#   • the verdict→count span uses `[\s\S]{0,120}?`, not `[^\n]*?` -- at 72-col
+#     wrapping "SHIP,\n0 blocking" is as likely as "SHIP, 0 blocking", and a
+#     newline-intolerant span made passing a lottery decided by line width.
+_REVIEW_CITATION_RE = re.compile(
+    r"Review\s*=\s*Opus reviewer\s*\(\s*[^\n]+\s*\)\s*:\s*"
+    r"(?:SHIP|FIX-FIRST)\b[\s\S]{0,120}?\b\d+\s+blocking\b",
+    re.IGNORECASE,
+)
+
+# Feature commits must state who designed and who built, so the plan/build/review
+# split is auditable in git history forever rather than living only in a session
+# transcript. "lead" is an ACCEPTED answer -- the point is a deliberate statement,
+# not a forced handoff. Both are self-attested, same caveat as the review citation.
+#   Design = planner (Opus 5): <verdict>      |  Design = lead -- <why no planner>
+#   Build  = implementer (Sonnet 5)           |  Build  = lead -- <why no implementer>
+_DESIGN_TRAILER_RE = re.compile(r"^\s*Design\s*=\s*\S+", re.MULTILINE | re.IGNORECASE)
+_BUILD_TRAILER_RE = re.compile(r"^\s*Build\s*=\s*\S+", re.MULTILINE | re.IGNORECASE)
+_FEAT_COMMIT_RE = re.compile(r"^\s*feat[(!:]", re.IGNORECASE)
+
+
+def _has_review_citation(message: str) -> bool:
+    return bool(_REVIEW_CITATION_RE.search(message))
+
+
+def _is_feature_commit(message: str) -> bool:
+    return bool(_FEAT_COMMIT_RE.match(message.lstrip("﻿")))
+
+
+def _missing_provenance_trailers(message: str) -> list[str]:
+    missing = []
+    if not _DESIGN_TRAILER_RE.search(message):
+        missing.append("Design")
+    if not _BUILD_TRAILER_RE.search(message):
+        missing.append("Build")
+    return missing
 
 
 def _find_python() -> str | None:
@@ -209,18 +429,29 @@ def _find_python() -> str | None:
 
 
 def _run_pytest() -> tuple:
-    """Returns (True, "") on pass, (False, detail) on failure, (None, detail)
-    when the suite couldn't be run at all (missing venv/pytest, timeout)."""
+    """Returns (True, "") on pass, (False, detail) on failure OR timeout,
+    (None, detail) when the suite couldn't be invoked at all (missing venv).
+
+    A timeout blocks deliberately (it is NOT downgraded to a warning): at
+    _PYTEST_TIMEOUT_SEC the suite has ~3x its normal runtime, so exceeding it
+    means a genuine hang, which is worth stopping a commit for.
+
+    The timeout was raised from 120s to 300s on 2026-08-15 after a real
+    near-miss: the suite had grown to 3573 tests / ~107s, leaving only ~13s of
+    headroom before a PASSING suite would start blocking every commit as a
+    false 'hang'. Re-check this margin whenever the suite grows substantially.
+    """
     py = _find_python()
     if not py:
         return None, ".venv python not found -- run `pip install -r requirements-dev.txt` in .venv"
     try:
         r = subprocess.run(
             [py, "-m", "pytest", "tests/", "-q"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=_PYTEST_TIMEOUT_SEC,
         )
     except subprocess.TimeoutExpired:
-        return False, "pytest timed out after 120s -- investigate a hang before proceeding"
+        return False, (f"pytest timed out after {_PYTEST_TIMEOUT_SEC}s -- investigate a hang "
+                       "before proceeding (normal runtime is ~110s)")
     except Exception as e:
         return None, f"could not invoke pytest ({e})"
 

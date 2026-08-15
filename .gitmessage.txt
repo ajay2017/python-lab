@@ -17,3 +17,18 @@
 #   • Claude-authored commits end with:
 #       Co-Authored-By: Ajay with <claude model> <ajay.x.ku@accenture.com>
 #     (use the actual model from the session — Sonnet 5, Opus 4.8, etc.)
+#
+# ── Enforced by .claude/hooks/pre_tool_checks.py (it will BLOCK the commit) ──
+#   • Touching constants / a gate / a scoring formula / a DB-write path
+#     (db.py, cron_runner.py, system_health.py, …) requires:
+#       Review = Opus reviewer (<resolved model>): SHIP|FIX-FIRST, N blocking; <notes>
+#     e.g. Review = Opus reviewer (Opus 5): SHIP, N blocking; sentinels verified
+#     Copy the model from the reviewer's own MODEL: line — don't guess a version.
+#     NOTE: the example above deliberately says "N blocking", not a digit. `-F`
+#     does NOT strip these # lines (git's cleanup=whitespace), so a real digit
+#     here would make a template-seeded message satisfy the gate by itself.
+#
+#   • Any `feat(` commit requires BOTH provenance trailers:
+#       Design = planner (Opus 5): <verdict>   |   Design = lead — <why no planner>
+#       Build  = implementer (Sonnet 5)        |   Build  = lead — <why no implementer>
+#     "lead" is an accepted answer — the point is a deliberate, recorded statement.

@@ -10,6 +10,21 @@ while the lead orchestrates and the Opus reviewer guards the decision logic.
 > regardless of what the lead is. See `docs/cost-routing.md` for the decision
 > rationale and updated economics.
 
+> **Workflow enforcement (2026-08-15).** The plan → build → review split is no
+> longer convention-only. `pre_tool_checks.py` now blocks a commit that (a) stages
+> a decision-engine-core **or DB-write** file without a properly-formatted Opus
+> review citation (resolved model + verdict + blocking count), or (b) is a `feat(`
+> commit missing its `Design =` / `Build =` provenance trailers. `lead` is an
+> accepted answer on both trailers — the requirement is a deliberate, permanently
+> recorded statement of who designed and who built, so the split is auditable in
+> git history rather than only in a session transcript. Separately — a
+> *convention*, not a hook check — the `reviewer` is now invoked
+> **automatically** when a change is review-required, rather than on request
+> (CLAUDE.md Hard Rule #4).
+> **Honesty caveat:** the hook proves a citation is *present and well-formed*; it
+> cannot prove a subagent ran. The real protection is that the reviewer is a
+> separate instance with its own context, re-deriving from the diff.
+
 > **Deterministic-gates-first (2026-08-04 cost/quality pass).** The free,
 > always-on gates — the `pre_tool_checks.py` commit/push hook (full pytest +
 > `check_antipatterns.py`) and the suite's own `tests/test_repo_hygiene.py`
