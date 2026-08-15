@@ -72,29 +72,26 @@ Owner-only page (hidden from the read-only viewer via <code>_OWNER_ONLY_PAGES</c
 
 <div class="panel">
 <table>
-  <tr><th style="width:30%">Table</th><th style="width:14%">Source</th><th>Status</th><th style="width:96px"></th></tr>
+  <tr><th style="width:34%">Table</th><th>Status</th><th style="width:96px"></th></tr>
   <tr>
     <td><strong>Grow Today scan universe</strong><br><code>SECTOR_UNIVERSE</code> · 68 tickers / 9 buckets</td>
-    <td><span class="tag code">from code</span></td>
     <td><span class="dot a"></span>Last curated 2026-05-05 — <strong>102d ago</strong> (refresh every 90d)</td>
     <td><button class="btn">Edit</button></td>
   </tr>
   <tr>
     <td><strong>Movers discovery universe</strong><br><code>DISCOVERY_UNIVERSE</code> · 204 tickers / 12 buckets</td>
-    <td><span class="tag code">from code</span></td>
     <td><span class="dot g"></span>Last curated 2026-05-29 — 78d ago</td>
     <td><button class="btn ghost">Edit</button></td>
   </tr>
   <tr>
     <td><strong>Diversification candidate roster</strong><br><code>_SECTOR_CANDIDATES</code> · 44 tickers / 11 sectors</td>
-    <td><span class="tag code">from code</span></td>
     <td><span class="dot a"></span>Last curated 2026-05-05 — <strong>102d ago</strong> (refresh every 90d)</td>
     <td><button class="btn">Edit</button></td>
   </tr>
 </table>
-<p class="cap"><span class="tag code">from code</span> means no saved override exists yet — the engine is
-reading the hardcoded list in the repo. Editing here creates a database override; the code list stays
-permanently as the fallback, so a Supabase outage behaves exactly like today.</p>
+<p class="cap">The database is the <strong>single source of truth</strong> for these lists. A one-time
+migration seeds them from the current code, after which the hardcoded copies are <strong>deleted</strong> —
+keeping them as a "fallback" is what lets a frozen list silently activate years later.</p>
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────── -->
@@ -200,6 +197,32 @@ permanently as the fallback, so a Supabase outage behaves exactly like today.</p
 </div>
 
 <!-- ─────────────────────────────────────────────────────────────── -->
+<h3>When the database is unavailable</h3>
+
+<div class="panel" style="border-color:#5a2a2e">
+  <div style="font-size:15px;margin-bottom:6px"><span class="dot r"></span><strong>Grow Today — scan universe unavailable</strong></div>
+  <p class="small muted" style="margin:0 0 10px">
+    The scan universe could not be read from the database, so <strong>no new-position
+    candidates are shown</strong>. This is not "no opportunities today" — the scan did not run.
+  </p>
+  <div class="cell small" style="color:var(--muted)">⛔ Supabase RLS is blocking reads. The <code>[supabase] key</code>
+  secret must be the <strong>service-role / secret key</strong> — not the publishable/anon key.
+  Update <code>SUPABASE_KEY</code> in Railway → Variables, then Redeploy.</div>
+</div>
+
+<div class="note">
+  <strong>Why nothing is shown, rather than a fallback list.</strong><br>
+  <span class="small">This behaviour is already proven: during the 2026-07-24 Railway
+  migration a wrong <code>SUPABASE_KEY</code> produced exactly this — no data, plus a message naming
+  the cause and the fix. That is the safety net.<br><br>
+  A silent fallback to a frozen code list would be the <strong>INTC failure mode</strong>: on 2026-07-14
+  <code>load_all</code> quietly served 5-day-old cached data, scored a name above the buy gate, and the
+  app <em>recommended a buy on stale inputs</em> — fresh data scored the same name a Sell.
+  An empty roster is also treated as unavailable, never as an empty universe, because
+  "scanned nothing, found nothing" looks identical to a clean bill of health.</span>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
 <h2>⏱️ Refresh reminders</h2>
 <p class="sub small">How long each table stays trustworthy before check ⑤ flags it. Changes only when a
 reminder appears — never what the engine decides.</p>
@@ -218,10 +241,12 @@ reminder appears — never what the engine decides.</p>
 <!-- ─────────────────────────────────────────────────────────────── -->
 <h2>Open design questions this mockup does <em>not</em> answer</h2>
 <div class="panel small">
-  <p style="margin-top:0"><strong>1. Does the cron read the override?</strong> <code>cron_runner.py</code>
-  imports <code>SECTOR_UNIVERSE</code> directly. If the app reads a database override and the cron doesn't,
-  the 9:45 ET morning-picks email and in-app Grow Today would silently scan
-  <strong>different universes</strong>. Must be decided before any code.</p>
+  <p style="margin-top:0"><strong>1. What does the cron do when the universe is unavailable?</strong>
+  <code>cron_runner.py</code> imports <code>SECTOR_UNIVERSE</code> directly and must be moved onto the same
+  resolver as the app. Single-source removes the divergence risk, but leaves one call: when the
+  9:45 ET morning-picks lane hits UNAVAILABLE, does it send nothing, or send an email saying the
+  scan couldn't run? Recommend the latter — silence is indistinguishable from "no picks today",
+  the same failure the empty-payload rule rejects.</p>
   <p><strong>2. Bucket renames.</strong> <code>_DIVERSIFY_TO_DISCOVERY</code> is keyed on both universes'
   bucket labels — renaming one here would silently degrade diversification suggestions. The UI must block
   a rename that orphans that map (a test catches it in CI, but a UI edit bypasses CI).</p>

@@ -109,14 +109,56 @@ This is the tier that solves the stated problem: you curate the list *in the app
 check ⑤ says it's due, and `as_of` stamps itself truthfully as a consequence. No code
 edit, and no way for the date to drift from reality.
 
-**The cost, which the original author deliberately avoided.** From
-[`discovery_universe.py`](../../stock_analyzer/discovery_universe.py):
+**A hybrid code-fallback was designed first and then REJECTED. Read this before
+re-proposing one.** The original tables are hardcoded on a deliberate rationale — from
+[`discovery_universe.py`](../../stock_analyzer/discovery_universe.py): *"a live scrape adds
+a runtime dependency and a new failure mode… A static list has zero runtime risk."* The
+first draft of this plan honoured that with a hybrid: DB override, hardcoded list as the
+floor.
 
-> *"Why hardcoded rather than scraped: a live scrape adds a runtime dependency and a new
-> failure mode for a list that barely changes week to week. A static list has zero runtime
-> risk; the cost is a manual refresh a few times a year."*
+**That was wrong, for three reasons that only became clear on challenge (user, 2026-08-15):**
 
-DB-backing reintroduces exactly that failure mode. **Resolution — hybrid, code as the floor:**
+1. **It is the INTC failure mode.** On 2026-07-14 `load_all` silently fell back to
+   `bundle_cache` with 5-day-old data, scored a name ≥ `COMPOSITE_BUY`, and **the app
+   recommended a buy on stale inputs** — fresh data scored the same name 32.1, a Sell.
+   That incident produced `GROW_TODAY_MAX_FUND_AGE_DAYS`. A silent fallback to a frozen
+   scan universe repeats it exactly, on the same buy-candidate surface.
+2. **The fallback rots.** Once DB edits are the norm, nobody updates the code list. The
+   "safety net" decays into a snapshot that could silently activate years later and scan a
+   dead universe with no signal.
+3. **The premise doesn't hold.** Supabase is already a hard dependency — no DB means no
+   holdings, so no portfolio and nothing to decide. A missing scan universe changes nothing
+   that isn't already broken.
+
+**Resolution — the DB is the single source of truth, and unavailability FAILS LOUD.**
+This is not a new pattern; it is the one the repo already uses and has already validated
+in production:
+
+- **HONEST EMPTY-STATE** (architecture.md §10) — Home *"distinguishes 'no holdings' from
+  'holdings exist but all bundles failed' and shows a fail-loud error… never 'enter your
+  holdings'."*
+- **During the 2026-07-24 Railway migration**, a wrong `SUPABASE_KEY` (publishable instead
+  of service-role) produced exactly the desired behaviour: the app showed **no data plus a
+  message naming the cause and the fix** (`db.py`'s RLS banner). The user cited this
+  unprompted as the safety net they want. It is already proven.
+
+**The invariant is therefore NOT "keep code as truth". It is:**
+
+> **Never silently substitute different data.** Fail loud, or serve stale *and say so*
+> (the `bundle_cache` / `stale_as_of` pattern).
+
+When the reference tables can't be read, Grow Today shows **"scan universe unavailable"** —
+it does not quietly scan a frozen list. Strictly safer than the hybrid, because it cannot
+produce a confident recommendation from stale inputs.
+
+**Consequences of dropping the hybrid — all simplifications:**
+- No `from code` / `from DB` badge; there is only one source.
+- The dual-resolution bug (payload falling back on *empty*, `as_of` on *no row*) **cannot
+  exist** — there is nothing to fall back to. It is designed out, not guarded against.
+- **A one-time seed migration** writes the current code lists into the DB, after which the
+  hardcoded copies are **deleted, not retained**. Keeping them is what creates the rot.
+
+~~Superseded hybrid resolver, kept only so the rejection is legible:~~
 
 ```
 resolve_universe(name) -> (payload, as_of, source):
@@ -126,18 +168,28 @@ resolve_universe(name) -> (payload, as_of, source):
     else:                     -> (override.payload, override.as_of, "db")
 ```
 
-**One resolver returns the payload AND its date together — this is not a style
-preference.** A first draft resolved them on two independent paths: the payload fell back
-to code when the override was *empty*, while the registry fell back to the code date only
-when there was *no row*. An empty-but-present row satisfies those differently, so the scan
-would run on the **stale hardcoded roster** while check ⑤ reported it **freshly refreshed** —
-silent absence wearing a green badge, i.e. precisely the failure class F-238 exists to
-catch, reintroduced by two individually-sensible fallbacks. (Caught in review, 2026-08-15.)
+**The actual resolver, post-rejection — one source, no fallback:**
 
-**Invariant: whichever payload wins must carry its own date.** The code list always travels
-with the code-recorded date; the DB payload always travels with the DB date. Check ⑤ grades
-whatever actually won, and the row should name the `source` so "which list am I even
-looking at?" is never a guess.
+```
+resolve_universe(name) -> (payload, as_of)   |   raises ReferenceDataUnavailable
+    row = db.load_reference_table(name)      # None on ANY failure (offline sentinel)
+    if row is None:        -> UNAVAILABLE    # DB down / pre-DDL / RLS misconfigured
+    if row.payload empty:  -> UNAVAILABLE    # never scan nothing and call it a scan
+    else:                  -> (row.payload, row.as_of)   # always travel together
+```
+
+Callers surface UNAVAILABLE the way Home already surfaces a failed bundle load: a
+fail-loud message naming the cause, and **no recommendations** — never a partial or
+silent-empty scan that looks like "no opportunities today."
+
+Note the empty-payload case still maps to UNAVAILABLE rather than "an empty universe."
+An empty roster is indistinguishable from a broken one, and "scanned nothing, found
+nothing" is the single most dangerous output this feature could produce: it looks
+identical to a clean bill of health.
+
+**Payload and `as_of` are returned together, never resolved separately.** This is what
+designs out the two-independent-paths bug that an earlier draft had — with no fallback
+tier, there is no second path for them to disagree on.
 
 The hardcoded list stays in the repo permanently as the fallback. Supabase down ⇒ the
 scan behaves exactly as it does today. This preserves zero-runtime-risk while enabling UI
@@ -207,14 +259,17 @@ telling the truth.
    BLS/BEA 2027 dates are outstanding as of 2026-08-15) — but it feeds
    `daily_briefing._act_today` and the cron alert lane directly, making it materially more
    decision-bearing than a scan universe. Recommend **excluding from v1** and revisiting.
-7. **The cron lane reads the universe DIRECTLY — decide this before any code.** (Added in
-   review.) `cron_runner.py` imports `SECTOR_UNIVERSE` and passes
-   `list(SECTOR_UNIVERSE.keys())` to `scan_sectors`. If the app reads a DB override and the
-   cron does not, the 9:45 ET morning-picks email and in-app Grow Today silently scan
-   **different universes**, with no banner saying so — on a surface that has already had a
-   dead-email incident (memory `project_morning_picks_cron_bug`). Needs: does the cron read
-   the override, and what does it do if Supabase is unreachable mid-lane? The `resolve_*`
-   helper must be the single entry point for BOTH, or this diverges by construction.
+7. **The cron lane reads the universe DIRECTLY — mostly RESOLVED by the fail-loud decision,
+   one part still open.** `cron_runner.py` imports `SECTOR_UNIVERSE` and passes
+   `list(SECTOR_UNIVERSE.keys())` to `scan_sectors`. It must call the same `resolve_universe`
+   the app does — a single entry point for both, or app and email diverge by construction on
+   a surface that has already had a dead-email incident (memory
+   `project_morning_picks_cron_bug`). Dropping the hybrid removes the divergence question
+   (there is only one source), but leaves one decision: **when the cron hits UNAVAILABLE, does
+   it send nothing, or send an email saying the scan couldn't run?** Recommend the latter —
+   silence is indistinguishable from "no picks today", which is the same failure the
+   empty-payload rule above rejects. It should also record a `failed` heartbeat so 🩺 System
+   Trust shows it.
 8. **Replace vs merge semantics.** The "empty payload" floor doesn't cover a *semantically
    truncated* one: a save with 3 of 12 buckets populated is non-empty, clears the floor, and
    wholesale-replaces the roster. Decide explicitly whether a save replaces or merges, and
