@@ -6,7 +6,7 @@ A directive distillation for any Claude session working in this repo. Read first
 
 ## Project orientation
 
-Personal portfolio intelligence app for a single user. Primary deploy is Streamlit Community Cloud, auto-deploying from `main`. A Railway Hobby pilot (`drishta.up.railway.app`) has run in parallel since 2026-07-24 against the same Supabase DB — see [docs/plans/railway-migration.md](docs/plans/railway-migration.md) for status and [DEVELOPMENT.md](DEVELOPMENT.md) for the secrets architecture. As of 2026-08-07, that same Railway project also owns all 5 scheduled cron lanes (premarket/scan/intraday/eod/weekly thesis) via dedicated native Cron Job services, migrated off GitHub Actions after a platform-wide GitHub Actions incident exposed its `schedule` trigger's best-effort delivery — see memory `project_cron_railway_migration`; `.github/workflows/alerts.yml` is now manual-dispatch-only. Never run locally — both deploys assume their respective hosted secrets delivery, not a local `.env`/`secrets.toml` dev loop.
+Personal portfolio intelligence app for a single user. **Primary deploy is Railway Hobby at `drishta.up.railway.app`**, auto-deploying from `main` — cut over 2026-08-15 after a 3-week parallel pilot that ran clean (see [docs/plans/railway-migration.md](docs/plans/railway-migration.md) for the full phase log and [DEVELOPMENT.md](DEVELOPMENT.md) for the secrets architecture). The Streamlit Community Cloud app is **kept dormant as a cold fallback** — it still auto-deploys from `main` against the same Supabase DB, but it is no longer the deploy you verify against, and its free-tier throttling notices are expected noise. Use it only if Railway itself is down. As of 2026-08-07 the same Railway project also owns all scheduled cron lanes — 6 as of the 2026-08-15 cutover (premarket/scan/intraday/eod/weekly thesis/weekly maintenance) — via dedicated native Cron Job services, migrated off GitHub Actions after a platform-wide GitHub Actions incident exposed its `schedule` trigger's best-effort delivery — see memory `project_cron_railway_migration`; `.github/workflows/alerts.yml` is now manual-dispatch-only. Never run locally — both deploys assume their respective hosted secrets delivery, not a local `.env`/`secrets.toml` dev loop.
 
 ## Operating posture
 
@@ -18,9 +18,9 @@ Personal portfolio intelligence app for a single user. Primary deploy is Streaml
 
 1. **Never hardcode decision thresholds.** Every gate / threshold / boundary value lives in [`stock_analyzer/constants.py`](stock_analyzer/constants.py). Import from there. Changing a value there is an investment-policy decision — discuss with the user before changing.
 
-2. **Never disable RLS.** Supabase tables are protected by `FOR ALL TO service_role` policies. The Streamlit secret `[supabase] key` must be the service-role / secret key (not publishable). If you see "row-level security blocking" errors, the fix is to swap secrets and reboot the app via Streamlit Cloud → Manage app → Reboot — not to disable RLS.
+2. **Never disable RLS.** Supabase tables are protected by `FOR ALL TO service_role` policies. The `[supabase] key` secret must be the service-role / secret key (not publishable). If you see "row-level security blocking" errors, the fix is to correct `SUPABASE_KEY` in Railway → Variables and redeploy the service — not to disable RLS.
 
-3. **Never run the app locally to test changes.** Push to `main`, wait ~2 min for Streamlit Cloud auto-redeploy (and, during the Railway pilot, its auto-redeploy too), hard-refresh the browser (Ctrl+F5).
+3. **Never run the app locally to test changes.** Push to `main`, wait ~2 min for the Railway auto-redeploy, hard-refresh the browser (Ctrl+F5) at `drishta.up.railway.app`. (The dormant Streamlit Cloud app redeploys off the same push; it is not the surface you verify against.)
 
 4. **Any commit touching `stock_analyzer/constants.py`, a gate, or a scoring/recommendation formula requires an Opus review before it ships, cited in the commit body** (`Review = Opus reviewer (<resolved version, e.g. Opus 5>): SHIP/FIX-FIRST, N blocking; ...`). The `reviewer` subagent's `model: opus` pin ([`.claude/agents/reviewer.md`](.claude/agents/reviewer.md)) is a generic alias, not a fixed version — it auto-follows whatever Opus release the account currently resolves it to, so the reviewer's own output states which specific version it ran as (its `MODEL:` line); copy that into the citation rather than assuming a number from memory. This applies **regardless of which model is running the main session** — invoke the `reviewer` subagent explicitly; don't rely on the main session's own judgment as a substitute. A commit in this category with no review citation is itself a defect — flag it. (Two 2026-07-15 commits shipped without this citation and needed a retroactive review to close the gap — see `docs/cost-routing.md`.)
 
@@ -58,7 +58,7 @@ When adding a new advisor or recommendation feature, **always** check whether it
 
 - Pure logic lives in `stock_analyzer/`; UI rendering and orchestration in `app.py`. Don't move domain logic into `app.py`.
 - New database columns must be backward-compatible: `db.load_trades()` backfills `None` for legacy rows missing columns.
-- Date comparisons use America/New_York timezone via `pytz` (Streamlit Cloud runs UTC).
+- Date comparisons use America/New_York timezone via `pytz` (the hosted containers run UTC).
 - For UI suppressions, render a visible banner explaining what was suppressed and why — never silently filter.
 
 ---

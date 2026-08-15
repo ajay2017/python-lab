@@ -37,6 +37,9 @@ class _FakeQueryBuilder:
     def upsert(self, *_a, **_kw):
         return self
 
+    def limit(self, *_a, **_kw):
+        return self
+
     def execute(self):
         if self._raise:
             raise RuntimeError("simulated relation does not exist / transient failure")
@@ -166,3 +169,42 @@ def test_mature_model_predictions_batch_skips_rows_with_no_id(monkeypatch):
     monkeypatch.setattr(db, "_client", lambda: fake)
     out = db.mature_model_predictions_batch([{"realized_value": 0.2}])  # no "id"
     assert out is True  # loop completes without ever calling .update on a bad row
+
+
+# ── has_backfilled_predictions ────────────────────────────────────────────────
+# Feeds the `maintenance` cron lane's skip decision. The tri-state matters:
+# True = skip, False = do the work, None = UNKNOWN, which must NOT be collapsed
+# into "already done" or a transient DB blip would leave a permanent hole in
+# the ledger.
+
+def test_has_backfilled_predictions_no_creds_returns_none(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: False)
+    assert db.has_backfilled_predictions("vol_forecast_ewma", "v1", "AAPL") is None
+
+
+def test_has_backfilled_predictions_query_failure_returns_none(monkeypatch):
+    """A pre-DDL table or a transient error is 'unknown', never False."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(raise_on_execute=True))
+    assert db.has_backfilled_predictions("vol_forecast_ewma", "v1", "AAPL") is None
+
+
+def test_has_backfilled_predictions_true_when_row_exists(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=[{"id": 7}]))
+    assert db.has_backfilled_predictions("vol_forecast_ewma", "v1", "AAPL") is True
+
+
+def test_has_backfilled_predictions_false_when_no_rows(monkeypatch):
+    """Genuine zero-row result is False (do the backfill) — distinct from None."""
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    monkeypatch.setattr(db, "_client", lambda: _FakeClient(rows=[]))
+    assert db.has_backfilled_predictions("vol_forecast_ewma", "v1", "AAPL") is False
+
+
+def test_has_backfilled_predictions_queries_model_predictions(monkeypatch):
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    fake = _FakeClient(rows=[])
+    monkeypatch.setattr(db, "_client", lambda: fake)
+    db.has_backfilled_predictions("vol_forecast_ewma", "v1", "AAPL")
+    assert fake.calls == ["model_predictions"]

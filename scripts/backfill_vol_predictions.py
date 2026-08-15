@@ -15,14 +15,27 @@ portfolio weights, which only exist as far back as the logged `trades`
 history (~3 months), not 5 years of market data. Portfolio-scope rows are
 written only by the live daily cron going forward (cron_runner.py).
 
-Idempotent: rerunning never duplicates rows — relies on the same
+Idempotent FOR AN IDENTICAL HISTORY WINDOW — relies on the same
 (model_name, model_version, scope, ticker, made_at) UNIQUE constraint +
 upsert that the live cron's writer uses (db.save_model_predictions_batch).
+A same-day re-fire or retry therefore never duplicates. Note the period is
+ROLLING, so a re-run weeks later samples shifted as_of points and ADDS rows
+at new made_at keys rather than replacing the old ones. The maintenance
+lane's routine skip_existing=True path never hits this; only a deliberate
+manual full redo can.
 
-Run from the Streamlit Cloud terminal (Manage app -> Terminal) or any shell
-with the same Supabase env vars the app uses:
+Normally you do NOT need to run this by hand: the `maintenance` cron lane
+(`cron_runner.py`, ALERT_RUN_MODE=maintenance) calls `run_backfill(
+skip_existing=True)` on a schedule, so a newly-bought ticker gets its history
+backfilled automatically on the next tick. Run it manually only to force a
+full redo (repair/refresh), from any shell with the same Supabase env vars:
 
     python scripts/backfill_vol_predictions.py
+
+NOTE: Railway's Console shell is NOT the app's environment — it has a minimal
+PATH, no app dependencies, and an unset LD_LIBRARY_PATH (numpy fails on
+libz.so.1). That is precisely why this became a cron lane; don't try to run
+it from that console.
 
 MEASUREMENT-ONLY: nothing this script writes is read by any gate,
 recommendation, or the composite score.
@@ -138,31 +151,75 @@ def _to_iso(ts) -> str | None:
             return None
 
 
-def main() -> None:
+def run_backfill(skip_existing: bool = False, log=print) -> dict:
+    """Backfill every currently-held ticker, returning a summary dict.
+
+    `skip_existing=True` skips tickers that already have `source='backfill'`
+    rows for this model — the mode the `maintenance` cron lane uses, so a
+    recurring run only does real work for holdings added since the last one.
+    A manual CLI run defaults to `False` (redo everything; the upsert makes
+    that safe) because the usual reason to invoke it by hand is to repair
+    or refresh rows.
+
+    `db.has_backfilled_predictions` returns `None` when the check itself
+    can't run (DB offline / pre-DDL). That is deliberately treated as
+    "unknown → back it up anyway": a redundant backfill costs provider
+    calls, whereas wrongly skipping leaves a permanent hole in the ledger.
+
+    LIMITATION: that check is presence-only (one row satisfies it). A first
+    backfill that ran against a degraded provider and wrote a thin result
+    still marks the ticker done permanently — the remedy is a manual
+    `skip_existing=False` redo for that ticker. See docs/architecture.md
+    §12.6 "Known limitation".
+
+    `log` is injected so the cron lane can route output through its own
+    timestamped `_log` instead of bare stdout.
+    """
     tickers = _held_tickers()
     if not tickers:
-        print("No held tickers found (no holdings, or DB unavailable) — nothing to backfill.")
-        return
+        log("No held tickers found (no holdings, or DB unavailable) — nothing to backfill.")
+        return {"tickers": 0, "rows": 0, "skipped": [], "already_done": []}
 
-    print(f"Backfilling vol_forecast_ewma for {len(tickers)} held ticker(s): "
-          f"{', '.join(tickers)}")
-    print(f"Period={PREDICTION_BACKFILL_PERIOD} · stride={_STRIDE_TRADING_DAYS} trading days "
-          f"· horizon={VOL_FORECAST_HORIZON_DAYS} trading days")
+    log(f"Backfilling vol_forecast_ewma for {len(tickers)} held ticker(s): "
+        f"{', '.join(tickers)}")
+    log(f"Period={PREDICTION_BACKFILL_PERIOD} · stride={_STRIDE_TRADING_DAYS} trading days "
+        f"· horizon={VOL_FORECAST_HORIZON_DAYS} trading days · skip_existing={skip_existing}")
 
     total_rows = 0
     skipped: list[str] = []
+    already_done: list[str] = []
     for ticker in tickers:
+        if skip_existing:
+            done = db.has_backfilled_predictions("vol_forecast_ewma", "v1", ticker)
+            if done is True:
+                log(f"  {ticker}: already backfilled — skip")
+                already_done.append(ticker)
+                continue
+            if done is None:
+                log(f"  {ticker}: backfill-state check unavailable — proceeding anyway")
+
         n_rows, reason = _backfill_ticker(ticker)
         if reason:
-            print(f"  {ticker}: SKIPPED — {reason}")
+            log(f"  {ticker}: SKIPPED — {reason}")
             skipped.append(ticker)
         else:
-            print(f"  {ticker}: {n_rows} row(s) written")
+            log(f"  {ticker}: {n_rows} row(s) written")
         total_rows += n_rows
 
-    print(f"\nBackfill complete: {len(tickers)} ticker(s) processed, "
-          f"{total_rows} row(s) written, {len(skipped)} skipped"
-          + (f" ({', '.join(skipped)})" if skipped else "") + ".")
+    log(f"Backfill complete: {len(tickers)} ticker(s) seen, "
+        f"{len(already_done)} already done, {total_rows} row(s) written, "
+        f"{len(skipped)} skipped"
+        + (f" ({', '.join(skipped)})" if skipped else "") + ".")
+    return {
+        "tickers": len(tickers),
+        "rows": total_rows,
+        "skipped": skipped,
+        "already_done": already_done,
+    }
+
+
+def main() -> None:
+    run_backfill(skip_existing=False)
     print("PORTFOLIO scope was NOT backfilled by this script — that needs "
           "historical trade-derived weights (design doc §1.6b); the daily "
           "cron writes portfolio-scope rows going forward instead.")

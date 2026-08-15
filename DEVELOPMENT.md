@@ -8,7 +8,7 @@ For deeper detail see [docs/requirements.md](docs/requirements.md) and [docs/arc
 
 ## What this project is
 
-A personal portfolio intelligence app for a single user (Ajay). Live deploy: **Streamlit Community Cloud**, repo: **github.com/ajay2017/python-lab**, branch: **main**.
+A personal portfolio intelligence app for a single user (Ajay). Live deploy: **Railway Hobby** (`drishta.up.railway.app`), repo: **github.com/ajay2017/python-lab**, branch: **main**. Streamlit Community Cloud is retained as a dormant fallback only — see "How to run / deploy" below.
 
 **Operating posture:** the app *decides*, it doesn't merely inform. Recommendations are issued as actionable calls; gates are hard suppressions, not soft warnings. See [docs/requirements.md §2A](docs/requirements.md#2a-operating-posture-and-decision-policy).
 
@@ -124,37 +124,58 @@ Rationale for each value: memory file `project_decision_thresholds.md` (Claude's
 
 ## How to run / deploy
 
-**Don't run the app locally.** It's designed to run on Streamlit Community Cloud where the secrets live.
+**Don't run the app locally.** It's designed to run on Railway where the secrets live.
+
+**Primary deploy: Railway Hobby at `drishta.up.railway.app`** (cut over 2026-08-15).
+The Streamlit Community Cloud app is kept **dormant as a cold fallback** — same repo,
+same Supabase DB, still auto-deploys from `main`, but it is not the surface you verify
+against and its free-tier throttling notices are expected. Reach for it only if Railway
+itself is down.
 
 | Action | How |
 |---|---|
-| Deploy a change | `git push origin main` — Streamlit Cloud auto-redeploys in 1–3 min |
+| Deploy a change | `git push origin main` — Railway auto-redeploys in 1–3 min |
 | See the new deploy | Hard-refresh the browser tab (Ctrl+F5 / Cmd+Shift+R) |
-| Force a session reset (when a cached_resource is stale) | Streamlit Cloud → app → **Manage app → Reboot** |
-| View deploy logs | Streamlit Cloud → app → Manage app → Logs |
+| Force a session reset (when a cached_resource is stale) | Railway → service → **Deployments → Redeploy** |
+| View deploy logs | Railway → service → **Deployments → View Logs** (structured, searchable) |
+| Change a secret | Railway → service → **Variables** → edit → Redeploy (see the secrets note below) |
 
-**Scheduled cron jobs run on Railway, not GitHub Actions** (migrated 2026-08-07 — GitHub's `schedule` trigger is best-effort and was hit by a platform-wide incident on 2026-08-06). Five dedicated Railway Cron Job services in project `endearing-magic` (`cron-premarket`, `cron-scan`, `cron-intraday`, `cron-eod`, `cron-thesis`) each run `python cron_runner.py` with their own schedule + `ALERT_RUN_MODE`, sharing the web service's Supabase/API secrets via Railway **Shared Variables**. `.github/workflows/alerts.yml` is now `workflow_dispatch`-only — manual re-runs / ad hoc testing, no longer the scheduled entry point. Full rationale, per-service cron expressions, and setup gotchas (config-as-code precedence, variable-reference fragility on service rename) in memory `project_cron_railway_migration`.
+**Scheduled cron jobs run on Railway, not GitHub Actions** (migrated 2026-08-07 — GitHub's `schedule` trigger is best-effort and was hit by a platform-wide incident on 2026-08-06). Six dedicated Railway Cron Job services in project `endearing-magic` (`cron-premarket`, `cron-scan`, `cron-intraday`, `cron-eod`, `cron-thesis`, and `cron-maintenance` added at the 2026-08-15 cutover) each run `python cron_runner.py` with their own schedule + `ALERT_RUN_MODE`, sharing the web service's Supabase/API secrets via Railway **Shared Variables**. `.github/workflows/alerts.yml` is now `workflow_dispatch`-only — manual re-runs / ad hoc testing, no longer the scheduled entry point. Full rationale, per-service cron expressions, and setup gotchas (config-as-code precedence, variable-reference fragility on service rename) in memory `project_cron_railway_migration`.
 
 ---
 
-## Secrets (set in Streamlit Cloud dashboard, never committed)
+## Secrets (set in Railway → Variables, never committed)
 
-Under **App → Settings → Secrets** in `secrets.toml` TOML format:
+Railway injects **flat environment variables only** — there is no file-based secrets
+feature in its current UI. Because ~50 call sites across `app.py` and `stock_analyzer/`
+call `st.secrets.get(...)` directly, and Streamlit's lazy loader raises
+`StreamlitSecretNotFoundError` on the *first* access when no `secrets.toml` exists at
+all, [`railway_start.sh`](railway_start.sh) materializes `.streamlit/secrets.toml` from
+those env vars at container boot, before launching Streamlit. Railway's Variables tab
+stays the single source of truth. Full rationale: `docs/architecture.md` §9.1b.
 
-```toml
-[supabase]
-url = "https://<your-project-id>.supabase.co"
-key = "sb_secret_***"          # MUST be the service-role / secret key, not publishable
+Variables to set on the service:
 
-ANTHROPIC_API_KEY = "sk-ant-..."   # Anthropic API for AI Snapshot, AI Insights, and the broker-import ticker fallback
-OPENAI_API_KEY    = "sk-..."       # optional
-GOOGLE_API_KEY    = "AIza..."      # optional
+| Env var | Required | Notes |
+|---|---|---|
+| `SUPABASE_URL` | yes | `https://<project-id>.supabase.co` |
+| `SUPABASE_KEY` | yes | MUST be the service-role / secret key, not publishable |
+| `ANTHROPIC_API_KEY` | yes | AI Snapshot, AI Insights, broker-import ticker fallback |
+| `APP_PASSWORD` | yes | owner login for the password gate |
+| `APP_READONLY_PASSWORD` | no | viewer account; leave blank to disable |
+| `FRED_API_KEY` | no | enriches the macro calendar with released values |
+| `FINNHUB_API_KEY` | no | primary live-price provider |
+| `FMP_API_KEY` | no | tertiary live-price provider |
 
-[fred]
-api_key = "..."                     # optional, enriches macro calendar with released values
-```
+The six Cron Job services share these via Railway **Shared Variables**, plus their own
+`ALERT_RUN_MODE` and the email trio (`RESEND_API_KEY`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`).
 
-**Security model:** RLS is enabled on all Supabase tables with `FOR ALL TO service_role` policies. The publishable/anon key has no matching policy — defense-in-depth in case the publishable key ever leaks. If you ever swap secrets, you MUST reboot the app via Manage app (the Supabase client is a process-level singleton — `db._CLIENT` — so a swap is only picked up on restart). Credentials resolve env-first (`SUPABASE_URL`/`SUPABASE_KEY`) then `st.secrets`, so the headless alert cron and the app share one path.
+> **Gotcha:** adding a new secret that the app reads through `st.secrets` requires a
+> matching line in `railway_start.sh`'s heredoc. Setting the Railway variable alone is
+> not enough — it will silently be absent from `st.secrets` even though the env var
+> exists. (Values read env-first, like `SUPABASE_*`, are exempt.)
+
+**Security model:** RLS is enabled on all Supabase tables with `FOR ALL TO service_role` policies. The publishable/anon key has no matching policy — defense-in-depth in case the publishable key ever leaks. If you ever swap secrets, you MUST redeploy the service (the Supabase client is a process-level singleton — `db._CLIENT` — so a swap is only picked up on restart). Credentials resolve env-first (`SUPABASE_URL`/`SUPABASE_KEY`) then `st.secrets`, so the headless alert cron and the app share one path.
 
 ---
 
@@ -302,9 +323,9 @@ _Remaining (genuinely minor, optional):_ the macro pick-gate uses the static eve
 
 ## What NOT to do
 
-- **Don't disable RLS.** The current Supabase setup is secured with RLS + service-role-only policies. If you see "row-level security blocking" errors, the Streamlit secret is on the wrong key (anon instead of service_role). The fix is to swap secrets, not disable RLS.
+- **Don't disable RLS.** The current Supabase setup is secured with RLS + service-role-only policies. If you see "row-level security blocking" errors, `SUPABASE_KEY` is on the wrong key (anon instead of service_role). The fix is to correct the variable and redeploy, not disable RLS.
 - **Don't hardcode threshold values.** Use `from stock_analyzer.constants import ...`.
-- **Don't run the app locally.** The secrets architecture assumes Streamlit Cloud. Local runs miss Supabase, miss FRED, may behave differently.
+- **Don't run the app locally.** The secrets architecture assumes Railway. Local runs miss Supabase, miss FRED, may behave differently.
 - **Don't set `nav_page` directly.** It's bound to the sidebar widget. Use the `_pending_page` indirection pattern (see app.py:502 for how the harness consumes it).
 - **Don't write speculative documentation.** The two memories `project_manual.md` and `project_sdlc_docs.md` explicitly defer user-manual and SDLC docs until the app is ~90% feature-complete.
 

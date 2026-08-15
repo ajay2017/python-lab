@@ -1256,13 +1256,99 @@ def _run_monthly_report(now_et, force: bool) -> int:
     return 0
 
 
+# Set by a lane that handles its own sub-job failures and signals them via a
+# non-zero RETURN rather than by raising (currently only _run_maintenance).
+# main() reads it so the heartbeat carries a reason, not a bare "failed".
+# Lanes that raise are unaffected — main()'s except-branch records their detail
+# directly from the exception.
+_LAST_LANE_FAILURE_DETAIL: str | None = None
+
+
+def _run_maintenance(now_et, force: bool) -> int:
+    """Saturday housekeeping: idempotent data backfills that keep the ledgers
+    complete without needing a human at a shell.
+
+    Exists because the 2026-08-15 Railway cutover removed the only practical
+    place to run one-off maintenance scripts. Railway's Console is NOT the
+    app's environment (minimal PATH, no app deps, unset LD_LIBRARY_PATH →
+    numpy fails on libz.so.1), and the Streamlit Cloud terminal these scripts
+    were originally written for is now a dormant fallback. Rather than chase
+    the console's quirks, the backfills became a lane the existing cron
+    infrastructure picks up — the takeaway recorded in memory
+    `project_railway_migration`.
+
+    Runs Saturday to stay clear of the Sunday thesis lane's LLM work. Both
+    jobs are isolated so one's failure can't suppress the other, matching the
+    thesis lane's discipline. MEASUREMENT-ONLY: neither job feeds a gate, a
+    recommendation, or the composite score — they fill in historical anchor
+    values on rows that already exist or should exist.
+    """
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
+
+    if not force and now_et.weekday() != 5:   # 5 = Saturday
+        _log("maintenance: not Saturday — skip.")
+        return 0
+
+    rc = 0
+    failures: list[str] = []
+
+    # ① analyst_coverage anchor prices — self-limiting (only NULL rows), so
+    #    this costs one cheap query once the table is caught up.
+    try:
+        # Imported INSIDE the function on purpose: the name resolves from the
+        # module attribute at call time, which is what lets the tests patch
+        # `scripts.backfill_analyst_prices.run_backfill`. Hoisting this to the
+        # top of the file would bind the function object at import time and
+        # silently gut those tests — they would still pass, against unstubbed
+        # code. Don't "tidy" it upward.
+        from scripts.backfill_analyst_prices import run_backfill as _analyst_backfill
+        summary = _analyst_backfill(log=lambda m: _log(f"maintenance/analyst: {m}"))
+        _log(f"maintenance: analyst anchor prices — {summary['updated']} updated, "
+             f"{summary['skipped_count']} skipped"
+             + (" (DB OFFLINE — nothing attempted)" if summary.get("offline") else ""))
+    except Exception as exc:
+        _log(f"maintenance/analyst: UNCAUGHT — {str(exc)[:160]}")
+        failures.append(f"analyst_prices: {str(exc)[:160]}")
+        rc = 1
+
+    # ② model_predictions historical backfill — skip_existing=True so a
+    #    recurring run only does real work for holdings added since the last
+    #    one, instead of re-fetching 5y of history for every ticker weekly.
+    try:
+        # Imported inside the function for the same patchability reason as ①.
+        from scripts.backfill_vol_predictions import run_backfill as _vol_backfill
+        summary = _vol_backfill(skip_existing=True,
+                                log=lambda m: _log(f"maintenance/vol: {m}"))
+        _log(f"maintenance: vol backfill — {summary['rows']} row(s) written across "
+             f"{summary['tickers']} held ticker(s), "
+             f"{len(summary['already_done'])} already done")
+    except Exception as exc:
+        _log(f"maintenance/vol: UNCAUGHT — {str(exc)[:160]}")
+        failures.append(f"vol_predictions: {str(exc)[:160]}")
+        rc = 1
+
+    if failures:
+        # Surfaced two ways, deliberately: the email is the immediate
+        # dead-man's-switch, and _LAST_LANE_FAILURE_DETAIL is what makes the
+        # heartbeat read "failed" on 🩺 System Trust instead of a false "ok".
+        # This lane returns non-zero rather than raising (so one sub-job's
+        # failure can't suppress the other), which means main()'s except-branch
+        # never sees it — without this the success path would record status="ok"
+        # over a run where both backfills blew up.
+        _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
+        _notify_failure("maintenance", _LAST_LANE_FAILURE_DETAIL)
+    return rc
+
+
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
     now_et = datetime.now(_ET)
     # Derive mode from ET hour; named overrides bypass time-inference.
     _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
-    mode = _mode_override if _mode_override in ("scan", "intraday", "thesis", "debrief", "monthly") else (
+    mode = _mode_override if _mode_override in ("scan", "intraday", "thesis", "debrief",
+                                                "monthly", "maintenance") else (
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
@@ -1299,11 +1385,12 @@ def main() -> int:
     # module's own _log() so the failure reason never made it into the
     # run log / dedup state, only a raw traceback in Actions' own output).
     _job_name, _job_fn = {
-        "scan":     ("scan",     _run_scan),
-        "intraday": ("intraday", _run_intraday),
-        "debrief":  ("debrief",  _run_debrief),
-        "monthly":  ("monthly",  _run_monthly_report),
-        "eod":      ("eod",      _run_eod),
+        "scan":        ("scan",        _run_scan),
+        "intraday":    ("intraday",    _run_intraday),
+        "debrief":     ("debrief",     _run_debrief),
+        "monthly":     ("monthly",     _run_monthly_report),
+        "eod":         ("eod",         _run_eod),
+        "maintenance": ("maintenance", _run_maintenance),
     }.get(mode, ("premarket", _run_premarket))
     try:
         rc = _job_fn(now_et, force)
@@ -1315,7 +1402,18 @@ def main() -> int:
         _notify_failure(_job_name, str(exc)[:160])
         _record_heartbeat(_job_name, now_et, status="failed", detail=str(exc)[:160])
         raise
-    _record_heartbeat(_job_name, now_et, status="ok")
+    # Status must track the return code, not merely "we got here without an
+    # exception". A lane that isolates its own sub-job failures reports them by
+    # returning non-zero (see _run_maintenance), and recording those as "ok"
+    # would show a green heartbeat for a run that actually failed — defeating
+    # the dead-man's-switch the heartbeat exists to provide. Every other
+    # dispatched lane returns 0 unconditionally, so this can never flip one of
+    # them to "failed".
+    if rc:
+        _record_heartbeat(_job_name, now_et, status="failed",
+                          detail=_LAST_LANE_FAILURE_DETAIL)
+    else:
+        _record_heartbeat(_job_name, now_et, status="ok")
     return rc
 
 

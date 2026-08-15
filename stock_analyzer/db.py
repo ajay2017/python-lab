@@ -747,11 +747,11 @@ def load_holdings() -> pd.DataFrame:
             _ah.record("supabase", "error", msg=err[:120])
             if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
                 st.error(
-                    "⛔ Supabase RLS is blocking reads. The Streamlit secret "
-                    "`[supabase] key` must be the **service-role / secret key** "
+                    "⛔ Supabase RLS is blocking reads. The `[supabase] key` "
+                    "secret must be the **service-role / secret key** "
                     "(starts with `sb_secret_` or is the legacy service_role JWT) — "
-                    "not the publishable/anon key. Update it in Streamlit Cloud → "
-                    "Settings → Secrets, then Reboot the app."
+                    "not the publishable/anon key. Update `SUPABASE_KEY` in "
+                    "Railway → Variables, then Redeploy the service."
                 )
             else:
                 st.error(f"⛔ DB read error: {err}")
@@ -2677,6 +2677,44 @@ def load_unmatured_model_predictions(model_name: str | None = None) -> "pd.DataF
             q = q.eq("model_name", model_name)
         rows = q.execute().data
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=_MODEL_PREDICTIONS_COLS)
+    except Exception:
+        return None
+
+
+def has_backfilled_predictions(model_name: str, model_version: str,
+                               ticker: str) -> "bool | None":
+    """True if `ticker` already has at least one `source='backfill'` row for
+    this (model_name, model_version) at ticker scope.
+
+    Exists so the `maintenance` cron lane can skip tickers whose historical
+    backfill is already done. Without it the lane would re-fetch the full
+    PREDICTION_BACKFILL_PERIOD (5y) of price history for every held ticker on
+    every run and re-upsert near-identical rows — correct, thanks to the
+    unique-constraint upsert, but pointlessly expensive against the provider
+    quota.
+
+    Returns `None` on ANY failure (offline sentinel — no credentials, pre-DDL
+    table, or a raised query exception), kept distinct from a genuine `False`
+    ("checked, and this ticker has no backfill rows"). The caller is expected
+    to treat `None` as "unknown → do the work anyway": the backfill is
+    idempotent, so a redundant run costs API calls, whereas wrongly skipping
+    leaves a permanent hole in the ledger."""
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("model_predictions")
+            .select("id")
+            .eq("model_name", model_name)
+            .eq("model_version", model_version)
+            .eq("scope", "ticker")
+            .eq("ticker", ticker)
+            .eq("source", "backfill")
+            .limit(1)
+            .execute()
+            .data
+        )
+        return bool(rows)
     except Exception:
         return None
 

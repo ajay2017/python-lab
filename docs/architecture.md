@@ -26,7 +26,7 @@
 | Database | Supabase (PostgreSQL) | client 2.29.0 | Holdings, watchlist, and trade persistence |
 | AI / LLM | Anthropic / OpenAI / Google | Latest | AI Snapshot generation (Home section) + AI Insights (Anthropic-only) |
 | Timezone | pytz | ≥2024.1 | All time comparisons use America/New_York (ET) |
-| Deployment | Streamlit Community Cloud (primary) + Railway Hobby (pilot, since 2026-07-24) | — | Hosting; both auto-deploy from `main` against the same Supabase DB (§9) |
+| Deployment | Railway Hobby (primary, since 2026-08-15) + Streamlit Community Cloud (dormant fallback) | — | Hosting; both auto-deploy from `main` against the same Supabase DB (§9) |
 
 ---
 
@@ -38,7 +38,7 @@
 └────────────────────────┬────────────────────────────────────┘
                          │ HTTPS
 ┌────────────────────────▼────────────────────────────────────┐
-│     Streamlit Community Cloud  /  Railway Hobby (pilot)       │
+│   Railway Hobby (primary)  /  Streamlit Cloud (fallback)      │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │                      app.py                            │  │
 │  │  - Page routing (session_state nav_page)               │  │
@@ -1824,42 +1824,57 @@ fetch_live_prices()         # Called by 60s auto-refresh fragment (Finnhub real-
 
 ## 9. Deployment
 
-Two platforms currently deploy from the same `main` branch against the same Supabase DB:
-Streamlit Community Cloud (primary, in production use) and a Railway Hobby pilot
-(`drishta.up.railway.app`, live since 2026-07-24 — plan + rationale in
-[docs/plans/railway-migration.md](plans/railway-migration.md)). They don't conflict; either
-can be reloaded/rebooted independently.
+**Railway Hobby is the primary deploy** (`drishta.up.railway.app`) as of the 2026-08-15
+cutover, after a 3-week parallel pilot that ran clean from 2026-07-24 — full phase log
+and rationale in [docs/plans/railway-migration.md](plans/railway-migration.md). The same
+Railway project also hosts all 6 cron lanes (§12.6).
 
-| Attribute | Streamlit Community Cloud | Railway Hobby (pilot) |
-|-----------|---------------------------|------------------------|
+Streamlit Community Cloud is **retained as a dormant cold fallback**: it still auto-deploys
+from the same `main` branch against the same Supabase DB, but it is not the surface changes
+are verified against, and its free-tier throttling notices are expected. The two don't
+conflict; either can be reloaded independently. It is kept rather than deleted because
+deletion is effectively irreversible (full re-setup + re-entering every secret) and it
+costs nothing to leave in place.
+
+| Attribute | Railway Hobby (primary) | Streamlit Community Cloud (fallback) |
+|-----------|--------------------------|--------------------------------------|
 | Repository / Branch | GitHub, `main` | GitHub, `main` |
-| Entry point | `app.py` | `app.py` via `railway_start.sh` (see 9.1b) |
-| Python version | 3.12 (`runtime.txt`) | 3.12 (`runtime.txt`, nixpacks) |
+| Entry point | `app.py` via `railway_start.sh` (see 9.1b) | `app.py` |
+| Python version | 3.12 (`runtime.txt`, nixpacks) | 3.12 (`runtime.txt`) |
 | Dependencies | `requirements.txt` | `requirements.txt` |
-| Config file | — | `railway.toml` (nixpacks build, healthcheck `/_stcore/health`, `replicas = 1`) |
-| Secrets management | Secrets dashboard, native `.streamlit/secrets.toml` format | Variables tab (flat env vars only — no file-based secrets UI found) |
-| Sleep behaviour | Sleeps after inactivity (~15–30s cold-start wake) | "Serverless" toggle enabled (Settings → Deploy) — sleeps after 10 min idle, wakes on next request from a cached build image |
+| Config file | `railway.toml` (nixpacks build, healthcheck `/_stcore/health`, `replicas = 1`) | — |
+| Secrets management | Variables tab (flat env vars only — no file-based secrets UI found) | Secrets dashboard, native `.streamlit/secrets.toml` format |
+| Sleep behaviour | "Serverless" toggle enabled (Settings → Deploy) — sleeps after 10 min idle, wakes on next request from a cached build image | Sleeps after inactivity (~15–30s cold-start wake) |
 
 ### 9.1 Required Secrets
 
-**Streamlit Cloud** — set in the Secrets dashboard, native TOML:
+**Railway (primary)** — set as flat Service Variables. `railway_start.sh` materializes
+these into `.streamlit/secrets.toml` at container boot (see 9.1b):
 
-```toml
-SUPABASE_URL    = "https://xxxxxxxxxxxx.supabase.co"
-SUPABASE_KEY    = "eyJ..."          # anon/service role key
-ANTHROPIC_API_KEY = "sk-ant-..."    # for AI Snapshot, AI Insights, and the broker-import ticker fallback
-# Optional additional LLM keys:
-OPENAI_API_KEY  = "sk-..."
-GOOGLE_API_KEY  = "AIza..."
-```
+| Variable | Required | Purpose |
+|---|---|---|
+| `SUPABASE_URL` | yes | Supabase project URL |
+| `SUPABASE_KEY` | yes | **service-role / secret** key — not the publishable/anon key |
+| `ANTHROPIC_API_KEY` | yes | AI Snapshot, AI Insights, broker-import ticker fallback |
+| `APP_PASSWORD` | yes | owner login for the password gate |
+| `APP_READONLY_PASSWORD` | no | read-only viewer account |
+| `FRED_API_KEY` | no | macro calendar released values |
+| `FINNHUB_API_KEY` | no | primary live-price provider |
+| `FMP_API_KEY` | no | tertiary live-price provider |
+
+The 6 Cron Job services inherit these via Railway **Shared Variables** and add their own
+`ALERT_RUN_MODE` plus the email trio (`RESEND_API_KEY`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`),
+which the web service does not need.
+
+Optional alternate LLM providers (`OPENAI_API_KEY`, `GOOGLE_API_KEY`) are read env-first by
+the AI provider selector in `app.py`, so they work as plain Railway variables without a
+`railway_start.sh` line.
 
 All secrets are accessed via `st.secrets["KEY_NAME"]` (or `st.secrets["section"]["key"]`) in the
 application code. They are never committed to the repository.
 
-**Railway** — set as flat Service Variables (`SUPABASE_URL`, `SUPABASE_KEY`, `ANTHROPIC_API_KEY`,
-`FRED_API_KEY`, `FINNHUB_API_KEY`, `FMP_API_KEY`, `APP_PASSWORD`, `APP_READONLY_PASSWORD`). The
-GitHub Actions cron's own vars (`RESEND_API_KEY`, `ALERT_*`) are **not** needed here — the cron
-runs on GitHub Actions regardless of which platform hosts the UI (§3.11 / NF-27).
+**Streamlit Cloud (fallback)** — the same values in its Secrets dashboard, in native TOML
+form. Only needs refreshing if the fallback is ever actually activated.
 
 #### 9.1b Why Railway needs `railway_start.sh`
 
@@ -1880,9 +1895,10 @@ Streamlit-native "Private app" OAuth layer, so the password gate needed its own 
 ### 9.2 Deployment Process
 
 1. Push changes to `main` branch on GitHub
-2. Streamlit Community Cloud and Railway both detect the push and auto-redeploy independently
+2. Railway detects the push and auto-redeploys; Streamlit Cloud independently redeploys the dormant fallback off the same push
 3. Typical redeploy time: 1–3 minutes (both platforms)
-4. GitHub Actions runs `tests.yml` (pytest over `stock_analyzer/` pure logic, 185 tests as of 2026-07-27) and `docs-check.yml` (constants-doc coverage) on push, but **neither gates the deploy** — Streamlit Cloud and Railway don't consult GitHub Actions, so a red ❌ shows up on the commit, not a blocked deploy. Manual testing (post-deploy smoke check + feature click-through) remains the quality gate for anything outside `stock_analyzer/`'s pure logic — see `docs/testing-strategy.md` for the full split.
+4. Verify against `drishta.up.railway.app` with a hard refresh (Ctrl+F5) — not the Streamlit URL
+5. GitHub Actions runs `tests.yml` (pytest over `stock_analyzer/` pure logic, 185 tests as of 2026-07-27) and `docs-check.yml` (constants-doc coverage) on push, but **neither gates the deploy** — Railway and Streamlit Cloud don't consult GitHub Actions, so a red ❌ shows up on the commit, not a blocked deploy. Manual testing (post-deploy smoke check + feature click-through) remains the quality gate for anything outside `stock_analyzer/`'s pure logic — see `docs/testing-strategy.md` for the full split.
 
 ---
 
@@ -2132,12 +2148,72 @@ API key resolution order: `st.secrets["anthropic"]["api_key"]` → `ANTHROPIC_AP
 | Timeout / API error | Returns `None`; caller shows banner; rest of app unaffected |
 | Read-only viewer mode | Thesis-draft button disabled at UI layer |
 
-### 12.6 Cron schedule (GitHub Actions)
+### 12.6 Cron lanes (Railway Cron Job services)
 
-| Lane | Schedule | Features invoked |
-|------|----------|-----------------|
-| `thesis` | Sunday evening | F-1 thesis review (all open positions with a thesis) |
-| `debrief` | Sunday evening (after thesis) | F-3 weekly debrief |
-| `monthly` | First Sunday of month | F-4 monthly report |
+Since 2026-08-07 the scheduled lanes run as dedicated Railway **Cron Job** services in the
+same project as the web service, each running `python cron_runner.py` with its own schedule
+and `ALERT_RUN_MODE` (migrated off GitHub Actions, whose `schedule` trigger is best-effort;
+`.github/workflows/alerts.yml` is now `workflow_dispatch`-only). Per-service cron
+expressions live in the Railway dashboard — see memory `project_cron_railway_migration`.
 
-All three lanes are inert until `ANTHROPIC_API_KEY` is set in GitHub repository secrets.
+`cron_runner.main()` resolves the lane from `ALERT_RUN_MODE`, falling back to an ET-hour
+inference (`< 12` ⇒ `premarket`, else `eod`) when that variable is unset or unrecognised.
+What actually prevents a schedule change from firing the wrong lane is the explicit
+`ALERT_RUN_MODE` per service plus each lane's own in-code guard (the weekday and ET-hour
+checks in the table above) — the hour-based fallback is the loose path, not the safeguard.
+Each lane records a `cron_heartbeat` row (§6.32), graded on 🩺 System Trust; a lane that
+reports failure by returning non-zero (rather than raising) still records
+`status="failed"`, so a green heartbeat can never mask a failed run.
+
+| Lane | Service | In-code guard | Features invoked |
+|------|---------|---------------|-----------------|
+| `premarket` | `cron-premarket` | trading day + ET hour ≥ `ALERT_EMAIL_HOUR_ET` | Protective exit alerts (F-143) |
+| `scan` | `cron-scan` | trading day | Morning buy-list scan |
+| `intraday` | `cron-intraday` | trading day | Intraday pullback entry check |
+| `eod` | `cron-eod` | trading day + ET hour ≥ `ALERT_EOD_HOUR_ET` | EOD snapshot, pullback alert, vol-prediction write + maturation |
+| `thesis` | `cron-thesis` | Sunday | F-1 thesis review → F-3 weekly debrief → F-4 monthly report (first Sunday) |
+| `maintenance` | `cron-maintenance` ⚠️ | Saturday | Idempotent data backfills (see below) |
+
+⚠️ Railway cron services are **dashboard-managed, not repo-managed**. `cron-maintenance`
+must be created manually (`ALERT_RUN_MODE=maintenance`, Saturday schedule, inheriting the
+Shared Variables) before this lane ever fires. Until then the code is inert and the lane
+reads ⚪ "unknown" on 🩺 System Trust — never red, since a lane with no heartbeat row yet
+is not treated as a fault.
+
+The `thesis` / `debrief` / `monthly` AI lanes are inert until `ANTHROPIC_API_KEY` is set.
+
+**`maintenance` lane (added at the 2026-08-15 Railway cutover).** The cutover removed the
+only practical shell for one-off maintenance scripts: Railway's Console is *not* the app's
+environment (minimal `PATH`, no app dependencies, unset `LD_LIBRARY_PATH` → numpy fails on
+`libz.so.1`), and the Streamlit Cloud terminal the backfill scripts were written for is now
+a dormant fallback. Rather than depend on a shell, the backfills became a lane:
+
+1. `scripts/backfill_analyst_prices.run_backfill()` — fills `analyst_coverage.price_at_article_date`.
+   Self-limiting: only queries NULL rows, so it costs one cheap query once caught up.
+2. `scripts/backfill_vol_predictions.run_backfill(skip_existing=True)` — fills historical
+   `model_predictions` rows for held tickers. `db.has_backfilled_predictions()` skips
+   tickers already done, so a recurring run only works on holdings added since the last
+   tick instead of re-fetching 5y of history weekly. That helper returns `None` when the
+   check itself can't run (DB offline / pre-DDL), which the caller treats as
+   **"unknown → back it up anyway"**: a redundant backfill is cheap-and-safe (see the
+   idempotency note) and merely costs provider calls, whereas wrongly skipping leaves a
+   permanent hole in the ledger.
+
+**Idempotency, precisely.** The upsert key is `(model_name, model_version, scope, ticker,
+made_at)`, and `made_at` is derived from a *rolling* `PREDICTION_BACKFILL_PERIOD` ("5y")
+window. So a same-day re-fire or retry fetches an identical window → identical `made_at`
+keys → a true upsert with no duplicates. A re-run weeks later against a rolled window
+samples *shifted* `as_of` points, which **adds** rows rather than replacing them. The
+routine `skip_existing=True` lane path never hits this; only a deliberate manual
+`skip_existing=False` redo can.
+
+**Known limitation — the "already done" check is presence-only.** `has_backfilled_predictions`
+is satisfied by a single row. If a ticker's first backfill ran against a degraded provider
+that returned less than the full period, the thin result still marks it done permanently,
+and the lane won't self-heal. Remedy is a manual `run_backfill(skip_existing=False)` for
+that ticker. Accepted for now: the failure needs a provider degradation on exactly the
+first run for a newly-bought ticker, and the data is measurement-only.
+
+Both jobs are isolated so one's failure can't suppress the other, and a failure fires the
+same `_notify_failure` dead-man's-switch email as every other lane. MEASUREMENT-ONLY —
+neither job feeds a gate, a recommendation, or the composite score.

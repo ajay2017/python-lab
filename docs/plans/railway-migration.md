@@ -3,10 +3,53 @@
 **Date:** 2026-07-23
 **Author:** Ajay Kumar
 **Analysis model:** Claude Sonnet 4.6
-**Status:** PILOT LIVE as of 2026-07-24 at `drishta.up.railway.app`. Phases 0b, 1, 2, 3, 4
-done (with real deviations from this plan — see "What actually happened" below); Phase 0a
-(Anthropic key rotation) deferred by user choice; Phase 5 (parallel-run comparison) is the
-current phase; Phase 6 (cutover) not started.
+**Status: CUTOVER COMPLETE 2026-08-15 — Railway is the primary deploy.** All phases closed
+except 0a. Phases 0b, 1, 2, 3, 4 done (with real deviations from this plan — see "What
+actually happened" below); Phase 5 (parallel run) ran 2026-07-24 → 2026-08-15 with no
+issues; Phase 6 (cutover) executed 2026-08-15 — see "Phase 6 — how it was actually done"
+below. **Phase 0a (Anthropic key rotation) remains deferred by explicit user choice** and is
+the only open item in this plan.
+
+### Phase 6 — how it was actually done (2026-08-15)
+
+Trigger: 3 weeks of clean parallel running, plus Streamlit Cloud's free tier increasingly
+interrupting with throttling / upgrade-to-Professional notices. By this point Railway was
+already carrying the real load — it had owned all 5 cron lanes since 2026-08-07 — so the
+cutover was mostly making the repo tell the truth.
+
+Three decisions taken at cutover:
+
+1. **Streamlit Cloud kept dormant as a cold fallback, not deleted.** Deleting is effectively
+   irreversible (full re-setup + re-entering every secret) and costs nothing to leave in
+   place; it stays useful if Railway itself has an incident (cf. the 2026-08-05 starlette
+   healthcheck failure). It still auto-deploys from `main` — it is simply no longer the
+   surface changes are verified against.
+2. **No custom domain.** `drishta.up.railway.app` already has TLS and had served fine for
+   3 weeks; a custom domain adds DNS work for no functional gain.
+3. **One-off maintenance scripts move into a cron lane** rather than depending on a shell.
+   This was the one genuine capability gap the cutover exposed: both
+   `scripts/backfill_analyst_prices.py` and `scripts/backfill_vol_predictions.py` documented
+   their run path as "the Streamlit Cloud terminal", and the 2026-08-06 session established
+   that Railway's Console is *not* the same environment (minimal `PATH`, no app deps, unset
+   `LD_LIBRARY_PATH` → numpy fails on `libz.so.1`). Rather than chase that, the backfills
+   became a `maintenance` cron lane — which is also the takeaway recorded in memory
+   `project_railway_migration`: prefer designing one-off maintenance as something the
+   existing cron picks up.
+
+What changed in the repo at cutover:
+
+| File | Change |
+|---|---|
+| `stock_analyzer/db.py` | RLS error message pointed users at "Streamlit Cloud → Settings → Secrets → Reboot" — a live, user-facing wrong instruction on Railway. Now names Railway → Variables → Redeploy. |
+| `CLAUDE.md` | Orientation line (Railway primary, Streamlit dormant); Hard Rule #2 reboot path; Hard Rule #3 deploy/verify loop. |
+| `DEVELOPMENT.md` | Live-deploy line, ops table (deploy/reboot/logs/secrets), secrets section rewritten around Railway Variables + the `railway_start.sh` heredoc gotcha, "What NOT to do" entries. |
+| `docs/architecture.md` | §1 tech-stack row, §2 diagram, §9 deployment section rewritten (incl. fixing a stale claim that the cron still ran on GitHub Actions). |
+| `cron_runner.py`, `stock_analyzer/system_health.py`, `scripts/*` | The new `maintenance` lane — see decision 3 above. |
+
+Deliberately **not** changed: the `# Streamlit Cloud runs UTC` rationale comments in
+`market_time.py`, `tax_advisor.py`, `earnings_advisor.py`, `watchlist_advisor.py`,
+`fmp_provider.py` and `investor_mirror.py`. The reasoning still holds verbatim (Railway's
+containers also run UTC) and renaming the host in six comments is churn, not accuracy.
 
 ### What actually happened vs. this plan (2026-07-24)
 

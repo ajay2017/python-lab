@@ -118,11 +118,16 @@ class _Lane:
 
 
 _LANES: tuple[_Lane, ...] = (
-    _Lane("premarket", "Pre-market protective scan", "daily"),
-    _Lane("scan",      "Morning market scan",        "daily"),
-    _Lane("intraday",  "Intraday pullback check",    "daily"),
-    _Lane("eod",       "End-of-day snapshot",        "daily"),
-    _Lane("thesis",    "Weekly thesis & debrief",    "weekly"),
+    _Lane("premarket",   "Pre-market protective scan", "daily"),
+    _Lane("scan",        "Morning market scan",        "daily"),
+    _Lane("intraday",    "Intraday pullback check",    "daily"),
+    _Lane("eod",         "End-of-day snapshot",        "daily"),
+    _Lane("thesis",      "Weekly thesis & debrief",    "weekly"),
+    # Saturday housekeeping (cron_runner._run_maintenance): idempotent data
+    # backfills. Registered here so a silent death is visible on 🩺 System
+    # Trust — a lane that writes heartbeats nobody grades is a lane that can
+    # stop firing unnoticed, which defeats the dead-man's-switch.
+    _Lane("maintenance", "Weekly data backfills",      "weekly"),
 )
 
 
