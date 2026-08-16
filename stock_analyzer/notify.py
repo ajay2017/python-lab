@@ -174,47 +174,64 @@ def render_db_outage_email(lane: str, lane_label: str, what_did_not_run: str,
     unprotected!" — that manufactures alarm out of an ABSENCE of data, which is
     exactly what the calm-advisor persona forbids. State precisely what did not
     happen, state that we have no market opinion right now because we could not
-    see anything, and stop. Pure string building: no DB, no Streamlit, no
+    see anything, and stop.
+
+    STYLING DIFFERS FROM EVERY OTHER RENDERER IN THIS MODULE, ON PURPOSE.
+    The others put `background:#0c0a09` on <body> and then use near-white text.
+    Yahoo, Gmail and most webmail STRIP or override <body> styling, so the dark
+    background disappears and the light text is left on white — verified live on
+    2026-08-16, where the title and the entire "What to check" list rendered
+    nearly invisible. That is tolerable on an informational email and NOT
+    tolerable here: this one is read at 8am when something is actually wrong,
+    and the actionable list was the least legible part of it. So this renderer
+    uses dark-on-light with the background on a wrapping <div> the clients
+    respect. Don't "make it consistent" with the others without re-testing in a
+    real inbox.
+
+    Pure string building: no DB, no Streamlit, no
     imports beyond this module's existing three — the whole point is that this
     path still works when Supabase does not.
     """
     subject = f"🔴 DRISHTA: {lane_label} did NOT run — database unreachable"
-    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
-      <div style="max-width:640px;margin:0 auto;font-family:Arial,Helvetica,sans-serif">
-        <div style="color:#f9fafb;font-size:18px;font-weight:700">DRISHTA · Scan did not run</div>
+    body = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f4f5">
+      <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d4d4d8;
+                  border-radius:8px;padding:22px;font-family:Arial,Helvetica,sans-serif">
+        <div style="color:#18181b;font-size:18px;font-weight:700">
+          DRISHTA · scheduled run did not complete
+        </div>
 
-        <div style="color:#f87171;font-size:15px;margin-top:14px;font-weight:600">
+        <div style="color:#b91c1c;font-size:15px;margin-top:14px;font-weight:700">
           {_html.escape(what_did_not_run)}
         </div>
 
-        <div style="color:#a8a29e;font-size:13px;margin-top:12px">
+        <div style="color:#3f3f46;font-size:13px;margin-top:12px">
           DRISHTA could not read your holdings from Supabase, so the
-          <b style="color:#e5e7eb">{_html.escape(lane_label)}</b> lane had nothing to work from.
+          <b style="color:#18181b">{_html.escape(lane_label)}</b> lane had nothing to work from.
         </div>
-        <div style="color:#78716c;font-size:12px;margin-top:8px;font-family:monospace;
-                    background:#1c1917;padding:8px 10px;border-radius:4px">
+        <div style="color:#3f3f46;font-size:12px;margin-top:8px;font-family:monospace;
+                    background:#f4f4f5;border:1px solid #e4e4e7;padding:8px 10px;border-radius:4px">
           {_html.escape(str(detail))[:400]}
         </div>
 
-        <div style="color:#a8a29e;font-size:13px;margin-top:14px;
-                    border-left:3px solid #57534e;padding-left:10px">
-          <b style="color:#e5e7eb">This is an infrastructure fault, not a market signal.</b>
+        <div style="color:#3f3f46;font-size:13px;margin-top:14px;
+                    border-left:3px solid #a1a1aa;padding-left:10px">
+          <b style="color:#18181b">This is an infrastructure fault, not a market signal.</b>
           DRISHTA has no opinion on your positions right now, because it could not see them.
           Nothing here says anything about what the market did.
         </div>
 
-        <div style="color:#a8a29e;font-size:13px;margin-top:14px">
-          <b style="color:#e5e7eb">What to check</b>
-          <ol style="margin:6px 0 0 18px;padding:0;color:#a8a29e">
+        <div style="color:#3f3f46;font-size:13px;margin-top:14px">
+          <b style="color:#18181b">What to check</b>
+          <ol style="margin:6px 0 0 18px;padding:0;color:#3f3f46">
             <li>Supabase project status — is the instance paused or down?</li>
-            <li>Is <span style="font-family:monospace;color:#d6d3d1">SUPABASE_KEY</span> still the
+            <li>Is <span style="font-family:monospace;color:#18181b">SUPABASE_KEY</span> still the
                 <b>service-role / secret</b> key (not the publishable/anon one)?</li>
             <li>Railway → Shared Variables — are the Supabase vars attached to this cron service?</li>
             <li>Open DRISHTA. If the app also shows an empty portfolio, the outage is real.</li>
           </ol>
         </div>
 
-        <div style="color:#6b7280;font-size:11px;margin-top:16px;border-top:1px solid #292524;padding-top:10px">
+        <div style="color:#52525b;font-size:11px;margin-top:16px;border-top:1px solid #e4e4e7;padding-top:10px">
           Lane <span style="font-family:monospace">{_html.escape(lane)}</span> ·
           attempted {_html.escape(str(built_at))[:19]} ET.
           You are receiving this because a scheduled run could not reach the database —

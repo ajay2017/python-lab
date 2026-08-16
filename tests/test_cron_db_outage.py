@@ -243,6 +243,38 @@ def test_the_outage_email_renders_without_touching_the_database(monkeypatch):
     assert "infrastructure fault, not a market signal" in html
 
 
+def test_the_outage_email_is_legible_on_a_light_background():
+    """Verified live 2026-08-16: Yahoo (like Gmail) strips <body> styling, so
+    this module's usual dark-body + near-white-text pattern left the title and
+    the whole 'What to check' list nearly invisible on white. Tolerable on an
+    informational email; not on the one read at 8am when something is wrong.
+    This renderer is deliberately dark-on-light — don't 'make it consistent'."""
+    from stock_analyzer.notify import render_db_outage_email
+    _, html = render_db_outage_email(
+        lane="premarket", lane_label="pre-market protective scan",
+        what_did_not_run="Stop breaches were NOT evaluated today.",
+        detail="unreadable", built_at="2026-08-16T08:00:00",
+    )
+    # Near-white text is what disappeared. None of it should survive here.
+    for invisible in ("#f9fafb", "#e5e7eb", "#a8a29e", "#d6d3d1"):
+        assert invisible not in html, f"{invisible} is unreadable on a white background"
+    # The dark page background must not be on <body>, which clients strip.
+    assert "background:#0c0a09" not in html
+
+
+def test_the_outage_email_header_is_not_lane_specific():
+    """It said 'Scan did not run' for every lane — wrong for maintenance,
+    debrief and monthly, which are not scans."""
+    from stock_analyzer.notify import render_db_outage_email
+    _, html = render_db_outage_email(
+        lane="maintenance", lane_label="weekly data backfills",
+        what_did_not_run="The weekly reference-data backfills did NOT run.",
+        detail="unreadable", built_at="2026-08-16T18:46:46",
+    )
+    assert "Scan did not run" not in html
+    assert "weekly data backfills" in html
+
+
 def test_handle_db_unavailable_never_raises(monkeypatch):
     """A failure to notify must never mask the original fault."""
     import cron_runner as cr
