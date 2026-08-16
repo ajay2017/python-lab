@@ -1,7 +1,14 @@
 # App Settings — UI-managed reference data
 
-**Status: DESIGN ONLY — 2026-08-15. No code written. Explicitly "design it first,
-build later" per the user.**
+**Status: DESIGN ONLY — still no code written, as of 2026-08-16. Explicitly "design it
+first, build later" per the user.**
+
+**Design state:** the architecture is settled (DB as single source of truth, fail loud on
+unavailable, no code fallback), the redline is agreed (never decision values), the
+visual is mocked and reviewed (`docs/mockups/app-settings-mockup.html`), and open
+question 7 was resolved and its mechanism BUILT by F-239. **Seven questions remain open;
+four of them are the actual work.** Nothing here is blocked on anything except a decision
+to start.
 
 **Origin:** after F-238 (reference-data shelf life, `docs/plans/` sibling work) shipped,
 the user asked whether the hardcoded values it monitors could be managed from the UI
@@ -259,17 +266,16 @@ telling the truth.
    BLS/BEA 2027 dates are outstanding as of 2026-08-15) — but it feeds
    `daily_briefing._act_today` and the cron alert lane directly, making it materially more
    decision-bearing than a scan universe. Recommend **excluding from v1** and revisiting.
-7. **The cron lane reads the universe DIRECTLY — mostly RESOLVED by the fail-loud decision,
-   one part still open.** `cron_runner.py` imports `SECTOR_UNIVERSE` and passes
-   `list(SECTOR_UNIVERSE.keys())` to `scan_sectors`. It must call the same `resolve_universe`
-   the app does — a single entry point for both, or app and email diverge by construction on
-   a surface that has already had a dead-email incident (memory
-   `project_morning_picks_cron_bug`). Dropping the hybrid removes the divergence question
-   (there is only one source), but leaves one decision: **when the cron hits UNAVAILABLE, does
-   it send nothing, or send an email saying the scan couldn't run?** Recommend the latter —
-   silence is indistinguishable from "no picks today", which is the same failure the
-   empty-payload rule above rejects. It should also record a `failed` heartbeat so 🩺 System
-   Trust shows it.
+7. **The cron lane reads the universe DIRECTLY — ✅ RESOLVED 2026-08-16 by F-239.**
+   `cron_runner.py` imports `SECTOR_UNIVERSE` and passes `list(SECTOR_UNIVERSE.keys())` to
+   `scan_sectors`; it must call the same `resolve_universe` the app does, or app and email
+   diverge by construction on a surface that has already had a dead-email incident (memory
+   `project_morning_picks_cron_bug`). The open half was *what the cron does when the universe
+   is unavailable* — **F-239 answered it and built the mechanism**: the lane emails the owner
+   naming what did not run, records `status="failed"`, and exits non-zero. `resolve_universe`
+   returning UNAVAILABLE should route into the existing `_handle_db_unavailable`, not invent
+   a second path. **Verified live** on 2026-08-16 (deliberate bad key on `cron-maintenance`:
+   detection → email delivered → run marked failed). See `docs/requirements.md` F-239.
 8. **Replace vs merge semantics.** The "empty payload" floor doesn't cover a *semantically
    truncated* one: a save with 3 of 12 buckets populated is non-empty, clears the floor, and
    wholesale-replaces the roster. Decide explicitly whether a save replaces or merges, and
