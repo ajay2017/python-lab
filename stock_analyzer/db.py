@@ -728,35 +728,72 @@ def _client():
 
 # ── Holdings ──────────────────────────────────────────────────────────────────
 
-def load_holdings() -> pd.DataFrame:
+_HOLDINGS_COLS = ["Ticker", "Shares", "Avg Cost ($)"]
+
+
+def load_holdings_or_none() -> "pd.DataFrame | None":
+    """Holdings, or `None` (the offline sentinel) when the table could not be
+    read AT ALL — no credentials, or the query raised.
+
+    An EMPTY DataFrame from this function means something specific and
+    different: the `holdings` table was read successfully and is genuinely
+    empty. Same contract, and same reason, as `load_recommendations_or_none`.
+
+    This distinction is load-bearing for the headless cron. `load_holdings()`
+    below collapses both cases to an empty frame, so until this function
+    existed a Supabase outage was indistinguishable from "the user owns
+    nothing" — every protective lane logged one line, returned success, and
+    sent no email while stop-breach and EXIT checks silently did not run. The
+    nastiest variant is a PARTIAL outage (only `holdings` unreadable, e.g. a
+    dropped RLS policy or a PGRST205 schema-cache miss on that one table):
+    there the heartbeat write still succeeds, so 🩺 System Trust shows a fresh,
+    genuinely green row over a scan that checked nothing.
+
+    Never raises.
+    """
     from stock_analyzer import api_health as _ah
-    if has_db():
-        try:
-            rows = _client().table("holdings").select("*").order("ticker").execute().data
-            _ah.record("supabase", "success")
-            if rows:
-                df = pd.DataFrame(rows)[["ticker", "shares", "avg_cost"]]
-                df.columns = ["Ticker", "Shares", "Avg Cost ($)"]
-                df["Shares"] = df["Shares"].astype(float)
-                df["Avg Cost ($)"] = df["Avg Cost ($)"].astype(float)
-                return df
-            # Table is empty — return empty frame so user starts fresh
-            return pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost ($)"])
-        except Exception as e:
-            err = str(e)
-            _ah.record("supabase", "error", msg=err[:120])
-            if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
-                st.error(
-                    "⛔ Supabase RLS is blocking reads. The `[supabase] key` "
-                    "secret must be the **service-role / secret key** "
-                    "(starts with `sb_secret_` or is the legacy service_role JWT) — "
-                    "not the publishable/anon key. Update `SUPABASE_KEY` in "
-                    "Railway → Variables, then Redeploy the service."
-                )
-            else:
-                st.error(f"⛔ DB read error: {err}")
-    # No DB configured — return empty frame
-    return pd.DataFrame(columns=["Ticker", "Shares", "Avg Cost ($)"])
+    if not has_db():
+        return None
+    try:
+        rows = _client().table("holdings").select("*").order("ticker").execute().data
+        _ah.record("supabase", "success")
+        if rows:
+            df = pd.DataFrame(rows)[["ticker", "shares", "avg_cost"]]
+            df.columns = _HOLDINGS_COLS
+            df["Shares"] = df["Shares"].astype(float)
+            df["Avg Cost ($)"] = df["Avg Cost ($)"].astype(float)
+            return df
+        # Read succeeded, table is genuinely empty — NOT the same as unreadable.
+        return pd.DataFrame(columns=_HOLDINGS_COLS)
+    except Exception as e:
+        err = str(e)
+        _ah.record("supabase", "error", msg=err[:120])
+        if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
+            st.error(
+                "⛔ Supabase RLS is blocking reads. The `[supabase] key` "
+                "secret must be the **service-role / secret key** "
+                "(starts with `sb_secret_` or is the legacy service_role JWT) — "
+                "not the publishable/anon key. Update `SUPABASE_KEY` in "
+                "Railway → Variables, then Redeploy the service."
+            )
+        else:
+            st.error(f"⛔ DB read error: {err}")
+        return None
+
+
+def load_holdings() -> pd.DataFrame:
+    """Holdings, with an empty frame on ANY failure.
+
+    Contract deliberately UNCHANGED — the interactive app assigns this straight
+    into `st.session_state.holdings_df`, which is read throughout `app.py`, and
+    those call sites legitimately treat "no holdings" and "couldn't load" the
+    same way (there is nothing to render either way).
+
+    A caller that must NOT conflate the two — anything that decides whether to
+    act, alert, or report success — needs `load_holdings_or_none()`.
+    """
+    df = load_holdings_or_none()
+    return df if df is not None else pd.DataFrame(columns=_HOLDINGS_COLS)
 
 
 def save_holdings(df: pd.DataFrame) -> bool:

@@ -109,6 +109,9 @@ def _run_lane(monkeypatch, *, analyst_raises=False, vol_raises=False):
     monkeypatch.setenv("ALERT_FORCE", "1")          # bypass the Saturday guard
     monkeypatch.delenv("ALERT_TEST_EMAIL", raising=False)
     monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cr.db, "has_db", lambda: True)
+    monkeypatch.setattr(cr.db, "load_holdings_or_none",
+                        lambda: __import__("pandas").DataFrame({"Ticker": ["AAPL"]}))
     monkeypatch.setattr(
         cr, "_record_heartbeat",
         lambda lane, _now, status="ok", detail=None: recorded.update(
@@ -167,6 +170,9 @@ def test_one_subjob_failure_does_not_suppress_the_other(monkeypatch):
     monkeypatch.setenv("ALERT_FORCE", "1")
     monkeypatch.delenv("ALERT_TEST_EMAIL", raising=False)
     monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cr.db, "has_db", lambda: True)
+    monkeypatch.setattr(cr.db, "load_holdings_or_none",
+                        lambda: __import__("pandas").DataFrame({"Ticker": ["AAPL"]}))
     monkeypatch.setattr(cr, "_record_heartbeat", lambda *_a, **_kw: None)
 
     import scripts.backfill_analyst_prices as bap

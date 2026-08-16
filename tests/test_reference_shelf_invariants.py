@@ -118,6 +118,9 @@ def test_stale_reference_data_never_fails_the_maintenance_lane(monkeypatch):
     notified = []
     monkeypatch.setattr(cr, "_notify_failure", lambda *a, **k: notified.append(a))
     monkeypatch.setattr(cr, "_record_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(cr.db, "has_db", lambda: True)
+    monkeypatch.setattr(cr.db, "load_holdings_or_none",
+                        lambda: __import__("pandas").DataFrame({"Ticker": ["AAPL"]}))
 
     ok_summary = {"updated": 0, "skipped_count": 0, "pending": 0, "offline": False,
                   "rows": 0, "tickers": 0, "skipped": [], "already_done": []}

@@ -33,11 +33,17 @@ run) — else derived from the ET hour (≥12:00 ET ⇒ eod, else premarket);
 premarket/eod are never taken as a direct override value, only ever
 hour-derived, so those two Railway services set no ALERT_RUN_MODE at all.
 All output → stdout (the Railway/Actions deploy log). Ships INERT: no
-RESEND_API_KEY ⇒ compute + log, send nothing. Exits 0 on every mode except a
-Sunday thesis-lane sub-job failure (thesis/debrief/monthly), which
-deliberately returns 1 so a manual GitHub Actions run's dead-man's-switch
-failure notification fires — Railway's cron services have no equivalent
-failure-email wired up yet.
+RESEND_API_KEY ⇒ compute + log, send nothing.
+
+EXIT CODES (updated 2026-08-16). Returns 1, not 0, when:
+  • a Sunday thesis-lane sub-job raises (thesis/debrief/monthly), or
+  • ANY lane finds Supabase unreadable — see _handle_db_unavailable.
+The second case is why every lane can now exit non-zero. Previously a DB
+outage made every lane log one line, return 0 and record a HEALTHY
+heartbeat, so an outage was indistinguishable from "nothing to report" —
+including on the pre-market protective lane, whose whole job is to tell
+you about stop breaches and EXIT signals. A non-zero exit makes Railway's
+own run list say so too, and feeds main()'s status="failed" heartbeat.
 
 Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
 FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_FROM
@@ -61,6 +67,7 @@ from stock_analyzer.headless_alert_engine import (
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
+    render_db_outage_email,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -68,6 +75,28 @@ _PROTECTIVE_ROW = 1   # alert_state lane: pre-market protective dedup
 _EOD_ROW = 2          # alert_state lane: EOD pullback dedup
 _BUY_ROW = 3          # alert_state lane: morning buy-list dedup
 _INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
+_DB_OUTAGE_ROW = 5    # alert_state lane: DB-unreachable notice dedup (self-creates on upsert)
+
+# Plain-language lane names + what a DB outage actually cost, for the outage
+# email. Kept here rather than in each lane so the wording can't drift.
+_LANE_OUTAGE_TEXT: dict[str, tuple[str, str]] = {
+    "premarket":   ("pre-market protective scan",
+                    "Stop breaches, deterioration EXIT signals and risk-off trims were NOT evaluated today."),
+    "eod":         ("end-of-day snapshot",
+                    "Today's closing snapshot was NOT saved, and the pullback check did NOT run."),
+    "scan":        ("morning market scan",
+                    "The buy-candidate scan did NOT run — no picks were evaluated."),
+    "intraday":    ("intraday pullback check",
+                    "The intraday entry check did NOT run."),
+    "thesis":      ("weekly thesis review",
+                    "The weekly thesis review did NOT run."),
+    "debrief":     ("weekly debrief",
+                    "The weekly debrief was NOT produced."),
+    "monthly":     ("monthly intelligence report",
+                    "The monthly report was NOT produced."),
+    "maintenance": ("weekly data backfills",
+                    "The weekly reference-data backfills did NOT run."),
+}
 
 
 def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
@@ -202,6 +231,13 @@ def _run_premarket(now_et, force: bool) -> int:
     state = db.load_alert_state(_PROTECTIVE_ROW) or {}
 
     payload = compute_protective_alerts(today=now_et.date())
+    # A DB outage must NOT read as "no protective actions today" — that is the
+    # silent success this branch exists to remove. Checked BEFORE the alert
+    # count is logged, so the log can't claim a clean scan either.
+    if payload.get("reason") == "db_unavailable":
+        return _handle_db_unavailable(
+            "premarket", now_et,
+            "; ".join(payload.get("errors", [])) or "holdings unreadable")
     alerts = payload.get("alerts", [])
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
@@ -318,6 +354,10 @@ def _run_eod(now_et, force: bool) -> int:
             return 0
 
     payload = compute_eod(today=now_et.date())
+    if payload.get("reason") == "db_unavailable":
+        return _handle_db_unavailable(
+            "eod", now_et,
+            "; ".join(payload.get("errors", [])) or "holdings unreadable")
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
 
@@ -655,7 +695,7 @@ def _run_scan(now_et, force: bool) -> int:
     "New Positions to Initiate" (Go — composite confirms) so the user can act from
     mobile. Post-open gated (today's price action must be real). Persist is inert
     until the scanner_cache table exists; the email is inert without RESEND_API_KEY.
-    Always exits 0."""
+    Exits 0 except when Supabase is unreadable (see _handle_db_unavailable)."""
     today_str = now_et.date().isoformat()
     if not force:
         if not is_trading_day(now_et.date()):
@@ -685,6 +725,13 @@ def _run_scan(now_et, force: bool) -> int:
     # ── Morning buy-list email — high-conviction New Positions to Initiate ──────
     sent = False
     payload = compute_morning_picks(today=now_et.date(), scanner_results=results_df)
+    # A DB outage returns an empty picks list — the tone-gate explainer below would
+    # attribute that to market conditions, which is confidently wrong under an outage.
+    # Checked before the error-log loop so no misleading engine notes print either.
+    if payload.get("reason") == "db_unavailable":
+        return _handle_db_unavailable(
+            "scan", now_et,
+            "; ".join(payload.get("errors", [])) or "holdings unreadable")
     for e in payload.get("errors", []):
         _log(f"engine note: {e}")
     picks = payload.get("picks", [])
@@ -819,6 +866,11 @@ def _run_intraday(now_et, force: bool) -> int:
     # Load the scanner_cache written by this morning's _run_scan step.
     cache = db.load_scanner_cache()
     if cache is None:
+        # load_scanner_cache() returns None for BOTH "DB offline" and "no scan run yet" —
+        # probe before logging so we don't misattribute an outage to a missing scan.
+        _detail = _db_unavailable_detail()
+        if _detail:
+            return _handle_db_unavailable("intraday", now_et, _detail)
         _log("intraday: no scanner_cache available — run scan first.")
         return 0
     scanner_df = cache.get("df")
@@ -924,6 +976,12 @@ def _run_thesis(now_et, force: bool) -> int:
         return 0
 
     if not ctx.get("ok"):
+        # _build_context sets reason="db_unavailable" when holdings can't be read —
+        # treat that as an outage (email owner) rather than a silent skip.
+        if ctx.get("reason") == "db_unavailable":
+            return _handle_db_unavailable(
+                "thesis", now_et,
+                "; ".join(ctx.get("errors", [])) or "holdings unreadable")
         _log(f"thesis: context load failed — {'; '.join(ctx.get('errors', []))}")
         return 0
 
@@ -1033,6 +1091,13 @@ def _run_debrief(now_et, force: bool) -> int:
     days_available = len(snapshots_df["snapshot_date"].unique()) if not snapshots_df.empty else 0
 
     if days_available < 5:
+        # days_available == 0 is indistinguishable from a DB outage without probing —
+        # a genuine early-run has at least some snapshots; zero means nothing came back.
+        # A partial shortfall (1–4 days) is a data-accumulation issue, not an outage.
+        if days_available == 0:
+            _detail = _db_unavailable_detail()
+            if _detail:
+                return _handle_db_unavailable("debrief", now_et, _detail)
         _log(f"debrief: only {days_available} snapshot day(s) available — need 5. "
              f"Earliest full debrief after {week_start + __import__('datetime').timedelta(days=5 - days_available)}.")
         return 0
@@ -1169,6 +1234,11 @@ def _run_monthly_report(now_et, force: bool) -> int:
     trades_df = db.load_trades()
 
     if recs_df is None or recs_df.empty:
+        # recs_df is None on a DB read failure as well as on genuinely zero recs —
+        # probe so an outage doesn't silently masquerade as "nothing to report yet".
+        _detail = _db_unavailable_detail()
+        if _detail:
+            return _handle_db_unavailable("monthly", now_et, _detail)
         _log(f"monthly: no recommendations in {period_start}→{period_end} — nothing to report yet.")
         return 0
 
@@ -1264,6 +1334,83 @@ def _run_monthly_report(now_et, force: bool) -> int:
 _LAST_LANE_FAILURE_DETAIL: str | None = None
 
 
+def _db_unavailable_detail() -> str | None:
+    """Human-readable detail when Supabase can't be read AT ALL, else None.
+
+    Deliberately re-reads HOLDINGS rather than issuing a synthetic `select 1`:
+    holdings is the input every protective decision depends on, so a PARTIAL
+    outage that breaks only that table (a dropped RLS policy, a PGRST205
+    schema-cache miss) is caught too — a probe against some other table would
+    happily succeed and report health. Called ONLY after a lane's DB-derived
+    input already came back empty/None, so it adds no round trip to the healthy
+    path. Never raises.
+    """
+    try:
+        if not db.has_db():
+            return "no Supabase credentials (SUPABASE_URL / SUPABASE_KEY not set)"
+        if db.load_holdings_or_none() is None:
+            return "holdings table could not be read from Supabase"
+    except Exception as exc:
+        return f"Supabase read raised: {str(exc)[:160]}"
+    return None
+
+
+def _handle_db_unavailable(lane: str, now_et, detail: str) -> int:
+    """Email the owner that `lane` could not reach the database, then fail the run.
+
+    Exists because the alternative is the silent success this whole change
+    removes: a lane that can't read the book logs one line, returns 0, and the
+    heartbeat reports healthy — indistinguishable from "nothing to report".
+
+    Dedup is honest about its own limits: you cannot dedup a DB-outage alert IN
+    the DB. So it dedups exactly when the DB is well enough to dedup (a partial
+    outage → one email per day) and FAILS OPEN when it isn't (a total outage →
+    one email per lane invocation, max ~4 on a weekday). More email means a
+    worse outage, which is self-explaining. A dedup read returning None means
+    SEND — never skip.
+
+    Never raises: a failure to notify must not mask the original fault.
+    """
+    global _LAST_LANE_FAILURE_DETAIL
+    label, what_did_not_run = _LANE_OUTAGE_TEXT.get(
+        lane, (lane, f"The {lane} lane did NOT run."))
+    _LAST_LANE_FAILURE_DETAIL = f"db_unavailable: {detail}"[:300]
+    _log(f"{lane}: DB UNAVAILABLE — {detail}")
+
+    today_str = now_et.date().isoformat()
+    already: set[str] = set()
+    try:
+        state = db.load_alert_state(_DB_OUTAGE_ROW)
+        # NB: deliberately NOT `... or {}` — an offline None must mean "no dedup
+        # available, send", not "nothing sent today".
+        if state is not None and state.get("last_emailed_date") == today_str:
+            already = {p for p in str(state.get("last_fingerprint") or "").split("|") if p}
+            if lane in already:
+                _log(f"{lane}: outage email already sent today — skip (dedup)")
+                return 1
+    except Exception as exc:
+        _log(f"{lane}: outage dedup read failed ({str(exc)[:80]}) — sending anyway")
+
+    try:
+        subject, html = render_db_outage_email(
+            lane=lane, lane_label=label, what_did_not_run=what_did_not_run,
+            detail=detail, built_at=now_et.isoformat(),
+        )
+        _send_email(f"db-outage/{lane}", subject, html)
+    except Exception as exc:
+        _log(f"{lane}: outage email FAILED to send — {str(exc)[:120]}")
+
+    try:
+        db.save_alert_state(
+            emailed_date=today_str,
+            fingerprint="|".join(sorted(already | {lane})),
+            row_id=_DB_OUTAGE_ROW,
+        )
+    except Exception:
+        pass   # dedup is best-effort; the email already went out
+    return 1
+
+
 def _run_maintenance(now_et, force: bool) -> int:
     """Saturday housekeeping: idempotent data backfills that keep the ledgers
     complete without needing a human at a shell.
@@ -1304,9 +1451,25 @@ def _run_maintenance(now_et, force: bool) -> int:
         # code. Don't "tidy" it upward.
         from scripts.backfill_analyst_prices import run_backfill as _analyst_backfill
         summary = _analyst_backfill(log=lambda m: _log(f"maintenance/analyst: {m}"))
+        # Both backfills hit the same Supabase DB — if the analyst backfill reports
+        # offline, the vol backfill would fail identically; email and exit rather than
+        # logging silently and blundering into the second sub-job with no DB.
+        if summary.get("offline"):
+            return _handle_db_unavailable(
+                "maintenance", now_et, "no Supabase credentials — backfills skipped")
+        # The `offline` flag alone is NOT enough: run_backfill sets it only when
+        # has_db() is False, and has_db() checks that credentials EXIST, not
+        # that Supabase is reachable. The dominant outage class (client raises /
+        # RLS blocks / table unreadable) degrades load_analyst_coverage to an
+        # empty frame, so it arrives here as a cheerful "nothing to backfill".
+        # Probe when there was genuinely nothing to do — a healthy caught-up
+        # table returns None from the probe, so this cannot false-positive.
+        if not summary.get("updated") and not summary.get("pending"):
+            _detail = _db_unavailable_detail()
+            if _detail:
+                return _handle_db_unavailable("maintenance", now_et, _detail)
         _log(f"maintenance: analyst anchor prices — {summary['updated']} updated, "
-             f"{summary['skipped_count']} skipped"
-             + (" (DB OFFLINE — nothing attempted)" if summary.get("offline") else ""))
+             f"{summary['skipped_count']} skipped")
     except Exception as exc:
         _log(f"maintenance/analyst: UNCAUGHT — {str(exc)[:160]}")
         failures.append(f"analyst_prices: {str(exc)[:160]}")
@@ -1363,19 +1526,34 @@ def main() -> int:
         # failure notification (dead-man's-switch).
         rc = 0
         _failures: list[str] = []
+        # Sub-job return codes are CAPTURED, not discarded. Each of the three can
+        # now return 1 from _handle_db_unavailable, and dropping that would send
+        # 1-3 outage emails and then record status="ok" — the exact silent
+        # success this whole change removes, on the one lane where three
+        # detectors fire at once. Kept SEPARATE from `_failures` so a DB outage
+        # doesn't also trigger _notify_failure's "the lane crashed, read the
+        # traceback" email on top of the outage email: two different messages
+        # about the same fault would be noise, and the outage email is the
+        # accurate one.
+        _outages: list[str] = []
         for _job, _fn in (("thesis", _run_thesis), ("debrief", _run_debrief),
                           ("monthly", _run_monthly_report)):
             try:
-                _fn(now_et, force)
+                if _fn(now_et, force):
+                    rc = 1
+                    _outages.append(_job)
             except Exception as exc:
                 _log(f"{_job}: UNCAUGHT — {str(exc)[:160]}")
                 rc = 1
                 _failures.append(f"{_job}: {str(exc)[:160]}")
         if _failures:
             _notify_failure(mode, "; ".join(_failures))
+        _detail = "; ".join(_failures) or (
+            f"{_LAST_LANE_FAILURE_DETAIL} (sub-jobs: {', '.join(_outages)})"
+            if _outages else None)
         _record_heartbeat("thesis", now_et,
-                          status="failed" if _failures else "ok",
-                          detail="; ".join(_failures) if _failures else None)
+                          status="failed" if rc else "ok",
+                          detail=_detail)
         return rc
 
     # Every other mode dispatches exactly one job per invocation. Wrap it in
@@ -1403,12 +1581,13 @@ def main() -> int:
         _record_heartbeat(_job_name, now_et, status="failed", detail=str(exc)[:160])
         raise
     # Status must track the return code, not merely "we got here without an
-    # exception". A lane that isolates its own sub-job failures reports them by
-    # returning non-zero (see _run_maintenance), and recording those as "ok"
-    # would show a green heartbeat for a run that actually failed — defeating
-    # the dead-man's-switch the heartbeat exists to provide. Every other
-    # dispatched lane returns 0 unconditionally, so this can never flip one of
-    # them to "failed".
+    # exception". Two things now report by RETURNING non-zero rather than
+    # raising — a DB outage in any lane (_handle_db_unavailable) and the
+    # maintenance lane's isolated sub-job failures — and recording either as
+    # "ok" would show a green heartbeat for a run that actually failed,
+    # defeating the dead-man's-switch the heartbeat exists to provide.
+    # (Before 2026-08-16 every dispatched lane returned 0 unconditionally, so
+    # this branch was unreachable; it is now the normal outage path.)
     if rc:
         _record_heartbeat(_job_name, now_et, status="failed",
                           detail=_LAST_LANE_FAILURE_DETAIL)

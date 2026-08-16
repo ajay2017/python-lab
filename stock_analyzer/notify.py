@@ -162,6 +162,69 @@ def render_test_email(n_alerts: int, built_at: str) -> tuple[str, str]:
     return subject, body
 
 
+def render_db_outage_email(lane: str, lane_label: str, what_did_not_run: str,
+                           detail: str, built_at: str) -> tuple[str, str]:
+    """Email (subject, html) for "this lane could not read the database".
+
+    Deliberately NOT reused from `_notify_failure`'s renderer: that email means
+    "the code crashed, go read a traceback." This one means something different
+    and more useful — "the lane ran correctly and could not see your book."
+
+    Tone is load-bearing. The tempting version says "⚠️ your positions may be
+    unprotected!" — that manufactures alarm out of an ABSENCE of data, which is
+    exactly what the calm-advisor persona forbids. State precisely what did not
+    happen, state that we have no market opinion right now because we could not
+    see anything, and stop. Pure string building: no DB, no Streamlit, no
+    imports beyond this module's existing three — the whole point is that this
+    path still works when Supabase does not.
+    """
+    subject = f"🔴 DRISHTA: {lane_label} did NOT run — database unreachable"
+    body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
+      <div style="max-width:640px;margin:0 auto;font-family:Arial,Helvetica,sans-serif">
+        <div style="color:#f9fafb;font-size:18px;font-weight:700">DRISHTA · Scan did not run</div>
+
+        <div style="color:#f87171;font-size:15px;margin-top:14px;font-weight:600">
+          {_html.escape(what_did_not_run)}
+        </div>
+
+        <div style="color:#a8a29e;font-size:13px;margin-top:12px">
+          DRISHTA could not read your holdings from Supabase, so the
+          <b style="color:#e5e7eb">{_html.escape(lane_label)}</b> lane had nothing to work from.
+        </div>
+        <div style="color:#78716c;font-size:12px;margin-top:8px;font-family:monospace;
+                    background:#1c1917;padding:8px 10px;border-radius:4px">
+          {_html.escape(str(detail))[:400]}
+        </div>
+
+        <div style="color:#a8a29e;font-size:13px;margin-top:14px;
+                    border-left:3px solid #57534e;padding-left:10px">
+          <b style="color:#e5e7eb">This is an infrastructure fault, not a market signal.</b>
+          DRISHTA has no opinion on your positions right now, because it could not see them.
+          Nothing here says anything about what the market did.
+        </div>
+
+        <div style="color:#a8a29e;font-size:13px;margin-top:14px">
+          <b style="color:#e5e7eb">What to check</b>
+          <ol style="margin:6px 0 0 18px;padding:0;color:#a8a29e">
+            <li>Supabase project status — is the instance paused or down?</li>
+            <li>Is <span style="font-family:monospace;color:#d6d3d1">SUPABASE_KEY</span> still the
+                <b>service-role / secret</b> key (not the publishable/anon one)?</li>
+            <li>Railway → Shared Variables — are the Supabase vars attached to this cron service?</li>
+            <li>Open DRISHTA. If the app also shows an empty portfolio, the outage is real.</li>
+          </ol>
+        </div>
+
+        <div style="color:#6b7280;font-size:11px;margin-top:16px;border-top:1px solid #292524;padding-top:10px">
+          Lane <span style="font-family:monospace">{_html.escape(lane)}</span> ·
+          attempted {_html.escape(str(built_at))[:19]} ET.
+          You are receiving this because a scheduled run could not reach the database —
+          silence would have been indistinguishable from "nothing to report".
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body
+
+
 def render_pullback_email(pb: dict, built_at: str) -> tuple[str, str]:
     """Reactive pullback-awareness email (subject, html) — the market actually fell
     today. AWARENESS, not an action: it reports exposure (reality observed), while

@@ -83,14 +83,24 @@ def _build_context(today: date) -> dict:
     Never raises. One prep path feeds BOTH the pre-market protective run and the
     EOD snapshot/pullback run, so they can never disagree about the book."""
     errors: list[str] = []
+    # `reason` is what lets a caller tell "the DB is unreachable" apart from
+    # "the user owns nothing" — the two used to be indistinguishable here,
+    # because db.load_holdings() collapsed a failed read into an empty frame.
+    # A protective lane MUST distinguish them: one means email the owner that
+    # the scan did not run, the other means quietly do nothing.
     if not db.has_db():
-        return {"ok": False, "errors": ["no Supabase credentials (SUPABASE_URL/SUPABASE_KEY)"]}
+        return {"ok": False, "reason": "db_unavailable",
+                "errors": ["no Supabase credentials (SUPABASE_URL/SUPABASE_KEY)"]}
     try:
-        holdings_df = db.load_holdings()
-    except Exception as e:
-        return {"ok": False, "errors": [f"load_holdings failed: {e}"]}
-    if holdings_df is None or holdings_df.empty:
-        return {"ok": False, "errors": ["no holdings"]}
+        holdings_df = db.load_holdings_or_none()
+    except Exception as e:   # defensive — the strict reader already swallows
+        return {"ok": False, "reason": "db_unavailable",
+                "errors": [f"load_holdings failed: {e}"]}
+    if holdings_df is None:
+        return {"ok": False, "reason": "db_unavailable",
+                "errors": ["holdings could not be read from Supabase"]}
+    if holdings_df.empty:
+        return {"ok": False, "reason": "no_holdings", "errors": ["no holdings"]}
 
     try:
         trades_df = db.load_trades()
@@ -137,7 +147,10 @@ def _build_context(today: date) -> dict:
         held_data[t] = bundle
 
     if not held_data:
-        return {"ok": False, "errors": errors + ["no holdings could be loaded"]}
+        # Provider fault, NOT a DB fault — the book was read fine, the price
+        # bundles failed. Must not trigger a "database unreachable" email.
+        return {"ok": False, "reason": "no_bundles",
+                "errors": errors + ["no holdings could be loaded"]}
 
     # NB: no intraday live-price merge (unlike the live app). The pre-market run
     # uses last close (stop rule = "CLOSED below stop"); the EOD run is post-close
@@ -145,7 +158,8 @@ def _build_context(today: date) -> dict:
     holdings = holdings_df.to_dict("records")
     port_df = build_portfolio_df(holdings, held_data, manual_stops=manual_stops)
     if port_df is None or port_df.empty:
-        return {"ok": False, "errors": errors + ["portfolio frame empty after load"]}
+        return {"ok": False, "reason": "empty_port_df",
+                "errors": errors + ["portfolio frame empty after load"]}
 
     try:
         port_risk = compute_portfolio_risk_metrics(port_df, held_data, spy_6mo, rfr)
@@ -180,7 +194,10 @@ def compute_protective_alerts(today: date | None = None) -> dict:
     ctx = _build_context(today)
     built_at = datetime.now(_ET).isoformat()
     if not ctx.get("ok"):
-        return {"alerts": [], "built_at": built_at, "errors": ctx.get("errors", [])}
+        # `reason` rides along so the cron can tell a DB outage (email the
+        # owner: the scan did NOT run) from an empty book (stay quiet).
+        return {"alerts": [], "built_at": built_at, "errors": ctx.get("errors", []),
+                "reason": ctx.get("reason")}
 
     errors = list(ctx["errors"])
     port_df, held_data = ctx["port_df"], ctx["held_data"]
@@ -319,7 +336,8 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
 
     ctx = _build_context(today)
     if not ctx.get("ok"):
-        return {"picks": [], "built_at": built_at, "errors": ctx.get("errors", [])}
+        return {"picks": [], "built_at": built_at, "errors": ctx.get("errors", []),
+                "reason": ctx.get("reason")}
     errors = list(ctx["errors"])
     port_df, held_data = ctx["port_df"], ctx["held_data"]
     spy_6mo, spy_1y, vix, fragility = ctx["spy_6mo"], ctx["spy_1y"], ctx["vix"], ctx["fragility"]
@@ -483,7 +501,7 @@ def compute_eod(today: date | None = None, pullback_threshold: float = PULLBACK_
     built_at = datetime.now(_ET).isoformat()
     if not ctx.get("ok"):
         return {"snapshot_rows": [], "pullback": None, "built_at": built_at,
-                "errors": ctx.get("errors", [])}
+                "errors": ctx.get("errors", []), "reason": ctx.get("reason")}
 
     port_df = ctx["port_df"]
     snapshot_rows = []

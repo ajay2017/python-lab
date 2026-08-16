@@ -198,7 +198,7 @@ def _patch_context_deps(**overrides):
 
 def _run_build_context(cfg):
     with patch("stock_analyzer.headless_alert_engine.db.has_db", return_value=cfg["has_db"]), \
-         patch("stock_analyzer.headless_alert_engine.db.load_holdings",
+         patch("stock_analyzer.headless_alert_engine.db.load_holdings_or_none",
                return_value=cfg["load_holdings"], side_effect=cfg.get("load_holdings_side_effect")), \
          patch("stock_analyzer.headless_alert_engine.db.load_trades",
                return_value=cfg["load_trades"]), \
