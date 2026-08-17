@@ -4,6 +4,16 @@ from stock_analyzer.indicators import sma, rsi as calc_rsi
 from stock_analyzer.constants import MOVER_MIN_DAY_GAIN_PCT
 
 # Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
+#
+# BUCKET LABELS ARE LOAD-BEARING, not just display. daily_briefing.py's macro
+# gate resolves a candidate's sector via portfolio.resolve_sector(ticker, <this
+# bucket label>) and then tests `sector in _macro_blocked_sectors`. A label that
+# macro_calendar._SECTOR_IMPACT doesn't know can NEVER be macro-suppressed — it
+# fails OPEN, silently, with no banner. So when adding a bucket, either name it
+# exactly as an existing _SECTOR_IMPACT key or add a row there in the same
+# commit, and give each ticker a portfolio.TICKER_SECTORS entry so the pick path
+# and the held path (which resolves from the provider's GICS string) agree.
+# tests/test_scanner.py asserts this invariant with an explicit allowlist.
 SECTOR_UNIVERSE = {
     "AI & Cloud": ["MSFT", "GOOGL", "META", "AMZN", "CRM", "NOW", "DDOG", "WDAY"],
     "Cybersecurity": ["PANW", "CRWD", "ZS", "NET", "FTNT", "OKTA", "S"],
@@ -11,12 +21,16 @@ SECTOR_UNIVERSE = {
     "Consumer Tech": ["AAPL", "NFLX", "SHOP", "UBER", "ABNB"],
     "AI & Data Platforms": ["PLTR", "AI", "MDB", "SNOW", "PATH", "IONQ"],
     "EV & Clean Energy": ["TSLA", "ENPH", "FSLR", "NEE", "RIVN"],
-    "Healthcare & Biotech": ["LLY", "NVO", "ABBV", "ISRG", "MRNA", "REGN", "AMGN"],
-    "Financials & Fintech": ["JPM", "V", "MA", "GS", "XYZ", "COIN", "PYPL"],
+    "Healthcare & Biotech": ["LLY", "NVO", "ABBV", "ISRG", "MRNA", "REGN", "AMGN",
+                             "JNJ", "UNH", "MRK", "TMO"],
+    "Financials & Fintech": ["JPM", "V", "MA", "GS", "XYZ", "COIN", "PYPL",
+                             "BAC", "WFC", "MS", "SCHW"],
     "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP"],
     "Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA"],
+    "Industrials": ["CAT", "GE", "GEV"],
+    "Communications": ["T", "VZ", "TMUS"],
     "Energy": ["XOM", "CVX", "OXY", "COP", "SLB"],
-    "Consumer Staples & Retail": ["COST", "NKE", "TJX", "WMT", "TGT"],
+    "Consumer Staples & Retail": ["COST", "NKE", "TJX", "WMT", "TGT", "HD"],
 }
 
 

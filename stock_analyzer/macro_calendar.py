@@ -208,6 +208,34 @@ _STATIC: list[tuple] = [
 
 # ── Sector sensitivity map ────────────────────────────────────────────────────
 # 3 = directly impacted, 2 = moderately impacted, 1 = minor
+#
+# THIS MAP IS A GATE, AND IT FAILS OPEN. daily_briefing.py resolves a candidate's
+# sector and tests `sector in _macro_blocked_sectors`; a sector label absent from
+# every category below can never be suppressed — silently, with no banner. So the
+# key set here must cover every portfolio.TICKER_SECTORS value AND every
+# scanner.SECTOR_UNIVERSE bucket label (the fallback when a ticker has no curated
+# entry). tests/test_scanner.py asserts exactly those two sets.
+#
+# It does NOT cover — and cannot — the third thing resolve_sector can return: the
+# RAW PROVIDER GICS STRING, handed to it by build_portfolio_df for a HELD ticker
+# with no TICKER_SECTORS entry ("Technology", "Consumer Cyclical", "Financial
+# Services", …). Such a holding is invisible to the held-side macro exposure math
+# at daily_briefing.py's `port_df["Sector"].isin(ev_affected_sectors)`, so it
+# silently drops out of exposure_pct and UNDER-counts the pre-event trim. That
+# fails in the calm direction (a trim under-fires; it can never manufacture a
+# suppression), which is why it is a documented limitation rather than the
+# fail-open bug fixed below.
+#   STANDING RULE: when a position is opened in a ticker with no TICKER_SECTORS
+#   entry, add one — otherwise it is invisible to the macro exposure math.
+# Note "Industrials" is now both a curated label AND a literal yfinance sector
+# string, so uncurated GICS-Industrials holdings newly enter that exposure sum.
+#
+# On 2026-08-16 that invariant was found broken for 13 of 73 scan-universe names
+# (all of Enterprise Tech and Consumer Staples & Retail, plus BA, RIVN, PYPL) and
+# for the held name SPCX — the four rows added below plus the TICKER_SECTORS
+# entries in portfolio.py close it. tests/test_scanner.py now asserts it.
+# Note "Fed Policy" and "Growth" use __ALL__, so those two event types always
+# suppressed correctly; the hole only ever affected the four keyed categories.
 _SECTOR_IMPACT: dict[str, dict[str, int]] = {
     "Fed Policy": {
         "__ALL__": 3,
@@ -224,6 +252,10 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Energy":         2,
         "Healthcare":     1,
         "Defense":        1,
+        "Industrials":    2,
+        "Communications": 2,
+        "Consumer Staples & Retail": 2,
+        "Enterprise Tech":           2,
     },
     "Employment": {
         "Consumer Tech":  3,
@@ -236,6 +268,20 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Healthcare":     1,
         "Energy":         1,
         "Defense":        1,
+        # Added 2026-08-16. Its absence was a LIVE fail-open, not latent debt:
+        # Employment carries Non-Farm Payrolls at HIGH, so all 7 Cybersecurity
+        # names (PANW/CRWD/ZS/NET/FTNT/OKTA/S) were unsuppressible ahead of every
+        # payrolls print. 2 matches this sector's own Inflation score and its
+        # cluster peers AI & Cloud / AI & Data — security budgets are
+        # contract-based, so payrolls move them less than consumer/financial
+        # names but they remain enterprise-software cyclicals.
+        "Cybersecurity":  2,
+        # Industrials 3: payrolls drive the cyclical capex/backlog read directly.
+        "Industrials":    3,
+        # Communications 1: rate-sensitive dividend defensives, closer to utilities.
+        "Communications": 1,
+        "Consumer Staples & Retail": 2,
+        "Enterprise Tech":           2,
     },
     "Growth": {
         "__ALL__": 2,
@@ -250,6 +296,13 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Healthcare":     1,
         "Defense":        1,
         "Energy":         1,
+        "Industrials":    2,
+        "Communications": 2,
+        # 3: WMT/TGT/COST *are* the retail-sales print — the most direct read
+        # of a consumer release anywhere in this map.
+        "Consumer Staples & Retail": 3,
+        # 1: enterprise IT has no direct consumer revenue.
+        "Enterprise Tech":           1,
     },
     "Activity": {
         "Semiconductors": 3,
@@ -259,6 +312,13 @@ _SECTOR_IMPACT: dict[str, dict[str, int]] = {
         "Defense":        2,
         "Clean Energy":   1,
         "Energy":         2,
+        # 3: ISM/PMI is *the* industrials print.
+        "Industrials":    3,
+        "Communications": 1,
+        # 1: ISM manufacturing barely touches staples/retail demand.
+        "Consumer Staples & Retail": 1,
+        # 2: IT capex tracks PMI with a lag.
+        "Enterprise Tech":           2,
     },
 }
 

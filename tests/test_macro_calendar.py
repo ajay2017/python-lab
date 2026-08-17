@@ -103,6 +103,11 @@ def test_affected_sectors_inflation_at_min_severity_2_matches_real_table():
     expected = {
         "AI & Data", "AI & Cloud", "Semiconductors", "Cybersecurity",
         "Clean Energy", "Consumer Tech", "EV & Auto", "Financials", "Energy",
+        # Added 2026-08-16 closing the macro-gate coverage hole — these four
+        # labels were reachable from resolve_sector but absent from
+        # _SECTOR_IMPACT, so their names could never be macro-suppressed.
+        "Industrials", "Communications", "Consumer Staples & Retail",
+        "Enterprise Tech",
     }
     assert mc.affected_sectors("Inflation", min_severity=2) == expected
 

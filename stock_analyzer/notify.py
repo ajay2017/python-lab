@@ -895,3 +895,219 @@ def send_email_resend(*, api_key: str, sender: str, to: str, subject: str, html:
         return False, f"HTTP {resp.status_code}: {(resp.text or '')[:300]}"
     except Exception as e:
         return False, f"exception: {type(e).__name__}: {e}"
+
+
+def render_liveness_email(
+    sweep: "dict | None",
+    shelf_down: "list[dict]",
+    shelf_warn: "list[dict]",
+    built_at: str,
+) -> "tuple[str, str]":
+    """Email (subject, html) for the weekly ticker-liveness and shelf-life check.
+
+    Called from the Saturday maintenance cron lane when: a dead ticker was
+    confirmed, the batch was inconclusive, the sweep raised (None), or a
+    reference table has expired (severity == "down").
+
+    Chore/awareness only — never gates a recommendation, never suppresses a pick.
+
+    STYLING: dark-on-light (same as render_db_outage_email) because email clients
+    strip <body> styling, leaving near-white text invisible on a white background —
+    verified live on 2026-08-16.  Do NOT align this to the other dark-body renderers
+    without re-testing in a real inbox.
+
+    Pure string building: no DB, no Streamlit, no network.
+    """
+    from stock_analyzer.util import safe_html as _sh
+    from stock_analyzer.constants import TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT
+
+    _dead_list = sweep.get("dead") if sweep is not None else None
+    n_dead = len(_dead_list) if _dead_list is not None else 0
+    n_shelf_down = len(shelf_down)
+
+    # ── Subject ───────────────────────────────────────────────────────────────
+    if sweep is None:
+        subject = "DRISHTA · Maintenance: roster-liveness check failed — no verdict this week"
+    elif sweep.get("status") == "inconclusive":
+        subject = "DRISHTA · Maintenance: roster-liveness inconclusive — provider may be degraded"
+    elif n_dead and n_shelf_down:
+        subject = (
+            f"DRISHTA · Maintenance: {n_dead} dead ticker{'s' if n_dead != 1 else ''}"
+            f" + {n_shelf_down} expired table{'s' if n_shelf_down != 1 else ''}"
+            f" — curation needed"
+        )
+    elif n_dead:
+        subject = (
+            f"DRISHTA · Maintenance: {n_dead} dead ticker{'s' if n_dead != 1 else ''}"
+            f" found in rosters — curation needed"
+        )
+    elif n_shelf_down:
+        subject = (
+            f"DRISHTA · Maintenance: {n_shelf_down} reference"
+            f" table{'s' if n_shelf_down != 1 else ''} expired — extend now"
+        )
+    else:
+        # Unreachable via cron_runner, which only calls this when there IS a
+        # finding. Guarded anyway so a future caller can't ship the nonsense
+        # subject "0 reference tables expired".
+        subject = "DRISHTA · Maintenance: roster-liveness report"
+
+    # ── Sweep section ─────────────────────────────────────────────────────────
+    if sweep is None:
+        sweep_html = """
+        <div style="border-left:3px solid #dc2626;background:#fef2f2;border-radius:0 4px 4px 0;
+                    padding:10px 14px;margin:0 0 14px 0">
+          <div style="color:#991b1b;font-weight:700;font-size:13px">
+            Ticker-liveness batch check could not run
+          </div>
+          <div style="color:#7f1d1d;font-size:12px;margin-top:4px">
+            The batch download raised an exception before producing any result.
+            There is no verdict this week — the rosters may or may not contain
+            stale tickers.  Check the Railway maintenance cron-service logs for
+            the traceback.  Silence would have been indistinguishable from a
+            clean run.
+          </div>
+        </div>"""
+    elif sweep.get("status") == "inconclusive":
+        hp = sweep.get("health_pct", 0.0)
+        suspects_n = sweep.get("suspects_n", 0)
+        roster_n = sweep.get("roster_n", 0)
+        sweep_html = f"""
+        <div style="border-left:3px solid #d97706;background:#fffbeb;border-radius:0 4px 4px 0;
+                    padding:10px 14px;margin:0 0 14px 0">
+          <div style="color:#92400e;font-weight:700;font-size:13px">
+            Ticker-liveness sweep inconclusive
+          </div>
+          <div style="color:#78350f;font-size:12px;margin-top:4px">
+            Batch health {_sh(f'{hp:.1f}%')} — only
+            {_sh(str(roster_n - suspects_n))} of {_sh(str(roster_n))} roster
+            tickers returned price data ({_sh(str(suspects_n))} suspect).
+            This is below the {_sh(f'{TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT:.0f}%')}
+            threshold required to trust the verdict.  The data provider was likely
+            rate-limited or temporarily degraded.  No dead-ticker conclusion is
+            drawn; the check will re-run next Saturday.  Silence would have been
+            indistinguishable from a clean run — this email states there is no verdict.
+          </div>
+        </div>"""
+    elif sweep.get("dead"):
+        rows = ""
+        for d in sweep["dead"]:
+            tk = _sh(str(d.get("ticker") or ""))
+            _rosters = d.get("rosters")
+            rosters = _sh(", ".join(sorted(_rosters if _rosters is not None else [])))
+            rows += f"""
+            <div style="border-bottom:1px solid #fecaca;padding:6px 0">
+              <span style="font-family:monospace;color:#b91c1c;font-weight:700">{tk}</span>
+              <span style="color:#3f3f46;font-size:12px;margin-left:8px">
+                appears in: {rosters}
+              </span>
+            </div>"""
+        sweep_html = f"""
+        <div style="margin:0 0 14px 0">
+          <div style="color:#b91c1c;font-weight:700;font-size:13px;margin-bottom:6px">
+            {n_dead} dead ticker{'s' if n_dead != 1 else ''} confirmed
+          </div>
+          <div style="background:#fef2f2;border:1px solid #fecaca;
+                      border-radius:4px;padding:10px 14px">
+            {rows}
+          </div>
+          <div style="color:#52525b;font-size:12px;margin-top:8px">
+            Each ticker returned no price from any provider (Finnhub, yfinance,
+            FMP).  Remove it from the roster(s) listed above and update the
+            shelf-registry date in reference_shelf.py.
+          </div>
+        </div>"""
+    else:
+        hp = sweep.get("health_pct", 0.0)
+        roster_n = sweep.get("roster_n", 0)
+        sweep_html = f"""
+        <div style="border-left:3px solid #16a34a;background:#f0fdf4;
+                    border-radius:0 4px 4px 0;padding:10px 14px;margin:0 0 14px 0">
+          <div style="color:#15803d;font-weight:700;font-size:13px">
+            All {_sh(str(roster_n))} roster tickers alive
+            (batch health {_sh(f'{hp:.1f}%')})
+          </div>
+        </div>"""
+
+    # ── Shelf-down section ────────────────────────────────────────────────────
+    shelf_down_html = ""
+    if shelf_down:
+        rows = ""
+        for r in shelf_down:
+            label = _sh(str(r.get("label") or r.get("key") or ""))
+            detail = _sh(str(r.get("detail") or ""))
+            loc = _sh(str(r.get("location") or ""))
+            consequence = _sh(str(r.get("consequence") or ""))
+            rows += f"""
+            <div style="border-bottom:1px solid #fecaca;padding:8px 0">
+              <div style="color:#991b1b;font-weight:700;font-size:13px">{label}</div>
+              <div style="color:#7f1d1d;font-size:12px;margin-top:2px">{detail}</div>
+              <div style="color:#52525b;font-size:12px;margin-top:2px">
+                Location: <code>{loc}</code>
+              </div>
+              <div style="color:#3f3f46;font-size:12px;margin-top:2px">
+                Impact: {consequence}
+              </div>
+            </div>"""
+        shelf_down_html = f"""
+        <div style="margin:0 0 14px 0">
+          <div style="color:#b91c1c;font-weight:700;font-size:13px;margin-bottom:6px">
+            {n_shelf_down} expired reference table{'s' if n_shelf_down != 1 else ''}
+          </div>
+          <div style="background:#fef2f2;border:1px solid #fecaca;
+                      border-radius:4px;padding:10px 14px">
+            {rows}
+          </div>
+        </div>"""
+
+    # ── Shelf-warn section (secondary: included only when already emailing) ───
+    shelf_warn_html = ""
+    if shelf_warn:
+        rows = ""
+        for r in shelf_warn:
+            sev = _sh(str(r.get("severity") or ""))
+            label = _sh(str(r.get("label") or r.get("key") or ""))
+            detail = _sh(str(r.get("detail") or ""))
+            color = "#d97706" if r.get("severity") == "warn" else "#6b7280"
+            rows += f"""
+            <div style="border-bottom:1px solid #e4e4e7;padding:6px 0">
+              <span style="color:{color};font-size:12px;font-weight:600">
+                {sev.upper()}
+              </span>
+              <span style="color:#3f3f46;font-size:12px;margin-left:6px">
+                {label}: {detail}
+              </span>
+            </div>"""
+        shelf_warn_html = f"""
+        <div style="margin:0 0 14px 0;color:#3f3f46;font-size:12px">
+          <div style="font-weight:600;margin-bottom:6px">
+            Reference tables approaching expiry
+          </div>
+          <div style="background:#fafaf9;border:1px solid #e4e4e7;
+                      border-radius:4px;padding:10px 14px">
+            {rows}
+          </div>
+        </div>"""
+
+    body = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f4f5">
+      <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d4d4d8;
+                  border-radius:8px;padding:22px;font-family:Arial,Helvetica,sans-serif">
+        <div style="color:#18181b;font-size:18px;font-weight:700">
+          DRISHTA · Weekly Roster-Liveness Check
+        </div>
+        <div style="color:#52525b;font-size:12px;margin-top:4px;margin-bottom:16px">
+          Chore report · built {_sh(str(built_at))[:19]} ET ·
+          awareness only, never gates a recommendation
+        </div>
+        {sweep_html}
+        {shelf_down_html}
+        {shelf_warn_html}
+        <div style="color:#71717a;font-size:11px;margin-top:16px;
+                    border-top:1px solid #e4e4e7;padding-top:10px">
+          Saturday maintenance lane · runs weekly.  You are receiving this
+          because the liveness check found something (or could not produce a
+          verdict) — silence is indistinguishable from health.
+        </div>
+      </div>
+    </body></html>"""
+    return subject, body

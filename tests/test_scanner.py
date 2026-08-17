@@ -406,3 +406,127 @@ def test_scan_movers_empty_ticker_list_skips_network_call(monkeypatch):
     result = scanner.scan_movers([])
     assert result.empty
     assert fake.calls == 0
+
+
+# ─── Macro-gate coverage invariant ──────────────────────────────────────────
+# The bug this guards (found 2026-08-16): daily_briefing's macro gate resolves a
+# candidate's sector via portfolio.resolve_sector(ticker, <SECTOR_UNIVERSE bucket
+# label>) and then tests `sector in _macro_blocked_sectors`. A resolved sector
+# absent from macro_calendar._SECTOR_IMPACT can NEVER be suppressed — it fails
+# OPEN, silently, with no banner. 13 of 73 scan-universe names were in that hole
+# (all of Enterprise Tech and Consumer Staples & Retail, plus BA, RIVN, PYPL),
+# and the held name SPCX besides. This is the test that would have caught it.
+
+def _macro_known_sectors() -> set:
+    from stock_analyzer.macro_calendar import _SECTOR_IMPACT
+    known = set()
+    for _cat, mapping in _SECTOR_IMPACT.items():
+        known |= {k for k in mapping if k != "__ALL__"}
+    return known
+
+
+def test_every_scan_universe_ticker_resolves_to_a_macro_known_sector():
+    # Allowlist is deliberately EMPTY: the hole was fully closed, and an empty
+    # allowlist is what makes this fail the moment a new one is opened. If a
+    # future change must add an entry here, that entry is a documented gate hole
+    # — not a formality.
+    from stock_analyzer.portfolio import resolve_sector
+    known = _macro_known_sectors()
+    allowed_holes: set = set()
+
+    unblockable = {
+        t: resolve_sector(t, bucket)
+        for bucket, tickers in scanner.SECTOR_UNIVERSE.items()
+        for t in tickers
+        if resolve_sector(t, bucket) not in known and t not in allowed_holes
+    }
+    assert not unblockable, (
+        "these tickers can never be macro-suppressed (sector unknown to "
+        f"_SECTOR_IMPACT): {unblockable}"
+    )
+
+
+def test_every_curated_ticker_sector_value_is_macro_known():
+    # The held path resolves sector from TICKER_SECTORS, so its VALUES must be
+    # covered too — SPCX ("Communications") was unblockable this way.
+    from stock_analyzer.portfolio import TICKER_SECTORS
+    known = _macro_known_sectors()
+    unknown = {t: s for t, s in TICKER_SECTORS.items() if s not in known}
+    assert not unknown, f"TICKER_SECTORS values unknown to _SECTOR_IMPACT: {unknown}"
+
+
+def test_new_bucket_tickers_agree_between_pick_path_and_held_path():
+    # VZ is the trap: the provider's GICS string is "Communication Services",
+    # the bucket label is "Communications". Only the explicit TICKER_SECTORS
+    # entry makes the two paths agree — without it a held VZ and a candidate VZ
+    # would be gated differently.
+    from stock_analyzer.portfolio import resolve_sector
+    for ticker, bucket, gics in [
+        ("VZ",  "Communications", "Communication Services"),
+        ("T",   "Communications", "Communication Services"),
+        ("CAT", "Industrials",    "Industrials"),
+        ("GE",  "Industrials",    "Industrials"),
+        ("WMT", "Consumer Staples & Retail", "Consumer Defensive"),
+        ("HD",  "Consumer Staples & Retail", "Consumer Cyclical"),
+    ]:
+        assert resolve_sector(ticker, bucket) == resolve_sector(ticker, gics), ticker
+
+
+def test_every_keyed_macro_category_covers_the_same_sector_set():
+    # _macro_known_sectors() unions ACROSS categories, so a label present in
+    # only one category still passes the two tests above. That hides a ragged
+    # map: before 2026-08-16, "Consumer" was missing Cybersecurity/AI & Cloud
+    # and "Activity" was missing those plus Consumer Tech/Healthcare.
+    #
+    # Inert today — both categories are MEDIUM-only in _STATIC and both gate
+    # sites filter to HIGH — but promoting one Retail Sales or ISM row to HIGH
+    # would silently reopen exactly the fail-open just fixed. Per-category
+    # coverage is the invariant that actually holds the gate closed.
+    # KNOWN DEBT, pinned rather than silently tolerated — but ONLY for the
+    # categories that provably cannot gate today. The distinction is the whole
+    # point, and getting it wrong once already nearly shipped a live hole:
+    #
+    #   Inflation   CPI HIGH ×24   → gates. Complete, no gaps.
+    #   Employment  NFP HIGH ×24   → gates. Was missing Cybersecurity, which
+    #                                left all 7 cyber names unsuppressible ahead
+    #                                of every payrolls print. FIXED 2026-08-16,
+    #                                NOT allowlisted.
+    #   Consumer    Retail MEDIUM  → both gate sites filter to HIGH, so inert.
+    #   Activity    no _STATIC rows at all → inert.
+    #
+    # Allowlisting is therefore legitimate for Consumer/Activity and would NOT
+    # have been for Employment. If either ever gains a HIGH row, delete its
+    # entry here and set the severities with the user first.
+    known_gaps = {
+        "Consumer":   {"AI & Cloud", "Cybersecurity"},
+        "Activity":   {"AI & Cloud", "Consumer Tech", "Cybersecurity",
+                       "Healthcare"},
+    }
+    from stock_analyzer.macro_calendar import _SECTOR_IMPACT
+    keyed = {cat: set(m) for cat, m in _SECTOR_IMPACT.items()
+             if "__ALL__" not in m}
+    universe = set().union(*keyed.values())
+    missing = {
+        cat: sorted((universe - keys) - known_gaps.get(cat, set()))
+        for cat, keys in keyed.items()
+        if (universe - keys) - known_gaps.get(cat, set())
+    }
+    assert not missing, (
+        "these macro categories don't score every known sector, so those "
+        f"sectors fail open if the category ever carries a HIGH event: {missing}"
+    )
+    # And the debt must not silently GROW under cover of the allowlist.
+    stale = {cat: sorted(gaps - (universe - keyed.get(cat, universe)))
+             for cat, gaps in known_gaps.items()
+             if gaps - (universe - keyed.get(cat, universe))}
+    assert not stale, (
+        f"allowlist lists gaps that no longer exist — tighten it: {stale}")
+
+
+def test_goog_absent_while_googl_present():
+    # Regression guard: scan_sectors dedups by SYMBOL, not issuer, so adding the
+    # second Alphabet share class would spend two of the twelve finalist slots on
+    # one company and double-count it in any future sector-weight math.
+    flat = {t for names in scanner.SECTOR_UNIVERSE.values() for t in names}
+    assert "GOOGL" in flat
+    assert "GOOG" not in flat

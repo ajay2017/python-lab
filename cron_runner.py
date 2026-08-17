@@ -67,7 +67,7 @@ from stock_analyzer.headless_alert_engine import (
 from stock_analyzer.notify import (
     render_alert_email, render_test_email, render_pullback_email,
     render_daily_action_email, render_intraday_entry_email, send_email_resend,
-    render_db_outage_email,
+    render_db_outage_email, render_liveness_email,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -1439,6 +1439,71 @@ def _run_maintenance(now_et, force: bool) -> int:
 
     rc = 0
     failures: list[str] = []
+
+    # ⓪ ticker-liveness sweep — MUST remain before sub-jobs ① and ②.
+    #
+    # Ordering is load-bearing: ① can `return _handle_db_unavailable(...)` early
+    # (see lines below at "if summary.get('offline')" and the DB-probe fallback).
+    # Placing the sweep after those paths would let a Supabase outage silently
+    # starve the roster-rot check — exactly the silent-failure class F-239 fixed.
+    # This sweep needs no DB: it probes provider data sources directly.
+    try:
+        # Imported inside the function for the same patchability reason as ① — the
+        # name resolves from the module attribute at call time, letting tests patch
+        # `stock_analyzer.ticker_liveness.sweep` and
+        # `stock_analyzer.reference_shelf.shelf_status` without binding at import.
+        from stock_analyzer import ticker_liveness as _tl
+        from stock_analyzer import reference_shelf as _rs
+
+        _sweep = _tl.sweep()
+        _shelf = _rs.shelf_status(today=now_et.date())
+
+        _shelf_down = [r for r in _shelf if r.get("severity") == "down"]
+        _shelf_warn = [r for r in _shelf
+                       if r.get("severity") in ("warn", "unknown")]
+
+        # Email only on a finding.  Dead ticker is a chore, not a lane failure;
+        # do NOT append to `failures` — that sets rc=1 → _LAST_LANE_FAILURE_DETAIL
+        # → the 🩺 System Trust heartbeat reads "failed", training the user to
+        # ignore a red heartbeat.  The informational email is the correct signal.
+        _send_liveness = (
+            _sweep is None                                      # batch raised
+            or (_sweep is not None
+                and _sweep.get("status") == "inconclusive")    # provider degraded
+            or (_sweep is not None
+                and bool(_sweep.get("dead")))                  # confirmed dead name(s)
+            or bool(_shelf_down)                               # expired table
+        )
+
+        if _send_liveness:
+            # Shelf-warn rows (approaching-expiry) go in ONLY when we're already
+            # emailing for another reason — not as a standalone weekly nag.
+            _subj, _html = render_liveness_email(
+                sweep=_sweep,
+                shelf_down=_shelf_down,
+                shelf_warn=_shelf_warn,
+                built_at=now_et.isoformat(),
+            )
+            _send_email("liveness", _subj, _html)
+            _log(
+                f"maintenance: liveness email sent — "
+                f"sweep={'None' if _sweep is None else _sweep.get('status')} "
+                f"dead={len(_sweep.get('dead', [])) if _sweep else '?'} "
+                f"shelf_down={len(_shelf_down)}"
+            )
+        else:
+            _hp = _sweep.get("health_pct", 0.0) if _sweep else 0.0
+            _log(
+                f"maintenance: liveness clean — health={_hp:.1f}%, dead=0, "
+                f"no shelf issues"
+            )
+    except Exception as exc:
+        # An exception HERE means the check itself broke — that IS a lane failure.
+        # It is distinct from "the check found something": a dead ticker is never
+        # an exception, it is a result inside a healthy _sweep dict.
+        _log(f"maintenance/liveness: UNCAUGHT — {str(exc)[:160]}")
+        failures.append(f"liveness: {str(exc)[:160]}")
+        rc = 1
 
     # ① analyst_coverage anchor prices — self-limiting (only NULL rows), so
     #    this costs one cheap query once the table is caught up.

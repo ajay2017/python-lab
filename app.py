@@ -3050,7 +3050,7 @@ def load_all(ticker: str, period: str = "6mo") -> dict:
     so the app and the cron never drift.
 
     max_entries=300: the curated + discovery universe is ~275 tickers
-    (SECTOR_UNIVERSE 73 + DISCOVERY_UNIVERSE 202); this covers that whole
+    (SECTOR_UNIVERSE 88 + DISCOVERY_UNIVERSE 201); this covers that whole
     known universe plus headroom for held/watchlist names and one-off
     "analyze any ticker" (F-40) lookups, while still bounding the worst case —
     each entry is the heaviest cached object in the app (full history + info +
@@ -16630,7 +16630,7 @@ elif page == "🥧 Portfolio Overview":
         # ═══════════════════════════════════════════════════════════════════════════
 
             st.caption(
-                "Scan ~80 tickers across 12 sectors and rank each holding by momentum score. "
+                "Scan ~90 tickers across 14 sectors and rank each holding by momentum score. "
                 "Shows whether you're holding the best names in each sector or just familiar ones. "
                 "Institutional uses universe-relative ranking to identify rotation candidates."
             )
@@ -17665,7 +17665,7 @@ elif page == "🔍 Market Scanner":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
 
     st.title("🔍 Market Scanner")
-    st.caption("Scans 60+ stocks across 12 sectors to surface trending opportunities.")
+    st.caption("Scans 88 stocks across 14 sectors to surface trending opportunities.")
     st.info(
         "**How to read this:** The scanner uses a **Momentum Score** (RSI + Trend + 1M/3M price momentum). "
         "It is a fast filter, not a buy signal. A high momentum score means the stock is moving — "
@@ -27584,6 +27584,15 @@ elif page == "🩺 System Trust":
         "until you refresh the list, and a permanent amber would train you to "
         "ignore the chip that also reports real outages."
     )
+    st.caption(
+        "**Age is only half the check.** A roster can be recently dated and still "
+        "contain a ticker that stopped trading — that failure is invisible here, "
+        "because this row measures how OLD a list is, not whether its names are "
+        "still real. The Saturday maintenance job runs a separate **liveness "
+        "sweep** across every roster and emails you only if it finds a dead "
+        "ticker, or if too much of the batch failed to resolve for the result to "
+        "be trusted. No email means it checked and everything resolved."
+    )
 
     _sysh_ca = _health.get("computed_at")
     if _sysh_ca:
@@ -29259,7 +29268,7 @@ The Home brief is split into **offense** (left) and **defense** (right).
 Two separate questions live here — keeping them apart answers most *"why didn't X show up?"* puzzles:
 
 **1. What gets *scanned* (the universe).** Each time signals refresh, the app screens:
-- **~80 curated names** across 12 sectors (the core list the scanner runs daily),
+- **~90 curated names** across 14 sectors (the core list the scanner runs daily),
 - **your Watchlist**, and
 - a broad **~200-name "discovery" universe** of liquid large/mid-caps, swept for big 1-day movers so a breakout in a name you *don't* track can still surface.
 
@@ -34769,6 +34778,13 @@ elif page == "🎯 My Edge":
             "engine's track record. Read-only — awareness only, no gates, no "
             "buy/sell prompts."
         )
+        st.caption(
+            "⚠️ **Scope note:** \"was this on the engine's radar?\" is judged against "
+            "the scan universe **as it stands today**, not as it stood on the trade "
+            "date. The universe was widened on 2026-08-16 (73 → 88 names), so some "
+            "older buys now read as in-scope that were genuinely outside the engine's "
+            "net at the time. Treat the split across that boundary as approximate."
+        )
 
         from stock_analyzer import self_track_record as _stv
         from stock_analyzer.constants import (
@@ -34818,6 +34834,12 @@ elif page == "🎯 My Edge":
             if _stv_trades_df is None:
                 _stv_trades_df = db.load_trades()
 
+            # Anachronism, deliberate and disclosed below: this is the roster as
+            # it stands TODAY, used as a proxy for "was this in the engine's
+            # scope at trade time". Widening SECTOR_UNIVERSE (as on 2026-08-16,
+            # +15 names) therefore RETROACTIVELY reclassifies older buys from
+            # self_out_of_scope toward in-scope, shifting the alpha split. The
+            # watchlist_set argument already carried the same property.
             _stv_universe  = set().union(*SECTOR_UNIVERSE.values())
             _stv_watchlist = set(st.session_state.get("watchlist", []))
 

@@ -129,13 +129,26 @@ def _nyse_calendar_horizon() -> date | None:
 # both touched on 2026-06-26 by a SQ→XYZ rename (a0ef644), and `sector_universe`
 # on 2026-05-10 by SNOW→WDAY (5ac4211), but neither reconsidered which names
 # belong. Dating from a rename would claim a refresh that never happened.
+#
+# Clarified 2026-08-16: a documented review that concludes "NO CHANGE NEEDED"
+# DOES earn a new as_of. The date records that a human deliberately reconsidered
+# the membership, not that the membership changed — and any other reading makes
+# CHURNING A ROSTER the only way to clear the warning, which would actively
+# degrade the very tables this exists to protect. The bar is evidence, not
+# outcome: a commit bumping a date with no membership diff must say what was
+# checked and what the conclusion was (e.g. "all 88 tickers resolved in the
+# weekly liveness sweep; coverage re-reviewed against the absent large-caps; no
+# change warranted"). Since the ticker_liveness sweep shipped, that evidence has
+# a machine-checked component rather than resting on an assertion.
 _REFERENCE_TABLES: tuple[_RefTable, ...] = (
     _RefTable(
         key="sector_universe",
         label="Grow Today scan universe",
         location="stock_analyzer/scanner.py — SECTOR_UNIVERSE",
         kind=KIND_AS_OF,
-        as_of=date(2026, 5, 5),
+        # 2026-08-16: full curation — all 73 verified alive, 15 large-caps added
+        # to close a 53%-tech skew, 2 new buckets (Industrials, Communications).
+        as_of=date(2026, 8, 16),
         consequence="the daily buy-candidate net may be missing current market "
                     "leaders — it fails by silently not surfacing names, never by erroring",
     ),

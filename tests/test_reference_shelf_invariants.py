@@ -119,6 +119,18 @@ def test_stale_reference_data_never_fails_the_maintenance_lane(monkeypatch):
     monkeypatch.setattr(cr, "_notify_failure", lambda *a, **k: notified.append(a))
     monkeypatch.setattr(cr, "_record_heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(cr.db, "has_db", lambda: True)
+
+    # Stub sub-job ⓪. Without these two the test drives a LIVE ~230-ticker
+    # yf.download on every suite run (making the deterministic pre-push gate
+    # network-dependent and hang-prone), and — because the shelf row below is
+    # severity="down" — reaches _send_email for real, so a machine with
+    # RESEND_API_KEY set would send an actual email from pytest.
+    import stock_analyzer.ticker_liveness as _tl
+    monkeypatch.setattr(_tl, "sweep", lambda: {
+        "status": "ok", "health_pct": 100.0, "dead": [],
+        "suspects_n": 0, "roster_n": 230,
+    })
+    monkeypatch.setattr(cr, "_send_email", lambda *a, **k: False)
     monkeypatch.setattr(cr.db, "load_holdings_or_none",
                         lambda: __import__("pandas").DataFrame({"Ticker": ["AAPL"]}))
 
@@ -141,16 +153,39 @@ def test_stale_reference_data_never_fails_the_maintenance_lane(monkeypatch):
     assert notified == [], "must not fire the cron dead-man's-switch email"
 
 
-def test_maintenance_lane_does_not_import_reference_shelf(monkeypatch):
-    """v1 is pull-only by design. If a future version adds a push digest it must
-    go through _send_email directly, never _notify_failure — this test failing
-    is the prompt to re-read that reasoning, not to delete the test."""
+def test_maintenance_lane_shelf_digest_never_reaches_the_failure_path(monkeypatch):
+    """Successor to test_maintenance_lane_does_not_import_reference_shelf.
+
+    That test asserted reference_shelf was ABSENT from the maintenance lane,
+    because v1 was pull-only. Its own docstring said a future push digest would
+    be legitimate *provided* it went through `_send_email` directly and never
+    `_notify_failure`, and told the reader to re-verify rather than delete.
+
+    2026-08-16: the weekly ticker-liveness sweep added exactly that push digest,
+    so the precondition is now met and the assertion moves to the real
+    invariant — shelf severity may reach the lane, but it must never touch
+    `failures`, `rc`, or `_notify_failure`. A stale reference table is a chore;
+    routing it to the dead-man's-switch would make 🩺 System Trust show the
+    maintenance heartbeat as "failed" and teach the user to ignore a red one.
+
+    The behavioural half of this is
+    test_stale_reference_data_never_fails_the_maintenance_lane above (which
+    drives a `severity="down"` row through main() and asserts rc == 0).
+    """
     import inspect
 
     import cron_runner as cr
     src = inspect.getsource(cr._run_maintenance)
-    assert "reference_shelf" not in src, (
-        "reference_shelf reached the maintenance lane — if this is deliberate, "
-        "verify it cannot touch `failures` or the return code before updating "
-        "this test (see test_stale_reference_data_never_fails_the_maintenance_lane)"
-    )
+
+    # Structural guard: no line that handles shelf data may also touch the
+    # failure path. Catches a future edit that "helpfully" escalates staleness.
+    for line in src.splitlines():
+        code = line.split("#", 1)[0]          # ignore prose in comments
+        if "shelf" not in code.lower():
+            continue
+        for forbidden in ("failures", "_notify_failure", "rc = 1"):
+            assert forbidden not in code, (
+                f"shelf data reached the failure path: {line.strip()!r} — a stale "
+                "reference table is a chore, not a lane failure (see this test's "
+                "docstring for why that distinction matters)"
+            )

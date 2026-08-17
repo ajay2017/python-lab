@@ -35,7 +35,7 @@ TICKER_SECTORS = {
     "PLTR": "AI & Data", "AI": "AI & Data", "MDB": "AI & Data", "SNOW": "AI & Data",
     "PATH": "AI & Data", "IONQ": "AI & Data",
     # Data / observability / search infra — same correlated cluster as SNOW/MDB.
-    "ESTC": "AI & Data", "CFLT": "AI & Data", "GTLB": "AI & Data",
+    "ESTC": "AI & Data", "GTLB": "AI & Data",   # CFLT removed 2026-08-16 (delisted)
     "MSFT": "AI & Cloud", "GOOGL": "AI & Cloud", "META": "AI & Cloud",
     "CRM": "AI & Cloud", "NOW": "AI & Cloud", "DDOG": "AI & Cloud",
     # Consumer-internet / social-advertising names — map to Consumer Tech so they
@@ -53,10 +53,24 @@ TICKER_SECTORS = {
     "BX": "Financials", "BAC": "Financials", "WFC": "Financials",
     "C": "Financials", "MS": "Financials", "SCHW": "Financials", "BLK": "Financials",
     "COF": "Financials", "HOOD": "Financials",
+    # BA was omitted here until 2026-08-16, so it fell back to the SECTOR_UNIVERSE
+    # bucket label "Defense & Aerospace" — a label _SECTOR_IMPACT doesn't know —
+    # and was silently exempt from the macro gate while LMT/RTX/NOC/GD were not.
     "LMT": "Defense", "RTX": "Defense", "NOC": "Defense", "GD": "Defense",
+    "BA": "Defense",
     "XOM": "Energy", "CVX": "Energy", "OXY": "Energy", "COP": "Energy",
     "EOG": "Energy",
     "SPCX": "Communications",   # Specialty Telecom (Nasdaq classification)
+    "T": "Communications", "VZ": "Communications", "TMUS": "Communications",
+    "CAT": "Industrials", "GE": "Industrials", "GEV": "Industrials",
+    # Staples/retail. Explicit entries matter because the held path resolves from
+    # the provider's GICS string ("Consumer Defensive"/"Consumer Cyclical"), which
+    # would never match the pick path's bucket label.
+    "COST": "Consumer Staples & Retail", "WMT": "Consumer Staples & Retail",
+    "TGT": "Consumer Staples & Retail", "TJX": "Consumer Staples & Retail",
+    "NKE": "Consumer Staples & Retail", "HD": "Consumer Staples & Retail",
+    # Fintech/EV names that previously fell through to their bucket labels.
+    "PYPL": "Financials", "RIVN": "EV & Auto",
 }
 
 

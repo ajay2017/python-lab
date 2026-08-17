@@ -897,6 +897,26 @@ REFERENCE_HORIZON_MIN_DAYS = {
     "nyse_calendar":       365,    # extending 3 years of holidays is a rare chore
 }
 
+# Minimum share of the reference rosters that must RESOLVE in the weekly liveness
+# sweep before its dead-ticker verdict is trusted at all (ticker_liveness.py, run
+# from the Saturday maintenance cron lane).
+#
+# OBSERVABILITY KNOB — NOT an investment threshold. It gates whether a chore email
+# is sent, never whether a pick is made or a gate fires.
+#
+# Why a batch-health floor rather than repeated confirmation over weeks: the false
+# positive we're defending against is "the provider was rate-limited / down", and
+# that failure hits the WHOLE batch at once, so it's measurable inside a single
+# run. Confirming across runs instead would need persistence — coupling a
+# roster-rot check to the very DB whose outage F-239 was about — and would delay a
+# true finding by a week. Below this floor the sweep reports "inconclusive" and
+# says so out loud; it never silently reports a clean bill of health.
+#
+# Value: with ~230 unique tickers, 90% tolerates ~23 simultaneous misses. Normal
+# jitter is far below that (2026-08-16: one genuine dead name = 99.6%), while a
+# real rate-limit event drops whole chunks of the batch well under it.
+TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT = 90.0
+
 # Per-call wall-clock cap (seconds) on each yfinance request. yfinance exposes no
 # request-level timeout, so a TCP-level hang would otherwise block until the OS
 # socket timeout (minutes) or — in the headless cron — the 15-min job kill. The

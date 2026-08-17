@@ -103,12 +103,15 @@ def test_skipped_tickers_are_reported(monkeypatch):
 def _run_lane(monkeypatch, *, analyst_raises=False, vol_raises=False):
     """Drive cron_runner.main() in maintenance mode, capturing the heartbeat."""
     import cron_runner as cr
+    import stock_analyzer.ticker_liveness as _tl
+    import stock_analyzer.reference_shelf as _rs
 
     recorded = {}
     monkeypatch.setenv("ALERT_RUN_MODE", "maintenance")
     monkeypatch.setenv("ALERT_FORCE", "1")          # bypass the Saturday guard
     monkeypatch.delenv("ALERT_TEST_EMAIL", raising=False)
     monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cr, "_send_email", lambda *_a, **_kw: False)
     monkeypatch.setattr(cr.db, "has_db", lambda: True)
     monkeypatch.setattr(cr.db, "load_holdings_or_none",
                         lambda: __import__("pandas").DataFrame({"Ticker": ["AAPL"]}))
@@ -117,6 +120,13 @@ def _run_lane(monkeypatch, *, analyst_raises=False, vol_raises=False):
         lambda lane, _now, status="ok", detail=None: recorded.update(
             lane=lane, status=status, detail=detail),
     )
+    # Patch sweep sub-job ⓪ so it is deterministic and makes no network calls.
+    monkeypatch.setattr(
+        _tl, "sweep",
+        lambda: {"status": "ok", "health_pct": 100.0, "dead": [],
+                 "suspects_n": 0, "roster_n": 230},
+    )
+    monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: [])
 
     def _mk(raises):
         def _fn(*_a, **_kw):
@@ -165,15 +175,24 @@ def test_maintenance_partial_failure_still_marks_failed(monkeypatch):
 def test_one_subjob_failure_does_not_suppress_the_other(monkeypatch):
     """Isolation: the analyst job still runs when the vol job blows up."""
     import cron_runner as cr
+    import stock_analyzer.ticker_liveness as _tl
+    import stock_analyzer.reference_shelf as _rs
     ran = []
     monkeypatch.setenv("ALERT_RUN_MODE", "maintenance")
     monkeypatch.setenv("ALERT_FORCE", "1")
     monkeypatch.delenv("ALERT_TEST_EMAIL", raising=False)
     monkeypatch.setattr(cr, "_notify_failure", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cr, "_send_email", lambda *_a, **_kw: False)
     monkeypatch.setattr(cr.db, "has_db", lambda: True)
     monkeypatch.setattr(cr.db, "load_holdings_or_none",
                         lambda: __import__("pandas").DataFrame({"Ticker": ["AAPL"]}))
     monkeypatch.setattr(cr, "_record_heartbeat", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        _tl, "sweep",
+        lambda: {"status": "ok", "health_pct": 100.0, "dead": [],
+                 "suspects_n": 0, "roster_n": 230},
+    )
+    monkeypatch.setattr(_rs, "shelf_status", lambda **_kw: [])
 
     import scripts.backfill_analyst_prices as bap
 

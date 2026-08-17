@@ -35,7 +35,9 @@ DISCOVERY_UNIVERSE: dict[str, list[str]] = {
     "Software & Cloud": [
         "CRM", "ORCL", "ADBE", "NOW", "INTU", "SAP", "WDAY", "TEAM", "DDOG",
         "SNOW", "MDB", "NET", "ZS", "CRWD", "PANW", "FTNT", "OKTA", "PLTR",
-        "HUBS", "ZM", "DOCU", "TWLO", "DBX", "GTLB", "S", "CFLT", "ESTC",
+        # CFLT removed 2026-08-16 — delisted; Yahoo returns 404 "Quote not found"
+        # and zero rows at period="max" across every provider.
+        "HUBS", "ZM", "DOCU", "TWLO", "DBX", "GTLB", "S", "ESTC",
         "PATH", "AI", "U", "BILL", "APP",
     ],
     "Internet & Media": [
