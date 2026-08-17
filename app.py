@@ -27616,10 +27616,38 @@ elif page == "🩺 System Trust":
             "The app may be operating on incomplete data; see the red rows below."
         )
     elif _chip == "warn":
-        st.warning(
-            f"🟡 {_n_warn} check(s) degraded — decisions still have their inputs, but "
-            "confidence is dented (a stale store, a backup data provider, or a late lane)."
+        # "decisions still have their inputs" is FALSE when the database itself
+        # is the degraded provider — checks ① and ② read Supabase, so if it is
+        # unreadable they had nothing to read and confirmed nothing. Asserting
+        # confidence there is the same wrong-assertion class F-243 exists to
+        # remove. Live outage test 2026-08-17 rendered exactly that sentence
+        # over a blind app.
+        # Derived from EVIDENCE, not from the provider row alone. `warn` is also
+        # reachable when Supabase is red-but-RECOVERED (check_providers re-grades
+        # down→warn exactly when the most recent call SUCCEEDED) — in that state
+        # the row's own detail says "recovered", and claiming "confirmed nothing
+        # this run" beside it would replace a false-green with a false-blind.
+        # Requiring that ① and ② genuinely confirmed nothing makes this banner
+        # and the rows beneath it agree by construction.
+        _db_row = next((_r for _r in _health.get("providers", [])
+                        if _r.get("source") == "supabase"), None)
+        _db_degraded = _db_row is not None and _db_row.get("severity") in ("warn", "down")
+        _confirmed_nothing = not any(
+            _r.get("severity") == "ok"
+            for _r in (_health.get("lanes", []) + _health.get("stores", []))
         )
+        _db_bad = _db_degraded and _confirmed_nothing
+        if _db_bad:
+            st.warning(
+                f"🟡 {_n_warn} check(s) degraded — **including the database itself**, "
+                "so any check below that reads Supabase confirmed nothing this run. "
+                "Treat green summary rows as 'not checked', not 'healthy'."
+            )
+        else:
+            st.warning(
+                f"🟡 {_n_warn} check(s) degraded — decisions still have their inputs, but "
+                "confidence is dented (a stale store, a backup data provider, or a late lane)."
+            )
     else:
         # The pipeline banner must account for check ⑤ even though ⑤ is
         # deliberately OUT of the chip rollup. Without this, an unqualified
@@ -27665,15 +27693,34 @@ elif page == "🩺 System Trust":
         return sum(1 for r in rows if r.get("severity") == "ok")
 
     def _sysh_section(title: str, rows: list, noun: str, all_ok_text: str, partial_text: str,
-                       tech_key: str | None = None) -> None:
+                       tech_key: str | None = None,
+                       none_confirmed_text: str | None = None) -> None:
         st.markdown(title)
         if not rows:
             return
         if _sysh_healthy(rows):
             _n, _n_ok = len(rows), _sysh_ok_count(rows)
-            _label = f"All {_n} {noun}" if _n != 1 else f"The 1 {noun}"
-            _detail = all_ok_text if _n_ok == _n else partial_text.format(n_ok=_n_ok, n=_n)
-            _sysh_row("ok", _label, _detail)
+            if _n_ok == 0:
+                # NOTHING was confirmed. Collapsing this to a green "All N …"
+                # asserts a clean bill of health from zero evidence — the same
+                # class as the fabricated watchlist F-243 removed. Live outage
+                # test 2026-08-17 showed exactly this: with Supabase unreadable,
+                # every lane and store graded "unknown", and the page rendered
+                # green "All 6 lanes" / "All 11 tracked data stores … rest
+                # exist" over a database it could not read. "Unknown" is not a
+                # fault, but it is also not an OK — say so.
+                # Text is PER SECTION: this helper serves all five, and the
+                # cause differs. Blaming the database is right for ①/② (they
+                # read Supabase) and wrong for ③ (no calls yet), ④ (a
+                # documented-normal state, explicitly "not a fault") and ⑤
+                # (shelf_status is pure and does no I/O at all). Removing one
+                # unverified assertion by adding another would be no gain.
+                _sysh_row("unknown", f"Could not confirm any of {_n} {noun}",
+                          none_confirmed_text or "nothing here was verified this run")
+            else:
+                _label = f"All {_n} {noun}" if _n != 1 else f"The 1 {noun}"
+                _detail = all_ok_text if _n_ok == _n else partial_text.format(n_ok=_n_ok, n=_n)
+                _sysh_row("ok", _label, _detail)
         else:
             for _r in rows:
                 _sysh_row(_r.get("severity", "unknown"), _r.get("label", ""), _r.get("detail", ""),
@@ -27686,6 +27733,9 @@ elif page == "🩺 System Trust":
         all_ok_text="Fired on schedule (" + " · ".join(
             _r.get("key", "") for _r in _health.get("lanes", [])) + ")",
         partial_text="No failures — {n_ok}/{n} lanes confirmed fired this session, rest not yet due",
+        none_confirmed_text="nothing was verified this run — most often the database "
+                            "is unreadable, so this check had nothing to read "
+                            "(see ③ Data providers below)",
     )
 
     _sysh_section(
@@ -27694,6 +27744,9 @@ elif page == "🩺 System Trust":
         all_ok_text="Present, with fresh data for their expected cadence",
         partial_text="No missing/stale stores — {n_ok}/{n} confirmed fresh, rest exist "
                      "(conditionally-written, not due this cycle)",
+        none_confirmed_text="nothing was verified this run — most often the database "
+                            "is unreadable, so this check had nothing to read "
+                            "(see ③ Data providers below)",
         tech_key="table",
     )
 

@@ -183,3 +183,60 @@ def test_outage_safe_pages_keep_the_diagnostic_reachable():
     Everything else about the gate is review-only."""
     assert "🩺 System Trust" in DB_OUTAGE_SAFE_PAGES
     assert "📖 User Guide" in DB_OUTAGE_SAFE_PAGES
+
+
+@pytest.fixture(autouse=True)
+def _isolate_supabase_health():
+    """These tests write to api_health's MODULE-GLOBAL _stats. Without teardown
+    they leak auth_errors=1 into every later test in the process — which passes
+    today and fails the moment test order changes (test_api_health.py asserts
+    overall_level() == gray)."""
+    from stock_analyzer import api_health
+    api_health._stats.pop("supabase", None)
+    yield
+    api_health._stats.pop("supabase", None)
+
+
+# ─── Credentials WRONG (not merely absent) — found by a live outage test ────
+# The has_db()-False special-case above covers credentials ABSENT. A wrong
+# service-role key is the likelier real fault (it broke the Railway cutover),
+# and it took a live test on the dormant Streamlit deploy to show the app
+# rendered AMBER — "decisions still have their inputs" — over a dead database.
+
+def test_auth_failure_grades_red_on_the_first_occurrence():
+    """api_health reaches red at auth_errors >= 1 or FIVE consecutive plain
+    errors. db.py used to record every failure as a bare "error", so a 401 sat
+    on yellow until the 5th. Classifying auth faults is what makes one wrong
+    key immediately red."""
+    from stock_analyzer import api_health
+    api_health._stats.pop("supabase", None)
+    db._record_db_error("{'message': 'JSON could not be generated', 'code': 401}")
+    assert api_health.get_health("supabase")["level"] == "red"
+
+
+def test_rls_block_is_classified_as_auth_not_a_transient_error():
+    from stock_analyzer import api_health
+    api_health._stats.pop("supabase", None)
+    db._record_db_error('permission denied for table holdings (42501) row-level security')
+    assert api_health.get_health("supabase")["level"] == "red"
+
+
+def test_a_plain_transient_error_still_grades_below_red():
+    """The classifier must not turn every failure into an auth fault — a
+    genuine transient (timeout, connection reset) should stay recoverable."""
+    from stock_analyzer import api_health
+    api_health._stats.pop("supabase", None)
+    db._record_db_error("connection reset by peer")
+    assert api_health.get_health("supabase")["level"] != "red"
+
+
+def test_wrong_key_turns_the_supabase_provider_row_down(monkeypatch):
+    """End to end: credentials present but rejected ⇒ the provider row is down,
+    so the chip is red rather than the amber the live test showed."""
+    from stock_analyzer import api_health
+    monkeypatch.setattr(db, "has_db", lambda: True)
+    api_health._stats.pop("supabase", None)
+    db._record_db_error("{'code': 401, 'message': 'Invalid API key'}")
+    rows = {r["source"]: r for r in system_health.check_providers()}
+    assert rows["supabase"]["severity"] == "down"
+    assert system_health.compute_health()["chip_severity"] == "down"

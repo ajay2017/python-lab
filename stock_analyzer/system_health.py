@@ -401,9 +401,20 @@ def check_providers() -> list[dict]:
             # special-case is defensible only because credentials-missing
             # provably means the app can read nothing. Do NOT let this drift
             # into "has_db() means the DB is up"; that conflation already cost
-            # us once in F-239. The reachable-but-broken case needs no help
-            # here: db.py records api_health on every read, so real errors
-            # already grade this row red on their own.
+            # us once in F-239.
+            #
+            # The reachable-but-broken case is handled SEPARATELY, in db.py's
+            # `_record_db_error`. An earlier version of this comment claimed it
+            # "needs no help here … real errors already grade this row red" —
+            # that was WRONG, and a live outage test on 2026-08-17 disproved it:
+            # db.py recorded every failure as a bare "error", and api_health
+            # reaches red at auth_errors >= 1, rate_limits >= 3, or FIVE
+            # consecutive plain errors,
+            # so a wrong service-role key rendered this row AMBER over a
+            # database that could not be read at all. db.py now classifies
+            # 401/403/RLS as an "auth" event, which is red on the first
+            # occurrence. Both halves are needed: this one for credentials
+            # ABSENT, that one for credentials WRONG.
             # Function-level import, matching check_cron_liveness/_probe_store.
             if source == "supabase":
                 from stock_analyzer import db as _db

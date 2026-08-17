@@ -606,6 +606,7 @@ the user acted on it):
 """
 
 import os
+import re
 
 import streamlit as st
 import pandas as pd
@@ -646,6 +647,53 @@ def is_readonly() -> bool:
     except Exception:
         pass
     return _READONLY
+
+
+# Auth-fault detection for Supabase failures. Split into TEXT tokens and a
+# CODE regex on purpose — an earlier version matched bare "401"/"403" as
+# substrings, which a review caught as a live hazard: PostgREST echoes payload
+# values back in constraint errors, so `Key (id)=(1401) already exists` or any
+# figure containing 401/403 would have been graded an auth fault. That matters
+# more than a cosmetic misgrade because `auth_errors` NEVER decays within a
+# session and `check_providers`' recovered re-grade only returns down→warn,
+# never →ok — so one false positive pins the sidebar red and the provider row
+# amber until the process restarts. Trading a false-amber for a sticky
+# false-red would have been a worse bug than the one being fixed.
+#
+# The text list also covers wire formats the first pass missed: PostgREST
+# returns JWSError/"invalid signature" for a structurally-valid but wrongly
+# signed key (no "401", no "jwt"), and "permission denied" is the usual RLS
+# prose alongside code 42501.
+#
+# "rls" is deliberately NOT a token — it is a substring of "urls".
+_AUTH_TEXT = (
+    "row-level security", "permission denied", "jwt", "jws",
+    "invalid signature", "api key", "apikey", "unauthorized",
+    "not authorized", "42501",
+)
+_AUTH_CODE_RE = re.compile(r"(?:code|status(?:_code)?|http|error)\D{0,4}(401|403)(?!\d)")
+
+
+def _record_db_error(msg: str) -> None:
+    """Record a Supabase failure, classifying AUTH faults as such.
+
+    Why this exists (found 2026-08-17 by a live outage test on the dormant
+    Streamlit deploy): every call site recorded a bare `"error"`, and
+    api_health grades a source red at `auth_errors >= 1`, `rate_limits >= 3`,
+    or FIVE consecutive plain errors. So a wrong service-role key — the single
+    most likely real-world credential fault, and the one that broke the Railway
+    cutover — rendered 🩺 System Trust **amber**, "decisions still have their
+    inputs", over a database that could not be read at all. api_health already
+    had full `"auth"` support; db.py simply never used it.
+
+    Classified by message because supabase-py surfaces PostgREST failures as
+    generic exceptions. See `_AUTH_TEXT` / `_AUTH_CODE_RE` for why the code
+    match is context-anchored rather than a bare substring.
+    """
+    from stock_analyzer import api_health as _ah
+    low = str(msg).lower()
+    is_auth = any(t in low for t in _AUTH_TEXT) or bool(_AUTH_CODE_RE.search(low))
+    _ah.record("supabase", "auth" if is_auth else "error", msg=str(msg)[:120])
 
 
 def _supabase_creds() -> tuple[str, str]:
@@ -767,7 +815,7 @@ def load_holdings_or_none() -> "pd.DataFrame | None":
         return pd.DataFrame(columns=_HOLDINGS_COLS)
     except Exception as e:
         err = str(e)
-        _ah.record("supabase", "error", msg=err[:120])
+        _record_db_error(err[:120])
         if "row-level security" in err.lower() or "rls" in err.lower() or "42501" in err:
             st.error(
                 "⛔ Supabase RLS is blocking reads. The `[supabase] key` "
@@ -804,7 +852,7 @@ def load_watchlist_or_none() -> "list[str] | None":
         # Read succeeded — an empty table is a real answer, not an absence.
         return [r["ticker"] for r in rows] if rows else []
     except Exception as e:
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return None
 
 
@@ -853,7 +901,7 @@ def load_trades_or_none() -> "pd.DataFrame | None":
         return df
     except Exception as e:
         err = str(e)
-        _ah.record("supabase", "error", msg=err[:120])
+        _record_db_error(err[:120])
         if "row-level security" in err.lower() or "42501" in err:
             st.error(
                 "⛔ Supabase RLS is blocking the trades table. The `[supabase] "
@@ -982,7 +1030,7 @@ def save_holdings(df: pd.DataFrame) -> bool:
         return True
     except Exception as e:
         err = str(e)
-        _ah.record("supabase", "error", msg=err[:120])
+        _record_db_error(err[:120])
         if "row-level security" in err.lower() or "42501" in err:
             st.error(
                 "⛔ Supabase RLS is blocking writes. The Streamlit secret "
@@ -1178,7 +1226,7 @@ def save_sentiment_snapshot(snap_date, rows: list[dict]) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=f"sentiment_snapshot_upsert: {str(e)[:100]}")
+        _record_db_error(f"sentiment_snapshot_upsert: {str(e)[:100]}")
         return False
 
 
@@ -1416,7 +1464,7 @@ def save_trade(record: dict) -> bool:
             except Exception as e2:
                 e = e2
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         st.error(f"⛔ Failed to save trade: {str(e)[:300]}")
         return False
 
@@ -1430,7 +1478,7 @@ def delete_trade(trade_id: int) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         st.error("⛔ Failed to delete trade — see Data Health tab for details.")
         return False
 
@@ -1453,7 +1501,7 @@ def update_trade_realized_pnl(trade_id: int, realized_pnl: float,
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         st.error(f"⛔ Failed to update trade {trade_id} — see Data Health tab for details.")
         return False
 
@@ -1498,7 +1546,7 @@ def save_thesis_review(record: dict) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1527,7 +1575,7 @@ def update_user_thesis(ticker: str, thesis: str) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1574,7 +1622,7 @@ def save_weekly_debrief(record: dict) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1623,7 +1671,7 @@ def save_monthly_report(record: dict) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1648,7 +1696,7 @@ def save_analyst_coverage(record: dict) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1700,7 +1748,7 @@ def delete_analyst_coverage(row_id) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1716,7 +1764,7 @@ def update_analyst_coverage_price(row_id, price: float) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         return False
 
 
@@ -1733,7 +1781,7 @@ def save_earnings_context(records: list[dict]) -> None:
         ).execute()
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
 
 
 def load_earnings_context(ticker: str, max_age_days: int = 30) -> dict | None:
@@ -1834,7 +1882,7 @@ def save_earnings_results(records: list[dict]) -> None:
         ).execute()
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
 
 
 def load_earnings_result(ticker: str, lookback_days: int = 90) -> dict | None:
@@ -2221,11 +2269,11 @@ def save_recommendations(records: list[dict]) -> dict:
         if ok2 is True:
             return {"attempted": len(used2), "saved": len(used2), "error": None}
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=f"rec_log_insert: {(err2 or '')[:100]}")
+        _record_db_error(f"rec_log_insert: {(err2 or '')[:100]}")
         return {"attempted": len(payload), "saved": 0, "error": (err2 or "")[:200]}
     # ok is False — upsert (including the missing-column retry cascade) still errored
     from stock_analyzer import api_health as _ah
-    _ah.record("supabase", "error", msg=f"rec_log_upsert: {(err or '')[:100]}")
+    _record_db_error(f"rec_log_upsert: {(err or '')[:100]}")
     return {"attempted": len(payload), "saved": 0, "error": (err or "")[:200]}
 
 
@@ -2991,7 +3039,7 @@ def save_watchlist(tickers: list[str]) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         st.error("⛔ Failed to save watchlist — see Data Health tab for details.")
         return False
 
@@ -3064,7 +3112,7 @@ def save_manual_stop(ticker: str, stop_price: float,
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         st.error(f"⛔ Failed to save manual stop for {t} — see Data Health tab for details.")
         return False
 
@@ -3080,7 +3128,7 @@ def clear_manual_stop(ticker: str) -> bool:
         return True
     except Exception as e:
         from stock_analyzer import api_health as _ah
-        _ah.record("supabase", "error", msg=str(e)[:120])
+        _record_db_error(str(e)[:120])
         st.error(f"⛔ Failed to clear manual stop for {t} — see Data Health tab for details.")
         return False
 
