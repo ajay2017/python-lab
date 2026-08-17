@@ -156,15 +156,35 @@ def rate_sensitivity_per_ticker(
 
     Returns list[dict] sorted by tlt_corr ascending (most rate-sensitive first).
     Rows with no TLT data still appear using the sector score only.
+
+    Third case, added 2026-08-16: a row with NEITHER a correlation NOR a
+    structural label reports `Sector Score = None` and an "Unknown" implication,
+    and sorts LAST. It is never given a 0.0 stand-in — that rendered as a
+    confident "+0.00" / "Roughly rate-neutral" indistinguishable from a real
+    finding. Unknown is not neutral, so it must not sort mid-table either.
     """
     from stock_analyzer.macro import RATE_SENSITIVITY  # avoid circular import at module level
 
     rows = []
     for _, pos in port_df.iterrows():
         ticker = str(pos.get("Ticker", ""))
-        sector = str(pos.get("Sector", "Other"))
+        # `or ""` not a default of "Other": UNCLASSIFIED_SECTOR ("Other") IS a
+        # real RATE_SENSITIVITY key worth 0.00, so defaulting a MISSING or blank
+        # column to it would silently inherit that deliberate policy value for a
+        # position whose sector simply wasn't supplied. Blank resolves to no key
+        # → None → "Unknown", which is what it actually is.
+        sector = str(pos.get("Sector") or "")
         weight = float(pos.get("Weight (%)", 0) or 0)
-        sector_score = RATE_SENSITIVITY.get(sector, 0.0)
+        # None, NOT 0.0, when the sector has no structural label. A default of
+        # 0.0 renders as a confident "+0.00" — indistinguishable from a real
+        # "structurally rate-neutral" reading — when the truth is "we have no
+        # label for this sector". Same fabricated-neutral class the fundamentals
+        # gate rejects. Reachable whenever a HELD ticker has no TICKER_SECTORS
+        # entry and falls back to the raw provider GICS string ("Basic
+        # Materials", "Technology"), and for the curated labels RATE_SENSITIVITY
+        # does not yet cover (Industrials, Communications,
+        # Consumer Staples & Retail).
+        sector_score = RATE_SENSITIVITY.get(sector)
 
         tlt_corr = None
         if tlt_df is not None and not tlt_df.empty:
@@ -176,7 +196,12 @@ def rate_sensitivity_per_ticker(
         # Human-readable implication driven by the sector score (structural) and
         # TLT correlation (empirical).  Use TLT corr when available; fall back to sector score.
         primary = tlt_corr if tlt_corr is not None else sector_score
-        if primary < -0.4:
+        if primary is None:
+            # Neither an empirical correlation nor a structural label — say so
+            # rather than printing "Roughly rate-neutral", which would be a
+            # confident claim derived from no data whatsoever.
+            implication = "Unknown — no rate data and no sector label"
+        elif primary < -0.4:
             implication = "Rate-sensitive — hurt when rates rise"
         elif primary < -0.1:
             implication = "Mild rate headwind"
@@ -196,7 +221,16 @@ def rate_sensitivity_per_ticker(
             "Implication":    implication,
         })
 
-    rows.sort(key=lambda r: (r["TLT Corr"] if r["TLT Corr"] is not None else r["Sector Score"]))
+    # Most rate-sensitive first. A row with neither an empirical correlation nor
+    # a structural label sorts LAST rather than raising: the pre-2026-08-16 key
+    # would compare None against a float once Sector Score stopped defaulting to
+    # 0.0. Unknown is not "neutral", so it must not land mid-table where it would
+    # read as one.
+    def _sort_key(r: dict) -> tuple[int, float]:
+        primary = r["TLT Corr"] if r["TLT Corr"] is not None else r["Sector Score"]
+        return (1, 0.0) if primary is None else (0, float(primary))
+
+    rows.sort(key=_sort_key)
     return rows
 
 

@@ -182,7 +182,12 @@ def portfolio_macro_exposure(port_df: pd.DataFrame, regime: dict) -> pd.DataFram
     rows = []
     for _, row in port_df.iterrows():
         sector   = row["Sector"]
-        rate_s   = RATE_SENSITIVITY.get(sector, 0.0)
+        # None, NOT 0.0, when the sector has no structural label — same
+        # fabricated-neutral fix as risk.rate_sensitivity_per_ticker. Both
+        # surfaces render the same ticker, so leaving one defaulting to 0.0
+        # would have NEM read "—/Unknown" on Risk Analysis and "0.00/Neutral"
+        # two sections away on Macro Alignment: one ticker, two epistemics.
+        rate_s   = RATE_SENSITIVITY.get(sector)
 
         if sector in over:
             alignment = "Tailwind ↑"

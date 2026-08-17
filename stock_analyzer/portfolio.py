@@ -22,7 +22,13 @@ TICKER_SECTORS = {
     "AVGO": "Semiconductors", "NVDA": "Semiconductors", "AMD": "Semiconductors",
     "MU": "Semiconductors", "QCOM": "Semiconductors", "INTC": "Semiconductors",
     "AMAT": "Semiconductors", "ASML": "Semiconductors", "TXN": "Semiconductors",
-    "LRCX": "Semiconductors",
+    # MRVL added 2026-08-16: it is HELD, and without an entry it fell back to
+    # the raw provider string "Technology" — unknown to both _SECTOR_IMPACT and
+    # RATE_SENSITIVITY, so it was invisible to the held-side macro exposure math
+    # and showed a fabricated "+0.00" rate score. Deliberately NOT added to
+    # scanner.SECTOR_UNIVERSE (that would re-add semiconductor concentration);
+    # being held and being scanned are separate questions.
+    "LRCX": "Semiconductors", "MRVL": "Semiconductors",
     "AAPL": "Consumer Tech", "AMZN": "Consumer Tech", "NFLX": "Consumer Tech",
     "SHOP": "Consumer Tech", "UBER": "Consumer Tech", "ABNB": "Consumer Tech",
     "BKNG": "Consumer Tech",

@@ -328,10 +328,15 @@ def test_rate_sensitivity_sorted_ascending_most_sensitive_first():
     assert rows[1]["Ticker"] == "JPM"
 
 
-def test_rate_sensitivity_unknown_sector_defaults_to_zero_score():
+def test_rate_sensitivity_unknown_sector_reports_none_not_zero():
+    # CONTRACT CHANGED 2026-08-16. This previously asserted `== 0.0`, pinning a
+    # `.get(sector, 0.0)` default that was never a deliberate policy — it made
+    # "no structural label exists for this sector" render as a confident
+    # "+0.00", indistinguishable from a real "structurally rate-neutral" read.
+    # Observed live on held NEM ("Basic Materials") and MRVL ("Technology").
     port_df = pd.DataFrame([_port_row("XYZ", "Not A Real Sector", 5.0)])
     rows = rate_sensitivity_per_ticker(port_df, held_data={}, tlt_df=None)
-    assert rows[0]["Sector Score"] == 0.0
+    assert rows[0]["Sector Score"] is None
 
 
 def test_rate_sensitivity_uses_live_tlt_corr_when_available():
@@ -445,3 +450,113 @@ def test_compute_portfolio_risk_metrics_beta_absent_without_spy():
     held_data = {"AAPL": {"df": df}}
     result = compute_portfolio_risk_metrics(port_df, held_data, spy_df=None)
     assert result["beta"] is None
+
+
+# ─── Rate sensitivity: unmapped sector must not fabricate a neutral ──────────
+# Found 2026-08-16 from a live Risk Analysis screenshot: NEM ("Basic Materials")
+# and MRVL ("Technology") rendered a confident "+0.00" Sector Score. Neither
+# label is a RATE_SENSITIVITY key — the old `.get(sector, 0.0)` default made
+# "no structural label exists" indistinguishable from "structurally neutral".
+
+def _rs_port_df(rows):
+    import pandas as pd
+    return pd.DataFrame(rows)
+
+
+def test_unmapped_sector_scores_none_not_zero():
+    from stock_analyzer.risk import rate_sensitivity_per_ticker
+    out = rate_sensitivity_per_ticker(
+        _rs_port_df([{"Ticker": "NEM", "Sector": "Basic Materials", "Weight (%)": 5.2}]),
+        {}, None,
+    )
+    assert out[0]["Sector Score"] is None, (
+        "an unmapped sector must report None, not a fabricated 0.0 that renders "
+        "as a confident '+0.00'")
+
+
+def test_mapped_sector_still_scores_normally():
+    from stock_analyzer.risk import rate_sensitivity_per_ticker
+    from stock_analyzer.macro import RATE_SENSITIVITY
+    out = rate_sensitivity_per_ticker(
+        _rs_port_df([{"Ticker": "NVDA", "Sector": "Semiconductors", "Weight (%)": 5.0}]),
+        {}, None,
+    )
+    assert out[0]["Sector Score"] == RATE_SENSITIVITY["Semiconductors"]
+
+
+def test_no_corr_and_no_sector_label_says_unknown_not_neutral():
+    # The dangerous fallback: with no TLT correlation AND no sector label, the
+    # old code compared 0.0 and printed "Roughly rate-neutral" — a confident
+    # claim from no data at all.
+    from stock_analyzer.risk import rate_sensitivity_per_ticker
+    out = rate_sensitivity_per_ticker(
+        _rs_port_df([{"Ticker": "NEM", "Sector": "Basic Materials", "Weight (%)": 5.2}]),
+        {}, None,
+    )
+    assert out[0]["Implication"] == "Unknown — no rate data and no sector label"
+    assert "neutral" not in out[0]["Implication"].lower()
+
+
+def test_sort_puts_unknown_rows_last_and_does_not_raise():
+    # Regression guard: once Sector Score can be None, the old sort key compared
+    # None against a float. Unknown is not "neutral", so it must not land
+    # mid-table where it would read as one.
+    from stock_analyzer.risk import rate_sensitivity_per_ticker
+    out = rate_sensitivity_per_ticker(
+        _rs_port_df([
+            {"Ticker": "NEM",  "Sector": "Basic Materials", "Weight (%)": 5.2},
+            {"Ticker": "NVDA", "Sector": "Semiconductors",  "Weight (%)": 5.0},
+            {"Ticker": "LLY",  "Sector": "Healthcare",      "Weight (%)": 5.2},
+        ]),
+        {}, None,
+    )
+    assert [r["Ticker"] for r in out][-1] == "NEM"
+
+
+def test_mrvl_and_held_semis_resolve_to_a_rate_known_sector():
+    # MRVL is held; without a TICKER_SECTORS entry it fell back to "Technology".
+    from stock_analyzer.portfolio import resolve_sector
+    from stock_analyzer.macro import RATE_SENSITIVITY
+    assert resolve_sector("MRVL", "Technology") in RATE_SENSITIVITY
+
+
+def test_mixed_none_column_formats_as_dash_not_nan():
+    """The bug the function-level tests above could NOT catch.
+
+    app.py renders these rows via pd.DataFrame(rows), which coerces a MIXED
+    float/None column to float64 — turning None into NaN. `NaN is not None` is
+    True, so an `is not None` guard silently emits "+nan". An ALL-None column
+    keeps object dtype and formats correctly, which is exactly why this passes
+    in isolation and breaks on a real book (some sectors mapped, some not).
+    Pins the pandas behaviour and the pd.notna guard that the render sites use.
+    """
+    from stock_analyzer.risk import rate_sensitivity_per_ticker
+    rows = rate_sensitivity_per_ticker(
+        pd.DataFrame([
+            _port_row("NVDA", "Semiconductors", 5.0),     # mapped   -> float
+            _port_row("NEM",  "Basic Materials", 5.2),    # unmapped -> None
+        ]),
+        held_data={}, tlt_df=None,
+    )
+    # NOTE ON THE TWO PRECONDITIONS BELOW: they pin pandas BEHAVIOUR, not app
+    # behaviour, so they invert if a future pandas preserves None (nullable /
+    # Arrow-backed defaults). If they go red, the production `pd.notna` guards
+    # are STILL CORRECT — relax these preconditions, do NOT revert the guards
+    # at app.py's two Risk Analysis formatters and the macro Styler's na_rep.
+    # This test also does NOT regression-guard those call sites: it re-implements
+    # the lambdas rather than importing them, so it documents the class, not the
+    # surface. Extracting a shared `fmt_signed` helper into util.py and testing
+    # that would close the gap; queued, not done here.
+    col = pd.DataFrame(rows)["Sector Score"]
+    assert col.dtype == "float64", (
+        "precondition: this pandas coerces a mixed float/None column to float64. "
+        "If this fails, pandas changed — relax the precondition, keep pd.notna.")
+    assert col.isna().any(), "the None became NaN, not a preserved None"
+
+    naive = col.apply(lambda v: f"{v:+.2f}" if v is not None else "—").tolist()
+    assert "+nan" in naive, (
+        "precondition: `is not None` fails to catch NaN, which is the whole bug. "
+        "If this fails, pandas changed — relax the precondition, keep pd.notna.")
+
+    guarded = col.apply(lambda v: f"{v:+.2f}" if pd.notna(v) else "—").tolist()
+    assert "+nan" not in guarded and "—" in guarded

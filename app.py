@@ -12427,24 +12427,26 @@ elif page == "🔗 Risk Analysis":
             import pandas as _rs_pd
             _rs_df = _rs_pd.DataFrame(_rs_rows)
 
-            def _rs_color(val):
-                if val is None:
-                    return ""
-                if val < -0.4:
-                    return "color:#ff4444"
-                if val < -0.1:
-                    return "color:#ffbb33"
-                if val < 0.1:
-                    return "color:#9ca3af"
-                if val < 0.4:
-                    return "color:#00C851"
-                return "color:#00C851;font-weight:bold"
-
+            # (_rs_color removed 2026-08-16 — dead since the display columns
+            # became pre-formatted strings, and it carried the same `is None`
+            # NaN hole fixed just below, so reviving it would reintroduce it.)
             _rs_display = _rs_df[["Ticker", "Sector", "Weight (%)", "TLT Corr", "Sector Score", "Implication"]].copy()
+            # pd.notna, NOT `is not None`: pd.DataFrame(_rs_rows) coerces a MIXED
+            # float/None column to float64, turning None into NaN — and
+            # `NaN is not None` is True, so the guard silently renders "+nan".
+            # (An ALL-None column keeps object dtype and formats fine, which is
+            # why this looks correct in isolation and breaks on the live book.)
             _rs_display["TLT Corr"] = _rs_display["TLT Corr"].apply(
-                lambda v: f"{v:+.3f}" if v is not None else "—"
+                lambda v: f"{v:+.3f}" if pd.notna(v) else "—"
             )
-            _rs_display["Sector Score"] = _rs_display["Sector Score"].apply(lambda v: f"{v:+.2f}")
+            # "—" not "+0.00" when the sector has no structural label: a zero
+            # reads as a real "structurally rate-neutral" finding, which is a
+            # claim the app never made. Reachable for a held ticker with no
+            # TICKER_SECTORS entry (falls back to the raw provider GICS string)
+            # and for curated labels RATE_SENSITIVITY doesn't yet cover.
+            _rs_display["Sector Score"] = _rs_display["Sector Score"].apply(
+                lambda v: f"{v:+.2f}" if pd.notna(v) else "—"
+            )
             st.dataframe(
                 _rs_display,
                 width='stretch',
@@ -17592,7 +17594,17 @@ elif page == "🌐 Macro":
                     _ec4.metric("% in headwind sectors", f"{_headwind_weight:.0f}%",
                                 help="Combined weight of positions facing macro headwinds")
 
-                    _expo_sorted = expo_df.sort_values("Rate Sensitivity")
+                    # Positions whose sector has no structural rate label carry
+                    # NaN (not a fabricated 0.0). Exclude them from the CHART
+                    # rather than plotting them: a NaN x-value makes the bar
+                    # silently vanish, which is a worse lie than the old "+0.00"
+                    # — the position would look absent, not unknown. They stay
+                    # in the table below, rendered "—", and are named here.
+                    _expo_unrated = expo_df[expo_df["Rate Sensitivity"].isna()]
+                    _expo_sorted = (
+                        expo_df[expo_df["Rate Sensitivity"].notna()]
+                        .sort_values("Rate Sensitivity")
+                    )
                     _bar_colors = [
                         "#00C851" if a == "Tailwind ↑" else "#ff4444" if a == "Headwind ↓" else "#888888"
                         for a in _expo_sorted["Macro Alignment"]
@@ -17601,22 +17613,46 @@ elif page == "🌐 Macro":
                         f"{row['Ticker']} ({row['Weight (%)']:.0f}%)"
                         for _, row in _expo_sorted.iterrows()
                     ]
-                    rs_fig = go.Figure(go.Bar(
-                        x=_expo_sorted["Rate Sensitivity"],
-                        y=_labels,
-                        orientation="h",
-                        marker_color=_bar_colors,
-                        text=[f"{v:+.2f}" for v in _expo_sorted["Rate Sensitivity"]],
-                        textposition="outside",
-                    ))
-                    rs_fig.add_vline(x=0, line_color="white", line_dash="dot", line_width=1)
-                    rs_fig.update_layout(
-                        title="Rate Sensitivity by Position (right = rate beneficiary)",
-                        template="plotly_dark", height=max(280, 35 * len(_expo_sorted)),
-                        xaxis_title="Rate Sensitivity Score",
-                        margin=dict(l=0, r=60, t=40, b=0),
-                    )
-                    st.plotly_chart(rs_fig, use_container_width=True)
+                    # Degenerate all-unrated book: go.Bar with empty x/y renders a
+                    # blank axis, which reads as "no positions" rather than "no
+                    # rate labels". Unreachable today (NVDA/LLY are mapped), but
+                    # cheap to state honestly. The caption below still names them
+                    # and the table still lists them.
+                    if _expo_sorted.empty:
+                        st.info(
+                            "No position has a structural rate-sensitivity label, "
+                            "so there is nothing to chart — see the table below."
+                        )
+                    else:
+                        rs_fig = go.Figure(go.Bar(
+                            x=_expo_sorted["Rate Sensitivity"],
+                            y=_labels,
+                            orientation="h",
+                            marker_color=_bar_colors,
+                            text=[f"{v:+.2f}" for v in _expo_sorted["Rate Sensitivity"]],
+                            textposition="outside",
+                        ))
+                        rs_fig.add_vline(x=0, line_color="white", line_dash="dot", line_width=1)
+                        rs_fig.update_layout(
+                            title="Rate Sensitivity by Position (right = rate beneficiary)",
+                            template="plotly_dark", height=max(280, 35 * len(_expo_sorted)),
+                            xaxis_title="Rate Sensitivity Score",
+                            margin=dict(l=0, r=60, t=40, b=0),
+                        )
+                        st.plotly_chart(rs_fig, use_container_width=True)
+                    # Sits directly under the chart, BEFORE the colour legend, so
+                    # it reads as a qualification of the chart rather than as
+                    # commentary on the legend.
+                    if not _expo_unrated.empty:
+                        st.caption(
+                            "Not charted (no structural rate label for their sector): "
+                            + _safe_html(", ".join(
+                                f"{t} · {s}" for t, s in zip(
+                                    _expo_unrated["Ticker"], _expo_unrated["Sector"])
+                            ))
+                            + " — shown as “—” in the table below rather than "
+                              "assigned a neutral score the app never computed."
+                        )
                     st.caption(
                         "🟢 Green = sector benefits from current macro regime  |  "
                         "⬜ Gray = neutral  |  "
@@ -17639,7 +17675,10 @@ elif page == "🌐 Macro":
                         expo_df[_disp_cols].style
                         .map(_align_col, subset=["Macro Alignment"])
                         .map(_rate_col,  subset=["Rate Sensitivity"])
-                        .format({"Weight (%)": "{:.1f}%", "Rate Sensitivity": "{:+.2f}"})
+                        # na_rep: without it a NaN rate score renders as the bare
+                        # string "nan" instead of an honest em-dash.
+                        .format({"Weight (%)": "{:.1f}%", "Rate Sensitivity": "{:+.2f}"},
+                                na_rep="—")
                     )
                     st.dataframe(_styled_expo, width='stretch')
 
