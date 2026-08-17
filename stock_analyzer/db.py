@@ -781,6 +781,133 @@ def load_holdings_or_none() -> "pd.DataFrame | None":
         return None
 
 
+def load_watchlist_or_none() -> "list[str] | None":
+    """Watchlist, or `None` (the offline sentinel) when it could not be read.
+
+    An EMPTY list means the `watchlist` table was read successfully and is
+    genuinely empty. Same contract as `load_holdings_or_none`.
+
+    **Why this exists is sharper than the holdings case.** `load_watchlist()`
+    below returns `list(_DEFAULT_WATCHLIST)` when there are no credentials — so
+    a blind app doesn't merely show nothing, it shows the user a watchlist
+    **they never created, presented as theirs**. An empty portfolio is a wrong
+    absence; a fabricated watchlist is a wrong *assertion*, which is worse and
+    is the exact class `project_fundamentals_gate` exists to forbid. Never
+    raises.
+    """
+    from stock_analyzer import api_health as _ah
+    if not has_db():
+        return None
+    try:
+        rows = _client().table("watchlist").select("ticker").execute().data
+        _ah.record("supabase", "success")
+        # Read succeeded — an empty table is a real answer, not an absence.
+        return [r["ticker"] for r in rows] if rows else []
+    except Exception as e:
+        _ah.record("supabase", "error", msg=str(e)[:120])
+        return None
+
+
+def load_trades_or_none() -> "pd.DataFrame | None":
+    """Trades, or `None` (the offline sentinel) when the table could not be read.
+
+    An EMPTY frame means the table was read and is genuinely empty — the state
+    of a brand-new journal. Same contract and reason as
+    `load_holdings_or_none`; collapsing the two would let a Supabase outage
+    render My Edge / Prior Trades / Behavioral Fingerprint as "you have no
+    history" rather than "we could not read your history". Never raises.
+
+    THIS is the strict implementation and `load_trades()` is the thin lenient
+    wrapper — deliberately that way round, matching holdings. The first attempt
+    inverted it (this function called `load_trades()` and caught exceptions) and
+    was actively harmful: `load_trades()` swallows its own errors and returns an
+    empty frame, so the `except` was unreachable AND every failed read recorded
+    `api_health "success"`. That resets `consecutive_errors`, which feeds
+    `system_health.check_providers`' recovered re-grade — i.e. a broken `trades`
+    table would have downgraded a genuine "down" to "warn" on the very provider
+    row this change exists to harden. Don't re-invert it.
+    """
+    from stock_analyzer import api_health as _ah
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("trades")
+            .select("*")
+            .order("traded_at", desc=True)
+            .execute().data
+        )
+        _ah.record("supabase", "success")
+        if not rows:
+            # Read succeeded, journal is genuinely empty — NOT unreadable.
+            return pd.DataFrame(columns=_TRADE_COLS)
+        df = pd.DataFrame(rows)
+        # Backfill columns for rows pre-dating each feature addition
+        for col in ("signal_seen", "followed_signal", "deviation_reason",
+                    "lesson", "lesson_category", "user_thesis", "thesis_source",
+                    "decision_context", "premortem_case_against",
+                    "premortem_commitment", "premortem_trigger_price",
+                    "premortem_trigger_direction"):
+            if col not in df.columns:
+                df[col] = None
+        return df
+    except Exception as e:
+        err = str(e)
+        _ah.record("supabase", "error", msg=err[:120])
+        if "row-level security" in err.lower() or "42501" in err:
+            st.error(
+                "⛔ Supabase RLS is blocking the trades table. The `[supabase] "
+                "key` secret must be the **service-role / secret key** "
+                "(bypasses RLS), not the publishable/anon key. Update "
+                "`SUPABASE_KEY` in Railway → Variables, then Redeploy."
+            )
+        else:
+            st.error(f"⛔ Trades read error: {err}")
+        return None
+
+
+def unavailable_detail() -> "str | None":
+    """Human-readable detail when Supabase can't be read AT ALL, else None.
+
+    Moved here from `cron_runner._db_unavailable_detail` on 2026-08-17 so the
+    outage EMAIL and the in-app outage BANNER give the same explanation of the
+    same fault — two independent wordings for one condition is how they drift.
+
+    Deliberately re-reads HOLDINGS rather than issuing a synthetic `select 1`:
+    holdings is the input every protective decision depends on, so a PARTIAL
+    outage that breaks only that table (a dropped RLS policy, a PGRST205
+    schema-cache miss) is caught too — a probe against another table would
+    happily succeed and report health. Never raises.
+    """
+    try:
+        if not has_db():
+            return "no Supabase credentials (SUPABASE_URL / SUPABASE_KEY not set)"
+        if load_holdings_or_none() is None:
+            return "holdings table could not be read from Supabase"
+    except Exception as exc:
+        return f"Supabase read raised: {str(exc)[:160]}"
+    return None
+
+
+def should_attempt_db_reload(last_failed_at: "float | None", now_ts: float) -> bool:
+    """Should the app retry the initial DB load after a failure?
+
+    Pure — takes `time.time()` epoch seconds, does no I/O and reads no clock, so
+    it is testable and can't drift with timezone handling. (Epoch floats, NOT
+    `datetime.now()`, which `check_antipatterns.py` flags.)
+
+    Bounds the retry so an outage doesn't cost three Supabase reads with client
+    timeouts on EVERY widget interaction. The boundary is INCLUSIVE — at exactly
+    `DB_RELOAD_RETRY_SEC` elapsed we retry — and is asserted exactly in tests
+    rather than reasoned about; the 2026-08-04 Critical was an off-by-one of
+    this shape that a design review had waved through as harmless.
+    """
+    from stock_analyzer.constants import DB_RELOAD_RETRY_SEC
+    if last_failed_at is None:
+        return True
+    return (now_ts - float(last_failed_at)) >= DB_RELOAD_RETRY_SEC
+
+
 def load_holdings() -> pd.DataFrame:
     """Holdings, with an empty frame on ANY failure.
 
@@ -1191,7 +1318,7 @@ def load_watchlist() -> list[str]:
 
 def load_watchlist_added_dates() -> dict[str, str]:
     """Return {ticker: added_at (ISO date string)} for every watchlist row.
-    Separate from load_watchlist() (which returns a flat list and has callers
+    Separate from load_watchlist() (which returns a flat list and had callers
     throughout app.py expecting that shape) — used only by O4 Watchlist
     Resurrection. Missing/unreadable rows are simply absent from the dict
     (never fabricated as "very stale" or "never stale"). Returns {} on any
@@ -1232,38 +1359,19 @@ _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
 
 
 def load_trades() -> pd.DataFrame:
-    empty = pd.DataFrame(columns=_TRADE_COLS)
-    if has_db():
-        try:
-            rows = (
-                _client().table("trades")
-                .select("*")
-                .order("traded_at", desc=True)
-                .execute().data
-            )
-            if rows:
-                df = pd.DataFrame(rows)
-                # Backfill columns for rows pre-dating each feature addition
-                for col in ("signal_seen", "followed_signal", "deviation_reason",
-                            "lesson", "lesson_category", "user_thesis", "thesis_source",
-                            "decision_context", "premortem_case_against",
-                            "premortem_commitment", "premortem_trigger_price",
-                            "premortem_trigger_direction"):
-                    if col not in df.columns:
-                        df[col] = None
-                return df
-            return empty
-        except Exception as e:
-            err = str(e)
-            if "row-level security" in err.lower() or "42501" in err:
-                st.error(
-                    "⛔ Supabase RLS is blocking the trades table. The Streamlit "
-                    "secret `[supabase] key` must be the service-role / secret "
-                    "key (bypasses RLS), not the publishable/anon key."
-                )
-            else:
-                st.error(f"⛔ Trades read error: {err}")
-    return empty
+    """Trades, with an empty (but correctly-COLUMNED) frame on ANY failure.
+
+    Lenient wrapper over `load_trades_or_none` — the strict version owns the
+    read, the api_health recording and the RLS message, so there is exactly one
+    implementation and a failed read can never be recorded as a success. Callers
+    that must distinguish "no trades" from "couldn't read trades" use the strict
+    one; the ~40 call sites that just want a frame to iterate use this.
+
+    The empty frame always carries `_TRADE_COLS`, which downstream consumers
+    index into — never a bare `pd.DataFrame()`.
+    """
+    df = load_trades_or_none()
+    return df if df is not None else pd.DataFrame(columns=_TRADE_COLS)
 
 
 def save_trade(record: dict) -> bool:

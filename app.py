@@ -83,6 +83,8 @@ from stock_analyzer.rebalancer import (
     TOLERANCE_OK, TOLERANCE_WATCH,
 )
 from stock_analyzer.constants import (
+    DB_OUTAGE_SAFE_PAGES,
+    DB_RELOAD_RETRY_SEC,
     PORTFOLIO_BETA_CEILING,
     PORTFOLIO_BETA_ELEVATED,
     PORTFOLIO_DRAWDOWN_ACTION_MAX,
@@ -2326,11 +2328,64 @@ if "_pending_page" in st.session_state:
         # Remember where we came from so a Back button can return us there
         st.session_state["_nav_origin"] = st.session_state.get("nav_page", "")
     st.session_state["nav_page"] = _dest
+# ── Initial DB load, with an honest failure path ─────────────────────────────
+# Until 2026-08-17 this latched `db_loaded = True` UNCONDITIONALLY after three
+# LENIENT loaders that return empty containers on failure. So a failed first
+# load showed an empty portfolio, an empty trade journal and a FABRICATED
+# default watchlist — with no banner and no retry — for the rest of the session,
+# even after Supabase recovered. The user hit exactly this during the 2026-08-15
+# Railway cutover (wrong RLS key → "app shows no data").
+#
+# The strict `_or_none` loaders distinguish "read fine, genuinely empty" from
+# "could not read". `db_loaded` now means ONLY "the initial load succeeded";
+# `_db_load_failure` carries the fault and drives the banner further down (after
+# the sidebar renders, so nav survives — see the outage gate below).
+#
+# holdings is the HARD gate (every decision depends on it, and it's the probe
+# db.unavailable_detail() uses); watchlist/trades failing alone is a SOFT
+# warning, because the book itself is still correct.
 if not st.session_state.get("db_loaded"):
-    st.session_state.holdings_df = db.load_holdings()
-    st.session_state.watchlist   = db.load_watchlist()
-    st.session_state.trades_df   = db.load_trades()
-    st.session_state.db_loaded   = True
+    # Explicit `is None`, not `... or {}` — check_antipatterns.py flags the
+    # collapse, and rightly: this key IS the offline record, so folding a
+    # falsy-but-present value into "no failure" is the exact class.
+    _fail_rec  = st.session_state.get("_db_load_failure")
+    _prev_fail = _fail_rec.get("at") if _fail_rec is not None else None
+    _may_retry = (st.session_state.pop("_db_retry_requested", False)
+                  or db.should_attempt_db_reload(_prev_fail, time.time()))
+    if _may_retry:
+        _h = db.load_holdings_or_none()
+        if _h is None:
+            # Keep the containers a valid TYPE (many call sites do .iterrows());
+            # the protection is the hard stop below, not a sentinel smuggled
+            # into a widely-read frame.
+            st.session_state.holdings_df = pd.DataFrame(columns=db._HOLDINGS_COLS)
+            st.session_state.watchlist   = []
+            st.session_state.trades_df   = pd.DataFrame(columns=db._TRADE_COLS)
+            st.session_state["_db_load_failure"] = {
+                "at": time.time(),
+                "detail": db.unavailable_detail() or "Supabase could not be read",
+                "scope": "holdings",
+            }
+        else:
+            st.session_state.holdings_df = _h
+            _w = db.load_watchlist_or_none()
+            _t = db.load_trades_or_none()
+            # NEVER fall back to _DEFAULT_WATCHLIST here: showing a watchlist the
+            # user never created, as theirs, is a wrong ASSERTION — worse than a
+            # wrong absence.
+            st.session_state.watchlist = _w if _w is not None else []
+            st.session_state.trades_df = _t if _t is not None else pd.DataFrame(columns=db._TRADE_COLS)
+            if _w is None or _t is None:
+                _partial = [n for n, v in (("watchlist", _w), ("trade history", _t))
+                            if v is None]
+                st.session_state["_db_load_failure"] = {
+                    "at": time.time(),
+                    "detail": f"could not read: {', '.join(_partial)}",
+                    "scope": "partial",
+                }
+            else:
+                st.session_state.pop("_db_load_failure", None)
+                st.session_state.db_loaded = True
 
 # ── Read-only viewer mode ────────────────────────────────────────────────────
 # PRIMARY: login password role (auth_role="owner" → full access,
@@ -2695,11 +2750,60 @@ with st.sidebar:
 
     portfolio_value = _pv if _pv > 0 else DEFAULT_PORTFOLIO_VALUE
     st.divider()
+    # Severity aligned with 🩺 System Trust check ③ on 2026-08-17. This used to
+    # read "🟡 Local session only — configure DB to persist", dev-flavoured
+    # wording for what is actually a total outage: with no credentials the app
+    # cannot read holdings, trades or the watchlist. Leaving it amber would have
+    # had the app say "🔴 unreachable" (chip + System Trust) and "🟡 local
+    # session only" (here, on every page) at the same time. INFORMS only — the
+    # hard suppression is the outage gate below; this row just has to agree
+    # with it.
     if db.has_db():
         st.markdown("🟢 **Supabase connected** — data persists")
     else:
-        st.markdown("🟡 **Local session only** — [configure DB to persist](https://supabase.com)")
+        st.markdown("🔴 **Database unreachable** — the app cannot read your "
+                    "holdings, trades or watchlist")
     st.caption("Market data: Finnhub + Yahoo Finance + FMP · Not financial advice")
+
+# ── DB-outage gate ───────────────────────────────────────────────────────────
+# Placed HERE, immediately after the sidebar block closes, rather than at the
+# load itself: at the load, `page` doesn't exist yet and the sidebar hasn't
+# rendered, so stopping there would strand the user on a blank screen with no
+# nav — including no route to 🩺 System Trust, the page that diagnoses this
+# exact outage. Stopping a fix's own diagnostic is self-defeating.
+#
+# Refuses to render any page that would MISREPRESENT the book. An empty
+# portfolio under a banner is still a wrong state, and banners get scrolled
+# past — CLAUDE.md's posture is hard suppression with a visible banner, not a
+# soft warning above misleading content. Same shape as the existing
+# no-holdings-vs-outage gate further down this file.
+_db_fail = st.session_state.get("_db_load_failure")
+if _db_fail and _db_fail.get("scope") == "holdings":
+    if page not in DB_OUTAGE_SAFE_PAGES:
+        st.error(
+            "⛔ **Cannot reach the database — your portfolio is NOT shown below.**\n\n"
+            f"Reason: {_db_fail.get('detail', 'unknown')}\n\n"
+            "This page is deliberately blocked rather than rendering an empty "
+            "portfolio, which would look like you hold nothing. "
+            f"Still available: {', '.join(DB_OUTAGE_SAFE_PAGES)}."
+        )
+        if st.button("🔄 Retry connection", type="primary"):
+            st.session_state["_db_retry_requested"] = True
+            st.rerun()
+        st.caption(
+            f"Retries automatically at most every {DB_RELOAD_RETRY_SEC}s; the "
+            "button retries now. Recovers on its own once Supabase is reachable."
+        )
+        st.stop()
+elif _db_fail and _db_fail.get("scope") == "partial":
+    # Holdings read fine, so the book on screen is CORRECT — a hard stop would
+    # be disproportionate. But My Edge / Prior Trades / Behavioral Fingerprint
+    # read trades, and an empty-looking history there would be a wrong absence.
+    st.warning(
+        f"⚠️ Partial database outage — {_db_fail.get('detail', '')}. "
+        "Your holdings are correct; history- and watchlist-driven surfaces may "
+        "look empty when they are not."
+    )
 
 # ── Risk-free rate (13-week T-bill, refreshed daily) ─────────────────────────
 @st.cache_data(ttl=86400)
@@ -29690,7 +29794,9 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **📅 Economic Calendar** — three tabs. **📅 Calendar** lists upcoming macro releases (FOMC, CPI, NFP, GDP, PPI, Retail Sales) with a KPI strip (events in the coming window, high-impact count, events this week, next major event). **📋 Pre-Event Playbook** runs bull/base/bear scenario impact on your actual holdings for each upcoming high-impact event and assigns each position a pre-event action — **PROTECT** (reduce exposure), **WATCH** (no action yet, but have a plan for when the number drops), **OPPORTUNITY** (high-conviction name with tailwind), or **HOLD** — plus **🎯 Post-Event Decision Rules** for the PROTECT/WATCH names. **📊 Post-Event Results** does the same scenario-impact analysis after a release, once you select (or the app auto-detects) which scenario actually played out, with the same action set (ADD/HOLD/WATCH/PROTECT) applied to the realized outcome. Awareness only on both playbook tabs — a name still has to clear the composite bar on its own to become a buy.
 - **🤖 AI Snapshot** (on 🏠 Home) — an on-demand, point-in-time LLM narrative of your book right now: executive summary, risk flags, action items. Pick your own AI provider (Claude/OpenAI/Gemini/Groq). For thesis health or weekly/monthly reflection, see 🧠 AI Insights instead.
 - **🔬 Model Lab** — owner-only, **EXPERIMENTAL**, not shown in read-only viewer mode. A quarantined measurement layer testing whether a simple 20-day forward-volatility forecast (EWMA) beats a naive "next 20 days ≈ last 20 days" baseline, per ticker + the portfolio aggregate. Feeds **no gate, no recommendation, no composite score, no threshold** — a dead end by design that consumes nothing from elsewhere in the app and publishes nothing back. The skill number is withheld until enough forecasts have matured to be meaningful, and is shown both blended and live-only so a mostly-backfilled number can't masquerade as live-validated. Predicts risk (volatility), never a stock-level direction/return call.
-- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Four checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session?), and **④ In-session data** (which analyses loaded this run). Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
+- **🩺 System Trust** — owner-only, not shown in read-only viewer mode. A **pipeline-health diagnostic** that answers one question: *can I trust what the app told me today?* Five checks read live at page load: **① Cron liveness** (did each scheduled job actually fire?), **② Data stores** (does every expected data table exist and have fresh data — this catches the case where a table was never created and writes were failing silently), **③ Data providers** (are the live-price sources healthy this session — including whether the database itself is reachable), **④ In-session data** (which analyses loaded this run), and **⑤ Reference data** (is any hand-maintained ticker list overdue for a refresh). Check ⑤ is deliberately left OFF the Home banner: it is a standing chore that stays amber for weeks until someone acts, and a permanent amber would train you to ignore the banner that also reports dead cron jobs. Each row is green / amber / red. When something is degraded, a one-line banner also appears at the top of 🏠 Home linking here; when everything's healthy, that banner stays hidden. **Reports only — it changes no recommendation, no gate, nothing.**
+
+- **If the database is unreachable, most pages deliberately refuse to load.** You'll see a red banner saying your portfolio is *not* shown, with a **🔄 Retry connection** button. This is on purpose: rendering an empty portfolio would look like you hold nothing, which is a worse lie than showing nothing at all. Two pages stay open — **🩺 System Trust** (to diagnose it) and **📖 User Guide** (this page) — because neither displays any of your holdings, so neither can mislead you. The app retries by itself every 30 seconds and recovers on its own once the database is back; the button retries immediately. If only your *watchlist* or *trade history* is unreadable, you get an amber warning instead and the app keeps working — your holdings are still correct, but history-driven pages (🎯 My Edge, 🧾 Prior Trades) may look emptier than they are.
 - **🧠 AI Insights** — AI reflection on your decisions: thesis tracking, the weekly debrief, and the monthly intelligence report, plus your **Analyst Coverage** inbox (paste broker research → structured intel), the **Research Scorecard** (tracks whether your saved analyst calls hit their targets), the **⚠️ Red Team** tab (daily adversarial score showing how much pressure each held thesis is under — see below), the **⚔️ Debate Log** tab — a browsable, most-recent-first history of every Bull vs Bear debate you've run (both entry candidates and exit challenges), so a debate's transcript is never lost once the day it ran rolls over — and the **💬 Ask** tab, where you can chat about your own trade history or a past recommendation's outcome (e.g. "how many trades did I make last week and what was the gain/loss on each" or "why did AAPL lose money after being recommended") and get an answer sourced from what's actually on record, never a live snapshot; a follow-up question ("what about MSFT instead?") can refer back to what you just asked. Answers may quote a trade's own recorded thesis/notes/lesson, and — for a recommendation's outcome — the matching purchase's recorded Pre-Mortem risk case and exit commitment, read against what actually happened (never a new call). Anything outside those question shapes is told plainly it's unsupported rather than guessed at. It narrates patterns and folds in outside research; it never gates. For a live right-now snapshot, see 🤖 AI Snapshot on Home. (For a structured Bull vs Bear debate on a new entry candidate, look for the **⚔️ Debate** button on 🏠 Home → 📈 Grow Today — see below.)
 """
             )

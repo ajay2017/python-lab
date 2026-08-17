@@ -311,6 +311,14 @@ def _probe_store(store: _Store) -> dict:
             "cadence": store.cadence, "severity": "unknown", "state": "unknown",
             "latest": None, "detail": ""}
     if not db.has_db():
+        # DELIBERATE ASYMMETRY with check ③, which grades the same condition
+        # "down" (see check_providers). Not an inconsistency to harmonise:
+        # ② reports whether a STORE exists and is fresh, and with no
+        # credentials it genuinely CANNOT know — "unknown" is the honest answer.
+        # ③ reports whether the DATABASE is reachable, and "no credentials" is a
+        # definite answer to that. ③ is stating the reason ② has to abstain.
+        # Both are pinned by tests; "fixing" either to match the other reopens
+        # the green-over-blind hole closed on 2026-08-17.
         base["state"], base["detail"] = "offline", "database unreachable"
         return base
     try:
@@ -385,13 +393,40 @@ def check_providers() -> list[dict]:
     out: list[dict] = []
     for source, label in _PROVIDERS:
         try:
+            # Supabase special-case (2026-08-17). Without it this check showed a
+            # fully GREEN 🩺 System Trust over an app that could read nothing:
+            # with no credentials nothing ever CALLS Supabase, so calls == 0 →
+            # "unknown" → which ranks 0 → chip_severity rolls up to "ok".
+            # `has_db()` is a CREDENTIALS check, not reachability (db.py) — the
+            # special-case is defensible only because credentials-missing
+            # provably means the app can read nothing. Do NOT let this drift
+            # into "has_db() means the DB is up"; that conflation already cost
+            # us once in F-239. The reachable-but-broken case needs no help
+            # here: db.py records api_health on every read, so real errors
+            # already grade this row red on their own.
+            # Function-level import, matching check_cron_liveness/_probe_store.
+            if source == "supabase":
+                from stock_analyzer import db as _db
+                if not _db.has_db():
+                    out.append({
+                        "source": source, "label": label, "severity": "down",
+                        "detail": "no Supabase credentials (SUPABASE_URL / "
+                                  "SUPABASE_KEY not set) — the app cannot read "
+                                  "holdings, trades or watchlist",
+                    })
+                    continue
             h = api_health.get_health(source)
             _lvl = h.get("level")
             severity = level_map.get(_lvl, "unknown") if isinstance(_lvl, str) else "unknown"
             calls = h.get("calls", 0) or 0
             if calls == 0:
                 severity = "unknown"
-                detail = "no calls this session"
+                # Say WHY there were no calls. The bare "no calls this session"
+                # is exactly the ambiguity that hid the green-over-blind defect
+                # above: it read identically whether the provider was merely
+                # unused or structurally unreachable.
+                detail = ("credentials present, no calls recorded this session"
+                          if source == "supabase" else "no calls this session")
             else:
                 # api_health's "red" is a cumulative session-lifetime read (e.g.
                 # rate_limits >= 3 never decays) — it can stay red long after the

@@ -917,6 +917,32 @@ REFERENCE_HORIZON_MIN_DAYS = {
 # real rate-limit event drops whole chunks of the batch well under it.
 TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT = 90.0
 
+# Minimum seconds between automatic retries of the initial Supabase load after
+# it has failed (`db.should_attempt_db_reload`, consumed by app.py's startup
+# load block). OPERATIONAL knob, NOT an investment threshold — it gates how
+# often a blind app re-probes, never a pick or a gate. Retrying on every rerun
+# would cost three Supabase reads with client timeouts on every widget
+# interaction during a network outage; never retrying would leave the app
+# stopped after Supabase recovered. The in-banner "Retry connection" button
+# bypasses this, so the cooldown only shapes the AUTOMATIC path.
+DB_RELOAD_RETRY_SEC = 30
+
+# Pages that stay reachable when the initial DB load has failed and the app is
+# otherwise hard-stopped (app.py's outage gate).
+#
+# This is a HARD-SUPPRESSION BOUNDARY, which is why it lives here rather than as
+# a module-level tuple in app.py: `tests/` cannot import app.py, so this is the
+# only place the "don't strand the user without a diagnostic" invariant can be
+# mechanically pinned. Three defects on 2026-08-17 landed precisely where the
+# suite can't reach — that is the reason for the placement, not a style
+# preference.
+#
+# Both entries render NO portfolio state, so neither can misrepresent the book
+# while the DB is unreadable. 🩺 System Trust is the page that diagnoses this
+# exact outage — stopping before it is reachable would make the fix hide its own
+# diagnostic. Do NOT add a page here that reads holdings/trades/watchlist.
+DB_OUTAGE_SAFE_PAGES = ("🩺 System Trust", "📖 User Guide")
+
 # Per-call wall-clock cap (seconds) on each yfinance request. yfinance exposes no
 # request-level timeout, so a TCP-level hang would otherwise block until the OS
 # socket timeout (minutes) or — in the headless cron — the 15-min job kill. The

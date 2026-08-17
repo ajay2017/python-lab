@@ -1,12 +1,12 @@
-# Baseline of constants NOT yet documented in docs/ (snapshot at tripwire
-# setup, 2026-07-16). Mixed bag: some are genuine internal plumbing; others
-# are real decision values that still deserve a docs/architecture.md row —
-# a backlog to burn down over time, NOT a permanent 'skip'. The point of the
-# baseline is only to make CI green on day one so it can catch NEW drift.
-# A newly added constant should be documented (preferred) or consciously
-# added here, never left to silently pass. Regenerate (rare — only after
-# deliberately deciding a batch is intentionally internal):
 #   python scripts/check_constants_documented.py --init
+# A newly added constant should be documented (preferred) or consciously
+# Baseline of constants NOT yet documented in docs/ (snapshot at tripwire
+# a backlog to burn down over time, NOT a permanent 'skip'. The point of the
+# added here, never left to silently pass. Regenerate (rare — only after
+# are real decision values that still deserve a docs/architecture.md row —
+# baseline is only to make CI green on day one so it can catch NEW drift.
+# deliberately deciding a batch is intentionally internal):
+# setup, 2026-07-16). Mixed bag: some are genuine internal plumbing; others
 ADD_WINNER_MIN_GAP_PCT
 APPROACHING_STOP_GAP_PCT
 COMPOSITE_BUY_FLAT_DAY
@@ -14,6 +14,7 @@ COMPOSITE_HIGH_CONVICTION
 CORR_DANGER_PAIRS_THRESHOLD
 CORR_HIGH_PAIRS_THRESHOLD
 DATA_YF_REQUEST_TIMEOUT_SEC
+DB_RELOAD_RETRY_SEC
 DEFAULT_PORTFOLIO_VALUE
 DETERIORATION_ATR_MULT_EXIT
 DETERIORATION_ATR_MULT_TRIM

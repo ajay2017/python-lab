@@ -1337,22 +1337,18 @@ _LAST_LANE_FAILURE_DETAIL: str | None = None
 def _db_unavailable_detail() -> str | None:
     """Human-readable detail when Supabase can't be read AT ALL, else None.
 
-    Deliberately re-reads HOLDINGS rather than issuing a synthetic `select 1`:
-    holdings is the input every protective decision depends on, so a PARTIAL
-    outage that breaks only that table (a dropped RLS policy, a PGRST205
-    schema-cache miss) is caught too — a probe against some other table would
-    happily succeed and report health. Called ONLY after a lane's DB-derived
-    input already came back empty/None, so it adds no round trip to the healthy
-    path. Never raises.
+    Body moved to `db.unavailable_detail()` on 2026-08-17 so the outage EMAIL
+    (this lane) and the in-app outage BANNER explain the same fault in the same
+    words — two independent wordings for one condition is how they drift apart.
+    The probe rationale (re-read HOLDINGS, not a synthetic `select 1`) lives
+    with the implementation there.
+
+    Kept as a thin alias rather than inlined at the 8 call sites: those sites
+    read `cr.db.*` under test patching, and the indirection keeps this lane's
+    call graph legible. Called ONLY after a lane's DB-derived input already came
+    back empty/None, so it adds no round trip to the healthy path. Never raises.
     """
-    try:
-        if not db.has_db():
-            return "no Supabase credentials (SUPABASE_URL / SUPABASE_KEY not set)"
-        if db.load_holdings_or_none() is None:
-            return "holdings table could not be read from Supabase"
-    except Exception as exc:
-        return f"Supabase read raised: {str(exc)[:160]}"
-    return None
+    return db.unavailable_detail()
 
 
 def _handle_db_unavailable(lane: str, now_et, detail: str) -> int:
