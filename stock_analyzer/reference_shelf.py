@@ -175,7 +175,10 @@ _REFERENCE_TABLES: tuple[_RefTable, ...] = (
         label="Diversification candidate roster",
         location="stock_analyzer/portfolio.py — _SECTOR_CANDIDATES",
         kind=KIND_AS_OF,
-        as_of=date(2026, 5, 5),
+        # 2026-08-17: full re-seed. All 56 names were alive, so this was a
+        # FITNESS refresh, not rot — three sectors were seeding a de-risking
+        # suggestion with sub-scale/speculative names.
+        as_of=date(2026, 8, 17),
         consequence="diversification ADD suggestions may name delisted or "
                     "acquired tickers",
     ),

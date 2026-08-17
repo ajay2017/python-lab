@@ -67,8 +67,23 @@ DISCOVERY_UNIVERSE: dict[str, list[str]] = {
         "XOM", "CVX", "COP", "SLB", "EOG", "OXY", "MPC", "PSX", "VLO", "WMB",
         "KMI", "LIN", "FCX", "NEM", "NUE", "DOW", "ALB", "CCJ",
     ],
+    # SEDG ($2.0B) / RUN ($2.4B) / PLUG ($3.2B) removed 2026-08-17 — this
+    # file's OWN stated rule applied ("keep names liquid — avoid thin micro-caps
+    # where a 10% move is noise, not signal"), not a new policy. They were
+    # reaching portfolio.diversifying_candidate_pool, i.e. being scored as
+    # concentration RELIEF, which is the opposite of what a $2B name provides.
+    # BE ($67.7B) is not sub-scale and stays; ENPH/FSLR stay too — they are
+    # legitimate Movers candidates, a different question from whether they
+    # should be ASSERTED as the sector's representatives.
+    #
+    # ORDER IS DELIBERATELY UNCHANGED. A "sort large-first" pass was tried and
+    # reverted: this bucket is unioned after the roster and truncated at
+    # DIVERSIFY_SCAN_CAP, so reordering promoted CEG/VST — AI-datacenter power
+    # plays carrying exactly the tech correlation this sector's 0.28 diversifier
+    # claim denies — from cut-by-the-cap into the scored pool. Reordering this
+    # list changes which names get scored; treat it as behaviour, not cosmetics.
     "Clean Energy & Utilities": [
-        "NEE", "DUK", "SO", "ENPH", "FSLR", "SEDG", "RUN", "PLUG", "BE", "D",
+        "NEE", "DUK", "SO", "ENPH", "FSLR", "BE", "D",
         "AEP", "EXC", "VST", "CEG",
     ],
     "Communications & Telecom": [

@@ -34,6 +34,20 @@ TICKER_SECTORS = {
     "BKNG": "Consumer Tech",
     "TSLA": "EV & Auto", "ENPH": "Clean Energy", "FSLR": "Clean Energy",
     "NEE": "Clean Energy", "BEP": "Clean Energy",
+    # BE (fuel cells, $67.7B) added 2026-08-17 with the roster re-seed.
+    # NOT adding DUK/SO/D/AEP here: they are regulated utilities, and mapping
+    # them onto the "Clean Energy" label would mis-route earnings_advisor's
+    # sector watch-list, SECTOR_ETF's benchmark and stress_test's shock
+    # magnitudes, all of which key on that same string. Utilities need their
+    # own sector, not a borrowed label.
+    "BE": "Clean Energy",
+    # F/GM had NO entry until 2026-08-17 despite being names the app can
+    # SUGGEST YOU BUY — a bought suggestion would have fallen back to the raw
+    # provider GICS string ("Consumer Cyclical"), unknown to _SECTOR_IMPACT and
+    # RATE_SENSITIVITY. Same class as the BA/MRVL gaps. A test now forbids it.
+    "F": "EV & Auto", "GM": "EV & Auto",
+    "TM": "EV & Auto", "RACE": "EV & Auto",
+    "CSCO": "Enterprise Tech", "ACN": "Enterprise Tech",
     "CRWD": "Cybersecurity", "NET": "Cybersecurity", "PANW": "Cybersecurity",
     "ZS": "Cybersecurity", "FTNT": "Cybersecurity", "OKTA": "Cybersecurity", "S": "Cybersecurity",
     "DELL": "Enterprise Tech", "ORCL": "Enterprise Tech", "IBM": "Enterprise Tech",
@@ -1114,20 +1128,60 @@ def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) ->
 # (always unioned in FIRST so well-known names are never dropped by the scan
 # cap), and as the sole source if the discovery-universe bucket is unavailable.
 # Shelf life: registered in stock_analyzer/reference_shelf.py — update its as_of date when you refresh this list.
+# These are the names the app ASSERTS as a sector's representatives when it
+# suggests an ADD to reduce concentration. Membership is earned by being a
+# large, liquid, representative expression of the sector's macro driver —
+# NEVER by trailing momentum, and never by "it's down so it's cheap". A
+# de-risking suggestion that names a sub-scale, single-technology or
+# pre-revenue company works against the only reason this table exists.
+#
+# Re-seeded 2026-08-17 (roster was 104d stale; all 56 names were alive, so this
+# was a fitness problem, not rot). Every ticker here must also have a
+# TICKER_SECTORS entry whose value equals its key — a suggested buy is a
+# prospective holding, and a holding with no curated sector is invisible to the
+# macro exposure math. Both invariants are asserted in tests/test_portfolio.py.
 _SECTOR_CANDIDATES = {
     "Healthcare":      ["LLY", "NVO", "ABBV", "ISRG", "REGN"],
     "Energy":          ["XOM", "CVX", "COP", "OXY"],
     "Defense":         ["LMT", "RTX", "NOC", "GD"],
     "Financials":      ["JPM", "V", "MA", "GS"],
-    "Clean Energy":    ["NEE", "ENPH", "FSLR", "BEP"],
-    "Consumer Tech":   ["AAPL", "AMZN", "NFLX", "SHOP"],
-    "AI & Cloud":      ["MSFT", "GOOGL", "META", "CRM"],
-    "AI & Data":       ["PLTR", "SNOW", "MDB", "IONQ"],
+    # Dropped ENPH ($5.3B) and BEP ($10.4B) as sub-scale for a suggestion whose
+    # job is REDUCING risk; both stay reachable via the discovery bucket, they
+    # just stop being ASSERTED as the sector's representatives. Median cap
+    # $17.3B → ~$68B.
+    #
+    # This sector KEEPS MEANING RENEWABLES. A first attempt re-seeded it to
+    # regulated utilities (DUK/SO/D/AEP) and was reverted before shipping: the
+    # string "Clean Energy" is a KEY in three other tables, so re-pointing it
+    # silently mis-routed them — earnings_advisor._SECTOR_WATCH would have told
+    # you to watch "module costs / IRA subsidy commentary" before Duke Energy's
+    # print, SECTOR_ETF would have benchmarked a utility against ICLN, and
+    # stress_test._SECTOR_SHOCKS would have shocked it -70% in the 2008
+    # scenario. Utilities need their OWN sector (~13 policy values), not a
+    # relabel. Don't retry the relabel.
+    "Clean Energy":    ["NEE", "FSLR", "BE"],
+    "Consumer Tech":   ["AAPL", "AMZN", "NFLX", "SHOP", "BKNG", "UBER"],
+    "AI & Cloud":      ["MSFT", "GOOGL", "META", "CRM", "NOW"],
+    # IONQ ($18.7B, pre-revenue quantum hardware) dropped — strictly
+    # risk-increasing as a redeploy target for concentration relief. NOT
+    # replaced: the large-cap data-platform universe outside PLTR/SNOW/MDB is
+    # genuinely thin, and inventing a fourth name to hit a count is how a
+    # roster starts asserting things it can't support.
+    "AI & Data":       ["PLTR", "SNOW", "MDB"],
     "Cybersecurity":   ["CRWD", "PANW", "NET", "ZS", "FTNT"],
     "Semiconductors":  ["NVDA", "AVGO", "AMD", "MU", "QCOM"],
     "Communications":  ["T", "VZ", "TMUS"],
-    "EV & Auto":       ["TSLA", "RIVN", "LCID", "F", "GM"],
-    "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP"],
+    # TSLA dropped 2026-08-17: it trades on the AI/robotaxi narrative, not the
+    # auto cycle, so its real correlation to a growth-tech book is far above
+    # this sector's stated 0.40 — you cannot de-risk a tech book by buying it.
+    # It stays in scanner.SECTOR_UNIVERSE, DISCOVERY_UNIVERSE and
+    # TICKER_SECTORS, so it remains fully discoverable and correctly
+    # classified when held; it just stops being offered AS A DIVERSIFIER.
+    # RIVN ($22.2B) and LCID ($2.5B) dropped as cash-burning single-product
+    # manufacturers. TM/RACE added because this sector has no discovery bucket
+    # (see _DIVERSIFY_TO_DISCOVERY), so the roster IS the whole pool.
+    "EV & Auto":       ["GM", "F", "TM", "RACE"],
+    "Enterprise Tech": ["DELL", "ORCL", "IBM", "HPE", "SAP", "CSCO", "ACN"],
 }
 
 # Maps a Diversification-Advisor sector to the broad discovery-universe bucket
@@ -1186,6 +1240,11 @@ _SECTOR_PROFILES = {
     "Financials":      {"corr": 0.35, "why": "benefits when rates rise — inverse to your growth-tech book"},
     "EV & Auto":       {"corr": 0.40, "why": "rate- and commodity-cycle driven, consumer-discretionary — distinct from the software/AI cycle"},
     "Enterprise Tech": {"corr": 0.45, "why": "legacy enterprise IT/capex cycle — more value-oriented than AI/Cloud growth names"},
+    # corr and `why` both UNCHANGED by the 2026-08-17 roster re-seed, which
+    # dropped two sub-scale names but kept the sector meaning renewables — so
+    # "policy/subsidy driven" still describes what's in it. (An earlier attempt
+    # re-pointed this sector at regulated utilities and would have made this
+    # text describe names the sector no longer held; reverted before shipping.)
     "Clean Energy":    {"corr": 0.28, "why": "policy/subsidy driven — moderate diversification from pure tech"},
     "Consumer Tech":   {"corr": 0.58, "why": "still tech but consumer-facing — partial diversification"},
     "Semiconductors":  {"corr": 0.65, "why": "same AI/compute cycle as AI & Cloud / AI & Data — not a genuine diversifier"},

@@ -460,3 +460,118 @@ def test_alerts_non_string_earnings_value_does_not_crash():
     held_data = {ticker: {"earnings": 12345}}
     result = alerts(port_df, held_data)
     assert [a for a in result if a["category"] == "earnings"] == []
+
+
+# ─── Diversification roster invariants (2026-08-17 re-seed) ──────────────────
+# The roster names tickers the app SUGGESTS YOU BUY to reduce concentration.
+# That purpose is what these tests protect: a suggested buy is a prospective
+# holding, and a de-risking suggestion must not itself add idiosyncratic risk.
+
+def _roster_tickers() -> set:
+    from stock_analyzer.portfolio import _SECTOR_CANDIDATES
+    return {t for names in _SECTOR_CANDIDATES.values() for t in names}
+
+
+def test_every_roster_ticker_has_a_curated_sector():
+    # FAILED ON HEAD before 2026-08-17: F, GM and LCID had no entry. A bought
+    # suggestion would resolve to the raw provider GICS string, which is unknown
+    # to macro_calendar._SECTOR_IMPACT and macro.RATE_SENSITIVITY — invisible to
+    # the held-side macro exposure math. Same class as the BA/MRVL gaps.
+    from stock_analyzer.portfolio import TICKER_SECTORS
+    missing = sorted(_roster_tickers() - set(TICKER_SECTORS))
+    assert not missing, (
+        f"roster names the app can suggest buying, with no curated sector: {missing}")
+
+
+def test_roster_ticker_sector_matches_its_roster_key():
+    # Buying a suggestion made under "Clean Energy" must not classify the
+    # position as something else — that incoherence doesn't exist today and
+    # this stops it starting.
+    from stock_analyzer.portfolio import _SECTOR_CANDIDATES, TICKER_SECTORS
+    mismatched = {
+        t: (sector, TICKER_SECTORS[t])
+        for sector, names in _SECTOR_CANDIDATES.items()
+        for t in names
+        if t in TICKER_SECTORS and TICKER_SECTORS[t] != sector
+    }
+    assert not mismatched, f"roster key vs TICKER_SECTORS disagreement: {mismatched}"
+
+
+def test_no_sector_roster_is_empty_or_near_empty():
+    # Margin on top of test_every_diversifying_sector_can_actually_produce_
+    # candidates below. Six sectors have no discovery-bucket mapping, so for
+    # them the roster IS the whole pool and held-name exclusion shrinks it
+    # further at runtime.
+    from stock_analyzer.portfolio import _SECTOR_CANDIDATES
+    thin = {s: names for s, names in _SECTOR_CANDIDATES.items() if len(names) < 3}
+    assert not thin, f"roster too thin to populate a candidate pool: {thin}"
+
+
+def test_clean_energy_pool_excludes_the_sub_scale_tail():
+    # The defect that motivated the re-seed: the pool — not just the roster —
+    # carried SEDG ($2.0B), RUN ($2.4B) and PLUG ($3.2B), because the roster
+    # fills only the first slots and the discovery bucket filled the rest in
+    # renewables-first order. Naming a $2B name as concentration relief is the
+    # opposite of this feature's purpose. BE ($67.7B) is deliberately NOT in
+    # this list — it is not sub-scale and was kept.
+    from stock_analyzer.portfolio import diversifying_candidate_pool
+    pool = set(diversifying_candidate_pool("Clean Energy", set()))
+    banned = {"SEDG", "RUN", "PLUG"}
+    assert not (pool & banned), (
+        f"sub-scale names back in the de-risking pool: {sorted(pool & banned)} — "
+        "they were removed 2026-08-17 because a diversification suggestion must "
+        "not add idiosyncratic risk; re-adding needs that reasoning engaged")
+
+
+def test_every_diversifying_sector_can_actually_produce_candidates():
+    # Stronger than asserting roster LENGTH: portfolio.py's ADD loop does
+    # `if not candidates: continue`, so an empty POOL silently suppresses that
+    # sector's card. Tests the thing that matters, not a proxy for it.
+    #
+    # Residual this cannot cover: every roster name already held. That case
+    # co-occurs with current_pct >= DIVERSIFY_ADD_SKIP_PCT, so the suppression
+    # is legitimate rather than silent.
+    from stock_analyzer.portfolio import _DIVERSIFYING_SECTORS, diversifying_candidate_pool
+    empty = [s for s in _DIVERSIFYING_SECTORS
+             if not diversifying_candidate_pool(s, set())]
+    assert not empty, f"these sectors would silently render no ADD card: {empty}"
+
+
+# NOTE — a test asserting CEG/VST stay out of the Clean Energy pool was written
+# and then DELETED rather than shipped, because it did not guard what it
+# claimed. It checked pool POSITION, but both consuming surfaces re-rank by
+# composite (annotate_add_candidates' `(tier, -score)`) before displaying the
+# top 3, so pool order survives only as a tiebreak. Writing a guard that looks
+# like protection but isn't is worse than having none.
+# Current state, stated plainly: removing the three micro-caps promoted VST
+# into the pool (it was previously cut by DIVERSIFY_SCAN_CAP). That is accepted
+# — VST is a legitimate member of a bucket named "Clean Energy & Utilities",
+# and it is a POOL candidate, not a roster name the app asserts as the sector's
+# representative. _SECTOR_PROFILES["Clean Energy"]["corr"] is unchanged from
+# HEAD, so no correlation claim moved. If VST/CEG ever need to be genuinely
+# excluded, that requires a per-sector deny-list inside
+# diversifying_candidate_pool — not an ordering trick and not a position test.
+
+
+def test_ticker_sectors_values_are_rate_known_or_a_documented_gap():
+    # Companion to the _SECTOR_IMPACT invariant in tests/test_scanner.py.
+    # These three curated labels have no RATE_SENSITIVITY key; since 2026-08-16
+    # they degrade honestly to None -> "Unknown" rather than a fabricated
+    # "+0.00". Pinned so a NEW gap can't appear silently.
+    from stock_analyzer.macro import RATE_SENSITIVITY
+    from stock_analyzer.portfolio import TICKER_SECTORS
+    known_gap = {"Industrials", "Communications", "Consumer Staples & Retail"}
+    unknown = sorted({v for v in TICKER_SECTORS.values()} - set(RATE_SENSITIVITY) - known_gap)
+    assert not unknown, f"new sector labels with no rate-sensitivity score: {unknown}"
+
+
+def test_discovery_clean_energy_removals_and_retentions():
+    # Proves the Movers net changed only as intended: three micro-caps out,
+    # everything else — including BE and the renewables that merely left the
+    # diversification ROSTER — still discoverable.
+    from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
+    bucket = set(DISCOVERY_UNIVERSE["Clean Energy & Utilities"])
+    assert not (bucket & {"SEDG", "RUN", "PLUG"})
+    for kept in ("NEE", "DUK", "SO", "D", "AEP", "BE", "VST", "CEG", "EXC",
+                 "FSLR", "ENPH"):
+        assert kept in bucket, f"{kept} should still be a Movers candidate"
