@@ -18,7 +18,50 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-04 (morning-picks cron bug fix + trades-idempotency catch-up)
+## 1. Latest run — 2026-08-17 (reference-roster refreshes F-240/F-241/F-242 + rate-sensitivity honesty fix)
+
+**3657 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
+--cov-report=term-missing -q`: 125.84s — TOTAL 16904 stmts, 3899 missed,
+**77%** overall coverage). Python (local `.venv`). Transcribed from the run,
+not recalled.
+
+**+508 tests and +2pp coverage over the 3149 entry below**, which was the last
+logged run (2026-08-04) — so this entry closes a 13-day logging gap, and most
+of that delta shipped in features logged in `docs/shipped-log.md` rather than
+here. The log itself had drifted; that is the drift class this file exists to
+prevent, and it is worth noting rather than quietly back-filling.
+
+Tests added by the work this entry is named for:
+- **F-240** (`tests/test_scanner.py`, +5): the macro-gate coverage invariant
+  with a deliberately EMPTY exception allowlist, a per-category `_SECTOR_IMPACT`
+  invariant whose allowlist also fails if it outlives its own debt, pick-path vs
+  held-path `resolve_sector` agreement, and a `GOOG`-absent regression guard.
+- **F-241** (`tests/test_ticker_liveness.py`, new, 13): batch-health boundary
+  asserted exactly at the threshold, rate-limit-is-not-a-dead-verdict,
+  multi-source rescue, dead-ticker-does-not-fail-the-lane, sub-job ordering,
+  exception containment, and the `None` vs `"inconclusive"` sentinel split.
+- **F-242** (`tests/test_portfolio.py`, +7): every roster ticker has a curated
+  sector (this one FAILED on HEAD — `F`, `GM`, `LCID`), roster key matches
+  `TICKER_SECTORS` value, every diversifying sector can actually produce
+  candidates, and the sub-scale-tail exclusion.
+- **Rate-sensitivity fix** (`tests/test_risk.py`, +6): unmapped sector reports
+  `None` not a fabricated `0.0`, "Unknown" instead of a confident
+  "rate-neutral" from no data, unknown rows sort last, and one test at the
+  **DataFrame layer** pinning the `pd.DataFrame` None→NaN coercion that the
+  function-level tests structurally could not see.
+
+**Coverage note, stated honestly:** `stock_analyzer/ticker_liveness.py` is at
+**72%** — the lowest of the new modules. The uncovered lines are the real-provider
+default paths (`fetch_batch`/`fetch_live` defaults, the timeout branch), which the
+tests deliberately inject around rather than exercise, since covering them would
+mean live network calls inside the suite. That is the correct trade — but it is
+also exactly why three display/runtime defects in this session were caught by
+review rather than by the suite.
+
+
+## 2. History
+
+### 2026-08-04 (morning-picks cron bug fix + trades-idempotency catch-up)
 
 **3149 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term-missing -q`: 24.89s — TOTAL 15177 stmts, 3852 missed,
@@ -253,7 +296,6 @@ analytics (Lessons Learned page), not a gate/scoring-formula change.
 
 ---
 
-## 2. History
 
 *(Newest first. Add a new entry above this line each time the suite is run
 and the result is worth recording — at minimum, after any batch/module

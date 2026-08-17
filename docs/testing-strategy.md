@@ -1,6 +1,6 @@
 # Testing Strategy — DRISHTA
 
-Last updated: 2026-07-27. How this app is verified, end to end: what the automated
+Last updated: 2026-08-17. How this app is verified, end to end: what the automated
 `pytest` suite covers, what it deliberately doesn't, and what manual checking fills
 the gap. Read this before deciding "does my change need a test, and what kind?"
 
@@ -9,8 +9,9 @@ the gap. Read this before deciding "does my change need a test, and what kind?"
 ## 1. Why two layers, not one
 
 DRISHTA has no staging environment and is never run locally (CLAUDE.md hard rule
-#3) — every change ships by pushing to `main` and letting Streamlit Cloud /
-Railway auto-redeploy. Until 2026-07-27 that meant the *only* quality gate was
+#3) — every change ships by pushing to `main` and letting Railway
+auto-redeploy (primary since the 2026-08-15 cutover; Streamlit Cloud is a
+dormant cold fallback). Until 2026-07-27 that meant the *only* quality gate was
 manual testing before push (docs/architecture.md §9.2, prior wording). That's
 still true for anything that requires a browser or live infrastructure — this
 repo has no Selenium/Playwright, and adding one hasn't been judged worth the
@@ -116,7 +117,7 @@ independent line of defense behind the local hook above, not the only one.)
 This is deliberate scope, not an oversight — re-read this before asking
 "should we add a test for X":
 
-- **`app.py` (Streamlit UI/orchestration, ~29,000 lines).** Too coupled to
+- **`app.py` (Streamlit UI/orchestration, ~35,000 lines).** Too coupled to
   `st.session_state`, widget keys, and `_pending_page` navigation to unit-test
   cheaply, and it's not where the decision logic lives (that's the whole point
   of the `stock_analyzer/` split). A UI bug here needs a human looking at a
@@ -128,14 +129,52 @@ This is deliberate scope, not an oversight — re-read this before asking
 - **Supabase read/write correctness in production** (RLS policies actually
   blocking/allowing as intended, real schema drift, actual cron write paths).
   Pytest never touches the real DB.
-- **Cron/headless jobs** (`.github/workflows/alerts.yml` → `cron_runner.py` →
-  `headless_alert_engine.py`). These run on GitHub's schedule infrastructure,
-  not in-process — pytest can exercise the pure functions they call, but not
-  "did the scheduled trigger actually fire and did the email arrive."
+- **Cron/headless jobs** (Railway native Cron Job services → `cron_runner.py` →
+  `headless_alert_engine.py`; 6 lanes as of 2026-08-15, migrated off GitHub
+  Actions on 2026-08-07 — `.github/workflows/alerts.yml` is now
+  manual-dispatch-only). These run on Railway's schedule infrastructure, not
+  in-process — pytest can exercise the pure functions they call, but not "did
+  the scheduled trigger actually fire and did the email arrive." The
+  dead-man's-switch (`_notify_failure` + `cron_heartbeat` + 🩺 System Trust)
+  exists precisely because this layer is untestable from here.
 - **Whether the recommendations are actually good** (real alpha, not just
   internally consistent). Pytest can prove `recommendation(65) == "Buy"`
   forever; it can't prove that Buy-labeled picks have historically beaten SPY.
   That's a different, periodic kind of check — see §4.6.
+
+### 3.1 The display/runtime layer — a demonstrated gap, not a theoretical one
+
+Added 2026-08-17 after **three defects in one session** landed where neither
+`pytest` nor the commit hook can reach. Worth stating concretely, because "the
+suite is green" was doing more reassurance than it had earned:
+
+1. **A `None` that became `+nan` on screen.** `risk.rate_sensitivity_per_ticker`
+   correctly returned `None` for an unmapped sector, and the function-level tests
+   proved it. But `pd.DataFrame(rows)` coerces a MIXED float/None column to
+   `float64`, so `None` became `NaN`, and the display guard `if v is not None`
+   silently rendered `"+nan"`. The tests asserted the *return value*; the bug was
+   in the *rendering*. (An all-`None` column keeps object dtype and formats fine —
+   which is exactly why it passes in isolation and breaks on a real book.)
+2. **A `NaN` that made a Plotly bar vanish.** Same value on the 🌐 Macro chart: a
+   NaN x-coordinate doesn't render badly, it removes the bar — the position looks
+   *absent* rather than *unknown*. No test renders a figure.
+3. **A `NameError` on a live page.** A call to `safe_html(...)` where `app.py`
+   binds `_safe_html`. `py_compile` sees valid syntax; the suite never imports and
+   renders `app.py`; the branch only executes when an unrated holding exists.
+
+**The rule this yields:** when a change's effect is *what the user sees*, test at
+the layer the bug can live in, or accept that review — not the suite — is the
+gate. `tests/test_risk.py::test_mixed_none_column_formats_as_dash_not_nan` is the
+worked example: it asserts the pandas coercion happens, asserts the naive guard
+*does* produce `"+nan"`, then asserts the correct guard doesn't. It also states
+honestly in its own docstring that it re-implements the formatter rather than
+importing it, so it documents the bug class without regression-guarding the call
+sites. Extracting a shared `fmt_signed` helper into `util.py` and testing that
+would close the remaining gap — queued, not done.
+
+**Corollary for the review economy:** this is the strongest argument for the
+`reviewer` lane in CLAUDE.md. All three were caught by an Opus reviewer
+re-deriving from the diff in a separate context, none by a deterministic gate.
 
 ---
 

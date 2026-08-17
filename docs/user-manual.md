@@ -99,7 +99,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 **💰 Account** — *Cash, account value, and capital trend.* Account-baseline: cash + total account value (F-03b), a flows ledger for growth-vs-contributions (F-03c), and a Capital Trend chart with a net-capital-contributed overlay (F-03d). Leverage/margin awareness (F-09d) lives here too — **read-only, never gates.** Look when reconciling real account value or checking margin.
 
-**🔍 Market Scanner** — *Find new names.* Scans the curated universe (~73 tickers across 12 sectors, F-60) plus a Movers discovery lane (F-60a), scores each 0–100 (F-61), ranks the top picks (F-62). Look when hunting for candidates beyond what the brief surfaced.
+**🔍 Market Scanner** — *Find new names.* Scans the curated universe (88 tickers across 14 sectors, F-60/F-240) plus a Movers discovery lane (F-60a), scores each 0–100 (F-61), ranks the top picks (F-62). Look when hunting for candidates beyond what the brief surfaced.
 
 **📖 User Guide** — *In-app help.* Four tabs (🚀 Start Here / ⚙️ How It Works / 🗺️ Features / 📚 Reference). The short-form companion to this manual.
 
@@ -117,7 +117,7 @@ Pre-market and end-of-day, the **email cron** may have already sent you a protec
 
 **🔬 Model Lab** (F-234) — *Owner-only, experimental.* Quarantined forward-volatility shadow layer: 20-day EWMA vol forecast per held ticker + portfolio, scored against a naive persistence baseline. Feeds no gate, no recommendation, no composite. Dead-end by design — a measurement harness to validate before any signal is ever wired in.
 
-**🩺 System Trust** (F-235) — *Owner-only, pipeline-health diagnostic.* Answers "can I trust what the app told me today?" Four live checks at page load: ① Cron liveness (did each Railway lane fire?), ② Data stores (does every expected table exist with fresh data — catches unapplied DDL and silent write failures), ③ Data providers (source health this session), ④ In-session caches (what loaded this run). Each row is green/amber/red. A one-line chip appears at the top of 🏠 Home only when something is degraded; invisible when healthy. Reports only — changes no recommendation, no gate, nothing.
+**🩺 System Trust** (F-235) — *Owner-only, pipeline-health diagnostic.* Answers "can I trust what the app told me today?" Five live checks at page load: ① Cron liveness (did each Railway lane fire?), ② Data stores (does every expected table exist with fresh data — catches unapplied DDL and silent write failures), ③ Data providers (source health this session), ④ In-session caches (what loaded this run), ⑤ Reference data — is any hand-maintained ticker list overdue for a refresh (F-238). Check ⑤ is deliberately **excluded** from the Home chip: it is a standing chore that stays amber for weeks until a human acts, and a permanent amber would train you to ignore the chip that also reports dead cron lanes. Each row is green/amber/red. A one-line chip appears at the top of 🏠 Home only when something is degraded; invisible when healthy. Reports only — changes no recommendation, no gate, nothing.
 
 ### Group: PORTFOLIO
 
@@ -252,7 +252,7 @@ Features that own state publish to `st.session_state`; downstream features read 
 
 ## II.9 Cron jobs & email alerts
 
-Headless runs (`cron_runner.py`, shares the app's exact data + credential path, fail-safe — always exits 0 so a failure never blocks):
+Headless runs (`cron_runner.py`, shares the app's exact data + credential path). Historically these always exited 0 so a failure could never block — **F-239 changed that deliberately**: a lane that cannot reach Supabase now emails the owner, records `status="failed"` on its heartbeat, and **exits 1**, so a silent outage can't look like a quiet day. Everything else still fails safe.
 
 | Job | Purpose |
 |---|---|
@@ -263,6 +263,7 @@ Headless runs (`cron_runner.py`, shares the app's exact data + credential path, 
 | `_run_thesis` | Weekly thesis review (INTACT/WEAKENING/BROKEN, F-151) |
 | `_run_debrief` | Weekly Portfolio Debrief email (F-152) |
 | `_run_monthly_report` | Monthly Intelligence Report (F-153) |
+| `_run_maintenance` | Saturday upkeep lane: ⓪ ticker-liveness sweep across all three reference rosters (F-241), ① analyst-coverage anchor-price backfill, ② `model_predictions` historical backfill. ⓪ runs FIRST on purpose — it needs no DB, and ① can return early on a Supabase outage |
 | `_run_test_email` | Delivery smoke test |
 
 Emails delivered via Resend with per-ET-day idempotency + DST safety (F-143/F-144). Protective email targets `ALERT_EMAIL_HOUR_ET` (=8am ET); EOD fires after `ALERT_EOD_HOUR_ET` (=4pm ET) and only on a ≥ 3% index down day (`PULLBACK_ALERT_INDEX_PCT`).

@@ -1665,7 +1665,7 @@ alarm; only a stale-but-present timestamp (or a `status='failed'` row) degrades.
 Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System
 Proprioception Phase 1). **INFORMS ONLY — every function is read-only and feeds
 no gate, recommendation, composite, or threshold.** Pull-based / render-time:
-nothing depends on its own background job. Four never-raising checks — ① cron
+nothing depends on its own background job. FIVE never-raising checks — ① cron
 liveness (`cron_heartbeat`), ② data-store existence + freshness (the "DDL-catcher":
 a provably-missing table reads red/"down"; the inventory maps each cron lane to
 the stores it writes and whether the write is unconditional-daily or conditional),
@@ -1681,6 +1681,82 @@ when the provider's most recent call actually succeeded (`consec_err == 0`) — 
 rate-limit burst (`rate_limits >= 3` never decays within a session) minutes after
 it had already recovered via the Yahoo Finance failover; see memory
 `project_system_proprioception`.
+
+### `stock_analyzer/reference_shelf.py`
+
+Shelf-life registry for the hand-maintained STATIC reference tables (F-238),
+rendered as 🩺 System Trust **check ⑤**. **AWARENESS ONLY — nothing here gates a
+recommendation, suppresses a pick, or changes a score.** Never raises: a
+proprioception layer that can crash the page it reports on is worse than none.
+`shelf_status()` is pure (no I/O, no DB) and returns a **list, never `None`** —
+this is not a provider that can be "offline", so the offline-sentinel contract
+applies PER ROW instead: a row whose source can't be read is graded `"unknown"`
+and still rendered, never dropped and never silently `"ok"`.
+
+Two staleness mechanics, because the tables fail two different ways.
+**`KIND_AS_OF`** — a membership table with a last-refresh date; stale when age
+exceeds `REFERENCE_SHELF_LIFE_DAYS`. Fails as SILENT ABSENCE (a stale universe
+stops surfacing names) or a mildly wrong number. Can only reach amber, never
+red — it's a chore, not an outage. **`KIND_HORIZON`** — a forward-dated table
+that RUNS OUT; stale when runway drops below `REFERENCE_HORIZON_MIN_DAYS`, red
+once actually expired. Horizons are always **derived from the table itself**,
+never hand-written, so extending the table clears the warning with nothing
+second to remember. The macro horizon is the **earliest per-event-series**
+expiry, not the global max, so one freshly-extended series can't mask five
+expiring ones (`_MACRO_MIN_SERIES_ROWS` = 4 stops a one-off entry becoming a
+phantom series that pins the row to a false red).
+
+**The `as_of` rule, clarified 2026-08-16:** `as_of` = the last *deliberate
+curation*. Mechanical ticker renames don't count. But a documented review
+concluding **"no change needed" DOES earn a new date** — the date records that a
+human reconsidered the membership, not that it changed, and any other reading
+makes CHURNING a roster the only way to clear the warning, which would degrade
+the very tables the check protects. The bar is evidence, not outcome.
+
+### `stock_analyzer/ticker_liveness.py`
+
+Weekly liveness sweep over the three curated rosters (`SECTOR_UNIVERSE` ∪
+`DISCOVERY_UNIVERSE` ∪ `_SECTOR_CANDIDATES`, ~230 unique), run as sub-job ⓪ of
+the Saturday `maintenance` cron lane (F-241). **AWARENESS / CHORE ONLY — never
+gates a recommendation, suppresses a pick, or changes a score.** Exists because
+`reference_shelf.py` measures a roster's AGE, which structurally cannot detect
+ticker ROT: on 2026-08-16 `CFLT` was found delisted inside a table the age clock
+rated **green** at 79d.
+
+**Two-stage by design.** One batched fetch screens the whole roster; if fewer
+than `TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT` of names resolve it returns
+`"inconclusive"` and reports **no** dead-ticker verdict — the false positive
+being defended against (a rate-limited or down provider) hits the entire batch
+at once and is therefore measurable inside a single run. Above the floor, only
+the handful of suspects escalate individually through the multi-source
+Finnhub→yfinance→FMP layer; a miss across **every** provider is the semantic
+"unknown symbol". Yahoo's literal 404 is deliberately NOT parsed (yfinance
+swallows it, and reaching it directly means depending on an unofficial
+crumb-gated endpoint). Confirmation is in **space** (across providers, one run)
+rather than in **time** (across weeks) — the latter would need persistence,
+coupling a roster-rot check to the very DB whose outage F-239 addressed, and
+would delay a true finding by a week.
+
+**Offline contract:** returns `None` — the sentinel — ONLY when the sweep could
+not run at all (the batch raised). `"inconclusive"` is a RESULT, not an absence;
+callers branch on `is None` separately. The batch is bounded by a module-local
+wall-clock cap (`_SWEEP_WALL_CLOCK_CAP_SEC`, an operational knob on the
+`system_health.py` precedent, not investment policy) reusing the provider
+layer's `_call_with_timeout`, which ABANDONS a hung worker — a plain
+`with ThreadPoolExecutor(...)` would block on it at `__exit__` and defeat the
+timeout entirely.
+
+**Reporting invariants (cron_runner):** sub-job ⓪ runs BEFORE the DB sub-jobs,
+because ① can return early on a Supabase outage and a check needing no DB must
+not be starved by one. **A dead ticker is a CURATION CHORE, never a lane
+failure** — it never touches `failures`/`rc`/`_notify_failure`, because a red
+maintenance heartbeat must keep meaning "the lane died". Only an exception *in
+the check itself* fails the lane. Emails **only on a finding** — never a weekly
+all-clear (the heartbeat already proves the lane ran) — but `"inconclusive"` and
+the offline sentinel DO email, stating plainly that there is no verdict and why:
+silence-because-degraded is a wrong state, not health. `shelf_status()` rides
+along with a severity split: an *expired* (`down`) table emails on its own;
+merely-aging (`warn`) rows are appended only when an email is already going out.
 
 ### `stock_analyzer/portfolio_health.py`
 

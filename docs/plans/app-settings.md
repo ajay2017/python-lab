@@ -1,6 +1,6 @@
 # App Settings — UI-managed reference data
 
-**Status: DESIGN ONLY — still no code written, as of 2026-08-16. Explicitly "design it
+**Status: DESIGN ONLY — still no code written, as of 2026-08-17. Explicitly "design it
 first, build later" per the user.**
 
 **Design state:** the architecture is settled (DB as single source of truth, fail loud on
