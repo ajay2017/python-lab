@@ -28602,9 +28602,14 @@ elif page == "💰 Account":
             _sii_fig = _sii_pgo.Figure()
             for _et in ("dividend", "interest", "fee"):
                 if _et in _sii_piv.columns:
+                    _sii_vals = _sii_piv[_et].abs()
                     _sii_fig.add_trace(_sii_pgo.Bar(
-                        x=_sii_piv.index, y=_sii_piv[_et].abs(),
+                        x=_sii_piv.index, y=_sii_vals,
                         name=_et.title(), marker_color=_sii_colors[_et],
+                        text=[f"${v:.2f}" if v >= 2 else "" for v in _sii_vals],
+                        textposition="inside",
+                        insidetextanchor="middle",
+                        textfont=dict(size=11, color="white"),
                     ))
             _sii_fig.update_layout(
                 barmode="stack", height=260,
