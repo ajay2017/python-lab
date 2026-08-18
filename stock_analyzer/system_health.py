@@ -158,6 +158,13 @@ _PROVIDERS: tuple[tuple[str, str], ...] = (
     ("fmp",           "Live prices — FMP (tertiary)"),
     ("supabase",      "Database — Supabase"),
     ("fred",          "Macro data — FRED"),
+    # F-244: api_health.py has recorded a "snaptrade" source since the
+    # broker-sync feature shipped, but this display list is the ONLY thing
+    # that puts a source in front of the user — adding to api_health's
+    # internal _stats dict does nothing on its own (found live, 2026-08-17:
+    # a user hit "Couldn't reach SnapTrade" with no error detail visible
+    # anywhere because this row was missing).
+    ("snaptrade",     "Broker sync — SnapTrade"),
 )
 
 

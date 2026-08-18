@@ -28432,9 +28432,18 @@ elif page == "💰 Account":
                 _snap_user_id = "drishta"
                 _snap_secret = snaptrade_client.register_user(_snap_user_id)
                 if _snap_secret is None:
+                    # Surface the actual captured exception inline — the
+                    # generic banner alone sent a user to re-check already-
+                    # correct Railway variables with no way to see the real
+                    # cause (2026-08-17 live incident: register_user()
+                    # swallows the exception into api_health, which had no
+                    # display surface at all before this fix).
+                    from stock_analyzer import api_health as _snap_ah
+                    _snap_last_err = (_snap_ah.get_health("snaptrade").get("last_error") or "").replace("`", "'")
                     st.error(
                         "⛔ Couldn't reach SnapTrade — check `SNAPTRADE_CLIENT_ID` / "
                         "`SNAPTRADE_CONSUMER_KEY` are set in Railway → Variables."
+                        + (f"\n\n**Captured error:** `{_snap_last_err}`" if _snap_last_err else "")
                     )
                 else:
                     _snap_portal_url = snaptrade_client.get_connection_portal_url(
