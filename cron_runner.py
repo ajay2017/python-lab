@@ -1633,6 +1633,14 @@ def _run_broker(now_et, force: bool) -> int:
         _log(f"broker: {len(accounts)} accounts linked — syncing only the "
              f"first ({account_id}); multi-account sync not built.")
 
+    # DIAGNOSTIC (2026-08-18): log raw positions + activities response shapes
+    # to debug why position drift shows all-app-only. Remove once root cause confirmed.
+    try:
+        _diag_pos = snaptrade_client.get_account_positions(account_id)
+        _log(f"broker/DIAG positions: type={type(_diag_pos).__name__} len={len(_diag_pos) if _diag_pos is not None else 'None'} sample={str(_diag_pos[:2] if _diag_pos else _diag_pos)[:300]}")
+    except Exception as _diag_exc:
+        _log(f"broker/DIAG positions: EXCEPTION {str(_diag_exc)[:200]}")
+
     rc = 0
     failures: list[str] = []
 
