@@ -103,8 +103,25 @@ def _record_success() -> None:
     api_health.record("snaptrade", "success")
 
 
-def _record_error(msg: object) -> None:
-    api_health.record("snaptrade", "error", msg=str(msg))
+def _record_error(exc: object) -> None:
+    """Record a failure for api_health's 120-char-truncated last_error_msg.
+
+    SnapTrade's ApiException.__str__ leads with the raw HTTP response
+    (status line + full header dict) before ever reaching the actual JSON
+    error body, so the generic str(e) representation gets cut off by the
+    120-char truncation exactly before the useful part — confirmed live
+    2026-08-17 (`(400) Reason: Bad Request HTTP response headers:
+    HTTPHeaderDict({'Date': ...` and nothing past it). `.body` is the
+    parsed JSON SnapTrade actually sent (e.g. `{'detail': 'Invalid
+    clientId provided - fake', ...}`) — lead with that instead."""
+    try:
+        from snaptrade_client import ApiException
+        if isinstance(exc, ApiException) and exc.body:
+            api_health.record("snaptrade", "error", msg=f"{exc.status} {exc.body}")
+            return
+    except Exception:
+        pass
+    api_health.record("snaptrade", "error", msg=str(exc))
 
 
 def register_user(user_id: str):
