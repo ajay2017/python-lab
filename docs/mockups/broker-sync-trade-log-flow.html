@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<!--
+  MOCKUP — Broker Sync · Option A trade-log flow
+  Status: PRE-APPROVAL. Static HTML only, no code written yet.
+  Flow: SnapTrade pending imports → "Log This Trade" pre-fills Log Trade form
+        (thesis + retrospective pre-mortem still required; mechanical fields locked from RH).
+  Numbers are ILLUSTRATIVE.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRISHTA — Broker Sync · Trade Log Flow mockup</title>
+<style>
+  :root{
+    --bg:#0e1117; --card:#111827; --line:#374151; --line-soft:#1f2937;
+    --txt:#f9fafb; --dim:#9ca3af; --mid:#d1d5db;
+    --grn:#22c55e; --grn-d:#052e16; --grn-mid:#16a34a;
+    --red:#ef4444; --red-d:#450a0a;
+    --amb:#f59e0b; --amb-d:#422006;
+    --blu:#60a5fa; --blu-d:#0c1e3a; --blu-mid:#2563eb;
+    --pur:#a78bfa; --pur-d:#2e1065;
+    --teal:#2dd4bf; --teal-d:#042f2e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);padding:28px 32px 80px;
+       font-family:"Source Sans Pro",-apple-system,Segoe UI,Roboto,sans-serif;
+       font-size:15px;line-height:1.5}
+  .wrap{max-width:1100px;margin:0 auto}
+
+  .mocknote{background:#1e1b4b;border-left:4px solid #818cf8;border-radius:8px;
+       padding:10px 14px;margin-bottom:24px;color:#c7d2fe;font-size:.86em}
+  .mocknote strong{color:#e0e7ff}
+
+  /* ── section labels ─────────────────────────────────────── */
+  .flow-step{display:flex;align-items:center;gap:10px;margin:32px 0 14px}
+  .step-num{background:#1d4ed8;color:#fff;border-radius:50%;width:26px;height:26px;
+       display:flex;align-items:center;justify-content:center;font-size:.82em;font-weight:700;flex-shrink:0}
+  .step-title{font-weight:700;font-size:1.05em}
+  .step-sub{color:var(--dim);font-size:.84em;margin-left:4px}
+  .arrow{color:var(--dim);font-size:1.4em;text-align:center;margin:8px 0;letter-spacing:2px}
+
+  /* ── card / panel ───────────────────────────────────────── */
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:16px 18px;margin-bottom:14px}
+  .panel-title{font-weight:700;font-size:.88em;color:var(--dim);text-transform:uppercase;
+       letter-spacing:.07em;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+
+  /* ── banners ─────────────────────────────────────────────── */
+  .banner{border-radius:8px;padding:9px 13px;margin-bottom:12px;font-size:.87em;
+       display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .banner-blu{background:var(--blu-d);border:1px solid #1e3a8a;color:#93c5fd}
+  .banner-amb{background:var(--amb-d);border:1px solid #78350f;color:#fde68a}
+  .banner-grn{background:var(--grn-d);border:1px solid #14532d;color:#86efac}
+  .banner-note{background:#1f2937;border:1px solid var(--line);color:var(--dim)}
+  .banner-pur{background:var(--pur-d);border:1px solid #6d28d9;color:#c4b5fd}
+
+  /* ── table ───────────────────────────────────────────────── */
+  .tbl-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       overflow:hidden;margin-bottom:10px}
+  table{width:100%;border-collapse:collapse;font-size:.88em}
+  thead{background:#1f2937;border-bottom:1px solid var(--line)}
+  th{padding:9px 12px;color:var(--dim);font-size:.72em;font-weight:700;
+       letter-spacing:.07em;text-transform:uppercase;text-align:left}
+  td{padding:10px 12px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tr.logged{opacity:.5}
+  tr.new-row{background:#0c1e3a}
+
+  .action-buy{color:#86efac;font-weight:700;font-size:.82em}
+  .action-sell{color:#fca5a5;font-weight:700;font-size:.82em}
+  .rh-tag{background:#172554;color:#93c5fd;border:1px solid #1d4ed8;
+       border-radius:6px;padding:1px 7px;font-size:.71em;font-weight:700}
+  .logged-tag{background:var(--grn-d);color:#86efac;border:1px solid var(--grn-mid);
+       border-radius:6px;padding:1px 7px;font-size:.71em;font-weight:700}
+  .pending-tag{background:var(--amb-d);color:#fde68a;border:1px solid #d97706;
+       border-radius:6px;padding:1px 7px;font-size:.71em;font-weight:700}
+
+  .btn{padding:6px 14px;border-radius:7px;font-size:.84em;font-weight:600;
+       border:1px solid;cursor:pointer;white-space:nowrap;display:inline-block}
+  .btn-pri{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
+  .btn-sec{background:transparent;color:var(--mid);border-color:var(--line)}
+  .btn-grn{background:var(--grn-d);color:#86efac;border-color:var(--grn-mid)}
+  .btn-sm{padding:4px 10px;font-size:.78em}
+  .btn-dis{opacity:.4;cursor:default}
+
+  /* ── log trade form ──────────────────────────────────────── */
+  .form-wrap{background:#0a0f1a;border:2px solid #1d4ed8;border-radius:12px;
+       padding:22px 24px;margin-bottom:14px}
+  .form-header{display:flex;align-items:center;gap:12px;margin-bottom:18px;
+       padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .form-title{font-weight:700;font-size:1.1em}
+  .form-source{background:var(--blu-d);color:#93c5fd;border:1px solid #1e3a8a;
+       border-radius:6px;padding:2px 9px;font-size:.75em;font-weight:700}
+
+  .form-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px}
+  .form-field{display:flex;flex-direction:column;gap:4px}
+  .field-lbl{font-size:.72em;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+       color:var(--dim);margin-bottom:2px}
+  .field-val{background:#1a2535;border:1px solid #2d3f5a;border-radius:7px;
+       padding:8px 11px;font-size:.95em;color:var(--mid);display:flex;
+       align-items:center;justify-content:space-between}
+  .field-val.locked{background:#111827;border-color:var(--line-soft);color:var(--mid)}
+  .lock-icon{color:#374151;font-size:.82em}
+  .field-input{background:#1a2535;border:1px solid #2d3f5a;border-radius:7px;
+       padding:8px 11px;font-size:.95em;color:var(--txt);width:100%;resize:vertical;
+       font-family:inherit}
+  .field-input.focus{border-color:var(--blu);outline:none}
+  .field-hint{color:var(--dim);font-size:.75em;margin-top:2px}
+
+  .rh-prefill-note{background:#0c1e3a;border:1px solid #1e3a8a;border-radius:8px;
+       padding:8px 12px;margin-bottom:16px;font-size:.82em;color:#93c5fd;
+       display:flex;align-items:center;gap:8px}
+
+  /* ── section dividers inside form ───────────────────────── */
+  .form-section{margin-bottom:18px}
+  .form-section-title{font-size:.78em;font-weight:700;letter-spacing:.07em;
+       text-transform:uppercase;color:var(--dim);margin-bottom:10px;
+       display:flex;align-items:center;gap:8px}
+  .required-star{color:var(--red);font-size:.9em}
+  .optional-tag{background:#1f2937;color:var(--dim);border:1px solid var(--line);
+       border-radius:5px;padding:1px 6px;font-size:.7em;font-weight:600}
+  .auto-tag{background:var(--teal-d);color:var(--teal);border:1px solid #0f766e;
+       border-radius:5px;padding:1px 6px;font-size:.7em;font-weight:600}
+  .retro-tag{background:var(--pur-d);color:var(--pur);border:1px solid #6d28d9;
+       border-radius:5px;padding:1px 6px;font-size:.7em;font-weight:600}
+
+  .textarea-mock{background:#1a2535;border:1px solid #2d3f5a;border-radius:7px;
+       padding:10px 12px;font-size:.9em;color:var(--dim);min-height:80px;
+       font-style:italic;margin-bottom:6px}
+  .textarea-mock.filled{color:var(--txt);font-style:normal;border-color:#374151}
+
+  .auto-capture{background:#042f2e;border:1px solid #0f766e;border-radius:7px;
+       padding:10px 12px;font-size:.84em;color:var(--teal);display:flex;
+       align-items:center;gap:8px}
+
+  .trigger-chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .chip{padding:5px 12px;border-radius:20px;font-size:.8em;font-weight:600;
+       border:1px solid var(--line);color:var(--dim);cursor:pointer}
+  .chip.on{background:var(--blu-d);color:#93c5fd;border-color:#1d4ed8}
+
+  .form-footer{display:flex;align-items:center;gap:12px;padding-top:16px;
+       border-top:1px solid var(--line);margin-top:4px;flex-wrap:wrap}
+  .form-footer-note{color:var(--dim);font-size:.8em}
+
+  /* ── state 3 — after logging ─────────────────────────────── */
+  .divider{border:none;border-top:1px solid var(--line);margin:28px 0}
+  .pos{color:var(--grn)} .neg{color:var(--red)} .neu{color:var(--mid)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="mocknote">
+  <strong>PRE-APPROVAL MOCKUP</strong> — Option A: SnapTrade pending imports → "Log This Trade" pre-fill flow.
+  Three states shown: (1) Pending imports queue, (2) Log Trade form with RH pre-fill, (3) After logging.
+  Illustrative data only.
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     STEP 1 — PENDING IMPORTS (updated for Option A)
+══════════════════════════════════════════════════ -->
+<div class="flow-step">
+  <div class="step-num">1</div>
+  <div class="step-title">Pending Imports queue</div>
+  <div class="step-sub">— SnapTrade fetched 3 transactions from Robinhood</div>
+</div>
+
+<div class="banner banner-blu">
+  3 transactions from Robinhood need to be logged. Click <strong>Log This Trade</strong> to open
+  the Trade Journal with fields pre-filled — you'll still write the thesis and pre-mortem.
+</div>
+
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Date</th>
+        <th>Ticker</th>
+        <th>Action</th>
+        <th>Shares</th>
+        <th>Price</th>
+        <th>Amount</th>
+        <th>Source</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Row 1 — pending, new -->
+      <tr class="new-row">
+        <td><span class="pending-tag">⏳ Pending</span></td>
+        <td>Aug 17, 2026</td>
+        <td><strong>MSFT</strong></td>
+        <td><span class="action-buy">BUY</span></td>
+        <td>10.0</td>
+        <td>$420.50</td>
+        <td><strong>$4,205.00</strong></td>
+        <td><span class="rh-tag">Robinhood</span></td>
+        <td><button class="btn btn-pri btn-sm">Log This Trade →</button></td>
+      </tr>
+      <!-- Row 2 — pending, new -->
+      <tr>
+        <td><span class="pending-tag">⏳ Pending</span></td>
+        <td>Aug 15, 2026</td>
+        <td><strong>AAPL</strong></td>
+        <td><span class="action-buy">BUY</span></td>
+        <td>5.0</td>
+        <td>$218.30</td>
+        <td><strong>$1,091.50</strong></td>
+        <td><span class="rh-tag">Robinhood</span></td>
+        <td><button class="btn btn-pri btn-sm">Log This Trade →</button></td>
+      </tr>
+      <!-- Row 3 — already logged -->
+      <tr class="logged">
+        <td><span class="logged-tag">✓ Logged</span></td>
+        <td>Aug 10, 2026</td>
+        <td><strong>NVDA</strong></td>
+        <td><span class="action-sell">SELL</span></td>
+        <td>2.0</td>
+        <td>$124.80</td>
+        <td><strong>$249.60</strong></td>
+        <td><span class="rh-tag">Robinhood</span></td>
+        <td><button class="btn btn-sec btn-sm btn-dis">Already logged</button></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="banner banner-note" style="font-size:.82em">
+  Trades are never auto-written. Each "Log This Trade" opens the Trade Journal with mechanical
+  fields pre-filled from Robinhood — you complete the thesis and pre-mortem.
+  Dismiss a row if you don't want to log it (e.g. an automated dividend reinvestment).
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     STEP 2 — LOG TRADE FORM (pre-filled from RH)
+══════════════════════════════════════════════════ -->
+<div class="arrow">↓ click "Log This Trade" for MSFT ↓</div>
+
+<div class="flow-step">
+  <div class="step-num">2</div>
+  <div class="step-title">Log Trade — pre-filled from Robinhood</div>
+  <div class="step-sub">— opens inline below the pending row (or as a sidebar panel)</div>
+</div>
+
+<div class="form-wrap">
+  <div class="form-header">
+    <div class="form-title">🔖 Log Trade · MSFT</div>
+    <div class="form-source">Pre-filled from Robinhood · Aug 17, 2026</div>
+    <button class="btn btn-sec btn-sm" style="margin-left:auto">✕ Cancel</button>
+  </div>
+
+  <!-- Pre-fill notice -->
+  <div class="rh-prefill-note">
+    🔒 Ticker, action, shares, price, and date are locked — sourced directly from your Robinhood order.
+    Complete the thesis and pre-mortem below to finish logging this trade.
+  </div>
+
+  <!-- Locked fields from RH -->
+  <div class="form-section">
+    <div class="form-section-title">Trade details <span class="rh-tag" style="font-size:.75em">From Robinhood</span></div>
+    <div class="form-grid">
+      <div class="form-field">
+        <div class="field-lbl">Ticker</div>
+        <div class="field-val locked"><span style="font-weight:700;color:var(--txt)">MSFT</span> <span class="lock-icon">🔒</span></div>
+      </div>
+      <div class="form-field">
+        <div class="field-lbl">Action</div>
+        <div class="field-val locked"><span class="action-buy">BUY</span> <span class="lock-icon">🔒</span></div>
+      </div>
+      <div class="form-field">
+        <div class="field-lbl">Shares</div>
+        <div class="field-val locked"><span style="color:var(--txt)">10.0</span> <span class="lock-icon">🔒</span></div>
+      </div>
+      <div class="form-field">
+        <div class="field-lbl">Price</div>
+        <div class="field-val locked"><span style="color:var(--txt)">$420.50</span> <span class="lock-icon">🔒</span></div>
+      </div>
+      <div class="form-field">
+        <div class="field-lbl">Date</div>
+        <div class="field-val locked"><span style="color:var(--txt)">Aug 17, 2026</span> <span class="lock-icon">🔒</span></div>
+      </div>
+      <div class="form-field">
+        <div class="field-lbl">Amount</div>
+        <div class="field-val locked"><span style="color:var(--txt)">$4,205.00</span> <span class="lock-icon">🔒</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- What you fill in: trigger type -->
+  <div class="form-section">
+    <div class="form-section-title">
+      What drove this buy? <span class="required-star">*</span>
+    </div>
+    <div class="trigger-chips">
+      <div class="chip on">Institutional Flow</div>
+      <div class="chip">Earnings Catalyst</div>
+      <div class="chip">Technical Read</div>
+      <div class="chip">Macro / News</div>
+      <div class="chip">Engine Rec</div>
+      <div class="chip">Other</div>
+    </div>
+    <div class="field-hint" style="margin-top:8px">Selected: <strong style="color:var(--txt)">Institutional Flow</strong></div>
+  </div>
+
+  <!-- Thesis (optional) -->
+  <div class="form-section">
+    <div class="form-section-title">
+      Thesis <span class="optional-tag">Optional</span>
+    </div>
+    <div class="textarea-mock filled">
+      MSFT buying pressure from ARK / institutional flow ahead of earnings. Azure growth
+      reaccelerating — consensus underestimates the AI infrastructure tailwind on margins.
+      Entry at $420 gives room to $480 target within 60d if cloud segment beats.
+    </div>
+    <div class="field-hint">
+      Tip: if you noted your reasoning at buy time, paste it here. A rough note beats nothing.
+    </div>
+  </div>
+
+  <!-- Retrospective pre-mortem (required) -->
+  <div class="form-section">
+    <div class="form-section-title">
+      Pre-Mortem <span class="required-star">*</span>
+      <span class="retro-tag">Retrospective</span>
+    </div>
+    <div class="banner banner-pur" style="margin-bottom:10px;font-size:.82em">
+      You bought this before logging it here — so this is a retrospective pre-mortem.
+      That's fine and honest. Write what <em>would have made you wrong at the moment you decided</em>,
+      not what you know now. The discipline still counts.
+    </div>
+    <div class="textarea-mock filled">
+      If macro deteriorated sharply (CPI surprise, rate hike repricing) right after entry,
+      Azure growth guidance cut, or if MSFT's composite dropped below 65 within 2 weeks
+      before any thesis catalyst materialized — those would mean I misread the setup.
+    </div>
+    <div class="field-hint">Required — even retrospectively. What would have made this entry wrong?</div>
+  </div>
+
+  <!-- Decision context — auto captured -->
+  <div class="form-section">
+    <div class="form-section-title">
+      Decision Context <span class="auto-tag">Auto-captured</span>
+    </div>
+    <div class="auto-capture">
+      ⚡ Engine state captured at save time — composite score, regime, risk posture,
+      concentration — logged automatically. No action needed.
+    </div>
+    <div class="field-hint" style="margin-top:6px">
+      Note: captured <em>now</em> (at logging time), not at the moment you placed the order.
+      A gap of a few hours may exist if the market moved between your buy and this log entry.
+    </div>
+  </div>
+
+  <!-- Form footer -->
+  <div class="form-footer">
+    <button class="btn btn-grn">Save Trade · MSFT BUY</button>
+    <button class="btn btn-sec">Cancel</button>
+    <span class="form-footer-note">
+      Saves to Trade Journal · runs recalculate_from_trades · marks this import as Logged
+    </span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     STEP 3 — AFTER LOGGING
+══════════════════════════════════════════════════ -->
+<div class="arrow">↓ after "Save Trade" ↓</div>
+
+<div class="flow-step">
+  <div class="step-num">3</div>
+  <div class="step-title">After saving</div>
+  <div class="step-sub">— row updates in-place, form collapses</div>
+</div>
+
+<div class="banner banner-grn">
+  ✓ MSFT BUY logged · Trade Journal updated · recalculate_from_trades ran · drift cache refreshed.
+</div>
+
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Date</th>
+        <th>Ticker</th>
+        <th>Action</th>
+        <th>Shares</th>
+        <th>Price</th>
+        <th>Amount</th>
+        <th>Source</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Row 1 — just logged -->
+      <tr class="logged">
+        <td><span class="logged-tag">✓ Logged</span></td>
+        <td>Aug 17, 2026</td>
+        <td><strong>MSFT</strong></td>
+        <td><span class="action-buy">BUY</span></td>
+        <td>10.0</td>
+        <td>$420.50</td>
+        <td><strong>$4,205.00</strong></td>
+        <td><span class="rh-tag">Robinhood</span></td>
+        <td><button class="btn btn-sec btn-sm btn-dis">Already logged</button></td>
+      </tr>
+      <!-- Row 2 — still pending -->
+      <tr class="new-row">
+        <td><span class="pending-tag">⏳ Pending</span></td>
+        <td>Aug 15, 2026</td>
+        <td><strong>AAPL</strong></td>
+        <td><span class="action-buy">BUY</span></td>
+        <td>5.0</td>
+        <td>$218.30</td>
+        <td><strong>$1,091.50</strong></td>
+        <td><span class="rh-tag">Robinhood</span></td>
+        <td><button class="btn btn-pri btn-sm">Log This Trade →</button></td>
+      </tr>
+      <!-- Row 3 — already logged previously -->
+      <tr class="logged">
+        <td><span class="logged-tag">✓ Logged</span></td>
+        <td>Aug 10, 2026</td>
+        <td><strong>NVDA</strong></td>
+        <td><span class="action-sell">SELL</span></td>
+        <td>2.0</td>
+        <td>$124.80</td>
+        <td><strong>$249.60</strong></td>
+        <td><span class="rh-tag">Robinhood</span></td>
+        <td><button class="btn btn-sec btn-sm btn-dis">Already logged</button></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="banner banner-note" style="font-size:.82em;margin-top:4px">
+  1 trade still pending (AAPL). A reminder chip will appear on the 💰 Account page badge
+  until all pending imports are logged or dismissed.
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     EDGE CASE — SELL trades (simpler flow)
+══════════════════════════════════════════════════ -->
+<hr style="border:none;border-top:1px solid var(--line);margin:32px 0">
+
+<div class="flow-step">
+  <div class="step-num" style="background:#6d28d9">!</div>
+  <div class="step-title">SELL trades — simpler form</div>
+  <div class="step-sub">— no pre-mortem required; lesson capture instead</div>
+</div>
+
+<div class="banner banner-note" style="margin-bottom:14px;font-size:.84em">
+  Pre-mortem is only for BUY entries (it's a forward-looking gate). For a SELL imported from
+  Robinhood, the form is lighter — locked mechanical fields + an optional lesson note
+  (the Pattern Library field from F-195).
+</div>
+
+<div class="form-wrap" style="border-color:#6d28d9">
+  <div class="form-header">
+    <div class="form-title">🔖 Log Trade · NVDA <span class="action-sell">SELL</span></div>
+    <div class="form-source" style="background:var(--pur-d);color:#c4b5fd;border-color:#6d28d9">Pre-filled from Robinhood · Aug 10, 2026</div>
+    <button class="btn btn-sec btn-sm" style="margin-left:auto">✕ Cancel</button>
+  </div>
+
+  <div class="rh-prefill-note">
+    🔒 Mechanical fields locked from Robinhood. Add a lesson note to capture what you learned —
+    feeds the Pattern Library on future sells of similar names.
+  </div>
+
+  <div class="form-grid" style="margin-bottom:18px">
+    <div class="form-field">
+      <div class="field-lbl">Ticker</div>
+      <div class="field-val locked"><span style="font-weight:700;color:var(--txt)">NVDA</span> <span class="lock-icon">🔒</span></div>
+    </div>
+    <div class="form-field">
+      <div class="field-lbl">Action</div>
+      <div class="field-val locked"><span class="action-sell">SELL</span> <span class="lock-icon">🔒</span></div>
+    </div>
+    <div class="form-field">
+      <div class="field-lbl">Shares</div>
+      <div class="field-val locked"><span style="color:var(--txt)">2.0</span> <span class="lock-icon">🔒</span></div>
+    </div>
+    <div class="form-field">
+      <div class="field-lbl">Price</div>
+      <div class="field-val locked"><span style="color:var(--txt)">$124.80</span> <span class="lock-icon">🔒</span></div>
+    </div>
+    <div class="form-field">
+      <div class="field-lbl">Date</div>
+      <div class="field-val locked"><span style="color:var(--txt)">Aug 10, 2026</span> <span class="lock-icon">🔒</span></div>
+    </div>
+    <div class="form-field">
+      <div class="field-lbl">Exit reason</div>
+      <div style="margin-top:2px">
+        <div class="trigger-chips">
+          <div class="chip">Stop hit</div>
+          <div class="chip on">Took profit</div>
+          <div class="chip">Thesis broken</div>
+          <div class="chip">Rebalance</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-section-title">Lesson note <span class="optional-tag">Optional</span></div>
+    <div class="textarea-mock">What did this trade teach you? Feeds the Pattern Library…</div>
+  </div>
+
+  <div class="form-footer">
+    <button class="btn btn-grn">Save Trade · NVDA SELL</button>
+    <button class="btn btn-sec">Cancel</button>
+    <span class="form-footer-note">No pre-mortem required for SELL entries</span>
+  </div>
+</div>
+
+</div><!-- .wrap -->
+</body>
+</html>

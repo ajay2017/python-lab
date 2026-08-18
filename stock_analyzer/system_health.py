@@ -137,6 +137,17 @@ _LANES: tuple[_Lane, ...] = (
     # Trust — a lane that writes heartbeats nobody grades is a lane that can
     # stop firing unnoticed, which defeats the dead-man's-switch.
     _Lane("maintenance", "Weekly data backfills",      "weekly"),
+    # SnapTrade broker sync (cron_runner._run_broker, F-244). "daily" matches
+    # SNAPTRADE_BALANCE_STALE_HOURS=25's implicit cadence assumption. Same
+    # registration rationale as `maintenance` above. Two distinct pre-setup
+    # states, both safe: before the `broker` Railway cron service is even
+    # scheduled, no row ever exists and this reads "unknown" (⚪); once it IS
+    # scheduled but SnapTrade credentials aren't configured yet, _run_broker
+    # returns 0 and the dispatcher still writes a fresh status="ok" heartbeat
+    # every fire (the dormant no-op is a genuine successful run), so the lane
+    # reads green — never "down" either way (2026-08-17 review finding: the
+    # original comment here conflated these two states).
+    _Lane("broker",      "SnapTrade broker sync",       "daily"),
 )
 
 

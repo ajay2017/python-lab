@@ -603,6 +603,82 @@ the user acted on it):
     drop policy if exists "Allow all (service role)" on public.missed_opportunity_cache;
     create policy "Allow all (service role)" on public.missed_opportunity_cache
         for all to service_role using (true) with check (true);
+
+    -- SnapTrade broker integration (Robinhood sync via SnapTrade REST
+    -- middleware — docs/plans/snaptrade-broker-integration.md). Three new
+    -- tables + one trades column. Until this DDL is applied, has_snaptrade()
+    -- checks env credentials only (unaffected) but every load/save below
+    -- no-ops / returns None or [] exactly like every other optional table in
+    -- this file, so the app runs exactly as before.
+
+    -- snaptrade_config: single-row (id=1) connection state — NEVER the
+    -- user_secret itself (that stays a Railway env var per the plan's
+    -- "Credential storage" section; a one-time OAuth secret this app must
+    -- not be the sole place holding).
+    create table if not exists public.snaptrade_config (
+        id                        integer primary key,
+        brokerage_authorization_id text,
+        status                    text not null default 'disconnected',
+        connected_at              timestamptz,
+        last_full_sync_at         timestamptz,
+        constraint snaptrade_config_single_row check (id = 1)
+    );
+    alter table public.snaptrade_config enable row level security;
+    drop policy if exists "Allow all (service role)" on public.snaptrade_config;
+    create policy "Allow all (service role)" on public.snaptrade_config
+        for all to service_role using (true) with check (true);
+
+    -- snaptrade_pending_imports: a notification/reminder queue, NEVER a
+    -- source of truth — Option A trade-log flow means a row here only
+    -- becomes a real `trades` row when the user completes the Log Trade form
+    -- (thesis/pre-mortem/decision context), never auto-written by the cron.
+    create table if not exists public.snaptrade_pending_imports (
+        id                bigint generated always as identity primary key,
+        snaptrade_txn_id  text not null,
+        ticker            text not null,
+        action            text not null check (action in ('BUY', 'SELL')),
+        shares            numeric not null check (shares > 0),
+        price             numeric not null check (price > 0),
+        trade_date        date not null,
+        raw_json          jsonb,
+        status            text not null default 'pending',  -- 'pending' | 'logged' | 'dismissed'
+        fetched_at        timestamptz not null default now(),
+        unique (snaptrade_txn_id)
+    );
+    alter table public.snaptrade_pending_imports enable row level security;
+    drop policy if exists "Allow all (service role)" on public.snaptrade_pending_imports;
+    create policy "Allow all (service role)" on public.snaptrade_pending_imports
+        for all to service_role using (true) with check (true);
+
+    -- snaptrade_income_events: dividends/interest/fees — DISPLAY/TREND ONLY.
+    -- Deliberately NEVER read by stock_analyzer/account.py's Modified Dietz
+    -- return math (that would inflate net_contributed_capital and suppress
+    -- reported growth% — see the plan's "Modified Dietz integrity" section).
+    -- Only account_flows (below) may feed that calculation.
+    create table if not exists public.snaptrade_income_events (
+        id          bigint generated always as identity primary key,
+        event_type  text not null check (event_type in ('dividend', 'interest', 'fee')),
+        ticker      text,             -- null for account-level interest/fees
+        amount      numeric not null,
+        event_date  date not null,
+        fetched_at  timestamptz not null default now()
+    );
+    alter table public.snaptrade_income_events enable row level security;
+    drop policy if exists "Allow all (service role)" on public.snaptrade_income_events;
+    create policy "Allow all (service role)" on public.snaptrade_income_events
+        for all to service_role using (true) with check (true);
+
+    -- trades.broker_txn_id: Tier-1 exact-match dedup key for the SnapTrade
+    -- sync (Tier-2 is the same content-match key F-87 CSV import already
+    -- uses — see broker_sync.classify_transactions). NULLS DISTINCT is
+    -- Postgres's default (same reasoning as trades_idempotency_key_unique
+    -- above) so existing manual/CSV rows with no broker_txn_id never collide.
+    -- Optional: until this column/index exist, save_trade drops the key and
+    -- retries (same graceful-degradation pattern as every other optional
+    -- trades column), so trade logging runs exactly as before.
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_txn_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS trades_broker_txn_id_unique
+        ON trades (broker_txn_id) NULLS DISTINCT;
 """
 
 import os
@@ -1403,7 +1479,8 @@ _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "signal_seen", "followed_signal", "deviation_reason", "lesson",
                "lesson_category", "traded_at", "user_thesis", "thesis_source",
                "decision_context", "premortem_case_against", "premortem_commitment",
-               "premortem_trigger_price", "premortem_trigger_direction"]
+               "premortem_trigger_price", "premortem_trigger_direction",
+               "broker_txn_id"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -1442,17 +1519,30 @@ def save_trade(record: dict) -> bool:
             and ("duplicate key" in _err_str or "23505" in _err_str)
         ):
             return True
+        # Same idempotency backstop for the SnapTrade dedup key: a unique-
+        # violation naming trades_broker_txn_id_unique means this exact
+        # broker transaction was already logged (e.g. the cron re-synced an
+        # overlapping window). Treat as an idempotent no-op — return True
+        # BEFORE the drop-and-retry block below, whose bare substring match
+        # on "broker_txn_id" would otherwise catch this same error, strip
+        # the column, and silently insert a duplicate trades row with no
+        # dedup key at all (2026-08-17 review finding).
+        if "trades_broker_txn_id_unique" in _err_str or (
+            "broker_txn_id" in _err_str
+            and ("duplicate key" in _err_str or "23505" in _err_str)
+        ):
+            return True
         # Graceful degradation: additive optional columns (thesis_source, F-5;
         # decision_context, Concept E; premortem_case_against/premortem_commitment,
-        # Concept C; idempotency_key, 2026-08-04) may not exist yet in Supabase
-        # (DDL not applied). If the error names ANY optional column (or is a
-        # PGRST204 schema-cache miss), drop ALL optional columns and retry
-        # once — a single retry handles the case where multiple columns are
-        # missing simultaneously.
+        # Concept C; idempotency_key, 2026-08-04; broker_txn_id, SnapTrade
+        # integration) may not exist yet in Supabase (DDL not applied). If the
+        # error names ANY optional column (or is a PGRST204 schema-cache
+        # miss), drop ALL optional columns and retry once — a single retry
+        # handles the case where multiple columns are missing simultaneously.
         _optional = ("thesis_source", "decision_context",
                      "premortem_case_against", "premortem_commitment",
                      "premortem_trigger_price", "premortem_trigger_direction",
-                     "lesson_category", "idempotency_key")
+                     "lesson_category", "idempotency_key", "broker_txn_id")
         _any_optional = any(c in _err_str for c in _optional)
         if _any_optional:
             _to_drop = {c for c in _optional if c in record}
@@ -3536,6 +3626,235 @@ def delete_account_flow(flow_id) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── SnapTrade broker integration (docs/plans/snaptrade-broker-integration.md) ─
+# snaptrade_config: single-row (id=1) connection state — never the user_secret
+# itself (a Railway env var, per the plan's "Credential storage" section).
+
+def load_snaptrade_config() -> dict | None:
+    """Return the single snaptrade_config row, or None (DB offline / table
+    missing / not yet connected). None means "connection state unknown" —
+    the setup UI shows the not-connected flow either way."""
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("snaptrade_config")
+            .select("brokerage_authorization_id,status,connected_at,last_full_sync_at")
+            .eq("id", 1).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "brokerage_authorization_id": row.get("brokerage_authorization_id"),
+            "status":                     row.get("status") or "disconnected",
+            "connected_at":               row.get("connected_at"),
+            "last_full_sync_at":          row.get("last_full_sync_at"),
+        }
+    except Exception:
+        return None
+
+
+def save_snaptrade_config(status: str, brokerage_authorization_id: str | None = None,
+                          connected_at: str | None = None,
+                          last_full_sync_at: str | None = None) -> bool:
+    """Upsert the single snaptrade_config row (id=1). Only non-None fields in
+    the call are updated (a status-only save from the cron doesn't clobber
+    connected_at). Best-effort; swallows failures.
+
+    Read-only-viewer gated: `is_readonly()` resolves False in the headless
+    `broker` cron (no Streamlit session → falls through to the `_READONLY`
+    module default, which the cron never sets True), so this costs the cron
+    nothing — but a live viewer session CAN reach this (the Account page's
+    connect/disconnect controls), and this repo's read-only-viewer model
+    relies on the db-layer guard as the backstop even if a UI gate is missed
+    (2026-08-17 review finding; see project_readonly_viewer)."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        record: dict = {"id": 1, "status": str(status)}
+        if brokerage_authorization_id is not None:
+            record["brokerage_authorization_id"] = brokerage_authorization_id
+        if connected_at is not None:
+            record["connected_at"] = connected_at
+        if last_full_sync_at is not None:
+            record["last_full_sync_at"] = last_full_sync_at
+        _client().table("snaptrade_config").upsert(record, on_conflict="id").execute()
+        return True
+    except Exception:
+        return False
+
+
+# snaptrade_pending_imports: a notification/reminder queue, NEVER a source of
+# truth (Option A trade-log flow — see plan doc). A row here becomes a real
+# `trades` row only when the user completes the Log Trade form.
+
+def load_snaptrade_pending_imports(status: str = "pending") -> list[dict]:
+    """Return pending-import rows for the given status, newest-first, or []
+    (DB offline / table missing / none). [] means "nothing pending" — a
+    real, positive result, not an unknown (the caller should not distinguish
+    this from an offline read; the Account page section simply renders
+    nothing to log, same as an empty broker account)."""
+    if not has_db():
+        return []
+    try:
+        rows = (
+            _client().table("snaptrade_pending_imports")
+            .select("id,snaptrade_txn_id,ticker,action,shares,price,trade_date,raw_json,status,fetched_at")
+            .eq("status", status)
+            .order("trade_date", desc=True).order("id", desc=True)
+            .execute().data
+        )
+        return rows or []
+    except Exception:
+        return []
+
+
+def save_snaptrade_pending_imports(rows: list[dict]) -> int:
+    """Insert new pending-import candidates (from broker_sync.classify_transactions'
+    `new_pending` list), ignoring conflicts on the snaptrade_txn_id unique
+    constraint so a re-fetch of the same activity window is a true no-op.
+
+    Deliberately NOT a merge-upsert: a plain upsert() would overwrite
+    `status` back to 'pending' on every conflicting row, silently un-logging
+    a trade the user already completed via "Log This Trade" (or un-dismissing
+    a row they dismissed) every time the cron re-syncs an overlapping window
+    — a 2026-08-17 review finding. `ignore_duplicates=True` (INSERT ... ON
+    CONFLICT DO NOTHING) makes a re-fetch touch nothing on an existing row.
+
+    Returns the number of rows attempted (not a per-row success count — this
+    is a best-effort batch write, same posture as save_holdings). Read-only-
+    viewer gated — see save_snaptrade_config's rationale; this costs the
+    cron nothing since is_readonly() resolves False there."""
+    if is_readonly(): return 0  # read-only viewer: no-op
+    if not has_db() or not rows:
+        return 0
+    records = [{
+        "snaptrade_txn_id": r["snaptrade_txn_id"],
+        "ticker":           r["ticker"],
+        "action":           r["action"],
+        "shares":           r["shares"],
+        "price":            r["price"],
+        "trade_date":       r["trade_date"],
+        "raw_json":         r.get("raw_json"),
+        "status":           "pending",
+    } for r in rows if r.get("snaptrade_txn_id")]
+    if not records:
+        return 0
+    try:
+        _client().table("snaptrade_pending_imports").upsert(
+            records, on_conflict="snaptrade_txn_id", ignore_duplicates=True,
+        ).execute()
+        return len(records)
+    except TypeError:
+        # Older supabase-py without ignore_duplicates support (same compat
+        # path as save_recommendations) — insert one at a time, treating a
+        # unique-violation on an existing row as "already recorded", not a
+        # failure, rather than falling back to a status-clobbering upsert.
+        saved = 0
+        for rec in records:
+            try:
+                _client().table("snaptrade_pending_imports").insert(rec).execute()
+                saved += 1
+            except Exception as e2:
+                _err = str(e2)
+                if "snaptrade_txn_id" in _err and (
+                    "duplicate key" in _err or "23505" in _err
+                ):
+                    continue
+        return saved
+    except Exception:
+        return 0
+
+
+def mark_snaptrade_pending_import_logged(pending_id) -> bool:
+    """Flip one pending-import row to status='logged' after the user saves
+    its pre-filled Log Trade form. USER-triggered write → honours the
+    read-only viewer guard. Best-effort; swallows failures."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        _client().table("snaptrade_pending_imports").update(
+            {"status": "logged"}
+        ).eq("id", pending_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+def backfill_trade_broker_txn_id(trade_id, broker_txn_id: str) -> bool:
+    """Attach a SnapTrade transaction id onto an EXISTING trades row that
+    content-matched but had no broker_txn_id yet (broker_sync.
+    classify_transactions' Tier-2 dedup — e.g. a trade originally entered via
+    F-87 CSV import). Called by the `broker` cron lane, never by a live
+    viewer session directly, but gated anyway (same reasoning as
+    save_snaptrade_config: costs the cron nothing, closes the write path for
+    any future caller). Best-effort; swallows failures — a missed backfill
+    just means Tier-2 content-match runs again next sync, not data loss."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        _client().table("trades").update(
+            {"broker_txn_id": str(broker_txn_id)}
+        ).eq("id", trade_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+# snaptrade_income_events: dividends/interest/fees — DISPLAY/TREND ONLY.
+# Deliberately never read by account.py's Modified Dietz return math.
+
+def load_snaptrade_income_events(since_date: str | None = None) -> list[dict]:
+    """Return income events (dividend/interest/fee), oldest-first, optionally
+    filtered to event_date >= since_date, or [] (DB offline / table missing /
+    none yet). [] means "no events in range" — never distinguished from
+    offline by callers; this feeds a trend chart, not a gate."""
+    if not has_db():
+        return []
+    try:
+        q = (
+            _client().table("snaptrade_income_events")
+            .select("id,event_type,ticker,amount,event_date,fetched_at")
+        )
+        if since_date:
+            q = q.gte("event_date", since_date)
+        rows = q.order("event_date", desc=False).execute().data
+        return rows or []
+    except Exception:
+        return []
+
+
+def save_snaptrade_income_events(rows: list[dict]) -> int:
+    """Insert new income-event rows (from broker_sync.classify_transactions'
+    `income_events` list). No unique constraint on this table (an income
+    event has no stable SnapTrade id in the activity payload the way a trade
+    does) — the caller (the `broker` cron lane) is responsible for only
+    passing events from the bounded sync window, so a normal daily sync
+    cadence won't re-insert the same event twice in practice; occasional
+    duplicates here only affect the display trend chart, never a gate or a
+    return calculation. Returns the number of rows attempted. Read-only-
+    viewer gated — see save_snaptrade_config's rationale; this costs the
+    cron nothing since is_readonly() resolves False there."""
+    if is_readonly(): return 0  # read-only viewer: no-op
+    if not has_db() or not rows:
+        return 0
+    try:
+        records = [{
+            "event_type": r["event_type"],
+            "ticker":     r.get("ticker"),
+            "amount":     r["amount"],
+            "event_date": r["event_date"],
+        } for r in rows]
+        _client().table("snaptrade_income_events").insert(records).execute()
+        return len(records)
+    except Exception:
+        return 0
 
 
 # ── Multi-Agent Debate — Bull vs Bear day-cache (ticker × debate_type × date) ─

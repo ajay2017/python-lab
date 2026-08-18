@@ -245,6 +245,8 @@ from stock_analyzer import regime_stress
 from stock_analyzer import catalyst_stress
 from stock_analyzer import thesis_cluster
 from stock_analyzer import missed_opportunity
+from stock_analyzer import broker_sync
+from stock_analyzer import snaptrade_client
 from stock_analyzer.account import (
     net_contributed_capital, account_growth, has_baseline,
     baseline_anchor, money_weighted_return, build_equity_timeseries,
@@ -21855,7 +21857,16 @@ elif page == "📒 Trade Journal":
     # pre-filled shares while the user is mid-edit. We keep the prefill
     # around until the trade is successfully recorded (popped below in the
     # submit handler), so every form reset re-applies the same values.
-    prefill = st.session_state.get("_tj_prefill", {})
+    #
+    # SnapTrade broker-import prefill (Option A flow, docs/plans/
+    # snaptrade-broker-integration.md) takes priority over a leftover
+    # recommendation prefill — same shape ({ticker, action, shares, price}),
+    # plus trade_date/snaptrade_txn_id/pending_id the record-construction and
+    # confirm-click blocks below read directly. `_is_broker_trade` gates the
+    # locked-field / bypassed-sanity-check / retrospective-premortem UI.
+    _broker_prefill = st.session_state.get("_tj_broker_prefill")
+    _is_broker_trade = bool(_broker_prefill)
+    prefill = _broker_prefill or st.session_state.get("_tj_prefill", {})
 
     # ── Consume _pending values stashed by _render_trade_button ──────────────
     # These flow Analysis → Trade Journal across navigation. Writing to the
@@ -21922,6 +21933,10 @@ elif page == "📒 Trade Journal":
                           disabled=st.session_state.get("_readonly", False)):
             _ps_saved = db.save_trade(_pending_sell)
             if _ps_saved or not db.has_db():
+                _ps_broker_pid = st.session_state.pop("_tj_pending_broker_id", None)
+                if _ps_broker_pid is not None:
+                    db.mark_snaptrade_pending_import_logged(_ps_broker_pid)
+                    st.session_state.pop("_tj_broker_prefill", None)
                 if not db.has_db():
                     _ps_new_row = pd.DataFrame([{**_pending_sell, "id": None, "traded_at": datetime.now().isoformat()}])
                     st.session_state.trades_df = pd.concat(
@@ -21977,6 +21992,12 @@ elif page == "📒 Trade Journal":
                 "price":  _ps_price,
             }
             st.session_state.pop("_tj_pending_sell", None)
+            # Cancelling a broker-sourced confirmation also unlocks the form
+            # (2026-08-17 review finding) — otherwise the locked fields would
+            # persist even though _tj_pending_sell is gone, with no visible
+            # way to actually edit anything.
+            st.session_state.pop("_tj_pending_broker_id", None)
+            st.session_state.pop("_tj_broker_prefill", None)
             st.rerun()
 
     # ── BUY confirmation card ──────────────────────────────────────────────
@@ -22009,6 +22030,10 @@ elif page == "📒 Trade Journal":
                           disabled=st.session_state.get("_readonly", False)):
             _pb_saved = db.save_trade(_pending_buy)
             if _pb_saved or not db.has_db():
+                _pb_broker_pid = st.session_state.pop("_tj_pending_broker_id", None)
+                if _pb_broker_pid is not None:
+                    db.mark_snaptrade_pending_import_logged(_pb_broker_pid)
+                    st.session_state.pop("_tj_broker_prefill", None)
                 st.session_state["_tj_thesis_loaded_for"] = None
                 st.session_state.pop("_tj_thesis_draft_text", None)
                 st.session_state.pop("_tj_thesis_draft_for", None)
@@ -22137,6 +22162,9 @@ elif page == "📒 Trade Journal":
                 "price":  _pb_price,
             }
             st.session_state.pop("_tj_pending_buy", None)
+            # See the matching SELL-cancel comment above — unlock the form.
+            st.session_state.pop("_tj_pending_broker_id", None)
+            st.session_state.pop("_tj_broker_prefill", None)
             st.rerun()
 
     trades_df = st.session_state.get("trades_df", db.load_trades())
@@ -22145,6 +22173,36 @@ elif page == "📒 Trade Journal":
     _tj_tab_log, _tj_tab_perf, _tj_tab_hist = st.tabs(["📝 Log Trade", "📊 Performance", "📋 History"])
 
     with _tj_tab_log:
+        if _is_broker_trade:
+            # Option A trade-log flow (docs/plans/snaptrade-broker-integration.md,
+            # docs/mockups/broker-sync-trade-log-flow.html): mechanical fields
+            # (ticker/action/shares/price/date) come straight from the broker
+            # fill and are LOCKED — the user still writes the decision
+            # documentation (thesis/pre-mortem) below. This never auto-writes
+            # `trades`; it only pre-fills the same interactive form + confirm
+            # step every other trade goes through.
+            st.markdown(
+                "<div style='background:#0d2438;border:1px solid #0ea5e9;"
+                "border-left:4px solid #0ea5e9;border-radius:8px;"
+                "padding:10px 16px;margin:8px 0;color:#bae6fd'>"
+                "🏦 <b>Logging a Robinhood trade</b> (synced via SnapTrade) — "
+                "ticker, action, shares, price, and date are locked from your "
+                "broker's fill. Decision context is auto-captured now, at save "
+                "time — not at the moment the order actually filled."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            # Escape hatch (2026-08-17 review finding): without this, a user
+            # who clicks "Log This Trade →" and changes their mind has no way
+            # out — every mechanical field is locked, so this permanently
+            # freezes the Log Trade tab to the stale broker record until they
+            # either complete it (including the pre-mortem) or reload the
+            # app. Abandoning here leaves the pending-import row 'pending' —
+            # it stays in the queue, safe to log later.
+            if st.button("✗ Not now — unlock the form", key="_tj_broker_abandon"):
+                st.session_state.pop("_tj_broker_prefill", None)
+                st.session_state.pop("_tj_pending_broker_id", None)
+                st.rerun()
         # ── Action + Ticker live OUTSIDE the form so changes trigger a rerun
         # and cost basis can be auto-looked-up before the form renders.
         _tx_c1, _tx_c2 = st.columns([1, 2])
@@ -22153,11 +22211,13 @@ elif page == "📒 Trade Journal":
                 "Action", ["BUY", "SELL"], horizontal=True,
                 key="_tj_action",
                 index=0 if st.session_state.get("_tj_action", _prefill_action) == "BUY" else 1,
+                disabled=_is_broker_trade,
             )
         with _tx_c2:
             st.text_input(
                 "Ticker", placeholder="e.g. CRWV",
                 key="_tj_ticker",
+                disabled=_is_broker_trade,
             )
 
         # Reactive cost-basis lookup — runs on every rerun after ticker/action change
@@ -22210,22 +22270,37 @@ elif page == "📒 Trade Journal":
         _market_price = _market_price_for(_live_ticker) if _live_ticker else None
 
         # ── Sanity-check overrides (outside the form so they persist across reruns) ──
-        st.caption("Sanity-check overrides — tick only when intentionally logging a backfill, historical, or unusual trade:")
-        st.checkbox(
-            "Allow unusual price (±50% off market — historical/split-adjusted/delisted)",
-            key="_tj_override_price",
-            help="Skips the price-typo guard (e.g. $0.01 vs $565). Use for backfills or split-adjusted entries.",
-        )
-        st.checkbox(
-            "Allow unrecognized ticker (symbol can't be resolved — historical/delisted)",
-            key="_tj_override_ticker",
-            help="Skips the ticker-existence check. Use for delisted symbols or tickers not in the scanner universe.",
-        )
-        st.checkbox(
-            "Allow SELL without a matching holding (historical trade before app was used)",
-            key="_tj_override_sell",
-            help="Skips the check that blocks selling a ticker you don't currently hold. Use only for pre-app backfills.",
-        )
+        # Broker-confirmed data (SnapTrade) bypasses these entirely, same
+        # precedent as the F-87 CSV importer: "Imported prices are real
+        # broker fills → the interactive form's price-sanity/ticker-existence
+        # guards are intentionally NOT applied" (broker_import.py). Force the
+        # three override flags True so the gates below never fire, and show
+        # a caption explaining why instead of the interactive checkboxes.
+        if _is_broker_trade:
+            st.session_state["_tj_override_price"]  = True
+            st.session_state["_tj_override_ticker"] = True
+            st.session_state["_tj_override_sell"]   = True
+            st.caption(
+                "🔒 Broker-confirmed data — price/ticker/holding sanity checks are "
+                "skipped for SnapTrade-synced trades, same as a CSV import."
+            )
+        else:
+            st.caption("Sanity-check overrides — tick only when intentionally logging a backfill, historical, or unusual trade:")
+            st.checkbox(
+                "Allow unusual price (±50% off market — historical/split-adjusted/delisted)",
+                key="_tj_override_price",
+                help="Skips the price-typo guard (e.g. $0.01 vs $565). Use for backfills or split-adjusted entries.",
+            )
+            st.checkbox(
+                "Allow unrecognized ticker (symbol can't be resolved — historical/delisted)",
+                key="_tj_override_ticker",
+                help="Skips the ticker-existence check. Use for delisted symbols or tickers not in the scanner universe.",
+            )
+            st.checkbox(
+                "Allow SELL without a matching holding (historical trade before app was used)",
+                key="_tj_override_sell",
+                help="Skips the check that blocks selling a ticker you don't currently hold. Use only for pre-app backfills.",
+            )
 
         # ── Decision Context — outside form so followed_signal can gate fields ──
         # Pre-fill signal_seen from current portfolio signal if ticker is held
@@ -22597,6 +22672,19 @@ elif page == "📒 Trade Journal":
                 st.session_state.pop("_tj_premortem_commitment", None)
                 st.session_state["_tj_premortem_commitment_for"] = _pm_tk
 
+            if _is_broker_trade:
+                st.markdown(
+                    "<div style='background:#241436;border:1px solid #a855f7;"
+                    "border-left:4px solid #a855f7;border-radius:8px;"
+                    "padding:10px 16px;margin:8px 0;color:#e9d5ff'>"
+                    "🔮 <b>Retrospective Pre-Mortem</b> — this trade already "
+                    "happened at your broker. Write what would have made you "
+                    "wrong <b>at the moment you decided</b> to buy, not what "
+                    "you know now. Still required — the discipline is in "
+                    "writing it down, whenever that happens."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
             st.text_area(
                 "🖊️ What would make me wrong about this? (required before this Buy can be recorded)",
                 key="_tj_premortem_commitment",
@@ -22637,12 +22725,14 @@ elif page == "📒 Trade Journal":
                     "Shares", min_value=0.001,
                     value=float(prefill.get("shares", 1)),
                     step=1.0, format="%.3f",
+                    disabled=_is_broker_trade,
                 )
             with f_col5:
                 price_val = st.number_input(
                     "Price per share ($)", min_value=0.01,
                     value=float(prefill.get("price", 0.01)),
                     step=0.01, format="%.2f",
+                    disabled=_is_broker_trade,
                 )
                 if _market_price:
                     _mp_delta_str = ""
@@ -23097,11 +23187,24 @@ elif page == "📒 Trade Journal":
                     "premortem_trigger_price":     _pmt_trigger_price,
                     "premortem_trigger_direction": _pmt_trigger_direction,
                 }
+                # SnapTrade dedup key + the real broker fill date. Only set
+                # when this is a broker-sourced trade — every other write
+                # path (manual entry) omits these keys entirely so `traded_at`
+                # keeps defaulting to the DB's now() and `broker_txn_id` stays
+                # NULL, exactly as before this feature existed.
+                if _is_broker_trade:
+                    record["broker_txn_id"] = _broker_prefill.get("snaptrade_txn_id")
+                    record["traded_at"]     = _broker_prefill.get("trade_date")
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 if action == "SELL":
                     st.session_state["_tj_pending_sell"] = record
                 else:
                     st.session_state["_tj_pending_buy"] = record
+                # Carried alongside the staged record (not part of it, so it's
+                # never sent to save_trade) — the snaptrade_pending_imports row
+                # to flip to 'logged' once this record actually saves.
+                if _is_broker_trade:
+                    st.session_state["_tj_pending_broker_id"] = _broker_prefill.get("pending_id")
                 st.rerun()
 
 
@@ -28264,6 +28367,265 @@ elif page == "💰 Account":
                 )
         st.markdown(_t_narr)
 
+    # ── ⚡ Broker Sync (SnapTrade — Robinhood) ───────────────────────────────
+    # docs/plans/snaptrade-broker-integration.md. Three capabilities:
+    # (1) balance sync writes account_cash via the `broker` cron lane — the
+    #     figures at the TOP of this page already reflect it once synced;
+    #     nothing new to render for the number itself here, just connection
+    #     state; (2) position drift is LIVE-computed right here on every
+    #     render (never cached/cron-written — that's the deliberate design,
+    #     not a gap), awareness only, never gates, never auto-corrects
+    #     `trades`; (3) transaction import is a review queue
+    #     (snaptrade_pending_imports) — Option A: never auto-written to
+    #     `trades`, only pre-fills the Trade Journal's Log Trade form (see
+    #     that page's `_tj_broker_prefill` handling).
+    st.markdown("---")
+    st.markdown("### ⚡ Broker Sync")
+    st.caption(
+        "Robinhood synced via SnapTrade — balance, position drift, and pending "
+        "trade imports. Supplements (doesn't replace) manual Trade Journal entry "
+        "and the 📋 Paste history CSV import."
+    )
+
+    _snap_config = db.load_snaptrade_config()
+    _snap_status = (_snap_config or {}).get("status", "disconnected")
+    _snap_has_creds = snaptrade_client.has_snaptrade()
+    _snap_connected = _snap_has_creds and _snap_status == "connected"
+    # Distinguish "credentials set, first cron sync hasn't landed yet" from
+    # "genuinely never set up" — otherwise a user who already added Railway
+    # env vars and is just waiting for the next `broker` cron fire would see
+    # the full registration flow again and could click "Register with
+    # SnapTrade" a second time, creating a needless duplicate SnapTrade user.
+    _snap_awaiting_first_sync = _snap_has_creds and not _snap_connected
+
+    if _snap_awaiting_first_sync:
+        st.info(
+            "⏳ **Credentials set — waiting for the first sync.** "
+            "`SNAPTRADE_USER_ID`/`SNAPTRADE_USER_SECRET` are configured; this "
+            "connects on the next `broker` cron run. Check 🩺 System Trust for "
+            "the `broker` lane's heartbeat if this persists."
+        )
+    elif not _snap_connected:
+        st.info(
+            "🔌 **Not connected.** SnapTrade bridges Robinhood to this app for "
+            "automated balance sync and transaction import.\n\n"
+            "**One-time setup** (credentials live as Railway environment "
+            "variables, never in this app's database):\n\n"
+            "1. Create a SnapTrade account at snaptrade.com and add your "
+            "`CLIENT_ID` / `CONSUMER_KEY` to Railway → Variables as "
+            "`SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY`, then redeploy.\n"
+            "2. Come back here after the redeploy and click **Register with "
+            "SnapTrade** below.\n"
+            "3. SnapTrade issues a `USER_SECRET` — shown **once**, right here. "
+            "Copy it (and the `USER_ID` shown alongside it) into Railway → "
+            "Variables as `SNAPTRADE_USER_ID` / `SNAPTRADE_USER_SECRET`.\n"
+            "4. Open the connection link shown to log into Robinhood via "
+            "SnapTrade's portal. Redeploy once more — sync starts on the next "
+            "`broker` cron run.\n\n"
+            "⚠️ Only click **Register with SnapTrade** once — the `USER_SECRET` "
+            "is issued a single time. If you lose it before copying it to "
+            "Railway, you'll need to delete the SnapTrade user and re-register."
+        )
+        _snap_setup = st.session_state.get("_snap_setup_result")
+        if not db.is_readonly():
+            if st.button("Register with SnapTrade", key="_snap_register_btn"):
+                _snap_user_id = "drishta"
+                _snap_secret = snaptrade_client.register_user(_snap_user_id)
+                if _snap_secret is None:
+                    st.error(
+                        "⛔ Couldn't reach SnapTrade — check `SNAPTRADE_CLIENT_ID` / "
+                        "`SNAPTRADE_CONSUMER_KEY` are set in Railway → Variables."
+                    )
+                else:
+                    _snap_portal_url = snaptrade_client.get_connection_portal_url(
+                        _snap_user_id, _snap_secret
+                    )
+                    st.session_state["_snap_setup_result"] = {
+                        "user_id": _snap_user_id,
+                        "user_secret": _snap_secret,
+                        "portal_url": _snap_portal_url,
+                    }
+                    db.save_snaptrade_config(status="pending_env_vars")
+                    st.rerun()
+        if _snap_setup:
+            st.warning(
+                "⚠️ **This USER_SECRET is shown once — copy it now.** It will not "
+                "be displayed again after you navigate away."
+            )
+            st.code(
+                f"SNAPTRADE_USER_ID={_snap_setup['user_id']}\n"
+                f"SNAPTRADE_USER_SECRET={_snap_setup['user_secret']}"
+            )
+            if _snap_setup.get("portal_url"):
+                st.link_button("🔗 Connect Robinhood via SnapTrade", _snap_setup["portal_url"])
+            else:
+                st.caption(
+                    "⚠️ Couldn't get a connection link this time — the USER_ID/"
+                    "USER_SECRET above are still valid; revisit this page after "
+                    "adding them to Railway to retry the connection link."
+                )
+    else:
+        _snap_last_sync = (_snap_config or {}).get("last_full_sync_at")
+        st.success(
+            "✅ **Connected to Robinhood via SnapTrade.**"
+            + (f"  Last synced: {str(_snap_last_sync)[:16].replace('T', ' ')} UTC"
+               if _snap_last_sync else "  Waiting for the first `broker` cron sync.")
+        )
+        if _cash is not None and _acct and _acct.get("updated_at"):
+            try:
+                from stock_analyzer.market_time import now_et as _snap_now_et
+                from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
+                import pytz as _snap_pytz
+                _snap_updated = datetime.fromisoformat(str(_acct["updated_at"]).replace("Z", "+00:00"))
+                if _snap_updated.tzinfo is None:
+                    _snap_updated = _snap_pytz.utc.localize(_snap_updated)
+                _snap_age_hrs = (_snap_now_et().astimezone(_snap_pytz.utc) - _snap_updated).total_seconds() / 3600.0
+                if _snap_age_hrs > SNAPTRADE_BALANCE_STALE_HOURS:
+                    st.warning(
+                        f"🟡 Balance is {_snap_age_hrs/24:.1f} day(s) stale — the `broker` "
+                        "cron lane may be behind. Check 🩺 System Trust."
+                    )
+            except Exception:
+                pass
+
+        # ── Position drift — LIVE compute, awareness only ────────────────────
+        # Short TTL cache (not a long-lived staleness like account_cash) —
+        # cheap insurance against a slow/rate-limited SnapTrade call stalling
+        # every single Account-page rerun (2026-08-17 review, non-blocking).
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _snap_cached_accounts():
+            return snaptrade_client.list_accounts()
+
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _snap_cached_positions(_account_id: str):
+            # Leading underscore opts _account_id out of Streamlit's cache-key
+            # hashing — harmless today (exactly one linked account, per the
+            # plan's single-user scope), but would cache-collide across
+            # accounts if multi-account sync is ever built. Revisit then.
+            return snaptrade_client.get_account_positions(_account_id)
+
+        st.markdown("#### 🔍 Position Drift")
+        _snap_accounts = _snap_cached_accounts()
+        if _snap_accounts is None:
+            st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
+        elif not _snap_accounts:
+            st.caption("No Robinhood account linked yet.")
+        elif not _have_pf:
+            # An empty stub here would make every RH position surface as
+            # "Robinhood-only" — false drift, not a real signal. Skip the
+            # check entirely rather than diff against an unloaded portfolio
+            # (2026-08-17 review finding).
+            st.caption("⚠️ Drift check unavailable — portfolio not loaded (open 🏠 Home first).")
+        else:
+            _snap_account_id = _snap_accounts[0].get("id")
+            _snap_positions = _snap_cached_positions(_snap_account_id)
+            # Diff against RAW holdings (st.session_state.holdings_df), NOT
+            # the enriched _acc_pdf — build_portfolio_df stores "Shares" as
+            # int(shares) for display, so a fractional Robinhood holding
+            # (e.g. 10.5 shares) would show a permanent phantom qty_mismatch
+            # against the truncated value (2026-08-17 review finding: this
+            # is exactly the case BROKER_DRIFT_SHARE_TOL exists to absorb,
+            # but truncation is orders of magnitude larger than the tolerance).
+            _snap_holdings_raw = st.session_state.get("holdings_df")
+            _snap_drift = broker_sync.diff_positions(_snap_positions, _snap_holdings_raw)
+            if _snap_drift is None:
+                st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
+            else:
+                _sd1, _sd2, _sd3 = st.columns(3)
+                with _sd1:
+                    st.markdown("**Robinhood-only** (missing BUY?)")
+                    if _snap_drift["rh_only"]:
+                        for _r in _snap_drift["rh_only"]:
+                            st.caption(f"• {_r['ticker']} — {_r['shares']:g} sh")
+                    else:
+                        st.caption("✓ none")
+                with _sd2:
+                    st.markdown("**App-only** (missing SELL?)")
+                    if _snap_drift["app_only"]:
+                        for _r in _snap_drift["app_only"]:
+                            st.caption(f"• {_r['ticker']} — {_r['shares']:g} sh")
+                    else:
+                        st.caption("✓ none")
+                with _sd3:
+                    st.markdown("**Qty mismatch**")
+                    if _snap_drift["qty_mismatch"]:
+                        for _r in _snap_drift["qty_mismatch"]:
+                            st.caption(f"• {_r['ticker']} — RH {_r['rh_shares']:g} vs app {_r['app_shares']:g}")
+                    else:
+                        st.caption("✓ none")
+                st.caption(
+                    "Awareness only — drift is never auto-corrected. Reconcile via the "
+                    "Trade Journal (missing trade) or the Portfolio page (share-count fix)."
+                )
+
+        # ── Pending Imports — Option A: never auto-written to `trades` ───────
+        st.markdown("#### 📥 Pending Imports")
+        _snap_pending = db.load_snaptrade_pending_imports("pending")
+        if not _snap_pending:
+            st.caption("✓ No pending imports.")
+        else:
+            for _pi in _snap_pending:
+                _pi_c1, _pi_c2 = st.columns([4, 1])
+                with _pi_c1:
+                    st.write(
+                        f"⏳ **{_pi['action']} {_pi['shares']:g} {_pi['ticker']}** "
+                        f"@ ${_pi['price']:,.2f} on {_pi['trade_date']}"
+                    )
+                with _pi_c2:
+                    if st.button("Log This Trade →", key=f"_snap_log_{_pi['id']}"):
+                        st.session_state["_tj_broker_prefill"] = {
+                            "ticker": _pi["ticker"],
+                            "action": _pi["action"],
+                            "shares": _pi["shares"],
+                            "price": _pi["price"],
+                            "trade_date": _pi["trade_date"],
+                            "snaptrade_txn_id": _pi["snaptrade_txn_id"],
+                            "pending_id": _pi["id"],
+                        }
+                        st.session_state["_pending_page"] = "📒 Trade Journal"
+                        st.rerun()
+
+        # ── Cash Activity — income events trend (display/trend ONLY; never
+        #    feeds account_flows / Modified Dietz — see plan doc) ────────────
+        st.markdown("#### 💵 Cash Activity")
+        _snap_income_since = (_today_et() - timedelta(days=270)).isoformat()
+        _snap_income = db.load_snaptrade_income_events(since_date=_snap_income_since)
+        if not _snap_income:
+            st.caption("No dividend/interest/fee events synced yet.")
+        else:
+            _sii_df = pd.DataFrame(_snap_income)
+            _sii_df["event_date"] = pd.to_datetime(_sii_df["event_date"])
+            _sii_df["month"] = _sii_df["event_date"].dt.to_period("M").dt.to_timestamp()
+            _sii_piv = (
+                _sii_df.groupby(["month", "event_type"])["amount"]
+                .sum().unstack(fill_value=0.0)
+            )
+            import plotly.graph_objects as _sii_pgo
+            _sii_colors = {"dividend": "#22c55e", "interest": "#3b82f6", "fee": "#ef4444"}
+            _sii_fig = _sii_pgo.Figure()
+            for _et in ("dividend", "interest", "fee"):
+                if _et in _sii_piv.columns:
+                    _sii_fig.add_trace(_sii_pgo.Bar(
+                        x=_sii_piv.index, y=_sii_piv[_et].abs(),
+                        name=_et.title(), marker_color=_sii_colors[_et],
+                    ))
+            _sii_fig.update_layout(
+                barmode="stack", height=260,
+                margin=dict(l=0, r=0, t=20, b=0),
+                legend=dict(orientation="h", y=1.15, x=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(tickprefix="$", gridcolor="rgba(128,128,128,0.15)"),
+            )
+            st.plotly_chart(_sii_fig, use_container_width=True)
+            _sii_ytd = _sii_df[_sii_df["event_date"].dt.year == _today_et().year]
+            _sii_div_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "dividend", "amount"].sum()
+            _sii_int_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "interest", "amount"].sum()
+            _sii_fee_ytd = _sii_ytd.loc[_sii_ytd["event_type"] == "fee", "amount"].sum()
+            st.caption(
+                f"YTD: **+${_sii_div_ytd:,.2f}** dividends · **+${_sii_int_ytd:,.2f}** "
+                f"interest · **-${abs(_sii_fee_ytd):,.2f}** fees"
+            )
+
 elif page == "🔔 Catalyst Watch":
     _fill_news_slot(_news_slot, st.session_state.get("_sidebar_news", []))
     st.title("🔔 Catalyst Watch")
@@ -29819,6 +30181,13 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **When you deposit or withdraw:** also log it as a flow under Growth & Contributions so growth stays honest. (A plain trade is **not** a flow — only money moving in/out of the account is.)
 
 **Your built-in sync check:** the app's **Total Account Value** should match your broker's total portfolio value, within a few dollars of quote timing. The precise test is **broker Total − your stock value = the net cash you entered.** Only two things can break it: an **unlogged trade** (equity is off) or a **stale cash figure** (cash is off) — fix whichever side is wrong. If the app reads *higher* than your broker, the gap is usually a margin balance you haven't entered as a negative number. Everything is advisory and view-only — nothing here ever places a trade.
+
+**4. ⚡ Broker Sync (optional) — automates the two manual habits above for Robinhood.** Scroll to the bottom of the 💰 Account page for the "⚡ Broker Sync" section, which connects Robinhood via **SnapTrade** (a middleman service — the app never sees your Robinhood login). Once connected, a background job keeps your **cash balance** current automatically, and shows:
+- **Position drift** — a live comparison of what Robinhood actually holds vs. what's logged in this app (three buckets: Robinhood-only, App-only, quantity mismatches). Awareness only — it never edits your trades or holdings for you; you reconcile it yourself the same way you always have.
+- **Pending trade imports** — buy/sell activity Robinhood reports that isn't in your Trade Journal yet. Nothing is written automatically: each row has a **"Log This Trade →"** button that opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. A ✗ button lets you back out of a locked import at any point without logging it.
+- **Cash Activity** — a monthly trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log).
+
+Setup is a one-time, four-step process shown on the page itself (it needs a SnapTrade account and a couple of Railway environment variables — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
 """
             )
 
@@ -29827,7 +30196,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
                 """
 - **🏠 Home** — Today's Brief: the daily decision summary, followed by the Evening Debrief and AI Snapshot sections. Below the live price strip, a **⚠️ Day Shock banner** flags any held ticker that's moved 5% or more today (up or down) with a red/green chip — pure awareness, shown only on a day it actually happens, and it never changes a recommendation or the deterioration Watch/Trim/Exit tier on its own. Behind the scenes, every held position's price is quietly cross-checked against an independent data source; if they disagree beyond a safe tolerance a red banner names the ticker so you know to verify against your broker before trusting a stop or your P&L. If that same disagreement has been growing since the last time it was checked, the banner now says so ("widened from X% to Y% since `<date>`") — a first-time integrity fault reads differently from one that's been quietly getting worse. A **🧬 Structural alert banner** flags a newly-formed correlation cluster among your holdings since your last 🧬 Structural Scan (see 🧩 Intelligence below) — shown only when a genuinely new pairing has formed, never on a cluster that's merely still there or one that's lost a member. Awareness only, same as Day Shock.
 - **🧾 Summary** — a lean, single-screen view of portfolio state + today's actions. **8 KPI tiles** (Portfolio Value, Unrealized P&L, Today's P&L, **Alpha vs SPY**, Avg Score, Diversification, Best/Worst) — Alpha vs SPY sits in tile 4 where Alerts used to be; Alerts detail lives on 📡 Signals & Advice. Alpha shows "n/a" when a trade during the window means the equity-level return is flow-inflated (the precise money-weighted read is on 💰 Account → Capital Trend). A slim **Act Today** strip below the KPI row shows the count + first item and links to 🏠 Home for the full detail — the same `split_defensive()` call as Home, so it can never under-report. A **2×2 pointer grid** ("🧭 Elsewhere in DRISHTA") shows four cards: **🎯 Engine Track Record** (hero — top-left: whether acting on the app's new-position calls has beaten SPY, same data as 📜 Recommendations History "All time" row, cached for the day), **🩺 Thesis Review** (top-right: how many held names' review needs attention, never a second verdict), **🔔 Catalyst Watch** (bottom-left: holdings reporting earnings within the week), and **🔗 Risk Posture** (bottom-right: the market-risk posture dial, never a second independent verdict). Full Holdings table at the bottom. Reads the same data Home already computed this session — visit 🏠 Home first if this page shows "needs today's Brief."
-- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above).
+- **💰 Account** — your account-level view: cash/margin, total value, true concentration, growth & return, and the **📈 Capital Trend** chart — a timeline of equity vs contributed capital with a net-value diamond that explains the gap between position-level gains and account-level return (see the section above). An optional **⚡ Broker Sync** section at the bottom connects Robinhood via SnapTrade for automated cash sync, live position-drift awareness, and a reviewable trade-import queue (see the section above).
 - **🔍 Market Scanner** — scans the universe for momentum/breakout candidates.
 - **📈 Analysis** — full scorecard + trade plan for any ticker (entry zone, stop, sizing, R:R).
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.

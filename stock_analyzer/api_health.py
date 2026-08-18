@@ -48,6 +48,7 @@ _stats: dict = {
     "finnhub":       _blank(),
     "fred":          _blank(),
     "supabase":      _blank(),
+    "snaptrade":     _blank(),
 }
 
 

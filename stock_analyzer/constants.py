@@ -1515,3 +1515,35 @@ PREDICTION_MIN_MATURED_N = 20
 # one. v1 (vol_forecast_ewma) has no fitted parameters, so a 5-year backfill
 # carries no in-sample leakage risk the way a fitted model would.
 PREDICTION_BACKFILL_PERIOD = "5y"
+
+# ── SnapTrade broker integration (Robinhood sync) ─────────────────────────
+# See docs/plans/snaptrade-broker-integration.md for full design. Position
+# drift, balance sync and transaction import all read these; none of them
+# is an investment-decision gate, but they govern data-integrity behaviour
+# (staleness banners, dedup tolerance, fetch bounds) so they live here per
+# hard rule #1 rather than as module-local literals.
+
+# Share-count tolerance before diff_positions() flags a held ticker as a
+# "qty mismatch" rather than a match. Absorbs fractional-share rounding
+# noise from SnapTrade's position feed vs the app's trades-derived shares
+# — not a real drift signal below this size.
+BROKER_DRIFT_SHARE_TOL = 0.001
+
+# Max age of the last successful SnapTrade balance sync before the Account
+# page shows a stale-data banner rather than silently trusting an old
+# account_cash row. 25h (not 24h) mirrors the existing daily-cron-lane
+# staleness convention elsewhere (a one-hour buffer past a strict 24h cycle
+# absorbs normal cron-fire jitter without falsely flagging stale).
+SNAPTRADE_BALANCE_STALE_HOURS = 25
+
+# Bounds the broker cron's transaction-history fetch window (days back from
+# now). Prevents an unbounded historical pull on first connect or after a
+# long SnapTrade/cron outage — anything older falls outside sync scope and
+# is expected to already be in trades via manual/CSV entry.
+SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS = 90
+
+# Per-call wall-clock timeout for the SnapTrade client wrapper. Same
+# operational-cap convention as DATA_YF_REQUEST_TIMEOUT_SEC — bounds a
+# single hung call so the broker cron lane can fail loud instead of
+# blocking the job budget.
+SNAPTRADE_REQUEST_TIMEOUT_SEC = 15

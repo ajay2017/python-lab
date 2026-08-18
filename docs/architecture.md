@@ -448,6 +448,10 @@ before tuning. See §6.29 (`judgment_opinions` table) and
 | `VOL_FORECAST_EWMA_LAMBDA` | 0.94 | Predictive Modeling Shadow Layer — RiskMetrics' fixed EWMA decay factor for the v1 volatility forecaster (`vol_forecast.forecast_vol_ewma`). NOT fitted to this app's data — a classical constant, so v1 carries no backtest-leakage risk the way a fitted model (GARCH-MLE, gradient-boosted trees) would if it were ever backfilled. Model parameter, not a gate. |
 | `PREDICTION_MIN_MATURED_N` | 20 | Predictive Modeling Shadow Layer — minimum matured (`realized_value` populated) `model_predictions` rows before `prediction_scoring.score_predictions()` reports a real `skill_score` number; below this, skill is withheld (`None`), same "not yet meaningful" discipline as `ENGINE_TRACK_MIN_CALLS`/`BEHAVIORAL_MIN_SAMPLE_N` elsewhere. Also reused (deliberately, not a parallel constant) as the floor for `skill_score_live_only`, so a headline skill number can't be inflated by a handful of live rows behind a mostly-backfilled sample. Measurement floor only — never a decision gate. |
 | `PREDICTION_BACKFILL_PERIOD` | "5y" | Predictive Modeling Shadow Layer — depth of `scripts/backfill_vol_predictions.py`'s price-history fetch, per-ticker scope only (PORTFOLIO-scope backfill needs actual historical weights, bounded to known `trades` history, not 5 years — deliberately not built). Matches the existing `MC_HISTORY_PERIOD` constant/fetch-path precedent (Outcome Range simulator) rather than inventing a new one. |
+| `BROKER_DRIFT_SHARE_TOL` | 0.001 | SnapTrade broker integration (`stock_analyzer/broker_sync.py`, `docs/plans/snaptrade-broker-integration.md`) — share-count tolerance below which `diff_positions()` treats a held ticker as matching rather than a "qty mismatch," absorbing fractional-share rounding noise between SnapTrade's live position feed and the app's `trades`-derived shares. Data-integrity tuning, not an investment threshold. |
+| `SNAPTRADE_BALANCE_STALE_HOURS` | 25 | SnapTrade broker integration — max age of the last successful SnapTrade balance sync before the 💰 Account page shows a stale-data banner rather than trusting an old `account_cash` row. 25h (not 24h) mirrors the existing daily-cron-lane staleness convention elsewhere, absorbing normal cron-fire jitter past a strict 24h cycle. Display-only staleness gate. |
+| `SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS` | 90 | SnapTrade broker integration — bounds the `broker` cron lane's transaction-history fetch window (days back from now). Prevents an unbounded historical pull on first connect or after a long SnapTrade/cron outage; anything older is expected to already be in `trades` via manual/CSV entry. Data-integrity/operational bound, not an investment threshold. |
+| `SNAPTRADE_REQUEST_TIMEOUT_SEC` | 15 | SnapTrade broker integration — per-call wall-clock timeout for `stock_analyzer/snaptrade_client.py`. Same operational-cap convention as `DATA_YF_REQUEST_TIMEOUT_SEC` — bounds a single hung SnapTrade call so the `broker` cron lane fails loud instead of blocking the job budget. |
 
 ### 4.0.2 Cross-feature coordination caches
 
@@ -823,11 +827,15 @@ CREATE TABLE trades (
     premortem_commitment   TEXT,                  -- F-187: investor's required "what would make me wrong" answer (never null on a BUY once recorded)
     premortem_trigger_price     NUMERIC,          -- F-228: raw (pre-split) price extracted from premortem_commitment, or null if not yet extracted / not checkable
     premortem_trigger_direction TEXT,             -- F-228: 'below' | 'above' | 'not_checkable' | null (null = not yet extracted, distinct from 'not_checkable')
-    traded_at        TIMESTAMPTZ DEFAULT now()
+    traded_at        TIMESTAMPTZ DEFAULT now(),
+    broker_txn_id    TEXT                          -- F-244: SnapTrade transaction id, Tier-1 dedup key (null for manual/CSV rows)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS trades_broker_txn_id_unique
+    ON trades (broker_txn_id) NULLS DISTINCT;
 ```
 
-The `signal_seen`, `followed_signal`, `deviation_reason`, `lesson`, `lesson_category` (F-195), `user_thesis` (F-1), `thesis_source` (F-5), `decision_context` (Concept E), `premortem_case_against`/`premortem_commitment` (F-187), and `premortem_trigger_price`/`premortem_trigger_direction` (F-228) columns were added after initial deployment. `db.load_trades()` backfills `None` for these columns in older rows to maintain backward compatibility. `save_trade` additionally retries the insert without whichever of `thesis_source`/`decision_context`/`premortem_case_against`/`premortem_commitment`/`premortem_trigger_price`/`premortem_trigger_direction`/`lesson_category` the DB error names, so trade logging never breaks before the one-time additive `ALTER TABLE trades ADD COLUMN ...` DDL is applied.
+The `signal_seen`, `followed_signal`, `deviation_reason`, `lesson`, `lesson_category` (F-195), `user_thesis` (F-1), `thesis_source` (F-5), `decision_context` (Concept E), `premortem_case_against`/`premortem_commitment` (F-187), `premortem_trigger_price`/`premortem_trigger_direction` (F-228), and `broker_txn_id` (F-244) columns were added after initial deployment. `db.load_trades()` backfills `None` for these columns in older rows to maintain backward compatibility. `save_trade` additionally retries the insert without whichever of `thesis_source`/`decision_context`/`premortem_case_against`/`premortem_commitment`/`premortem_trigger_price`/`premortem_trigger_direction`/`lesson_category`/`broker_txn_id` the DB error names, so trade logging never breaks before the one-time additive `ALTER TABLE trades ADD COLUMN ...` DDL is applied — **except** a `broker_txn_id` UNIQUE-violation, which is checked BEFORE that generic retry and treated as an idempotent no-op (the same transaction was already logged), so the bare-substring match on the column-degradation path can never strip the dedup key and silently insert a duplicate row (a 2026-08-17 review finding).
 
 **Pre-Commitment Enforcement (F-228 — docs/plans/premortem-enforcement.md).** Actively monitors the F-187 `premortem_commitment` free text against live price data instead of only ever quoting it back as passive narrative context (Thesis Red Team, Portfolio Q&A). `stock_analyzer/premortem_monitor.py::extract_trigger()` (Haiku, ONE-SHOT at BUY-submission time — never on every rerun, never retried) parses the commitment into a structured, checkable fact: `premortem_trigger_direction` is only ever `'below'`/`'above'` when an explicit numeric price was stated; a qualitative commitment ("if guidance disappoints") is marked `'not_checkable'` — a genuine, permanent state, not "not yet attempted" (that's the `NULL`/`NULL` state, distinguished so a transient extraction failure is never confused with "nothing to check"). `detect_premortem_triggers()` (pure Python, zero LLM cost, called once per Daily Brief build alongside `deterioration_signals()`) then compares each ticker's *currently open lot* (via the split-ratio-aware `tax_advisor._build_open_lots()`, so a sell-then-rebuy never resurfaces an unrelated closed lot's trigger, and a stock split never leaves a stale pre-split price) against its price history since that lot's `buy_date`. A trigger only fires while the **most recent daily close** is still beyond the level (self-resolving — a recovered position stops firing on its own, no acknowledge/snooze mechanism) — never "crossed at any point since BUY," which would nag forever after a recovered dip. Surfaces as a first-class `kind="premortem_triggered"` Act Today card, deliberately shown ALONGSIDE any existing WATCH/TRIM/EXIT card on the same ticker rather than merged (`_consolidate_act_today()` exempts this kind from its ticker-consolidation entirely) — the investor's own stated condition firing is a genuinely different reason from the algorithm's deterioration read. Never suppresses, gates, or modifies any recommendation.
 
@@ -1631,7 +1639,7 @@ risk the way a fitted model would.
 
 ```sql
 CREATE TABLE IF NOT EXISTS cron_heartbeat (
-    lane        TEXT PRIMARY KEY,               -- 'premarket'|'scan'|'intraday'|'eod'|'thesis'
+    lane        TEXT PRIMARY KEY,               -- 'premarket'|'scan'|'intraday'|'eod'|'thesis'|'maintenance'|'broker'
     last_run_at TIMESTAMPTZ NOT NULL,           -- ET-aware ISO timestamp of the last invocation
     status      TEXT NOT NULL DEFAULT 'ok',     -- 'ok' | 'failed'
     detail      TEXT,                           -- failure detail (truncated), NULL on success
@@ -1660,6 +1668,92 @@ returns `None` (offline sentinel) on any failure. **Reader:** the owner-only
 — which reads a lane's heartbeat as "unknown" (⚪, not degraded) when no row
 exists yet, so a freshly-applied table or a lane's first run is never a false
 alarm; only a stale-but-present timestamp (or a `status='failed'` row) degrades.
+
+### 6.33 `snaptrade_config` table
+
+```sql
+CREATE TABLE IF NOT EXISTS snaptrade_config (
+    id                         INTEGER PRIMARY KEY,   -- always 1 (single user)
+    brokerage_authorization_id TEXT,
+    status                     TEXT NOT NULL DEFAULT 'disconnected',  -- 'disconnected' | 'pending_env_vars' | 'connected' | 'error'
+    connected_at               TIMESTAMPTZ,
+    last_full_sync_at          TIMESTAMPTZ,
+    CHECK (id = 1)
+);
+
+ALTER TABLE snaptrade_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_snaptrade_config" ON snaptrade_config
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**F-244 SnapTrade broker sync** (`docs/plans/snaptrade-broker-integration.md`).
+Single-row connection-state bookkeeping — **never the `USER_SECRET` itself**,
+which SnapTrade issues once at registration and the app deliberately never
+persists (a Railway environment variable instead; see the plan's "Credential
+storage" section). `status='pending_env_vars'` is an app-set intermediate
+value (not in the schema's original 3-value comment) covering the window
+between the one-time "Register with SnapTrade" click and the `broker` cron's
+first successful sync, which flips it to `'connected'`. Ships inert until this
+DDL is applied — `load_snaptrade_config()` returns `None`, `has_snaptrade()`
+(env-credential check) is unaffected.
+
+### 6.34 `snaptrade_pending_imports` table
+
+```sql
+CREATE TABLE IF NOT EXISTS snaptrade_pending_imports (
+    id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    snaptrade_txn_id TEXT NOT NULL,
+    ticker           TEXT NOT NULL,
+    action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    shares           NUMERIC NOT NULL CHECK (shares > 0),
+    price            NUMERIC NOT NULL CHECK (price > 0),
+    trade_date       DATE NOT NULL,
+    raw_json         JSONB,
+    status           TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'logged' | 'dismissed'
+    fetched_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (snaptrade_txn_id)
+);
+
+ALTER TABLE snaptrade_pending_imports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_snaptrade_pending_imports" ON snaptrade_pending_imports
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**F-244 — a notification/reminder queue, NEVER a source of truth.** A row here
+becomes a real `trades` row only when the user completes the "Log This Trade"
+form (Option A flow); the `broker` cron never writes `trades` directly.
+`save_snaptrade_pending_imports()` deliberately does NOT merge-upsert — it
+inserts with `ignore_duplicates=True` (INSERT ... ON CONFLICT DO NOTHING) so a
+re-fetch of an overlapping sync window is a true no-op. An earlier version
+used a merge-upsert with `status` hardcoded to `'pending'`, which would have
+silently flipped an already-`'logged'` or `'dismissed'` row back to `'pending'`
+on every re-sync — caught and fixed in the 2026-08-17 review before ship.
+
+### 6.35 `snaptrade_income_events` table
+
+```sql
+CREATE TABLE IF NOT EXISTS snaptrade_income_events (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_type TEXT NOT NULL CHECK (event_type IN ('dividend', 'interest', 'fee')),
+    ticker     TEXT,             -- null for account-level interest/fees
+    amount     NUMERIC NOT NULL,
+    event_date DATE NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE snaptrade_income_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_snaptrade_income_events" ON snaptrade_income_events
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+**F-244 — display/trend ONLY.** Feeds exclusively the 💰 Account page's Cash
+Activity monthly trend chart. **Deliberately never read by
+`stock_analyzer/account.py`'s Modified Dietz return math** — a dividend or
+interest credit is performance, not a contribution, and routing it through
+`account_flows`'s `net_contributed_capital` would silently inflate NCC and
+suppress reported growth%. Only `CONTRIBUTION`/`WITHDRAWAL` SnapTrade activity
+types ever reach `account_flows`; see `stock_analyzer/broker_sync.py`'s
+`classify_transactions()`.
 
 ### `stock_analyzer/system_health.py`
 
@@ -1758,6 +1852,63 @@ the offline sentinel DO email, stating plainly that there is no verdict and why:
 silence-because-degraded is a wrong state, not health. `shelf_status()` rides
 along with a severity split: an *expired* (`down`) table emails on its own;
 merely-aging (`warn`) rows are appended only when an email is already going out.
+
+### `stock_analyzer/snaptrade_client.py`
+
+Thin wrapper over the official `snaptrade-python-sdk` (F-244, SnapTrade broker
+sync — `docs/plans/snaptrade-broker-integration.md`). Every public function
+returns `None` on any failure (missing credentials, timeout, SDK/API error) —
+never raises into caller code, matching the multi-source provider convention
+(`project_second_data_source`) rather than a bespoke error contract.
+Credentials are env-first then `st.secrets` (mirrors `db._supabase_creds()`),
+so the module works identically in the headless Railway `broker` cron and the
+Streamlit app. `SNAPTRADE_CLIENT_ID`/`SNAPTRADE_CONSUMER_KEY` are app-level;
+`SNAPTRADE_USER_ID`/`SNAPTRADE_USER_SECRET` are user-level and issued ONCE by
+SnapTrade at registration — this module never persists the secret, by design
+(see the plan's "Credential storage" section). `api_health.record("snaptrade", ...)`
+feeds 🩺 System Trust's provider-health check the same way Finnhub/FMP/Yahoo do.
+
+### `stock_analyzer/broker_sync.py`
+
+Pure transform/decision logic (no I/O) sitting between `snaptrade_client.py`
+and the `broker` cron lane / `app.py` (F-244). Three functions:
+
+**`diff_positions(rh_positions, port_df)`** — three-bucket drift (rh_only /
+app_only / qty_mismatch, tolerance `BROKER_DRIFT_SHARE_TOL`) between live
+SnapTrade positions and the app's holdings. Returns `None` (the offline
+sentinel) when `rh_positions is None`, never collapsing "couldn't read the
+broker" into "checked, no drift." Callers MUST pass **raw, untruncated**
+shares (`st.session_state.holdings_df`, not the display-enriched `port_df`,
+whose `"Shares"` column is `int()`-cast for the UI — a 2026-08-17 review
+finding: Robinhood's routine fractional-share holdings otherwise produce a
+permanent phantom `qty_mismatch`). Awareness only — never gates, never
+auto-corrects `trades`.
+
+**`map_balances_to_cash(rh_balance)`** — maps a raw SnapTrade balance payload
+to `{"cash_balance": float, "note": str}`, matching `account_cash`'s signed
+convention (negative = margin debit, the existing account-baseline v4 rule).
+`None` in → `None` out; an empty list or a missing `cash` field also returns
+`None` rather than fabricating a zero balance.
+
+**`classify_transactions(rh_txns, existing_trades)`** — classifies raw
+SnapTrade activities into `new_pending` (BUY/SELL candidates for
+`snaptrade_pending_imports`), `backfill_broker_txn_id` (a content-matched
+existing `trades` row — e.g. previously CSV-imported — that should have this
+transaction's id attached instead of becoming a duplicate pending import),
+`income_events` (dividend/interest/fee — **display/trend only**), `flows`
+(CONTRIBUTION/WITHDRAWAL only — the sole category allowed to reach
+`account_flows`), and `ignored` (a `{type: count}` transparency dict for
+everything else, e.g. TRANSFER/OPTIONEXPIRATION). **The Modified-Dietz
+invariant this function exists to protect:** `account.py`'s
+`net_contributed_capital` reads `account_flows`, and a dividend/interest
+credit is performance, not a contribution — routing it there would silently
+inflate NCC and suppress reported growth%. `_FLOW_TYPES` and `_INCOME_TYPES`
+are disjoint by construction; an unrecognized type falls to `ignored`, never
+`flows` (the safe direction). Dedup is two-tier: Tier 1 exact match on
+`trades.broker_txn_id`; Tier 2 the same `(date, ticker, action,
+round(shares,4), round(price,2))` content-match key F-87's CSV importer
+already uses, restricted to `trades` rows that don't yet carry a
+`broker_txn_id` (so an already-linked row can never be re-matched by Tier 2).
 
 ### `stock_analyzer/portfolio_health.py`
 

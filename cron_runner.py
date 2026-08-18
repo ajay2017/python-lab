@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 Headless alert cron entry point (exit-discipline Phase 3 + pullback Phase 2 +
-Today's-P&L EOD snapshot). Scheduled via 5 dedicated Railway native Cron Job
+Today's-P&L EOD snapshot). Scheduled via 7 dedicated Railway native Cron Job
 services (project `endearing-magic`: cron-premarket/cron-scan/cron-intraday/
-cron-eod/cron-thesis), migrated off GitHub Actions on 2026-08-07 after a
-platform-wide GitHub Actions incident (2026-08-06) exposed the `schedule`
-trigger's documented best-effort delivery (delayed/dropped runs under load).
-.github/workflows/alerts.yml is now workflow_dispatch-only — manual re-runs /
-ad hoc testing only, no longer the scheduled entry point. See memory
-`project_cron_railway_migration` for the full history and per-service config.
+cron-eod/cron-thesis/cron-maintenance/cron-broker), migrated off GitHub
+Actions on 2026-08-07 after a platform-wide GitHub Actions incident
+(2026-08-06) exposed the `schedule` trigger's documented best-effort delivery
+(delayed/dropped runs under load). .github/workflows/alerts.yml is now
+workflow_dispatch-only — manual re-runs / ad hoc testing only, no longer the
+scheduled entry point. See memory `project_cron_railway_migration` for the
+full history and per-service config.
 
-FIVE modes (one per ET trading day/week each):
+SEVEN modes (one per ET trading day/week each):
   • premarket (~08:00 ET) — recompute PROTECTIVE signals (stop / EXIT / risk-off)
     and email only when the action set changed. (exit-discipline Phase 3)
   • scan (~09:45 ET, post-open) — run the sector scanner headlessly and persist
@@ -25,9 +26,16 @@ FIVE modes (one per ET trading day/week each):
     have a user_thesis written at BUY entry (one LLM call per position, saves
     to thesis_reviews table; inert without ANTHROPIC_API_KEY), followed by the
     weekly debrief and (first Sunday of the month only) the monthly report.
+  • maintenance (Saturday) — idempotent reference-data backfills (analyst
+    anchor prices, vol-forecast history) plus the ticker-liveness/reference-
+    shelf sweep. Never touches a gate or the composite score.
+  • broker (any cadence the Railway service is set to) — SnapTrade (Robinhood)
+    balance sync + transaction import; dormant until the user completes the
+    one-time connect flow. Position drift is computed live in the app, not
+    here. (docs/plans/snaptrade-broker-integration.md)
 
-Mode = $ALERT_RUN_MODE if it's one of scan|intraday|thesis|debrief|monthly —
-set directly as a fixed per-service variable on the scan/intraday/thesis
+Mode = $ALERT_RUN_MODE if it's one of scan|intraday|thesis|debrief|monthly|
+maintenance|broker — set directly as a fixed per-service variable on those
 Railway services (or via the workflow_dispatch mode input on a manual GitHub
 run) — else derived from the ET hour (≥12:00 ET ⇒ eod, else premarket);
 premarket/eod are never taken as a direct override value, only ever
@@ -47,8 +55,12 @@ own run list say so too, and feeds main()'s status="failed" heartbeat.
 
 Env: SUPABASE_URL/SUPABASE_KEY (service-role) · FINNHUB_API_KEY/FMP_API_KEY/
 FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_FROM
-· ALERT_RUN_MODE (scan|intraday|thesis|debrief|monthly) · ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1
-(synthetic delivery test) · ALERT_PROTECTIVE_ROW=1 / EOD lane uses row 2 in alert_state.
+· ALERT_RUN_MODE (scan|intraday|thesis|debrief|monthly|maintenance|broker) ·
+ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1 (synthetic delivery test) ·
+ALERT_PROTECTIVE_ROW=1 / EOD lane uses row 2 in alert_state. The broker lane
+additionally needs SNAPTRADE_CLIENT_ID/SNAPTRADE_CONSUMER_KEY (app-level) and
+SNAPTRADE_USER_ID/SNAPTRADE_USER_SECRET (user-level, set once after the
+one-time SnapTrade connect flow) — see stock_analyzer/snaptrade_client.py.
 """
 
 import hashlib
@@ -58,8 +70,12 @@ from datetime import datetime, timedelta
 
 import pytz
 
+from stock_analyzer import broker_sync
 from stock_analyzer import db
-from stock_analyzer.constants import ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET
+from stock_analyzer import snaptrade_client
+from stock_analyzer.constants import (
+    ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS,
+)
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
     compute_protective_alerts, compute_eod, compute_morning_picks,
@@ -96,6 +112,8 @@ _LANE_OUTAGE_TEXT: dict[str, tuple[str, str]] = {
                     "The monthly report was NOT produced."),
     "maintenance": ("weekly data backfills",
                     "The weekly reference-data backfills did NOT run."),
+    "broker":      ("SnapTrade broker sync",
+                    "The Robinhood balance/transaction sync did NOT run."),
 }
 
 
@@ -1565,6 +1583,137 @@ def _run_maintenance(now_et, force: bool) -> int:
     return rc
 
 
+def _run_broker(now_et, force: bool) -> int:
+    """SnapTrade broker sync (Robinhood) — the 7th cron lane
+    (docs/plans/snaptrade-broker-integration.md). Balance sync + transaction
+    import only — position drift (capability 1 of the plan) is computed
+    LIVE at app-render time from a fresh SnapTrade read, not cached here, so
+    there is nothing for this lane to write for it.
+
+    Dormant (returns 0, no email, no heartbeat failure) until the user
+    completes the one-time SnapTrade connect flow — an unconfigured
+    integration is a normal not-yet-set-up state, the same posture as "no
+    RESEND_API_KEY" elsewhere in this file, not a lane failure.
+
+    Isolated per sub-job like the maintenance lane so one's failure can't
+    suppress the other. A genuine Supabase outage (as opposed to SnapTrade
+    itself being unreachable) still routes through _handle_db_unavailable so
+    it gets the same outage email/dedup as every other lane, rather than a
+    generic "cron lane failed" message that would obscure which system is
+    actually down.
+    """
+    global _LAST_LANE_FAILURE_DETAIL
+    _LAST_LANE_FAILURE_DETAIL = None
+
+    if not snaptrade_client.has_snaptrade():
+        _log("broker: SnapTrade not configured (no user credentials) — skip.")
+        return 0
+
+    accounts = snaptrade_client.list_accounts()
+    if accounts is None:
+        # _notify_failure has no dedup (unlike _handle_db_unavailable below),
+        # so a SnapTrade outage emails on EVERY fire of this lane — bounded to
+        # ~1/day only because the `broker` Railway service is expected to run
+        # daily (SNAPTRADE_BALANCE_STALE_HOURS=25 assumes the same cadence).
+        # If this lane is ever scheduled more often than daily, add a dedup
+        # here matching _handle_db_unavailable's pattern (2026-08-17 review).
+        _detail = "SnapTrade unreachable — could not list connected accounts"
+        _LAST_LANE_FAILURE_DETAIL = _detail
+        _log(f"broker: {_detail}")
+        _notify_failure("broker", _detail)
+        return 1
+    if not accounts:
+        _log("broker: SnapTrade connected but no brokerage accounts linked — nothing to sync.")
+        return 0
+
+    # Single-user app connecting one Robinhood account — sync the first;
+    # log (don't silently ignore) if SnapTrade ever reports more than one.
+    account_id = accounts[0].get("id")
+    if len(accounts) > 1:
+        _log(f"broker: {len(accounts)} accounts linked — syncing only the "
+             f"first ({account_id}); multi-account sync not built.")
+
+    rc = 0
+    failures: list[str] = []
+
+    # ① balance sync — writes account_cash.
+    try:
+        raw_balance = snaptrade_client.get_account_balance(account_id)
+        mapped = broker_sync.map_balances_to_cash(raw_balance)
+        if mapped is None:
+            failures.append("balance: SnapTrade balance unavailable/unparseable")
+            rc = 1
+        else:
+            if db.save_account_cash(mapped["cash_balance"], note=mapped["note"]):
+                _log(f"broker: balance synced — cash_balance={mapped['cash_balance']}")
+            else:
+                _detail = _db_unavailable_detail()
+                if _detail:
+                    return _handle_db_unavailable("broker", now_et, _detail)
+                failures.append("balance: save_account_cash failed")
+                rc = 1
+    except Exception as exc:
+        _log(f"broker/balance: UNCAUGHT — {str(exc)[:160]}")
+        failures.append(f"balance: {str(exc)[:160]}")
+        rc = 1
+
+    # ② transaction import — pending imports / income events / flows / dedup
+    #    backfill. Order matters: read trades BEFORE writing anything this
+    #    pass, so Tier-2 content-match sees only rows from prior syncs.
+    #    NOTE (2026-08-17 review): this sub-job has no explicit DB-outage
+    #    probe of its own — it relies on sub-job ① above as the outage
+    #    sentinel, same as _run_maintenance's ① (analyst backfill) covers ②
+    #    (vol backfill). Every write here is idempotent/self-healing on the
+    #    next fire (ignore_duplicates / re-synced bounded window / re-run
+    #    Tier-2 match), so a mid-run outage beginning strictly AFTER ①
+    #    succeeds silently logs "0 synced" rather than emailing — acceptable
+    #    because nothing here feeds a gate or the composite score. Don't
+    #    reorder ① after ② without re-adding an equivalent probe.
+    try:
+        raw_txns = snaptrade_client.get_account_activities(
+            account_id, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS
+        )
+        existing_trades = db.load_trades()
+        classified = broker_sync.classify_transactions(raw_txns, existing_trades)
+        if classified is None:
+            failures.append("transactions: SnapTrade activities unavailable")
+            rc = 1
+        else:
+            n_pending = db.save_snaptrade_pending_imports(classified["new_pending"])
+            n_income = db.save_snaptrade_income_events(classified["income_events"])
+            for bf in classified["backfill_broker_txn_id"]:
+                db.backfill_trade_broker_txn_id(bf["trade_id"], bf["broker_txn_id"])
+            for flow in classified["flows"]:
+                db.add_account_flow(
+                    flow["flow_date"], flow["flow_type"], flow["amount"],
+                    note="Synced via SnapTrade (Robinhood)",
+                )
+            _log(
+                f"broker: transactions synced — {n_pending} pending, "
+                f"{n_income} income events, {len(classified['backfill_broker_txn_id'])} "
+                f"backfilled, {len(classified['flows'])} flows, "
+                f"ignored={classified['ignored']}"
+            )
+    except Exception as exc:
+        _log(f"broker/transactions: UNCAUGHT — {str(exc)[:160]}")
+        failures.append(f"transactions: {str(exc)[:160]}")
+        rc = 1
+
+    # ③ bookkeeping only — never contributes to `failures`/rc; a missed
+    #    last_full_sync_at stamp doesn't lose user data, it only makes the
+    #    next SNAPTRADE_BALANCE_STALE_HOURS staleness check slightly less
+    #    precise.
+    try:
+        db.save_snaptrade_config(status="connected", last_full_sync_at=now_et.isoformat())
+    except Exception as exc:
+        _log(f"broker/config: UNCAUGHT — {str(exc)[:160]} (ignored — bookkeeping only)")
+
+    if failures:
+        _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
+        _notify_failure("broker", _LAST_LANE_FAILURE_DETAIL)
+    return rc
+
+
 def main() -> int:
     force = os.environ.get("ALERT_FORCE", "") == "1"
     test_email = os.environ.get("ALERT_TEST_EMAIL", "") == "1"
@@ -1572,7 +1721,7 @@ def main() -> int:
     # Derive mode from ET hour; named overrides bypass time-inference.
     _mode_override = os.environ.get("ALERT_RUN_MODE", "").strip().lower()
     mode = _mode_override if _mode_override in ("scan", "intraday", "thesis", "debrief",
-                                                "monthly", "maintenance") else (
+                                                "monthly", "maintenance", "broker") else (
         "eod" if now_et.hour >= 12 else "premarket"
     )
     _log(f"start · {now_et.isoformat()} ET · mode={mode} · force={force} · test_email={test_email}")
@@ -1630,6 +1779,7 @@ def main() -> int:
         "monthly":     ("monthly",     _run_monthly_report),
         "eod":         ("eod",         _run_eod),
         "maintenance": ("maintenance", _run_maintenance),
+        "broker":      ("broker",      _run_broker),
     }.get(mode, ("premarket", _run_premarket))
     try:
         rc = _job_fn(now_et, force)

@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<!--
+  MOCKUP — 💰 Account page → "⚡ Broker Sync" section (SnapTrade integration, proposed)
+  Status: PRE-APPROVAL. Static HTML only, no code written yet.
+  Decisions locked: USER_SECRET=Railway env var; income events tracked in snaptrade_income_events;
+  account_flows = ACH/wire only; 7th cron lane; Buy/Sell always queued for review.
+  Numbers below are ILLUSTRATIVE, not from the live DB.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DRISHTA — Broker Sync mockup</title>
+<style>
+  :root{
+    --bg:#0e1117; --card:#111827; --line:#374151; --line-soft:#1f2937;
+    --txt:#f9fafb; --dim:#9ca3af; --mid:#d1d5db;
+    --grn:#22c55e; --grn-d:#052e16; --grn-mid:#16a34a;
+    --red:#ef4444; --red-d:#450a0a;
+    --amb:#f59e0b; --amb-d:#422006;
+    --blu:#60a5fa; --blu-d:#0c1e3a; --blu-mid:#2563eb;
+    --pur:#a78bfa; --pur-d:#2e1065;
+    --teal:#2dd4bf; --teal-d:#042f2e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);padding:28px 32px 80px;
+       font-family:"Source Sans Pro",-apple-system,Segoe UI,Roboto,sans-serif;
+       font-size:15px;line-height:1.5}
+  .wrap{max-width:1180px;margin:0 auto}
+
+  /* ── mock note ──────────────────────────────────────────── */
+  .mocknote{background:#1e1b4b;border-left:4px solid #818cf8;border-radius:8px;
+       padding:10px 14px;margin-bottom:24px;color:#c7d2fe;font-size:.86em}
+  .mocknote strong{color:#e0e7ff}
+
+  /* ── page header ────────────────────────────────────────── */
+  .pgtitle{font-size:1.55em;font-weight:700;margin-bottom:4px}
+  .pgsub{color:var(--dim);font-size:.9em;margin-bottom:24px}
+
+  /* ── existing account strip (abbreviated) ───────────────── */
+  .acct-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;
+       margin-bottom:28px;padding-bottom:24px;border-bottom:1px solid var(--line)}
+  .acard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .acard .lbl{color:var(--dim);font-size:.72em;font-weight:700;letter-spacing:.08em;
+       text-transform:uppercase;margin-bottom:6px}
+  .acard .val{font-size:1.55em;font-weight:600;letter-spacing:-.01em}
+  .acard .sub{color:var(--dim);font-size:.8em;margin-top:3px}
+  .pos{color:var(--grn)} .neg{color:var(--red)} .amb{color:var(--amb)} .neu{color:var(--mid)}
+  .dim-lbl{color:var(--dim)}
+
+  /* ── section header ─────────────────────────────────────── */
+  .sec-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .sec-title{font-size:1.12em;font-weight:700}
+  .sec-badge{background:var(--blu-d);color:#93c5fd;border:1px solid #1e3a8a;
+       border-radius:6px;padding:2px 9px;font-size:.72em;font-weight:700;letter-spacing:.04em}
+  .sec-badge.new{background:#1a2e1a;color:#86efac;border-color:#166534}
+  .sec-note{color:var(--dim);font-size:.82em;margin-left:auto}
+
+  /* ── connection bar ─────────────────────────────────────── */
+  .conn-bar{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:14px 18px;margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .conn-dot{width:10px;height:10px;border-radius:50%;background:var(--grn);
+       box-shadow:0 0 6px var(--grn);flex-shrink:0}
+  .conn-dot.off{background:var(--dim);box-shadow:none}
+  .conn-dot.amb{background:var(--amb);box-shadow:0 0 6px var(--amb)}
+  .conn-label{font-weight:600;font-size:1em}
+  .conn-ts{color:var(--dim);font-size:.84em}
+  .conn-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .btn{padding:6px 14px;border-radius:7px;font-size:.84em;font-weight:600;
+       border:1px solid;cursor:pointer;white-space:nowrap}
+  .btn-pri{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
+  .btn-sec{background:transparent;color:var(--mid);border-color:var(--line)}
+  .btn-grn{background:var(--grn-d);color:#86efac;border-color:var(--grn-mid)}
+  .btn-red{background:var(--red-d);color:#fca5a5;border-color:#7f1d1d}
+  .btn-sm{padding:4px 10px;font-size:.78em}
+
+  /* ── 3-col metric row ───────────────────────────────────── */
+  .metric-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px}
+  .metric{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .metric .lbl{color:var(--dim);font-size:.72em;font-weight:700;letter-spacing:.08em;
+       text-transform:uppercase;margin-bottom:6px}
+  .metric .val{font-size:1.62em;font-weight:600;letter-spacing:-.02em}
+  .metric .sub{color:var(--dim);font-size:.79em;margin-top:3px}
+
+  /* ── alert / info banners ───────────────────────────────── */
+  .banner{border-radius:8px;padding:9px 13px;margin-bottom:12px;font-size:.87em;display:flex;align-items:center;gap:8px}
+  .banner-amb{background:var(--amb-d);border:1px solid #78350f;color:#fde68a}
+  .banner-grn{background:var(--grn-d);border:1px solid #14532d;color:#86efac}
+  .banner-red{background:var(--red-d);border:1px solid #7f1d1d;color:#fca5a5}
+  .banner-blu{background:var(--blu-d);border:1px solid #1e3a8a;color:#93c5fd}
+  .banner-note{background:#1f2937;border:1px solid var(--line);color:var(--dim)}
+
+  /* ── divider ────────────────────────────────────────────── */
+  .divider{border:none;border-top:1px solid var(--line);margin:22px 0}
+
+  /* ── drift panel ────────────────────────────────────────── */
+  .drift-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px}
+  .drift-card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .drift-card.clean{border-color:var(--grn-mid);background:var(--grn-d)}
+  .drift-card .dtitle{font-size:.75em;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+       color:var(--dim);margin-bottom:10px}
+  .drift-row{display:flex;justify-content:space-between;align-items:baseline;
+       padding:5px 0;border-bottom:1px solid var(--line-soft);font-size:.9em}
+  .drift-row:last-child{border-bottom:none}
+  .drift-ticker{font-weight:700;color:var(--txt)}
+  .drift-detail{color:var(--dim);font-size:.83em}
+  .drift-badge{font-size:.72em;font-weight:700;padding:1px 7px;border-radius:8px}
+  .db-rh{background:#172554;color:#93c5fd;border:1px solid #1d4ed8}   /* RH-only */
+  .db-app{background:#2d1b69;color:#c4b5fd;border:1px solid #6d28d9}  /* app-only */
+  .db-mis{background:var(--amb-d);color:#fde68a;border:1px solid #d97706} /* mismatch */
+
+  /* ── pending imports table ──────────────────────────────── */
+  .import-table-wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       overflow:hidden;margin-bottom:12px}
+  .import-table{width:100%;border-collapse:collapse;font-size:.88em}
+  .import-table thead{background:#1f2937;border-bottom:1px solid var(--line)}
+  .import-table th{padding:9px 12px;color:var(--dim);font-size:.72em;font-weight:700;
+       letter-spacing:.07em;text-transform:uppercase;text-align:left}
+  .import-table th:first-child{text-align:center}
+  .import-table td{padding:9px 12px;border-bottom:1px solid var(--line-soft)}
+  .import-table tr:last-child td{border-bottom:none}
+  .import-table tr.selected{background:#0c1e3a}
+  .import-table tr.already{opacity:.5}
+  .chk{width:16px;height:16px;accent-color:var(--blu);cursor:pointer}
+  .action-buy{color:#86efac;font-weight:700;font-size:.82em}
+  .action-sell{color:#fca5a5;font-weight:700;font-size:.82em}
+  .already-tag{background:#1f2937;color:var(--dim);border:1px solid var(--line);
+       border-radius:6px;padding:1px 7px;font-size:.72em}
+
+  /* ── import footer ──────────────────────────────────────── */
+  .import-foot{display:flex;align-items:center;gap:14px;padding:12px 0 4px}
+  .import-count{color:var(--dim);font-size:.85em}
+
+  /* ── cash activity ──────────────────────────────────────── */
+  .transfers-list{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       margin-bottom:14px;overflow:hidden}
+  .transfer-row{display:flex;align-items:center;gap:10px;padding:10px 14px;
+       border-bottom:1px solid var(--line-soft);font-size:.88em}
+  .transfer-row:last-child{border-bottom:none}
+  .tr-chk{flex-shrink:0}
+  .tr-type{font-weight:600;min-width:100px}
+  .tr-date{color:var(--dim);min-width:60px}
+  .tr-amt{font-weight:700;min-width:80px}
+  .tr-dest{color:var(--dim);font-size:.82em;flex:1}
+  .tr-action{margin-left:auto}
+
+  /* ── income chart ───────────────────────────────────────── */
+  .chart-card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:16px 20px}
+  .chart-head{display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap}
+  .chart-title{font-weight:700;font-size:1em}
+  .legend{display:flex;gap:16px;font-size:.78em;color:var(--dim);margin-bottom:16px;flex-wrap:wrap}
+  .leg-dot{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px}
+  .chart-bars{display:flex;align-items:flex-end;gap:6px;height:130px;padding-bottom:28px;position:relative}
+  .chart-bars::after{content:'';position:absolute;bottom:28px;left:0;right:0;
+       height:1px;background:var(--line-soft)}
+  .bar-group{display:flex;flex-direction:column;align-items:center;gap:0;flex:1;position:relative}
+  .bar-seg{width:100%;border-radius:0}
+  .bar-seg:first-child{border-radius:4px 4px 0 0}
+  .bar-lbl{position:absolute;bottom:-22px;font-size:.7em;color:var(--dim);white-space:nowrap}
+  .bar-total{position:absolute;top:-18px;font-size:.72em;color:var(--mid);font-weight:600}
+  .bar-grn{background:var(--grn-mid)}
+  .bar-blu{background:#3b82f6}
+  .bar-red{background:#dc2626}
+  .income-summary{display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;padding-top:12px;
+       border-top:1px solid var(--line-soft);font-size:.85em}
+  .inc-item .inc-lbl{color:var(--dim);font-size:.78em;font-weight:700;
+       text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
+  .inc-item .inc-val{font-weight:600;font-size:1.05em}
+
+  /* ── setup (disconnected) state ─────────────────────────── */
+  .setup-card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:24px 22px;text-align:center}
+  .setup-icon{font-size:2.4em;margin-bottom:10px}
+  .setup-title{font-weight:700;font-size:1.1em;margin-bottom:6px}
+  .setup-desc{color:var(--dim);font-size:.88em;max-width:480px;margin:0 auto 18px;line-height:1.6}
+  .setup-steps{text-align:left;background:#1f2937;border-radius:8px;padding:14px 16px;
+       margin:0 auto 18px;max-width:520px;font-size:.85em}
+  .setup-steps li{color:var(--dim);padding:4px 0;padding-left:6px}
+  .setup-steps li strong{color:var(--txt)}
+  .setup-steps ol{padding-left:18px}
+
+  /* ── state toggle tabs (for mockup only) ────────────────── */
+  .state-toggle{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+  .stab{padding:5px 12px;border-radius:6px;font-size:.8em;font-weight:600;
+       border:1px solid var(--line);color:var(--dim);cursor:pointer;background:var(--card)}
+  .stab.on{background:var(--blu-d);color:#93c5fd;border-color:#1d4ed8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="mocknote">
+  <strong>PRE-APPROVAL MOCKUP</strong> — 💰 Account page · "⚡ Broker Sync" section (SnapTrade, F-244 proposed).
+  Illustrative data. Decisions locked: USER_SECRET=Railway env var · income events tracked in
+  <code>snaptrade_income_events</code> · <code>account_flows</code>=ACH/wire only · 7th cron lane ·
+  Buy/Sell always queued for review. Two states shown below: <strong>Connected</strong> and
+  <strong>Not connected</strong>.
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     PAGE HEADER
+══════════════════════════════════════════════════ -->
+<div class="pgtitle">💰 Account</div>
+<div class="pgsub">Account-level baseline · concentration in account terms · broker sync</div>
+
+<!-- ── existing account metrics (abbreviated, unchanged) ── -->
+<div class="acct-strip">
+  <div class="acard">
+    <div class="lbl">Total Account Value</div>
+    <div class="val">$5,513.66</div>
+    <div class="sub dim-lbl">equity + net cash</div>
+  </div>
+  <div class="acard">
+    <div class="lbl">Net Cash / Margin</div>
+    <div class="val neg">−$328.44</div>
+    <div class="sub dim-lbl">margin debit (signed)</div>
+  </div>
+  <div class="acard">
+    <div class="lbl">Cash %</div>
+    <div class="val neu">−6.0%</div>
+    <div class="sub dim-lbl">of total account</div>
+  </div>
+  <div class="acard">
+    <div class="lbl">Account Growth</div>
+    <div class="val pos">+12.4%</div>
+    <div class="sub dim-lbl">since $7,152 baseline · Modified Dietz</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     STATE A — CONNECTED (primary view)
+══════════════════════════════════════════════════ -->
+<div class="sec-head">
+  <div class="sec-title">⚡ Broker Sync</div>
+  <div class="sec-badge new">NEW</div>
+  <div class="sec-note">Robinhood via SnapTrade · read-only</div>
+</div>
+
+<!-- ── A1. Connection status bar ── -->
+<div class="conn-bar">
+  <div class="conn-dot"></div>
+  <div>
+    <div class="conn-label">Robinhood via SnapTrade</div>
+    <div class="conn-ts">Last synced today 6:02 PM ET · next: 6:00 AM ET (daily cron)</div>
+  </div>
+  <div class="conn-actions">
+    <button class="btn btn-grn">↻ Sync Now</button>
+    <button class="btn btn-sec btn-sm">Disconnect</button>
+  </div>
+</div>
+
+<!-- ── A2. Balances ── -->
+<div class="metric-row">
+  <div class="metric">
+    <div class="lbl">Equity (held positions)</div>
+    <div class="val">$5,842.10</div>
+    <div class="sub dim-lbl">synced from Robinhood</div>
+  </div>
+  <div class="metric">
+    <div class="lbl">Net Cash / Margin</div>
+    <div class="val neg">−$328.44</div>
+    <div class="sub dim-lbl">margin debit · signed</div>
+  </div>
+  <div class="metric">
+    <div class="lbl">Total Account</div>
+    <div class="val">$5,513.66</div>
+    <div class="sub dim-lbl">equity + net cash</div>
+  </div>
+</div>
+
+<!-- stale balance example (comment out in healthy state) -->
+<!--
+<div class="banner banner-amb">
+  ⚠️ Balance is 27h old — synced yesterday 5:58 PM ET. Manual entry active as fallback.
+  <button class="btn btn-sec btn-sm" style="margin-left:auto">Sync Now</button>
+</div>
+-->
+<div class="banner banner-grn" style="margin-bottom:6px">
+  ✓ Balance synced today at 6:02 PM ET. Manual account_cash entry retained as fallback if sync fails.
+</div>
+<div class="banner banner-note" style="margin-bottom:18px;font-size:.8em">
+  Concentration gates (15% / 35%) remain equity-basis — cash sync does not move any gate.
+</div>
+
+<hr class="divider">
+
+<!-- ── A3. Position drift ── -->
+<div class="sec-head" style="margin-bottom:12px">
+  <div style="font-weight:700">📊 Position Drift</div>
+  <div class="sec-badge" style="background:#1a2533;color:var(--dim);border-color:var(--line)">AWARENESS ONLY</div>
+  <div class="sec-note">Robinhood vs App · as of 6:02 PM ET · tolerance ±0.001 shares</div>
+</div>
+
+<!-- happy path: no drift -->
+<!--
+<div class="banner banner-grn">✓ No discrepancies — Robinhood positions match the App exactly (14 holdings checked).</div>
+-->
+
+<!-- drift detected state -->
+<div class="drift-grid">
+  <div class="drift-card">
+    <div class="dtitle">In Robinhood · not in App <span style="color:var(--dim);font-weight:400">(2)</span></div>
+    <div class="drift-row">
+      <span class="drift-ticker">AAPL</span>
+      <span class="drift-detail">10.0 sh <span class="drift-badge db-rh">RH only</span></span>
+    </div>
+    <div class="drift-row">
+      <span class="drift-ticker">COIN</span>
+      <span class="drift-detail">5.5 sh <span class="drift-badge db-rh">RH only</span></span>
+    </div>
+    <div style="color:var(--dim);font-size:.8em;margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft)">
+      Check if these should be logged in the Trade Journal.
+    </div>
+  </div>
+
+  <div class="drift-card">
+    <div class="dtitle">In App · not in Robinhood <span style="color:var(--dim);font-weight:400">(1)</span></div>
+    <div class="drift-row">
+      <span class="drift-ticker">GD</span>
+      <span class="drift-detail">25.0 sh <span class="drift-badge db-app">App only</span></span>
+    </div>
+    <div style="color:var(--dim);font-size:.8em;margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft)">
+      Possibly sold at broker but not yet logged in App.
+    </div>
+  </div>
+
+  <div class="drift-card">
+    <div class="dtitle">Quantity mismatch <span style="color:var(--dim);font-weight:400">(1)</span></div>
+    <div class="drift-row">
+      <span class="drift-ticker">NVDA</span>
+      <span>
+        <span style="font-size:.83em">App <span class="neu">10.0</span> → RH <span class="amb">10.5</span>
+        <span class="drift-badge db-mis">+0.5 sh</span></span>
+      </span>
+    </div>
+    <div style="color:var(--dim);font-size:.8em;margin-top:10px;padding-top:8px;border-top:1px solid var(--line-soft)">
+      Possibly a fractional fill or dividend reinvestment.
+    </div>
+  </div>
+</div>
+
+<!-- offline drift state example -->
+<!--
+<div class="banner banner-note">
+  🔌 Broker offline — position drift not checked this session.
+</div>
+-->
+
+<hr class="divider">
+
+<!-- ── A4. Pending imports (Buy / Sell) ── -->
+<div class="sec-head" style="margin-bottom:12px">
+  <div style="font-weight:700">📥 Pending Imports</div>
+  <div class="sec-badge" style="background:var(--amb-d);color:#fde68a;border-color:#d97706">REQUIRES REVIEW</div>
+  <div class="sec-note">Buy / Sell trades from Robinhood · never auto-written</div>
+</div>
+
+<div class="banner banner-blu" style="margin-bottom:12px;font-size:.84em">
+  3 new transactions fetched from Robinhood. Review and select which to import into the Trade Journal.
+  Already-recorded trades are shown dimmed and pre-unchecked.
+</div>
+
+<div class="import-table-wrap">
+  <table class="import-table">
+    <thead>
+      <tr>
+        <th style="width:48px">Import?</th>
+        <th>Date</th>
+        <th>Ticker</th>
+        <th>Action</th>
+        <th>Shares</th>
+        <th>Price</th>
+        <th>Amount</th>
+        <th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="selected">
+        <td style="text-align:center"><input type="checkbox" class="chk" checked></td>
+        <td>Aug 17, 2026</td>
+        <td><strong>MSFT</strong></td>
+        <td><span class="action-buy">BUY</span></td>
+        <td>10.0</td>
+        <td>$420.50</td>
+        <td><strong>$4,205.00</strong></td>
+        <td><span style="color:var(--dim);font-size:.82em">New — not in App</span></td>
+      </tr>
+      <tr class="selected">
+        <td style="text-align:center"><input type="checkbox" class="chk" checked></td>
+        <td>Aug 15, 2026</td>
+        <td><strong>AAPL</strong></td>
+        <td><span class="action-buy">BUY</span></td>
+        <td>5.0</td>
+        <td>$218.30</td>
+        <td><strong>$1,091.50</strong></td>
+        <td><span style="color:var(--dim);font-size:.82em">New — not in App</span></td>
+      </tr>
+      <tr class="already">
+        <td style="text-align:center"><input type="checkbox" class="chk"></td>
+        <td>Aug 10, 2026</td>
+        <td><strong>NVDA</strong></td>
+        <td><span class="action-sell">SELL</span></td>
+        <td>2.0</td>
+        <td>$124.80</td>
+        <td><strong>$249.60</strong></td>
+        <td><span class="already-tag">Already in App</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="import-foot">
+  <span class="import-count">2 of 3 selected · 1 already recorded (skipped)</span>
+  <button class="btn btn-pri">Import Selected (2)</button>
+  <span style="color:var(--dim);font-size:.8em;margin-left:8px">
+    Runs recalculate_from_trades after write · invalidates drift cache
+  </span>
+</div>
+
+<hr class="divider">
+
+<!-- ── A5. Cash Activity ── -->
+<div class="sec-head" style="margin-bottom:12px">
+  <div style="font-weight:700">💵 Cash Activity</div>
+  <div class="sec-note">Transfers → account_flows · Income events tracked for trend</div>
+</div>
+
+<!-- Pending transfers -->
+<div style="font-size:.78em;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+     color:var(--dim);margin-bottom:8px">Pending Transfers (ACH / Wire)</div>
+
+<div class="transfers-list">
+  <div class="transfer-row">
+    <div class="tr-chk"><input type="checkbox" class="chk" checked></div>
+    <div class="tr-type">ACH Deposit</div>
+    <div class="tr-date dim-lbl">Aug 10</div>
+    <div class="tr-amt pos">+$500.00</div>
+    <div class="tr-dest">→ account_flows · contributes to net capital</div>
+    <div class="tr-action"><button class="btn btn-grn btn-sm">Write to Ledger</button></div>
+  </div>
+</div>
+
+<div class="banner banner-note" style="margin-bottom:18px;font-size:.8em">
+  Dividends, interest, and fees are income — not contributions. They are tracked in the trend below
+  and never written to account_flows (which stays pure for Modified Dietz return calculation).
+</div>
+
+<!-- Income trend chart -->
+<div class="chart-card">
+  <div class="chart-head">
+    <span class="chart-title">📈 Income Over Time</span>
+    <span style="color:var(--dim);font-size:.84em">Dividends · Interest · Fees · last 9 months</span>
+  </div>
+  <div class="legend">
+    <span><span class="leg-dot" style="background:var(--grn-mid)"></span>Dividends</span>
+    <span><span class="leg-dot" style="background:#3b82f6"></span>Interest</span>
+    <span><span class="leg-dot" style="background:#dc2626"></span>Fees</span>
+  </div>
+
+  <!-- SVG bar chart -->
+  <svg width="100%" height="160" viewBox="0 0 820 160" preserveAspectRatio="none" style="overflow:visible">
+    <!-- grid line -->
+    <line x1="0" y1="110" x2="820" y2="110" stroke="#374151" stroke-width="1"/>
+
+    <!-- month labels -->
+    <text x="40"  y="150" text-anchor="middle" fill="#6b7280" font-size="11">Dec</text>
+    <text x="130" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Jan</text>
+    <text x="220" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Feb</text>
+    <text x="310" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Mar</text>
+    <text x="400" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Apr</text>
+    <text x="490" y="150" text-anchor="middle" fill="#6b7280" font-size="11">May</text>
+    <text x="580" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Jun</text>
+    <text x="670" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Jul</text>
+    <text x="760" y="150" text-anchor="middle" fill="#6b7280" font-size="11">Aug</text>
+
+    <!-- Dec: div $8.20, int $1.50, fee -$0.50 → total $9.20 = ~42px -->
+    <rect x="15"  y="68" width="50" height="34" rx="2" fill="#16a34a"/>   <!-- div 8.20 -->
+    <rect x="15"  y="62" width="50" height="6"  rx="0" fill="#3b82f6"/>   <!-- int 1.50 -->
+    <rect x="15"  y="110" width="50" height="3" rx="0" fill="#dc2626"/>   <!-- fee 0.50 -->
+    <text x="40"  y="56" text-anchor="middle" fill="#d1d5db" font-size="10">$9.20</text>
+
+    <!-- Jan: div $12.40, int $2.10, fee -$0 -->
+    <rect x="105" y="58" width="50" height="52" rx="2" fill="#16a34a"/>
+    <rect x="105" y="49" width="50" height="9"  rx="0" fill="#3b82f6"/>
+    <text x="130" y="43" text-anchor="middle" fill="#d1d5db" font-size="10">$14.50</text>
+
+    <!-- Feb: div $6.00, int $1.80, fee -$0.25 -->
+    <rect x="195" y="84" width="50" height="26" rx="2" fill="#16a34a"/>
+    <rect x="195" y="76" width="50" height="8"  rx="0" fill="#3b82f6"/>
+    <rect x="195" y="110" width="50" height="1" rx="0" fill="#dc2626"/>
+    <text x="220" y="70" text-anchor="middle" fill="#d1d5db" font-size="10">$7.55</text>
+
+    <!-- Mar: div $15.60, int $2.30, fee -$0.50 -->
+    <rect x="285" y="44" width="50" height="66" rx="2" fill="#16a34a"/>
+    <rect x="285" y="34" width="50" height="10" rx="0" fill="#3b82f6"/>
+    <rect x="285" y="110" width="50" height="2" rx="0" fill="#dc2626"/>
+    <text x="310" y="28" text-anchor="middle" fill="#d1d5db" font-size="10">$17.40</text>
+
+    <!-- Apr: div $9.80, int $1.60 -->
+    <rect x="375" y="68" width="50" height="42" rx="2" fill="#16a34a"/>
+    <rect x="375" y="61" width="50" height="7"  rx="0" fill="#3b82f6"/>
+    <text x="400" y="55" text-anchor="middle" fill="#d1d5db" font-size="10">$11.40</text>
+
+    <!-- May: div $18.20, int $3.00, fee -$0.75 -->
+    <rect x="465" y="32" width="50" height="78" rx="2" fill="#16a34a"/>
+    <rect x="465" y="19" width="50" height="13" rx="0" fill="#3b82f6"/>
+    <rect x="465" y="110" width="50" height="3" rx="0" fill="#dc2626"/>
+    <text x="490" y="13" text-anchor="middle" fill="#d1d5db" font-size="10">$20.45</text>
+
+    <!-- Jun: div $11.00, int $2.20 -->
+    <rect x="555" y="63" width="50" height="47" rx="2" fill="#16a34a"/>
+    <rect x="555" y="53" width="50" height="10" rx="0" fill="#3b82f6"/>
+    <text x="580" y="47" text-anchor="middle" fill="#d1d5db" font-size="10">$13.20</text>
+
+    <!-- Jul: div $14.40, int $2.80, fee -$0.50 -->
+    <rect x="645" y="49" width="50" height="61" rx="2" fill="#16a34a"/>
+    <rect x="645" y="37" width="50" height="12" rx="0" fill="#3b82f6"/>
+    <rect x="645" y="110" width="50" height="2" rx="0" fill="#dc2626"/>
+    <text x="670" y="31" text-anchor="middle" fill="#d1d5db" font-size="10">$16.70</text>
+
+    <!-- Aug (partial month): div $4.20, int $0.90 -->
+    <rect x="735" y="91" width="50" height="19" rx="2" fill="#16a34a" opacity="0.65"/>
+    <rect x="735" y="87" width="50" height="4"  rx="0" fill="#3b82f6" opacity="0.65"/>
+    <text x="760" y="81" text-anchor="middle" fill="#9ca3af" font-size="10">$5.10 ▸</text>
+  </svg>
+
+  <!-- Income summary this month -->
+  <div class="income-summary">
+    <div class="inc-item">
+      <div class="inc-lbl">Dividends (YTD)</div>
+      <div class="inc-val pos">$91.60</div>
+    </div>
+    <div class="inc-item">
+      <div class="inc-lbl">Interest (YTD)</div>
+      <div class="inc-val" style="color:#93c5fd">$16.70</div>
+    </div>
+    <div class="inc-item">
+      <div class="inc-lbl">Fees (YTD)</div>
+      <div class="inc-val neg">−$2.50</div>
+    </div>
+    <div class="inc-item">
+      <div class="inc-lbl">Net Income (YTD)</div>
+      <div class="inc-val pos">$105.80</div>
+    </div>
+    <div class="inc-item" style="margin-left:auto">
+      <div class="inc-lbl">Aug (partial)</div>
+      <div class="inc-val neu">$5.10 so far</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     STATE B — NOT CONNECTED
+══════════════════════════════════════════════════ -->
+<hr class="divider" style="margin-top:48px">
+<div style="color:var(--dim);font-size:.78em;font-weight:700;letter-spacing:.08em;
+     text-transform:uppercase;margin-bottom:16px">ALTERNATE STATE — Not connected</div>
+
+<div class="conn-bar" style="margin-bottom:16px">
+  <div class="conn-dot off"></div>
+  <div>
+    <div class="conn-label" style="color:var(--dim)">Robinhood · Not connected</div>
+    <div class="conn-ts">Connect your Robinhood account to enable automatic sync</div>
+  </div>
+  <div class="conn-actions">
+    <button class="btn btn-pri">Connect Robinhood</button>
+  </div>
+</div>
+
+<div class="setup-card">
+  <div class="setup-icon">🔗</div>
+  <div class="setup-title">One-time setup — takes about 2 minutes</div>
+  <div class="setup-desc">
+    DRISHTA connects to Robinhood via SnapTrade (read-only).
+    After setup, balances, positions, and trade history sync automatically each morning.
+  </div>
+  <div class="setup-steps">
+    <ol>
+      <li><strong>Sign up at snaptrade.com</strong> and create an app to get your CLIENT_ID and CONSUMER_KEY.</li>
+      <li><strong>Add three Railway variables:</strong> <code>SNAPTRADE_CLIENT_ID</code>, <code>SNAPTRADE_CONSUMER_KEY</code>, <code>SNAPTRADE_USER_SECRET</code>.</li>
+      <li><strong>Click "Connect Robinhood" above</strong> — you'll be sent to a SnapTrade portal to log in to Robinhood.</li>
+      <li><strong>Copy the USER_SECRET</strong> returned by SnapTrade into the Railway variable and redeploy.</li>
+      <li>Done — the daily cron will handle syncing from here.</li>
+    </ol>
+  </div>
+  <button class="btn btn-pri">Connect Robinhood →</button>
+  <div style="color:var(--dim);font-size:.8em;margin-top:10px">
+    Read-only access. No trades can be placed through DRISHTA.
+  </div>
+</div>
+
+<!-- ── offline broker (connected but unreachable) ── -->
+<div style="margin-top:20px">
+  <div style="color:var(--dim);font-size:.78em;font-weight:700;letter-spacing:.08em;
+       text-transform:uppercase;margin-bottom:10px">ALTERNATE STATE — Connected but SnapTrade offline</div>
+  <div class="banner banner-amb">
+    ⚠️ Cannot reach SnapTrade — last sync was Aug 16 at 6:05 AM ET (27h ago).
+    Showing last known balances. Drift and pending imports unavailable this session.
+    <button class="btn btn-sec btn-sm" style="margin-left:auto">Retry</button>
+  </div>
+  <div class="banner banner-note" style="font-size:.8em">
+    Manual account_cash entry ($5,513.66) is active as the account total fallback.
+    Gates and recommendations are unaffected — they run on live equity data.
+  </div>
+</div>
+
+</div><!-- .wrap -->
+</body>
+</html>
