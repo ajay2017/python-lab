@@ -26,6 +26,7 @@ from datetime import timedelta
 from stock_analyzer import api_health
 from stock_analyzer.constants import SNAPTRADE_REQUEST_TIMEOUT_SEC
 from stock_analyzer.market_time import today_et
+from stock_analyzer.providers.yfinance_provider import _call_with_timeout
 
 try:
     import streamlit as st
@@ -109,10 +110,18 @@ def _record_error(msg: object) -> None:
 def register_user(user_id: str):
     """Register a new SnapTrade user. Returns the `user_secret` string (issued
     ONCE — the caller must display/persist it immediately) or None on failure.
-    One-time setup call — not used in normal sync operation."""
+    One-time setup call — not used in normal sync operation.
+
+    Wall-clock bounded via _call_with_timeout, not a `timeout=` kwarg — the
+    installed SDK's convenience methods don't expose one (confirmed against
+    a live TypeError: 'register_snap_trade_user() got an unexpected keyword
+    argument timeout', 2026-08-17). Same pattern already used for yfinance,
+    which has the identical no-timeout-knob problem."""
     try:
-        resp = _client().authentication.register_snap_trade_user(
-            user_id=user_id, timeout=SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        resp = _call_with_timeout(
+            _client().authentication.register_snap_trade_user,
+            (), {"user_id": user_id},
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
         return resp.body["userSecret"]
@@ -125,9 +134,10 @@ def get_connection_portal_url(user_id: str, user_secret: str):
     """Return the SnapTrade connection-portal redirect URL for the given user,
     or None on failure. One-time setup call."""
     try:
-        resp = _client().authentication.login_snap_trade_user(
-            user_id=user_id, user_secret=user_secret,
-            timeout=SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        resp = _call_with_timeout(
+            _client().authentication.login_snap_trade_user,
+            (), {"user_id": user_id, "user_secret": user_secret},
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
         return resp.body.get("redirectURI")
@@ -144,9 +154,10 @@ def list_accounts():
     if not user_id or not user_secret:
         return None
     try:
-        resp = _client().account_information.list_user_accounts(
-            user_id=user_id, user_secret=user_secret,
-            timeout=SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        resp = _call_with_timeout(
+            _client().account_information.list_user_accounts,
+            (), {"user_id": user_id, "user_secret": user_secret},
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
         return resp.body
@@ -166,9 +177,10 @@ def get_account_balance(account_id: str):
     if not user_id or not user_secret:
         return None
     try:
-        resp = _client().account_information.get_user_account_balance(
-            account_id=account_id, user_id=user_id, user_secret=user_secret,
-            timeout=SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        resp = _call_with_timeout(
+            _client().account_information.get_user_account_balance,
+            (), {"account_id": account_id, "user_id": user_id, "user_secret": user_secret},
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
         return resp.body
@@ -185,9 +197,10 @@ def get_account_positions(account_id: str):
     if not user_id or not user_secret:
         return None
     try:
-        resp = _client().account_information.get_all_account_positions(
-            account_id=account_id, user_id=user_id, user_secret=user_secret,
-            timeout=SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        resp = _call_with_timeout(
+            _client().account_information.get_all_account_positions,
+            (), {"account_id": account_id, "user_id": user_id, "user_secret": user_secret},
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
         return resp.body.get("results")
@@ -212,15 +225,19 @@ def get_account_activities(account_id: str, lookback_days: int):
     end = today_et()
     start = end - timedelta(days=lookback_days)
     try:
-        resp = _client().account_information.get_account_activities(
-            account_id=account_id,
-            user_id=user_id,
-            user_secret=user_secret,
-            start_date=start.isoformat(),
-            end_date=end.isoformat(),
-            offset=0,
-            limit=1000,
-            timeout=SNAPTRADE_REQUEST_TIMEOUT_SEC,
+        resp = _call_with_timeout(
+            _client().account_information.get_account_activities,
+            (),
+            {
+                "account_id": account_id,
+                "user_id": user_id,
+                "user_secret": user_secret,
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "offset": 0,
+                "limit": 1000,
+            },
+            SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
         return resp.body.get("data")
