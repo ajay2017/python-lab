@@ -655,13 +655,19 @@ the user acted on it):
     -- reported growth% — see the plan's "Modified Dietz integrity" section).
     -- Only account_flows (below) may feed that calculation.
     create table if not exists public.snaptrade_income_events (
-        id          bigint generated always as identity primary key,
-        event_type  text not null check (event_type in ('dividend', 'interest', 'fee')),
-        ticker      text,             -- null for account-level interest/fees
-        amount      numeric not null,
-        event_date  date not null,
-        fetched_at  timestamptz not null default now()
+        id                bigint generated always as identity primary key,
+        snaptrade_txn_id  text,             -- SnapTrade activity id for dedup; null for
+                                            -- broker feeds that don't expose a stable id.
+                                            -- Partial unique index below (WHERE NOT NULL).
+        event_type        text not null check (event_type in ('dividend', 'interest', 'fee')),
+        ticker            text,             -- null for account-level interest/fees
+        amount            numeric not null,
+        event_date        date not null,
+        fetched_at        timestamptz not null default now()
     );
+    create unique index if not exists snaptrade_income_events_txn_id_unique
+        on public.snaptrade_income_events (snaptrade_txn_id)
+        where snaptrade_txn_id is not null;
     alter table public.snaptrade_income_events enable row level security;
     drop policy if exists "Allow all (service role)" on public.snaptrade_income_events;
     create policy "Allow all (service role)" on public.snaptrade_income_events
@@ -678,6 +684,15 @@ the user acted on it):
     ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_txn_id text;
     CREATE UNIQUE INDEX IF NOT EXISTS trades_broker_txn_id_unique
         ON trades (broker_txn_id) NULLS DISTINCT;
+
+    -- snaptrade_income_events.snaptrade_txn_id: added post-ship to dedup
+    -- re-fetches of the same 90-day window (the original table lacked this
+    -- column; ALTER + partial index are idempotent on subsequent runs).
+    ALTER TABLE public.snaptrade_income_events
+        ADD COLUMN IF NOT EXISTS snaptrade_txn_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS snaptrade_income_events_txn_id_unique
+        ON public.snaptrade_income_events (snaptrade_txn_id)
+        WHERE snaptrade_txn_id IS NOT NULL;
 """
 
 import os
@@ -3831,27 +3846,39 @@ def load_snaptrade_income_events(since_date: str | None = None) -> list[dict]:
 
 
 def save_snaptrade_income_events(rows: list[dict]) -> int:
-    """Insert new income-event rows (from broker_sync.classify_transactions'
-    `income_events` list). No unique constraint on this table (an income
-    event has no stable SnapTrade id in the activity payload the way a trade
-    does) — the caller (the `broker` cron lane) is responsible for only
-    passing events from the bounded sync window, so a normal daily sync
-    cadence won't re-insert the same event twice in practice; occasional
-    duplicates here only affect the display trend chart, never a gate or a
-    return calculation. Returns the number of rows attempted. Read-only-
+    """Upsert income-event rows (from broker_sync.classify_transactions'
+    `income_events` list). Rows carrying a `snaptrade_txn_id` are upserted
+    via the partial unique index — re-fetching the same 90-day window on
+    every cron run is a no-op for those rows. Rows without an id (None) fall
+    back to a plain insert (rare; only if SnapTrade omits the activity id).
+    This table is DISPLAY/TREND ONLY — never a gate or return calculation.
+    Returns the number of rows attempted. Read-only-
     viewer gated — see save_snaptrade_config's rationale; this costs the
     cron nothing since is_readonly() resolves False there."""
     if is_readonly(): return 0  # read-only viewer: no-op
     if not has_db() or not rows:
         return 0
     try:
-        records = [{
-            "event_type": r["event_type"],
-            "ticker":     r.get("ticker"),
-            "amount":     r["amount"],
-            "event_date": r["event_date"],
-        } for r in rows]
-        _client().table("snaptrade_income_events").insert(records).execute()
+        # Drop id-less rows: without a snaptrade_txn_id we cannot dedup, so
+        # re-inserting would silently re-inflate the trend chart on every sync.
+        # Matches save_snaptrade_pending_imports' convention (line ~3750).
+        records = [
+            {
+                "snaptrade_txn_id": r["snaptrade_txn_id"],
+                "event_type":       r["event_type"],
+                "ticker":           r.get("ticker"),
+                "amount":           r["amount"],
+                "event_date":       r["event_date"],
+            }
+            for r in rows if r.get("snaptrade_txn_id")
+        ]
+        if not records:
+            return 0
+        _client().table("snaptrade_income_events").upsert(
+            records,
+            on_conflict="snaptrade_txn_id",
+            ignore_duplicates=True,
+        ).execute()
         return len(records)
     except Exception:
         return 0

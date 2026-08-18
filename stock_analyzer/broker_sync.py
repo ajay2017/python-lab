@@ -356,6 +356,7 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
                 ignored[ttype] = ignored.get(ttype, 0) + 1
                 continue
             income_events.append({
+                "snaptrade_txn_id": str(txn_id) if txn_id is not None else None,
                 "event_type": _INCOME_TYPES[ttype],
                 "ticker": _activity_ticker(txn) or None,
                 "amount": float(amount),
