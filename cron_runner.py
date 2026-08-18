@@ -1628,32 +1628,54 @@ def _run_broker(now_et, force: bool) -> int:
 
     # Single-user app connecting one Robinhood account — sync the first;
     # log (don't silently ignore) if SnapTrade ever reports more than one.
-    account_id = accounts[0].get("id")
-    if len(accounts) > 1:
-        _log(f"broker: {len(accounts)} accounts linked — syncing only the "
-             f"first ({account_id}); multi-account sync not built.")
+    # Find the main brokerage account — the one with the most confirmed equity
+    # positions. SnapTrade may link auxiliary accounts (credit card, crypto,
+    # IRA, managed) alongside the main trading account; confirmed 2026-08-18
+    # diagnostic: 5 accounts linked — Credit Card (0 pos), Crypto (0 pos),
+    # IRA (0 pos), Managed (0 pos), Individual (15 pos). accounts[0] was the
+    # credit card, so the original `accounts[0]` sync wrote credit-card cash
+    # and ignored 84 credit-card POSDEBIT transactions instead of stock trades.
+    #
+    # Selection invariants (Opus reviewer, 2026-08-18):
+    # - None (read failed / timeout) is NEVER treated as 0 (confirmed empty);
+    #   collapsing them would silently select the wrong account on a transient
+    #   timeout, corrupting account_cash (feeds the concentration gate).
+    # - If every read fails: refuse to sync — notify + return 1.
+    # - If all valid reads return 0 positions (user sold everything): proceed
+    #   with the first account that returned a valid response (deterministic by
+    #   SnapTrade list order; a legitimately all-cash account should still sync
+    #   its balance). This is the deliberate policy: "all-zero but valid" is
+    #   not the same failure mode as "all reads timed out".
+    _best_count: int = -1   # -1 = no valid response seen yet
+    _best_id: str | None = None
+    for _a in accounts:
+        _aid = _a.get("id")
+        if not _aid:
+            continue
+        _aname = _a.get("name") or _a.get("institution_name") or "?"
+        _apos = snaptrade_client.get_account_positions(_aid)
+        if _apos is None:
+            _log(f"broker: account {_aname!r} ({_aid}) — positions read failed; skipping for selection")
+            continue  # unknown — do not treat as 0
+        _pcount = len(_apos)
+        _log(f"broker: account {_aname!r} ({_aid}) — {_pcount} positions")
+        if _pcount > _best_count:
+            _best_count = _pcount
+            _best_id = _aid
 
-    # DIAGNOSTIC (2026-08-18): log all accounts + positions per account + sample
-    # POSDEBIT transaction structure. Remove once root cause confirmed.
-    try:
-        for _i, _acct in enumerate(accounts):
-            _diag_aid = _acct.get("id")
-            _diag_name = _acct.get("name") or _acct.get("institution_name") or "?"
-            _diag_type = _acct.get("account_type") or _acct.get("type") or "?"
-            _diag_pos = snaptrade_client.get_account_positions(_diag_aid)
-            _diag_plen = len(_diag_pos) if _diag_pos is not None else "None"
-            _log(f"broker/DIAG acct[{_i}]: id={_diag_aid} name={_diag_name!r} type={_diag_type!r} positions={_diag_plen}")
-    except Exception as _diag_exc:
-        _log(f"broker/DIAG accounts: EXCEPTION {str(_diag_exc)[:200]}")
-    try:
-        _diag_all_txns = snaptrade_client.get_account_activities(account_id, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS)
-        _diag_posdebit = [t for t in (_diag_all_txns or []) if str(t.get("type", "")).upper() == "POSDEBIT"]
-        if _diag_posdebit:
-            _log(f"broker/DIAG POSDEBIT sample (first 1): keys={list(_diag_posdebit[0].keys())} val={str(_diag_posdebit[0])[:400]}")
-        else:
-            _log("broker/DIAG POSDEBIT: none found in activities")
-    except Exception as _diag_exc:
-        _log(f"broker/DIAG txn sample: EXCEPTION {str(_diag_exc)[:200]}")
+    if _best_id is None:
+        _detail = (
+            "positions read failed for every linked account — cannot safely "
+            "select which account to sync; skipping to avoid writing wrong "
+            "account's balance"
+        )
+        _LAST_LANE_FAILURE_DETAIL = _detail
+        _log(f"broker: {_detail}")
+        _notify_failure("broker", _detail)
+        return 1
+
+    account_id = _best_id
+    _log(f"broker: selected account {account_id!r} ({_best_count} positions) for sync")
 
     rc = 0
     failures: list[str] = []

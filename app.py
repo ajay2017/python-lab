@@ -28479,12 +28479,13 @@ elif page == "💰 Account":
             return snaptrade_client.list_accounts()
 
         @st.cache_data(ttl=60, show_spinner=False)
-        def _snap_cached_positions(_account_id: str):
-            # Leading underscore opts _account_id out of Streamlit's cache-key
-            # hashing — harmless today (exactly one linked account, per the
-            # plan's single-user scope), but would cache-collide across
-            # accounts if multi-account sync is ever built. Revisit then.
-            return snaptrade_client.get_account_positions(_account_id)
+        def _snap_cached_positions(account_id: str):
+            # No leading underscore — account_id IS part of the cache key so
+            # each of the user's linked accounts gets its own 60s slot
+            # (2026-08-18 fix: user has 5 accounts; original _account_id with
+            # leading underscore was excluded from the cache key, causing all
+            # 5 calls to return the first account's result).
+            return snaptrade_client.get_account_positions(account_id)
 
         st.markdown("#### 🔍 Position Drift")
         _snap_accounts = _snap_cached_accounts()
@@ -28499,8 +28500,22 @@ elif page == "💰 Account":
             # (2026-08-17 review finding).
             st.caption("⚠️ Drift check unavailable — portfolio not loaded (open 🏠 Home first).")
         else:
-            _snap_account_id = _snap_accounts[0].get("id")
-            _snap_positions = _snap_cached_positions(_snap_account_id)
+            # Aggregate positions from ALL linked accounts — SnapTrade links
+            # auxiliary accounts (credit card, crypto, IRA, managed) alongside
+            # the main brokerage account; confirmed 2026-08-18 that this user's
+            # 15 equity positions are in accounts[4] ("Robinhood Individual"),
+            # not accounts[0] ("Robinhood Credit Card"). Pass None to
+            # diff_positions only when every account call failed (signals
+            # "unavailable"), not when all legitimately returned 0 positions.
+            _all_snap_positions: list = []
+            _any_pos_failure = False
+            for _sa in _snap_accounts:
+                _sa_pos = _snap_cached_positions(_sa.get("id", ""))
+                if _sa_pos is None:
+                    _any_pos_failure = True
+                elif _sa_pos:
+                    _all_snap_positions.extend(_sa_pos)
+            _drift_input = None if (_any_pos_failure and not _all_snap_positions) else _all_snap_positions
             # Diff against RAW holdings (st.session_state.holdings_df), NOT
             # the enriched _acc_pdf — build_portfolio_df stores "Shares" as
             # int(shares) for display, so a fractional Robinhood holding
@@ -28509,7 +28524,7 @@ elif page == "💰 Account":
             # is exactly the case BROKER_DRIFT_SHARE_TOL exists to absorb,
             # but truncation is orders of magnitude larger than the tolerance).
             _snap_holdings_raw = st.session_state.get("holdings_df")
-            _snap_drift = broker_sync.diff_positions(_snap_positions, _snap_holdings_raw)
+            _snap_drift = broker_sync.diff_positions(_drift_input, _snap_holdings_raw)
             if _snap_drift is None:
                 st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
             else:
