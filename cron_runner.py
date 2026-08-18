@@ -1633,13 +1633,27 @@ def _run_broker(now_et, force: bool) -> int:
         _log(f"broker: {len(accounts)} accounts linked — syncing only the "
              f"first ({account_id}); multi-account sync not built.")
 
-    # DIAGNOSTIC (2026-08-18): log raw positions + activities response shapes
-    # to debug why position drift shows all-app-only. Remove once root cause confirmed.
+    # DIAGNOSTIC (2026-08-18): log all accounts + positions per account + sample
+    # POSDEBIT transaction structure. Remove once root cause confirmed.
     try:
-        _diag_pos = snaptrade_client.get_account_positions(account_id)
-        _log(f"broker/DIAG positions: type={type(_diag_pos).__name__} len={len(_diag_pos) if _diag_pos is not None else 'None'} sample={str(_diag_pos[:2] if _diag_pos else _diag_pos)[:300]}")
+        for _i, _acct in enumerate(accounts):
+            _diag_aid = _acct.get("id")
+            _diag_name = _acct.get("name") or _acct.get("institution_name") or "?"
+            _diag_type = _acct.get("account_type") or _acct.get("type") or "?"
+            _diag_pos = snaptrade_client.get_account_positions(_diag_aid)
+            _diag_plen = len(_diag_pos) if _diag_pos is not None else "None"
+            _log(f"broker/DIAG acct[{_i}]: id={_diag_aid} name={_diag_name!r} type={_diag_type!r} positions={_diag_plen}")
     except Exception as _diag_exc:
-        _log(f"broker/DIAG positions: EXCEPTION {str(_diag_exc)[:200]}")
+        _log(f"broker/DIAG accounts: EXCEPTION {str(_diag_exc)[:200]}")
+    try:
+        _diag_all_txns = snaptrade_client.get_account_activities(account_id, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS)
+        _diag_posdebit = [t for t in (_diag_all_txns or []) if str(t.get("type", "")).upper() == "POSDEBIT"]
+        if _diag_posdebit:
+            _log(f"broker/DIAG POSDEBIT sample (first 1): keys={list(_diag_posdebit[0].keys())} val={str(_diag_posdebit[0])[:400]}")
+        else:
+            _log("broker/DIAG POSDEBIT: none found in activities")
+    except Exception as _diag_exc:
+        _log(f"broker/DIAG txn sample: EXCEPTION {str(_diag_exc)[:200]}")
 
     rc = 0
     failures: list[str] = []
