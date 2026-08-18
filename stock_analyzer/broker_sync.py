@@ -56,8 +56,9 @@ _TRADE_TYPES = {"BUY", "SELL"}
 # purposes. Options/crypto/other instrument kinds are excluded — the app has
 # no options or crypto tracking anywhere else (project_today_pnl_scope: "user
 # holds no options"), and their `instrument` shape is a different schema than
-# the equity case this function is built for.
-_EQUITY_INSTRUMENT_KINDS = {"stock", "etf"}
+# the equity case this function is built for. "adr" added for foreign stocks
+# that trade as American Depositary Receipts (e.g. SAP, ASML).
+_EQUITY_INSTRUMENT_KINDS = {"stock", "etf", "adr"}
 
 
 # ── Position drift (capability 1) ───────────────────────────────────────────
