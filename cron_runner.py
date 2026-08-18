@@ -58,9 +58,9 @@ FRED_API_KEY (optional providers) · RESEND_API_KEY/ALERT_EMAIL_TO/ALERT_EMAIL_F
 · ALERT_RUN_MODE (scan|intraday|thesis|debrief|monthly|maintenance|broker) ·
 ALERT_FORCE=1 (bypass guards) · ALERT_TEST_EMAIL=1 (synthetic delivery test) ·
 ALERT_PROTECTIVE_ROW=1 / EOD lane uses row 2 in alert_state. The broker lane
-additionally needs SNAPTRADE_CLIENT_ID/SNAPTRADE_CONSUMER_KEY (app-level) and
-SNAPTRADE_USER_ID/SNAPTRADE_USER_SECRET (user-level, set once after the
-one-time SnapTrade connect flow) — see stock_analyzer/snaptrade_client.py.
+additionally needs SNAPTRADE_CLIENT_ID/SNAPTRADE_CONSUMER_KEY — a Personal
+SnapTrade API key (not Commercial), which has no separate per-user
+credential — see stock_analyzer/snaptrade_client.py.
 """
 
 import hashlib
@@ -1606,7 +1606,7 @@ def _run_broker(now_et, force: bool) -> int:
     _LAST_LANE_FAILURE_DETAIL = None
 
     if not snaptrade_client.has_snaptrade():
-        _log("broker: SnapTrade not configured (no user credentials) — skip.")
+        _log("broker: SnapTrade not configured (credentials not set) — skip.")
         return 0
 
     accounts = snaptrade_client.list_accounts()

@@ -1862,11 +1862,25 @@ never raises into caller code, matching the multi-source provider convention
 (`project_second_data_source`) rather than a bespoke error contract.
 Credentials are env-first then `st.secrets` (mirrors `db._supabase_creds()`),
 so the module works identically in the headless Railway `broker` cron and the
-Streamlit app. `SNAPTRADE_CLIENT_ID`/`SNAPTRADE_CONSUMER_KEY` are app-level;
-`SNAPTRADE_USER_ID`/`SNAPTRADE_USER_SECRET` are user-level and issued ONCE by
-SnapTrade at registration — this module never persists the secret, by design
-(see the plan's "Credential storage" section). `api_health.record("snaptrade", ...)`
-feeds 🩺 System Trust's provider-health check the same way Finnhub/FMP/Yahoo do.
+Streamlit app. `SNAPTRADE_CLIENT_ID`/`SNAPTRADE_CONSUMER_KEY` are the **only**
+two credentials — a **Personal** SnapTrade API key (corrected 2026-08-18: the
+original build wrongly assumed a Commercial key with a second `userId`/
+`userSecret` pair; SnapTrade's own Dashboard states Personal accounts never
+register a user and never send `userId`/`userSecret` on any call — confirmed
+by omitting them and getting the same clientId-level auth error as supplying
+them). `SnapTradeAuth.personal_api_key(...)` is used, not `commercial_api_key`.
+Every SDK call is wrapped in `stock_analyzer.providers.yfinance_provider.
+_call_with_timeout` (a worker-thread wall-clock bound) rather than a
+`timeout=` kwarg — the installed SDK's convenience methods don't expose one
+(confirmed via `inspect.signature()` against all six methods this module
+calls; a live `TypeError` caught the original mistake). `_record_error()`
+special-cases `snaptrade_client.ApiException` to record `f"{e.status}
+{e.body}"` rather than `str(e)` — the exception's default string form leads
+with HTTP headers, not the actual JSON error body, which `api_health`'s
+120-char truncation was cutting off before ever reaching the useful part.
+`api_health.record("snaptrade", ...)` feeds 🩺 System Trust's provider-health
+check the same way Finnhub/FMP/Yahoo do (added to `system_health._PROVIDERS`
+after a live incident where the recorded source had no display surface at all).
 
 ### `stock_analyzer/broker_sync.py`
 

@@ -13,11 +13,20 @@ or as "no data").
 Credentials (env-first, then st.secrets — same dual-source pattern as
 `db._supabase_creds`, so this works both in the headless Railway cron and
 in the Streamlit app):
-  SNAPTRADE_CLIENT_ID, SNAPTRADE_CONSUMER_KEY   — app-level (Railway secret)
-  SNAPTRADE_USER_ID, SNAPTRADE_USER_SECRET      — user-level (Railway secret;
-      USER_SECRET is issued once at registration and stored by the user, not
-      auto-persisted by the app — see the plan doc's "Credential storage"
-      section for why).
+  SNAPTRADE_CLIENT_ID, SNAPTRADE_CONSUMER_KEY   — the only two credentials.
+
+**Personal API key, not Commercial** (confirmed against the actual SnapTrade
+Dashboard, 2026-08-18 — the original build wrongly assumed the Commercial
+multi-tenant model). SnapTrade's own Personal-key page states: "Personal
+accounts do not register a SnapTrade user — skip registerUser, and do not
+send userId or userSecret." So unlike a Commercial integration (which
+registers a distinct `userId`/`userSecret` per end-user), every call here
+uses ONLY the Client ID + Consumer Key — there is no per-user registration
+step and no second credential pair. Verified directly against the SDK: none
+of `login_snap_trade_user`/`list_user_accounts`/`get_user_account_balance`/
+`get_all_account_positions`/`get_account_activities` require `user_id`/
+`user_secret` (omitting them produces the same clientId-level auth error as
+supplying them, not a "missing required field" error).
 """
 
 import os
@@ -49,26 +58,11 @@ def _snaptrade_app_creds() -> tuple[str, str]:
     return "", ""
 
 
-def _snaptrade_user_creds() -> tuple[str, str]:
-    """(user_id, user_secret) — env first, then st.secrets."""
-    user_id = os.environ.get("SNAPTRADE_USER_ID", "")
-    user_secret = os.environ.get("SNAPTRADE_USER_SECRET", "")
-    if user_id and user_secret:
-        return user_id, user_secret
-    if st is not None:
-        try:
-            sec = st.secrets.get("snaptrade", {})
-            return sec.get("user_id", "") or "", sec.get("user_secret", "") or ""
-        except Exception:
-            pass
-    return "", ""
-
-
 def has_snaptrade() -> bool:
-    """True when both app-level and user-level SnapTrade credentials are present."""
+    """True when the Personal SnapTrade API key (Client ID + Consumer Key)
+    is present. No separate user-level credential exists for a Personal key."""
     client_id, consumer_key = _snaptrade_app_creds()
-    user_id, user_secret = _snaptrade_user_creds()
-    return bool(client_id) and bool(consumer_key) and bool(user_id) and bool(user_secret)
+    return bool(client_id) and bool(consumer_key)
 
 
 # Process-level singleton — same rationale as db._client(): a plain module
@@ -80,17 +74,17 @@ _client_creds_used: tuple[str, str] | None = None
 
 def _client():
     """Lazily construct (and cache) the SnapTrade SDK client. Raises if
-    app-level credentials are missing — callers must check `has_snaptrade()`
-    first, or catch the exception (every public function below does)."""
+    credentials are missing — callers must check `has_snaptrade()` first,
+    or catch the exception (every public function below does)."""
     global _client_singleton, _client_creds_used
     client_id, consumer_key = _snaptrade_app_creds()
     if not client_id or not consumer_key:
-        raise RuntimeError("SnapTrade app credentials not configured")
+        raise RuntimeError("SnapTrade credentials not configured")
     if _client_singleton is not None and _client_creds_used == (client_id, consumer_key):
         return _client_singleton
     from snaptrade_client import SnapTrade, SnapTradeAuth
     _client_singleton = SnapTrade(
-        auth=SnapTradeAuth.commercial_api_key(
+        auth=SnapTradeAuth.personal_api_key(
             consumer_key=consumer_key,
             client_id=client_id,
         )
@@ -124,36 +118,13 @@ def _record_error(exc: object) -> None:
     api_health.record("snaptrade", "error", msg=str(exc))
 
 
-def register_user(user_id: str):
-    """Register a new SnapTrade user. Returns the `user_secret` string (issued
-    ONCE — the caller must display/persist it immediately) or None on failure.
-    One-time setup call — not used in normal sync operation.
-
-    Wall-clock bounded via _call_with_timeout, not a `timeout=` kwarg — the
-    installed SDK's convenience methods don't expose one (confirmed against
-    a live TypeError: 'register_snap_trade_user() got an unexpected keyword
-    argument timeout', 2026-08-17). Same pattern already used for yfinance,
-    which has the identical no-timeout-knob problem."""
-    try:
-        resp = _call_with_timeout(
-            _client().authentication.register_snap_trade_user,
-            (), {"user_id": user_id},
-            SNAPTRADE_REQUEST_TIMEOUT_SEC,
-        )
-        _record_success()
-        return resp.body["userSecret"]
-    except Exception as e:
-        _record_error(e)
-        return None
-
-
-def get_connection_portal_url(user_id: str, user_secret: str):
-    """Return the SnapTrade connection-portal redirect URL for the given user,
-    or None on failure. One-time setup call."""
+def get_connection_portal_url():
+    """Return the SnapTrade connection-portal redirect URL, or None on
+    failure. One-time setup call — no user_id/user_secret for a Personal key."""
     try:
         resp = _call_with_timeout(
             _client().authentication.login_snap_trade_user,
-            (), {"user_id": user_id, "user_secret": user_secret},
+            (), {},
             SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
@@ -164,16 +135,15 @@ def get_connection_portal_url(user_id: str, user_secret: str):
 
 
 def list_accounts():
-    """Return the list of connected brokerage accounts (raw SDK dicts) for the
-    configured user, or None on failure/missing credentials. Each element
-    carries at least `id` (SnapTrade account UUID) and `institution_name`."""
-    user_id, user_secret = _snaptrade_user_creds()
-    if not user_id or not user_secret:
+    """Return the list of connected brokerage accounts (raw SDK dicts), or
+    None on failure/missing credentials. Each element carries at least `id`
+    (SnapTrade account UUID) and `institution_name`."""
+    if not has_snaptrade():
         return None
     try:
         resp = _call_with_timeout(
             _client().account_information.list_user_accounts,
-            (), {"user_id": user_id, "user_secret": user_secret},
+            (), {},
             SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
@@ -190,13 +160,12 @@ def get_account_balance(account_id: str):
     account) returns one — this function returns the FULL response body
     unfiltered and leaves currency selection to the caller (broker_sync.py),
     since collapsing to one number is a business decision, not plumbing."""
-    user_id, user_secret = _snaptrade_user_creds()
-    if not user_id or not user_secret:
+    if not has_snaptrade():
         return None
     try:
         resp = _call_with_timeout(
             _client().account_information.get_user_account_balance,
-            (), {"account_id": account_id, "user_id": user_id, "user_secret": user_secret},
+            (), {"account_id": account_id},
             SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
@@ -210,13 +179,12 @@ def get_account_positions(account_id: str):
     """Return the raw list of position entries for one SnapTrade account
     (each with an `instrument` discriminated by `instrument.kind`, plus
     `units`/`price`/`cost_basis`), or None on failure."""
-    user_id, user_secret = _snaptrade_user_creds()
-    if not user_id or not user_secret:
+    if not has_snaptrade():
         return None
     try:
         resp = _call_with_timeout(
             _client().account_information.get_all_account_positions,
-            (), {"account_id": account_id, "user_id": user_id, "user_secret": user_secret},
+            (), {"account_id": account_id},
             SNAPTRADE_REQUEST_TIMEOUT_SEC,
         )
         _record_success()
@@ -236,8 +204,7 @@ def get_account_activities(account_id: str, lookback_days: int):
     more than that in one lookback window would need to page via `offset`;
     not built here since SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS keeps the
     window small enough that a single retail account won't hit it."""
-    user_id, user_secret = _snaptrade_user_creds()
-    if not user_id or not user_secret:
+    if not has_snaptrade():
         return None
     end = today_et()
     start = end - timedelta(days=lookback_days)
@@ -247,8 +214,6 @@ def get_account_activities(account_id: str, lookback_days: int):
             (),
             {
                 "account_id": account_id,
-                "user_id": user_id,
-                "user_secret": user_secret,
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "offset": 0,

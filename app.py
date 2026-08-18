@@ -28391,53 +28391,37 @@ elif page == "💰 Account":
     _snap_status = (_snap_config or {}).get("status", "disconnected")
     _snap_has_creds = snaptrade_client.has_snaptrade()
     _snap_connected = _snap_has_creds and _snap_status == "connected"
-    # Distinguish "credentials set, first cron sync hasn't landed yet" from
-    # "genuinely never set up" — otherwise a user who already added Railway
-    # env vars and is just waiting for the next `broker` cron fire would see
-    # the full registration flow again and could click "Register with
-    # SnapTrade" a second time, creating a needless duplicate SnapTrade user.
-    _snap_awaiting_first_sync = _snap_has_creds and not _snap_connected
 
-    if _snap_awaiting_first_sync:
-        st.info(
-            "⏳ **Credentials set — waiting for the first sync.** "
-            "`SNAPTRADE_USER_ID`/`SNAPTRADE_USER_SECRET` are configured; this "
-            "connects on the next `broker` cron run. Check 🩺 System Trust for "
-            "the `broker` lane's heartbeat if this persists."
-        )
-    elif not _snap_connected:
+    if not _snap_connected:
         st.info(
             "🔌 **Not connected.** SnapTrade bridges Robinhood to this app for "
-            "automated balance sync and transaction import.\n\n"
-            "**One-time setup** (credentials live as Railway environment "
-            "variables, never in this app's database):\n\n"
-            "1. Create a SnapTrade account at snaptrade.com and add your "
-            "`CLIENT_ID` / `CONSUMER_KEY` to Railway → Variables as "
-            "`SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY`, then redeploy.\n"
-            "2. Come back here after the redeploy and click **Register with "
-            "SnapTrade** below.\n"
-            "3. SnapTrade issues a `USER_SECRET` — shown **once**, right here. "
-            "Copy it (and the `USER_ID` shown alongside it) into Railway → "
-            "Variables as `SNAPTRADE_USER_ID` / `SNAPTRADE_USER_SECRET`.\n"
-            "4. Open the connection link shown to log into Robinhood via "
-            "SnapTrade's portal. Redeploy once more — sync starts on the next "
-            "`broker` cron run.\n\n"
-            "⚠️ Only click **Register with SnapTrade** once — the `USER_SECRET` "
-            "is issued a single time. If you lose it before copying it to "
-            "Railway, you'll need to delete the SnapTrade user and re-register."
+            "automated balance sync and transaction import — using a "
+            "**Personal SnapTrade API key** (free, single-account; unlike a "
+            "Commercial integration, there's no separate per-user registration "
+            "step or second credential pair — confirmed 2026-08-18 against "
+            "SnapTrade's own Dashboard after the original build wrongly "
+            "assumed the Commercial multi-tenant model).\n\n"
+            "**One-time setup** (credentials live as a Railway environment "
+            "variable, never in this app's database):\n\n"
+            "1. In your SnapTrade Dashboard → API Keys → **Personal API Key**, "
+            "copy the `Client ID` / `Consumer Key` shown there into Railway → "
+            "Variables as `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY`, "
+            "then redeploy.\n"
+            "2. Come back here after the redeploy and click **Connect "
+            "Robinhood** below to get your SnapTrade connection link.\n"
+            "3. Open that link to log into Robinhood via SnapTrade's portal. "
+            "Sync starts on the next `broker` cron run."
         )
-        _snap_setup = st.session_state.get("_snap_setup_result")
-        if not db.is_readonly():
-            if st.button("Register with SnapTrade", key="_snap_register_btn"):
-                _snap_user_id = "drishta"
-                _snap_secret = snaptrade_client.register_user(_snap_user_id)
-                if _snap_secret is None:
+        if not db.is_readonly() and _snap_has_creds:
+            if st.button("Connect Robinhood", key="_snap_connect_btn"):
+                _snap_portal_url = snaptrade_client.get_connection_portal_url()
+                if _snap_portal_url is None:
                     # Surface the actual captured exception inline — the
                     # generic banner alone sent a user to re-check already-
                     # correct Railway variables with no way to see the real
-                    # cause (2026-08-17 live incident: register_user()
-                    # swallows the exception into api_health, which had no
-                    # display surface at all before this fix).
+                    # cause (2026-08-17 live incident: the SDK call swallows
+                    # the exception into api_health, which had no display
+                    # surface at all before this fix).
                     from stock_analyzer import api_health as _snap_ah
                     _snap_last_err = (_snap_ah.get_health("snaptrade").get("last_error") or "").replace("`", "'")
                     st.error(
@@ -28446,33 +28430,22 @@ elif page == "💰 Account":
                         + (f"\n\n**Captured error:** `{_snap_last_err}`" if _snap_last_err else "")
                     )
                 else:
-                    _snap_portal_url = snaptrade_client.get_connection_portal_url(
-                        _snap_user_id, _snap_secret
-                    )
-                    st.session_state["_snap_setup_result"] = {
-                        "user_id": _snap_user_id,
-                        "user_secret": _snap_secret,
-                        "portal_url": _snap_portal_url,
-                    }
-                    db.save_snaptrade_config(status="pending_env_vars")
+                    st.session_state["_snap_portal_url"] = _snap_portal_url
+                    db.save_snaptrade_config(status="pending_connection")
                     st.rerun()
-        if _snap_setup:
-            st.warning(
-                "⚠️ **This USER_SECRET is shown once — copy it now.** It will not "
-                "be displayed again after you navigate away."
+        elif not _snap_has_creds:
+            st.caption(
+                "Add `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY` to "
+                "Railway → Variables and redeploy to unlock the Connect button."
             )
-            st.code(
-                f"SNAPTRADE_USER_ID={_snap_setup['user_id']}\n"
-                f"SNAPTRADE_USER_SECRET={_snap_setup['user_secret']}"
+        _snap_portal_url_cached = st.session_state.get("_snap_portal_url")
+        if _snap_portal_url_cached:
+            st.link_button("🔗 Connect Robinhood via SnapTrade", _snap_portal_url_cached)
+            st.caption(
+                "Sync starts on the next `broker` cron run once Robinhood is connected. "
+                "This link expires after a while — if it doesn't work, click **Connect "
+                "Robinhood** above again for a fresh one."
             )
-            if _snap_setup.get("portal_url"):
-                st.link_button("🔗 Connect Robinhood via SnapTrade", _snap_setup["portal_url"])
-            else:
-                st.caption(
-                    "⚠️ Couldn't get a connection link this time — the USER_ID/"
-                    "USER_SECRET above are still valid; revisit this page after "
-                    "adding them to Railway to retry the connection link."
-                )
     else:
         _snap_last_sync = (_snap_config or {}).get("last_full_sync_at")
         st.success(
@@ -30196,7 +30169,7 @@ The app doesn't auto-connect to your brokerage yet, so you keep it current with 
 - **Pending trade imports** — buy/sell activity Robinhood reports that isn't in your Trade Journal yet. Nothing is written automatically: each row has a **"Log This Trade →"** button that opens the Trade Journal with ticker/shares/price/date already locked in from the real fill — you still choose a trigger reason and write the required pre-mortem (labeled "Retrospective" since the trade already happened), same as any other Buy. A ✗ button lets you back out of a locked import at any point without logging it.
 - **Cash Activity** — a monthly trend of dividends, interest, and fees, purely for visibility (it never feeds your Growth/Return numbers above — those stay driven by the deposits/withdrawals you log).
 
-Setup is a one-time, four-step process shown on the page itself (it needs a SnapTrade account and a couple of Railway environment variables — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
+Setup is a one-time, three-step process shown on the page itself (it needs a free SnapTrade Personal API Key and one Railway environment variable pair — not something done from inside the app in one click). Broker Sync **supplements** the manual habits above — you can still enter cash by hand and log trades manually any time, connected or not.
 """
             )
 

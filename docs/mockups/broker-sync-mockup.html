@@ -5,6 +5,16 @@
   Decisions locked: USER_SECRET=Railway env var; income events tracked in snaptrade_income_events;
   account_flows = ACH/wire only; 7th cron lane; Buy/Sell always queued for review.
   Numbers below are ILLUSTRATIVE, not from the live DB.
+
+  SUPERSEDED 2026-08-18: the setup flow below (USER_SECRET, 3 Railway
+  variables, a "Register with SnapTrade" step) assumed a Commercial SnapTrade
+  API key. The shipped app uses a Personal API key instead (confirmed against
+  the user's real SnapTrade account) — no per-user registration step, no
+  USER_ID/USER_SECRET, only SNAPTRADE_CLIENT_ID/SNAPTRADE_CONSUMER_KEY, and a
+  single "Connect Robinhood" button. Kept as-is (not rewritten) since this is
+  a historical record of what was approved at design time, not live docs —
+  see docs/plans/snaptrade-broker-integration.md's "credential model" section
+  and app.py's actual "⚡ Broker Sync" code for the shipped flow.
 -->
 <html lang="en">
 <head>

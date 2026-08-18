@@ -612,9 +612,8 @@ the user acted on it):
     -- this file, so the app runs exactly as before.
 
     -- snaptrade_config: single-row (id=1) connection state — NEVER the
-    -- user_secret itself (that stays a Railway env var per the plan's
-    -- "Credential storage" section; a one-time OAuth secret this app must
-    -- not be the sole place holding).
+    -- Client ID / Consumer Key themselves (a Personal SnapTrade API key,
+    -- Railway env vars only, per the plan's "Credential storage" section).
     create table if not exists public.snaptrade_config (
         id                        integer primary key,
         brokerage_authorization_id text,
@@ -3629,8 +3628,9 @@ def delete_account_flow(flow_id) -> bool:
 
 
 # ── SnapTrade broker integration (docs/plans/snaptrade-broker-integration.md) ─
-# snaptrade_config: single-row (id=1) connection state — never the user_secret
-# itself (a Railway env var, per the plan's "Credential storage" section).
+# snaptrade_config: single-row (id=1) connection state — never the Client ID /
+# Consumer Key themselves (Railway env vars only, per the plan's "Credential
+# storage" section; a Personal SnapTrade API key, not Commercial).
 
 def load_snaptrade_config() -> dict | None:
     """Return the single snaptrade_config row, or None (DB offline / table
