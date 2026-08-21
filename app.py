@@ -16734,7 +16734,8 @@ elif page == "🥧 Portfolio Overview":
                 st.caption(
                     "Sector ETFs: SOXX (Semis) · IGV (AI/Cloud/Tech) · XLV (Healthcare) · "
                     "XLE (Energy) · XLF (Financials) · ITA (Defense) · XLY (Consumer) · "
-                    "CIBR (Cybersecurity) · ICLN (Clean Energy) · DRIV (EV).  "
+                    "CIBR (Cybersecurity) · ICLN (Clean Energy) · DRIV (EV) · "
+                    "XLI (Industrials) · XLC (Communications).  "
                     "Data cached 1 hour."
                 )
             elif _sr_df is None:
