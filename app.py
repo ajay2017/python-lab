@@ -77,6 +77,7 @@ from stock_analyzer.stress_test import (
 )
 from stock_analyzer import monte_carlo as _mc
 from stock_analyzer import forward_sim as _fsim
+from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
 from stock_analyzer.daily_pnl import compute_positions_day_pnl
 from stock_analyzer.rebalancer import (
@@ -27806,50 +27807,138 @@ elif page == "📊 Predictive Analytics":
                     st.session_state.pop("_entry_timing_cache", None)
                     st.rerun()
 
-    # ── Alpha Attribution — activates after ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS days of snapshots ───
+    # ── Alpha Attribution — activates after ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS
+    # CAPTURED snapshot days (distinct dates, not calendar span — see F-247) ────
     with st.expander(
-        f"📊 Alpha Attribution — activates after {ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS} days of snapshots",
+        f"📊 Alpha Attribution — activates after {ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS} captured days of snapshots",
         expanded=False,
     ):
         st.info(
-            "**Coming once you have 6+ months of daily portfolio snapshots.**  \n\n"
+            f"**Coming once {ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS} daily portfolio "
+            "snapshots have actually been captured.**  \n\n"
+            "That is counted in **captured trading days, not calendar time** — so it is "
+            f"roughly {ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS / 21:.1f} months of unbroken "
+            "capture, and longer if there are gaps. (Before 2026-08-21 this was measured "
+            "as the calendar span between the first and last snapshot, which a gapped "
+            "history could clear while holding very little data.)  \n\n"
             "Factor attribution decomposes your realized alpha into the dimensions "
             "that actually drove it: which sectors, which hold-duration bands "
             "(< 30 days / 30–90 days / 90+ days), and which score tiers contributed "
             "most — and whether your capital allocation *follows* your edge or works "
             "against it."
         )
+        # ── Data-readiness audit (E2) ─────────────────────────────────────────
+        # This block used to measure coverage as (latest - earliest).days + 1 — a
+        # CALENDAR SPAN. Two ways that overstated readiness: only ~69% of
+        # calendar days are NYSE sessions, and a cron gap was invisible (a week
+        # of snapshots in March plus one in August reported 168 days of
+        # "coverage" on 6 real dates). daily_snapshots is cron-written and cron
+        # gaps are demonstrated here — F-239 found a lane outage on 2026-08-16
+        # that read green until 08-21. So the honest count now renders BESIDE the
+        # old span rather than replacing it: the gap between them is the finding.
+        # Audit only — nothing here gates or feeds a recommendation.
         try:
-            _pa_snaps = db.load_daily_snapshots()
-            if _pa_snaps is not None and not _pa_snaps.empty \
-                    and "snapshot_date" in _pa_snaps.columns:
-                _pa_snaps["snapshot_date"] = _pa_pd.to_datetime(
-                    _pa_snaps["snapshot_date"], utc=True
-                ).dt.date
-                _pa_earliest = _pa_snaps["snapshot_date"].min()
-                _pa_latest   = _pa_snaps["snapshot_date"].max()
-                _pa_days_cov = (_pa_latest - _pa_earliest).days + 1
+            _pa_snaps  = db.load_daily_snapshots()
+            _pa_cov    = _attr_ready.snapshot_coverage(_pa_snaps)
+            if _pa_cov is None:
+                st.caption("No daily snapshots recorded yet.")
+            else:
                 _pa_c1, _pa_c2, _pa_c3 = st.columns(3)
-                _pa_c1.metric("Earliest snapshot", str(_pa_earliest))
-                _pa_c2.metric("Latest snapshot",   str(_pa_latest))
+                _pa_c1.metric("Earliest snapshot", str(_pa_cov["earliest"]))
+                _pa_c2.metric("Latest snapshot",   str(_pa_cov["latest"]))
                 _pa_c3.metric(
-                    "Coverage",
-                    f"{_pa_days_cov} days",
-                    delta=f"{_pa_days_cov - ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS:+d} vs "
+                    "Snapshots recorded",
+                    f"{_pa_cov['n_dates']} days",
+                    delta=f"{_pa_cov['n_dates'] - ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS:+d} vs "
                           f"{ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS}-day target",
                     delta_color="normal",
+                    help="DISTINCT snapshot dates — the real observation count, not "
+                         "the calendar span between the first and last.",
                 )
-                if _pa_days_cov < ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS:
+                if _pa_cov["completeness_pct"] is not None:
+                    st.caption(
+                        f"Spans **{_pa_cov['span_days']} calendar days** containing "
+                        f"**{_pa_cov['expected_sessions']} NYSE sessions**; "
+                        f"**{_pa_cov['n_dates']} snapshots captured "
+                        f"({_pa_cov['completeness_pct']:.0f}% of expected)**. Weekends and "
+                        "holidays are not counted as gaps."
+                    )
+                if _pa_cov["calendar_stale"]:
+                    st.caption(
+                        f"⚠️ The NYSE holiday table only runs to {_pa_cov['calendar_last_year']}, "
+                        "so sessions beyond it are counted without holiday adjustment — the "
+                        "expected-session count above is slightly high and completeness "
+                        "slightly low."
+                    )
+                if _pa_cov["missing_sessions"] > 0:
+                    st.warning(
+                        f"⚠️ **{_pa_cov['missing_sessions']} session(s) missing**, longest "
+                        f"unbroken gap **{_pa_cov['largest_gap_sessions']} session(s)**. One "
+                        "long outage hurts an attribution far more than the same number of "
+                        "scattered misses, so read the gap figure, not just the total."
+                    )
+                if _pa_cov["n_dates"] < ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS:
                     st.progress(
-                        min(_pa_days_cov / ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS, 1.0),
+                        min(_pa_cov["n_dates"] / ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS, 1.0),
                         text=(
-                            f"{min(int(_pa_days_cov / ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS * 100), 100)}"
+                            f"{min(int(_pa_cov['n_dates'] / ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS * 100), 100)}"
                             f"% to activation — "
-                            f"{ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS - _pa_days_cov} more days needed"
+                            f"{ALPHA_ATTRIBUTION_MIN_SNAPSHOT_DAYS - _pa_cov['n_dates']} "
+                            "more captured days needed"
                         ),
                     )
-            else:
-                st.caption("No daily snapshots recorded yet.")
+
+                # Churn and concentration — the two things Pass #1 actually
+                # warned would make an attribution on THIS book noisy, and which
+                # a coverage figure alone cannot answer.
+                _pa_conc = _attr_ready.concentration(_pa_snaps)
+                _pa_turn = _attr_ready.turnover(
+                    st.session_state.get("trades_df"), _pa_snaps
+                )
+                _pa_bits = []
+                if _pa_conc and _pa_conc["effective_positions"] is not None:
+                    _pa_bits.append(
+                        f"**{_pa_conc['n_positions']} positions** but only "
+                        f"**{_pa_conc['effective_positions']:.1f} effective** "
+                        f"(largest {_pa_conc['top_weight_pct']:.0f}% of book)"
+                    )
+                if _pa_turn:
+                    # The annualised figure is withheld until the window is
+                    # genuinely as long as the lookback — scaling a short or
+                    # gapped window up to a year is the same measurement sin
+                    # this panel exists to fix.
+                    if _pa_turn["annualised_turnover_pct"] is not None:
+                        _pa_bits.append(
+                            f"turnover **{_pa_turn['annualised_turnover_pct']:.0f}%/yr**"
+                        )
+                    else:
+                        _pa_bits.append(
+                            f"turnover **{_pa_turn['window_turnover_pct']:.0f}% over "
+                            f"{_pa_turn['window_days']}d** (too short to annualise)"
+                        )
+                    _pa_bits.append(
+                        f"{_pa_turn['n_trades']} trades, splits excluded; book value "
+                        f"averaged over {_pa_turn['n_snapshot_dates_in_window']} snapshots"
+                    )
+                if _pa_bits:
+                    st.caption(
+                        "Churn & concentration — " + " · ".join(_pa_bits)
+                        + ". A concentrated, high-turnover book makes an attribution "
+                        "noisier regardless of how much history exists, so these matter "
+                        "as much as the day count above."
+                    )
+                else:
+                    st.caption(
+                        "Churn & concentration unavailable this session — so the day "
+                        "count above is only half the readiness picture."
+                    )
+                st.caption(
+                    "⚠️ One constraint any sector attribution must state: sector labels "
+                    "come from an as-of-**now** curated map (`resolve_sector`), so a "
+                    "historical decomposition applies today's taxonomy to past holdings. "
+                    "The scan/diversification rosters were refreshed 2026-08-16/17, so "
+                    "this is real, not hypothetical."
+                )
         except Exception:
             st.caption("Could not load snapshot coverage.")
 
