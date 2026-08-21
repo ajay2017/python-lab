@@ -110,8 +110,6 @@ from stock_analyzer.constants import (
     ACCOUNT_CASH_STALE_DAYS,
     DIVERSIFY_DISPLAY_TOP,
     DIVERSIFY_SCAN_CAP,
-    REDEPLOY_CORR_DIVERSIFIER_MAX,
-    REDEPLOY_CORR_CORRELATED_MIN,
     COMPOSITE_BUY,
     COMPOSITE_HOLD,
     PERF_ALPHA_BAND_PCT,
@@ -220,6 +218,7 @@ from stock_analyzer.portfolio import (
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
+    classify_book_corr,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share
 from stock_analyzer.scanner import (
@@ -8400,14 +8399,15 @@ if page == "🏠 Home":
                             if _passers_corr else None
                         )
 
+                        _CORR_STATE_COPY = {
+                            "diversifier": lambda cv: f"🟢 corr {cv:.2f} to your book — genuine diversifier",
+                            "correlated":  lambda cv: f"🔴 corr {cv:.2f} to your book — limited benefit (moves with your book)",
+                            "partial":     lambda cv: f"🟡 corr {cv:.2f} to your book — partial diversifier",
+                            "na":          lambda cv: "corr to your book: n/a",
+                        }
+
                         def _corr_label(cv) -> str:
-                            if not isinstance(cv, (int, float)):
-                                return "corr to your book: n/a"
-                            if cv < REDEPLOY_CORR_DIVERSIFIER_MAX:
-                                return f"🟢 corr {cv:.2f} to your book — genuine diversifier"
-                            if cv >= REDEPLOY_CORR_CORRELATED_MIN:
-                                return f"🔴 corr {cv:.2f} to your book — limited benefit (moves with your book)"
-                            return f"🟡 corr {cv:.2f} to your book — partial diversifier"
+                            return _CORR_STATE_COPY[classify_book_corr(cv)](cv)
 
                         st.markdown("**Redeploy into — engine-vetted candidates:**")
                         if any(c["passes"] is True for c in _cand_rows):
@@ -11919,6 +11919,7 @@ elif page == "📡 Signals & Advice":
 
             if add_recs:
                 st.subheader("➕ Add for Diversification")
+                _add_port_ret = portfolio_return_series(port_df, held_data)
                 for rec in add_recs:
                     with st.container(border=True):
                         ac1, ac2 = st.columns([3, 1])
@@ -11928,10 +11929,18 @@ elif page == "📡 Signals & Advice":
                                 f"currently {rec['current_pct']:.0f}% → target {rec['target_pct']:.0f}%"
                             )
                             st.caption(rec["reason"])
-                            st.markdown(
-                                f"Typical correlation to a growth/tech-heavy portfolio: "
-                                f"**{rec['corr_to_tech']:.2f}** — lower = genuine diversification"
-                            )
+                            if _add_port_ret is None:
+                                st.markdown(
+                                    f"Sector-typical correlation to a tech-heavy book: "
+                                    f"**{rec['corr_to_tech']:.2f}** *(rough prior — live read "
+                                    f"unavailable this session)*"
+                                )
+                            else:
+                                st.markdown(
+                                    "Correlation to **your** book is shown live per candidate "
+                                    "below — lower = genuine diversification. "
+                                    f"*(Sector-typical prior: ~{rec['corr_to_tech']:.2f}.)*"
+                                )
                         with ac2:
                             st.metric("Suggested add", f"${rec['add_dollars']:,.0f}",
                                       f"+{rec['gap_pct']:.1f}%", delta_color="normal")
@@ -11977,6 +11986,35 @@ elif page == "📡 Signals & Advice":
                         _scored_n  = sum(1 for c in _annotated if c["passes"] is not None)
                         _top       = _annotated[:DIVERSIFY_DISPLAY_TOP]
 
+                        # Live correlation-to-book for the displayed candidates — the
+                        # same data-driven read the Rebalancer redeploy card uses,
+                        # rather than the static sector-level prior above.
+                        _corr_map: dict[str, float | None] = {}
+                        for _c in _top:
+                            _bd = _div_bundles.get(_c["ticker"])
+                            _bd = _bd if _bd is not None else {}
+                            _hist = _bd.get("df") if _bd.get("df") is not None else _bd.get("history")
+                            _close = (
+                                _hist["Close"]
+                                if (_hist is not None and not _hist.empty and "Close" in _hist.columns)
+                                else None
+                            )
+                            _corr_map[_c["ticker"]] = (
+                                correlation_to_portfolio(_close, _add_port_ret)
+                                if (_close is not None and _add_port_ret is not None) else None
+                            )
+                        # "Cleanest diversifier" = lowest corr among displayed
+                        # gate-passers (highlight, not a re-rank — mirrors the
+                        # Rebalancer redeploy card's own _cleanest logic).
+                        _add_passers_corr = [
+                            c for c in _top
+                            if c["passes"] is True and isinstance(_corr_map.get(c["ticker"]), (int, float))
+                        ]
+                        _add_cleanest = (
+                            min(_add_passers_corr, key=lambda c: _corr_map[c["ticker"]])["ticker"]
+                            if _add_passers_corr else None
+                        )
+
                         # Headline: does the sector need have an actionable entry today?
                         _passers = [c for c in _annotated if c["passes"] is True]
                         if _passers:
@@ -12008,6 +12046,29 @@ elif page == "📡 Signals & Advice":
                             f"composite ≥ {COMPOSITE_BUY:.0f}."
                         )
 
+                        # Live corr-to-book caption for one candidate — same band
+                        # copy the Rebalancer redeploy card uses, plus a "cleanest"
+                        # badge and two DISTINCT n/a reasons (book-level vs
+                        # candidate-level — don't collapse them into one message).
+                        def _add_corr_caption(_cand_t: str) -> str:
+                            if _add_port_ret is None:
+                                return "corr to your book: n/a (live read unavailable this session)"
+                            _cv = _corr_map.get(_cand_t)
+                            _state = classify_book_corr(_cv)
+                            if _state == "na":
+                                return (
+                                    f"corr to your book: n/a (insufficient price-history "
+                                    f"overlap for {_cand_t})"
+                                )
+                            _copy = {
+                                "diversifier": f"🟢 corr {_cv:.2f} to your book — genuine diversifier",
+                                "partial":     f"🟡 corr {_cv:.2f} to your book — partial diversifier",
+                                "correlated":  f"🔴 corr {_cv:.2f} to your book — limited benefit (moves with your book)",
+                            }[_state]
+                            if _cand_t == _add_cleanest:
+                                _copy += " · 🏆 cleanest diversifier"
+                            return _copy
+
                         # Per-candidate quality cards (top N, best-first, gated)
                         _score_cols = st.columns(len(_top))
                         for _scol, _c in zip(_score_cols, _top):
@@ -12017,6 +12078,7 @@ elif page == "📡 Signals & Advice":
                                 if _c["passes"] is None:
                                     st.metric(_cand, "—", "score unavailable")
                                     st.caption("Could not load live score")
+                                    st.caption(_add_corr_caption(_cand))
                                     # Jump to the full Analysis scorecard (same
                                     # control as the New-Position cards) — trade
                                     # decisions happen on Analysis; this is the bridge.
@@ -12043,6 +12105,7 @@ elif page == "📡 Signals & Advice":
                                     st.caption("R:R N/A")
                                 if not _c["passes"]:
                                     st.caption(f"Below Buy gate ({COMPOSITE_BUY:.0f})")
+                                st.caption(_add_corr_caption(_cand))
                                 # Secondary fundamentals from the same bundle (no extra call)
                                 _fin = (_div_bundles.get(_cand) or {}).get("financials", {}) or {}
                                 _pe  = _fin.get("forward_pe")

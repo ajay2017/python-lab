@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import numpy as np
 
-from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS
+from stock_analyzer.constants import COMPOSITE_BUY, COMPOSITE_SELL, DIVERSIFY_SCAN_CAP, UNCLASSIFIED_SECTOR, SINGLE_NAME_CEILING, SINGLE_NAME_TRIM_TRIGGER, SECTOR_CEILING, SECTOR_REDUCE_TRIGGER, ATR_STOP_MULT, GAP_TO_STOP_ROUND_DECIMALS, CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD, POSITION_AT_RISK_GAP_PCT, APPROACHING_STOP_GAP_PCT, ALERT_PNL_PROFIT_TAKE_PCT, ALERT_PNL_STOP_LOSS_PCT, REBALANCE_TRIM_PNL_PCT, REBALANCE_ADD_MIN_SCORE, REBALANCE_ADD_UNDERSIZED_PCT, REBALANCE_ADD_TARGET_WEIGHT_PCT, REBALANCE_REVIEW_GAP_PCT, DIVERSIFY_REDUCE_HIGH_URGENCY_PCT, DIVERSIFY_ADD_SKIP_PCT, DIVERSIFY_ADD_TARGET_PCT, PT_TARGET_LOOKBACK_DAYS, STOP_RATCHET_LEVELS, EARNINGS_IMMINENT_DAYS, EARNINGS_CRITICAL_DAYS, REDEPLOY_CORR_DIVERSIFIER_MAX, REDEPLOY_CORR_CORRELATED_MIN
 from stock_analyzer.discovery_universe import DISCOVERY_UNIVERSE
 from stock_analyzer.earnings_advisor import _today_et
 
@@ -1077,6 +1077,30 @@ def correlation_to_portfolio(
         return round(float(c), 2)
     except Exception:
         return None
+
+
+def classify_book_corr(
+    cv,
+    diversifier_max: float = REDEPLOY_CORR_DIVERSIFIER_MAX,
+    correlated_min: float = REDEPLOY_CORR_CORRELATED_MIN,
+) -> str:
+    """Classify a candidate's correlation-to-book reading into a display state.
+
+    Shared band logic behind the Rebalancer redeploy card's "correlation to
+    your book" label AND the Diversification Advisor ADD card — a candidate
+    with the exact same live corr reading must land in the same band on both
+    surfaces. `cv` is expected to be a `correlation_to_portfolio()` output
+    (float in [-1, 1] or None); any non-finite input (None, NaN, non-numeric)
+    is "na" rather than fabricating a band. Pure / no I/O; returns a STATE
+    string only — copy/emoji stays with the caller.
+    """
+    if not isinstance(cv, (int, float)) or math.isnan(cv):
+        return "na"
+    if cv < diversifier_max:
+        return "diversifier"
+    if cv >= correlated_min:
+        return "correlated"
+    return "partial"
 
 
 def diversification_score(corr_df: pd.DataFrame, weights: dict | None = None) -> dict:

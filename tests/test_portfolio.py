@@ -13,10 +13,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stock_analyzer.constants import CORR_DANGER_PAIRS_THRESHOLD, CORR_HIGH_PAIRS_THRESHOLD
+from stock_analyzer.constants import (
+    CORR_DANGER_PAIRS_THRESHOLD,
+    CORR_HIGH_PAIRS_THRESHOLD,
+    REDEPLOY_CORR_CORRELATED_MIN,
+    REDEPLOY_CORR_DIVERSIFIER_MAX,
+)
 from stock_analyzer.portfolio import (
     alerts,
     build_portfolio_df,
+    classify_book_corr,
     diversification_score,
     manual_stop_wins,
     protective_stop,
@@ -575,3 +581,78 @@ def test_discovery_clean_energy_removals_and_retentions():
     for kept in ("NEE", "DUK", "SO", "D", "AEP", "BE", "VST", "CEG", "EXC",
                  "FSLR", "ENPH"):
         assert kept in bucket, f"{kept} should still be a Movers candidate"
+
+
+# ── classify_book_corr ────────────────────────────────────────────────────────
+# Shared state classifier behind BOTH the Rebalancer redeploy card's
+# "correlation to your book" label and the Diversification Advisor ADD card's
+# per-candidate live corr caption — a candidate must land in the same band on
+# both surfaces. Never fabricate a band for a missing/invalid reading.
+
+def test_classify_book_corr_none_is_na():
+    assert classify_book_corr(None) == "na"
+
+
+def test_classify_book_corr_nan_is_na():
+    assert classify_book_corr(float("nan")) == "na"
+
+
+def test_classify_book_corr_at_diversifier_max_is_partial_not_diversifier():
+    # Boundary is a strict `<`, so exactly at the max is NOT a diversifier.
+    assert classify_book_corr(REDEPLOY_CORR_DIVERSIFIER_MAX) == "partial"
+
+
+def test_classify_book_corr_just_below_diversifier_max_is_diversifier():
+    assert classify_book_corr(REDEPLOY_CORR_DIVERSIFIER_MAX - 0.0001) == "diversifier"
+
+
+def test_classify_book_corr_at_correlated_min_is_correlated():
+    # Boundary is `>=`, so exactly at the min IS correlated.
+    assert classify_book_corr(REDEPLOY_CORR_CORRELATED_MIN) == "correlated"
+
+
+def test_classify_book_corr_just_below_correlated_min_is_partial():
+    assert classify_book_corr(REDEPLOY_CORR_CORRELATED_MIN - 0.0001) == "partial"
+
+
+def test_classify_book_corr_negative_correlation_is_the_strongest_diversifier():
+    assert classify_book_corr(-0.3) == "diversifier"
+
+
+def test_classify_book_corr_reproduces_pre_migration_rebalancer_corr_label_state():
+    # Captures the Rebalancer redeploy card's `_corr_label` closure logic
+    # EXACTLY as it read before the 2026-08 migration onto this shared
+    # function (app.py, "Correlation-to-book for the displayed names only"
+    # section): `not isinstance(cv, (int, float))` -> na; `cv < MAX` ->
+    # diversifier; `cv >= MIN` -> correlated; else -> partial. This sweep
+    # backs the migration's behavior-preservation claim mechanically — if
+    # classify_book_corr ever drifts from this band logic, this test catches
+    # it even though the closure itself no longer contains the inline logic.
+    # NOTE: NaN is deliberately excluded from this sweep. The pre-migration
+    # closure had a latent bug on NaN input (`nan < MAX` and `nan >= MIN` are
+    # both False in Python, so it fell through to "partial" instead of
+    # "n/a") — but `correlation_to_portfolio()` already NaN-guards before
+    # returning, so the closure never actually received a NaN in practice.
+    # classify_book_corr correctly treats NaN as "na" (see the dedicated
+    # test above) rather than reproducing that unexercised bug.
+    def _pre_migration_corr_label_state(cv):
+        if not isinstance(cv, (int, float)):
+            return "na"
+        if cv < REDEPLOY_CORR_DIVERSIFIER_MAX:
+            return "diversifier"
+        if cv >= REDEPLOY_CORR_CORRELATED_MIN:
+            return "correlated"
+        return "partial"
+
+    sweep = [
+        None, "not-a-number",
+        -1.0, -0.5, -0.01, 0.0, 0.01,
+        REDEPLOY_CORR_DIVERSIFIER_MAX - 0.01, REDEPLOY_CORR_DIVERSIFIER_MAX,
+        REDEPLOY_CORR_DIVERSIFIER_MAX + 0.01, 0.5,
+        REDEPLOY_CORR_CORRELATED_MIN - 0.01, REDEPLOY_CORR_CORRELATED_MIN,
+        REDEPLOY_CORR_CORRELATED_MIN + 0.01, 1.0,
+    ]
+    for cv in sweep:
+        assert classify_book_corr(cv) == _pre_migration_corr_label_state(cv), (
+            f"classify_book_corr diverged from pre-migration _corr_label at cv={cv!r}"
+        )
