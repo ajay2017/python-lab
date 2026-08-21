@@ -28,6 +28,7 @@ from stock_analyzer.portfolio import (
     protective_stop,
     real_sector_exposure,
     sector_benchmark_tilt,
+    SECTOR_ETF,
     stop_ladder,
     trim_allocation,
 )
@@ -656,3 +657,67 @@ def test_classify_book_corr_reproduces_pre_migration_rebalancer_corr_label_state
         assert classify_book_corr(cv) == _pre_migration_corr_label_state(cv), (
             f"classify_book_corr diverged from pre-migration _corr_label at cv={cv!r}"
         )
+
+
+# ── SECTOR_ETF coverage ────────────────────────────────────────────────────────
+# 2026-08-21 follow-up: Industrials/Communications (added to SECTOR_UNIVERSE
+# 2026-08-16) had no SECTOR_ETF entry, so their names could never register in
+# daily_briefing's top-3 "leading sectors" (built by fetching returns only for
+# SECTOR_ETF.values()) and could never receive _sector_bonus's +5 ranking
+# bonus. Fixed by adding both; this test pins the fix and guards against a
+# future SECTOR_UNIVERSE addition silently reopening the same gap.
+
+def test_industrials_and_communications_have_a_sector_etf():
+    assert SECTOR_ETF.get("Industrials") == "XLI"
+    assert SECTOR_ETF.get("Communications") == "XLC"
+
+
+def test_every_scanner_sector_universe_bucket_has_a_sector_etf():
+    """`_sector_bonus` (daily_briefing.py) matches a candidate's sector against
+    a leading sector name via SUBSTRING containment
+    (`any(ls.get("sector", "") in str(sector) for ls in lead_secs)`), not exact
+    equality — so a SECTOR_UNIVERSE bucket like "AI & Data Platforms" would be
+    correctly covered by SECTOR_ETF's shorter "AI & Data" key IF that key could
+    ever actually be emitted as a leading-sector name. It can't: the
+    leading-sectors list reverse-resolves an ETF back to a sector name via
+    `next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf)` (app.py:4950)
+    — FIRST KEY WINS per duplicate ETF value. `IGV` has three keys ("AI &
+    Cloud", "AI & Data", "Enterprise Tech"), so only "AI & Cloud" is EVER
+    emitted when IGV leads — "AI & Data" and "Enterprise Tech" never are. A
+    naive substring check against all of SECTOR_ETF's keys would silently
+    green-light "AI & Data Platforms"/"Enterprise Tech" as covered when
+    they're actually not — the same class of gap this test exists to catch
+    (caught in review, 2026-08-21). This test instead builds the REAL
+    emittable set (first key per unique ETF value) and checks against that.
+
+    `Industrials`/`Communications` had NOTHING in the emittable set as a
+    substring before 2026-08-21 (the gap this session's approved fix closed).
+    Three buckets remain genuinely uncovered and are ALLOWLISTED here as
+    known, pre-existing, NOT-yet-fixed gaps — all out of scope for the
+    2026-08-21 change, which only covered Industrials/Communications; don't
+    silently expand scope by fixing them here:
+      - "Consumer Staples & Retail" — no SECTOR_ETF key at all is a substring.
+      - "AI & Data Platforms" / "Enterprise Tech" — the IGV duplicate-key
+        collision above (pre-existing, predates F-240 entirely).
+    If this allowlist ever needs a FOURTH entry, that's a signal the
+    underlying gap is recurring, not a reason to just grow the allowlist
+    further without asking."""
+    from stock_analyzer.scanner import SECTOR_UNIVERSE
+
+    _emittable_names: set[str] = set()
+    _seen_etf_values: set[str] = set()
+    for _k, _v in SECTOR_ETF.items():
+        if _v not in _seen_etf_values:
+            _seen_etf_values.add(_v)
+            _emittable_names.add(_k)
+
+    _allowlist = {"Consumer Staples & Retail", "AI & Data Platforms", "Enterprise Tech"}
+    missing = [
+        sec for sec in SECTOR_UNIVERSE
+        if sec not in _allowlist and not any(name in sec for name in _emittable_names)
+    ]
+    assert not missing, (
+        f"SECTOR_UNIVERSE bucket(s) with no EMITTABLE SECTOR_ETF name as a "
+        f"substring — these can never register as a 'leading sector' or get "
+        f"the +5 ranking bonus: {missing}"
+    )

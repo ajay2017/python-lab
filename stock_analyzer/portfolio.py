@@ -702,6 +702,16 @@ SECTOR_ETF = {
     "AI & Data":       "IGV",
     "EV & Auto":       "DRIV",
     "Enterprise Tech": "IGV",
+    # Added 2026-08-21 (F-240 follow-up, user-confirmed) — these two SECTOR_UNIVERSE
+    # buckets (added 2026-08-16) had no ETF benchmark, so their names could never
+    # register in daily_briefing's top-3 "leading sectors" (built by fetching
+    # returns only for SECTOR_ETF.values()), which meant they could never receive
+    # _sector_bonus's +5 ranking bonus even when genuinely leading — a silent
+    # under-ranking, never a wrong pick (the bonus only ever adds, never gates).
+    # Also sharpens the SPY-fallback sector-relative-alpha reads in perf_advisor.py
+    # and the Relative Strength / Sector Rotation tabs for the same two sectors.
+    "Industrials":     "XLI",
+    "Communications":  "XLC",
     "Other":           "SPY",
 }
 
