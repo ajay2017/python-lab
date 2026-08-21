@@ -18,7 +18,63 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-17 (reference-roster refreshes F-240/F-241/F-242 + rate-sensitivity honesty fix)
+## 1. Latest run — 2026-08-21 (F-245 Forward Portfolio Simulator)
+
+**3771 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
+--cov-report=term`: 93.46s — TOTAL 17563 stmts, 4168 missed, **76%** overall
+coverage). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**+114 tests over the 3657 entry below.** 64 of those are F-245's
+(`tests/test_forward_sim.py`, new); the remaining ~50 shipped with work logged
+in `docs/shipped-log.md` between 08-17 and 08-21 without a test-results entry.
+F-245's own count went 36 → 64 across two Opus review rounds: the review found
+a real defect the original 36 could not have caught (the identity test used the
+same frame as both position and benchmark, leaving relative strength entirely
+unconstrained), so the added tests are the direct product of that finding, not
+padding. Transcribed from `pytest --collect-only -q`, not from the delta — a
+first pass recorded 61 by adding 3 to the previous count, missing that one of
+the four new tests was a *rename* of an existing one.
+
+**Coverage moved 77% → 76% — a real 1pp drop, not a rounding artifact, and
+worth stating plainly rather than presenting as flat.** Total statements grew
++659 while missed grew +269. F-245's own module is well covered by its 64
+tests; the dilution is app.py-side render code and the other 08-17→08-21 work,
+which added statements faster than tests. Not a regression in any existing
+module's coverage — but the trend is the thing this log exists to make visible.
+
+Tests added by the work this entry is named for:
+- **F-245** (`tests/test_forward_sim.py`, new, 64). The load-bearing one is
+  `test_zero_shock_matches_assess_holding`: `forward_sim` must re-extract the
+  deterioration scalars at a substituted price, which duplicates
+  `assess_holding`'s peak-window / trend-MA / below-MA math. That duplication is
+  the module's single biggest risk — a silently drifted replay would report a
+  portfolio the app would never actually produce, and report it
+  authoritatively — so at zero shock the two must agree on the tier and 7
+  scalars, parametrized across every peak-window branch
+  (`peak_window_days ∈ {None,1,3,14,60}` × `age_days ∈ {None,30,400}`) on a
+  frame longer than `DETERIORATION_PEAK_FALLBACK_BARS`, plus a NaN-Close bar.
+  Verified non-vacuous (the fixture yields a real EXIT at 12.0% off peak, not a
+  `None`-vs-`None` match).
+  **A cautionary note worth keeping.** The first version of this test passed the
+  *same* frame as both the position and the benchmark, which made relative
+  strength 0.0 on both sides and left the entire RS path unconstrained — and
+  that is precisely the path where the Opus review then found a live defect.
+  A convenient fixture can silently un-test the thing it exists to test; the
+  benchmark is now a genuinely different series and the test asserts RS is
+  non-zero before comparing it.
+  Also pinned: the day1-vs-confirmed bracket and its monotonicity across 6 shock
+  magnitudes, RS being additive (the engine's real reading survives into the
+  replay rather than being replaced), a missing stop reading `None` rather than
+  a falsy "no breach", the Brief's exact rounded breach test,
+  `mean_pairwise_corr` returning `None` (never `0.0`) when unresolvable and
+  surviving duplicate `corr_df` labels, a WATCH name never coexisting with a
+  risk-off card (the H6 invariant), an offline `_fragility_cache` reading as
+  "unknown" rather than a calm book, a TRIM never being liquidated as an exit,
+  and surviving beta staying `None` rather than fabricating 1.0.
+
+---
+
+## 1a. Previous run — 2026-08-17 (reference-roster refreshes F-240/F-241/F-242 + rate-sensitivity honesty fix)
 
 **3657 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term-missing -q`: 125.84s — TOTAL 16904 stmts, 3899 missed,

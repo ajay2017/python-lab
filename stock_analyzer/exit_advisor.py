@@ -214,6 +214,23 @@ def _series_close(df):
     return s if not s.empty else None
 
 
+def _peak_window_bars(window: int | None) -> int:
+    """Bars to look back for the high-water mark.
+
+    Calendar days → approx trading bars (5/7), +2 cushion, floor of 2. A missing
+    or non-positive window falls back to ~3 trading months so an old pre-entry
+    high can't fabricate a huge drawdown.
+
+    Extracted so `forward_sim.replay_position` (which must re-derive the peak at
+    a SHOCKED price and therefore cannot call `assess_holding`) shares this math
+    rather than duplicating it — a silent divergence there would make the
+    simulator report a book the engine would never produce.
+    """
+    if window is not None and window > 0:
+        return max(2, int(round(window * 5.0 / 7.0)) + 2)
+    return DETERIORATION_PEAK_FALLBACK_BARS
+
+
 def _pct_return(close, lookback: int):
     """Simple return over `lookback` bars, or None if not enough history."""
     if close is None or len(close) <= lookback:
@@ -276,14 +293,7 @@ def assess_holding(
 
     # High-water mark over the holding window (re-anchored window if provided).
     window = peak_window_days if peak_window_days is not None else age_days
-    if window is not None and window > 0:
-        # Calendar days → approx trading bars; +2 cushion, floor of 2.
-        n = max(2, int(round(window * 5.0 / 7.0)) + 2)
-        peak_series = close.tail(n)
-    else:
-        # No journal age — bound the lookback so an old pre-entry high can't
-        # fabricate a huge drawdown. ~3 trading months.
-        peak_series = close.tail(DETERIORATION_PEAK_FALLBACK_BARS)
+    peak_series = close.tail(_peak_window_bars(window))
     peak = float(peak_series.max())
     if peak <= 0:
         return None

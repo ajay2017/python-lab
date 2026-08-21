@@ -76,6 +76,7 @@ from stock_analyzer.stress_test import (
     _EARLIEST_STRESS_START,
 )
 from stock_analyzer import monte_carlo as _mc
+from stock_analyzer import forward_sim as _fsim
 from stock_analyzer.personalized_discovery import build_winner_profile
 from stock_analyzer.daily_pnl import compute_positions_day_pnl
 from stock_analyzer.rebalancer import (
@@ -12146,8 +12147,10 @@ elif page == "🔗 Risk Analysis":
     risk_pairs          = st.session_state.get("_risk_pairs_cache") or []
     _div_label          = st.session_state.get("_div_label_cache")
 
-    _ra_tab_dash, _ra_tab_action, _ra_tab_stress, _ra_tab_mc = st.tabs([
-        "📊 Dashboard", "📋 Action Plan", "🔥 Stress Testing", "🎲 Outcome Range"
+    (_ra_tab_dash, _ra_tab_action, _ra_tab_stress, _ra_tab_mc,
+     _ra_tab_rules) = st.tabs([
+        "📊 Dashboard", "📋 Action Plan", "🔥 Stress Testing", "🎲 Outcome Range",
+        "🧯 After My Rules",
     ])
 
     with _ra_tab_dash:
@@ -13716,6 +13719,345 @@ elif page == "🔗 Risk Analysis":
                         "days could produce, **not a probability forecast** of any specific future "
                         "outcome or macro regime."
                     )
+
+    with _ra_tab_rules:
+        # ── After My Rules — Forward Portfolio Simulator (F-245, E1 Phase 1) ──
+        # Replays the app's OWN mechanical rules (ratcheted protective stop,
+        # deterioration ladder, risk-off overlay) against a shocked book. Every
+        # tier decision comes from exit_advisor's own functions -- forward_sim
+        # re-extracts the scalars at a substituted price but never reimplements a
+        # rule, and tests/test_forward_sim.py pins that extraction against
+        # assess_holding at zero shock so it cannot drift.
+        #
+        # READ-ONLY: issues no directive, gates nothing, writes nothing. The
+        # point is to test the INTERACTION of ~20 gates + the ladder + the stop
+        # ladder, each of which was set as an isolated policy decision.
+        #
+        # Not memoized on purpose: unlike the Prior Trades tab (whose per-rerun
+        # cost was plotly figure construction + a SPY fetch), this is pure
+        # in-memory pandas over the held rows -- the SPY/VIX reads are already
+        # @st.cache_data and there are no charts. A session memo keyed on prices
+        # would churn every 60s with the price fragment for no gain.
+        from stock_analyzer.constants import (
+            DETERIORATION_TREND_MA as _FS_MA,
+            DETERIORATION_CONFIRM_DAYS as _FS_CONFIRM,
+            REL_STRENGTH_LOOKBACK_DAYS as _FS_RS,
+        )
+
+        st.divider()
+        st.subheader("🧯 After My Rules Fire")
+        st.caption(
+            "🔥 Stress Testing shows the price damage. This shows what your own rules then "
+            "DO about it — which stops breach, what the deterioration ladder flags, whether "
+            "the risk-off overlay arms, and what book you are left holding. "
+            "**Diagnostic only: it issues no recommendation and changes nothing.**"
+        )
+
+        _fs_beta = _port_risk.get("beta") if _port_risk else None
+        _fs_default = next(
+            (i for i, s in enumerate(SCENARIOS) if s["id"] == "bear_entry"), 0
+        )
+        _fs_choice = st.selectbox(
+            "Scenario", [s["label"] for s in SCENARIOS], index=_fs_default,
+            key="_fsim_scenario",
+            help="Same per-position shock model as 🔥 Stress Testing — position beta "
+                 "vs SPY, with that event's historical sector overrides where the "
+                 "scenario has them.",
+        )
+        _fs_sc = next(s for s in SCENARIOS if s["label"] == _fs_choice)
+
+        # Guarded: this block runs on EVERY load of 🔗 Risk Analysis (Streamlit
+        # renders inactive tab content), so an unhandled exception here would
+        # take out all five tabs including the Dashboard — a much larger blast
+        # radius than the button-gated Outcome Range tab next door.
+        try:
+            _fs_out = _fsim.simulate(
+                _fs_sc, port_df, held_data,
+                spy_df=_cached_spy("6mo"),          # RS benchmark, as the Brief passes
+                spy_trend_df=_cached_spy("1y"),     # ~1y of history for the 200-DMA leg
+                vix_level=_cached_vix(),
+                fragility=st.session_state.get("_fragility_cache"),
+                portfolio_beta=_fs_beta,
+            )
+            _fs_err = None
+        except Exception as _fs_e:      # noqa: BLE001 — never break the page
+            _fs_out, _fs_err = None, str(_fs_e)
+
+        if _fs_err:
+            st.caption(
+                f"🧯 The rule replay could not run this session ({_fs_err}). Nothing "
+                "is being suppressed — the other tabs are unaffected."
+            )
+
+        elif not _fs_out:
+            st.info(
+                "No shockable positions — the replay needs at least one holding with "
+                "a live market value."
+            )
+        elif _fs_out["n_positions"] == 0:
+            _fs_gaps = _fs_out["uncovered"] + _fs_out["no_value"]
+            st.warning(
+                "⚠️ None of your positions could be judged — every holding is missing "
+                f"either a live market value or the price history / {_FS_MA}-day trend "
+                "line the deterioration ladder reads. Nothing is being suppressed; "
+                "there is simply nothing to replay."
+                + (" Affected: " + ", ".join(_fs_gaps) if _fs_gaps else "")
+            )
+        else:
+            _fs_c1, _fs_c2, _fs_c3 = st.columns(3)
+            _fs_c1.metric("SPY shock", f"{_fs_out['spy_move']:+.0f}%")
+            _fs_c2.metric(
+                "Book impact", f"{_fs_out['estimated_port_move']:+.1f}%",
+                _m(f"${_fs_out['post_shock_value']:,.0f}"), delta_color="off",
+            )
+            _fs_c3.metric("Positions replayed", f"{_fs_out['n_positions']}")
+
+            # ── The bracket ───────────────────────────────────────────────────
+            st.markdown("##### The bracket — immediate vs trend-confirmed")
+            st.caption(
+                f"Two honest reads, not one answer. TRIM needs 2 of 3 sessions below the "
+                f"{_FS_MA}-day trend line before it can activate — on day one of a shock "
+                f"that genuinely has not happened yet, so only the deep-drawdown EXIT "
+                f"shortcut fires. The right column assumes the scenario runs the "
+                f"{_FS_CONFIRM}-session window out. **The gap between the two columns is how "
+                f"much of your protection depends on that confirmation lag.**"
+            )
+
+            _fs_day1 = _fs_out["counts"][_fsim.TIER_DAY1]
+            _fs_conf = _fs_out["counts"][_fsim.TIER_CONFIRMED]
+            _fs_sv1 = _fs_out["survivors"][_fsim.TIER_DAY1]
+            _fs_svc = _fs_out["survivors"][_fsim.TIER_CONFIRMED]
+
+            _fs_bl, _fs_br = st.columns(2)
+            for _fs_col, _fs_ttl, _fs_cnt, _fs_sv in (
+                (_fs_bl, "Fires immediately", _fs_day1, _fs_sv1),
+                (_fs_br, "Once the trend confirms", _fs_conf, _fs_svc),
+            ):
+                with _fs_col:
+                    st.markdown(f"**{_fs_ttl}**")
+                    st.markdown(
+                        f"- 🔴 EXIT: **{_fs_cnt['EXIT']}**\n"
+                        f"- 🟠 TRIM: **{_fs_cnt['TRIM']}**\n"
+                        f"- 🟡 WATCH: **{_fs_cnt['WATCH']}**\n"
+                        f"- ⛔ Positions exited (stop breach or EXIT): "
+                        f"**{_fs_sv['n_exited']}** of {_fs_out['n_positions']}"
+                    )
+
+            # ── Stop-out clustering: the headline finding ─────────────────────
+            _fs_stops = _fs_out["stop_outs"]
+            if _fs_stops:
+                _fs_corr = _fsim.mean_pairwise_corr(_fs_stops, corr_df)
+                _fs_secs = {}
+                for _fs_p in _fs_out["positions"]:
+                    if _fs_p["ticker"] in _fs_stops:
+                        _fs_secs[_fs_p["sector"]] = _fs_secs.get(_fs_p["sector"], 0) + 1
+                _fs_top_sec = max(_fs_secs.items(), key=lambda kv: kv[1]) if _fs_secs else None
+
+                _fs_msg = (
+                    f"**{len(_fs_stops)} of {_fs_out['n_positions']} positions breach their "
+                    f"protective stop simultaneously** in this scenario: "
+                    f"{', '.join(_fs_stops)}."
+                )
+                if _fs_top_sec and _fs_top_sec[1] > 1:
+                    _fs_msg += (
+                        f" {_fs_top_sec[1]} of them sit in **{_fs_top_sec[0]}** — they are "
+                        "not independent bets."
+                    )
+                if _fs_corr is not None:
+                    _fs_msg += (
+                        f" Their mean pairwise correlation is **{_fs_corr:+.2f}** — the "
+                        "higher this is, the more these stops fire as one decision rather "
+                        "than several."
+                    )
+                else:
+                    _fs_msg += (
+                        " Correlation between them is unavailable this session, so the "
+                        "clustering read below is sector-only."
+                    )
+                st.warning(_fs_msg)
+
+            # ── The surviving book ────────────────────────────────────────────
+            st.markdown("##### The book you would be left holding")
+            st.caption(
+                "Taking the trend-confirmed column, and counting a breached stop or an "
+                "EXIT tier as a full exit. A TRIM is **not** liquidated here — its size is "
+                "a per-card directive, so modelling it as a fixed haircut would invent a "
+                "number."
+            )
+            _fs_s1, _fs_s2, _fs_s3 = st.columns(3)
+            _fs_s1.metric("Positions remaining", f"{_fs_svc['n_kept']}")
+            _fs_s2.metric(
+                "Surviving beta",
+                f"{_fs_svc['surviving_beta']:.2f}" if _fs_svc["surviving_beta"] is not None
+                else "—",
+                help="Value-weighted beta of the positions that survive. '—' means no "
+                     "surviving position carries a beta — never a fabricated 1.0.",
+            )
+            _fs_s3.metric(
+                "Raised to cash",
+                f"{_fs_svc['proceeds_pct']:.0f}%" if _fs_svc["proceeds_pct"] is not None
+                else "—",
+                _m(f"${_fs_svc['proceeds']:,.0f}"), delta_color="off",
+                help="Exit proceeds as a share of post-shock equity. Deliberately NOT "
+                     "compared against the regime cash floor — that comparison implies a "
+                     "redeployment directive, which this diagnostic does not issue.",
+            )
+            if _fs_svc["surviving_sectors"]:
+                st.caption(
+                    "Surviving sector mix — "
+                    + " · ".join(
+                        f"{_fs_k} {_fs_v:.0f}%"
+                        for _fs_k, _fs_v in list(_fs_svc["surviving_sectors"].items())[:6]
+                    )
+                )
+
+            # ── Risk-off overlay ─────────────────────────────────────────────
+            _fs_ro = _fs_out["risk_off"]
+            if not _fs_ro["available"]:
+                st.caption(
+                    "🛡️ Risk-off overlay: **unavailable** — no SPY history loaded this "
+                    "session, so whether it would arm is unknown (not “it would not”)."
+                )
+            elif not _fs_ro["armed"]:
+                # Checked BEFORE fragility: the overlay needs regime AND
+                # fragility, so a regime leg that doesn't trip settles the
+                # question on its own — withholding an answer we actually have
+                # would be over-caution dressed as honesty.
+                st.caption("🛡️ Risk-off overlay: would not arm in this scenario.")
+            elif not _fs_ro["fragility_available"]:
+                # An offline fragility cache must NOT render as a calm book.
+                st.caption(
+                    "🛡️ Risk-off overlay: **unknown** — the regime leg trips ("
+                    + "; ".join(_fs_ro["reasons"])
+                    + ") but the book's fragility reading is unavailable this session "
+                    "and the overlay also gates on that, so whether it would arm "
+                    "cannot be determined (not “it would not”)."
+                )
+            elif not _fs_ro["cards"]:
+                st.caption(
+                    "🛡️ Risk-off overlay: the regime leg trips ("
+                    + "; ".join(_fs_ro["reasons"])
+                    + ") but no additional name surfaces — either the book does not read "
+                    "fragile, or every candidate already carries a flag above."
+                )
+            else:
+                st.markdown("##### 🛡️ Risk-off overlay would also surface")
+                st.caption(
+                    "On top of the exits above — "
+                    + "; ".join(_fs_ro["reasons"])
+                    + ". Any name already flagged above is excluded, so a position is "
+                    "never double-counted."
+                )
+                # Deliberately NOT rendering the card's own `directive` string.
+                # It is written as a live imperative ("Trim ~25% (12 shares) of X
+                # — or tighten the stop to ~$118.40"), and its stop level is
+                # derived from the SHOCKED price, so printing it verbatim states
+                # an instruction with a dollar figure that is wrong for today.
+                # That is the line between diagnostic and directive, and this
+                # tab does not cross it. Facts only, past-conditional.
+                # Only fields the card actually carries — it has no `beta` key
+                # (beta lives inside its prose `why`), and printing a defaulted
+                # 0.00 would be a fabricated number on a diagnostic surface.
+                for _fs_card in _fs_ro["cards"]:
+                    _fs_w = _f(_fs_card.get("weight"), None)
+                    st.markdown(
+                        f"- **{_fs_card['ticker']}** — would surface as a top risk "
+                        "driver for a risk-off trim"
+                        + (f" ({_fs_w:.1f}% of the shocked book)"
+                           if _fs_w is not None else "")
+                    )
+
+            # ── Per-position detail ──────────────────────────────────────────
+            with st.expander("Per-position replay", expanded=False):
+                _fs_rows = [{
+                    "Ticker": _fs_p["ticker"],
+                    "Sector": _fs_p["sector"],
+                    "Price": _fs_p["price_now"],
+                    "→ Shocked": _fs_p["price_shocked"],
+                    "Move %": _fs_p["move_pct"],
+                    "DD from peak %": _fs_p["dd_from_peak_pct"],
+                    "Stop": _fs_p["stop"] if _fs_p["stop_available"] else None,
+                    "Stop breached": (
+                        "⛔ yes" if _fs_p["stop_breached"] is True
+                        else "no" if _fs_p["stop_breached"] is False
+                        else "⚠️ no stop"
+                    ),
+                    "Immediate": _fs_p[_fsim.TIER_DAY1] or "—",
+                    "Confirmed": _fs_p[_fsim.TIER_CONFIRMED] or "—",
+                } for _fs_p in _fs_out["positions"]]
+                st.dataframe(
+                    pd.DataFrame(_fs_rows), use_container_width=True, hide_index=True
+                )
+
+            # ── Honest gaps — never silent ───────────────────────────────────
+            if _fs_out["stop_unavailable"]:
+                st.warning(
+                    "⚠️ **No protective stop on file** for "
+                    + ", ".join(_fs_out["stop_unavailable"])
+                    + " — these show as “no stop”, not as safe. A missing stop is a data "
+                      "gap (the same one that makes the Brief skip a mechanical SELL), so "
+                      "the exit counts above UNDER-state what would happen."
+                )
+            if _fs_out["uncovered"]:
+                st.caption(
+                    "Not judged (insufficient price history for the trend line): "
+                    + ", ".join(_fs_out["uncovered"])
+                    + ". Excluded rather than assumed safe."
+                )
+            if _fs_out["no_value"]:
+                st.caption(
+                    "Not shocked (no live market value — usually a missing price): "
+                    + ", ".join(_fs_out["no_value"])
+                    + ". Excluded rather than assumed safe."
+                )
+            if _fs_out["rel_strength_degraded"]:
+                st.caption(
+                    "Trailing relative-strength reading unavailable for "
+                    + ", ".join(_fs_out["rel_strength_degraded"])
+                    + f" (no SPY benchmark, or fewer than {_FS_RS + 1} sessions of "
+                    "history — the trailing return needs a bar on both ends of the "
+                    f"{_FS_RS}-session window). "
+                    "Their tiers resolve off the scenario's own move alone, so treat "
+                    "those rows as less reliable in both directions."
+                )
+
+            with st.expander("What this does and does not model", expanded=False):
+                st.markdown(
+                    f"**Derived from your real data** — the shocked price (the same beta / "
+                    f"sector-override model 🔥 Stress Testing uses), each position's "
+                    f"high-water peak, the {_FS_MA}-day trend line and whether the shocked "
+                    f"price breaks it, relative strength (the engine's own trailing "
+                    f"{_FS_RS}-day reading vs SPY, **plus** this scenario's name-vs-SPY "
+                    f"differential — additive, so at zero shock it is exactly the "
+                    f"engine's number), your **ratcheted** protective stop (`max(ATR stop, "
+                    f"profit-ratchet floor)`, or a tighter manual override — not the raw "
+                    f"ATR entry stop), and whether the risk-off regime arms (the shocked "
+                    f"SPY close against its real 200-day mean; its two legs are OR'd, so "
+                    f"no VIX assumption is needed).\n\n"
+                    f"**Assumed — exactly one thing:** the number of sessions below the "
+                    f"trend line. That is the whole reason for the two-column bracket "
+                    f"above, rather than a single authoritative number.\n\n"
+                    f"**Two things bias this toward showing FEWER exits, not more.** "
+                    f"A position with no protective stop on file counts as “no breach” "
+                    f"(it is named explicitly when that happens); and the ATR-scaled "
+                    f"TRIM/EXIT floors are measured against the shocked price, so they "
+                    f"widen as the price falls — which is what would genuinely happen "
+                    f"live, but it means the ladder gets harder to trip in a deep "
+                    f"shock. Read the exit counts as a floor.\n\n"
+                    f"**A simulated stop-out is not a filled order.** The ratchet stop is "
+                    f"stateless — the app re-derives it from your current gain tier on "
+                    f"every run and it has no high-water memory. So a breach here means "
+                    f"“the stop the app would recommend today was crossed”, not “a resting "
+                    f"broker order executed”.\n\n"
+                    f"**Not modelled:** the path (this is the trough, not a day-by-day "
+                    f"walk), TRIM sizing, taxes, slippage, and anything you would *buy* "
+                    f"afterwards. It also says nothing about when to re-enter — the "
+                    f"de-risk rule the app implements is the exit half of a two-sided "
+                    f"trend rule, and the re-entry half does not exist yet.\n\n"
+                    f"**This is a mechanical consequence, not a forecast.** No probability "
+                    f"is attached to the scenario, and no expected return is implied for "
+                    f"any individual name."
+                )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -30410,6 +30752,23 @@ The **🎲 Outcome Range** tab (also on 🔗 Risk Analysis) answers a different 
 A ticker with too little price history (e.g. a recent IPO) is excluded and named explicitly — its weight is redistributed among the rest, and the $ figures shown reflect only the included holdings, not your whole portfolio.
 
 This is **awareness only** — like Stress Testing, it never gates a recommendation, sizes a trade, or feeds any score.
+"""
+            )
+
+        with st.expander("🧯 After My Rules — what your own rules would DO in a shock", expanded=False):
+            st.markdown(
+                """
+The **🧯 After My Rules** tab (5th tab on 🔗 Risk Analysis) is the third scenario surface, and it asks the question the other two don't. 🔥 Stress Testing shows the **price damage**. 🎲 Outcome Range shows the **spread of outcomes**. This one shows what **your own rules then do about it** — and what book you're left holding afterwards.
+
+**Why this exists:** the app enforces around twenty hard gates, a WATCH/TRIM/EXIT deterioration ladder, and a stop ladder. Each of those was set as a separate decision. None of them has ever been tested *together*. Individually-correct rules can still combine badly — for example, if every stop in the book breaches in the same week because the positions were never really independent bets.
+
+**How to read it:** pick a scenario, then read the **two columns** side by side. "Fires immediately" is what happens on day one. "Once the trend confirms" is what happens if the scenario keeps running — because a TRIM needs two of three sessions below the trend line before it can activate, which on day one hasn't happened yet. **Neither column is "the" answer. The gap between them is the point:** it shows how much of your protection depends on that confirmation delay.
+
+**The finding to look for:** the stop-out clustering line. If six positions breach their stops at once, and they're mostly one sector with high correlation between them, then a book of fifteen names was really a handful of bets wearing fifteen tickers.
+
+**What it does NOT do:** it issues no recommendation, changes no score, and moves no gate. It doesn't model the day-by-day path (it's the trough, not the journey), TRIM sizing, taxes, or slippage. And it says nothing about **when to buy back in** — the app's de-risk rule is the exit half of a two-sided trend rule, and the re-entry half doesn't exist yet. Measuring whether that gap actually costs you anything is exactly what this tab is for.
+
+**One honesty point worth internalising:** a simulated stop-out is **not** a filled order. The app re-derives your ratchet stop from your current gain on every run — it has no memory and doesn't sit at the broker. So a breach here means "the stop the app would recommend today was crossed," not "a resting order executed." If a position shows **⚠️ no stop**, the exit counts are an *under*-statement, not a clean bill of health.
 """
             )
 
