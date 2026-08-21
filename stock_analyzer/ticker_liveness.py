@@ -19,6 +19,14 @@ Offline contract (enforced by check_antipatterns.py):
                  ``result.get("status") == "inconclusive"``.
   "ok" result  — batch healthy; suspects escalated through multi-source layer.
 
+Escalation is ONE batched fetch_live(suspects) call (not N sequential
+single-ticker calls), bounded by _SWEEP_ESCALATION_CAP_SEC. A `None` result
+from that call (layer offline OR wall-clock breach) yields NO dead ticker for
+the whole batch. An empty-dict `{}` result means every suspect was
+unconfirmed across all providers — i.e. every suspect IS dead. These two
+must never be confused: `None` is uncertain, `{}` is a genuine all-dead
+verdict.
+
 Never uses ``.get(...) or []`` / ``or {}`` patterns — the offline signal must
 not be collapsed at any read site here.
 """
@@ -44,6 +52,24 @@ from stock_analyzer.constants import TICKER_LIVENESS_MIN_BATCH_HEALTH_PCT
 # DATA_YF_REQUEST_TIMEOUT_SEC (20), which caps ONE bundle request; this caps a
 # whole threaded batch.
 _SWEEP_WALL_CLOCK_CAP_SEC = 180
+
+# Wall-clock cap (seconds) on the SEPARATE suspect-escalation phase below.
+# OPERATIONAL knob, module-local on the same precedent as
+# _SWEEP_WALL_CLOCK_CAP_SEC and system_health.py's recency windows — not
+# investment policy, kept out of constants.py by deliberate user decision
+# (a separate constant, not shared with the batch-download cap above).
+#
+# The escalation call is a mixed chain: fetch_live() fans the WHOLE suspects
+# list to Finnhub (loops per-ticker internally), then yfinance (ONE batched
+# yf.download for the gap), then FMP (loops per-ticker internally) for what's
+# still missing. Finnhub/FMP's per-ticker loops are each request-capped at
+# their own ~10s client timeout, but nothing bounds the LOOP as a whole, so a
+# batch of ~23 suspects (the realistic worst case at the health floor) could
+# still run for minutes. This cap wraps the single fetch_live(suspects) call
+# so that worst case degrades to "no dead ticker this week" instead of a
+# Railway job-kill (which would also lose the heartbeat row and failure
+# email — see the module docstring).
+_SWEEP_ESCALATION_CAP_SEC = 180
 
 
 def sweep(fetch_batch=None, fetch_live=None) -> dict | None:
@@ -74,7 +100,13 @@ def sweep(fetch_batch=None, fetch_live=None) -> dict | None:
             Provider likely rate-limited; every verdict would be noise.
         ``{"status": "ok", "health_pct": float, "dead": list,
            "suspects_n": int, "roster_n": int}``
-            Batch healthy; suspects escalated through multi-source layer.
+            Batch healthy; suspects escalated via ONE batched
+            ``fetch_live(suspects)`` call (not N sequential single-ticker
+            calls), bounded by ``_SWEEP_ESCALATION_CAP_SEC``. A ``None``
+            result from that call (layer offline or wall-clock breach)
+            yields NO dead ticker for the whole batch; an empty-dict ``{}``
+            result means every suspect was unconfirmed across all providers
+            (all dead) — these two are never confused.
             ``dead`` is empty (all alive) or lists confirmed-dead tickers,
             each with the roster file(s) they appear in.
     """
@@ -182,34 +214,59 @@ def sweep(fetch_batch=None, fetch_live=None) -> dict | None:
         }
 
     # ── Escalate suspects through multi-source provider layer ─────────────────
-    # Expect 0-3 suspects in a healthy run.  A miss across all providers
-    # (Finnhub → yfinance → FMP) IS the semantic "unknown symbol" — we do NOT
-    # parse Yahoo's 404 (yfinance swallows it; hitting quoteSummary directly
-    # depends on an unofficial crumb-gated endpoint, explicitly rejected).
+    # Expect 0-3 suspects in a healthy run, though the health floor can admit
+    # ~10% of the roster (~23 names). ONE batched fetch_live(suspects) call —
+    # NOT N sequential single-ticker calls — since get_live_prices already
+    # fans a full ticker list across Finnhub → yfinance (one batched download)
+    # → FMP; batching collapses N yfinance downloads into 1 without changing
+    # the per-ticker result. Bounded by _SWEEP_ESCALATION_CAP_SEC so the
+    # remaining per-ticker Finnhub/FMP loops can't hang the lane (see the
+    # constant's comment above).
+    #
+    # A miss across all providers (Finnhub → yfinance → FMP) IS the semantic
+    # "unknown symbol" — we do NOT parse Yahoo's 404 (yfinance swallows it;
+    # hitting quoteSummary directly depends on an unofficial crumb-gated
+    # endpoint, explicitly rejected).
+    #
+    # `prices is None` (whole layer offline, OR this call breached the
+    # wall-clock cap) means NO dead ticker for the WHOLE batch — deliberately
+    # fail-quiet: a false "dead" costs a live name deleted from the roster; a
+    # missed dead costs one week. `prices == {}` is DIFFERENT: every suspect
+    # was confirmed unconfirmed across all providers, i.e. every suspect IS
+    # dead. These two must never be collapsed — hence the `is not None` check
+    # below, not a truthiness check.
     dead: list[dict] = []
-    for t in suspects:
-        # The dict access stays INSIDE the try: a provider returning a
-        # non-dict payload would otherwise raise AttributeError out of sweep()
-        # and be recorded as a lane failure, when the honest reading is
-        # "couldn't confirm this one".
+    if suspects:
         try:
-            prices = fetch_live([t])
-            if prices is None:
-                continue  # whole layer offline for this call → uncertain
-            hit = prices.get(t)
-            unconfirmed = hit is None or hit.get("price") is None
-        except Exception:
-            # Provider exception on escalation → uncertain, skip. Deliberately
-            # fail-quiet: a false "dead" costs a live name deleted from the
-            # roster; a missed dead costs one week.
-            continue
-        if unconfirmed:
-            dead.append(
-                {
-                    "ticker":  t,
-                    "rosters": sorted(membership.get(t, set())),
-                }
+            from stock_analyzer.providers.yfinance_provider import _call_with_timeout
+            prices = _call_with_timeout(
+                fetch_live, (suspects,), {}, _SWEEP_ESCALATION_CAP_SEC
             )
+        except Exception:
+            # Layer offline, or the wall-clock cap breached (TimeoutError) —
+            # uncertain for every suspect this run. Same fail-quiet reasoning
+            # as above, applied once to the batch instead of once per ticker.
+            prices = None
+
+        if prices is not None:
+            for t in suspects:
+                # The dict access stays INSIDE the try: a malformed payload
+                # for ONE suspect (e.g. a non-dict value) would otherwise
+                # raise AttributeError and abort classification of the
+                # OTHERS — the honest reading for that one is "couldn't
+                # confirm this one", not a lane failure.
+                try:
+                    hit = prices.get(t)
+                    unconfirmed = hit is None or hit.get("price") is None
+                except Exception:
+                    continue
+                if unconfirmed:
+                    dead.append(
+                        {
+                            "ticker":  t,
+                            "rosters": sorted(membership.get(t, set())),
+                        }
+                    )
 
     return {
         "status":     "ok",

@@ -7,6 +7,11 @@ Contracts being locked:
   2. Provider degradation (rate-limit) → inconclusive, never a dead verdict.
   3. Multi-source rescue: a ticker missing from the batch but returned by the
      live-price layer is NOT reported dead.
+  3b. Batched escalation: suspects are escalated via ONE fetch_live(suspects)
+      call (not N sequential single-ticker calls), bounded by
+      _SWEEP_ESCALATION_CAP_SEC. `None` (offline/timeout) → no dead ticker
+      for the whole batch; `{}` (genuinely all unconfirmed) → all dead. A
+      malformed per-suspect payload doesn't abort the others.
   4. Confirmed dead path: email sent, `failures` empty, rc == 0.
   5. Ordering guarantee: sweep runs before DB sub-jobs, survives a DB early return.
   6. Sweep exception is isolated: lane failure without suppressing ① or ②.
@@ -262,6 +267,208 @@ def test_multi_source_rescue_not_dead(monkeypatch):
     dead_tickers = [d["ticker"] for d in result["dead"]]
     assert suspect not in dead_tickers, (
         f"{suspect} was rescued by fetch_live and must not be reported dead")
+
+
+# ── 3b. Batched escalation — ONE fetch_live(suspects) call, not N ────────────
+#
+# All tests below use zero-padded ticker names (T01..T30) so lexical sort
+# order matches numeric order — `roster = sorted(membership)` inside sweep()
+# determines the exact suspects list/order handed to fetch_live, and these
+# tests need to predict it exactly.
+
+def _escalation_fixture(monkeypatch, n_suspects: int = 3, n_total: int = 30):
+    """Build a 30-ticker roster with the LAST `n_suspects` tickers dead in the
+    batch download (30 total / 3 suspects = 90.0% health == threshold, the
+    inclusive boundary — so the batch-health gate lets escalation run)."""
+    tickers = [f"T{i:02d}" for i in range(1, n_total + 1)]
+    _patch_rosters(monkeypatch, tickers=tickers)
+    suspects = tickers[-n_suspects:]
+    alive = [t for t in tickers if t not in suspects]
+    return tickers, suspects, alive
+
+
+def test_escalation_is_one_batched_call_not_n(monkeypatch):
+    """3 suspects → fetch_live called exactly ONCE with the full length-3
+    list, not 3 times with a length-1 list each."""
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+
+    calls: list[list[str]] = []
+
+    def _live(ts):
+        calls.append(list(ts))
+        return {t: {"price": 1.0} for t in ts}  # rescue all
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=_live,
+    )
+    assert result is not None
+    assert result["status"] == "ok"
+    assert len(calls) == 1, (
+        f"fetch_live must be called exactly once for the whole batch, "
+        f"was called {len(calls)}x")
+    assert calls[0] == suspects, "the single call must carry the FULL suspects list"
+    assert result["dead"] == []
+
+
+def test_escalation_empty_dict_means_all_dead(monkeypatch):
+    """fetch_live returning `{}` means EVERY suspect was unconfirmed → all dead.
+
+    This is the regression test for a truthiness-check bug: `{}` is falsy, so
+    `if prices:` would wrongly skip the whole batch and produce dead=[]
+    instead of the correct all-dead verdict. Only `is not None` correctly
+    distinguishes the genuine all-dead result (`{}`) from the offline/timeout
+    sentinel (`None`).
+    """
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=lambda ts: {},
+    )
+    assert result is not None
+    assert result["status"] == "ok"
+    dead_tickers = {d["ticker"] for d in result["dead"]}
+    assert dead_tickers == set(suspects), (
+        "an empty-dict fetch_live result must mark EVERY suspect dead — "
+        "a truthiness-check regression would instead leave dead == []")
+
+
+def test_escalation_mixed_rescue(monkeypatch):
+    """One batched response can rescue some suspects and confirm others dead
+    in the SAME call — only the omitted/nulled ones land in `dead`."""
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    rescued, nulled, missing = suspects
+
+    def _live(ts):
+        return {
+            rescued: {"price": 42.0},
+            nulled: {"price": None},
+            # `missing` intentionally absent from the payload entirely
+        }
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=_live,
+    )
+    assert result is not None
+    dead_tickers = {d["ticker"] for d in result["dead"]}
+    assert dead_tickers == {nulled, missing}
+    assert rescued not in dead_tickers
+
+
+def test_escalation_timeout_breach_is_bounded_and_fails_safe(monkeypatch):
+    """A fetch_live that hangs past `_SWEEP_ESCALATION_CAP_SEC` must not hang
+    sweep() itself — the wall-clock cap breaches, sweep() returns promptly,
+    and the breach fails toward NO dead ticker (uncertain, not confirmed-dead).
+
+    `_slow_live` returns `{}` (all-dead payload) AFTER sleeping, deliberately
+    NOT a rescue-all payload — if the bound were silently broken (e.g. a
+    future refactor drops `_call_with_timeout`), the call would eventually
+    complete and `{}` would mark every suspect dead, so `dead == []` would
+    FAIL. A rescue-all payload can't distinguish "bound fired" from "bound
+    broken but got lucky" (both give dead == []) — this shape can."""
+    import time
+
+    monkeypatch.setattr(_tl, "_SWEEP_ESCALATION_CAP_SEC", 0.05)
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+
+    def _slow_live(ts):
+        time.sleep(0.5)  # well past the 0.05s cap
+        return {}  # all-dead payload — see docstring above for why not rescue-all
+
+    _t0 = time.monotonic()
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=_slow_live,
+    )
+    _elapsed = time.monotonic() - _t0
+    assert _elapsed < 0.4, (
+        f"sweep() took {_elapsed:.2f}s — the escalation cap did not bound it")
+    assert result is not None
+    assert result["status"] == "ok"
+    assert result["dead"] == [], (
+        "a timeout breach must fail toward NO dead ticker, not a false dead "
+        "(this would fail if the bound were silently broken, since _slow_live "
+        "returns an all-dead {} payload once it actually completes)")
+
+
+def test_escalation_layer_offline_returns_none_no_false_dead(monkeypatch):
+    """fetch_live returning None (whole layer offline) → dead == [], and the
+    top-level sweep() result stays the normal 'ok' dict — NOT the None
+    offline sentinel, which is reserved for a BATCH-DOWNLOAD failure only."""
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=lambda ts: None,
+    )
+    assert result is not None, (
+        "an escalation-phase None must not be promoted to the top-level "
+        "offline sentinel — that is reserved for a batch-download failure")
+    assert isinstance(result, dict)
+    assert result["status"] == "ok"
+    assert result["dead"] == []
+
+
+def test_escalation_fetch_live_raises_is_contained(monkeypatch):
+    """fetch_live raising an exception is contained — dead == [], and the
+    overall sweep() result is still the normal 'ok' dict shape, not None."""
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+
+    def _boom(ts):
+        raise RuntimeError("provider exploded")
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=_boom,
+    )
+    assert result is not None
+    assert isinstance(result, dict)
+    assert result["status"] == "ok"
+    assert result["dead"] == []
+
+
+def test_escalation_malformed_payload_does_not_abort_others(monkeypatch):
+    """A malformed value for ONE suspect (non-dict) must not abort
+    classification of the other suspects in the same batched response."""
+    _tickers, suspects, alive = _escalation_fixture(monkeypatch)
+    t1, t2, t3 = suspects  # t1: malformed, t2: explicit-None price, t3: real price
+
+    def _live(ts):
+        return {t1: "not-a-dict", t2: {"price": None}, t3: {"price": 123.45}}
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=alive, dead=suspects),
+        fetch_live=_live,
+    )
+    assert result is not None
+    dead_tickers = {d["ticker"] for d in result["dead"]}
+    assert t1 not in dead_tickers, "malformed payload for t1 → uncertain, not dead"
+    assert t2 in dead_tickers, "explicit None price → unconfirmed → dead"
+    assert t3 not in dead_tickers, "real price → confirmed alive, not dead"
+
+
+def test_escalation_skipped_when_no_suspects(monkeypatch):
+    """0 suspects (all names have price history) → fetch_live is never called
+    at all, and dead == []."""
+    tickers = [f"T{i:02d}" for i in range(1, 31)]
+    _patch_rosters(monkeypatch, tickers=tickers)
+
+    called: list[list[str]] = []
+
+    def _live(ts):
+        called.append(list(ts))
+        return {}
+
+    result = sweep(
+        fetch_batch=lambda _ts: _make_df(alive=tickers, dead=[]),
+        fetch_live=_live,
+    )
+    assert result is not None
+    assert result["status"] == "ok"
+    assert result["dead"] == []
+    assert called == [], "fetch_live must not be called when there are 0 suspects"
 
 
 # ── 4. Confirmed-dead path ────────────────────────────────────────────────────
