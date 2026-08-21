@@ -1668,6 +1668,16 @@ returns `None` (offline sentinel) on any failure. **Reader:** the owner-only
 — which reads a lane's heartbeat as "unknown" (⚪, not degraded) when no row
 exists yet, so a freshly-applied table or a lane's first run is never a false
 alarm; only a stale-but-present timestamp (or a `status='failed'` row) degrades.
+**Tightened 2026-08-21 (closes a gap found live: a total DB outage prevents the
+heartbeat WRITE too, so a stale-but-still-"ok" row can otherwise read healthy
+for up to 30h/8d after a real failure).** Each `_Lane` in `_LANES` now carries
+`fire_hours_et`/`fire_weekday` — ET-native, already-margined expected-fire
+times duplicated from the Railway dashboard's real cron schedule (dashboard is
+still the source of truth; these must be updated by hand if a schedule
+changes) — and an otherwise-"ok" row that predates its lane's expected fire
+downgrades to "warn" (never "down"/"unknown"). The email alert already covers
+the same failure through a DB-independent channel; this closes the dashboard
+side of the same gap.
 
 ### 6.33 `snaptrade_config` table
 

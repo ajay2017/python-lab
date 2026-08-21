@@ -19,7 +19,10 @@ Four checks:
 Severity vocabulary:
   "ok"      (🟢) — healthy / fresh.
   "warn"    (🟡) — degraded but the app still has the input (stale row, provider
-                   on a backup, weekly lane a touch late). Amber, never suppresses.
+                   on a backup, weekly lane a touch late, or a lane's last-good
+                   heartbeat predates its expected fire — possibly a write that
+                   silently failed during a total DB outage). Amber, never
+                   suppresses.
   "down"    (🔴) — the input is provably GONE: a missing data store (the DDL bug),
                    a lane that ran and FAILED, or a provider still actively
                    erroring (its most recent call did NOT succeed — a resolved
@@ -124,19 +127,48 @@ class _Lane:
     key: str
     label: str
     kind: str   # "daily" | "weekly"
+    # Expected-fire tightening (2026-08-21, closes the "row survives a total DB
+    # outage" gap — see the block comment below the table). Empty tuple = don't
+    # grade this lane's freshness beyond the existing age-window logic above;
+    # any non-empty tuple opts the lane into the "row exists but predates the
+    # expected fire" check inside check_cron_liveness().
+    fire_hours_et: tuple[int, ...] = ()
+    fire_weekday: int | None = None   # date.weekday(): Mon=0..Sun=6; weekly lanes only
 
 
+# `fire_hours_et` / `fire_weekday` values below are ET-native and ALREADY carry
+# margin past each lane's actual Railway-dashboard cron fire+write time (same
+# "expect a row a couple hours after the latest possible write, never before"
+# posture as the `expected_hour_et` column in `_INVENTORY` above). Railway Cron
+# Job schedules are dashboard-managed, NOT repo-managed (see the ⚠️ note in
+# docs/architecture.md's cron table and memory `project_cron_railway_migration`)
+# — these hours are a DUPLICATE of that real source of truth, confirmed against
+# the live Railway dashboard by the user on 2026-08-21, and must be updated by
+# hand if a schedule is ever changed there. They deliberately do NOT need a
+# per-lane DST adjustment: because they are ET-native (not fixed-UTC, unlike the
+# Railway cron expressions themselves) and already margined, the ~1h seasonal
+# drift a fixed-UTC cron shows across EST/EDT is absorbed by the same margin
+# automatically — nothing here needs touching twice a year.
+#
+#   lane key      | fire_hours_et | fire_weekday
+#   premarket     | (10,)         | —
+#   scan          | (12,)         | —
+#   intraday      | (13,)         | —
+#   eod           | (19,)         | —
+#   thesis        | (20,)         | 6 (Sunday)
+#   maintenance   | (10,)         | 5 (Saturday)
+#   broker        | (14, 19)      | —
 _LANES: tuple[_Lane, ...] = (
-    _Lane("premarket",   "Pre-market protective scan", "daily"),
-    _Lane("scan",        "Morning market scan",        "daily"),
-    _Lane("intraday",    "Intraday pullback check",    "daily"),
-    _Lane("eod",         "End-of-day snapshot",        "daily"),
-    _Lane("thesis",      "Weekly thesis & debrief",    "weekly"),
+    _Lane("premarket",   "Pre-market protective scan", "daily",  fire_hours_et=(10,)),
+    _Lane("scan",        "Morning market scan",        "daily",  fire_hours_et=(12,)),
+    _Lane("intraday",    "Intraday pullback check",    "daily",  fire_hours_et=(13,)),
+    _Lane("eod",         "End-of-day snapshot",        "daily",  fire_hours_et=(19,)),
+    _Lane("thesis",      "Weekly thesis & debrief",    "weekly", fire_hours_et=(20,), fire_weekday=6),
     # Saturday housekeeping (cron_runner._run_maintenance): idempotent data
     # backfills. Registered here so a silent death is visible on 🩺 System
     # Trust — a lane that writes heartbeats nobody grades is a lane that can
     # stop firing unnoticed, which defeats the dead-man's-switch.
-    _Lane("maintenance", "Weekly data backfills",      "weekly"),
+    _Lane("maintenance", "Weekly data backfills",      "weekly", fire_hours_et=(10,), fire_weekday=5),
     # SnapTrade broker sync (cron_runner._run_broker, F-244). "daily" matches
     # SNAPTRADE_BALANCE_STALE_HOURS=25's implicit cadence assumption. Same
     # registration rationale as `maintenance` above. Two distinct pre-setup
@@ -146,8 +178,9 @@ _LANES: tuple[_Lane, ...] = (
     # returns 0 and the dispatcher still writes a fresh status="ok" heartbeat
     # every fire (the dormant no-op is a genuine successful run), so the lane
     # reads green — never "down" either way (2026-08-17 review finding: the
-    # original comment here conflated these two states).
-    _Lane("broker",      "SnapTrade broker sync",       "daily"),
+    # original comment here conflated these two states). Two fires/day
+    # (14, 19) → the expected-fire check grades against max() = 19.
+    _Lane("broker",      "SnapTrade broker sync",       "daily", fire_hours_et=(14, 19)),
 )
 
 
@@ -223,6 +256,33 @@ def _last_expected_daily_date(expected_hour_et: int) -> date | None:
         return None
 
 
+def _last_expected_weekly_date(fire_weekday: int, expected_hour_et: int) -> date | None:
+    """The most recent calendar date matching `fire_weekday` (Mon=0..Sun=6) that
+    is on/before today — i.e. the weekly lane's expected fire date. Self-derives
+    ET "now" via `market_time.now_et()` (mirrors `_last_expected_daily_date`
+    exactly — NOT handed a `now` from the caller) so this can never be fed a
+    non-ET fallback clock; returns None if `market_time` won't import, same as
+    the daily helper. Calendar-weekday based, NOT trading-day based
+    (thesis/maintenance run on Sun/Sat, non-trading days by design). If today
+    IS that weekday but the expected hour hasn't passed yet, the fire hasn't
+    happened today, so "expected" steps back to last week's occurrence. Never
+    raises — returns None on any error."""
+    try:
+        from stock_analyzer import market_time
+    except Exception:
+        return None
+    try:
+        now = market_time.now_et()
+        d = now.date()
+        delta_days = (d.weekday() - fire_weekday) % 7
+        candidate = d - timedelta(days=delta_days)
+        if candidate == d and now.hour < expected_hour_et:
+            candidate = candidate - timedelta(days=7)
+        return candidate
+    except Exception:
+        return None
+
+
 def _age(now: datetime, ts: datetime) -> timedelta:
     return now - ts
 
@@ -232,7 +292,15 @@ def check_cron_liveness() -> list[dict]:
     """Read cron_heartbeat and grade each lane's recency. A lane with no
     heartbeat row yet is 'unknown' (not 'down') — silence right after this
     feature ships, or before a lane's first run, is not a failure. A lane whose
-    latest run recorded status='failed' is 'down'."""
+    latest run recorded status='failed' is 'down'.
+
+    Lanes with `fire_hours_et` configured get an additional tightening: an
+    otherwise-'ok' row that predates the lane's expected fire (this daily
+    hour, or this week's `fire_weekday`+hour) downgrades to 'warn' — this
+    catches a heartbeat write that silently failed during a total DB outage
+    (the last-good row survives and would otherwise read fresh for up to
+    _DAILY_LANE_OK_HOURS/_WEEKLY_LANE_OK_DAYS after the real failure). Only
+    ever 'ok' → 'warn'; never overrides 'down'/'unknown'/'failed'."""
     from stock_analyzer import db
 
     try:
@@ -303,6 +371,44 @@ def check_cron_liveness() -> list[dict]:
                     severity, detail = "warn", f"last fired {_ago(age)} — later than daily cadence"
                 else:
                     severity, detail = "down", f"last fired {_ago(age)} — daily lane appears dead"
+
+            # Tightening (2026-08-21): the age-window grading above trusts the
+            # last-known-good row's AGE, but during a total DB outage the
+            # heartbeat write itself fails to save — the last-good row survives
+            # and this lane would read "ok" for up to _DAILY_LANE_OK_HOURS /
+            # _WEEKLY_LANE_OK_DAYS after a real failure, even though the
+            # failure already fired an outage email through a DB-independent
+            # channel (found live 2026-08-16: the `maintenance` lane read green
+            # for days after a real outage). Only ever downgrades "ok" → "warn"
+            # — never touches "down"/"unknown"/"failed", and never runs for a
+            # lane with no `fire_hours_et` configured. Wrapped defensively so
+            # this new logic can only ever leave the base result unchanged, not
+            # make it worse.
+            if severity == "ok" and lane.fire_hours_et:
+                try:
+                    if lane.fire_weekday is not None:
+                        expected = _last_expected_weekly_date(
+                            lane.fire_weekday, max(lane.fire_hours_et))
+                    else:
+                        expected = _last_expected_daily_date(max(lane.fire_hours_et))
+                    # `ran` may round-trip from Supabase as UTC even though the
+                    # write was ET-native (timestamptz) — normalize to ET so this
+                    # compares against `expected` (always ET-native) on the same
+                    # calendar date; otherwise an evening ET fire (eod/broker/
+                    # thesis) can read a day later in UTC and mask a genuine
+                    # single-period miss, worst in EST (winter).
+                    from stock_analyzer import market_time as _mt
+                    ran_et_date = ran.astimezone(_mt.ET).date()
+                    if expected is not None and ran_et_date < expected:
+                        severity = "warn"
+                        detail = (
+                            f"last good heartbeat is from {ran.date()}, but a run was "
+                            f"expected by now — a scheduled fire may have failed without "
+                            f"recording (e.g. a DB outage prevented the failure write too); "
+                            f"check for an outage email."
+                        )
+                except Exception:
+                    pass
 
         out.append({
             "key": lane.key, "label": lane.label, "severity": severity,

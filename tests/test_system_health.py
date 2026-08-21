@@ -213,6 +213,163 @@ def test_freshness_does_not_expect_todays_row_before_lane_due_hour(monkeypatch):
     assert sh._last_expected_daily_date(19) == after.date()
 
 
+# ── expected-fire tightening (2026-08-21: closes the "row survives a total DB
+# outage" gap — see check_cron_liveness's docstring and the block comment above
+# _LANES) ───────────────────────────────────────────────────────────────────────
+def test_last_expected_weekly_date_due_hour_boundary(monkeypatch):
+    """Unit-level lock on `_last_expected_weekly_date`: before the lane's
+    fire_weekday+hour this week, expected = last week's occurrence; at/after,
+    expected = this week's. 2026-08-22 is a Saturday (weekday 5). Self-derives
+    ET "now" via market_time.now_et() (mirrors _last_expected_daily_date) —
+    monkeypatch that, don't pass `now` as an argument."""
+    import datetime as dt
+    import pytz
+    et = pytz.timezone("America/New_York")
+
+    before = et.localize(dt.datetime(2026, 8, 22, 9, 0))   # before the 10am fire hour
+    monkeypatch.setattr(market_time, "now_et", lambda: before)
+    assert sh._last_expected_weekly_date(5, 10) == dt.date(2026, 8, 15)
+
+    after = et.localize(dt.datetime(2026, 8, 22, 11, 0))   # after the 10am fire hour
+    monkeypatch.setattr(market_time, "now_et", lambda: after)
+    assert sh._last_expected_weekly_date(5, 10) == dt.date(2026, 8, 22)
+
+
+def test_last_expected_weekly_date_returns_none_on_internal_error(monkeypatch):
+    """Never raises — a `market_time.now_et()` that blows up must yield None,
+    not a crash, mirroring `_last_expected_daily_date`'s fail-safe style."""
+    def _boom():
+        raise RuntimeError("clock unavailable")
+    monkeypatch.setattr(market_time, "now_et", _boom)
+    assert sh._last_expected_weekly_date(5, 10) is None
+
+
+def test_cron_liveness_weekly_outage_regression(monkeypatch):
+    """The motivating bug: a DB outage during Saturday's `maintenance` fire
+    means the heartbeat write itself never happened, so last week's row
+    survives. Age alone (7d4h) is still inside the weekly OK band (8 days),
+    but the row predates THIS week's expected fire — must downgrade to warn,
+    not read green."""
+    import datetime as dt
+    import pytz
+    et = pytz.timezone("America/New_York")
+
+    now = et.localize(dt.datetime(2026, 8, 22, 15, 0))   # this Saturday, 5h past the 10am fire
+    ran = et.localize(dt.datetime(2026, 8, 15, 11, 0))   # LAST week's Saturday fire (only good row)
+    monkeypatch.setattr(market_time, "now_et", lambda: now)
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": "maintenance", "last_run_at": ran.isoformat(), "status": "ok"},
+    ])
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["maintenance"]["severity"] == "warn"
+    assert "expected" in lanes["maintenance"]["detail"]
+
+
+def test_cron_liveness_daily_missed_fire_warns_past_due_hour(monkeypatch):
+    """Daily equivalent of the regression above: an `eod` row dated yesterday
+    reads 'warn' once today's 19:00 ET due hour has passed, but stays 'ok'
+    before it — not-yet-due must never amber."""
+    import datetime as dt
+    import pytz
+    from stock_analyzer import data as sdata
+    et = pytz.timezone("America/New_York")
+    monkeypatch.setattr(sdata, "is_trading_day", lambda d: d.weekday() < 5)
+
+    # 2026-08-20 (Thu) 20:00 ET is the last good row; 2026-08-21 (Fri) is "today".
+    ran = et.localize(dt.datetime(2026, 8, 20, 20, 0))
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": "eod", "last_run_at": ran.isoformat(), "status": "ok"},
+    ])
+
+    past_due = et.localize(dt.datetime(2026, 8, 21, 20, 0))   # after 19:00 ET
+    monkeypatch.setattr(market_time, "now_et", lambda: past_due)
+    monkeypatch.setattr(market_time, "today_et", lambda: past_due.date())
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["eod"]["severity"] == "warn"
+
+    not_due = et.localize(dt.datetime(2026, 8, 21, 18, 0))    # before 19:00 ET
+    monkeypatch.setattr(market_time, "now_et", lambda: not_due)
+    monkeypatch.setattr(market_time, "today_et", lambda: not_due.date())
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["eod"]["severity"] == "ok"   # not yet due — must never false-amber
+
+
+def test_cron_liveness_broker_multi_fire_uses_max_hour(monkeypatch):
+    """broker fires twice a day (14, 19) — grading must use max()=19, NOT
+    min()=14. A missed weekday fire (last-good row is the prior trading day,
+    now is past 19:00 ET today) reads warn."""
+    import datetime as dt
+    import pytz
+    from stock_analyzer import data as sdata
+    et = pytz.timezone("America/New_York")
+    monkeypatch.setattr(sdata, "is_trading_day", lambda d: d.weekday() < 5)
+
+    ran = et.localize(dt.datetime(2026, 8, 20, 20, 0))   # prior trading day (Thu)
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": "broker", "last_run_at": ran.isoformat(), "status": "ok"},
+    ])
+    now = et.localize(dt.datetime(2026, 8, 21, 20, 0))   # Fri, past 19:00 ET
+    monkeypatch.setattr(market_time, "now_et", lambda: now)
+    monkeypatch.setattr(market_time, "today_et", lambda: now.date())
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["broker"]["severity"] == "warn"
+
+
+def test_cron_liveness_broker_between_fires_stays_ok(monkeypatch):
+    """The discriminating case: at Fri 15:00 ET — past the 14:00 fire but
+    BEFORE the 19:00 one — a last-good row from Thu must still read 'ok'.
+    grading against min()=14 would false-amber here; only max()=19 is correct
+    (a healthy day where only the later fire has written yet is not a miss)."""
+    import datetime as dt
+    import pytz
+    from stock_analyzer import data as sdata
+    et = pytz.timezone("America/New_York")
+    monkeypatch.setattr(sdata, "is_trading_day", lambda d: d.weekday() < 5)
+
+    ran = et.localize(dt.datetime(2026, 8, 20, 20, 0))   # prior trading day (Thu)
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": "broker", "last_run_at": ran.isoformat(), "status": "ok"},
+    ])
+    now = et.localize(dt.datetime(2026, 8, 21, 15, 0))   # Fri, between the 14:00 and 19:00 fires
+    monkeypatch.setattr(market_time, "now_et", lambda: now)
+    monkeypatch.setattr(market_time, "today_et", lambda: now.date())
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["broker"]["severity"] == "ok"
+
+
+def test_cron_liveness_tightening_error_leaves_severity_unchanged(monkeypatch):
+    """If `_last_expected_weekly_date` itself blows up, the tightening block's
+    own try/except must swallow it and leave the base age-window severity
+    untouched — never a worse default than before this feature existed."""
+    def _boom(*_a, **_kw):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(sh, "_last_expected_weekly_date", _boom)
+    now = market_time.now_et()
+    fresh = (now - timedelta(hours=1)).isoformat()
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": "maintenance", "last_run_at": fresh, "status": "ok"},
+    ])
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["maintenance"]["severity"] == "ok"   # base age-window result, untouched
+
+
+def test_cron_liveness_tightening_never_overrides_down_or_unknown(monkeypatch):
+    """ok→warn is the ONLY transition this tightening can ever make. A fresh
+    'failed' row stays down, an already-stale (past the daily OK window) row
+    stays whatever the base age-window logic already gave it (no double
+    grading), and a lane with no heartbeat row at all stays unknown."""
+    now = market_time.now_et()
+    monkeypatch.setattr(db, "load_cron_heartbeats", lambda: [
+        {"lane": "eod",  "last_run_at": (now - timedelta(hours=1)).isoformat(), "status": "failed", "detail": "boom"},
+        {"lane": "scan", "last_run_at": (now - timedelta(days=2)).isoformat(),  "status": "ok"},
+        # broker: no row at all.
+    ])
+    lanes = {x["key"]: x for x in sh.check_cron_liveness()}
+    assert lanes["eod"]["severity"] == "down"      # fresh but FAILED — tightening never runs
+    assert lanes["scan"]["severity"] == "warn"     # 2d stale — base logic's own answer, not re-graded
+    assert lanes["broker"]["severity"] == "unknown"  # no row at all — never touched
+
+
 # ── rollup + never-raises ─────────────────────────────────────────────────────
 def test_worst_severity_ranking():
     assert sh._worst("ok", "unknown") == "ok"
