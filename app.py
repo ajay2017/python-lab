@@ -219,7 +219,7 @@ from stock_analyzer.portfolio import (
     manual_stop_wins, holding_returns, relative_strength_table, SECTOR_ETF, TICKER_SECTORS,
     diversifying_candidate_pool, correlation_to_portfolio, portfolio_return_series,
     trailing_return, trim_allocation, real_sector_exposure, sector_benchmark_tilt,
-    classify_book_corr,
+    classify_book_corr, correlation_coverage, CORR_MIN_OBS_TRUSTED,
 )
 from stock_analyzer.concentration import assess_add_concentration, high_beta_share
 from stock_analyzer.scanner import (
@@ -4627,7 +4627,7 @@ if page == "🏠 Home":
     # and silently degrades — e.g. the rebalance trim PLAN fell back to the
     # basis-only list because a cached brief predated the trim_target_*/
     # market_value/price fields. See memory project_home_synth_memoization.
-    _SYNTH_SCHEMA_VER = 6  # bumped: grow_today new_picks now carry personalized_match
+    _SYNTH_SCHEMA_VER = 7  # bumped: bundle now carries corr_coverage (F-246)
     _synth_sig = (
         frozenset(
             (str(_h.get("Ticker") or _h.get("ticker") or "").upper(),
@@ -4658,6 +4658,9 @@ if page == "🏠 Home":
         risk_pairs         = _b["risk_pairs"]
         _div_label         = _b["_div_label"]
         div_recs           = _b["div_recs"]
+        # .get() not [] — a bundle memoized before the schema bump lacks the key;
+        # None is the honest "coverage unknown", not a fabricated count.
+        _corr_cov          = _b.get("corr_coverage")
         h_rets             = _b["h_rets"]
         _port_risk         = _b["_port_risk"]
         _fragility         = _b["_fragility"]
@@ -4685,6 +4688,7 @@ if page == "🏠 Home":
         st.session_state["_avg_corr_cache"]           = avg_corr
         st.session_state["_risk_pairs_cache"]         = risk_pairs
         st.session_state["_div_label_cache"]          = _div_label
+        st.session_state["_corr_coverage_cache"]      = _corr_cov
         st.session_state["_n_danger_cache"]           = n_danger
         st.session_state["_n_warning_cache"]          = n_warning
         st.session_state["_grow_composites"]          = _grow_composites
@@ -4786,6 +4790,15 @@ if page == "🏠 Home":
 
         try:
             corr_df      = correlation_matrix(held_data)
+            # F-246: computed HERE, beside the matrix and from the same
+            # held_data, then published/memoized alongside it. Computing it at
+            # render time instead would describe a DIFFERENT held_data whenever
+            # the synthesis memo serves a corr_df built on an earlier run (the
+            # memo signature keys on holdings/date, not on price histories), so
+            # a thin matrix whose histories have since recovered would render as
+            # "sample is fine" — the exact inverse of what this figure is for.
+            # Same producer-threaded shape F-230's `n_window_days` uses.
+            _corr_cov    = correlation_coverage(held_data)
             _weights_map = dict(zip(port_df["Ticker"], port_df["Weight (%)"])) if not corr_df.empty else None
             div          = diversification_score(corr_df, _weights_map)
             div_score    = div["score"]
@@ -4799,11 +4812,13 @@ if page == "🏠 Home":
             div_score  = avg_corr = None
             risk_pairs = []
             _div_label = "Unavailable"
-        st.session_state["_corr_df_cache"]    = corr_df
-        st.session_state["_div_score_cache"]  = div_score
-        st.session_state["_avg_corr_cache"]   = avg_corr
-        st.session_state["_risk_pairs_cache"] = risk_pairs
-        st.session_state["_div_label_cache"]  = _div_label
+            _corr_cov  = None    # offline sentinel — never a fabricated count
+        st.session_state["_corr_df_cache"]       = corr_df
+        st.session_state["_div_score_cache"]     = div_score
+        st.session_state["_avg_corr_cache"]      = avg_corr
+        st.session_state["_risk_pairs_cache"]    = risk_pairs
+        st.session_state["_div_label_cache"]     = _div_label
+        st.session_state["_corr_coverage_cache"] = _corr_cov
 
         try:
             div_recs = diversification_recommendations(port_df, corr_df, div, portfolio_value)
@@ -5506,6 +5521,7 @@ if page == "🏠 Home":
             "bundle": {
                 "alert_list": alert_list, "n_danger": n_danger, "n_warning": n_warning,
                 "actions": actions, "corr_df": corr_df, "div": div,
+                "corr_coverage": _corr_cov,   # must travel WITH corr_df
                 "div_score": div_score, "avg_corr": avg_corr, "risk_pairs": risk_pairs,
                 "_div_label": _div_label, "div_recs": div_recs, "h_rets": h_rets,
                 "_port_risk": _port_risk, "_fragility": _fragility,
@@ -12146,6 +12162,10 @@ elif page == "🔗 Risk Analysis":
     avg_corr            = st.session_state.get("_avg_corr_cache")
     risk_pairs          = st.session_state.get("_risk_pairs_cache") or []
     _div_label          = st.session_state.get("_div_label_cache")
+    # Produced beside corr_df and memoized with it, so it always describes the
+    # matrix actually on screen. None = unknown (producer failed, or a bundle
+    # memoized before the schema bump) — never read as "sample is fine".
+    _corr_cov           = st.session_state.get("_corr_coverage_cache")
 
     (_ra_tab_dash, _ra_tab_action, _ra_tab_stress, _ra_tab_mc,
      _ra_tab_rules) = st.tabs([
@@ -12534,7 +12554,10 @@ elif page == "🔗 Risk Analysis":
             st.divider()
 
         # ── Diversification & Correlation ─────────────────────────────────────
-        if corr_df.empty:
+        # `is None` FIRST: _corr_df_cache can be absent when _last_held_data was
+        # published by _rebuild_portfolio_after_trade without a Home visit, and
+        # None.empty would raise. Mirrors every other consumer of this key.
+        if corr_df is None or corr_df.empty:
             st.info("Need at least 2 holdings with price history to compute correlations.")
         else:
             dc1, dc2, dc3 = st.columns(3)
@@ -12545,6 +12568,43 @@ elif page == "🔗 Risk Analysis":
             dc3.metric("High-Correlation Pairs", len(risk_pairs),
                        help=f"Pairs with correlation ≥ {CORR_HIGH_PAIRS_THRESHOLD}")
             st.caption(f"Classification: **{_div_label}** — weighted avg pairwise 6-month return correlation")
+
+            # ── How much data is actually behind that number ──────────────────
+            # correlation_matrix() drops rows LISTWISE across every ticker, so
+            # the whole matrix runs on the intersection of all histories — one
+            # degraded fetch thins the sample for every pair at once, and a thin
+            # sample produces near-zero correlations that read as real
+            # diversification. Surfaced because "Well Diversified" is a claim
+            # the user acts on. Awareness only; gates nothing.
+            if _corr_cov is None:
+                st.caption(
+                    "Sample size behind these correlations is **unknown** this session — "
+                    "reload from 🏠 Home to recompute it. Treat the figures above as "
+                    "unverified rather than confirmed."
+                )
+            else:
+                _cov_txt = (
+                    f"Computed on **{_corr_cov['n_obs']} daily returns** shared by all "
+                    f"{_corr_cov['n_tickers']} of your {len(held_data)} holdings with "
+                    "usable price history"
+                )
+                if _corr_cov["shortest_len"] < _corr_cov["longest_len"]:
+                    _cov_txt += (
+                        f" — shortest is **{_corr_cov['shortest_ticker']}** "
+                        f"({_corr_cov['shortest_len']} bars vs {_corr_cov['longest_len']} "
+                        "for the longest), which is usually what caps the sample"
+                    )
+                if _corr_cov["n_obs"] < CORR_MIN_OBS_TRUSTED:
+                    st.error(
+                        f"⛔ {_cov_txt}. That is below the {CORR_MIN_OBS_TRUSTED} "
+                        "observations this app requires anywhere else before it will "
+                        "report an empirical correlation, so the correlations above — "
+                        "and the diversification score and classification derived from "
+                        "them — are **not reliable**. A thin sample pushes correlations "
+                        "toward zero, which shows up as diversification you may not have."
+                    )
+                else:
+                    st.caption(f"{_cov_txt}.")
 
             if risk_pairs:
                 st.markdown("**Correlated pairs — reduce diversification benefit:**")
@@ -13863,16 +13923,53 @@ elif page == "🔗 Risk Analysis":
                         f" {_fs_top_sec[1]} of them sit in **{_fs_top_sec[0]}** — they are "
                         "not independent bets."
                     )
-                if _fs_corr is not None:
+                # The copy must READ the numbers, not assume correlation is high.
+                # And the flat negative is judged on the MAX pairwise, never the
+                # mean: CORR_HIGH_PAIRS_THRESHOLD is a per-PAIR constant, and a
+                # subset holding one duplicated pair among several near-zero
+                # pairs averages far below it — so denying duplication on the
+                # mean would under-alarm on a protective surface.
+                _fs_max = _fsim.max_pairwise_corr(_fs_stops, corr_df)
+                _fs_up = {str(t).upper() for t in _fs_stops}   # symmetry with _pairwise_values
+                _fs_dupes = [
+                    rp for rp in risk_pairs
+                    if str(rp["t1"]).upper() in _fs_up and str(rp["t2"]).upper() in _fs_up
+                ]
+                _fs_thin = bool(_corr_cov and _corr_cov["n_obs"] < CORR_MIN_OBS_TRUSTED)
+                if _fs_corr is None:
                     _fs_msg += (
-                        f" Their mean pairwise correlation is **{_fs_corr:+.2f}** — the "
-                        "higher this is, the more these stops fire as one decision rather "
-                        "than several."
+                        " Correlation between them is unavailable this session, so the "
+                        "clustering read here is sector-only."
+                    )
+                elif _fs_thin:
+                    _fs_msg += (
+                        f" Their mean pairwise correlation reads **{_fs_corr:+.2f}**, but "
+                        f"it rests on only {_corr_cov['n_obs']} shared daily returns — too "
+                        "thin to trust, so draw no conclusion from it either way "
+                        "(see 📊 Dashboard)."
+                    )
+                elif _fs_dupes and _fs_max is not None:
+                    # Gated on _fs_dupes, NOT on `_fs_max >= threshold`. `_fs_max`
+                    # is rounded to 2dp off an already-3dp-rounded matrix, while
+                    # diversification_score tests the unrounded value — so a pair
+                    # at 0.647 would round to 0.65 and trip a bare max>=threshold
+                    # check while being absent from risk_pairs, leaving this line
+                    # claiming a high pair the Dashboard says doesn't exist.
+                    # risk_pairs is sorted by -corr, so _fs_dupes[0] IS the max.
+                    _fs_msg += (
+                        f" Mean pairwise correlation across them is {_fs_corr:+.2f}, but "
+                        f"the highest pair reaches **{_fs_max:+.2f}** "
+                        f"({_fs_dupes[0]['t1']}×{_fs_dupes[0]['t2']}) — a low average can "
+                        "hide a duplicated pair, and that pair is one bet stopping out "
+                        "twice."
                     )
                 else:
                     _fs_msg += (
-                        " Correlation between them is unavailable this session, so the "
-                        "clustering read below is sector-only."
+                        f" Mean pairwise correlation is {_fs_corr:+.2f} and no pair among "
+                        f"them reaches {CORR_HIGH_PAIRS_THRESHOLD}, so correlation does "
+                        "not look like the driver here. The likelier explanation is that "
+                        "the stops themselves sit inside the range of a shock this size, "
+                        "so most of them break regardless."
                     )
                 st.warning(_fs_msg)
 

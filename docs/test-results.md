@@ -18,11 +18,21 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-21 (F-245 Forward Portfolio Simulator)
+## 1. Latest run — 2026-08-21 (F-245 Forward Portfolio Simulator + F-246 correlation coverage)
 
-**3771 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
---cov-report=term`: 93.46s — TOTAL 17563 stmts, 4168 missed, **76%** overall
+**3780 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
+--cov-report=term`: 77.47s — TOTAL 17583 stmts, 4158 missed, **76%** overall
 coverage). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**F-246** added 9 tests (6 in `tests/test_portfolio_intelligence.py`, 3 in
+`tests/test_forward_sim.py`). The `n_obs` arithmetic ones exist because the
+figure's entire purpose is stating a correct sample size, so an off-by-one there
+would be self-defeating — including the interior-NaN case, which pins that
+listwise deletion removes the NaN row *before* `pct_change`, so frame-dropna and
+pct_change-dropna never differ by more than the single leading bar. The
+`max_pairwise_corr` ones pin the review finding that a per-pair threshold cannot
+be applied to a mean: one 0.77 pair among near-zero pairs averages below 0.65,
+so judging "these are not the same bet" on the mean under-alarms.
 
 **+114 tests over the 3657 entry below.** 64 of those are F-245's
 (`tests/test_forward_sim.py`, new); the remaining ~50 shipped with work logged

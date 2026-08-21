@@ -884,18 +884,83 @@ def sector_benchmark_tilt(real_sector_df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Correlation & Diversification ─────────────────────────────────────────────
 
-def correlation_matrix(held_data: dict) -> pd.DataFrame:
-    """Build a daily-return correlation matrix from held_data price histories."""
+# Display-only measurement floor — NOT an investment-policy threshold, so it
+# lives here rather than in constants.py, matching the F-230
+# `stress_test._MIN_STRESS_WINDOW_DAYS` / `account._ANNUALIZE_CAVEAT_MAX_DAYS`
+# precedent. It decides only whether a data-quality WARNING is shown next to an
+# awareness reading; it gates no recommendation and changes no score. The value
+# is not newly invented: it reuses the app's existing "≥20 overlapping trading
+# days" empirical-correlation minimum (`portfolio_intelligence.factor_tilt`'s
+# `min_overlap_days`, itself mirroring risk.py's rate-sensitivity floor).
+CORR_MIN_OBS_TRUSTED = 20
+
+
+def _close_series_map(held_data: dict) -> dict:
+    """{ticker: Close series} — the inputs the correlation matrix is built from.
+
+    Shared by `correlation_matrix` and `correlation_coverage` so the coverage
+    figure always describes the SAME inputs the matrix used. Never duplicate
+    this extraction: a coverage number computed off a different set would be
+    worse than no coverage number at all.
+    """
     series = {}
     for ticker, data in held_data.items():
         hist = data.get("df") if data.get("df") is not None else data.get("history")
         if hist is not None and not hist.empty and "Close" in hist.columns:
             series[ticker] = hist["Close"]
+    return series
+
+
+def correlation_matrix(held_data: dict) -> pd.DataFrame:
+    """Build a daily-return correlation matrix from held_data price histories.
+
+    NOTE the `.dropna()` below is LISTWISE across every ticker at once, so the
+    matrix is computed on the INTERSECTION of all histories — one short or
+    degraded fetch shortens the sample for every pair in the book. That is why
+    `correlation_coverage()` exists: the sample size must be visible, because a
+    thin intersection produces near-zero correlations that read as genuine
+    diversification. Changing the deletion strategy is a behaviour change to a
+    shared decision input (diversification score, clusters, F-230, F-245) — not
+    a cleanup.
+    """
+    series = _close_series_map(held_data)
     if len(series) < 2:
         return pd.DataFrame()
     prices = pd.DataFrame(series).dropna()
     returns = prices.pct_change().dropna()
     return returns.corr().round(3)
+
+
+def correlation_coverage(held_data: dict) -> dict | None:
+    """How much data `correlation_matrix()` actually had to work with.
+
+    Awareness/diagnostic only — computes no correlation, gates nothing, and is
+    read by no decision path. Returns None on the PRIMARY empty-matrix condition
+    (fewer than 2 usable histories). Note that is not the only way
+    `correlation_matrix` ends up empty: two histories with disjoint date indexes
+    yield a coverage dict (with `n_obs == 0`) but an empty matrix, so
+    empty-matrix is a strict superset of `None` here.
+
+    `n_obs` is the number of daily returns behind EVERY pair (the listwise
+    intersection, minus one bar for `pct_change`). `shortest_ticker` names the
+    holding with the shortest history — usually, but not provably, the one
+    capping the sample: with disjoint indexes every history can be the same
+    length while the intersection is still empty.
+    """
+    series = _close_series_map(held_data)
+    if len(series) < 2:
+        return None
+    lengths = {t: int(s.dropna().shape[0]) for t, s in series.items()}
+    prices = pd.DataFrame(series).dropna()
+    shortest = min(lengths, key=lambda t: lengths[t])
+    return {
+        "n_tickers": len(series),
+        "n_obs": max(0, len(prices) - 1),   # pct_change() drops the first bar
+        "shortest_ticker": shortest,
+        "shortest_len": lengths[shortest],
+        "longest_len": max(lengths.values()),
+        "lengths": lengths,
+    }
 
 
 def _to_tz_naive(s: pd.Series) -> pd.Series:

@@ -311,14 +311,8 @@ def shock_port_df(port_df, moves):
     return out
 
 
-def mean_pairwise_corr(tickers, corr_df):
-    """Mean pairwise correlation across `tickers`, or None.
-
-    The headline finding this feature exists to surface: if the names that all
-    stop out together are highly correlated, a book of N positions was really a
-    handful of bets wearing N tickers. Returns None (never 0.0) when fewer than
-    two tickers are resolvable — a missing correlation read must not render as
-    "uncorrelated".
+def _pairwise_values(tickers, corr_df):
+    """Every resolvable pairwise correlation among `tickers`.
 
     Uses the codebase's established guard: check membership in BOTH index and
     columns, and reject a non-scalar `.loc` result, because duplicate labels in
@@ -326,7 +320,7 @@ def mean_pairwise_corr(tickers, corr_df):
     tests/test_portfolio_intelligence.py).
     """
     if corr_df is None or getattr(corr_df, "empty", True):
-        return None
+        return []
     names = [str(t).upper() for t in (tickers or [])]
     values = []
     for i, a in enumerate(names):
@@ -340,9 +334,36 @@ def mean_pairwise_corr(tickers, corr_df):
             value = _num(cell)      # None for a frame/Series or a NaN cell
             if value is not None:
                 values.append(value)
+    return values
+
+
+def mean_pairwise_corr(tickers, corr_df):
+    """Mean pairwise correlation across `tickers`, or None.
+
+    Returns None (never 0.0) when fewer than two tickers are resolvable — a
+    missing correlation read must not render as "uncorrelated".
+    """
+    values = _pairwise_values(tickers, corr_df)
     if not values:
         return None
     return round(sum(values) / len(values), 2)
+
+
+def max_pairwise_corr(tickers, corr_df):
+    """HIGHEST pairwise correlation across `tickers`, or None.
+
+    Exists because a mean cannot support a flat negative. A subset can hold one
+    genuinely duplicated pair (0.77) alongside several near-zero pairs and still
+    average well below any per-pair threshold — so judging "these are not the
+    same bet" on the mean under-alarms on a protective surface. The per-pair
+    constant (`CORR_HIGH_PAIRS_THRESHOLD`) is only meaningful against a per-pair
+    number, which is this one. Use the mean to describe the set, the max to deny
+    that any duplication exists.
+    """
+    values = _pairwise_values(tickers, corr_df)
+    if not values:
+        return None
+    return round(max(values), 2)
 
 
 def _survivors(positions, which, held_data):

@@ -625,3 +625,38 @@ def test_a_position_with_no_market_value_gets_its_own_bucket():
     assert out["no_value"] == ["ZZZ"]
     assert "ZZZ" not in [p["ticker"] for p in out["positions"]]
     assert "ZZZ" not in out["uncovered"]      # distinct reason, distinct bucket
+
+
+# ── max_pairwise_corr: a mean cannot support a flat negative ──────────────────
+
+def test_max_pairwise_corr_finds_a_duplicated_pair_a_low_mean_hides():
+    """The review finding: one 0.77 pair among near-zero pairs averages low.
+
+    CORR_HIGH_PAIRS_THRESHOLD is a per-PAIR constant, so judging "these are not
+    the same bet" on the mean under-alarms — a duplicated pair can hide inside a
+    low average. The max is what the per-pair threshold is meaningful against.
+    """
+    corr = _corr([[1.00, 0.77, 0.02],
+                  [0.77, 1.00, 0.01],
+                  [0.02, 0.01, 1.00]], ["AAA", "BBB", "CCC"])
+    names = ["AAA", "BBB", "CCC"]
+    mean = forward_sim.mean_pairwise_corr(names, corr)
+    mx = forward_sim.max_pairwise_corr(names, corr)
+    assert mean is not None and mean < 0.65, "mean must sit below the pair threshold"
+    assert mx == 0.77 and mx >= 0.65, "max must expose the duplicated pair"
+
+
+def test_max_pairwise_corr_shares_the_guards_with_the_mean():
+    corr = _corr([[1.0, 0.9], [0.9, 1.0]], ["AAA", "BBB"])
+    assert forward_sim.max_pairwise_corr(["AAA"], corr) is None
+    assert forward_sim.max_pairwise_corr([], corr) is None
+    assert forward_sim.max_pairwise_corr(["AAA", "BBB"], None) is None
+    assert forward_sim.max_pairwise_corr(["XXX", "YYY"], corr) is None
+    assert forward_sim.max_pairwise_corr(["AAA", "BBB"], corr) == 0.9
+
+
+def test_max_pairwise_corr_skips_nan_cells():
+    corr = _corr([[1.0, float("nan"), 0.6],
+                  [float("nan"), 1.0, 0.3],
+                  [0.6, 0.3, 1.0]], ["AAA", "BBB", "CCC"])
+    assert forward_sim.max_pairwise_corr(["AAA", "BBB", "CCC"], corr) == 0.6

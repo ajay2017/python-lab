@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from stock_analyzer import portfolio
 from stock_analyzer import portfolio_intelligence as pi
 from stock_analyzer.constants import CORR_HIGH_PAIRS_THRESHOLD, CORR_DANGER_PAIRS_THRESHOLD
 from stock_analyzer.stress_test import _MIN_STRESS_WINDOW_DAYS
@@ -619,3 +620,91 @@ def test_factor_tilt_all_positions_dropped_returns_empty_shape():
             "Y": {"df": pd.DataFrame({"Close": close_y})}}
     result = pi.factor_tilt(held, {"X": 50.0, "Y": 50.0}, {"A": factor_a}, min_overlap_days=20)
     assert result == {"positions": [], "portfolio_tilt": {}, "n_included": 0}
+
+
+# ── correlation_coverage: how much data is behind the correlation matrix ──────
+# Added 2026-08-21 after a live reading showed avg portfolio correlation 0.12 on
+# a tech-heavy 18-name book while flagging CRM×SAP at 0.77 — a pattern that
+# could mean either "genuinely uncorrelated" or "matrix computed on a handful of
+# rows". `correlation_matrix` uses LISTWISE deletion across every ticker, so one
+# short history silently governs the whole book, and nothing surfaced it. These
+# pin the diagnostic that makes the sample size visible.
+
+def _hist(n, start=100.0, step=1.0):
+    return pd.DataFrame({"Close": [start + step * i for i in range(n)]})
+
+
+def test_correlation_coverage_reports_the_listwise_intersection():
+    held = {"AAA": {"df": _hist(50)}, "BBB": {"df": _hist(50)}}
+    cov = portfolio.correlation_coverage(held)
+    assert cov["n_tickers"] == 2
+    assert cov["n_obs"] == 49          # 50 rows − 1 for pct_change
+    assert cov["shortest_len"] == 50
+    assert cov["longest_len"] == 50
+
+
+def test_correlation_coverage_names_the_ticker_pinning_the_sample():
+    """One short history governs every pair — the whole point of the diagnostic."""
+    held = {"AAA": {"df": _hist(120)}, "BBB": {"df": _hist(120)}, "ZZZ": {"df": _hist(8)}}
+    cov = portfolio.correlation_coverage(held)
+    assert cov["shortest_ticker"] == "ZZZ"
+    assert cov["shortest_len"] == 8
+    assert cov["longest_len"] == 120
+    # The intersection — NOT the longest history — is what every pair gets.
+    assert cov["n_obs"] == 7
+    assert cov["n_obs"] < portfolio.CORR_MIN_OBS_TRUSTED
+
+
+def test_correlation_coverage_matches_the_matrix_it_describes():
+    """Coverage must describe the SAME inputs correlation_matrix used.
+
+    Both read `_close_series_map`, so a ticker excluded from the matrix (no
+    Close column) must also be excluded from the count — otherwise the caption
+    would claim more data than the correlations actually had.
+    """
+    held = {
+        "AAA": {"df": _hist(40)},
+        "BBB": {"df": _hist(40, start=50.0, step=-0.3)},
+        "NOCLOSE": {"df": pd.DataFrame({"Open": [1.0, 2.0, 3.0]})},
+    }
+    corr = portfolio.correlation_matrix(held)
+    cov = portfolio.correlation_coverage(held)
+    assert "NOCLOSE" not in corr.columns
+    assert cov["n_tickers"] == len(corr.columns) == 2
+    assert cov["n_obs"] == 39
+
+
+def test_correlation_coverage_is_none_when_no_matrix_can_be_built():
+    """Same condition under which correlation_matrix returns an empty frame."""
+    for held in ({}, {"AAA": {"df": _hist(30)}}, {"AAA": {"df": None}, "BBB": {"df": None}}):
+        assert portfolio.correlation_coverage(held) is None
+        assert portfolio.correlation_matrix(held).empty
+
+
+def test_correlation_coverage_handles_non_overlapping_indexes():
+    """Disjoint date indexes ⇒ empty intersection, reported as 0 not crashed."""
+    a = pd.DataFrame({"Close": [1.0, 2.0, 3.0]}, index=pd.date_range("2026-01-01", periods=3))
+    b = pd.DataFrame({"Close": [1.0, 2.0, 3.0]}, index=pd.date_range("2026-06-01", periods=3))
+    cov = portfolio.correlation_coverage({"AAA": {"df": a}, "BBB": {"df": b}})
+    assert cov is not None
+    assert cov["n_obs"] == 0
+    assert cov["n_obs"] < portfolio.CORR_MIN_OBS_TRUSTED
+
+
+def test_correlation_coverage_interior_nan_costs_exactly_one_row():
+    """Listwise deletion removes the NaN row BEFORE pct_change.
+
+    So frame-dropna and pct_change-dropna never differ by more than the single
+    leading bar — which is the assumption `n_obs = len(prices) - 1` rests on.
+    Pinned because the caption's whole purpose is stating the right number.
+    """
+    a = _hist(30)
+    b = _hist(30, start=70.0, step=0.5)
+    b.loc[10, "Close"] = float("nan")      # interior gap in one ticker only
+    held = {"AAA": {"df": a}, "BBB": {"df": b}}
+    cov = portfolio.correlation_coverage(held)
+    # 30 rows, one dropped listwise for the NaN, one more for pct_change.
+    assert cov["n_obs"] == 28
+    # And it agrees with the matrix's own effective sample.
+    prices = pd.DataFrame({"AAA": a["Close"], "BBB": b["Close"]}).dropna()
+    assert cov["n_obs"] == len(prices.pct_change().dropna())
