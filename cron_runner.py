@@ -92,6 +92,7 @@ _EOD_ROW = 2          # alert_state lane: EOD pullback dedup
 _BUY_ROW = 3          # alert_state lane: morning buy-list dedup
 _INTRADAY_ROW = 4     # alert_state lane: intraday pullback entry dedup
 _DB_OUTAGE_ROW = 5    # alert_state lane: DB-unreachable notice dedup (self-creates on upsert)
+_BROKER_FAILURE_ROW = 6  # alert_state lane: broker-lane failure-email dedup (self-creates on upsert)
 
 # Plain-language lane names + what a DB outage actually cost, for the outage
 # email. Kept here rather than in each lane so the wording can't drift.
@@ -207,6 +208,46 @@ def _notify_failure(mode: str, detail: str) -> None:
         _send_email("cron-failure", subject, html)
     except Exception as exc:
         _log(f"cron-failure notify: UNCAUGHT — {str(exc)[:160]} (original failure still propagates)")
+
+
+def _notify_broker_failure(now_et, detail: str) -> None:
+    """Dedup wrapper around `_notify_failure("broker", ...)` — at most one
+    failure email per day, even if the `broker` lane is scheduled to run
+    more than once daily. Added 2026-08-21 as the prerequisite this lane's
+    own comments called out before increasing cron frequency past daily:
+    without it, an ongoing SnapTrade outage would send one email per
+    scheduled run instead of one per day. Mirrors `_handle_db_unavailable`'s
+    dedup shape but keyed to its own alert_state row (`_BROKER_FAILURE_ROW`)
+    since this covers SnapTrade-side failures, not DB outages (those already
+    route through `_handle_db_unavailable`/`_DB_OUTAGE_ROW`). Fails OPEN on
+    any dedup-read/write error — a duplicate email is far cheaper than a
+    silently swallowed failure. Never raises."""
+    today_str = now_et.date().isoformat()
+    try:
+        state = db.load_alert_state(_BROKER_FAILURE_ROW)
+        # NB: deliberately NOT `... or {}` — an offline None must mean "no
+        # dedup available, send", not "nothing sent today".
+        if state is not None and state.get("last_emailed_date") == today_str:
+            _log("broker: failure email already sent today — skip (dedup)")
+            return
+    except Exception as exc:
+        _log(f"broker: failure dedup read failed ({str(exc)[:80]}) — sending anyway")
+
+    try:
+        _notify_failure("broker", detail)
+    except Exception as exc:
+        # _notify_failure's own contract is "never raises" (it wraps its body
+        # in try/except) — this is belt-and-suspenders so a future change to
+        # it can't turn this dedup wrapper into a new way for the broker lane
+        # to blow up.
+        _log(f"broker: failure notify UNCAUGHT — {str(exc)[:120]}")
+
+    try:
+        db.save_alert_state(
+            emailed_date=today_str, fingerprint="broker", row_id=_BROKER_FAILURE_ROW,
+        )
+    except Exception:
+        pass   # dedup is best-effort; the email already went out
 
 
 def _record_heartbeat(lane: str, now_et, status: str = "ok", detail: str | None = None) -> None:
@@ -1611,16 +1652,13 @@ def _run_broker(now_et, force: bool) -> int:
 
     accounts = snaptrade_client.list_accounts()
     if accounts is None:
-        # _notify_failure has no dedup (unlike _handle_db_unavailable below),
-        # so a SnapTrade outage emails on EVERY fire of this lane — bounded to
-        # ~1/day only because the `broker` Railway service is expected to run
-        # daily (SNAPTRADE_BALANCE_STALE_HOURS=25 assumes the same cadence).
-        # If this lane is ever scheduled more often than daily, add a dedup
-        # here matching _handle_db_unavailable's pattern (2026-08-17 review).
+        # Failure email is deduped to 1/day via _notify_broker_failure — see
+        # its docstring; safe even if this lane is scheduled more than once
+        # daily (2026-08-21, closes the gap the 2026-08-17 review flagged).
         _detail = "SnapTrade unreachable — could not list connected accounts"
         _LAST_LANE_FAILURE_DETAIL = _detail
         _log(f"broker: {_detail}")
-        _notify_failure("broker", _detail)
+        _notify_broker_failure(now_et, _detail)
         return 1
     if not accounts:
         _log("broker: SnapTrade connected but no brokerage accounts linked — nothing to sync.")
@@ -1671,7 +1709,7 @@ def _run_broker(now_et, force: bool) -> int:
         )
         _LAST_LANE_FAILURE_DETAIL = _detail
         _log(f"broker: {_detail}")
-        _notify_failure("broker", _detail)
+        _notify_broker_failure(now_et, _detail)
         return 1
 
     account_id = _best_id
@@ -1754,7 +1792,7 @@ def _run_broker(now_et, force: bool) -> int:
 
     if failures:
         _LAST_LANE_FAILURE_DETAIL = "; ".join(failures)
-        _notify_failure("broker", _LAST_LANE_FAILURE_DETAIL)
+        _notify_broker_failure(now_et, _LAST_LANE_FAILURE_DETAIL)
     return rc
 
 
