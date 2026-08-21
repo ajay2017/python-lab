@@ -28528,6 +28528,12 @@ elif page == "💰 Account":
             if _snap_drift is None:
                 st.caption("⚠️ Drift check unavailable — SnapTrade unreachable this render.")
             else:
+                if _any_pos_failure:
+                    st.caption(
+                        "⚠️ One or more linked accounts couldn't be read this render — "
+                        "the check below only covers the accounts that responded, so a "
+                        "clean result doesn't rule out drift in the missing account."
+                    )
                 _sd1, _sd2, _sd3 = st.columns(3)
                 with _sd1:
                     st.markdown("**Robinhood-only** (missing BUY?)")
@@ -28582,7 +28588,9 @@ elif page == "💰 Account":
                         st.session_state["_pending_page"] = "📒 Trade Journal"
                         st.rerun()
                 with _pi_c3:
-                    if st.button("Already logged", key=f"_snap_dismiss_{_pi['id']}",
+                    if db.is_readonly():
+                        st.caption("🔒 view-only")
+                    elif st.button("Already logged", key=f"_snap_dismiss_{_pi['id']}",
                                  help="Use this when you've already logged this trade "
                                       "manually and the price/date didn't exactly match "
                                       "for auto-linking (e.g. a 1-cent settlement "
