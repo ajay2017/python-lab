@@ -28562,7 +28562,7 @@ elif page == "💰 Account":
             st.caption("✓ No pending imports.")
         else:
             for _pi in _snap_pending:
-                _pi_c1, _pi_c2 = st.columns([4, 1])
+                _pi_c1, _pi_c2, _pi_c3 = st.columns([4, 1, 1])
                 with _pi_c1:
                     st.write(
                         f"⏳ **{_pi['action']} {_pi['shares']:g} {_pi['ticker']}** "
@@ -28581,6 +28581,17 @@ elif page == "💰 Account":
                         }
                         st.session_state["_pending_page"] = "📒 Trade Journal"
                         st.rerun()
+                with _pi_c3:
+                    if st.button("Already logged", key=f"_snap_dismiss_{_pi['id']}",
+                                 help="Use this when you've already logged this trade "
+                                      "manually and the price/date didn't exactly match "
+                                      "for auto-linking (e.g. a 1-cent settlement "
+                                      "difference). Never logs or edits a trade — just "
+                                      "clears this pending-import flag."):
+                        if db.dismiss_snaptrade_pending_import(_pi["id"]):
+                            st.rerun()
+                        else:
+                            st.toast("Couldn't dismiss — try again.", icon="⚠️")
 
         # ── Cash Activity — income events trend (display/trend ONLY; never
         #    feeds account_flows / Modified Dietz — see plan doc) ────────────

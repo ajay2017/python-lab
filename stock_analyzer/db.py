@@ -3801,6 +3801,32 @@ def mark_snaptrade_pending_import_logged(pending_id) -> bool:
         return False
 
 
+def dismiss_snaptrade_pending_import(pending_id) -> bool:
+    """Flip one pending-import row to status='dismissed' — the user's manual
+    escape hatch for a broker activity that's already logged in `trades` but
+    didn't auto-link via classify_transactions' two-tier dedup (e.g. a 1-cent
+    price mismatch between the app's own recorded fill and SnapTrade's
+    reported price defeats the Tier-2 exact content-match key). Deliberately
+    does NOT attempt to backfill broker_txn_id onto the existing trade row —
+    doing that automatically risks linking the wrong trade if the user is
+    mistaken; the user is only asserting 'not a new trade', not identifying
+    which existing row it is. No un-dismiss path in the UI — a fat-fingered
+    dismiss of a genuinely-new trade surfaces later via Position Drift
+    (Robinhood-only / qty mismatch against raw holdings), the compensating
+    control, rather than a reversible undo. USER-triggered write → honours
+    the read-only viewer guard. Best-effort; swallows failures."""
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    try:
+        _client().table("snaptrade_pending_imports").update(
+            {"status": "dismissed"}
+        ).eq("id", pending_id).execute()
+        return True
+    except Exception:
+        return False
+
+
 def backfill_trade_broker_txn_id(trade_id, broker_txn_id: str) -> bool:
     """Attach a SnapTrade transaction id onto an EXISTING trades row that
     content-matched but had no broker_txn_id yet (broker_sync.
