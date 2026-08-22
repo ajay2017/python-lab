@@ -272,6 +272,104 @@ def test_summary_buckets_counts_and_gated_averages():
     assert summary["app_aligned"]["avg_alpha_pct"] == pytest.approx(0.0, abs=0.01)
     assert summary["self_graded"]["avg_alpha_pct"] == pytest.approx(10.0, abs=0.5)
 
+    # All 8 self rows here are in-scope, matured and priced.
+    assert summary["n_self_in_scope_graded"] == 8
+    assert summary["n_self_out_of_scope_graded"] == 0
+
+
+def test_summary_graded_split_sums_to_the_graded_n():
+    """The split must describe exactly the rows behind self_graded's average.
+
+    self_graded averages ACROSS self_in_scope + self_out_of_scope, and the two
+    answer different questions — in-scope means the app had a view and stayed
+    silent (a head-to-head), out-of-scope means it never looked. The panel
+    captions the average with this split, so it has to reconcile with it.
+    """
+    today = date(2026, 9, 1)
+    universe = {"SSS"}                      # ZZZ deliberately out of scope
+    rows = []
+    for i in range(5):
+        d = today - timedelta(days=10 + i)
+        rows.append(_trade_row(ticker="SSS", traded_at=d.isoformat(), id_=200 + i, price=100.0))
+    for i in range(3):
+        d = today - timedelta(days=10 + i)
+        rows.append(_trade_row(ticker="ZZZ", traded_at=d.isoformat(), id_=400 + i, price=100.0))
+
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df([]), universe, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    summary = stv.self_vs_engine_summary(
+        classified, {"SSS": 110.0, "ZZZ": 110.0},
+        _flat_spy(today - timedelta(days=40), today), today, BEHAVIORAL_MIN_SAMPLE_N,
+    )
+
+    assert summary["n_self_in_scope_graded"] == 5
+    assert summary["n_self_out_of_scope_graded"] == 3
+    assert (
+        summary["n_self_in_scope_graded"] + summary["n_self_out_of_scope_graded"]
+        == summary["self_graded"]["n"]
+    )
+
+
+def test_summary_graded_split_excludes_immature_rows_unlike_the_raw_counts():
+    """THE reason the _graded variants exist rather than reusing the raw counts.
+
+    `n_self_in_scope` counts every classified trade including immature and
+    unpriced ones. Captioning the average with that number would describe a
+    LARGER population than the average actually ran on — the same mistake F-246
+    was built to fix, one panel over.
+    """
+    today = date(2026, 9, 1)
+    rows = []
+    for i in range(3):                      # matured: graded
+        d = today - timedelta(days=10 + i)
+        rows.append(_trade_row(ticker="SSS", traded_at=d.isoformat(), id_=200 + i, price=100.0))
+    # Bought yesterday — inside REC_SCORE_MIN_DAYS, so classified but NOT graded.
+    rows.append(_trade_row(
+        ticker="SSS", traded_at=(today - timedelta(days=1)).isoformat(), id_=299, price=100.0,
+    ))
+
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df([]), {"SSS"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    summary = stv.self_vs_engine_summary(
+        classified, {"SSS": 110.0},
+        _flat_spy(today - timedelta(days=40), today), today, BEHAVIORAL_MIN_SAMPLE_N,
+    )
+
+    assert summary["n_self_in_scope"] == 4              # raw: includes the immature buy
+    assert summary["n_self_in_scope_graded"] == 3       # graded: excludes it
+    assert summary["self_graded"]["n"] == 3
+
+
+def test_summary_all_out_of_scope_reports_zero_head_to_head():
+    """Drives the amber "none of these is a head-to-head" branch.
+
+    With nothing in-scope the side-by-side compares the user's own sourcing
+    against the engine's picks — not their judgment against its silence — so the
+    count that reveals it must be reachable and exactly zero.
+    """
+    today = date(2026, 9, 1)
+    rows = [
+        _trade_row(ticker="ZZZ", traded_at=(today - timedelta(days=10 + i)).isoformat(),
+                   id_=400 + i, price=100.0)
+        for i in range(4)
+    ]
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df([]), {"SSS"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    summary = stv.self_vs_engine_summary(
+        classified, {"ZZZ": 110.0},
+        _flat_spy(today - timedelta(days=40), today), today, BEHAVIORAL_MIN_SAMPLE_N,
+    )
+
+    assert summary["self_graded"]["n"] == 4
+    assert summary["n_self_in_scope_graded"] == 0
+    assert summary["n_self_out_of_scope_graded"] == 4
+
 
 def test_summary_gates_each_average_independently():
     today = date(2026, 9, 1)

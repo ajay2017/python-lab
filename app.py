@@ -31102,7 +31102,7 @@ Each card suppresses to "insufficient data" until enough closed trades accumulat
 
 **🧭 Self vs Engine — "Is my OWN instinct good, separate from whether the engine is good?"**
 
-A different question than 🎯 Engine Track Record on 🧾 Summary — that card grades the app's own picks; this tab grades **your** self-initiated BUYs. Every BUY is independently classified from the actual recommendation history (never from the self-reported "Reason" dropdown on Log Trade, which turned out not to be a reliable signal for this): **app-aligned** (a matching app recommendation existed shortly before you bought), **self-initiated** (no matching recommendation — either the ticker was entirely outside the app's scanned universe, or the app covered it and simply didn't flag it), and a separate **not-graded** count for older trades from before recommendation-log coverage was reliable — those are disclosed but never averaged into either side, since a missing record from that period doesn't prove anything either way. The headline compares each side's average alpha vs SPY, gated at the same 8-decision floor as Behavioral Fingerprint, with the logged thesis text shown next to your biggest self-initiated winners and losers. **Awareness only — read-only, no gates, no buy/sell prompts, and a self-initiated buy outperforming doesn't contradict the engine's own track record; they're answering different questions.**
+A different question than 🎯 Engine Track Record on 🧾 Summary — that card grades the app's own picks; this tab grades **your** self-initiated BUYs. Every BUY is independently classified from the actual recommendation history (never from the self-reported "Reason" dropdown on Log Trade, which turned out not to be a reliable signal for this): **app-aligned** (a matching app recommendation existed shortly before you bought), **self-initiated** (no matching recommendation), and a separate **not-graded** count for older trades from before recommendation-log coverage was reliable — those are disclosed but never averaged into either side, since a missing record from that period doesn't prove anything either way. The headline compares each side's average alpha vs SPY, gated at the same 8-decision floor as Behavioral Fingerprint, with the logged thesis text shown next to your biggest self-initiated winners and losers. **Read the head-to-head count under the self-initiated figure.** The self-initiated side pools two situations that mean different things: names the app *had a view on and stayed silent about* (a genuine head-to-head — you overrode its silence and one of you was right) and names entirely *outside* its scanned universe (where it never looked, so there was no call of its own to beat). The caption states how many of the graded buys are which, and if **none** are head-to-head you get an amber note — because then the side-by-side is comparing your own sourcing against the engine's picks, not your judgment against its silence. **Awareness only — read-only, no gates, no buy/sell prompts, and a self-initiated buy outperforming doesn't contradict the engine's own track record; they're answering different questions.**
 """
             )
 
@@ -36082,10 +36082,25 @@ elif page == "🎯 My Edge":
                 _stv_self_stats = _stv_summary["self_graded"]
                 _stv_app_stats  = _stv_summary["app_aligned"]
 
+                # Composition of the SELF side, on the graded population only —
+                # self_graded averages across self_in_scope + self_out_of_scope,
+                # and those answer different questions: in-scope means the app
+                # had a view and stayed silent (a real head-to-head), out-of-
+                # scope means it never looked (no engine call to beat). Without
+                # this, "Self-initiated +Xpp vs App-aligned +Ypp" reads as your
+                # judgment beating the engine when it may be entirely names the
+                # engine never evaluated. The _graded variants are used
+                # deliberately: the unfiltered n_self_in_scope counts immature
+                # and unpriced trades too, so it would describe a different
+                # population than the average above it.
+                _stv_in_g  = _stv_summary["n_self_in_scope_graded"]
+                _stv_out_g = _stv_summary["n_self_out_of_scope_graded"]
+
                 if _stv_self_stats["n"] < BEHAVIORAL_MIN_SAMPLE_N:
                     st.caption(
                         f"Building — need ≥{BEHAVIORAL_MIN_SAMPLE_N} matured self-initiated "
-                        f"BUYs to compare (have {_stv_self_stats['n']}). "
+                        f"BUYs to compare (have {_stv_self_stats['n']}"
+                        f"{f'; {_stv_in_g} head-to-head' if _stv_self_stats['n'] else ''}). "
                         "An observed pattern in your own decisions, not a verdict on it."
                     )
                 else:
@@ -36107,6 +36122,29 @@ elif page == "🎯 My Edge":
                         _stv_c2.caption(
                             f"Need ≥{BEHAVIORAL_MIN_SAMPLE_N} matured app-aligned BUYs "
                             f"(have {_stv_app_stats['n']})."
+                        )
+                    # Amber when NOTHING is head-to-head: the side-by-side then
+                    # implies a comparison that structurally does not exist,
+                    # so a plain caption would under-state it.
+                    if _stv_in_g == 0:
+                        st.warning(
+                            f"⚠️ **None of these {_stv_self_stats['n']} are a head-to-head.** "
+                            "All were outside the app's scanned universe and watchlist, so it "
+                            "never had a view to disagree with — the side-by-side above compares "
+                            "your own sourcing against the engine's picks, not your judgment "
+                            "against its silence."
+                        )
+                    elif _stv_out_g == 0:
+                        st.caption(
+                            f"All {_stv_in_g} are names the app had a view on and stayed silent "
+                            "about — a true head-to-head against its silence."
+                        )
+                    else:
+                        st.caption(
+                            f"{_stv_in_g} of {_stv_self_stats['n']} are a head-to-head — names "
+                            "the app had a view on and stayed silent about. The other "
+                            f"{_stv_out_g} were outside its scanned universe, where there was no "
+                            "engine call to beat."
                         )
                     st.caption(
                         "An observed correlation in your own decisions, not a verdict on it."

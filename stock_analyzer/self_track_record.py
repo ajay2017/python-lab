@@ -187,6 +187,7 @@ def self_vs_engine_summary(
           "available": True,
           "n_app_aligned": int, "n_self_out_of_scope": int,
           "n_self_in_scope": int, "n_self_graded": int,
+          "n_self_in_scope_graded": int, "n_self_out_of_scope_graded": int,
           "n_coverage_limited": int,
           "app_aligned":  {"n": int, "avg_alpha_pct": float|None, "sufficient": bool},
           "self_graded":  {"n": int, "avg_alpha_pct": float|None, "sufficient": bool},
@@ -197,6 +198,20 @@ def self_vs_engine_summary(
     (alpha_pct not None) population actually averaged — the same population
     the "sufficient" gate and the caller's "building (N/min_sample_n)" caption
     both read, so they can never disagree.
+
+    **`self_graded` averages ACROSS self_in_scope + self_out_of_scope, and those
+    two answer different questions** — in-scope means the App had a view and
+    stayed silent (a real head-to-head), out-of-scope means it never looked (no
+    engine call to beat). So `n_self_in_scope_graded` /
+    `n_self_out_of_scope_graded` give that split **on the graded population
+    only**, i.e. the exact rows behind `self_graded["avg_alpha_pct"]`; they sum
+    to `self_graded["n"]` by construction. The unfiltered `n_self_in_scope` /
+    `n_self_out_of_scope` count every classified trade including immature and
+    unpriced ones, so captioning the average with THOSE would describe a
+    different population than the number above it — the F-246 mistake. Added
+    2026-08-22: all three of `n_self_in_scope`, `n_self_out_of_scope` and
+    `n_self_graded` had been returned since V1 and read by nothing but tests,
+    so the panel showed a merged average with its composition invisible.
     """
     if classified is None:
         return {"available": False}
@@ -218,11 +233,14 @@ def self_vs_engine_summary(
         if b in buckets:
             buckets[b].append(r)
 
+    # Single predicate so the per-bucket graded counts below cannot drift from
+    # the population _graded() actually averages — the two must agree or the
+    # caption would describe a different set than the metric above it.
+    def _is_graded(r: dict) -> bool:
+        return r.get("alpha_pct") is not None and not r.get("outcome_maturing")
+
     def _graded(items: list[dict]) -> dict:
-        vals = [
-            r["alpha_pct"] for r in items
-            if r.get("alpha_pct") is not None and not r.get("outcome_maturing")
-        ]
+        vals = [r["alpha_pct"] for r in items if _is_graded(r)]
         n = len(vals)
         avg = round(sum(vals) / n, 2) if n else None
         return {"n": n, "avg_alpha_pct": avg, "sufficient": n >= min_sample_n}
@@ -235,6 +253,12 @@ def self_vs_engine_summary(
         "n_self_out_of_scope":  len(buckets["self_out_of_scope"]),
         "n_self_in_scope":      len(buckets["self_in_scope"]),
         "n_self_graded":        len(self_graded_items),
+        # The same split, restricted to the rows behind self_graded's average.
+        # These two sum to self_graded["n"]; the unfiltered pair above does not.
+        "n_self_in_scope_graded":
+            sum(1 for r in buckets["self_in_scope"] if _is_graded(r)),
+        "n_self_out_of_scope_graded":
+            sum(1 for r in buckets["self_out_of_scope"] if _is_graded(r)),
         "n_coverage_limited":   len(buckets["coverage_limited"]),
         "app_aligned":          _graded(buckets["app_aligned"]),
         "self_graded":          _graded(self_graded_items),

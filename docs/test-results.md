@@ -18,13 +18,22 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-21 (F-247 attribution readiness + the turnover-legs / sample-size disclosure fix)
+## 1. Latest run — 2026-08-22 (F-247 readiness + three withheld-basis disclosure fixes)
 
-**3812 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
---cov-report=term`: 110.46s — TOTAL 17690 stmts, 4169 missed, **76%** overall
+**3815 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
+--cov-report=term`: 68.62s — TOTAL 17692 stmts, 4170 missed, **76%** overall
 coverage). Python (local `.venv`). Transcribed from the run, not recalled.
 
-**+32 over the 3780 entry below**, in two parts. **F-247** added 25
+**The last +3** (2026-08-22) are the 🧭 Self vs Engine head-to-head disclosure,
+found by a targeted Sonnet sweep for the "asserts a conclusion, withholds a
+basis it already computed" class. Two of the three are the interesting ones:
+one asserts the graded in/out-of-scope split sums to `self_graded["n"]`, and one
+asserts the *graded* split excludes immature rows where the raw counts do not —
+which is the whole reason the new fields exist rather than reusing the counts
+already returned. `n_self_in_scope` had been returned since F-233 and read by
+nothing but tests.
+
+**+32 over the 3780 entry below** for the two 08-21 parts. **F-247** added 25
 (`tests/test_attribution_readiness.py`, new) — the readiness audit that counts
 distinct captured snapshot dates against NYSE sessions instead of a calendar
 span. Its own review caught two defects the first draft shipped with, and both
