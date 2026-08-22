@@ -18,7 +18,38 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-21 (F-245 Forward Portfolio Simulator + F-246 correlation coverage)
+## 1. Latest run — 2026-08-21 (F-247 attribution readiness + the turnover-legs / sample-size disclosure fix)
+
+**3812 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
+--cov-report=term`: 110.46s — TOTAL 17690 stmts, 4169 missed, **76%** overall
+coverage). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**+32 over the 3780 entry below**, in two parts. **F-247** added 25
+(`tests/test_attribution_readiness.py`, new) — the readiness audit that counts
+distinct captured snapshot dates against NYSE sessions instead of a calendar
+span. Its own review caught two defects the first draft shipped with, and both
+now have tests: SPLIT rows counted as traded notional (the tell was an `action`
+column the fixture built and the function never read), and an annualisation
+blow-up that the original assertion (`> 20.0`) *documented* rather than caught.
+A loose assertion is worse than no assertion — it looks like coverage while
+permitting any value above the floor.
+
+The remaining **7** are this session's follow-up fix, and both groups exist
+because reading the live panel found something the tests could not: 3 in
+`tests/test_attribution_readiness.py` for the turnover legs — including
+`test_turnover_accumulation_and_churn_differ_in_the_legs_not_the_total`, which
+asserts that a book being *built* and a book being *churned* produce an
+**identical** total turnover figure and differ only in the split (that
+indistinguishability is why the legs are reported, and the shipped panel had
+rendered only the sum) — plus one pinning `window_days` as inclusive so it
+agrees with `span_days` rather than printing 74 and 73 for one interval. And 4
+in `tests/test_predictive_analytics.py` for the Decision Quality directive's
+sample-size disclosure, one of which pins that an `avm` carrying only
+`edge`/`edge_pp` renders clean prose instead of "None acted vs None passed".
+
+---
+
+## 1a. Previous run — 2026-08-21 (F-245 Forward Portfolio Simulator + F-246 correlation coverage)
 
 **3780 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
 --cov-report=term`: 77.47s — TOTAL 17583 stmts, 4158 missed, **76%** overall
@@ -84,7 +115,7 @@ Tests added by the work this entry is named for:
 
 ---
 
-## 1a. Previous run — 2026-08-17 (reference-roster refreshes F-240/F-241/F-242 + rate-sensitivity honesty fix)
+## 1b. Previous run — 2026-08-17 (reference-roster refreshes F-240/F-241/F-242 + rate-sensitivity honesty fix)
 
 **3657 passed, 0 failed, 0 skipped** (`pytest tests/ --cov=stock_analyzer
 --cov-report=term-missing -q`: 125.84s — TOTAL 16904 stmts, 3899 missed,
