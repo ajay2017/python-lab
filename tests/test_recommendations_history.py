@@ -594,6 +594,68 @@ def test_ungraded_reasons_unexplained_catches_a_reason_it_does_not_know():
     assert res["tickers_no_price"] == []
 
 
+def test_ungraded_reasons_splits_the_entry_reference_bucket_by_rec_type_and_date():
+    """Root-cause detail for the bucket that is 469 of 470 on the live book.
+
+    `rec_type` narrows WHICH writer produced them — the cron scan logs only
+    "new_pick" and has no buy_candidate list at all — and the date span answers
+    whether the logging gap is still open or already closed.
+    """
+    m = [
+        _matched(ticker="A1", rec_date=date(2026, 1, 5), rec_type="new_pick",
+                 price_at_surface=None),
+        _matched(ticker="A2", rec_date=date(2026, 1, 9), rec_type="buy_candidate",
+                 price_at_surface=None),
+        _matched(ticker="A3", rec_date=date(2026, 1, 2), rec_type="buy_candidate",
+                 price_at_surface=None),
+        # A different bucket — must not leak into either the split or the span.
+        _matched(ticker="NPX", rec_date=date(2025, 6, 1), rec_type="add_winner",
+                 price_at_surface=50.0),
+    ]
+    out = rh.compute_outcomes(
+        m, {"A1": 55.0, "A2": 55.0, "A3": 55.0},   # NPX absent -> no_current_price
+        date(2026, 1, 15), spy_close_by_date=_SPY_OK,
+    )
+    res = rh.ungraded_reasons(out)
+
+    assert res["no_entry_reference"] == 3
+    assert res["no_entry_reference_by_rec_type"] == {"buy_candidate": 2, "new_pick": 1}
+    # Span covers only the no_entry_reference rows — NPX's 2025 date is excluded.
+    assert res["no_entry_reference_earliest"] == date(2026, 1, 2)
+    assert res["no_entry_reference_latest"] == date(2026, 1, 9)
+
+
+def test_ungraded_reasons_entry_reference_detail_is_empty_when_bucket_is():
+    """No fabricated zero-date when there is nothing to describe."""
+    m = [_matched(ticker="OK1", rec_date=date(2026, 1, 1), price_at_surface=50.0)]
+    out = rh.compute_outcomes(m, {"OK1": 55.0}, date(2026, 1, 15),
+                              spy_close_by_date=_SPY_OK)
+    res = rh.ungraded_reasons(out)
+    assert res["no_entry_reference"] == 0
+    assert res["no_entry_reference_by_rec_type"] == {}
+    assert res["no_entry_reference_earliest"] is None
+    assert res["no_entry_reference_latest"] is None
+
+
+def test_ungraded_reasons_entry_reference_handles_missing_type_and_date():
+    """A legacy row can carry neither. Both degrade without dropping the row
+    from the count, so the split still reconciles with the bucket total."""
+    res = rh.ungraded_reasons([
+        {"ticker": "AAA", "alpha_pct": None, "outcome_maturing": False,
+         "alpha_unavailable_reason": "no_entry_reference",
+         "rec_type": None, "rec_date": None},
+        {"ticker": "BBB", "alpha_pct": None, "outcome_maturing": False,
+         "alpha_unavailable_reason": "no_entry_reference",
+         "rec_type": "new_pick", "rec_date": date(2026, 2, 2)},
+    ])
+    assert res["no_entry_reference"] == 2
+    assert res["no_entry_reference_by_rec_type"] == {"new_pick": 1, "unknown": 1}
+    assert sum(res["no_entry_reference_by_rec_type"].values()) == res["no_entry_reference"]
+    # The one usable date defines both ends rather than pairing with a None.
+    assert res["no_entry_reference_earliest"] == date(2026, 2, 2)
+    assert res["no_entry_reference_latest"] == date(2026, 2, 2)
+
+
 def test_ungraded_reasons_names_only_the_no_price_tickers():
     """The actionable half: if this list reads as delisted or acquired names,
     the survivorship bias is confirmed rather than suspected."""

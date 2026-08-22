@@ -26923,6 +26923,31 @@ elif page == "📊 Predictive Analytics":
             f"**{_pac_ung['n_graded']:,}** could be scored and "
             f"**{_pac_ung['n_ungraded']:,}** could not: " + "; ".join(_ung_bits) + "."
         )
+        # Root-cause detail for the no-entry-price bucket. On the live book this
+        # is essentially the whole gap (469 of 470), and the rec_type split plus
+        # the date span are what identify WHICH writer produced them and whether
+        # it is still producing them: the cron scan logs only "new_pick" and has
+        # no buy_candidate list at all, so a buy_candidate-heavy split points at
+        # the interactive path instead.
+        if _pac_ung["no_entry_reference"]:
+            _ner_types = _pac_ung["no_entry_reference_by_rec_type"]
+            _ner_lo    = _pac_ung["no_entry_reference_earliest"]
+            _ner_hi    = _pac_ung["no_entry_reference_latest"]
+            _ner_split = ", ".join(
+                f"**{_n}** `{_t}`" for _t, _n in _ner_types.items()
+            ) or "no recorded type"
+            _ner_span = (
+                f" · dated **{_ner_lo:%b %d, %Y} → {_ner_hi:%b %d, %Y}**"
+                if _ner_lo is not None and _ner_hi is not None else
+                " · no usable dates on these rows"
+            )
+            st.caption(
+                f"🔍 The {_pac_ung['no_entry_reference']:,} with no entry-price "
+                f"reference: {_ner_split}{_ner_span}. No entry price means the "
+                "would-have-gained maths has nothing to measure from, so these can "
+                "never be scored. **A latest date at or near today means the logging "
+                "gap is still open; one that stops earlier means it already closed.**"
+            )
         if _pac_ung["no_current_price"]:
             _ung_names   = _pac_ung["tickers_no_price"]
             _UNG_MAX_LST = 12          # one name, so the slice and the count can't drift

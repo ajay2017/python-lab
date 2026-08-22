@@ -20,9 +20,20 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ## 1. Latest run — 2026-08-22 (F-247 readiness + F-248 + three withheld-basis disclosure fixes)
 
-**3831 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
---cov-report=term`: 80.91s — TOTAL 17715 stmts, 4170 missed, **76%** overall
+**3834 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
+--cov-report=term`: 69.67s — TOTAL 17723 stmts, 4170 missed, **76%** overall
 coverage). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**The last +3** are F-248's follow-up detail: the first live read of the new
+coverage line came back **469 of 470 in `no_entry_reference`** and **zero** in
+`no_current_price`, killing the survivorship-bias hypothesis the feature was
+built to test. Static analysis could not identify which writer produced the 469
+(the cron logs only `new_pick` and has no fallback, but scanner picks do carry
+`price` and `test_daily_briefing.py` already pins that), so rather than guess a
+second time the bucket now splits by `rec_type` and reports its date span. The
+tests pin that the split reconciles with the bucket total even when `rec_type`
+is absent, and that a row in a *different* bucket cannot leak into either the
+split or the date span.
 
 **F-248 added 16** — why matured recommendations drop out of the Predictive
 Analytics working set. Two are worth naming. `test_..._adds_exactly_one_key_and_

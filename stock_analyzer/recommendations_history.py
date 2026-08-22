@@ -380,12 +380,32 @@ def ungraded_reasons(enriched: list[dict]) -> dict:
         "no_spy_window":              "no_spy_window",
     }
     no_price_tickers: set[str] = set()
+    # Root-cause detail for `no_entry_reference` SPECIFICALLY, because that is
+    # the bucket with an open question: on the live book it is 469 of 470, and
+    # static analysis could not identify which writer produced them. `rec_type`
+    # narrows the writer (the cron scan logs ONLY "new_pick" and has no
+    # buy_candidate list at all, so a buy_candidate-heavy split means the
+    # interactive path), and the date span answers the decision-relevant
+    # question — whether the gap is still open or already closed. Deliberately
+    # not generalised to every bucket: this is detail for a live investigation,
+    # not a permanent per-bucket schema.
+    ner_by_type: dict[str, int] = {}
+    ner_dates: list[date] = []
     for r in ungraded:
         reason = r.get("alpha_unavailable_reason")
         bucket = _KNOWN.get(reason, "unexplained") if isinstance(reason, str) else "unexplained"
         tally[bucket] += 1
         if bucket == "no_current_price" and r.get("ticker"):
             no_price_tickers.add(str(r["ticker"]).strip().upper())
+        elif bucket == "no_entry_reference":
+            rt = str(r.get("rec_type") or "unknown").strip() or "unknown"
+            ner_by_type[rt] = ner_by_type.get(rt, 0) + 1
+            rd = r.get("rec_date")
+            # isinstance, not a truthiness or hasattr check: rec_date can be
+            # None on a legacy row, and datetime subclasses date so both work
+            # for min/max.
+            if isinstance(rd, date):
+                ner_dates.append(rd)
 
     return {
         "n_mature":   len(mature),
@@ -406,6 +426,12 @@ def ungraded_reasons(enriched: list[dict]) -> dict:
                        + tally["no_spy_series"] + tally["no_rec_date"]
                        + tally["no_spy_window"] + tally["unexplained"],
         "tickers_no_price": sorted(no_price_tickers),
+        # See the comment above the loop — investigation detail for the one
+        # bucket whose root cause is open. Empty dict / None when that bucket is
+        # empty, never a fabricated zero-date.
+        "no_entry_reference_by_rec_type": dict(sorted(ner_by_type.items())),
+        "no_entry_reference_earliest": min(ner_dates) if ner_dates else None,
+        "no_entry_reference_latest":   max(ner_dates) if ner_dates else None,
     }
 
 
