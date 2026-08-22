@@ -27916,6 +27916,17 @@ elif page == "📊 Predictive Analytics":
                             f"turnover **{_pa_turn['window_turnover_pct']:.0f}% over "
                             f"{_pa_turn['window_days']}d** (too short to annualise)"
                         )
+                    # The LEGS, not just the sum. turnover() computes both
+                    # precisely so accumulation can be told apart from churn —
+                    # a buy-heavy split on a book built inside its own
+                    # measurement window is book construction, not churn, and
+                    # the summed figure alone cannot say which. Dropping these
+                    # left the one ambiguous number on screen and the
+                    # disambiguating pair unused (fixed 2026-08-21).
+                    _pa_bits.append(
+                        f"buys **{_pa_turn['buy_turnover_pct']:.0f}%** vs sells "
+                        f"**{_pa_turn['sell_turnover_pct']:.0f}%** of book"
+                    )
                     _pa_bits.append(
                         f"{_pa_turn['n_trades']} trades, splits excluded; book value "
                         f"averaged over {_pa_turn['n_snapshot_dates_in_window']} snapshots"

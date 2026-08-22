@@ -185,6 +185,72 @@ def test_turnover_measures_the_window_and_splits_the_legs():
     assert out["mean_book_value"] == 10000.0
     assert out["n_snapshot_dates_in_window"] == 10
     assert out["window_turnover_pct"] == 20.0
+    # Legs as percentages of the same book, for a caller that must not handle
+    # dollar figures.
+    assert out["buy_turnover_pct"] == 10.0
+    assert out["sell_turnover_pct"] == 10.0
+
+
+def test_turnover_legs_as_pct_sum_to_the_total_pct():
+    """buy_pct + sell_pct == window_turnover_pct, the same identity the notional
+    fields hold. Pinned because the two are rounded independently."""
+    days = _sessions_from(date(2026, 3, 2), 10)
+    snaps = _snaps([(d, "AAA", 100.0, 100.0) for d in days])
+    trades = _trades([
+        (f"{days[1]}T14:00:00Z", "AAA", "BUY",  3.0, 100.0),
+        (f"{days[3]}T14:00:00Z", "AAA", "SELL", 7.0, 100.0),
+    ])
+    out = ar.turnover(trades, snaps, lookback_days=180)
+    assert out["buy_turnover_pct"] + out["sell_turnover_pct"] == pytest.approx(
+        out["window_turnover_pct"], abs=0.2
+    )
+
+
+def test_turnover_accumulation_and_churn_differ_in_the_legs_not_the_total():
+    """THE reason the legs are reported at all.
+
+    A book BUILT inside its own measurement window and a book CHURNED inside it
+    produce the SAME total turnover figure and mean completely different things.
+    The summed number cannot tell them apart; the split does immediately. The
+    shipped panel rendered only the sum, which is what made a live 1564% reading
+    uninterpretable.
+    """
+    days  = _sessions_from(date(2026, 3, 2), 10)
+    snaps = _snaps([(d, "AAA", 100.0, 100.0) for d in days])   # book = $10,000
+
+    churn = ar.turnover(_trades([
+        (f"{days[2]}T14:00:00Z", "AAA", "BUY",  10.0, 100.0),
+        (f"{days[5]}T14:00:00Z", "AAA", "SELL", 10.0, 100.0),
+    ]), snaps, lookback_days=180)
+
+    accumulation = ar.turnover(_trades([
+        (f"{days[2]}T14:00:00Z", "AAA", "BUY", 10.0, 100.0),
+        (f"{days[5]}T14:00:00Z", "AAA", "BUY", 10.0, 100.0),
+    ]), snaps, lookback_days=180)
+
+    # Indistinguishable on the headline figure...
+    assert churn["window_turnover_pct"] == accumulation["window_turnover_pct"] == 20.0
+    # ...and unambiguous on the legs.
+    assert (churn["buy_turnover_pct"], churn["sell_turnover_pct"]) == (10.0, 10.0)
+    assert (accumulation["buy_turnover_pct"], accumulation["sell_turnover_pct"]) == (20.0, 0.0)
+
+
+def test_turnover_window_days_is_inclusive_and_agrees_with_span_days():
+    """Both figures render on the same panel describing the same interval.
+
+    Before 2026-08-21 they read 74 vs 73 days for one interval — an
+    inclusive/exclusive artifact, but on a panel whose entire purpose is
+    trustworthy counting it reads as a bug.
+    """
+    days  = _sessions_from(date(2026, 3, 2), 10)
+    snaps = _snaps([(d, "AAA", 100.0, 100.0) for d in days])
+    trades = _trades([(f"{days[2]}T14:00:00Z", "AAA", "BUY", 10.0, 100.0)])
+    turn = ar.turnover(trades, snaps, lookback_days=180)
+    cov  = ar.snapshot_coverage(snaps)
+    # The snapshot history is shorter than the lookback, so the turnover window
+    # IS the snapshot span — the two must agree exactly.
+    assert turn["window_days"] == cov["span_days"]
+    assert turn["window_days"] == (days[-1] - days[0]).days + 1
 
 
 def test_turnover_withholds_the_annualised_figure_on_a_short_window():

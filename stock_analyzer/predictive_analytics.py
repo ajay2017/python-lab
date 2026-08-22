@@ -379,11 +379,30 @@ def synthesize_directives(
     edge    = avm.get("edge", "insufficient")
     edge_pp = avm.get("edge_pp")
 
+    # State the two sample sizes in the directive text. This was the only card
+    # asserting something about the USER'S judgment with no basis on screen,
+    # while the sector and signal cards both quote their n — and the two sides
+    # here are structurally lopsided (you act on a small fraction of what the
+    # engine surfaces), so a thin acted side is the normal case, not the edge
+    # case. acted_vs_missed_comparison's floor is deliberately "BOTH sides < 3"
+    # (see its test named for that choice), which means a 1-vs-300 split still
+    # classifies; showing the counts is what lets a reader discount it.
+    # Deliberately NOT `.get(...) or {}` — that collapses an offline sentinel,
+    # and callers legitimately pass an avm carrying only edge/edge_pp.
+    _acted  = avm.get("acted")
+    _missed = avm.get("missed")
+    _acted_n  = _acted.get("n")  if isinstance(_acted,  dict) else None
+    _missed_n = _missed.get("n") if isinstance(_missed, dict) else None
+    basis = (
+        f" ({_acted_n} acted vs {_missed_n} passed)"
+        if _acted_n is not None and _missed_n is not None else ""
+    )
+
     if edge == "acting" and edge_pp is not None and edge_pp >= 0.5:
         directives.append({
             "type": "action",
             "text": (
-                f"Your discretion is adding {edge_pp:.1f}pp of alpha — you're filtering "
+                f"Your discretion is adding {edge_pp:.1f}pp of alpha{basis} — you're filtering "
                 f"signal from noise effectively. Don't feel pressure to act on every signal; "
                 f"your selectivity is working."
             ),
@@ -394,7 +413,7 @@ def synthesize_directives(
             "type": "caution",
             "text": (
                 f"Following every engine signal would have added {edge_pp:.1f}pp more alpha "
-                f"than your current act rate. Review what's making you pass — the engine "
+                f"than your current act rate{basis}. Review what's making you pass — the engine "
                 f"may be seeing something you're discounting."
             ),
             "source_tab": "⚖️ Decision Quality",

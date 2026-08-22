@@ -200,6 +200,15 @@ def turnover(trades_df, snaps_df, *, lookback_days: int = 180) -> dict | None:
     `min(buys, sells)` answers that by stripping net build-out, and reporting
     both lets the reader see which they are looking at.
 
+    The legs are ALSO returned as percentages of the same denominator
+    (`buy_turnover_pct` / `sell_turnover_pct`) so a caller can show the split
+    without handling dollar figures, and so the reader can see at a glance which
+    story a large total tells. This matters more than it sounds: a book BUILT
+    during its own measurement window has both a buy-heavy numerator and a small
+    mean-value denominator, so it reads as extreme "turnover" by construction.
+    2026-08-21: the shipped panel rendered only the summed figure and dropped the
+    legs, which is precisely the ambiguity this docstring claimed to resolve.
+
     `annualised_turnover_pct` is **withheld (None) until the window is actually
     as long as `lookback_days`.** Annualising a 10-day history multiplies by ~36
     and would print a spectacular, meaningless number — and the mean book value
@@ -295,7 +304,14 @@ def turnover(trades_df, snaps_df, *, lookback_days: int = 180) -> dict | None:
     if mean_value <= 0:
         return None
 
-    window_actual = max(1, (window_end - max(window_start, days[0])).days)
+    # INCLUSIVE day count, matching `snapshot_coverage`'s `span_days`. Both
+    # figures render on the same panel and described the same interval as 74 vs
+    # 73 days before 2026-08-21 — a pure inclusive/exclusive artifact that reads
+    # as a bug on a panel whose whole purpose is trustworthy counting. Side
+    # effect, accepted: the `>= lookback_days` annualisation gate now opens one
+    # day earlier, and the 365/window multiplier is a hair smaller (the
+    # conservative direction). Neither matters on an audit-only panel.
+    window_actual = max(1, (window_end - max(window_start, days[0])).days + 1)
     window_pct = traded / mean_value * 100.0
     return {
         "window_days": window_actual,
@@ -309,6 +325,13 @@ def turnover(trades_df, snaps_df, *, lookback_days: int = 180) -> dict | None:
         "sell_notional": round(sells, 0),
         "mean_book_value": round(mean_value, 0),
         "window_turnover_pct": round(window_pct, 1),
+        # Each leg against the SAME denominator as window_turnover_pct, so
+        # buy_turnover_pct + sell_turnover_pct == window_turnover_pct up to
+        # rounding. Rounded independently for display, so the two can differ
+        # from the total by 0.1pp — same display artifact noted above for the
+        # notional fields, not a reconciliation failure.
+        "buy_turnover_pct": round(buys / mean_value * 100.0, 1),
+        "sell_turnover_pct": round(sells / mean_value * 100.0, 1),
         "annualised_turnover_pct": (
             round(window_pct * (365.0 / window_actual), 1)
             if window_actual >= lookback_days else None

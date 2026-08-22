@@ -442,6 +442,53 @@ def test_synthesize_directives_decision_quality_acting_action():
     assert matches[0]["type"] == "action"
 
 
+def test_synthesize_directives_acting_states_both_sample_sizes():
+    """The only card asserting something about the USER'S judgment had no basis
+    on screen, while the sector and signal cards both quote their n.
+
+    It matters here more than elsewhere because the two sides are structurally
+    lopsided — you act on a small fraction of what the engine surfaces — and
+    acted_vs_missed_comparison's floor is deliberately "BOTH sides < 3", so a
+    1-vs-300 split still classifies as a confident verdict. The counts are what
+    let a reader discount it.
+    """
+    out = _synth(avm={
+        "edge": "acting", "edge_pp": 8.3,
+        "acted": {"n": 34}, "missed": {"n": 310},
+    })
+    text = _has_source(out, "⚖️ Decision Quality")[0]["text"]
+    assert "34 acted vs 310 passed" in text
+
+
+def test_synthesize_directives_passing_states_both_sample_sizes():
+    out = _synth(avm={
+        "edge": "passing", "edge_pp": 2.0,
+        "acted": {"n": 4}, "missed": {"n": 120},
+    })
+    matches = _has_source(out, "⚖️ Decision Quality")
+    assert matches[0]["type"] == "caution"
+    assert "4 acted vs 120 passed" in matches[0]["text"]
+
+
+def test_synthesize_directives_thin_acted_side_is_visible_in_the_text():
+    """The case the basis clause exists for: 1 trade vs 300 still classifies as
+    "acting" by design, so the only defence is that the reader can SEE the 1."""
+    out = _synth(avm={
+        "edge": "acting", "edge_pp": 12.0,
+        "acted": {"n": 1}, "missed": {"n": 300},
+    })
+    assert "1 acted vs 300 passed" in _has_source(out, "⚖️ Decision Quality")[0]["text"]
+
+
+def test_synthesize_directives_omits_the_basis_when_side_counts_absent():
+    """Callers legitimately pass an avm carrying only edge/edge_pp. That must
+    render clean prose, not "(None acted vs None passed)"."""
+    out = _synth(avm={"edge": "acting", "edge_pp": 5.0})
+    text = _has_source(out, "⚖️ Decision Quality")[0]["text"]
+    assert "acted vs" not in text
+    assert "None" not in text
+
+
 def test_synthesize_directives_decision_quality_acting_below_threshold_no_directive():
     out = _synth(avm={"edge": "acting", "edge_pp": 0.4999})
     assert _has_source(out, "⚖️ Decision Quality") == []
