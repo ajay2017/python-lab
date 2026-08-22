@@ -390,6 +390,224 @@ def test_compute_outcomes_alpha_none_when_spy_series_missing():
     assert out[0]["alpha_pct"] is None
 
 
+# ─── alpha_unavailable_reason ────────────────────────────────────────────────
+# Recorded at the branch that forces alpha_pct to None, so ungraded_reasons can
+# TALLY rather than re-derive. A consumer re-deriving these conditions would
+# drift from compute_outcomes the first time a branch here changes — which is
+# the defect class the whole measurement exists to expose.
+
+_SPY_OK = {date(2026, 1, 1): 100.0, date(2026, 1, 15): 110.0}
+
+
+def test_alpha_unavailable_reason_is_none_when_alpha_is_computable():
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=50.0, acted_on=False)]
+    out = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_pct"] is not None
+    assert out[0]["alpha_unavailable_reason"] is None
+
+
+def test_alpha_unavailable_reason_acted_sell_even_with_a_valid_spy_window():
+    """The one DELIBERATE exclusion — realized P&L spans an unknown holding
+    period, so a single rec_date->today window cannot benchmark it."""
+    m = [_matched(rec_date=date(2026, 1, 1), acted_on=True,
+                  acted_trade=_trade(action="SELL", cost_basis=500.0, realized_pnl=100.0))]
+    out = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_pct"] is None
+    assert out[0]["alpha_unavailable_reason"] == "acted_sell_unbenchmarkable"
+
+
+def test_alpha_unavailable_reason_missed_with_no_current_price():
+    """The bias-carrying bucket: a failed price lookup correlates with
+    delisted / acquired / renamed tickers, so the exclusion is not random."""
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=50.0, acted_on=False)]
+    out = rh.compute_outcomes(m, {}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_unavailable_reason"] == "no_current_price"
+
+
+def test_alpha_unavailable_reason_missed_with_no_entry_reference():
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=None, acted_on=False)]
+    out = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_unavailable_reason"] == "no_entry_reference"
+
+
+def test_alpha_unavailable_reason_acted_buy_zero_trade_price_is_entry_reference():
+    m = [_matched(rec_date=date(2026, 1, 1), acted_on=True,
+                  acted_trade=_trade(action="BUY", price=0.0))]
+    out = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_unavailable_reason"] == "no_entry_reference"
+
+
+def test_alpha_unavailable_reason_no_spy_series_is_not_reported_as_out_of_range():
+    """A benchmark OUTAGE must never be labelled as the rec being out of range.
+
+    `_spy_return_pct` returns None for three physically different causes, and
+    app.py's Predictive Analytics page swallows a failed SPY fetch into an EMPTY
+    DICT — so conflating them told the user every matured rec was "dated outside
+    the SPY series" during a provider outage, blaming their own data for it.
+    Caught in Opus review; the offline-sentinel-vs-empty-container class.
+    """
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=50.0, acted_on=False)]
+    for absent in (None, {}):
+        out = rh.compute_outcomes(
+            m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=absent,
+        )
+        assert out[0]["outcome_pct"] is not None, "the price side must be intact here"
+        assert out[0]["alpha_unavailable_reason"] == "no_spy_series"
+
+
+def test_alpha_unavailable_reason_no_spy_window_needs_a_real_series_that_misses():
+    """The genuine case: a populated series that simply doesn't reach the rec."""
+    late_spy = {date(2026, 6, 1): 100.0, date(2026, 6, 15): 110.0}
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=50.0, acted_on=False)]
+    out = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=late_spy)
+    assert out[0]["outcome_pct"] is not None
+    assert out[0]["alpha_unavailable_reason"] == "no_spy_window"
+
+
+def test_alpha_unavailable_reason_no_rec_date_distinct_from_a_window_miss():
+    m = [_matched(rec_date=None, price_at_surface=50.0, acted_on=False)]
+    out = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_unavailable_reason"] == "no_rec_date"
+
+
+def test_alpha_unavailable_reason_price_cause_wins_over_a_missing_series():
+    """Precedence, pinned: a missing price is per-ticker and actionable, a
+    missing series is one global fact, so the price cause is reported."""
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=50.0, acted_on=False)]
+    out = rh.compute_outcomes(m, {}, date(2026, 1, 15), spy_close_by_date=None)
+    assert out[0]["alpha_unavailable_reason"] == "no_current_price"
+
+
+def test_compute_outcomes_adds_exactly_one_key_and_changes_no_other():
+    """The additive contract, asserted directly rather than assumed.
+
+    `compute_outcomes` has ~8 consumers across the app; the change is only safe
+    if it adds a key and alters nothing else.
+    """
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=50.0, acted_on=False)]
+    row = rh.compute_outcomes(m, {"AAA": 55.0}, date(2026, 1, 15),
+                              spy_close_by_date=_SPY_OK)[0]
+    expected = {
+        "id", "ticker", "rec_date", "rec_type", "surfaced_at", "price_at_surface",
+        "composite_score", "momentum_score", "sector", "conviction", "verdict",
+        "thesis", "acted_on", "acted_trade",
+        "outcome_pct", "outcome_dollars", "outcome_label", "days_since",
+        "spy_return_pct", "alpha_pct", "outcome_maturing",
+        "alpha_unavailable_reason",
+    }
+    assert set(row) == expected, "a new key here can reach 8 consumers — update deliberately"
+
+
+def test_alpha_unavailable_reason_both_prices_missing_reports_the_bias_bucket():
+    """Ambiguous rows are attributed to no_current_price ON PURPOSE.
+
+    It is the only bucket carrying a bias direction, so attributing an
+    ambiguous row there OVER-alarms rather than under-alarms — the safe
+    direction for a diagnostic.
+    """
+    m = [_matched(rec_date=date(2026, 1, 1), price_at_surface=None, acted_on=False)]
+    out = rh.compute_outcomes(m, {}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    assert out[0]["alpha_unavailable_reason"] == "no_current_price"
+
+
+# ─── ungraded_reasons ────────────────────────────────────────────────────────
+
+def test_ungraded_reasons_buckets_are_exclusive_and_sum_to_the_ungraded_total():
+    """The load-bearing property: the breakdown must ACCOUNT for the whole gap.
+
+    The panel showed "814 available -> 344 used" while explaining only the
+    maturity exclusion, so ~470 rows vanished unexplained while every figure on
+    the page rested on the survivors.
+    """
+    m = [
+        # graded
+        _matched(ticker="OK1", rec_date=date(2026, 1, 1), price_at_surface=50.0),
+        # acted sell — deliberate
+        _matched(ticker="SEL", rec_date=date(2026, 1, 1), acted_on=True,
+                 acted_trade=_trade(action="SELL", cost_basis=500.0, realized_pnl=10.0)),
+        # no current price
+        _matched(ticker="NPX", rec_date=date(2026, 1, 1), price_at_surface=50.0),
+        # no entry reference
+        _matched(ticker="NER", rec_date=date(2026, 1, 1), price_at_surface=None),
+    ]
+    out = rh.compute_outcomes(
+        m, {"OK1": 55.0, "SEL": 55.0, "NER": 55.0},   # NPX deliberately absent
+        date(2026, 1, 15), spy_close_by_date=_SPY_OK,
+    )
+    res = rh.ungraded_reasons(out)
+
+    assert res["n_mature"] == 4
+    assert res["n_graded"] == 1
+    assert res["n_ungraded"] == 3
+    assert res["acted_sell"] == 1
+    assert res["no_current_price"] == 1
+    assert res["no_entry_reference"] == 1
+    assert res["no_spy_series"] == 0
+    assert res["no_rec_date"] == 0
+    assert res["no_spy_window"] == 0
+    assert res["unexplained"] == 0
+    # Every bucket named explicitly, so adding a seventh forces this test to be
+    # updated deliberately rather than silently passing on a partial partition.
+    assert sum(res[k] for k in (
+        "acted_sell", "no_current_price", "no_entry_reference",
+        "no_spy_series", "no_rec_date", "no_spy_window", "unexplained",
+    )) == res["n_ungraded"]
+
+
+def test_ungraded_reasons_n_droppable_excludes_the_by_design_bucket():
+    """acted SELLs are excluded by design and must not inflate the "dropped for
+    fixable/unknown reasons" figure the warning compares against."""
+    m = [
+        _matched(ticker="SEL", rec_date=date(2026, 1, 1), acted_on=True,
+                 acted_trade=_trade(action="SELL", cost_basis=500.0, realized_pnl=10.0)),
+        _matched(ticker="NPX", rec_date=date(2026, 1, 1), price_at_surface=50.0),
+    ]
+    out = rh.compute_outcomes(m, {"SEL": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    res = rh.ungraded_reasons(out)
+    assert res["n_ungraded"] == 2
+    assert res["n_droppable"] == 1
+
+
+def test_ungraded_reasons_ignores_immature_rows():
+    """Immature recs are already explained by the existing caption; folding them
+    in here would double-count the one exclusion the page always disclosed."""
+    m = [_matched(ticker="YNG", rec_date=date(2026, 1, 14), price_at_surface=50.0)]
+    out = rh.compute_outcomes(m, {}, date(2026, 1, 15), min_days=5)   # days_since=1
+    assert out[0]["outcome_maturing"] is True
+    res = rh.ungraded_reasons(out)
+    assert res["n_mature"] == 0
+    assert res["n_ungraded"] == 0
+
+
+def test_ungraded_reasons_unexplained_catches_a_reason_it_does_not_know():
+    """MUST stay 0 in practice. Non-zero means compute_outcomes grew a None path
+    this taxonomy doesn't know about, so the buckets no longer account for the
+    total — surfaced rather than silently absorbed into a known bucket."""
+    res = rh.ungraded_reasons([
+        {"ticker": "AAA", "alpha_pct": None, "outcome_maturing": False,
+         "alpha_unavailable_reason": "a_path_added_later"},
+        # key absent entirely — the same failure, one step earlier
+        {"ticker": "BBB", "alpha_pct": None, "outcome_maturing": False},
+    ])
+    assert res["unexplained"] == 2
+    assert res["n_droppable"] == 2
+    assert res["tickers_no_price"] == []
+
+
+def test_ungraded_reasons_names_only_the_no_price_tickers():
+    """The actionable half: if this list reads as delisted or acquired names,
+    the survivorship bias is confirmed rather than suspected."""
+    m = [
+        _matched(ticker="ZZZ", rec_date=date(2026, 1, 1), price_at_surface=50.0),
+        _matched(ticker="aaa", rec_date=date(2026, 1, 1), price_at_surface=50.0),
+        _matched(ticker="NER", rec_date=date(2026, 1, 1), price_at_surface=None),
+    ]
+    out = rh.compute_outcomes(m, {"NER": 55.0}, date(2026, 1, 15), spy_close_by_date=_SPY_OK)
+    res = rh.ungraded_reasons(out)
+    # Sorted, upper-cased, deduplicated — and NER is a different bucket.
+    assert res["tickers_no_price"] == ["AAA", "ZZZ"]
+
+
 def test_compute_outcomes_maturing_below_min_days_true():
     m = [_matched(rec_date=date(2026, 1, 10))]
     out = rh.compute_outcomes(m, {}, date(2026, 1, 15), min_days=10)  # days_since=5 < 10

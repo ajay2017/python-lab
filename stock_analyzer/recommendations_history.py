@@ -164,6 +164,26 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
                             (calendar). Such recs are kept for display but excluded
                             from the scorecard aggregates (one session of wiggle
                             isn't an outcome). See REC_SCORE_MIN_DAYS.
+      - alpha_unavailable_reason : str | None — WHY alpha_pct is None, recorded at
+                            the branch that caused it. None whenever alpha_pct is
+                            not None. One of "acted_sell_unbenchmarkable" (the
+                            deliberate case above), "no_current_price" (the live
+                            price fetch missed this ticker), "no_entry_reference"
+                            (no price_at_surface on a missed rec, or a
+                            non-positive trade price on an acted one), or one of
+                            three DISTINCT benchmark causes: "no_spy_series" (no
+                            series passed, or an empty one because the caller's
+                            fetch failed), "no_rec_date" (no date to benchmark
+                            from), "no_spy_window" (a real series that genuinely
+                            doesn't reach this rec). `_spy_return_pct` collapses
+                            all three into one None; they are separated here
+                            because reporting an OUTAGE as "outside the series"
+                            blames the user's data for a provider failure.
+                            Recorded rather than re-derived
+                            downstream: a consumer re-deriving these conditions
+                            would drift from this function's real logic the first
+                            time a branch here changes. Tallied by
+                            `ungraded_reasons`.
 
     Pure read of current_prices / spy_close_by_date; no fetches. Caller is
     responsible for ensuring current_prices has every relevant ticker and that
@@ -175,6 +195,10 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
         rec = dict(r)   # don't mutate caller's data
         cur = current_prices.get(rec["ticker"])
         cur = float(cur) if (cur is not None and float(cur) > 0) else None
+        # Set at whichever branch below forces alpha_pct to None; stays None when
+        # alpha is computable. See the docstring — recorded here, never
+        # re-derived by a consumer.
+        rec["alpha_unavailable_reason"] = None
 
         if rec["acted_on"] and rec["acted_trade"]:
             t = rec["acted_trade"]
@@ -193,6 +217,9 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
                 else:
                     rec["outcome_pct"]     = None
                     rec["outcome_dollars"] = None
+                    rec["alpha_unavailable_reason"] = (
+                        "no_current_price" if cur is None else "no_entry_reference"
+                    )
         else:
             # Missed — what would-have-gained against price_at_surface
             pas = rec.get("price_at_surface")
@@ -204,6 +231,14 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
             else:
                 rec["outcome_pct"]     = None
                 rec["outcome_dollars"] = None
+                # Both can be missing at once. A missing CURRENT price is
+                # reported in that case, deliberately: it is the bucket that
+                # carries a survivorship-bias direction, so attributing an
+                # ambiguous row to it over-alarms rather than under-alarms —
+                # the safe direction for a diagnostic.
+                rec["alpha_unavailable_reason"] = (
+                    "no_current_price" if cur is None else "no_entry_reference"
+                )
 
         # Label
         op = rec["outcome_pct"]
@@ -230,6 +265,13 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
         if is_sell_acted:
             rec["spy_return_pct"] = None
             rec["alpha_pct"]      = None
+            # Assigned unconditionally, not conditionally like the branch below:
+            # a realized SELL is unbenchmarkable regardless of price
+            # availability, so this is always the binding reason. (The acted-SELL
+            # path above never enters the price branches that set a reason, so
+            # there is nothing here to overwrite — but stating the reason
+            # unconditionally keeps that independent of how that path evolves.)
+            rec["alpha_unavailable_reason"] = "acted_sell_unbenchmarkable"
         else:
             spy_ret = _spy_return_pct(spy_close_by_date, rd, today)
             rec["spy_return_pct"] = round(spy_ret, 2) if spy_ret is not None else None
@@ -237,6 +279,29 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
                 round(rec["outcome_pct"] - spy_ret, 2)
                 if (rec["outcome_pct"] is not None and spy_ret is not None) else None
             )
+            # Only if a price reason was not already recorded. A missing price
+            # is per-ticker and actionable; a benchmark problem is one global
+            # fact, so the price cause is the more useful attribution when both
+            # hold.
+            #
+            # The three benchmark causes are kept SEPARATE because they are
+            # physically different and _spy_return_pct collapses all three into
+            # one None. Conflating them mislabels a provider OUTAGE as the
+            # user's data being out of range: app.py's Predictive Analytics page
+            # swallows a failed SPY fetch into an EMPTY DICT, and at least one
+            # caller passes no series at all — in which case every mature row
+            # would have read "dated outside the SPY series", blaming the
+            # recommendation dates for a fetch failure. That is the
+            # offline-sentinel-vs-empty-container class from CLAUDE.md, and it
+            # would be worse than an unexplained count: the total reconciles
+            # while the stated reason is false.
+            if rec["alpha_pct"] is None and rec["alpha_unavailable_reason"] is None:
+                if not spy_close_by_date:
+                    rec["alpha_unavailable_reason"] = "no_spy_series"
+                elif rd is None:
+                    rec["alpha_unavailable_reason"] = "no_rec_date"
+                else:
+                    rec["alpha_unavailable_reason"] = "no_spy_window"
 
         # Maturity: too young to grade (one session of wiggle isn't an outcome).
         ds = rec["days_since"]
@@ -244,6 +309,104 @@ def compute_outcomes(matched: list[dict], current_prices: dict[str, float] | Non
 
         out.append(rec)
     return out
+
+
+def ungraded_reasons(enriched: list[dict]) -> dict:
+    """Why do MATURE recommendations fail to produce an `alpha_pct`?
+
+    📊 Predictive Analytics showed "814 outcomes available → 344 used in this
+    analysis" while its caption explained only the 64 excluded for immaturity.
+    ~470 rows vanished with no stated reason, and every figure on that page —
+    all six lenses and all four directive cards — rests on the survivors.
+
+    Why that is more than a tidiness problem: `alpha_pct` is None whenever the
+    live price fetch missed the ticker, and a failed lookup correlates with
+    DELISTED / ACQUIRED / RENAMED names. That is a **non-random** exclusion,
+    i.e. survivorship bias in an alpha measurement. The counts here are what
+    make the difference between "benign, by design" and "the page overstates"
+    answerable from the UI instead of by argument — same reason F-246 shipped a
+    correlation observation count and F-247 a captured-day count.
+
+    Buckets are mutually exclusive, sum to `n_ungraded`, and are TALLIED from
+    the `alpha_unavailable_reason` that `compute_outcomes` records at the branch
+    responsible. Nothing is re-derived here: a consumer re-deriving those
+    conditions would drift from that function the first time a branch changes,
+    which is precisely the class of defect this measurement exists to expose.
+
+      acted_sell         — DELIBERATE, not a defect. Realized P&L spans an
+                           unknown holding period, so a single rec_date→today
+                           SPY window cannot fairly benchmark it.
+      no_current_price   — the bias-carrying bucket. `tickers_no_price` names
+                           them (sorted, deduplicated) so the list can be
+                           eyeballed for dead tickers.
+      no_entry_reference — no `price_at_surface` on a missed rec, or a
+                           non-positive trade price on an acted one. A logging
+                           gap; carries no particular bias direction.
+      no_spy_series      — the caller passed no benchmark series, or an empty one
+                           because its fetch failed. **A provider outage, not a
+                           property of the recommendations**, and kept separate
+                           from `no_spy_window` for exactly that reason: the
+                           Predictive Analytics page swallows a failed SPY fetch
+                           into an empty dict, so lumping these together would
+                           have told the user every rec was "dated outside the
+                           SPY series" during an outage. The exclusion is then
+                           perfectly UNIFORM — the least biased case possible —
+                           so it must never feed a non-randomness claim.
+      no_rec_date        — the rec carries no date to benchmark from.
+      no_spy_window      — a real series that genuinely does not reach this rec.
+      unexplained        — **MUST be 0.** Non-zero means `compute_outcomes`
+                           grew a None path this taxonomy does not know about,
+                           so the other buckets no longer account for the
+                           total. Surfaced rather than silently absorbed.
+
+    Counts MATURE rows only — immature ones are already explained by the
+    existing caption, and folding them in here would double-count the one
+    exclusion the page always disclosed.
+    """
+    mature = [r for r in enriched if not r.get("outcome_maturing")]
+    ungraded = [r for r in mature if r.get("alpha_pct") is None]
+
+    tally = {
+        "acted_sell": 0, "no_current_price": 0, "no_entry_reference": 0,
+        "no_spy_series": 0, "no_rec_date": 0, "no_spy_window": 0,
+        "unexplained": 0,
+    }
+    _KNOWN = {
+        "acted_sell_unbenchmarkable": "acted_sell",
+        "no_current_price":           "no_current_price",
+        "no_entry_reference":         "no_entry_reference",
+        "no_spy_series":              "no_spy_series",
+        "no_rec_date":                "no_rec_date",
+        "no_spy_window":              "no_spy_window",
+    }
+    no_price_tickers: set[str] = set()
+    for r in ungraded:
+        reason = r.get("alpha_unavailable_reason")
+        bucket = _KNOWN.get(reason, "unexplained") if isinstance(reason, str) else "unexplained"
+        tally[bucket] += 1
+        if bucket == "no_current_price" and r.get("ticker"):
+            no_price_tickers.add(str(r["ticker"]).strip().upper())
+
+    return {
+        "n_mature":   len(mature),
+        "n_graded":   len(mature) - len(ungraded),
+        "n_ungraded": len(ungraded),
+        **tally,
+        # Rows dropped for a reason that is NOT by-design. The comparison the
+        # caller renders against `n_graded` is deliberately a comparison of two
+        # measured quantities ("more discarded than used"), not a tuned
+        # constant — this module introduces no thresholds.
+        #
+        # NOTE for the caller: a large `n_droppable` does NOT by itself imply a
+        # biased sample. Only `no_current_price` carries a bias direction;
+        # `no_entry_reference` is a logging gap and a `no_spy_series` outage
+        # excludes rows UNIFORMLY, which is the least biased case there is. Any
+        # non-randomness claim must be gated on `no_current_price`, not on this.
+        "n_droppable": tally["no_current_price"] + tally["no_entry_reference"]
+                       + tally["no_spy_series"] + tally["no_rec_date"]
+                       + tally["no_spy_window"] + tally["unexplained"],
+        "tickers_no_price": sorted(no_price_tickers),
+    }
 
 
 # ── Rollup metrics ──────────────────────────────────────────────────────────

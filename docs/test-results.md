@@ -18,11 +18,23 @@ pytest tests/ --cov=stock_analyzer --cov-report=term-missing -q
 
 ---
 
-## 1. Latest run — 2026-08-22 (F-247 readiness + three withheld-basis disclosure fixes)
+## 1. Latest run — 2026-08-22 (F-247 readiness + F-248 + three withheld-basis disclosure fixes)
 
-**3815 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
---cov-report=term`: 68.62s — TOTAL 17692 stmts, 4170 missed, **76%** overall
+**3831 passed, 0 failed, 0 skipped** (`pytest -q --cov=stock_analyzer
+--cov-report=term`: 80.91s — TOTAL 17715 stmts, 4170 missed, **76%** overall
 coverage). Python (local `.venv`). Transcribed from the run, not recalled.
+
+**F-248 added 16** — why matured recommendations drop out of the Predictive
+Analytics working set. Two are worth naming. `test_..._adds_exactly_one_key_and_
+changes_no_other` asserts `compute_outcomes`' exact output key set, because that
+function has 8 consumers and the change is only safe if it is genuinely
+additive; the Opus review verified that by tracing all 8, and this test keeps it
+verified. `test_alpha_unavailable_reason_no_spy_series_is_not_reported_as_out_of_
+range` pins the blocking defect that review caught: `_spy_return_pct` returns
+`None` for three physically different causes and `app.py` swallows a failed SPY
+fetch into an empty dict, so a provider outage would have told the user every
+matured rec was "dated outside the SPY series" — the total reconciling while the
+stated reason was false. It runs both `None` and `{}` as the series.
 
 **The last +3** (2026-08-22) are the 🧭 Self vs Engine head-to-head disclosure,
 found by a targeted Sonnet sweep for the "asserts a conclusion, withholds a

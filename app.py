@@ -26721,6 +26721,7 @@ elif page == "📊 Predictive Analytics":
         compute_outcomes,
         summary_stats,
         by_rec_type,
+        ungraded_reasons,
     )
     from stock_analyzer.predictive_analytics import (
         calibration_by_score_band,
@@ -26870,6 +26871,98 @@ elif page == "📊 Predictive Analytics":
         f"{_pac_pending_note}  ·  "
         f"Data loaded at session start — use **Refresh** (top right) to pull the latest."
     )
+
+    # ── Why matured recommendations dropped out of the working set ─────────────
+    # The strip above reports "N available → M used" and the caption explains
+    # only the immature exclusion, so the remainder vanished with no stated
+    # reason — while every figure on this page, all six lenses and all four
+    # directive cards, rests on the survivors. `no_current_price` is the bucket
+    # that carries a bias DIRECTION: a failed price lookup correlates with
+    # delisted / acquired / renamed tickers, so those exclusions are not random.
+    # Rendered before the st.stop() gate below on purpose — when the working set
+    # is too small to analyse, why it is small is the most useful thing on screen.
+    _pac_ung = ungraded_reasons(_pac_enriched)
+    if _pac_ung["n_ungraded"]:
+        _ung_bits = []
+        if _pac_ung["acted_sell"]:
+            _ung_bits.append(
+                f"**{_pac_ung['acted_sell']}** acted SELLs — realized P&L spans an "
+                "unknown holding period, so no single SPY window can fairly "
+                "benchmark them (excluded by design)"
+            )
+        if _pac_ung["no_current_price"]:
+            _ung_bits.append(
+                f"**{_pac_ung['no_current_price']}** with no current price"
+            )
+        if _pac_ung["no_entry_reference"]:
+            _ung_bits.append(
+                f"**{_pac_ung['no_entry_reference']}** with no entry-price reference"
+            )
+        # Three separate benchmark causes, deliberately NOT one line. A failed
+        # SPY fetch lands in _pac_spy_by_date = {} (the except above), and
+        # reporting that as "dated outside the SPY series" would blame these
+        # recommendations for a provider outage.
+        if _pac_ung["no_spy_series"]:
+            _ung_bits.append(
+                f"**{_pac_ung['no_spy_series']}** with no SPY benchmark loaded this "
+                "session — a data-feed problem, not a property of these picks"
+            )
+        if _pac_ung["no_rec_date"]:
+            _ung_bits.append(f"**{_pac_ung['no_rec_date']}** with no recorded date")
+        if _pac_ung["no_spy_window"]:
+            _ung_bits.append(
+                f"**{_pac_ung['no_spy_window']}** dated outside the SPY series"
+            )
+        if _pac_ung["unexplained"]:
+            _ung_bits.append(
+                f"**{_pac_ung['unexplained']}** for an unrecognised reason — this "
+                "should be zero"
+            )
+        st.caption(
+            f"⚖️ Of {_pac_ung['n_mature']:,} matured recommendations, "
+            f"**{_pac_ung['n_graded']:,}** could be scored and "
+            f"**{_pac_ung['n_ungraded']:,}** could not: " + "; ".join(_ung_bits) + "."
+        )
+        if _pac_ung["no_current_price"]:
+            _ung_names   = _pac_ung["tickers_no_price"]
+            _UNG_MAX_LST = 12          # one name, so the slice and the count can't drift
+            st.caption(
+                "A failed price lookup correlates with delisted, acquired or renamed "
+                "tickers, so those exclusions are **not random** and can bias the "
+                "figures on this page. No price for: "
+                + ", ".join(_ung_names[:_UNG_MAX_LST])
+                + (f" (+{len(_ung_names) - _UNG_MAX_LST} more)"
+                   if len(_ung_names) > _UNG_MAX_LST else "")
+                + ". Check 🩺 System Trust if this list looks longer than expected — "
+                "a broad gap here is a price-provider problem, not a data-quality "
+                "issue with your own log."
+            )
+        # Not a tuned threshold — a comparison of two measured quantities. When
+        # more matured rows were discarded for fixable/unknown reasons than were
+        # kept, the working set is a minority of the evidence.
+        #
+        # The NON-RANDOMNESS clause is gated separately on no_current_price,
+        # because n_droppable is not evidence of bias on its own: a logging gap
+        # (no_entry_reference) has no bias direction, and a benchmark outage
+        # (no_spy_series) excludes rows UNIFORMLY — the least biased case there
+        # is. Asserting "not random" whenever the total is large would state
+        # more than the data supports, which is the whole failure mode this
+        # panel exists to correct.
+        if _pac_ung["n_droppable"] > _pac_ung["n_graded"]:
+            _ung_bias_note = (
+                " Some of those exclusions are **not random** (see the missing-price "
+                "list above), so the surviving set may not represent the whole."
+                if _pac_ung["no_current_price"] else
+                " Those exclusions carry no particular direction, so this is a "
+                "coverage limit rather than a skew."
+            )
+            st.warning(
+                f"⚠️ **More matured recommendations were dropped for fixable or unknown "
+                f"reasons ({_pac_ung['n_droppable']:,}) than were scored "
+                f"({_pac_ung['n_graded']:,}).** The figures on this page describe the "
+                f"minority that could be scored.{_ung_bias_note} Treat the averages as "
+                "indicative, not settled."
+            )
 
     _pac_min_required = PREDICTIVE_MIN_BAND_N * 2
     if _pac_n_graded < _pac_min_required:
@@ -30826,7 +30919,7 @@ Setup is a one-time, three-step process shown on the page itself (it needs a fre
 - **⚖️ Compare** — side-by-side comparison of multiple tickers.
 - **📋 Watchlist** — names you're tracking, with enter-now flags. Defaults to a **🎯 Actionable** filter (just the Enter Now / Near Entry names) rather than showing everything at once — other chips (Hold / Waiting / Remove / All), a ticker search box, and a sort dropdown are there to look further. Old, forgotten names that just became actionable get a "👁️ actionable again" callout.
 - **🌐 Macro** — market regime, VIX, SPY trend, cross-asset pulse, and economic calendar context. Tone-flip conditions are shown here.
-- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates.
+- **📊 Predictive Analytics** — your personal edge map: does a higher composite score actually deliver more alpha *for you*? Six live lenses — Score Calibration, Decision Quality, Signal Breakdown, Sector Alpha, Sentiment Alignment, and Entry Timing — plus a synthesis panel that turns the data into 2–5 actionable directives. Entry Timing asks a narrower question: does momentum running far ahead of the composite score at the moment a pick fires predict a rough first few days? Opt-in (click "Analyze") since it fetches forward prices per pick. Awareness only; never gates. **Read the coverage line at the top before trusting any figure on this page.** It states how many matured recommendations could actually be scored and — for those that could not — exactly why, one reason at a time: sold positions (excluded by design, since realized P&L spans a holding period no single market window can benchmark), recommendations with no current price, ones with no entry price logged, and ones the SPY benchmark couldn't cover. The missing-price bucket is the one worth watching: a failed price lookup tends to happen on delisted, acquired or renamed tickers, so those exclusions are **not random** and the names are listed so you can see them. If more matured recommendations were dropped than scored, an amber note says so — every average on the page describes only the ones that could be scored.
 - **🥧 Portfolio Overview** — allocation breakdown, P&L attribution, a **🧭 Sector Gaps** pointer (sectors you're underweight/unheld that could genuinely diversify this book, linking to the full Diversification Advisor), and Analytics (relative strength, sector rotation, rankings, and a **Portfolio vs. S&P 500** real-sector benchmark tilt — uses each holding's actual market sector, not this app's thematic groupings) for your current holdings.
 - **🏆 Health** — construction health score (A–F) across five dimensions (concentration, sector balance, diversification, beta/fragility, signal integrity), plus Portfolio Dynamics: interactive scatter, tenure cohorts, engine alignment donut, and Sleeping Capital / Working Hardest efficiency panels with a Weekly/Monthly/Yearly period toggle. Awareness only — never gates.
 - **🎯 My Edge** — five retrospective-only tabs, no recommendations or gates: **📐 Benchmark Mirror** (money-weighted return vs. a shadow SPY/QQQ portfolio using your real cash flows), **🔬 Workflow ROI**, **📅 Decision Quality**, **🧬 Behavioral Fingerprint** (sample-gated Buy-side and Exit Signal Response patterns), and **🪞 Investor Mirror** (conviction alignment, disposition-effect checks, Sizing Alpha, and Premature-Exit Cost). Answers "am I beating passive," "does prep pay off," "am I improving" — never scores anything that feeds a recommendation elsewhere.
