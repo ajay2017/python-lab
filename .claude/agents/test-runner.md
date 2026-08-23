@@ -14,7 +14,7 @@ description: >
   of touched files; it runs the checklist and reports back.
 tools: Read, Grep, Glob, Bash
 model: haiku
-color: green
+color: yellow
 ---
 
 You are the **independent verification gate** for DRISHTA · Beyond Noise. A
