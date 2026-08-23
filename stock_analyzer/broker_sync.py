@@ -104,9 +104,23 @@ def diff_positions(rh_positions: list[dict] | None, port_df: pd.DataFrame) -> di
     Each bucket entry is a plain dict; empty lists mean "checked, no drift in
     that bucket" — a real, positive result, not an unknown.
     """
+    return diff_position_map(normalize_positions(rh_positions), port_df)
+
+
+def normalize_positions(rh_positions: list[dict] | None) -> dict | None:
+    """Raw SnapTrade position dicts → `{TICKER: shares}`, or None if unreadable.
+
+    Split out of `diff_positions` so the broker side can be PERSISTED (the cron
+    already fetches these payloads and discarded them) and re-diffed later
+    against a live book. Keeps every filter the drift check depends on:
+    non-equity instruments dropped, zero-unit (closed) positions skipped, and
+    the same ticker summed across the user's multiple linked accounts.
+
+    None in → None out. An empty dict is a REAL result (broker holds nothing),
+    never conflated with "could not read".
+    """
     if rh_positions is None:
         return None
-
     rh_shares: dict[str, float] = {}
     for pos in rh_positions:
         ticker = _position_ticker(pos)
@@ -116,6 +130,20 @@ def diff_positions(rh_positions: list[dict] | None, port_df: pd.DataFrame) -> di
         if units is None or float(units) == 0.0:
             continue  # a closed (zero-unit) position is not a real holding
         rh_shares[ticker] = rh_shares.get(ticker, 0.0) + float(units)
+    return rh_shares
+
+
+def diff_position_map(rh_shares: dict | None, port_df) -> dict | None:
+    """Diff an already-normalized `{TICKER: shares}` broker map against the book.
+
+    The half of `diff_positions` that does not need a live broker call, so a
+    persisted snapshot can be re-diffed against CURRENT holdings on every
+    render. That ordering matters: the side the user actively edits (the book)
+    is always live, so a fix clears the warning immediately instead of waiting
+    for the next cron.
+    """
+    if rh_shares is None:
+        return None
 
     app_shares: dict[str, float] = {}
     if port_df is not None and not port_df.empty:
@@ -385,3 +413,135 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
         "flows": flows,
         "ignored": ignored,
     }
+
+
+# ── Drift banner decision (pure) ────────────────────────────────────────────
+
+def drift_dollar_impact(diff: dict | None, price_map: dict | None) -> dict:
+    """Signed dollar impact of a drift diff on Portfolio Value.
+
+    Positive `overstated` = the app's book counts value the broker does not, so
+    every weight reads SMALLER than it is and `SINGLE_NAME_CEILING` /
+    `SECTOR_CEILING` LOOSEN. That direction is why this matters: the 2026-08-23
+    DELL case (+4.46%) made a true 15.0% position read 14.36% — a fail-open on
+    a concentration gate, not a cosmetic display error.
+
+    `rh_only` names are held at the broker but absent from the book, so they
+    have no price here and are reported as SHARES only. Fetching a price would
+    put a network call back on Home, which is the whole thing this design
+    avoids; printing $0 would read as "no impact", which is worse than silence.
+    """
+    out = {"overstated": 0.0, "priced": [], "unpriced": [], "rh_only_shares": []}
+    if not diff:
+        return out
+    prices = price_map or {}
+
+    for row in diff.get("app_only", []):
+        tk, sh = row["ticker"], float(row.get("shares") or 0.0)
+        px = prices.get(tk)
+        if px:
+            out["overstated"] += sh * float(px)
+            out["priced"].append({"ticker": tk, "shares": sh, "dollars": sh * float(px)})
+        else:
+            out["unpriced"].append({"ticker": tk, "shares": sh})
+
+    for row in diff.get("qty_mismatch", []):
+        tk = row["ticker"]
+        # `diff` is rh - app, so app-minus-rh is the overstatement.
+        excess = -float(row.get("diff") or 0.0)
+        px = prices.get(tk)
+        if px:
+            out["overstated"] += excess * float(px)
+            out["priced"].append({"ticker": tk, "shares": excess, "dollars": excess * float(px)})
+        else:
+            out["unpriced"].append({"ticker": tk, "shares": excess})
+
+    for row in diff.get("rh_only", []):
+        out["rh_only_shares"].append(
+            {"ticker": row["ticker"], "shares": float(row.get("shares") or 0.0)}
+        )
+
+    out["overstated"] = round(out["overstated"], 2)
+    return out
+
+
+def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
+                        price_map=None) -> dict:
+    """What 🏠 Home should say about app-vs-broker drift. Pure, no Streamlit.
+
+    Extracted as a decision function rather than render-layer `if`s because
+    every branch below is an offline/partial state that must be ASSERTABLE —
+    the queued "extract the outage gate's decision logic into testable pure
+    functions" lesson, applied before the incident rather than after it.
+
+    `state` is one of:
+      "none"        — nothing to say (no broker configured, or a clean, fresh
+                      check). Silent by design: a green tick on every render is
+                      the noise that trains a user past the amber one.
+      "unknown"     — NOT CHECKED. No snapshot, or the book isn't loaded. Must
+                      render; this is the branch that would otherwise fail open
+                      into looking clean.
+      "stale_clean" — checked, no mismatch, but the snapshot is older than
+                      `stale_hours`. Renders as "no mismatch as of <date>, not
+                      re-checked since" and NEVER as a clean bill of health.
+      "drift"       — a real mismatch. Renders with the dollar impact.
+    """
+    if holdings_df is None or (hasattr(holdings_df, "empty") and holdings_df.empty):
+        # Diffing against an unloaded book turns every broker position into a
+        # fabricated `rh_only`. The Account panel refuses for the same reason.
+        return {"state": "none", "reason": "no_holdings"}
+
+    if snapshot is None:
+        return {"state": "unknown", "reason": "no_snapshot"}
+
+    positions = snapshot.get("positions")
+    if positions is None:
+        return {"state": "unknown", "reason": "no_positions"}
+
+    diff = diff_position_map(positions, holdings_df)
+    if diff is None:
+        return {"state": "unknown", "reason": "no_positions"}
+
+    captured_at = snapshot.get("captured_at")
+    is_stale = _is_stale(captured_at, now_et, stale_hours)
+    all_ok = bool(snapshot.get("all_accounts_ok", False))
+    has_drift = any(diff[k] for k in ("rh_only", "app_only", "qty_mismatch"))
+
+    base = {
+        "diff": diff,
+        "captured_at": captured_at,
+        "is_stale": is_stale,
+        "all_accounts_ok": all_ok,
+        "impact": drift_dollar_impact(diff, price_map),
+    }
+
+    if has_drift:
+        # A stale POSITIVE is still true of its date — report it, dated.
+        return {"state": "drift", **base}
+    if is_stale:
+        return {"state": "stale_clean", **base}
+    if not all_ok:
+        # Clean, fresh, but some account didn't respond when captured — a clean
+        # result cannot rule out drift in the account we never read.
+        return {"state": "stale_clean", **base}
+    return {"state": "none", "reason": "clean", **base}
+
+
+def _is_stale(captured_at, now_et, stale_hours) -> bool:
+    """True when `captured_at` is older than `stale_hours`, or unreadable.
+
+    Unreadable counts as STALE, not fresh — an unparseable timestamp is an
+    unknown age, and treating an unknown as fresh is the fail-open direction.
+    """
+    if captured_at is None:
+        return True
+    try:
+        ts = pd.to_datetime(captured_at, utc=True, errors="coerce", format="ISO8601")
+        if ts is None or pd.isna(ts):
+            return True
+        now = pd.to_datetime(now_et, utc=True, errors="coerce")
+        if now is None or pd.isna(now):
+            return True
+        return (now - ts).total_seconds() > float(stale_hours) * 3600.0
+    except (TypeError, ValueError):
+        return True
