@@ -2504,14 +2504,32 @@ Each lane records a `cron_heartbeat` row (§6.32), graded on 🩺 System Trust; 
 reports failure by returning non-zero (rather than raising) still records
 `status="failed"`, so a green heartbeat can never mask a failed run.
 
-| Lane | Service | In-code guard | Features invoked |
-|------|---------|---------------|-----------------|
-| `premarket` | `cron-premarket` | trading day + ET hour ≥ `ALERT_EMAIL_HOUR_ET` | Protective exit alerts (F-143) |
-| `scan` | `cron-scan` | trading day | Morning buy-list scan |
-| `intraday` | `cron-intraday` | trading day | Intraday pullback entry check |
-| `eod` | `cron-eod` | trading day + ET hour ≥ `ALERT_EOD_HOUR_ET` | EOD snapshot, pullback alert, vol-prediction write + maturation |
-| `thesis` | `cron-thesis` | Sunday | F-1 thesis review → F-3 weekly debrief → F-4 monthly report (first Sunday) |
-| `maintenance` | `cron-maintenance` ⚠️ | Saturday | Idempotent data backfills (see below) |
+| Lane | Service | Schedule (UTC) | In-code guard | Features invoked |
+|------|---------|----------------|---------------|-----------------|
+| `premarket` | `cron-premarket` | `0 12,13 * * *` | trading day + ET hour ≥ `ALERT_EMAIL_HOUR_ET` | Protective exit alerts (F-143) |
+| `scan` | `cron-scan` | `45 13,14 * * *` | trading day | Morning buy-list scan |
+| `intraday` | `cron-intraday` | `30 15,16 * * 1-5` | trading day | Intraday pullback entry check |
+| `eod` | `cron-eod` | `30 21 * * 1-5` | trading day + ET hour ≥ `ALERT_EOD_HOUR_ET` | EOD snapshot, pullback alert, vol-prediction write + maturation |
+| `thesis` | `cron-thesis` | `0 23 * * 0` | Sunday | F-1 thesis review → F-3 weekly debrief → F-4 monthly report (first Sunday) |
+| `maintenance` | `cron-maintenance` ⚠️ | *not recorded here* | Saturday | Idempotent data backfills (see below) |
+
+**The schedule column is a MIRROR of the Railway dashboard, which is the source of truth**
+(these services are dashboard-managed, not repo-managed — see the ⚠️ note below). Read the
+live expression before changing one; do not edit a service to match this table.
+
+**Why the weekday lanes carry a comma list in the HOUR field.** A single cron expression
+cannot hit a fixed ET time across a DST boundary, and Railway has no timezone field. Two UTC
+slots cover both seasons and each lane's own ET gate discards the wrong one — `cron-premarket`
+runs 08:00 ET / dedups 09:00 in EDT, and self-skips 07:00 (`7 < ALERT_EMAIL_HOUR_ET`) / runs
+08:00 in EST. **Expect two container starts per lane per trading morning**, the second logging
+a dedup line; this is correct, and restores the pre-migration behaviour. The 2026-08-07
+GitHub-Actions migration collapsed each lane to one slot and kept the *winter* expression, so
+`premarket`/`scan`/`intraday` ran an hour late for the whole EDT season until 2026-08-23. It
+was silent because **every gate is lower-bound-only: the gates can tell you a run was not
+early, never that it was late.** `cron-eod` was unaffected and was deliberately left on a
+single slot — 21:30 UTC clears `ALERT_EOD_HOUR_ET = 16` in both offsets, because its gate
+boundary sits far enough from its schedule that a one-hour shift cannot cross it. Memory
+`project_cron_railway_migration`.
 
 ⚠️ Railway cron services are **dashboard-managed, not repo-managed**. `cron-maintenance`
 must be created manually (`ALERT_RUN_MODE=maintenance`, Saturday schedule, inheriting the
