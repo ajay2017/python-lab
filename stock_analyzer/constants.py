@@ -1523,10 +1523,15 @@ PREDICTION_BACKFILL_PERIOD = "5y"
 # (staleness banners, dedup tolerance, fetch bounds) so they live here per
 # hard rule #1 rather than as module-local literals.
 
-# Share-count tolerance before diff_positions() flags a held ticker as a
-# "qty mismatch" rather than a match. Absorbs fractional-share rounding
-# noise from SnapTrade's position feed vs the app's trades-derived shares
-# — not a real drift signal below this size.
+# Share-count tolerance before a held ticker counts as a real quantity
+# mismatch rather than rounding noise. Absorbs fractional-share noise from
+# SnapTrade's position feed vs the app's trades-derived shares — not a real
+# drift signal below this size.
+# TWO consumers, deliberately sharing one number because it is one question
+# ("is this share difference real or float noise"), not two policies:
+#   • broker_sync.diff_positions()      — broker feed vs the app's holdings
+#   • daily_pnl.reconcile_baseline()    — prior-close baseline vs holdings
+# Retuning this for the broker feed also moves the day-P&L integrity guard.
 BROKER_DRIFT_SHARE_TOL = 0.001
 
 # Max age of the last successful SnapTrade balance sync before the Account

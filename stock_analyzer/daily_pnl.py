@@ -25,6 +25,8 @@ UI-free / no I/O.
 
 from __future__ import annotations
 
+from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL
+
 
 def _num(v, default: float = 0.0) -> float:
     """Float coercion that maps None / NaN / junk to `default` (never raises)."""
@@ -52,6 +54,202 @@ def today_trade_cash_delta(today_trades: list[dict]) -> float:
         elif action == "BUY":
             delta -= cash
     return delta
+
+
+def _is_split(action) -> bool:
+    """SPLIT rows carry `shares` = the adjusted TOTAL, not a delta (db.py's
+    SPLIT convention), so they can never be summed into a share delta. Matched
+    by substring to stay consistent with every other SPLIT check in the codebase
+    (`"SPLIT" in action`), which tolerates decorated actions like "SPLIT 4:1".
+    """
+    return "SPLIT" in str(action or "").strip().upper()
+
+
+def today_trade_share_delta(today_trades: list[dict]) -> dict[str, float]:
+    """Net share change per ticker from today's BUY/SELL rows (BUY +, SELL −).
+
+    SPLIT is excluded — see `_is_split`. A ticker whose only row today is a
+    split is therefore ABSENT from this map, which is not the same as "no
+    change"; `reconcile_baseline` handles that by skipping such tickers
+    entirely rather than reporting a drift it cannot compute.
+    """
+    delta: dict[str, float] = {}
+    for t in today_trades:
+        action = str(t.get("action", "")).strip().upper()
+        ticker = str(t.get("ticker", "")).strip().upper()
+        if not ticker or _is_split(action):
+            continue
+        if action == "BUY":
+            delta[ticker] = delta.get(ticker, 0.0) + _num(t.get("shares"))
+        elif action == "SELL":
+            delta[ticker] = delta.get(ticker, 0.0) - _num(t.get("shares"))
+    return delta
+
+
+def reconcile_baseline(
+    held: list[dict],
+    baseline: dict,
+    today_trades: list[dict],
+) -> dict:
+    """
+    Every way the prior-close baseline and the current holdings can disagree
+    without a trade explaining it. Each one silently distorts the day-P&L
+    identity, so each is surfaced rather than absorbed.
+
+    Three shapes, all the same defect class — "the baseline describes a book
+    that is not the one being marked":
+
+      • `orphans`     — in the baseline, not held, no trade today. Its baseline
+                        value is subtracted with nothing offsetting, so the
+                        figure is UNDERSTATED by that position's FULL prior-close
+                        value — not by a day's move, which is one to two orders
+                        of magnitude smaller and in the reassuring direction.
+      • `qty_drift`   — held, but at a share count that today's trades do not
+                        explain. Only the drifted portion is wrong, so the error
+                        is `drift × price` — the case that produced a silent
+                        $1,091.62 error on 2026-08-23 while the orphan check
+                        (which fires only on a fully-vanished ticker) stayed
+                        quiet.
+      • `unbaselined` — held, absent from the baseline, no trade today. The
+                        WORST of the three: the full position value is added
+                        with nothing subtracting it, so the figure is
+                        OVERSTATED by roughly `shares × price`, not by a day's
+                        move. Reachable via a partial `daily_snapshots` write,
+                        and routinely via a stale baseline (anything opened
+                        between the baseline date and today lands here).
+
+    NOT EXHAUSTIVE — a known FOURTH shape is structurally invisible here: a
+    ticker traded today that is in NEITHER `baseline` NOR `held` (stale
+    baseline, bought after it, sold today). Its proceeds enter `cash_delta`
+    with nothing subtracting the cost, overstating the figure by roughly the
+    position's value — the sell-side twin of `unbaselined`. Detecting it needs
+    the trade price, which this signature does not carry, so it is queued
+    rather than half-done. Do not read "three shapes" as complete.
+
+    Share comparisons use `BROKER_DRIFT_SHARE_TOL` — the same tolerance the
+    broker-vs-app reconciliation uses, because it is the same question ("is this
+    share difference real or float noise"), not a second policy number.
+
+    Pure. Returns lists that are always present (possibly empty) — never None,
+    since "no disagreement" and "not checked" are both knowable here.
+    """
+    # ACCUMULATE duplicate rows rather than last-wins: `current_val` sums every
+    # row, so an auditor that overwrote would disagree with the very identity it
+    # audits. Unreachable today (build_portfolio_df emits one row per ticker),
+    # but mirroring the arithmetic costs nothing and removes the trap.
+    _held_by_ticker: dict[str, dict] = {}
+    for h in held:
+        tk = str(h.get("ticker", "")).strip().upper()
+        if not tk:
+            continue
+        if tk in _held_by_ticker:
+            _held_by_ticker[tk] = {
+                "ticker": tk,
+                "shares": _num(_held_by_ticker[tk].get("shares")) + _num(h.get("shares")),
+                "price":  _num(h.get("price")),      # last price wins
+            }
+        else:
+            _held_by_ticker[tk] = h
+    _base_by_ticker = {str(k).strip().upper(): v for k, v in baseline.items()}
+    _traded  = {str(t.get("ticker", "")).strip().upper() for t in today_trades}
+    _split   = {str(t.get("ticker", "")).strip().upper()
+                for t in today_trades if _is_split(t.get("action"))}
+    _deltas  = today_trade_share_delta(today_trades)
+
+    # A ticker fully absent from today's book AND today's trades is the classic
+    # orphan — reported under its own key for continuity. Everything else is
+    # judged on the RESIDUAL below, because "was there a trade today" is not the
+    # question: a trade that explains only PART of a change leaves the rest just
+    # as unexplained, and an early version of this function exempted any traded
+    # ticker outright, which hid exactly that case.
+    # Orphans carry a dollar figure like the other two shapes. An orphan's
+    # baseline value is subtracted with NOTHING offsetting it, so the error is
+    # the position's full prior-close value — NOT "a day's move", which is one
+    # to two orders of magnitude smaller and in the reassuring direction.
+    # Negative = day-P&L UNDERSTATED by this much.
+    _orphan_tickers = {
+        tk for tk in _base_by_ticker
+        if tk not in _held_by_ticker and tk not in _traded
+    }
+    orphans = [
+        {
+            "ticker":          tk,
+            "baseline_shares": _num(_base_by_ticker[tk].get("shares")),
+            "value_impact":    round(
+                -_num(_base_by_ticker[tk].get("shares"))
+                * _num(_base_by_ticker[tk].get("close")), 2),
+        }
+        for tk in sorted(_orphan_tickers)
+    ]
+
+    qty_drift = []
+    unbaselined = []
+    for tk in sorted(set(_base_by_ticker) | set(_held_by_ticker)):
+        if tk in _orphan_tickers:
+            continue                      # already reported, don't double-count
+        # A split today rewrites the share count by a ratio this function cannot
+        # recover from the row (it stores the new TOTAL). It is also the one case
+        # with no error to report: post-split shares × post-split price
+        # reconciles against the pre-split baseline, and the cash leg is
+        # correctly zero. Silence here is the right answer, not a concession.
+        if tk in _split:
+            continue
+
+        _h          = _held_by_ticker.get(tk)
+        _b          = _base_by_ticker.get(tk)
+        cur_shares  = _num(_h.get("shares")) if _h else 0.0
+        base_shares = _num(_b.get("shares")) if _b else 0.0
+        # An unheld ticker has no live price, so value its residual at the
+        # baseline close — the same basis the day-P&L subtracted it at.
+        price       = _num(_h.get("price")) if _h else _num(_b.get("close")) if _b else 0.0
+
+        expected   = base_shares + _deltas.get(tk, 0.0)
+        unexplained = cur_shares - expected
+
+        # UNIT GUARD. The held/baseline sides are display-truncated integers
+        # (`portfolio.build_portfolio_df` stores `int(shares)`, and both
+        # `daily_snapshots` writers write from that same frame) while the trade
+        # deltas are raw to 4dp (`broker_sync` rounds fills, it does not
+        # truncate). Comparing the two reports a fractional "drift" that is
+        # really just truncation — it would fire on every fractional-quantity
+        # day, which is how a banner gets trained into noise and costs you the
+        # next real one. Since floor(x + n) == floor(x) + n for integer n, an
+        # INTEGRAL net delta compares exactly; only a fractional one is unsafe.
+        # Cost of this choice: a genuine whole-share drift is MISSED on a day
+        # the ticker also had a fractional fill. Judged the better error — the
+        # alternative is a false alarm on a correctly-journalled book.
+        # Note the `or` rather than `and`: a fractional value on EITHER side is
+        # enough to make the comparison unsafe, and today only the delta can be
+        # fractional. If a future change stops truncating either side, this
+        # still fails closed instead of newly crying wolf.
+        if ((float(cur_shares).is_integer() or float(base_shares).is_integer())
+                and not float(expected).is_integer()):
+            continue
+
+        if abs(unexplained) <= BROKER_DRIFT_SHARE_TOL:
+            continue
+
+        if _b is None:
+            unbaselined.append({
+                "ticker":            tk,
+                "current_shares":    cur_shares,
+                "unexplained_shares": round(unexplained, 6),
+                # Positive = day-P&L overstated. Approximate: the true error is
+                # the shares' COST BASIS, which this function does not have.
+                "value_impact":      round(unexplained * price, 2),
+            })
+        else:
+            qty_drift.append({
+                "ticker":          tk,
+                "baseline_shares": base_shares,
+                "expected_shares": expected,
+                "current_shares":  cur_shares,
+                "drift_shares":    round(unexplained, 6),
+                # Signed: positive = day-P&L overstated by this much.
+                "value_impact":    round(unexplained * price, 2),
+            })
+
+    return {"orphans": orphans, "qty_drift": qty_drift, "unbaselined": unbaselined}
 
 
 def compute_positions_day_pnl(
@@ -82,16 +280,9 @@ def compute_positions_day_pnl(
     day_pnl     = current_val - baseline_val + cash_delta
     day_pnl_pct = (day_pnl / total_value * 100.0) if total_value else 0.0
 
-    # A baseline ticker that is neither still held nor sold in today's trades
-    # "vanished" without a recorded exit — a journal gap that would silently
-    # distort the delta (it subtracts the baseline value with nothing offsetting).
-    # Surface it so the caller can flag rather than present a quietly-wrong number.
-    _held_tickers  = {str(h.get("ticker", "")).upper() for h in held}
-    _traded_tickers = {str(t.get("ticker", "")).upper() for t in today_trades}
-    orphans = sorted(
-        tk for tk in baseline
-        if tk.upper() not in _held_tickers and tk.upper() not in _traded_tickers
-    )
+    # Every way the baseline can describe a different book than the one being
+    # marked — each silently distorts the delta above. See `reconcile_baseline`.
+    _recon = reconcile_baseline(held, baseline, today_trades)
 
     return {
         "day_pnl":          round(day_pnl, 2),
@@ -100,5 +291,7 @@ def compute_positions_day_pnl(
         "current_value":    round(current_val, 2),
         "baseline_value":   round(baseline_val, 2),
         "n_baseline":       len(baseline),
-        "orphans":          orphans,   # baseline names with no current holding and no recorded exit today
+        "orphans":          _recon["orphans"],      # baseline names with no current holding and no recorded exit today
+        "qty_drift":        _recon["qty_drift"],    # held, but at a share count today's trades don't explain
+        "unbaselined":      _recon["unbaselined"],  # held, absent from the baseline, no trade today
     }

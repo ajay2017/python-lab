@@ -5922,10 +5922,75 @@ if page == "🏠 Home":
     # Fail-loud: a baseline name with no current holding and no recorded exit
     # today is a journal gap that would distort the day P&L — surface it.
     if _dpnl is not None and _dpnl.get("orphans"):
+        # The error here is the position's FULL prior-close value, not its day
+        # move — nothing offsets the baseline subtraction. The old wording said
+        # "move", understating the largest of the three shapes by one to two
+        # orders of magnitude, in the reassuring direction.
+        _or_bits = []
+        for _d in _dpnl["orphans"]:
+            _or_amt = _m(f"${abs(_d['value_impact']):,.0f}")
+            _or_bits.append(
+                f"**{_d['ticker']}** ("
+                + (f"{_or_amt} understated" if _d["value_impact"] else "amount unavailable")
+                + ")"
+            )
         st.caption(
-            f"⚠️ Day-P&L baseline includes **{', '.join(_dpnl['orphans'])}** from the prior "
-            f"close with no current holding and no recorded trade today — check the Trade "
-            f"Journal; the figure may be off by that position's move."
+            f"⚠️ Day-P&L baseline includes {', '.join(_or_bits)} from the prior close with no "
+            f"current holding and no recorded trade today — check the Trade Journal. Nothing "
+            f"offsets the baseline value, so the figure is understated by that whole position, "
+            f"not just its day move."
+        )
+    # Same defect class as the orphan check above, but for the two shapes it
+    # structurally cannot see: a ticker still held at a share count today's
+    # trades don't explain, and a held ticker missing from the baseline. Both
+    # quote the dollar error, because "the number is wrong" is only actionable
+    # with "by how much" — a 2026-08-23 share drift moved this tile by $1,091.62
+    # with no warning while the orphan check stayed (correctly) silent.
+    if _dpnl is not None and _dpnl.get("qty_drift"):
+        _qd_bits = []
+        for _d in _dpnl["qty_drift"]:
+            # A zero impact means no price was available to value the residual
+            # (an unheld name with no baseline close) — say that, rather than
+            # printing "$0 understated", which reads as "no problem".
+            if _d["value_impact"]:
+                _amt  = _m(f"${abs(_d['value_impact']):,.0f}")
+                _dirn = "overstated" if _d["value_impact"] > 0 else "understated"
+                _tail = f", {_amt} {_dirn}"
+            else:
+                _tail = ", amount unavailable"
+            _qd_bits.append(
+                f"**{_d['ticker']}** ({_d['current_shares']:g} held vs "
+                f"{_d['expected_shares']:g} expected{_tail})"
+            )
+        _qd_parts = ", ".join(_qd_bits)
+        # The detector only ever sees TODAY's trades, so it can prove the figure
+        # is off but NOT that a trade is missing. Say the first and offer the
+        # candidate causes rather than accusing the journal — a banner that sends
+        # the user hunting a trade they already logged is one they stop reading.
+        _qd_why = (
+            "a trade logged after the baseline date (this figure spans more than one day)"
+            if not _dpnl_is_current else
+            "an imported trade carrying a date-only timestamp, or a genuine position drift"
+        )
+        st.caption(
+            f"⚠️ Share count doesn't match the baseline plus today's trades: {_qd_parts}. "
+            f"Today's P&L is off by roughly that amount (exact only if the shares are simply "
+            f"wrong; an unlogged fill was bought at a price this can't see). Most likely "
+            f"{_qd_why} — reconcile against your broker (💰 Account → Broker Sync) before "
+            f"trusting this tile."
+        )
+    if _dpnl is not None and _dpnl.get("unbaselined"):
+        _ub_bits = []
+        for _d in _dpnl["unbaselined"]:
+            _ub_amt = _m(f"${_d['value_impact']:,.0f}")
+            _ub_bits.append(f"**{_d['ticker']}** (~{_ub_amt})")
+        _ub_parts = ", ".join(_ub_bits)
+        st.caption(
+            f"⚠️ Held with no prior-close baseline row: {_ub_parts}. Their **full value**, not "
+            f"a day's move, is counted as gain — so Today's P&L is overstated by roughly that "
+            f"much (the exact error is the cost basis, so treat these as approximate). Expected "
+            f"if the position opened after the baseline date; otherwise the daily snapshot is "
+            f"incomplete or the trade was imported with a date-only timestamp."
         )
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
@@ -10410,16 +10475,35 @@ elif page == "🧾 Summary":
             "" if _sm_dpnl_is_current
             else f" · from {date.fromisoformat(_sm_dpnl_baseline_date).strftime('%b %d')}"
         )
+        # Home publishes the number AND its integrity findings; this tile used to
+        # consume only the number, so a figure Home banners as off rendered here
+        # under the word "TRUE". Read the same three lists Home does — the
+        # coordination contract is the whole payload, not the headline.
+        # Explicit isinstance rather than `or []` — a dict cached by a session
+        # older than this feature simply lacks the keys, and `or []` is the
+        # offline-sentinel collapse the repo's own antipattern gate rejects.
+        _sm_dp_bad = 0
+        for _k in ("orphans", "qty_drift", "unbaselined"):
+            _v = _sm_dpnl.get(_k)
+            if isinstance(_v, list):
+                _sm_dp_bad += len(_v)
         _s3.metric(
             "Today's P&L", _m(f"${_sm_dpnl['day_pnl']:+,.0f}"),
             f"{_sm_dpnl['day_pnl_pct']:+.2f}%{_sm_dp_scope}",
             delta_color="normal" if _sm_dpnl["day_pnl"] >= 0 else "inverse",
             help=(
-                f"TRUE day P&L for tracked positions, measured from the "
-                f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
-                f"Same figure as 🏠 Home (published this session)."
+                (f"Day P&L for tracked positions, measured from the "
+                 f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
+                 f"⚠️ {_sm_dp_bad} position(s) don't reconcile against that baseline, so this "
+                 f"figure is known to be off — see 🏠 Home for the amount and the names.")
+                if _sm_dp_bad else
+                (f"TRUE day P&L for tracked positions, measured from the "
+                 f"{_sm_dpnl_baseline_date} close — held names + today's realized trades. "
+                 f"Same figure as 🏠 Home (published this session).")
             ),
         )
+        if _sm_dp_bad:
+            _s3.caption(f"⚠️ {_sm_dp_bad} position(s) don't reconcile — see 🏠 Home")
     elif _sm_today_pnl is not None:
         _s3.metric(
             "Today's P&L (held)", _m(f"${_sm_today_pnl:+,.0f}"), f"{_sm_today_pnl_pct:+.2f}%",
@@ -30866,6 +30950,8 @@ The app's intelligence is computed live in your browser — so it can only reach
 - **📡 Mid-morning (~9:45 AM ET) — Market scan + buy list.** Runs the full sector scan in the background and saves it, so when you open the app your **buy candidates and new signals are already there** (stamped *"📡 from today's auto-scan"*) — no manual scan, no ~20-second wait. **It then emails you the high-conviction "New Positions to Initiate"** — the green *Go — Composite Confirms* setups only (no noise, no conflicting names) — so you can place the trade from your phone if you can't open the app. Each one lists the entry zone, suggested shares, and stop, with a reminder to **act only if the price is still in the entry zone**. Like the protective email, it's **exception-based**: if nothing clears the high-conviction bar (common on flat/down days), you get no email. (You can still hit **Refresh Signals** in-app any time to re-score on live prices.)
 
 - **🌙 After the close (~4:30 PM ET) — End of day.** Two things: **(1)** it saves a daily snapshot of your holdings so **"Today's P&L"** has an accurate prior-day baseline tomorrow — even on days you never opened the app. **(2)** If the **broad market actually fell sharply that day (about −3% or worse)**, it sends a brief **awareness** email showing roughly how far your book likely moved (your exposure × the drop) and your most-exposed names. That one is *awareness, not a directive* — pullback timing can't be predicted; the actionable de-risk, if warranted, comes in the next pre-market protective email.
+
+**When "Today's P&L" doesn't trust itself.** That figure compares your holdings *now* against the prior-close snapshot above, plus today's trades. If those three don't reconcile, the number is wrong — so the tile says so instead of quietly showing it, in a caption naming the position **and the dollar amount it's off by**. Three cases — **the three it can detect**, not every way the two can disagree: a name in the baseline you no longer hold with no exit logged (the figure is *understated* by that whole position, since nothing offsets it); a name held at a **share count today's trades don't explain** (a missing trade, or an import whose date landed a day earlier — this one is the reason a $1,092 error once went unnoticed, because the position was still held and looked fine); and a name held with **no baseline row at all**, whose *whole value* — not a day's move — is counted as gain. That last one is expected if you opened the position after the baseline date, and 🧾 Summary shows a matching pointer so the same number never reads as verified on one page and questionable on another. The dollar figures are close estimates, not exact — the app can't always know what price an unlogged fill happened at. If you see one of these, reconcile against your broker on 💰 Account → Broker Sync before acting on the figure.
 
 **Exception-based by design.** Every email is *conditional* — you only hear from the app when there's something real. The **protective and pullback emails are rare safety nets** (a ~3% day happens only a few times a year); the **morning buy email arrives only on days a setup clears the high-conviction bar**, and stays silent otherwise. None of it is a notification feed — it matches the app's whole posture: surface what matters *now*, stay quiet otherwise.
 
