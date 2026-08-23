@@ -215,6 +215,38 @@ applied). Forward-only — existing rows stay NULL, nothing is backfilled.
     ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS bq_score numeric;
     ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS val_score numeric;
 
+Sizing capture (F-249 Phase 2, added 2026-08-23 — plan
+docs/plans/sizing-calibration.md). Records WHAT SIZE the app suggested at the
+moment it surfaced a recommendation, so Phase 3 can later measure the take rate
+(actual shares bought / suggested shares) and the risk-per-trade that implies.
+None of this was recoverable retroactively: the suggested share count was
+computed at render time and discarded, the trend bucket that drove the old
+formula was never recorded, and F-249 changed the formula anyway — so a backfill
+would splice two different investment policies onto one axis. Forward-only, and
+rec_sizing_version exists so a future formula change can never be silently
+compared across the boundary. Optional/inert until applied, exactly like the
+pillar scores above. Semantics worth knowing when querying:
+  * rec_sizing_version NOT NULL with rec_shares NULL  = captured, and the app
+    deliberately suggested NO size (one share over the single-name ceiling, or
+    price at/below the ATR stop).
+  * all four NULL = pre-capture; OR a rec_type that never carries a size
+    (buy_candidate rows never do — only new_pick and add_winner); OR a
+    required sizing INPUT was unavailable, so the engine produced no sizing
+    dict at all (no bundle stop for a held name, or no portfolio value). That
+    third case is reachable post-DDL, so "all NULL" does not imply "before the
+    cutoff" — Phase 3 must filter on a non-null rec_shares, not on rec_date.
+  * FIRST WRITER OF THE DAY WINS (the upsert ignores duplicates), and on most
+    days that is the 9:30 ET cron scan lane, not the interactive session. So
+    the captured size is the MORNING-SCAN suggestion, not an intraday
+    recompute at the price the user actually traded at. That is the better
+    take-rate denominator — stable and single-valued — but it is not "what was
+    on screen when I clicked buy".
+
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_shares          numeric;
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_stop            numeric;
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_portfolio_value numeric;
+    ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_sizing_version  integer;
+
 Manual stops (added 2026-05-29 — user-set stop overrides recorded when
 the Brief's "raise stop" recommendation is actioned. Without this the
 recommendation re-fires every render because the system has no record
@@ -2255,6 +2287,22 @@ def save_recommendations(records: list[dict]) -> dict:
     if is_readonly(): return {"attempted": 0, "saved": 0, "error": "read-only"}  # read-only viewer: no-op
     if not records or not has_db():
         return {"attempted": 0, "saved": 0, "error": None}
+    def _pos_num(x):
+        """float(x) if it is a usable positive number, else None."""
+        try:
+            v = float(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+        if v is None or v != v or v <= 0:   # v != v filters NaN
+            return None
+        return v
+
+    def _int_or_none(x):
+        try:
+            return int(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+
     payload = []
     for r in records:
         tk = str(r.get("ticker", "")).strip().upper()
@@ -2289,6 +2337,13 @@ def save_recommendations(records: list[dict]) -> dict:
             "t_score":          r.get("t_score"),
             "bq_score":         r.get("bq_score"),
             "val_score":        r.get("val_score"),
+            # Sizing capture (F-249 Phase 2). Coerced like price_at_surface —
+            # a non-numeric or non-positive suggestion is stored NULL rather
+            # than poisoning the take-rate arithmetic Phase 3 will run on it.
+            "rec_shares":          _pos_num(r.get("rec_shares")),
+            "rec_stop":            _pos_num(r.get("rec_stop")),
+            "rec_portfolio_value": _pos_num(r.get("rec_portfolio_value")),
+            "rec_sizing_version":  _int_or_none(r.get("rec_sizing_version")),
         })
     if not payload:
         return {"attempted": 0, "saved": 0, "error": None}
@@ -2301,9 +2356,16 @@ def save_recommendations(records: list[dict]) -> dict:
     # stop persisting sentiment (already-working, unrelated data) for the
     # entire window until the pillar-score DDL is applied, with no error
     # surfaced (saved=N, error=None) to reveal the loss.
+    _F249_SIZING_COLS = frozenset(("rec_shares", "rec_stop",
+                                   "rec_portfolio_value", "rec_sizing_version"))
     _QA_PILLAR_COLS = frozenset(("t_score", "bq_score", "val_score"))
     _F179_COLS      = frozenset(("s_score", "avg_sent"))
-    _OPTIONAL_COLS  = _QA_PILLAR_COLS | _F179_COLS
+    _OPTIONAL_COLS  = _F249_SIZING_COLS | _QA_PILLAR_COLS | _F179_COLS
+    # NEWEST GENERATION FIRST. The strip cascade peels one generation at a time
+    # in this order, so a "rec_shares is missing" error cannot also discard the
+    # pillar scores and sentiment that are already working in production. Append
+    # new generations to the FRONT, never extend an existing frozenset.
+    _COL_GENERATIONS = (_F249_SIZING_COLS, _QA_PILLAR_COLS, _F179_COLS)
 
     def _upsert(rows):
         try:
@@ -2346,21 +2408,59 @@ def save_recommendations(records: list[dict]) -> dict:
                 or "could not find the" in low or "pgrst204" in low) and \
                any(c in low for c in _OPTIONAL_COLS)
 
+    def _missing_generation(err_str):
+        """The generation containing the column PostgREST actually NAMED.
+
+        Targeted, not positional. Peeling generations blind (newest-first)
+        would strip the sizing columns on a `bq_score`-missing error — data
+        that is working, discarded because something unrelated is absent, which
+        is the precise failure this cascade exists to prevent. PostgREST names
+        the offending column, so use it.
+        """
+        low = (err_str or "").lower()
+        if not _col_missing(err_str):
+            return None
+        for generation in _COL_GENERATIONS:
+            if any(c in low for c in generation):
+                return generation
+        return None
+
     def _with_retry(call_fn, rows):
-        """call_fn(rows); on a column-missing error, strip ONLY the newer
-        pillar-score columns and retry — strip the older F-179 columns too
-        only if THAT retry itself still reports a missing column (e.g. a
-        fresh DB with neither DDL applied). Returns (ok, err, rows_used)."""
+        """call_fn(rows); on a column-missing error strip ONLY the generation
+        that error names, and retry — repeating if the retry then reveals a
+        DIFFERENT missing generation (e.g. a fresh DB with no DDL applied).
+
+        Stripping every optional column on the first failure would silently
+        stop persisting already-working data (sentiment, pillar scores, sizing)
+        for the entire window, and report success while doing it
+        (saved=N, error=None). Returns (ok, err, rows_used).
+        """
         ok, err = call_fn(rows)
-        if ok is not False or not _col_missing(err):
-            return ok, err, rows
-        stage1 = _strip(rows, _QA_PILLAR_COLS)
-        ok1, err1 = call_fn(stage1)
-        if ok1 is not False or not _col_missing(err1):
-            return ok1, err1, stage1
-        stage2 = _strip(rows, _OPTIONAL_COLS)
-        ok2, err2 = call_fn(stage2)
-        return ok2, err2, stage2
+        stripped, used = set(), rows
+        for _ in range(len(_COL_GENERATIONS)):
+            if ok is not False:
+                return ok, err, used
+            generation = _missing_generation(err)
+            # `<=` is subset: guards against re-stripping a generation we have
+            # already removed, which would otherwise spin without progress.
+            if generation is None or generation <= stripped:
+                return ok, err, used
+            stripped |= generation
+            used = _strip(rows, stripped)
+            ok, err = call_fn(used)
+        # Last-resort floor. Targeting is a strict improvement over the old
+        # blind newest-first peel, but it can terminate in a hard saved=0 if the
+        # error string ever names a column from a NEWER generation than the one
+        # actually missing (e.g. a PostgREST hint mentioning a column that does
+        # exist). Unlikely — supabase-py stringifies a single-column PGRST204
+        # with hint: None — and it fails loudly rather than silently. Even so,
+        # the pre-targeting code had an unconditional strip-everything stage,
+        # and dropping that floor would be a regression in resilience for a
+        # log the recommendation history depends on.
+        if ok is False and _col_missing(err) and stripped != _OPTIONAL_COLS:
+            used = _strip(rows, _OPTIONAL_COLS)
+            ok, err = call_fn(used)
+        return ok, err, used
 
     # ignore_duplicates compat (TypeError) is a client-library signature issue,
     # independent of which columns are present — it would raise on the very

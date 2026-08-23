@@ -3,9 +3,11 @@
 **Date:** 2026-08-22
 **Author:** Ajay Kumar
 **Analysis model:** Claude Opus 5 (`planner` design pass + lead verification)
-**Status:** **PHASE 1 SHIPPED 2026-08-23 (F-249)** — user decisions 1, 2, 7 settled 2026-08-22,
-plus an 8th decision taken mid-build (ceiling-infeasible ⇒ fail closed, see below). Phase 2
-pending DDL approval; Phase 3 gated, do not start.
+**Status:** **PHASE 1 SHIPPED 2026-08-23 (F-249).** **PHASE 2 CODE SHIPPED 2026-08-23 —
+INERT until the DDL below is applied by hand in the Supabase dashboard.** User decisions 1, 2,
+7 settled 2026-08-22, plus an 8th taken mid-build (ceiling-infeasible ⇒ fail closed) and a 9th
+during Phase 2 (the strip cascade must be error-targeted, not positional). Phase 3 remains
+gated — do not start; it needs decision (5) and the two measurements named there.
 
 > **Design verdict: RECONSIDER** (planner, Opus 5). The feature as originally asked
 > — "what did I leave on the table by buying 5 instead of the recommended 26?" —
@@ -244,7 +246,69 @@ rows carry no sizing keys — verify unaffected).
 
 ---
 
-## Phase 2 — Start the clock (mechanical; behind a manual DDL)
+## Phase 2 — Start the clock — CODE SHIPPED 2026-08-23, AWAITING DDL
+
+**ACTION REQUIRED — nothing is captured until this runs.** Paste into the Supabase SQL editor
+(same one-time convention as `model_predictions` / `analyst_target_snapshots`):
+
+```sql
+ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_shares          numeric;
+ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_stop            numeric;
+ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_portfolio_value numeric;
+ALTER TABLE public.recommendations ADD COLUMN IF NOT EXISTS rec_sizing_version  integer;
+```
+
+Until it runs, the writer strips these four columns and retries, so the recommendation log
+keeps working exactly as before — no error, no lost rows, just no sizing captured. **Every day
+before it runs is a day of Phase 3 substrate that cannot be recovered**, because the suggested
+size is computed at render time and discarded.
+
+**Decision (9), taken during the build — the cascade had to change.** The first
+implementation peeled optional-column generations positionally, newest-first. That is wrong: a
+`bq_score`-missing error would strip the sizing columns on the way past, discarding data that
+works because something unrelated is absent — the precise loss this cascade exists to prevent,
+reported as success (`saved=N, error=None`). Caught by the **pre-existing**
+`test_save_recommendations_pgrst204_schema_cache_error_degrades_and_retries`, which encodes a
+real 2026-08-07 production incident. The cascade now reads the column name PostgREST reports
+and strips **only that generation**, repeating if a retry reveals a different one.
+
+**Two scope corrections to what this section originally claimed:**
+1. **`buy_candidate` rows carry no sizing at all** — only `new_picks` and `add_positions` get a
+   `sizing` dict from `_grow_today`. Their four columns stay NULL by design, and **Phase 3 must
+   scope to `new_pick`/`add_winner`** or it will divide by NULL.
+2. **`portfolio_value` was not in scope at the writer** (passed as a kwarg, not held as a
+   local). Rather than re-read a portfolio total at write time — which could disagree with the
+   basis the size was computed from — the **sizing dict now carries its own `portfolio_value`
+   and `sizing_version`**, making a mismatch structurally impossible.
+
+**Opus review: SHIP, 0 blocking.** It hand-verified all 36 substring pairs across the now
+9-member `_OPTIONAL_COLS` for collisions (none), and proved the cascade terminates in every
+branch. Seven non-blocking items taken, three of which mattered:
+1. **The "all four NULL" enumeration was NOT exhaustive** — a fourth state exists and is
+   reachable **post-DDL**: a `new_pick`/`add_winner` row whose sizing *input* was unavailable
+   (no bundle stop for a held name, or no portfolio value) produces no sizing dict, hence four
+   NULLs. So **Phase 3 must filter on a non-null `rec_shares`, never on `rec_date`.** Another
+   instance of a doc claim stronger than the code, which is why it was asked for explicitly.
+2. **First writer of the day wins, and it is usually the CRON** — `cron_runner` logs
+   `new_pick` rows in the morning scan lane, before any interactive session. So the captured
+   size is the **morning-scan suggestion**, not an intraday recompute at the traded price. That
+   is the better take-rate denominator (stable, single-valued), but it is not "what was on
+   screen when I clicked buy" and a Phase 3 caption must not imply otherwise. Corollary: a
+   cron row written with a degraded input **blocks** that day's interactive capture.
+3. **A last-resort strip-all floor was restored.** Error-targeting is a strict improvement,
+   but the pre-targeting code had an unconditional strip-everything terminal stage, and
+   dropping it would have been a resilience regression on a log the recommendation history
+   depends on.
+Also taken: provenance keys are now pinned **per sizing shape** (the renderer-contract test is
+a subset check, so dropping `sizing_version` would have left the suite green while capture
+silently went NULL); the cron writer's sizing pass-through is tested for the first time; the
+`generation <= stripped` anti-infinite-loop guard has a test; the cron row is built once rather
+than mutating `rows[-1]`; and `rec_stop`'s two bases by `rec_type` are documented. Noted but
+not changed: `_REC_COLS` is unextended (matching the F-179/pillar precedent), so
+`load_recommendations` returns a narrower frame on the empty path — **Phase 3 must guard with
+`in df.columns` rather than discovering that live.**
+
+Original spec follows.
 
 Four nullable additive columns on `recommendations`: `rec_shares`, `rec_stop`,
 `rec_portfolio_value`, `rec_sizing_version`. All four are already in scope at both

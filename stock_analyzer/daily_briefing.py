@@ -96,6 +96,17 @@ def _f(val, default=0.0):
         return default
 
 
+# Provenance marker for the SIZING FORMULA, persisted alongside every suggested
+# size (recommendations.rec_sizing_version) so a future formula change can never
+# be silently compared against sizes produced under the old one.
+#   1 = the retired _suggest_size era (hardcoded trend-bucket stops, NO
+#       concentration cap). Never actually persisted — nothing captured sizes
+#       before F-249 — so a NULL in the DB means "pre-capture", not "version 1".
+#   2 = F-249: ceiling-capped risk.position_sizing() off the ATR stop.
+# Bump this whenever the formula changes; do NOT reuse a number.
+SIZING_FORMULA_VERSION = 2
+
+
 def _position_size_for_render(
     portfolio_value: float,
     price: float,
@@ -140,6 +151,8 @@ def _position_size_for_render(
         return {
             "ceiling_infeasible": True,
             "one_share_pct": round(price / portfolio_value * 100, 1),
+            "portfolio_value": round(portfolio_value, 2),
+            "sizing_version": SIZING_FORMULA_VERSION,
         }
     if _reason == "stop":
         # Today's price is at or below the ATR stop for this name. Same marker
@@ -149,6 +162,8 @@ def _position_size_for_render(
         return {
             "stop_infeasible": True,
             "stop_at": round(stop, 2),
+            "portfolio_value": round(portfolio_value, 2),
+            "sizing_version": SIZING_FORMULA_VERSION,
         }
     raw = position_sizing(
         portfolio_value, RISK_PCT_PER_TRADE, price, stop,
@@ -171,6 +186,10 @@ def _position_size_for_render(
         "entry_hi":        entry_hi,
         "ceiling_capped":  raw.get("ceiling_capped", False),
         "uncapped_shares": raw.get("uncapped_shares", raw["shares"]),
+        # Provenance for persistence (Phase 2). Travels WITH the size so the
+        # stored basis can never disagree with the basis it was computed from.
+        "portfolio_value": round(portfolio_value, 2),
+        "sizing_version":  SIZING_FORMULA_VERSION,
     }
 
 

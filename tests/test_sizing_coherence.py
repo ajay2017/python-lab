@@ -34,7 +34,11 @@ from stock_analyzer.constants import (
     RISK_PCT_PER_TRADE,
     SINGLE_NAME_CEILING,
 )
-from stock_analyzer.daily_briefing import _grow_today, _position_size_for_render
+from stock_analyzer.daily_briefing import (
+    SIZING_FORMULA_VERSION,
+    _grow_today,
+    _position_size_for_render,
+)
 from stock_analyzer.risk import position_sizing, sizing_unavailable_reason
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -578,3 +582,43 @@ class TestStopInfeasibleMarker:
         for sz in cases:
             assert sz, "no-size must not degrade to an empty dict — that renders silently"
             assert sz.get("stop_infeasible") or sz.get("ceiling_infeasible")
+
+
+# ── 10. Persistence provenance (F-249 Phase 2) ───────────────────────────────
+
+class TestSizingProvenance:
+    """Every sizing shape must carry the two keys the DB capture reads.
+
+    The renderer-contract test uses a SUBSET check, so dropping
+    `sizing_version` from _position_size_for_render would leave the whole suite
+    green while the capture silently went to NULL -- precisely the silent-loss
+    class Phase 2 exists to prevent. Asserted per shape, not once.
+    """
+
+    def test_full_size_carries_version_and_basis(self):
+        sz = _position_size_for_render(100_000, 100.0, 94.0, 99.0, 101.0)
+        assert sz["sizing_version"] == SIZING_FORMULA_VERSION
+        assert sz["portfolio_value"] == 100_000
+
+    def test_ceiling_marker_carries_version_and_basis(self):
+        sz = _position_size_for_render(10_000, 4_500.0, 4_365.0, None, None)
+        assert sz.get("ceiling_infeasible") is True
+        assert sz["sizing_version"] == SIZING_FORMULA_VERSION
+        assert sz["portfolio_value"] == 10_000
+
+    def test_stop_marker_carries_version_and_basis(self):
+        sz = _position_size_for_render(100_000, 90.0, 94.0, None, None)
+        assert sz.get("stop_infeasible") is True
+        assert sz["sizing_version"] == SIZING_FORMULA_VERSION
+        assert sz["portfolio_value"] == 100_000
+
+    def test_missing_input_carries_nothing(self):
+        """{} must stay bare -- a version with no capture would misreport state.
+
+        The three-state contract reads "version set" as "the app made a sizing
+        decision". A missing-input {} made no decision, so stamping a version
+        on it would make a data gap indistinguishable from a deliberate
+        no-size.
+        """
+        assert _position_size_for_render(0, 100.0, 94.0, None, None) == {}
+        assert _position_size_for_render(100_000, 0.0, 94.0, None, None) == {}

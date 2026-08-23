@@ -5301,6 +5301,26 @@ if page == "🏠 Home":
                             _v = _b2.get("val_score")
                         return _v
 
+                    def _rec_sizing_cols(pick: dict) -> dict:
+                        """The four F-249 Phase 2 sizing columns for one pick.
+
+                        Returns {} when the engine attached no sizing dict at
+                        all, so the columns land NULL rather than 0 — "not
+                        captured" and "suggested nothing" must stay
+                        distinguishable, and rec_sizing_version is what
+                        separates them (set on a deliberate no-size, absent
+                        when nothing was captured).
+                        """
+                        _s = pick.get("sizing")
+                        if not isinstance(_s, dict) or not _s:
+                            return {}
+                        return {
+                            "rec_shares":          _s.get("shares"),
+                            "rec_stop":            _s.get("stop"),
+                            "rec_portfolio_value": _s.get("portfolio_value"),
+                            "rec_sizing_version":  _s.get("sizing_version"),
+                        }
+
                     _rec_rows: list[dict] = []
                     for _p in (_gt_today.get("new_picks") or []):
                         _tk = str(_p.get("ticker", ""))
@@ -5320,6 +5340,11 @@ if page == "🏠 Home":
                             "t_score":          _t_score_for(_tk),
                             "bq_score":         _bq_score_for(_tk),
                             "val_score":        _val_score_for(_tk),
+                            # Sizing capture (F-249 Phase 2). Read straight off
+                            # the sizing dict the engine produced, including the
+                            # portfolio_value it actually sized against — never a
+                            # separately re-read total, which could disagree.
+                            **_rec_sizing_cols(_p),
                         })
                     for _p in (_gt_today.get("add_positions") or []):
                         _tk = str(_p.get("ticker", ""))
@@ -5339,6 +5364,11 @@ if page == "🏠 Home":
                             "t_score":          _t_score_for(_tk),
                             "bq_score":         _bq_score_for(_tk),
                             "val_score":        _val_score_for(_tk),
+                            # Sizing capture (F-249 Phase 2). Read straight off
+                            # the sizing dict the engine produced, including the
+                            # portfolio_value it actually sized against — never a
+                            # separately re-read total, which could disagree.
+                            **_rec_sizing_cols(_p),
                         })
                     for _p in (_daily_brief.get("buy_candidates") or []):
                         _bx = _p.get("xref") or {}

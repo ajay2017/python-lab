@@ -143,7 +143,7 @@ def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
         # same either way per CLAUDE.md's recurring-defect-gate guidance.
         _xref = p.get("xref")
         _verdict = _xref.get("verdict") if isinstance(_xref, dict) else None
-        rows.append({
+        _row = {
             "ticker":           str(tk),
             "rec_date":         rec_date,
             "rec_type":         "new_pick",
@@ -154,7 +154,25 @@ def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
             "conviction":       p.get("conviction", ""),
             "verdict":          _verdict or "",
             "thesis":           p.get("thesis", ""),
-        })
+        }
+        # Sizing capture (F-249 Phase 2) — unlike the pillar scores above, this
+        # IS available on the cron path: compute_morning_picks runs the same
+        # _grow_today, so each pick already carries the sizing dict the cards
+        # and emails render from. Absent dict => columns stay NULL. Built into
+        # the row before appending rather than mutating rows[-1], so a future
+        # `continue` landing between the two cannot silently drop the capture.
+        # NOTE: this lane usually WINS the day (it runs before any interactive
+        # session, and the upsert ignores duplicates), so these are the values
+        # Phase 3 will mostly read.
+        _s = p.get("sizing")
+        if isinstance(_s, dict) and _s:
+            _row.update({
+                "rec_shares":          _s.get("shares"),
+                "rec_stop":            _s.get("stop"),
+                "rec_portfolio_value": _s.get("portfolio_value"),
+                "rec_sizing_version":  _s.get("sizing_version"),
+            })
+        rows.append(_row)
     return rows
 
 
