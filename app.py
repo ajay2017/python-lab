@@ -80,6 +80,15 @@ from stock_analyzer import forward_sim as _fsim
 from stock_analyzer import attribution_readiness as _attr_ready
 from stock_analyzer.personalized_discovery import build_winner_profile
 from stock_analyzer.daily_pnl import compute_positions_day_pnl
+# Module-level (not local at each site) because all three import writers need
+# it and app.py runs top-to-bottom — see feedback_module_def_order.
+from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
+# Note markers imported from the module that DETECTS them, so a reworded
+# writer cannot silently disarm the imported-trade repair.
+from stock_analyzer.trade_time import (
+    NOTE_CSV_IMPORT as _NOTE_CSV_IMPORT,
+    NOTE_TEXT_IMPORT as _NOTE_TEXT_IMPORT,
+)
 from stock_analyzer.rebalancer import (
     equal_weights, compute_drift, build_rebalance_plan,
     TOLERANCE_OK, TOLERANCE_WATCH,
@@ -4500,7 +4509,7 @@ if page == "🏠 Home":
                     if _tdf_dp is not None and not _tdf_dp.empty and "traded_at" in _tdf_dp.columns:
                         _tt = _tdf_dp.copy()
                         _tt["_d"] = (
-                            pd.to_datetime(_tt["traded_at"], utc=True, errors="coerce")
+                            pd.to_datetime(_tt["traded_at"], utc=True, errors="coerce", format="ISO8601")
                             .dt.tz_convert("America/New_York").dt.date
                         )
                         _tt = _tt[_tt["_d"] == _today_et()]
@@ -7623,7 +7632,7 @@ if page == "🏠 Home":
                     if "traded_at" in _do_tdf.columns and "action" in _do_tdf.columns:
                         _do_tdf_c = _do_tdf.copy()
                         _do_tdf_c["_do_date"] = (
-                            pd.to_datetime(_do_tdf_c["traded_at"], utc=True, errors="coerce")
+                            pd.to_datetime(_do_tdf_c["traded_at"], utc=True, errors="coerce", format="ISO8601")
                             .dt.tz_convert("America/New_York").dt.date
                         )
                         _do_buys = _do_tdf_c[
@@ -10425,7 +10434,7 @@ elif page == "🧾 Summary":
                     _sm_win_start, _sm_win_end = _sm_joined.index.min(), _sm_joined.index.max()
                     _sm_t = _sm_tdf.copy()
                     _sm_t["_d"] = (
-                        pd.to_datetime(_sm_t["traded_at"], utc=True, errors="coerce")
+                        pd.to_datetime(_sm_t["traded_at"], utc=True, errors="coerce", format="ISO8601")
                         .dt.tz_convert("America/New_York").dt.date.astype(str)
                     )
                     _sm_t = _sm_t[_sm_t["action"].astype(str).str.upper().isin(["BUY", "SELL"])]
@@ -23899,7 +23908,13 @@ elif page == "📒 Trade Journal":
                 # NULL, exactly as before this feature existed.
                 if _is_broker_trade:
                     record["broker_txn_id"] = _broker_prefill.get("snaptrade_txn_id")
-                    record["traded_at"]     = _broker_prefill.get("trade_date")
+                    # Anchor to a real ET time rather than sending the bare
+                    # date — Postgres would cast that to midnight UTC, i.e. the
+                    # prior EVENING in ET, dating the trade a day early for
+                    # every ET reader. See market_time.et_anchor_iso.
+                    _bp_date = _broker_prefill.get("trade_date")
+                    if _bp_date:
+                        record["traded_at"] = _et_anchor_iso(_bp_date)
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 if action == "SELL":
                     st.session_state["_tj_pending_sell"] = record
@@ -24946,15 +24961,29 @@ elif page == "📒 Trade Journal":
                                     _bi_n_ok   = 0
                                     _bi_n_fail = 0
                                     for _, _bi_row in _bi_sel.iterrows():
-                                        _bi_rec = {
-                                            "ticker":       str(_bi_row["Ticker"]),
-                                            "action":       str(_bi_row["Action"]),
-                                            "shares":       float(_bi_row["Shares"]),
-                                            "price":        float(_bi_row["Price"]),
-                                            "traded_at":    str(_bi_row["Date"]),
-                                            "trigger_type": "MANUAL",
-                                            "notes":        f"Robinhood import {_bi_today_str}",
-                                        }
+                                        # Real try/except, matching the RH-text
+                                        # path. A truthiness guard is NOT enough:
+                                        # "Date" is `.astype(str)`, so the realistic
+                                        # bad value is the TRUTHY string "None"/"NaT",
+                                        # which would sail through and raise
+                                        # ValueError out of date.fromisoformat —
+                                        # mid-loop, with earlier rows already inserted
+                                        # and nothing counting the failure.
+                                        try:
+                                            _bi_rec = {
+                                                "ticker":       str(_bi_row["Ticker"]),
+                                                "action":       str(_bi_row["Action"]),
+                                                "shares":       float(_bi_row["Shares"]),
+                                                "price":        float(_bi_row["Price"]),
+                                                # ET-anchored, not a bare date — see
+                                                # market_time.et_anchor_iso.
+                                                "traded_at":    _et_anchor_iso(_bi_row["Date"]),
+                                                "trigger_type": "MANUAL",
+                                                "notes":        f"{_NOTE_CSV_IMPORT} {_bi_today_str}",
+                                            }
+                                        except (TypeError, ValueError):
+                                            _bi_n_fail += 1
+                                            continue
                                         if db.save_trade(_bi_rec):
                                             _bi_n_ok += 1
                                         else:
@@ -25269,9 +25298,11 @@ elif page == "📒 Trade Journal":
                                                 "action":       str(_ss_row["Action"]),
                                                 "shares":       float(_ss_row["Shares"]),
                                                 "price":        float(_ss_row["Price"]),
-                                                "traded_at":    str(_ss_row["Date"]),
+                                                # ET-anchored, not a bare date —
+                                                # see market_time.et_anchor_iso.
+                                                "traded_at":    _et_anchor_iso(_ss_row["Date"]),
                                                 "trigger_type": "MANUAL",
-                                                "notes":        f"RH text import {_ss_today_str}",
+                                                "notes":        f"{_NOTE_TEXT_IMPORT} {_ss_today_str}",
                                             }
                                         except (TypeError, ValueError):
                                             _ss_n_fail += 1
@@ -33386,7 +33417,7 @@ elif page == "🧠 AI Insights":
                     ].copy()
                     if not _sc_t_sells.empty:
                         _sc_t_sells["_d"] = (
-                            pd.to_datetime(_sc_t_sells["traded_at"], utc=True, errors="coerce")
+                            pd.to_datetime(_sc_t_sells["traded_at"], utc=True, errors="coerce", format="ISO8601")
                             .dt.tz_convert("America/New_York").dt.date
                         )
                         _sc_after = _sc_t_sells[_sc_t_sells["_d"] > _sc_adate]
@@ -35637,7 +35668,7 @@ elif page == "🎯 My Edge":
                         continue
                     try:
                         _bf_et = pd.to_datetime(
-                            r["acted_trade"]["traded_at"], utc=True
+                            r["acted_trade"]["traded_at"], utc=True, format="ISO8601"
                         ).tz_convert("America/New_York").time()
                     except Exception:
                         continue

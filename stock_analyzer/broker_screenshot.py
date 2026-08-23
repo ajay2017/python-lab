@@ -463,7 +463,7 @@ def find_app_only_in_range(
             continue
 
         try:
-            traded_at = pd.to_datetime(row.get("traded_at"), utc=True, errors="coerce")
+            traded_at = pd.to_datetime(row.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
             if pd.isnull(traded_at):
                 continue
             row_date = traded_at.date()
@@ -515,7 +515,7 @@ def last_screenshot_sync_date(trades_df) -> Optional[datetime.date]:
     if subset.empty:
         return None
 
-    dates = pd.to_datetime(subset["traded_at"], utc=True, errors="coerce").dropna()
+    dates = pd.to_datetime(subset["traded_at"], utc=True, errors="coerce", format="ISO8601").dropna()
     if dates.empty:
         return None
     return dates.max().date()

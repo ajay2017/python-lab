@@ -297,7 +297,7 @@ def classify_against_existing(
             agkey = (eticker, eaction, eshares, eprice)
             existing_agnos[agkey] += 1
             # utc=True handles mixed ISO 8601 offset formats in traded_at
-            edt = pd.to_datetime(erow.get("traded_at"), utc=True, errors="coerce")
+            edt = pd.to_datetime(erow.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
             if not pd.isnull(edt):
                 existing_exact[(edt.date(), *agkey)] += 1
 

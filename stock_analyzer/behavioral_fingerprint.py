@@ -309,7 +309,7 @@ def signal_response_rate_pattern(
             return None
 
         # Build a set of (ticker, sell_date) pairs for fast lookup.
-        sells["_sell_date"] = pd.to_datetime(sells["traded_at"], utc=True, errors="coerce").dt.date
+        sells["_sell_date"] = pd.to_datetime(sells["traded_at"], utc=True, errors="coerce", format="ISO8601").dt.date
         sells = sells.dropna(subset=["_sell_date"])
         sell_pairs = set(zip(sells["ticker"].str.upper(), sells["_sell_date"]))
 
@@ -375,7 +375,7 @@ def signal_lag_pattern(
         if sells.empty:
             return None
 
-        sells["_sell_date"] = pd.to_datetime(sells["traded_at"], utc=True, errors="coerce").dt.date
+        sells["_sell_date"] = pd.to_datetime(sells["traded_at"], utc=True, errors="coerce", format="ISO8601").dt.date
         sells = sells.dropna(subset=["_sell_date"])
         # Build a mapping ticker -> sorted list of sell dates for fast lookup.
         from collections import defaultdict
@@ -548,7 +548,7 @@ def escalation_ignored_pattern(
             sells_df = trades_df[trades_df["action"] == "SELL"].copy()
             if not sells_df.empty:
                 sells_df["_sell_date"] = pd.to_datetime(
-                    sells_df["traded_at"], utc=True, errors="coerce"
+                    sells_df["traded_at"], utc=True, errors="coerce", format="ISO8601"
                 ).dt.date
                 sells_df = sells_df.dropna(subset=["_sell_date"])
                 from collections import defaultdict

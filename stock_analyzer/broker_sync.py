@@ -281,7 +281,7 @@ def classify_transactions(rh_txns: list[dict] | None, existing_trades: pd.DataFr
                 eprice = round(float(erow.get("price") or 0), 2)
             except (TypeError, ValueError):
                 continue
-            edt = pd.to_datetime(erow.get("traded_at"), utc=True, errors="coerce")
+            edt = pd.to_datetime(erow.get("traded_at"), utc=True, errors="coerce", format="ISO8601")
             if pd.isnull(edt):
                 continue
             key = (edt.date(), eticker, eaction, eshares, eprice)

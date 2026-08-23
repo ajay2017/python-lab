@@ -1523,6 +1523,20 @@ PREDICTION_BACKFILL_PERIOD = "5y"
 # (staleness banners, dedup tolerance, fetch bounds) so they live here per
 # hard rule #1 rather than as module-local literals.
 
+# Assumed ET fill time for an IMPORTED trade that carries a date but no time
+# (broker sync / CSV / RH-text). Those writers send a bare date, Postgres casts
+# it to midnight UTC in a `timestamptz` column, and midnight UTC is the PRIOR
+# EVENING in ET — so every `tz_convert("America/New_York")` reader dated the
+# trade a day early. See `stock_analyzer/trade_time.py`.
+#
+# CONSTRAINED, not free: must be >= 0 and < 19, or the anchor changes the UTC
+# calendar day too, silently re-dating every UTC-date reader — including
+# tax_advisor's lot dates and broker_sync's dedup key. 16:00 ("market close")
+# is honest for an unknown fill time and sorts imports after the regular
+# session. `tests/test_trade_time.py` pins the safe band so a future edit past
+# it fails loudly instead of quietly moving a tax lot.
+IMPORTED_TRADE_ANCHOR_ET_HOUR = 16
+
 # Share-count tolerance before a held ticker counts as a real quantity
 # mismatch rather than rounding noise. Absorbs fractional-share noise from
 # SnapTrade's position feed vs the app's trades-derived shares — not a real

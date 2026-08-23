@@ -1020,7 +1020,25 @@ def load_trades_or_none() -> "pd.DataFrame | None":
                     "premortem_trigger_direction"):
             if col not in df.columns:
                 df[col] = None
-        return df
+        # Re-anchor imported trades that carry a date but no time. They land as
+        # midnight UTC, which is the PRIOR EVENING in ET, so every
+        # tz_convert("America/New_York") reader dated them a day early — a wrong
+        # Today's-P&L figure and a whiplash suppression that failed open. Done
+        # HERE because this is the single choke point every reader passes
+        # through; the alternative was ~20 call sites that fail in two opposite
+        # directions. Provenance-gated and fail-closed — see trade_time.py.
+        # Isolated from the read's except: this shim is PURE LOGIC, and letting
+        # its exceptions fall through would record a DB error, render "⛔ Trades
+        # read error" and return the offline sentinel — which F-243's outage
+        # gate escalates to refusing to render the portfolio at all. A shim bug
+        # would be misdiagnosed as a Supabase outage. Fail open to the unrepaired
+        # frame instead: a day-early import date is far better than a fake outage.
+        try:
+            from stock_analyzer.trade_time import normalize_traded_at
+            return normalize_traded_at(df)
+        except Exception as _tt_err:          # noqa: BLE001 — never mask a real read
+            print(f"trade_time.normalize_traded_at failed, using raw frame: {_tt_err}")
+            return df
     except Exception as e:
         err = str(e)
         _record_db_error(err[:120])

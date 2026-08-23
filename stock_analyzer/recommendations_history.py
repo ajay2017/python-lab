@@ -79,9 +79,18 @@ def match_recs_to_trades(recs_df, trades_df) -> list[dict]:
     enriched with `acted_on`, `acted_trade` (the matching trade row or None),
     and normalized fields suitable for downstream consumption.
 
-    SAME-DAY semantics: rec_date must equal traded_at::date in NY ET. Acting
-    a day later is treated as a distinct decision, not as following the
+    SAME-DAY semantics: rec_date must equal traded_at's **UTC** calendar date.
+    Acting a day later is treated as a distinct decision, not as following the
     recommendation.
+
+    This said "in NY ET" until 2026-08-23 and that was FALSE — `_to_date` above
+    takes `str(v)[:10]`, i.e. the UTC date. Do not "fix" the code to match the
+    old docstring: converting this to `tz_convert("America/New_York")` would
+    move it into the failure class that broke Today's P&L and `risk_advisor`
+    (imported trades land at midnight UTC = the prior ET evening), silently
+    breaking F-233 self-track and F-247 acted/passed matching. `trade_time.py`
+    re-anchors imported rows at load, so both readings now agree in practice —
+    but the UTC reading is the one this function is written against.
     """
     if recs_df is None or len(recs_df) == 0:
         return []

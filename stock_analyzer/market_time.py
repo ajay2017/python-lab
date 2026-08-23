@@ -41,3 +41,28 @@ def today_et() -> date:
     `trade_analytics.py`.
     """
     return now_et().date()
+
+
+def et_anchor_iso(day, hour: int | None = None) -> str:
+    """A bare trade DATE → an ISO timestamp anchored at `hour` ET that day.
+
+    For the import writers (broker sync / CSV / RH-text), which know the day a
+    fill happened but not the time. Sending the bare date instead lets Postgres
+    cast it to midnight UTC in a `timestamptz` column — and midnight UTC is the
+    PRIOR EVENING in ET, so every ET reader dates the trade a day early. That
+    was a live wrong number in Today's P&L and a whiplash suppression that
+    failed open.
+
+    `stock_analyzer.trade_time` repairs rows already written that way; this
+    stops new ones being created, so the repair only ever covers legacy data.
+
+    `hour` defaults to `IMPORTED_TRADE_ANCHOR_ET_HOUR`, imported lazily so this
+    module stays free of a constants dependency for its two original callers.
+    """
+    from stock_analyzer.constants import IMPORTED_TRADE_ANCHOR_ET_HOUR
+    if hour is None:
+        hour = IMPORTED_TRADE_ANCHOR_ET_HOUR
+    d = date.fromisoformat(str(day)[:10]) if not isinstance(day, date) else day
+    # localize() rather than replace(tzinfo=...) — pytz zones carry a historical
+    # LMT offset that replace() would silently apply (the classic -04:56 bug).
+    return ET.localize(datetime(d.year, d.month, d.day, int(hour), 0, 0)).isoformat()

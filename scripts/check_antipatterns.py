@@ -40,6 +40,27 @@ Rules (each an AST signature, low false-positive by design):
   NAIVE_DATE_TODAY           — bare `date.today()` / `datetime.today()`; off-by-
       one across ~8pm-midnight ET vs the project's NY-tz convention. Use the
       shared trading-day / _today_et helper on any date that feeds a decision.
+  MIXED_TZ_PARSE             — `pd.to_datetime(...)` on `traded_at` WITHOUT
+      `format="ISO8601"`. pandas infers a strict format from the first non-null
+      value, so a column mixing microsecond and second precision silently
+      coerces the non-matching rows to NaT — and `traded_at` genuinely mixes
+      (raw-SQL inserts vs Postgres `now()`; see db.recalculate_from_trades).
+      `utc=True` alone does NOT fix it. THIRD recurrence of this one class
+      (2026-05-28, 2026-08-02, then eight sites at once on 2026-08-23) is what
+      earned it a gate. Scoped to `traded_at` only: it is the column with a
+      PROVEN mixed writer. `snapshot_date` is a plain `date` (no time to vary)
+      and `surfaced_at` is written solely through the SDK — gating on those
+      would be an inferred premise. The kwarg VALUE is checked, not merely its
+      presence: `format=None` is definitionally the inferred-format behaviour
+      this bans, and an explicit strptime format reproduces the original defect
+      exactly — both would otherwise read as compliant.
+      LIMIT, stated honestly: detection is an AST filter plus a substring scan of
+      the call source, so a parse whose column name is ALIASED into a local first
+      (`_ta = row.get("traded_at")` then `pd.to_datetime(_ta, ...)`, as in
+      risk_advisor) is NOT caught. Those happen to be scalar and so are immune,
+      but do not read a green gate as proof that every parse carries the kwarg.
+      This rule currently baselines at ZERO, so any hit is a real finding.
+      Memory `feedback_pandas_mixed_tz_parsing`.
 
 Baseline: like check_constants_documented.py, a snapshot of the existing tail is
 recorded (scripts/antipattern_baseline.json) so CI is green on day one and only
@@ -139,6 +160,28 @@ class _Visitor(ast.NodeVisitor):
                 html_arg = node.args[0] if node.args else None
                 if html_arg is not None and _is_dynamic_html(html_arg):
                     self.hits.append(("UNSAFE_HTML_DYNAMIC", self._seg(node)))
+        # MIXED_TZ_PARSE — pd.to_datetime on a mixed-precision timestamptz
+        # column without format="ISO8601". THIRD recurrence of one bug class
+        # (2026-05-28, 2026-08-02, 2026-08-23 at eight sites at once), which is
+        # what earns it a gate. pandas infers a strict format from the first
+        # non-null value, so a column mixing microsecond and second precision —
+        # which `trades.traded_at` genuinely does, raw-SQL rows vs Postgres
+        # `now()` — silently coerces the non-matching rows to NaT. `utc=True`
+        # alone does NOT fix it. Memory `feedback_pandas_mixed_tz_parsing`.
+        _fn = node.func.attr if isinstance(node.func, ast.Attribute) else \
+              getattr(node.func, "id", None)
+        _has_iso = any(
+            kw.arg == "format"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value == "ISO8601"
+            for kw in node.keywords
+        )
+        if _fn == "to_datetime" and not _has_iso:
+            # Scope to the known-mixed columns rather than every parse in the
+            # repo — a false positive here costs a harmless extra kwarg, but a
+            # broad rule would bury the signal.
+            if "traded_at" in self._seg(node):
+                self.hits.append(("MIXED_TZ_PARSE", self._seg(node)))
         # NAIVE_UTCNOW / NAIVE_DATE_TODAY
         if isinstance(node.func, ast.Attribute):
             if node.func.attr == "utcnow":
@@ -264,6 +307,9 @@ def main() -> int:
             "unsafe_allow_html (stock_analyzer.util.safe_html / html.escape).\n"
             "  NAIVE_UTCNOW/DATE_TODAY   → use the NY-tz trading-day helper "
             "(stock_analyzer.market_time), not naive utcnow()/date.today().\n"
+            "  MIXED_TZ_PARSE            → add format=\"ISO8601\"; utc=True "
+            "ALONE does not fix mixed microsecond precision — it silently NaTs "
+            "rows. This rule baselines at ZERO; do NOT --init past it.\n"
             "If an instance is genuinely acceptable, regenerate the baseline "
             "deliberately: python scripts/check_antipatterns.py --init\n"
         )

@@ -251,7 +251,7 @@ def turnover(trades_df, snaps_df, *, lookback_days: int = 180) -> dict | None:
     try:
         # utc=True per the mixed-offset convention — traded_at has been written
         # by several paths and pandas coerces mixed ISO offsets to NaT without it.
-        tdates = pd.to_datetime(trades_df["traded_at"], errors="coerce", utc=True)
+        tdates = pd.to_datetime(trades_df["traded_at"], errors="coerce", utc=True, format="ISO8601")
         action = trades_df["action"].astype(str).str.upper()
         is_real_trade = ~action.str.contains("SPLIT", na=False)
         notional = (
