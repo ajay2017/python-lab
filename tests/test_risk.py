@@ -92,6 +92,12 @@ def test_position_sizing_basic_calculation():
 def test_position_sizing_shares_floor_at_one():
     # A tiny risk budget with a large risk-per-share would compute < 1 share
     # -- must floor at 1, never 0 or negative.
+    #
+    # NOTE (F-249): this floor applies to the RISK-BUDGET size only, and this
+    # call deliberately passes NO max_position_pct. Once a ceiling is supplied,
+    # a position that can't afford one whole share is no longer floored to 1 --
+    # it returns None (see sizing_unavailable_reason / test_sizing_coherence.py),
+    # because forcing one share there breached the ceiling silently.
     result = position_sizing(portfolio_value=1_000, risk_pct=0.001, entry=500.0, stop=400.0)
     assert result["shares"] == 1
 

@@ -222,6 +222,14 @@ TRIM/EXIT floors are **ATR-scaled** (a quiet name trips tight, a jumpy one gets 
 
 **Position sizing:** `RISK_PCT_PER_TRADE` = **1.5%** of portfolio risked per trade (Moderate). Add-to-winner requires the position sit ≥ `ADD_WINNER_MIN_GAP_PCT` (8%) above its stop, and a 10-day cooldown after an add (`ADD_WINNER_COOLDOWN_DAYS`) to avoid re-nudging a buy you just made.
 
+Every surface that suggests a share count — Grow Today new picks, add-to-winner cards, Analysis, Watchlist, and the cron emails — routes through **one** function, `risk.position_sizing()`, off the same ATR stop (`price − ATR_STOP_MULT × ATR(14)`). Size is the risk budget divided by the per-share risk, then **capped at `SINGLE_NAME_CEILING` (15%)**; when the cap binds, the card says so and states what the uncapped risk-budget size would have been. **A suggested size is a per-idea maximum, not a portfolio plan** — at 15% each, a book funds ~6 concurrent full positions, so the sizes are not meant to be taken simultaneously across every idea on screen. (Before F-249, Grow Today used a separate uncapped estimator and suggested 18.75–30% of the book; see the F-249 row in [requirements.md](requirements.md).)
+
+**One caveat on adds — the cap is applied to the add in isolation, not to the resulting position.** For an add-to-winner the 15% ceiling bounds *the shares being added*, not (ceiling − current weight), so adding a full-size tranche to a position already near the ceiling can leave you above it. This is a known gap recorded in [architecture.md](architecture.md); it is a strict improvement over the previous uncapped behaviour, but do not read "capped at 15%" as a guarantee that an add cannot take a single name past 15%. The concentration gates on 🔗 Risk Analysis and the Rebalancer still measure the *resulting* position and will flag it.
+
+Two cases suggest **no size at all**, each with a caption saying which: one share already exceeding the ceiling (an account-size constraint — no stop change fixes it), or a price at/below the name's ATR stop (no room between entry and stop to size against). Neither ever renders a blank size line silently.
+
+The Grow Today footer line states **risk**, not capital: "at 1.5% risk per trade across N setups, you'd be risking ~$X if every stop hits." That figure is the total you lose if every stop triggers — it is *not* the cash to deploy, which is the sum of the individual card costs and is far larger.
+
 **Portfolio risk** (`risk.py` / `risk_advisor.py`): beta target 1.0, soft-warn > 1.3 (`PORTFOLIO_BETA_ELEVATED`), hard breach > 1.4 (`PORTFOLIO_BETA_CEILING`). Sharpe/volatility/drawdown/tail-risk each fire a tiered HIGH/MEDIUM action or a congratulatory OK card off their own constant ladders (e.g. Sharpe: HIGH < 0.4, action < 0.8, OK ≥ 1.0). **Fragility gauge** (F-09a) measures how a routine −10% pullback (`FRAGILITY_PULLBACK_PCT`) would hit *this* book — exposure, not a forecast of timing.
 
 ## II.6 Macro & regime

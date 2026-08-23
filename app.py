@@ -62,7 +62,7 @@ from stock_analyzer.fundamentals import (
 )
 from stock_analyzer.sentiment import analyze_news, sentiment_score_0_100
 from stock_analyzer.scoring import combined_score, recommendation
-from stock_analyzer.risk import atr_stop_loss, position_sizing, compute_all_risk, compute_portfolio_risk_metrics, rate_sensitivity_per_ticker
+from stock_analyzer.risk import atr_stop_loss, position_sizing, sizing_unavailable_reason, compute_all_risk, compute_portfolio_risk_metrics, rate_sensitivity_per_ticker
 from stock_analyzer.risk_advisor import build_risk_advisor_recommendations
 from stock_analyzer.perf_advisor import compute_attribution, build_perf_recommendations
 from stock_analyzer.earnings_advisor import build_earnings_playbook
@@ -7123,6 +7123,14 @@ if page == "🏠 Home":
                 "</div></div>",
                 unsafe_allow_html=True,
             )
+            # Per-idea maximum note — the suggested size is a per-idea maximum,
+            # not a portfolio plan. N is derived from SINGLE_NAME_CEILING, never
+            # hardcoded, so this stays accurate if the policy constant changes.
+            st.caption(
+                f"Suggested sizes are per-idea maximums, not a portfolio plan — "
+                f"at {int(SINGLE_NAME_CEILING)}% each, a book funds "
+                f"~{int(100 / SINGLE_NAME_CEILING)} concurrent full positions."
+            )
             # Pre-open note (panel-level, single line, NOT per-card).
             # Shows only in Pre-Market — prices are provisional until the
             # 9:30 ET open. On weekends/holidays/after-hours/closed we omit
@@ -7161,7 +7169,12 @@ if page == "🏠 Home":
             _vc         = _reconciled.get("color") or _gx.get("verdict_color", "#22c55e")
             _vl         = _reconciled.get("label") or _gx.get("verdict_label", "")
             _v_one      = _reconciled.get("one_liner") or _gx.get("verdict_one_liner", "")
-            _sz         = _gp.get("sizing", {})
+            _sz         = _gp.get("sizing")
+            # Explicit dict check, not `or {}` — that idiom is the
+            # offline-sentinel-collapse antipattern the recurring-defect gate
+            # blocks repo-wide. Guards a legacy/hand-edited cached brief whose
+            # "sizing" key exists but is null.
+            _sz         = _sz if isinstance(_sz, dict) else {}
             _conv       = _gp.get("conviction", "unverified")
             _comp_sc    = _gp.get("composite_score")   # None if not yet fetched
             _comp_lbl   = _gp.get("composite_label", "")
@@ -7309,7 +7322,7 @@ if page == "🏠 Home":
                    f"Entry zone ${_sz.get('entry_lo', _gp['price']):.2f}–${_sz.get('entry_hi', _gp['price']):.2f} "
                    f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
                    f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
-                   f"</div>" if _sz else "")
+                   f"</div>" if _sz.get('shares') else "")
                 + (
                     f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
                     + (f"<div style='color:#cbd5e1;font-size:0.78em;font-weight:600;background:#0f172a;"
@@ -7326,6 +7339,25 @@ if page == "🏠 Home":
                 + f"</div>",
                 unsafe_allow_html=True,
             )
+            # Single-name ceiling disclosure — never silently cap; state what
+            # the risk-budget size would have been (CLAUDE.md never-silently-filter).
+            if _sz.get("ceiling_capped"):
+                st.caption(
+                    f"📐 Size reduced to the {int(SINGLE_NAME_CEILING)}% single-name ceiling. "
+                    f"Risk-budget size would be {_sz['uncapped_shares']} shares."
+                )
+            elif _sz.get("ceiling_infeasible"):
+                st.caption(
+                    f"📐 No size suggested — one share is ~{_sz['one_share_pct']:.0f}% of your "
+                    f"book, above the {int(SINGLE_NAME_CEILING)}% single-name ceiling. This name "
+                    f"is too large for this account at the current cap."
+                )
+            elif _sz.get("stop_infeasible"):
+                st.caption(
+                    f"📐 No size suggested — today's price is at or below this name's "
+                    f"${_sz['stop_at']:,.2f} ATR stop, so there is no room between entry and stop "
+                    f"to size against."
+                )
             _ac_cov = _ac_cov_map.get(str(_gp["ticker"]).upper())
             if _ac_cov and (_ac_cov.get("consensus_rating") or _ac_cov.get("avg_pt") is not None):
                 _ac_parts = []
@@ -7560,7 +7592,8 @@ if page == "🏠 Home":
         if add_pos:
             st.markdown("**➕ Add to Winning Positions**")
         for _ga in add_pos:
-            _sz = _ga.get("sizing", {})
+            _sz = _ga.get("sizing")
+            _sz = _sz if isinstance(_sz, dict) else {}
             _ga_steady_chip = ""
             if _ga.get("_hysteresis", {}).get("stable"):
                 _ga_steady_chip = (
@@ -7584,13 +7617,35 @@ if page == "🏠 Home":
                 f"💡 <em>{_ga['thesis']}</em></div>"
                 + (f"<div style='color:#6b7280;font-size:0.78em;margin-top:4px'>"
                    f"📐 Add: {_sz.get('shares',0)} shares ≈ ${_sz.get('total_cost',0):,.0f} "
-                   f"· Stop ~${_sz.get('stop',0):.2f}</div>" if _sz else "")
+                   # "Sizing stop", not "stop" — this is the fresh-entry ATR stop the
+                   # add is sized against, deliberately NOT the ratcheted/manual
+                   # protective stop the thesis line's "% above stop" measures from
+                   # (the ratchet stop sits higher, which would suggest MORE shares
+                   # and systematically over-buy into strength). Two different
+                   # numbers, so they get two different labels.
+                   f"· Sizing stop ~${_sz.get('stop',0):.2f}</div>" if _sz.get('shares') else "")
                 + (f"<div style='color:#cbd5e1;font-size:0.78em;margin-top:6px;font-weight:600;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:2px 10px;display:inline-block'>"
                    f"⏱ First surfaced: {_fmt_first_seen(_ga.get('_first_seen_at'))}"
                    f"</div>" if _ga.get("_first_seen_at") else "")
                 + f"</div>",
                 unsafe_allow_html=True,
             )
+            # Single-name ceiling disclosure for add-to-winner cards.
+            if _sz.get("ceiling_capped"):
+                st.caption(
+                    f"📐 Add size reduced to the {int(SINGLE_NAME_CEILING)}% single-name ceiling. "
+                    f"Risk-budget size would be {_sz['uncapped_shares']} shares."
+                )
+            elif _sz.get("ceiling_infeasible"):
+                st.caption(
+                    f"📐 No add size suggested — one share is ~{_sz['one_share_pct']:.0f}% of your "
+                    f"book, above the {int(SINGLE_NAME_CEILING)}% single-name ceiling."
+                )
+            elif _sz.get("stop_infeasible"):
+                st.caption(
+                    f"📐 No add size suggested — price is at or below this name's "
+                    f"${_sz['stop_at']:,.2f} ATR sizing stop."
+                )
             if _ga.get("sector_elevated_warning"):
                 st.caption(f"⚠️ {_ga['sector_elevated_warning']}")
 
@@ -20279,7 +20334,23 @@ elif page == "📈 Analysis":
                         # Neither of the two banners above fired, yet Position Sizing
                         # still didn't render — say so rather than silently vanishing
                         # (matches Watchlist's equivalent caption for the same gap).
-                        st.caption("Position sizing unavailable — stop price too close to entry or not set.")
+                        # Ask the shared detector WHICH condition suppressed it: a
+                        # degenerate stop is a data problem the user can inspect,
+                        # while a ceiling that can't afford one share is an
+                        # account-size constraint no stop change will ever fix.
+                        # Before F-249 this said "stop too close" for both, blaming
+                        # the stop while a healthy 2xATR stop rendered right above.
+                        if sizing_unavailable_reason(
+                            portfolio_value, price, r["stop"], SINGLE_NAME_CEILING
+                        ) == "ceiling":
+                            st.caption(
+                                f"Position sizing unavailable — one share is "
+                                f"~{price / portfolio_value * 100:.0f}% of your portfolio, above the "
+                                f"{int(SINGLE_NAME_CEILING)}% single-name ceiling. The stop is fine; "
+                                f"this name is too large for this account at the current cap."
+                            )
+                        else:
+                            st.caption("Position sizing unavailable — stop price too close to entry or not set.")
 
                     if targets:
                         st.markdown("#### Price Scenarios")
@@ -22000,7 +22071,18 @@ elif page == "📋 Watchlist":
                             f"~{_wl_ps['uncapped_pct']:.0f}%)"
                         )
                 elif _price:
-                    st.caption("Position sizing unavailable — stop price too close to entry or not set.")
+                    # Same two-cause split as Analysis — see the note there.
+                    if sizing_unavailable_reason(
+                        _pv_now, _price, _stop, SINGLE_NAME_CEILING
+                    ) == "ceiling" and _pv_now:
+                        st.caption(
+                            f"Position sizing unavailable — one share is "
+                            f"~{_price / _pv_now * 100:.0f}% of your portfolio, above the "
+                            f"{int(SINGLE_NAME_CEILING)}% single-name ceiling. The stop is fine; "
+                            f"this name is too large for this account at the current cap."
+                        )
+                    else:
+                        st.caption("Position sizing unavailable — stop price too close to entry or not set.")
 
             # Detail recommendation
             st.markdown(
@@ -30548,6 +30630,12 @@ Once your trades are logged and reconciled (see *First run* above), your daily r
 The Home brief is split into **offense** (left) and **defense** (right).
 
 **Left — Grow Today / High-Conviction Entries:** new positions to initiate and adds to existing winners, sized within position-sizing rules. In a flat or down market this collapses to "Defer New Entries" — the app won't push you to deploy into a falling tape.
+
+**About the suggested share count.** It comes from the same sizing rule the whole app uses: risk 1.5% of the book on the trade, with the stop set 2× ATR below price, then **cap the position at the 15% single-name ceiling**. Three things follow. First, when the cap binds, the card says so and tells you what the uncapped risk-budget size would have been — it never quietly shrinks a number on you. Second, **a suggested size is a per-idea maximum, not a portfolio plan**: at 15% apiece a book only funds about six full positions, so the sizes on screen are not meant to be taken all at once. Third, the app will suggest **no size at all** — and say which of the two reasons applies — when a single share would already exceed the ceiling (that's an account-size limit; changing the stop won't fix it) or when the price has fallen to or below the name's ATR stop (no room between entry and stop to size against). It never leaves the size line blank without a reason.
+
+**One caveat on adds.** For an add-to-winner the cap bounds *the shares being added*, not the position you end up with — so a full-size add onto a name already near 15% can leave it above 15%. That's a known limitation, not a bug you're seeing; the concentration checks on 🔗 Risk Analysis and the Rebalancer still measure the *resulting* position and will flag it.
+
+The footer line beneath the cards states **risk, not capital** — "you'd be risking ~$X if every stop hits" is what you lose if every one of those trades goes against you, not the cash to deploy.
 
 **Right — three lanes, by urgency:**
 - **🔴 Act Today (decisions only)** — genuine trade decisions for *today*: a stop breached, a sell signal, a **deterioration trim or exit** on a position that's rolling over (see *loss protection* below), a sized trim, breaking critical news. If there's nothing here you'll see **"✅ Nothing to act on — you're set for today."**

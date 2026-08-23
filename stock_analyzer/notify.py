@@ -14,7 +14,43 @@ import re
 
 import requests
 
+from stock_analyzer.constants import SINGLE_NAME_CEILING
+
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
+
+
+def _sizing_cap_note(sz: dict) -> str:
+    """Concentration-cap disclosure row for an email card, or "" when silent.
+
+    Three distinct cases, none of which may pass unexplained (an email that
+    silently drops the size line reads as "no opinion" rather than "the cap
+    bound"):
+      * ceiling_capped     — a size was suggested, but trimmed to the cap.
+      * ceiling_infeasible — one share alone breaches the cap, so no size was
+                             suggested at all.
+      * stop_infeasible    — price is at/below the name's ATR stop, so there is
+                             no room between entry and stop to size against.
+    All interpolated values are numbers this module computed, not free text.
+    """
+    if sz.get("ceiling_capped") and sz.get("uncapped_shares") is not None:
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 Size capped at {int(SINGLE_NAME_CEILING)}% single-name limit — '
+            f'risk-budget size would be {int(sz["uncapped_shares"])} shares.</div>'
+        )
+    if sz.get("ceiling_infeasible") and sz.get("one_share_pct") is not None:
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 No size suggested — one share is ~{float(sz["one_share_pct"]):.0f}% of the book, '
+            f'above the {int(SINGLE_NAME_CEILING)}% single-name ceiling.</div>'
+        )
+    if sz.get("stop_infeasible") and sz.get("stop_at") is not None:
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 No size suggested — price is at or below this name&#39;s '
+            f'${float(sz["stop_at"]):,.2f} ATR stop.</div>'
+        )
+    return ""
 
 # Per-kind accent + headline label for the email cards.
 _KIND_STYLE = {
@@ -312,6 +348,7 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
         _lo, _hi = sz.get("entry_lo"), sz.get("entry_hi")
         _sh, _tc = sz.get("shares"), sz.get("total_cost")
         _stop, _pp = sz.get("stop"), sz.get("port_pct")
+        _cap_note  = _sizing_cap_note(sz)
 
         score_bits = []
         if score is not None: score_bits.append(f"Momentum {float(score):.0f}")
@@ -344,6 +381,7 @@ def render_buy_picks_email(picks: list[dict], built_at: str) -> tuple[str, str]:
           {f'<div style="color:#f1f5f9;font-size:14px;margin-top:6px"><b style="color:#22c55e">→ BUY:</b> {act_str}</div>' if act_str else ''}
           {f'<div style="color:#fbbf24;font-size:12px;margin-top:3px">⚠️ {guard}</div>' if guard else ''}
           {f'<div style="color:#a8a29e;font-size:12px;margin-top:4px">{thesis}</div>' if thesis else ''}
+          {_cap_note}
         </div>""")
 
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
@@ -396,6 +434,7 @@ def render_daily_action_email(
     _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
     _sh, _tc   = sz.get("shares"), sz.get("total_cost")
     _stop, _pp = sz.get("stop"), sz.get("port_pct")
+    _cap_note  = _sizing_cap_note(sz)
     day     = top_pick.get("day_change")
 
     is_high_conviction = (comp or 0) >= SCAN_TOP_PICK_MIN_COMPOSITE
@@ -481,6 +520,7 @@ def render_daily_action_email(
       {f'<div style="color:#f1f5f9;font-size:14px;font-weight:600;margin-bottom:3px">→ {act_str}</div>' if act_str else ''}
       {f'<div style="color:#fbbf24;font-size:12px;margin-bottom:4px">⚠️ {guard}</div>' if guard else ''}
       {f'<div style="color:#a8a29e;font-size:12px">{thesis}</div>' if thesis else ''}
+      {_cap_note}
     </div>"""
 
     # ── Section 3: other setups (compact) ────────────────────────────────────
@@ -559,6 +599,7 @@ def render_intraday_entry_email(
         sz     = e.get("sizing") or {}
         _lo, _hi_p = sz.get("entry_lo"), sz.get("entry_hi")
         _stop  = sz.get("stop")
+        _cap_note = _sizing_cap_note(sz)
 
         price_line = ""
         if cur is not None and opn is not None and drop is not None:
@@ -585,6 +626,7 @@ def render_intraday_entry_email(
           <div style="color:#fbbf24;font-size:12px;margin-top:3px">
             ⚠️ Price moves fast — verify live before acting.
           </div>
+          {_cap_note}
         </div>""")
 
     spy_line = ""

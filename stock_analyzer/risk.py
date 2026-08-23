@@ -30,11 +30,54 @@ def atr_stop_loss(df: pd.DataFrame, multiplier: float = ATR_STOP_MULT) -> tuple[
     return stop, round(atr_val, 2)
 
 
+def sizing_unavailable_reason(
+    portfolio_value: float, entry: float, stop: float,
+    max_position_pct: float | None = None,
+) -> str | None:
+    """Why `position_sizing` would decline to size, or None if it would size.
+
+    `position_sizing` returns None for two STRUCTURALLY DIFFERENT reasons, and a
+    caller that conflates them tells the user to fix the wrong thing:
+
+      "stop"    — degenerate stop (entry <= stop, or stop <= 0). A data problem;
+                  the user can inspect or reset the stop.
+      "ceiling" — the single-name cap cannot afford one whole share
+                  (`price > portfolio_value * max_position_pct%`). An ACCOUNT-SIZE
+                  constraint; no change to the stop will ever fix it. Before this
+                  helper existed, the Analysis and Watchlist fallback captions
+                  said "stop price too close to entry or not set" for this case,
+                  while rendering a perfectly healthy 2xATR stop directly above.
+
+    Kept as the single predicate for both conditions so `position_sizing`, the
+    Grow Today adapter and the fallback captions cannot drift apart. Do NOT
+    re-derive either test at a call site.
+    """
+    # Public helper called from render branches that are reached BECAUSE values
+    # are missing, so coerce rather than trusting the caller: a None entry would
+    # raise TypeError and a NaN would blow up int() further down. Both are
+    # "no usable stop" answers, not crashes.
+    def _num(x) -> float:
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return 0.0
+        return v if v == v else 0.0  # v != v filters NaN
+
+    portfolio_value, entry, stop = _num(portfolio_value), _num(entry), _num(stop)
+    if entry <= 0 or stop <= 0 or entry <= stop:
+        return "stop"
+    if (max_position_pct is not None and portfolio_value > 0
+            and int((portfolio_value * (_num(max_position_pct) / 100.0)) / entry) < 1):
+        return "ceiling"
+    return None
+
+
 def position_sizing(
     portfolio_value: float, risk_pct: float, entry: float, stop: float,
     max_position_pct: float | None = None,
 ) -> dict | None:
-    if entry <= stop or stop <= 0:
+    # Both no-size conditions live in one place — see sizing_unavailable_reason.
+    if sizing_unavailable_reason(portfolio_value, entry, stop, max_position_pct):
         return None
     risk_dollars   = portfolio_value * risk_pct
     risk_per_share = entry - stop
@@ -48,7 +91,12 @@ def position_sizing(
     shares = risk_based_shares
     ceiling_capped = False
     if max_position_pct is not None and portfolio_value > 0 and entry > 0:
-        ceiling_shares = max(1, int((portfolio_value * (max_position_pct / 100.0)) / entry))
+        # Guaranteed >= 1 by the "ceiling" guard above, so no max(1, ...) floor
+        # is needed here. That floor used to force one share even when it
+        # breached the cap AND left ceiling_capped False (risk_based_shares was
+        # also 1, so `shares > ceiling_shares` never fired) — a $4,500 name on a
+        # $10,000 book printed 1 share = 45% of portfolio, silently.
+        ceiling_shares = int((portfolio_value * (max_position_pct / 100.0)) / entry)
         if shares > ceiling_shares:
             shares = ceiling_shares
             ceiling_capped = True

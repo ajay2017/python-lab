@@ -67,8 +67,11 @@ from stock_analyzer.constants import (
     GROW_MAX_PICKS_DEFAULT,
     GROW_CANDIDATE_OVERFETCH,
     GROW_TODAY_MAX_FUND_AGE_DAYS,
+    ATR_STOP_MULT,
     DETERIORATION_TRIM_SUGGESTED_PCT,
 )
+from stock_analyzer.risk import position_sizing, sizing_unavailable_reason
+from stock_analyzer.targets import entry_zone
 from stock_analyzer.signal_reconciliation import (
     reconcile_signals,
     lookup_composite,
@@ -91,6 +94,84 @@ def _f(val, default=0.0):
         return default if v != v else v
     except (TypeError, ValueError):
         return default
+
+
+def _position_size_for_render(
+    portfolio_value: float,
+    price: float,
+    stop: float,
+    entry_lo,
+    entry_hi,
+) -> dict:
+    """Wrap position_sizing() into renderer-compatible keys.
+
+    Calls the ceiling-capped position_sizing() from risk.py (the same function
+    used by Analysis, Watchlist Advisor, etc.) and maps its output to the dict
+    shape the Grow Today renderers (app.py) and cron emails (notify.py) expect.
+
+    Three states, deliberately distinct:
+      - ``{}``                  — a required input is MISSING (price <= 0,
+                                  portfolio_value <= 0, stop <= 0). Nothing to
+                                  explain; the caller simply has no data yet.
+      - ``ceiling_infeasible``  — inputs are fine but one share alone breaches
+                                  the single-name cap. Account-size constraint.
+      - ``stop_infeasible``     — inputs are fine but price is at/below the stop.
+    The two markers carry NO ``shares`` key, so a renderer gating its size text
+    on ``shares`` can never print "0 shares"; they exist so a card that already
+    says BUY never shows a blank size with no reason.
+
+    Carries ceiling_capped and uncapped_shares so the render layer can show a
+    disclosure when the single-name cap binds.
+    """
+    if not (price > 0 and portfolio_value > 0 and stop > 0):
+        return {}
+    # Why no size, if there is no size. Asks the shared detector rather than
+    # re-deriving either predicate here — a second copy drifts the moment
+    # position_sizing's own guards change.
+    _reason = sizing_unavailable_reason(
+        portfolio_value, price, stop, max_position_pct=SINGLE_NAME_CEILING,
+    )
+    if _reason == "ceiling":
+        # One share alone breaches the single-name cap, so no honest size
+        # exists. Surface an explicit marker rather than an empty dict so the
+        # render layer can say WHY instead of silently dropping the line.
+        # Carries no "shares" key on purpose — every renderer gates its size
+        # text on shares, so a marker can never print "0 shares".
+        return {
+            "ceiling_infeasible": True,
+            "one_share_pct": round(price / portfolio_value * 100, 1),
+        }
+    if _reason == "stop":
+        # Today's price is at or below the ATR stop for this name. Same marker
+        # pattern: no shares key, but an explicit reason so the card explains
+        # itself instead of rendering a buy with a blank size (the silent-filter
+        # case the Opus review flagged as blocking).
+        return {
+            "stop_infeasible": True,
+            "stop_at": round(stop, 2),
+        }
+    raw = position_sizing(
+        portfolio_value, RISK_PCT_PER_TRADE, price, stop,
+        max_position_pct=SINGLE_NAME_CEILING,
+    )
+    if raw is None:
+        # Unreachable today: position_sizing delegates the identical predicate
+        # with identical arguments to sizing_unavailable_reason above, so both
+        # of its None causes were already branched on. Kept as defence-in-depth
+        # against the two drifting apart — not a live route.
+        return {}
+    return {
+        "shares":          raw["shares"],
+        "total_cost":      raw["total_cost"],
+        "stop":            round(stop, 2),
+        "stop_pct":        round((price - stop) / price * 100, 1),
+        "port_pct":        raw["portfolio_pct"],
+        "risk_budget":     raw["risk_budget"],
+        "entry_lo":        entry_lo,
+        "entry_hi":        entry_hi,
+        "ceiling_capped":  raw.get("ceiling_capped", False),
+        "uncapped_shares": raw.get("uncapped_shares", raw["shares"]),
+    }
 
 
 def _gate_wt(row) -> float:
@@ -473,30 +554,6 @@ def _thesis(ticker: str, scanner_row: dict, is_sector_leader: bool) -> str:
     return (". ".join(parts).capitalize() + ".") if parts else "Momentum and trend aligned."
 
 
-def _suggest_size(price: float, trend: str, portfolio_value: float) -> dict:
-    """Estimate position size using a trend-based stop approximation."""
-    stop_pct = 0.05 if "Strong" in trend else 0.07 if "Uptrend" in trend else 0.08
-    stop     = price * (1 - stop_pct)
-    risk_dollars  = portfolio_value * RISK_PCT_PER_TRADE
-    risk_per_share = price - stop
-    if risk_per_share <= 0:
-        return {}
-    shares     = max(1, int(risk_dollars / risk_per_share))
-    total_cost = round(shares * price, 0)
-    # Entry zone: buy anywhere from the stop buffer up to a small premium above current price
-    entry_lo   = round(price * (1 - stop_pct * 0.40), 2)   # 40% of stop-distance below current
-    entry_hi   = round(price * (1 + stop_pct * 0.15), 2)   # 15% of stop-distance above current
-    return {
-        "shares":      shares,
-        "total_cost":  total_cost,
-        "stop":        round(stop, 2),
-        "stop_pct":    round(stop_pct * 100, 1),
-        "port_pct":    round(total_cost / portfolio_value * 100, 1) if portfolio_value else 0,
-        "risk_budget": round(risk_dollars, 0),
-        "entry_lo":    entry_lo,
-        "entry_hi":    entry_hi,
-    }
-
 
 def _recently_added(ticker, held_data, cooldown: int = ADD_WINNER_COOLDOWN_DAYS) -> bool:
     """True when the user added shares to `ticker` within the cooldown window —
@@ -819,7 +876,6 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             if tone == "flat" and not is_mover and xref["verdict"] not in ("confirmed", "unverified"):
                 continue
 
-            sizing = _suggest_size(price, trend, portfolio_value) if price > 0 and portfolio_value > 0 else {}
             _base_thesis = _thesis(ticker, row, is_leader)
             # Movers lead with today's move (their entry trigger), then the
             # standard trend/momentum thesis.
@@ -938,6 +994,42 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             _divergence = divergence_at_entry({
                 "momentum_score": _f(row.get("Score", 0)), "composite_score": _composite_score,
             })
+
+            # Sizing — computed here, after the composite gate, so _comp_data is
+            # guaranteed non-empty. Uses the ATR stop from the bundle (same source
+            # as the stop ladder shown on the Analysis page) and the ceiling-capped
+            # position_sizing() that every other sizing surface uses.
+            # Stop on the SAME price basis as the size. `_comp_data["stop"]` sits
+            # ATR_STOP_MULT x ATR below the BUNDLE's last close, but `price` here is
+            # the scanner row's quote — for movers (up 5%+ intraday) those diverge.
+            # Above the stale stop that only over-states risk_per_share and
+            # under-sizes (safe); BELOW it, risk_per_share goes negative and the
+            # size vanished with no explanation on the primary buy surface. Deriving
+            # the stop from the bundle's ATR against the live price keeps
+            # risk_per_share exactly ATR_STOP_MULT x ATR and makes stop_pct honest.
+            # Falls back to the bundle's own stop when ATR is unavailable.
+            _pick_atr  = _f(_comp_data.get("atr"))
+            # Fall back on the RESULT, not the input: a name whose ATR is >= half
+            # its price yields a NON-POSITIVE derived stop, which would trip the
+            # adapter's missing-input guard and render a BUY with no size and no
+            # caption — the same silent shape this fix exists to remove.
+            _atr_stop  = round(price - ATR_STOP_MULT * _pick_atr, 2) if _pick_atr > 0 else 0.0
+            _pick_stop = _atr_stop if _atr_stop > 0 else _f(_comp_data.get("stop"))
+            # Entry zone on the SAME live-price basis as the stop and the size.
+            # The bundle's own entry_lo/hi are derived from its last close, so for
+            # a mover the zone could sit entirely BELOW the current quote while the
+            # card headline said BUY — and the emails' "only act if price is still
+            # inside $X-$Y" guard would then contradict their own headline.
+            _pick_lo, _pick_hi = (
+                entry_zone(price, _pick_atr) if _pick_atr > 0
+                else (_comp_data.get("entry_lo"), _comp_data.get("entry_hi"))
+            )
+            sizing = (
+                _position_size_for_render(
+                    portfolio_value, price, _pick_stop, _pick_lo, _pick_hi,
+                )
+                if price > 0 and portfolio_value > 0 else {}
+            )
 
             pick = {
                 "ticker":          ticker,
@@ -1172,7 +1264,27 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     continue
                 price   = _f(row.get("Price", 0))
                 is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
-                sizing  = _suggest_size(price, "Strong Uptrend", portfolio_value) if price > 0 else {}
+                # Sizing — source the ATR stop from held_data (same bundle shape as
+                # composites). If no stop is available, degrade to {} — never invent
+                # or estimate a stop (spec item 2).
+                # NOTE: the add lane deliberately stays on the bundle's
+                # last-close ATR stop rather than re-deriving against the live
+                # price as the new-pick lane does. Safe because this branch is
+                # already gated on gap >= ADD_WINNER_MIN_GAP_PCT measured from
+                # the RATCHETED stop (>= the ATR stop), so price > stop holds by
+                # construction. Don't "unify the lanes" without re-reading that
+                # gate; and per memory project_stop_ladder_and_display the ATR
+                # basis here is a policy decision (the ratchet stop would sit
+                # higher, suggest MORE shares, and over-buy into strength).
+                _held_bundle = (held_data or {}).get(ticker, {})
+                _held_stop = _f(_held_bundle.get("stop"))
+                sizing = (
+                    _position_size_for_render(
+                        portfolio_value, price, _held_stop,
+                        _held_bundle.get("entry_lo"), _held_bundle.get("entry_hi"),
+                    )
+                    if price > 0 and portfolio_value > 0 else {}
+                )
                 # Honest P&L framing — the composite is entry-price-agnostic, so a
                 # Strong Buy add candidate can be up OR down vs the user's entry.
                 # State the real P&L with a single correct sign (the old copy hard-
@@ -1216,14 +1328,14 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
         _risk_pct_str = f"{RISK_PCT_PER_TRADE * 100:.1f}%"
         if _act_risk_flags:
             deploy_note = (
-                f"⚠️ Resolve Act Today risk alerts before deploying. "
+                f"⚠️ Resolve Act Today risk alerts before acting. "
                 f"If proceeding: {_risk_pct_str} risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''} "
-                f"= ~${deploy:,.0f}."
+                f"= ~${deploy:,.0f} at risk if every stop hits."
             )
         else:
             deploy_note = (
                 f"At {_risk_pct_str} risk per trade across {n_trades} setup{'s' if n_trades > 1 else ''}, "
-                f"consider deploying ~${deploy:,.0f} today."
+                f"you'd be risking ~${deploy:,.0f} if every stop hits."
             )
 
     return {
