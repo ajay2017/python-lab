@@ -161,9 +161,11 @@ def _build_new_pick_rows(picks: list[dict], rec_date) -> list[dict]:
         # and emails render from. Absent dict => columns stay NULL. Built into
         # the row before appending rather than mutating rows[-1], so a future
         # `continue` landing between the two cannot silently drop the capture.
-        # NOTE: this lane usually WINS the day (it runs before any interactive
-        # session, and the upsert ignores duplicates), so these are the values
-        # Phase 3 will mostly read.
+        # NOTE: this lane does NOT usually win the day. Measured 2026-08-23:
+        # the owner opens the app around 09:26-09:32 ET while this lane's own
+        # scanner_cache row is stamped 10:46 ET, and the upsert ignores
+        # duplicates — so the interactive session is normally the first writer
+        # and these rows are the FALLBACK for tickers nobody looked at first.
         _s = p.get("sizing")
         if isinstance(_s, dict) and _s:
             _row.update({

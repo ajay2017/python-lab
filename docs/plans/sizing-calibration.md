@@ -289,12 +289,16 @@ branch. Seven non-blocking items taken, three of which mattered:
    (no bundle stop for a held name, or no portfolio value) produces no sizing dict, hence four
    NULLs. So **Phase 3 must filter on a non-null `rec_shares`, never on `rec_date`.** Another
    instance of a doc claim stronger than the code, which is why it was asked for explicitly.
-2. **First writer of the day wins, and it is usually the CRON** — `cron_runner` logs
-   `new_pick` rows in the morning scan lane, before any interactive session. So the captured
-   size is the **morning-scan suggestion**, not an intraday recompute at the traded price. That
-   is the better take-rate denominator (stable, single-valued), but it is not "what was on
-   screen when I clicked buy" and a Phase 3 caption must not imply otherwise. Corollary: a
-   cron row written with a degraded input **blocks** that day's interactive capture.
+2. **First writer of the day wins.** The review said that is usually the CRON, reasoning from
+   the code; **measured 2026-08-23 against real `surfaced_at` values, it is usually the
+   INTERACTIVE session.** On 2026-08-21 the batches were 09:26 / 09:31 / 09:32 / 09:49 / 11:37
+   ET (all interactive) while the scan lane's own `scanner_cache` row is stamped 10:46 ET. The
+   owner opens the app before the cron fires. This is *better* for Phase 3 — the captured size
+   is what was actually on screen — but it means the value is **not reproducible from
+   end-of-day prices**, and the interactive write has **no post-open gate** (the 09:26 batch is
+   pre-open, so a size can be computed off the prior close, which the `scan` lane explicitly
+   refuses to do). Corollary either way: a row written with a degraded input **blocks** that
+   day's later capture for the same ticker.
 3. **A last-resort strip-all floor was restored.** Error-targeting is a strict improvement,
    but the pre-targeting code had an unconditional strip-everything terminal stage, and
    dropping it would have been a resilience regression on a log the recommendation history
