@@ -7321,7 +7321,12 @@ if page == "🏠 Home":
                    f"📐 Suggested: {_sz.get('shares',0)} shares · "
                    f"Entry zone ${_sz.get('entry_lo', _gp['price']):.2f}–${_sz.get('entry_hi', _gp['price']):.2f} "
                    f"= ~${_sz.get('total_cost',0):,.0f} ({_sz.get('port_pct',0):.1f}% of portfolio) · "
-                   f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.0f}% below)"
+                   # 1 decimal, not 0: the retired _suggest_size produced stop_pct
+                   # of exactly 5.0/7.0/8.0 so :.0f was lossless, but an
+                   # ATR-derived stop is fractional — 7.7 rendered as "8%" here
+                   # while Analysis showed "-7.7%" for the same stop, which is the
+                   # same two-numbers-for-one-thing incoherence F-249 removed.
+                   f"Stop ~${_sz.get('stop',0):.2f} ({_sz.get('stop_pct',0):.1f}% below)"
                    f"</div>" if _sz.get('shares') else "")
                 + (
                     f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
