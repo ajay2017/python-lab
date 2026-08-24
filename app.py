@@ -29251,6 +29251,15 @@ elif page == "💰 Account":
                             annotation_font_color="#ffffff",
                             annotation_bgcolor="rgba(0,0,0,0.45)",
                         )
+                        # "Now" marker — current position at 0% decline
+                        _fig_mg.add_annotation(
+                            x=0, y=0, xref="x", yref="paper",
+                            text="▶ Now",
+                            showarrow=False,
+                            xanchor="left", yanchor="middle",
+                            font=dict(color="#ffffff", size=11),
+                            bgcolor="rgba(0,0,0,0.5)",
+                        )
                         _fig_mg.update_layout(
                             barmode="stack",
                             xaxis=dict(
@@ -29266,6 +29275,13 @@ elif page == "💰 Account":
                             font_color="#ccc",
                         )
                         st.plotly_chart(_fig_mg, use_container_width=True)
+                        st.caption(
+                            "**How to read:** You are at ▶ Now (0% decline). "
+                            "The green zone is your runway — how far the book can fall before a call. "
+                            "The red zone is past the call floor. "
+                            "The dashed line is the app's standard −10% fragility scenario; "
+                            "when it sits in red, that pullback would breach your threshold before it bottoms."
+                        )
                     st.caption(
                         f"Estimated at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate — "
                         "Robinhood raises this on volatile or concentrated names, so your actual "
