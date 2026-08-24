@@ -8240,7 +8240,9 @@ if page == "🏠 Home":
             df = _db_trades[_db_trades["ticker"].astype(str).str.upper() == t]
             if df.empty:
                 return None
-            df = df.sort_values("traded_at", ascending=False)
+            df = (df.assign(_sort_ts=pd.to_datetime(df["traded_at"], errors="coerce", utc=True, format="ISO8601"))
+                  .sort_values("_sort_ts", ascending=False)
+                  .drop(columns=["_sort_ts"]))
             # Entry thesis = notes on the most recent BUY (with non-empty notes)
             thesis, thesis_date = "", ""
             buys = df[df["action"].astype(str).str.upper() == "BUY"]
@@ -12621,7 +12623,9 @@ elif page == "🔗 Risk Analysis":
         # balance can't force a trim. Renders only when the seeded cash shows a
         # real, fresh margin debit (see _leverage_cache). "$" escaped as "\$" —
         # Streamlit renders a $…$ pair as LaTeX.
-        _lev_c = st.session_state.get("_leverage_cache") or {}
+        _lev_c = st.session_state.get("_leverage_cache")
+        if _lev_c is None:
+            _lev_c = {}
         if _lev_c.get("levered"):
             _lv_ratio = _lev_c.get("ratio")
             _lv_eq    = _f(_lev_c.get("equity"), 0.0)
@@ -15263,7 +15267,11 @@ elif page == "🧩 Intelligence":
         if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
             _sca_tdf = st.session_state.trades_df
             if "traded_at" in _sca_tdf.columns and "action" in _sca_tdf.columns:
-                _sca_buys = _sca_tdf[_sca_tdf["action"] == "BUY"].sort_values("traded_at", ascending=False)
+                _sca_buys = _sca_tdf[_sca_tdf["action"] == "BUY"].copy()
+                _sca_buys["_sort_ts"] = pd.to_datetime(
+                    _sca_buys["traded_at"], errors="coerce", utc=True, format="ISO8601"
+                )
+                _sca_buys = _sca_buys.sort_values("_sort_ts", ascending=False).drop(columns=["_sort_ts"])
                 for _, _sca_brow in _sca_buys.iterrows():
                     _sca_bt = str(_sca_brow["ticker"]).upper()
                     if _sca_bt not in _sca_trade_date:
@@ -29206,7 +29214,9 @@ elif page == "💰 Account":
                 "leverage amplifies exposure relative to your own capital."
             )
             # ── Margin call-distance awareness panel ──────────────────────────
-            _lev_c = st.session_state.get("_leverage_cache") or {}
+            _lev_c = st.session_state.get("_leverage_cache")
+            if _lev_c is None:
+                _lev_c = {}
             if _lev_c.get("levered"):
                 _md = _margin_mod.call_distance(
                     stock_value=_lev_c["equity"],       # total market value of holdings
@@ -31963,7 +31973,11 @@ elif page == "🧠 AI Insights":
     if "trades_df" in st.session_state and not st.session_state.trades_df.empty:
         _tdf = st.session_state.trades_df
         if "user_thesis" in _tdf.columns:
-            _buys = _tdf[_tdf["action"] == "BUY"].sort_values("traded_at", ascending=False)
+            _buys = _tdf[_tdf["action"] == "BUY"].copy()
+            _buys["_sort_ts"] = pd.to_datetime(
+                _buys["traded_at"], errors="coerce", utc=True, format="ISO8601"
+            )
+            _buys = _buys.sort_values("_sort_ts", ascending=False).drop(columns=["_sort_ts"])
             for _, _brow in _buys.iterrows():
                 _bt = str(_brow["ticker"]).upper()
                 if _bt not in _trade_date_by_ticker:

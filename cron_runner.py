@@ -1073,14 +1073,20 @@ def _run_thesis(now_et, force: bool) -> int:
         _log("thesis: no trades with user_thesis found — add theses via Trade Journal.")
         return 0
 
+    import pandas as _pd_cr
+    _thesis_candidates = trades_df[
+        (trades_df["action"] == "BUY") &
+        (trades_df["user_thesis"].notna()) &
+        (trades_df["user_thesis"].astype(str).str.strip() != "") &
+        (trades_df["ticker"].astype(str).str.upper().isin(open_tickers))
+    ].copy()
+    _thesis_candidates["_sort_ts"] = _pd_cr.to_datetime(
+        _thesis_candidates["traded_at"], errors="coerce", utc=True, format="ISO8601"
+    )
     buys_with_thesis = (
-        trades_df[
-            (trades_df["action"] == "BUY") &
-            (trades_df["user_thesis"].notna()) &
-            (trades_df["user_thesis"].astype(str).str.strip() != "") &
-            (trades_df["ticker"].astype(str).str.upper().isin(open_tickers))
-        ]
-        .sort_values("traded_at", ascending=False)
+        _thesis_candidates
+        .sort_values("_sort_ts", ascending=False)
+        .drop(columns=["_sort_ts"])
         .drop_duplicates(subset="ticker")
     )
 
