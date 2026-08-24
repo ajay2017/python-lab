@@ -111,6 +111,9 @@ TICKER_BETA_CRITICAL = 1.8       # "very high beta" — hard breach when added t
 # yardstick magnitude is new here.
 FRAGILITY_PULLBACK_PCT = -10.0   # routine-correction yardstick (~1–2×/yr); mirrors the "Mild Correction" stress scenario
 
+# ── Margin maintenance (awareness only — NEVER gates) ────────────────────────
+MARGIN_MAINTENANCE_RATE = 0.25   # estimated Reg T maintenance floor; Robinhood raises this on volatile/concentrated names, so real call threshold is typically CLOSER than this implies — awareness only, read by NO gate or advisor
+
 # ── Concentration limits ─────────────────────────────────────────────────────
 SECTOR_CEILING    = 35.0         # hard sector cap (% of portfolio)
 SECTOR_ELEVATED   = 25.0         # soft warn above this

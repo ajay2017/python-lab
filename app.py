@@ -194,7 +194,9 @@ from stock_analyzer.constants import (
     PERSONALIZED_DISCOVERY_PROFILE_PCTL_HIGH,
     PREDICTION_MIN_MATURED_N,
     COMPOSITE_FIRMNESS_MARGIN,
+    MARGIN_MAINTENANCE_RATE,
 )
+from stock_analyzer import margin as _margin_mod
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -29189,6 +29191,85 @@ elif page == "💰 Account":
                 "loan; account-level concentration below runs HIGHER than equity weight because "
                 "leverage amplifies exposure relative to your own capital."
             )
+            # ── Margin call-distance awareness panel ──────────────────────────
+            _lev_c = st.session_state.get("_leverage_cache") or {}
+            if _lev_c.get("levered"):
+                _md = _margin_mod.call_distance(
+                    stock_value=_lev_c["equity"],       # total market value of holdings
+                    owner_equity=_lev_c["net_capital"], # capital the owner actually holds
+                    margin_debit=_lev_c["margin_debit"],
+                    rate=MARGIN_MAINTENANCE_RATE,
+                )
+                if _md is not None:
+                    st.markdown("#### 📐 Margin Call Distance")
+                    _mg1, _mg2, _mg3 = st.columns(3)
+                    _mg1.metric(
+                        "Margin Cushion",
+                        _m(f"${_md['cushion']:,.0f}"),
+                        help="Equity above the estimated maintenance floor. Reaches $0 at the call.",
+                    )
+                    _mg2.metric(
+                        "Call Triggers At",
+                        f"{_md['call_distance_pct']:.1f}%",
+                        help="Estimated book decline that would trigger a margin call at the standard 25% maintenance rate.",
+                    )
+                    _mg3.metric(
+                        "Leverage",
+                        f"{_lev_c['ratio']:.2f}×",
+                        help="Total holdings ÷ owner equity.",
+                    )
+                    if _md["in_call"]:
+                        st.error(
+                            "⚠️ You are at or past the estimated maintenance floor. "
+                            "Check Robinhood immediately."
+                        )
+                    else:
+                        # Horizontal distance-to-call bar
+                        import plotly.graph_objects as _go_mg
+                        _frag = abs(FRAGILITY_PULLBACK_PCT)
+                        _call = abs(_md["call_distance_pct"])
+                        _axis_max = round(max(_frag, _call) * 1.35)
+                        _fig_mg = _go_mg.Figure()
+                        # Green zone — cushion
+                        _fig_mg.add_trace(_go_mg.Bar(
+                            x=[_call], y=[""], orientation="h",
+                            marker_color="#2ecc71", name="Cushion",
+                            showlegend=False,
+                        ))
+                        # Red zone — past the call
+                        _fig_mg.add_trace(_go_mg.Bar(
+                            x=[_axis_max - _call], y=[""], orientation="h",
+                            marker_color="#e74c3c", name="Call zone",
+                            showlegend=False,
+                        ))
+                        # Fragility scenario marker
+                        _fig_mg.add_vline(
+                            x=_frag,
+                            line_dash="dash", line_color="#f39c12", line_width=2,
+                            annotation_text=f"−{_frag:.0f}% fragility scenario",
+                            annotation_position="top right",
+                            annotation_font_color="#f39c12",
+                        )
+                        _fig_mg.update_layout(
+                            barmode="stack",
+                            xaxis=dict(
+                                title="Book decline (%)",
+                                range=[0, _axis_max],
+                                ticksuffix="%",
+                            ),
+                            yaxis=dict(visible=False),
+                            height=120,
+                            margin=dict(l=0, r=10, t=10, b=30),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            font_color="#ccc",
+                        )
+                        st.plotly_chart(_fig_mg, use_container_width=True)
+                    st.caption(
+                        f"Estimated at the standard {MARGIN_MAINTENANCE_RATE*100:.0f}% maintenance rate — "
+                        "Robinhood raises this on volatile or concentrated names, so your actual "
+                        "call threshold may be closer than shown. Awareness only — never blocks a trade."
+                    )
         if _total_acct > 0:
             _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
             _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)
