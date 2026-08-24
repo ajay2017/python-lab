@@ -347,3 +347,94 @@ def test_the_user_fixing_the_book_clears_the_banner_against_a_stale_snapshot():
     assert bs.decide_drift_banner(snap, _pdf([("DELL", 24.0)]), _NOW, 25)["state"] == "drift"
     # user corrects the holding to match the broker
     assert bs.decide_drift_banner(snap, _pdf([("DELL", 20.0)]), _NOW, 25)["state"] == "stale_clean"
+
+
+# ─── a correctly-logged trade must never read as a missing one ──────────────
+# The broker snapshot refreshes once daily; the book is diffed live. That
+# asymmetry lets a user's FIX clear the banner instantly -- but its mirror is
+# that logging a perfectly correct trade makes the book move ahead of the
+# snapshot and look like drift. Without this split, the app's most common daily
+# workflow produced "overstated by ~$5,400 -- fix a missing trade" on a morning
+# the user did everything right.
+
+def test_a_ticker_traded_since_the_snapshot_is_awaiting_sync_not_drift():
+    out = bs.decide_drift_banner(
+        _snap({"NVDA": 10.0}), _pdf([("NVDA", 40.0)]), _NOW, 25,
+        price_map={"NVDA": 180.0}, recent_trade_tickers=["NVDA"],
+    )
+    assert out["state"] == "awaiting_sync"
+    assert out["awaiting_sync"] == ["NVDA"]
+    # And crucially: no dollar accusation.
+    assert out["impact"]["overstated"] == 0.0
+
+
+def test_the_same_drift_without_a_recent_trade_IS_reported():
+    """The guard must not swallow genuine drift -- only drift the user has
+    already explained by logging something."""
+    out = bs.decide_drift_banner(
+        _snap({"NVDA": 10.0}), _pdf([("NVDA", 40.0)]), _NOW, 25,
+        price_map={"NVDA": 180.0},
+    )
+    assert out["state"] == "drift"
+    assert out["impact"]["overstated"] == 30 * 180.0
+
+
+def test_real_drift_still_surfaces_alongside_an_awaiting_sync_ticker():
+    """A mixed book: one ticker explained, one not. The unexplained one must
+    still produce the full warning, and the dollar figure must EXCLUDE the
+    explained one or it would overstate the problem."""
+    out = bs.decide_drift_banner(
+        _snap({"NVDA": 10.0, "DELL": 20.0}),
+        _pdf([("NVDA", 40.0), ("DELL", 24.0)]), _NOW, 25,
+        price_map={"NVDA": 180.0, "DELL": 100.0},
+        recent_trade_tickers=["NVDA"],
+    )
+    assert out["state"] == "drift"
+    assert [r["ticker"] for r in out["diff"]["qty_mismatch"]] == ["DELL"]
+    assert out["awaiting_sync"] == ["NVDA"]
+    assert out["impact"]["overstated"] == 4 * 100.0     # DELL only
+
+
+def test_awaiting_sync_matches_tickers_case_insensitively():
+    out = bs.decide_drift_banner(
+        _snap({"NVDA": 10.0}), _pdf([("NVDA", 40.0)]), _NOW, 25,
+        recent_trade_tickers=["nvda"],
+    )
+    assert out["state"] == "awaiting_sync"
+
+
+def test_no_recent_trades_leaves_the_diff_untouched():
+    for empty in (None, [], ()):
+        out = bs.decide_drift_banner(
+            _snap({"DELL": 20.0}), _pdf([("DELL", 24.0)]), _NOW, 25,
+            recent_trade_tickers=empty,
+        )
+        assert out["state"] == "drift", empty
+        assert out["awaiting_sync"] == []
+
+
+def test_split_awaiting_sync_handles_a_none_diff():
+    real, awaiting = bs.split_awaiting_sync(None, ["AAA"])
+    assert real == {"rh_only": [], "app_only": [], "qty_mismatch": []}
+    assert awaiting == []
+
+
+def test_split_awaiting_sync_covers_all_three_buckets():
+    diff = {
+        "rh_only":      [{"ticker": "AAA", "shares": 1.0}],
+        "app_only":     [{"ticker": "BBB", "shares": 2.0}],
+        "qty_mismatch": [{"ticker": "CCC", "rh_shares": 1.0, "app_shares": 3.0,
+                          "diff": -2.0}],
+    }
+    real, awaiting = bs.split_awaiting_sync(diff, ["AAA", "BBB", "CCC"])
+    assert awaiting == ["AAA", "BBB", "CCC"]
+    assert real == {"rh_only": [], "app_only": [], "qty_mismatch": []}
+
+
+def test_a_clean_book_with_recent_trades_stays_silent():
+    """Trading today must not by itself produce a message."""
+    out = bs.decide_drift_banner(
+        _snap({"NVDA": 40.0}), _pdf([("NVDA", 40.0)]), _NOW, 25,
+        recent_trade_tickers=["NVDA"],
+    )
+    assert out["state"] == "none"

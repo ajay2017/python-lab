@@ -83,6 +83,9 @@ from stock_analyzer.daily_pnl import compute_positions_day_pnl
 # Module-level (not local at each site) because all three import writers need
 # it and app.py runs top-to-bottom — see feedback_module_def_order.
 from stock_analyzer.market_time import et_anchor_iso as _et_anchor_iso
+from stock_analyzer.market_time import now_et as _now_et
+from stock_analyzer import broker_sync
+from stock_analyzer.constants import SNAPTRADE_BALANCE_STALE_HOURS
 # Note markers imported from the module that DETECTS them, so a reworded
 # writer cannot silently disarm the imported-trade repair.
 from stock_analyzer.trade_time import (
@@ -936,6 +939,169 @@ def _tip(key: str) -> str:
 def _m(val_str: str) -> str:
     """Return masked placeholder when privacy mode is on, otherwise the value as-is."""
     return "••••••" if st.session_state.get("_privacy", True) else val_str
+
+
+def _tickers_traded_since(trades_df, captured_at) -> list:
+    """Tickers with a trade logged AFTER `captured_at`.
+
+    The broker snapshot refreshes once daily while the book is diffed live, so
+    any ticker traded since the capture will differ for a perfectly good reason.
+    Without this, logging a correct trade at 10:00 makes Home announce
+    "Portfolio Value overstated by ~$5,400 — fix a missing trade" the same
+    morning you did everything right, which is how a real warning gets ignored.
+
+    Returns [] (not None) on any failure — an empty set means "explain nothing
+    away", i.e. the conservative direction that keeps drift visible.
+    """
+    if trades_df is None or captured_at is None:
+        return []
+    try:
+        if getattr(trades_df, "empty", True) or "traded_at" not in trades_df.columns:
+            return []
+        _cap = pd.to_datetime(captured_at, utc=True, errors="coerce", format="ISO8601")
+        if _cap is None or pd.isna(_cap):
+            return []
+        _ts = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
+                             format="ISO8601")
+        _hit = trades_df.loc[_ts.notna() & (_ts > _cap), "ticker"]
+        return sorted({str(t).strip().upper() for t in _hit if str(t).strip()})
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
+def _fmt_asof_et(captured_at) -> str:
+    """A stored capture time as an ET wall-clock string.
+
+    PostgREST hands `timestamptz` back normalized to UTC, so slicing the
+    raw string printed a 14:14 ET capture as "18:14" — a FUTURE time to
+    someone reading at 15:00 ET. Everything else on Home is ET.
+    """
+    try:
+        _ts = pd.to_datetime(captured_at, utc=True, errors="coerce",
+                             format="ISO8601")
+        if _ts is None or pd.isna(_ts):
+            return "unknown"
+        _et = _ts.tz_convert("America/New_York")
+        # Include the YEAR when it isn't the current one, or a year-old
+        # snapshot reads as recent (feedback_timestamp_chips).
+        _fmt = "%b %d, %H:%M ET" if _et.year == _today_et().year else "%b %d %Y, %H:%M ET"
+        return _et.strftime(_fmt)
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _render_broker_drift(placeholder, verdict) -> None:
+    """Render 🏠 Home's app-vs-broker drift banner from a pure verdict.
+
+    All the branching lives in `broker_sync.decide_drift_banner`, which is
+    Streamlit-free and fully unit-tested; this function only turns a state into
+    words. Deliberately silent when clean and fresh — a green "matches your
+    broker" line on every render is the noise that trains a user past the amber
+    one, so the clean confirmation stays on 💰 Account where you go to look.
+
+    AWARENESS ONLY, never a gate. A drift check cannot be trusted to be armed
+    (it goes quiet exactly when the broker is unreachable), and the false-
+    positive surface is broad — multi-account aggregation, instrument kinds,
+    settlement lag. Suppressing a buy on a phantom would be a hard failure with
+    no recourse; this is a user-fixable data error, so the app routes to the
+    fix rather than locking the doors.
+    """
+    if not verdict:
+        return
+    state = verdict.get("state")
+    if state == "none":
+        return
+
+    with placeholder.container():
+        if state == "unknown":
+            # Silent when no broker is linked at all — there is nothing to be
+            # unknown ABOUT, and a permanent caption above Portfolio Value for
+            # a feature the user never set up is pure noise.
+            try:
+                from stock_analyzer import snaptrade_client as _sc
+                if not _sc.has_snaptrade():
+                    return
+            except Exception:
+                return
+            st.caption(
+                "⚠️ Broker drift **not checked** — no broker snapshot available, so "
+                "the app can't confirm Portfolio Value matches your broker."
+            )
+            return
+
+        _asof = _fmt_asof_et(verdict.get("captured_at"))
+        if state == "stale_clean":
+            _why = ("not re-checked since" if verdict.get("is_stale")
+                    else "some linked accounts didn't respond")
+            # "as of unknown" is ungrammatical, and an unreadable capture time
+            # is itself why the check counts as stale — say that instead.
+            _when = "at the last check" if _asof == "unknown" else f"as of {_asof}"
+            st.caption(
+                f"ℹ️ No broker mismatch {_when} — {_why}. Not a clean bill of "
+                "health for right now."
+            )
+            return
+
+        if state == "awaiting_sync":
+            # Everything that differs is explained by a trade the user logged
+            # since the snapshot. They did nothing wrong, so this is a caption,
+            # not a warning — and it must never say "missing trade".
+            _aw_list = verdict.get("awaiting_sync")
+            _aw = ", ".join(_aw_list if isinstance(_aw_list, list) else [])
+            st.caption(
+                f"ℹ️ Waiting on the broker to catch up on **{_aw}** — you logged a trade "
+                f"after the {_asof} broker snapshot, so a difference here is expected. "
+                "Nothing to fix."
+            )
+            return
+
+        # state == "drift"
+        _imp   = verdict.get("impact")
+        if not isinstance(_imp, dict):
+            _imp = {}
+        _over  = float(_imp.get("overstated") or 0.0)
+        _lines = []
+        for _r in _imp.get("priced", []):
+            _dir = "extra in app" if _r["shares"] > 0 else "missing from app"
+            _lines.append(
+                f"- **{_r['ticker']}** — {abs(_r['shares']):g} sh {_dir} "
+                f"({_m(f'${abs(_r['dollars']):,.0f}')})"
+            )
+        for _r in _imp.get("unpriced", []):
+            _lines.append(
+                f"- **{_r['ticker']}** — {abs(_r['shares']):g} sh mismatch (value unavailable)"
+            )
+        for _r in _imp.get("rh_only_shares", []):
+            _lines.append(
+                f"- **{_r['ticker']}** — {_r['shares']:g} sh at your broker, not in your "
+                "app; its value is missing from Portfolio Value entirely"
+            )
+
+        # Sub-dollar rounding guard, NOT a policy threshold: below $1 the
+        # figure is noise and the generic headline reads better. Both
+        # branches warn and no gate moves either way.
+        if abs(_over) >= 1:
+            _word = "overstated" if _over > 0 else "understated"
+            _head = f"Portfolio Value may be **{_word} by ~{_m(f'${abs(_over):,.0f}')}**"
+        else:
+            _head = "Your holdings don't match your broker"
+
+        # ALWAYS dated, not only when stale. The broker side refreshes once a
+        # day while the book is diffed live, so an undated "overstated by $X"
+        # reads as a claim about right now when it is really a comparison
+        # against this morning's capture.
+        _stale_note = f"  \n_Broker snapshot as of {_asof}; it refreshes once daily._"
+        _partial    = ("  \n_Some linked accounts didn't respond, so there may be more._"
+                       if not verdict.get("all_accounts_ok") else "")
+        st.warning(
+            f"⚠️ **Your book doesn't match your broker** — {_head}\n\n"
+            + "\n".join(_lines)
+            + "\n\nEvery weight, gate and suggested position size is computed from "
+              "Portfolio Value. Most likely a trade logged after that snapshot; "
+              "otherwise a missing trade — check 📒 Trade Journal or "
+              "💰 Account → Broker Sync (full reconciliation)."
+            + _stale_note + _partial
+        )
 
 
 # Shared severity palette for Act Today / Review cards (Home) and the simple
@@ -4017,6 +4183,10 @@ if page == "🏠 Home":
     _alert_ph_xcheck     = st.empty()
     _alert_ph_split      = st.empty()
     _alert_ph_structural = st.empty()
+    # Filled far below (after live prices exist) but DECLARED here so it renders
+    # ABOVE the Portfolio Value tile — the caveat has to precede the number it
+    # caveats. Same declare-early/fill-late pattern as _alert_ph_structural.
+    _alert_ph_drift      = st.empty()
 
     # ── Day Shock awareness banner — AWARENESS ONLY, never gates ──────────────
     # A single-day move can happen well above the 50-day trend line, where
@@ -4529,6 +4699,42 @@ if page == "🏠 Home":
                     _dpnl_is_current = _dpnl_baseline_date >= _ptd.isoformat()
     except Exception:
         _dpnl = None
+
+    # ── Broker drift — does the book match the broker? ───────────────────────
+    # Fills the placeholder declared far above, so this renders ABOVE Portfolio
+    # Value. Reads a snapshot the `broker` cron persisted; NO SnapTrade call on
+    # Home's render path (1 + N-accounts reads at 15s each would be a 90s
+    # worst-case stall on the most-rerun page). The book side is diffed LIVE,
+    # so correcting a mis-logged trade clears this immediately.
+    #
+    # Diffs raw `holdings_df`, NOT port_df: build_portfolio_df stores
+    # `int(shares)`, so a fractional broker holding would show a permanent
+    # phantom mismatch. Matches what the Account panel already does.
+    _drift_verdict = None
+    try:
+        @st.cache_data(ttl=120, show_spinner=False)
+        def _cached_broker_snapshot():
+            return db.load_broker_position_snapshot()
+
+        _bsnap = _cached_broker_snapshot()
+        _drift_verdict = broker_sync.decide_drift_banner(
+            _bsnap,
+            st.session_state.get("holdings_df"),
+            _now_et(),
+            SNAPTRADE_BALANCE_STALE_HOURS,
+            price_map={t: (v or {}).get("price") for t, v in _lp_map.items()},
+            # A ticker traded since the capture differs for a good reason.
+            recent_trade_tickers=_tickers_traded_since(
+                st.session_state.get("trades_df"),
+                _bsnap.get("captured_at") if isinstance(_bsnap, dict) else None,
+            ),
+        )
+    except Exception:
+        _drift_verdict = None      # unknown, not "clean" — nothing renders
+    _render_broker_drift(_alert_ph_drift, _drift_verdict)
+    # Published for the F-250 day-P&L captions below, which defer to this
+    # banner for any ticker it already explains (see the qty_drift block).
+    st.session_state["_broker_drift_cache"] = _drift_verdict
 
     # Publish Tier-B to session_state so 🧾 Summary shows the SAME number
     # instead of independently recomputing the cheaper held-only mark — two
@@ -5972,6 +6178,22 @@ if page == "🏠 Home":
                 f"{_d['expected_shares']:g} expected{_tail})"
             )
         _qd_parts = ", ".join(_qd_bits)
+        # Defer to the broker banner for any ticker it already covers.
+        # Broker drift is EXTERNAL ground truth; this check is internal and
+        # inferential, so the authoritative one keeps the full explanation and
+        # this becomes a cross-reference. Never suppressed wholesale: this
+        # detector sees two shapes the broker check structurally cannot
+        # (orphans, unbaselined) and is the only one that still works when
+        # SnapTrade is offline.
+        _bd = st.session_state.get("_broker_drift_cache")
+        _bd_tickers = set()
+        if isinstance(_bd, dict) and _bd.get("state") == "drift":
+            _bd_diff = _bd.get("diff")
+            for _b in (_bd_diff.get("qty_mismatch", [])
+                       if isinstance(_bd_diff, dict) else []):
+                _bd_tickers.add(_b["ticker"])
+        _qd_dupes = [d["ticker"] for d in _dpnl["qty_drift"]
+                     if d["ticker"] in _bd_tickers]
         # The detector only ever sees TODAY's trades, so it can prove the figure
         # is off but NOT that a trade is missing. Say the first and offer the
         # candidate causes rather than accusing the journal — a banner that sends
@@ -5987,6 +6209,9 @@ if page == "🏠 Home":
             f"wrong; an unlogged fill was bought at a price this can't see). Most likely "
             f"{_qd_why} — reconcile against your broker (💰 Account → Broker Sync) before "
             f"trusting this tile."
+            + (f" {', '.join(_qd_dupes)} also "
+               f"{'disagree' if len(_qd_dupes) > 1 else 'disagrees'} with your "
+               f"broker — see the banner above." if _qd_dupes else "")
         )
     if _dpnl is not None and _dpnl.get("unbaselined"):
         _ub_bits = []
@@ -29468,7 +29693,15 @@ elif page == "💰 Account":
                     _any_pos_failure = True
                 elif _sa_pos:
                     _all_snap_positions.extend(_sa_pos)
-            _drift_input = None if (_any_pos_failure and not _all_snap_positions) else _all_snap_positions
+            # ANY unreadable account ⇒ unavailable, full stop. The older rule
+            # (`_any_pos_failure and not _all_snap_positions`) rendered a
+            # partial diff whenever some other account returned positions —
+            # which fabricates `app_only` drift for everything in the account
+            # that failed. Today's topology (auxiliaries empty) hid that, but
+            # it is the same fault the cron's write invariant refuses, and two
+            # surfaces answering one question by different rules is how they
+            # end up contradicting each other.
+            _drift_input = None if _any_pos_failure else _all_snap_positions
             # Diff against RAW holdings (st.session_state.holdings_df), NOT
             # the enriched _acc_pdf — build_portfolio_df stores "Shares" as
             # int(shares) for display, so a fractional Robinhood holding

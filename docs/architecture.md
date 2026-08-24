@@ -1784,6 +1784,51 @@ suppress reported growth%. Only `CONTRIBUTION`/`WITHDRAWAL` SnapTrade activity
 types ever reach `account_flows`; see `stock_analyzer/broker_sync.py`'s
 `classify_transactions()`.
 
+### 6.36 `broker_position_snapshot` table
+
+**Single-row (id=1) capture of what the BROKER reported holding**, so 🏠 Home can
+warn that Portfolio Value disagrees with the broker without putting a SnapTrade
+call on its render path. Written by the `broker` cron lane, read by Home.
+**Manual DDL** — the statements live in `db.py`'s schema block; the feature ships
+inert until they are applied, and 🩺 System Trust shows the store red until then.
+
+| column | type | meaning |
+|---|---|---|
+| `id` | integer PK | always 1 (`check (id = 1)`) |
+| `positions` | jsonb | `{"DELL": 20.0, ...}` — ticker → shares, equity/ETF/ADR only |
+| `account_ids` | jsonb | the accounts that responded at capture time |
+| `all_accounts_ok` | boolean | every linked account responded |
+| `captured_at` | timestamptz | set EXPLICITLY on upsert, because `default now()` fires only on INSERT and a refreshed row would otherwise keep its original age |
+
+**Why only the broker side is stored.** The book side is diffed LIVE on every
+render (`broker_sync.diff_position_map` against raw `holdings_df`). That
+asymmetry is the design: the side the user actively edits is the live one, so
+correcting a mis-logged trade clears the warning immediately instead of nagging
+until tomorrow's cron. Storing a precomputed *verdict* instead would invert
+that and is why it was rejected.
+
+**Why one JSONB row rather than a row per ticker.** A per-ticker table admits a
+PARTIAL write, and a ticker missing from it reads as "the broker doesn't hold
+it" ⇒ a **fabricated** drift on a correct book. Delete-then-insert is worse — a
+crash mid-way empties the table and every holding reads `app_only`. A single-row
+upsert is atomic. Same never-fabricate reasoning as F-243's outage gate.
+
+**Zero additional SnapTrade calls.** The `broker` lane's account-selection loop
+already fetched every account's positions purely to count them and discarded
+the payloads; this persists what was already paid for. Home doing it live would
+be 1 + N-accounts reads at `SNAPTRADE_REQUEST_TIMEOUT_SEC = 15` each — a ~90s
+worst-case stall on the most-rerun page.
+
+**The write invariant, and it is strict.** A snapshot is written ONLY when
+EVERY linked account responded — not merely when one did. The account topology
+is one heavy brokerage account plus several empty auxiliaries; the heavy one is
+the slowest read and likeliest to time out, and if only it fails the empty
+auxiliaries still satisfy the lane's selection guard. The aggregate would be
+`{}`, and upserting that says the broker holds nothing ⇒ every real holding
+renders as fabricated drift, with the known-good snapshot destroyed. Skipping is
+the safe direction: the prior row ages past `SNAPTRADE_BALANCE_STALE_HOURS` into
+Home's dated "no mismatch as of ‹date› — not re-checked since". Pinned by
+`tests/test_broker_position_snapshot.py`.
 ### `stock_analyzer/system_health.py`
 
 Pure-ish diagnostic module for the owner-only 🩺 System Trust page (System

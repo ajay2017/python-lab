@@ -1647,9 +1647,18 @@ def _run_maintenance(now_et, force: bool) -> int:
 def _run_broker(now_et, force: bool) -> int:
     """SnapTrade broker sync (Robinhood) — the 7th cron lane
     (docs/plans/snaptrade-broker-integration.md). Balance sync + transaction
-    import only — position drift (capability 1 of the plan) is computed
-    LIVE at app-render time from a fresh SnapTrade read, not cached here, so
-    there is nothing for this lane to write for it.
+    import, plus a broker-side position snapshot.
+
+    That snapshot was added 2026-08-23. This docstring previously said drift
+    "is computed LIVE at app-render time ... so there is nothing for this lane
+    to write for it" — which described the design rather than justifying it,
+    and stopped being true once 🏠 Home needed the answer. Home cannot afford a
+    live read (1 + N-accounts SnapTrade calls at 15s each = a 90s worst-case
+    stall on the most-rerun page), and the account-selection loop below ALREADY
+    fetches every account's positions just to count them, so persisting them
+    costs zero additional API calls. Only the BROKER side is stored; the book
+    side is diffed live on every render so a user's fix clears the warning
+    immediately rather than waiting for tomorrow's run.
 
     Dormant (returns 0, no email, no heartbeat failure) until the user
     completes the one-time SnapTrade connect flow — an unconfigured
@@ -1706,16 +1715,29 @@ def _run_broker(now_et, force: bool) -> int:
     #   not the same failure mode as "all reads timed out".
     _best_count: int = -1   # -1 = no valid response seen yet
     _best_id: str | None = None
+    _pos_by_account: dict[str, list] = {}   # account_id -> raw positions
+    _pos_read_failed = False                # any account we could NOT read
     for _a in accounts:
         _aid = _a.get("id")
         if not _aid:
+            # An account we never attempted is just as unread as one that timed
+            # out. Without this the snapshot would be written as "complete"
+            # while silently missing that account's positions — the exact
+            # fabrication the write invariant exists to prevent.
+            _pos_read_failed = True
             continue
         _aname = _a.get("name") or _a.get("institution_name") or "?"
         _apos = snaptrade_client.get_account_positions(_aid)
         if _apos is None:
             _log(f"broker: account {_aname!r} ({_aid}) — positions read failed; skipping for selection")
+            _pos_read_failed = True
             continue  # unknown — do not treat as 0
         _pcount = len(_apos)
+        # Keep the payload instead of discarding it. This loop already
+        # pays for every account's positions read purely to pick the main
+        # account, so persisting a broker-side snapshot for Home's drift
+        # warning costs ZERO additional SnapTrade calls.
+        _pos_by_account[str(_aid)] = _apos
         _log(f"broker: account {_aname!r} ({_aid}) — {_pcount} positions")
         if _pcount > _best_count:
             _best_count = _pcount
@@ -1737,6 +1759,66 @@ def _run_broker(now_et, force: bool) -> int:
 
     rc = 0
     failures: list[str] = []
+
+    # ⓪ broker-side position snapshot — feeds 🏠 Home's drift warning without
+    # putting a SnapTrade call on its render path. Uses the payloads the
+    # selection loop above already fetched, so no extra API cost.
+    #
+    # HARD INVARIANT: write ONLY when EVERY linked account responded.
+    #
+    # "At least one responded" is NOT sufficient, and assuming it was is the
+    # trap here. The real account topology is one heavy brokerage account plus
+    # several empty auxiliaries (credit card / crypto / IRA / managed). The
+    # heavy one is the slowest read and so the likeliest to hit
+    # SNAPTRADE_REQUEST_TIMEOUT_SEC — and if ONLY it fails, the empty
+    # auxiliaries still satisfy `_best_id is not None`, we'd aggregate to `{}`,
+    # and upserting that over the last good row would tell Home the broker
+    # holds NOTHING. Every real holding would render as fabricated `app_only`
+    # drift ("overstated by ~$24,503") on a perfectly correct book, and the
+    # known-good snapshot would be gone.
+    #
+    # `all_accounts_ok=False` does not rescue that: in the drift branch it only
+    # adds "some accounts didn't respond, so there may be MORE" — the opposite
+    # of the truth when the drift shown is entirely invented.
+    #
+    # Skipping is the safe direction. The prior snapshot simply ages past
+    # SNAPTRADE_BALANCE_STALE_HOURS into Home's "no mismatch as of <date> — not
+    # re-checked since", which is visible, dated, and never fabricated. This
+    # also matches what the live Account panel already does for the same
+    # condition; the persistence path must not be weaker than the path it
+    # mirrors, or the two surfaces disagree about the same underlying fault.
+    try:
+        if _pos_read_failed:
+            _log(f"broker: position snapshot NOT saved — "
+                 f"{len(accounts) - len(_pos_by_account)} of {len(accounts)} account(s) "
+                 f"unreadable. A partial snapshot would fabricate app_only drift for "
+                 f"every holding in the unread account; keeping the prior snapshot.")
+        else:
+            # No `or {}` here: this branch runs only when NO read failed, so
+            # every payload is a real list and normalize_positions (which
+            # returns None only for a None input) cannot return None. `or {}`
+            # would also be the offline-sentinel-collapse the repo's own gate
+            # blocks.
+            _snap_positions: dict[str, float] = {}
+            for _apos in _pos_by_account.values():
+                _norm = broker_sync.normalize_positions(_apos)
+                for _tk, _sh in _norm.items():
+                    _snap_positions[_tk] = _snap_positions.get(_tk, 0.0) + _sh
+            if db.save_broker_position_snapshot(
+                _snap_positions,
+                account_ids=sorted(_pos_by_account),
+                all_accounts_ok=True,
+            ):
+                _log(f"broker: position snapshot saved — {len(_snap_positions)} ticker(s) "
+                     f"across {len(_pos_by_account)} account(s)")
+            else:
+                # Non-fatal and deliberately NOT rc=1: the snapshot is
+                # awareness-only and Home renders "not checked" without it.
+                # Failing the lane would suppress the balance and transaction
+                # sync, which are the load-bearing jobs.
+                _log("broker: position snapshot not saved (DDL not applied yet, or DB write failed).")
+    except Exception as exc:
+        _log(f"broker/snapshot: UNCAUGHT — {str(exc)[:160]}")
 
     # ① balance sync — writes account_cash.
     try:

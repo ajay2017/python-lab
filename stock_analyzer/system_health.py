@@ -118,6 +118,11 @@ _INVENTORY: tuple[_Store, ...] = (
     _Store("weekly_debriefs",           "Weekly debrief",                "thesis",    "weekly",  False),
     _Store("monthly_reports",           "Monthly intelligence report",   "thesis",    "monthly", False),
     _Store("thesis_reviews",            "AI thesis reviews",             "thesis",    "weekly",  False),
+    # Existence-only on purpose. Its DDL is applied BY HAND, so until that
+    # happens the broker lane logs a skip and 🏠 Home's drift banner silently
+    # says "not checked" forever — a feature that looks fine while doing
+    # nothing. Registering it here is what makes that state visible.
+    _Store("broker_position_snapshot",  "Broker position snapshot",      "broker",    "daily",   False),
 )
 
 

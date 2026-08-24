@@ -465,8 +465,42 @@ def drift_dollar_impact(diff: dict | None, price_map: dict | None) -> dict:
     return out
 
 
+def split_awaiting_sync(diff: dict | None, recent_trade_tickers) -> tuple[dict, list]:
+    """Separate drift the user has ALREADY EXPLAINED from drift that is real.
+
+    The broker snapshot refreshes once a day; the book is diffed live. That
+    asymmetry is deliberate — it means correcting a mis-logged trade clears the
+    warning immediately — but it has a mirror problem that is easy to miss: the
+    moment you log a PERFECTLY CORRECT trade, the book moves ahead of the
+    snapshot and the ticker looks like drift. Without this split, the app's most
+    common daily workflow produces a confident "Portfolio Value overstated by
+    ~$5,400 — fix a missing trade" the same morning you did everything right.
+
+    A ticker traded after `captured_at` is therefore reported as AWAITING SYNC,
+    not as an error. Deliberately NOT dropped: a trade on a ticker does not
+    prove the resulting share count is right, so it still has to be visible —
+    just not as an accusation.
+    """
+    known = {str(t).strip().upper() for t in (recent_trade_tickers or [])}
+    if not diff:
+        return {"rh_only": [], "app_only": [], "qty_mismatch": []}, []
+    if not known:
+        return diff, []
+    real: dict = {}
+    awaiting: list = []
+    for bucket in ("rh_only", "app_only", "qty_mismatch"):
+        keep = []
+        for row in diff.get(bucket, []):
+            if row["ticker"] in known:
+                awaiting.append(row["ticker"])
+            else:
+                keep.append(row)
+        real[bucket] = keep
+    return real, sorted(set(awaiting))
+
+
 def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
-                        price_map=None) -> dict:
+                        price_map=None, recent_trade_tickers=None) -> dict:
     """What 🏠 Home should say about app-vs-broker drift. Pure, no Streamlit.
 
     Extracted as a decision function rather than render-layer `if`s because
@@ -504,11 +538,23 @@ def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
 
     captured_at = snapshot.get("captured_at")
     is_stale = _is_stale(captured_at, now_et, stale_hours)
+    # NOTE: no writer passes False today — the cron's invariant is to skip
+    # entirely when any account is unreadable, so a persisted row always has
+    # all_accounts_ok=True. The column and this branch are kept because the
+    # DDL default is `false` (the fail-safe reading for a legacy or
+    # hand-inserted row) and because a future per-account-scoped write could
+    # legitimately set it. Don't try to trigger the False path from the cron.
     all_ok = bool(snapshot.get("all_accounts_ok", False))
+
+    # Drift on a ticker traded since the snapshot is EXPECTED, not an error —
+    # the book moved ahead of a once-daily broker capture. Reported separately
+    # so a correct trade never renders as a missing one.
+    diff, awaiting = split_awaiting_sync(diff, recent_trade_tickers)
     has_drift = any(diff[k] for k in ("rh_only", "app_only", "qty_mismatch"))
 
     base = {
         "diff": diff,
+        "awaiting_sync": awaiting,
         "captured_at": captured_at,
         "is_stale": is_stale,
         "all_accounts_ok": all_ok,
@@ -518,6 +564,10 @@ def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
     if has_drift:
         # A stale POSITIVE is still true of its date — report it, dated.
         return {"state": "drift", **base}
+    if awaiting:
+        # Everything that differed is explained by a trade logged since the
+        # snapshot. Informational, NOT a warning — the user did nothing wrong.
+        return {"state": "awaiting_sync", **base}
     if is_stale:
         return {"state": "stale_clean", **base}
     if not all_ok:

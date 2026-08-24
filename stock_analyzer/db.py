@@ -659,6 +659,38 @@ the user acted on it):
     create policy "Allow all (service role)" on public.snaptrade_config
         for all to service_role using (true) with check (true);
 
+    -- broker_position_snapshot: single-row (id=1) capture of what the BROKER
+    -- reported holding, so 🏠 Home can warn that Portfolio Value disagrees with
+    -- the broker WITHOUT putting a SnapTrade call on its render path (1 +
+    -- N-accounts calls at 15s each = a 90s worst-case stall on the app's most
+    -- rerun page). The `broker` cron already fetches these payloads to pick the
+    -- main account and discards them, so persisting costs ZERO extra API calls.
+    --
+    -- Only the BROKER side is stored. The book side is diffed live on every
+    -- render, so correcting a mis-logged trade clears the warning immediately
+    -- instead of nagging until tomorrow's cron — that asymmetry is the whole
+    -- design, not an implementation detail.
+    --
+    -- SINGLE-ROW JSONB, not per-ticker rows, and this is load-bearing: a
+    -- per-ticker table admits a PARTIAL write, and a ticker missing from it
+    -- reads as "the broker doesn't hold it" ⇒ a FABRICATED drift on a correct
+    -- book. Delete-then-insert is worse (a crash mid-way empties the table and
+    -- every holding reads app_only). A single-row upsert is atomic.
+    -- `all_accounts_ok` false means some linked account didn't respond at
+    -- capture time, so a clean diff cannot rule out drift in the unread one.
+    create table if not exists public.broker_position_snapshot (
+        id              integer primary key,
+        positions       jsonb   not null,
+        account_ids     jsonb,
+        all_accounts_ok boolean not null default false,
+        captured_at     timestamptz not null default now(),
+        constraint broker_position_snapshot_single_row check (id = 1)
+    );
+    alter table public.broker_position_snapshot enable row level security;
+    drop policy if exists "Allow all (service role)" on public.broker_position_snapshot;
+    create policy "Allow all (service role)" on public.broker_position_snapshot
+        for all to service_role using (true) with check (true);
+
     -- snaptrade_pending_imports: a notification/reminder queue, NEVER a
     -- source of truth — Option A trade-log flow means a row here only
     -- becomes a real `trades` row when the user completes the Log Trade form
@@ -4442,3 +4474,96 @@ def save_missed_opportunity_cache(scan_date, patterns, missed_snapshot):
         }).execute()
     except Exception:
         pass
+
+
+# ── broker_position_snapshot: what the BROKER reported holding ──────────────
+# Captured by the `broker` cron (which already fetches these payloads to pick
+# the main account and previously discarded them, so this costs ZERO extra
+# SnapTrade calls) and consumed by 🏠 Home, which re-diffs it against the LIVE
+# book on every render. Only the broker side is persisted — see the DDL comment
+# for why that asymmetry is the design and not an accident.
+
+def _mt_now_et():
+    """ET-aware now, imported lazily to keep db.py free of a hard
+    market_time dependency at module import."""
+    from stock_analyzer.market_time import now_et
+    return now_et()
+
+
+def load_broker_position_snapshot() -> dict | None:
+    """The single broker_position_snapshot row, or None.
+
+    None means UNKNOWN — DB offline, table not yet created (the DDL is applied
+    by hand, same convention as snaptrade_config), or no capture has run. The
+    caller MUST render that as "not checked", never as "no drift":
+    `broker_sync.decide_drift_banner` returns state "unknown" for it.
+
+    An empty `positions` dict is a genuinely DIFFERENT thing — the broker
+    responded and holds nothing — and is returned as `{}`, not None. Collapsing
+    the two would let an outage read as an all-cash account, which would flag
+    every holding as drift.
+    """
+    if not has_db():
+        return None
+    try:
+        rows = (
+            _client().table("broker_position_snapshot")
+            .select("positions,account_ids,all_accounts_ok,captured_at")
+            .eq("id", 1).limit(1).execute().data
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        positions = row.get("positions")
+        if positions is None:
+            return None          # unreadable payload — unknown, not "no drift"
+        return {
+            "positions":       {str(k).upper(): float(v) for k, v in dict(positions).items()},
+            "account_ids":     row.get("account_ids"),
+            "all_accounts_ok": bool(row.get("all_accounts_ok", False)),
+            "captured_at":     row.get("captured_at"),
+        }
+    except Exception:
+        return None
+
+
+def save_broker_position_snapshot(positions: dict, account_ids=None,
+                                  all_accounts_ok: bool = False) -> bool:
+    """Upsert the single broker_position_snapshot row (id=1).
+
+    CALLER INVARIANT, and the highest-consequence rule in this feature: do NOT
+    call this when every account read failed. An empty snapshot tells Home the
+    broker holds nothing, which turns every real holding into a fabricated
+    `app_only` drift on a perfectly correct book. "Unknown" must stay absent,
+    not be written as empty. This function cannot distinguish the two, so the
+    cron guards it — `positions={}` here is reserved for a genuinely all-cash
+    account that responded successfully.
+
+    Read-only-viewer gated at the db layer for the same reason as
+    `save_snaptrade_config`: `is_readonly()` is False in the headless cron, so
+    this costs it nothing, while a live viewer session can never write.
+    """
+    if is_readonly(): return False  # read-only viewer: no-op
+    if not has_db():
+        return False
+    if positions is None:
+        return False                 # never write "unknown" as a row
+    try:
+        _client().table("broker_position_snapshot").upsert(
+            {
+                "id":              1,
+                "positions":       {str(k).upper(): float(v) for k, v in dict(positions).items()},
+                "account_ids":     list(account_ids) if account_ids else None,
+                "all_accounts_ok": bool(all_accounts_ok),
+                # Explicit, not the column default: `default now()` fires only
+                # on INSERT, so an upsert over an existing row would keep the
+                # ORIGINAL capture time and the staleness check would trust a
+                # fresh snapshot as old (or worse, an old one as fresh).
+                "captured_at":     _mt_now_et().isoformat(),
+            },
+            on_conflict="id",
+        ).execute()
+        return True
+    except Exception as e:
+        _record_db_error(str(e)[:120])
+        return False
