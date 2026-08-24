@@ -2480,7 +2480,17 @@ def _check_password():
                 st.session_state["_login_fails"] = 0
             elif _fails >= 3:
                 time.sleep(2)   # 2s delay after 3rd+ failure
-            st.error(f"Incorrect password ({_fails} failed attempt{'s' if _fails != 1 else ''})")
+            _quips = [
+                "🤔 Hmm. That didn't work.",
+                "🙈 Nope, not that one.",
+                "🎲 Care to roll the dice again?",
+                "🧐 The vibes were off on that one.",
+                "🔮 The crystal ball says... try again.",
+                "🦆 The duck shook its head.",
+                "🚪 Door's still closed.",
+                "🌚 The void stared back. Try again.",
+            ]
+            st.error(_quips[(_fails - 1) % len(_quips)])
     st.stop()
 
 _check_password()
