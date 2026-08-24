@@ -2557,7 +2557,20 @@ reports failure by returning non-zero (rather than raising) still records
 | `intraday` | `cron-intraday` | `30 15,16 * * 1-5` | trading day | Intraday pullback entry check |
 | `eod` | `cron-eod` | `30 21 * * 1-5` | trading day + ET hour ≥ `ALERT_EOD_HOUR_ET` | EOD snapshot, pullback alert, vol-prediction write + maturation |
 | `thesis` | `cron-thesis` | `0 23 * * 0` | Sunday | F-1 thesis review → F-3 weekly debrief → F-4 monthly report (first Sunday) |
+| `broker` | `cron-broker` | *not recorded here* | **none** — see below | SnapTrade balance sync, transaction import, broker position snapshot (F-252) |
 | `maintenance` | `cron-maintenance` ⚠️ | *not recorded here* | Saturday | Idempotent data backfills (see below) |
+
+⚠️ **`broker` has NO in-code guard at all** — no trading-day check, no ET-hour
+floor. Every other lane self-skips a wrongly-timed fire; this one runs whenever
+its cron fires, weekends included (confirmed: it ran Sunday 2026-08-23). So the
+comma-list DST pattern used by the other weekday lanes would cause it to run
+BOTH slots rather than dedup one, and its schedule cannot be reasoned about from
+the code — read the dashboard. `system_health` grades it against 14:00/19:00 ET
+(`_Lane("broker", …, fire_hours_et=(14, 19))`), but a real fire was observed at
+**17:02 ET**, so that expectation and reality currently disagree; the live cron
+expression has not been read yet. Not known to affect any number — the lane is
+idempotent and its consumers all handle staleness — but do not treat the
+`fire_hours_et` values as the schedule.
 
 **The schedule column is a MIRROR of the Railway dashboard, which is the source of truth**
 (these services are dashboard-managed, not repo-managed — see the ⚠️ note below). Read the
