@@ -24895,9 +24895,23 @@ elif page == "📒 Trade Journal":
                 # microsecond component that the Python-SDK inserts have) get
                 # silently coerced to NaT by errors='coerce', rendering as 'None'
                 # in the Date / Time column. utc=True normalises to UTC.
-                display_df["traded_at"] = pd.to_datetime(
+                _at_ts = pd.to_datetime(
                     display_df["traded_at"], errors="coerce", utc=True, format="ISO8601"
-                ).dt.strftime("%Y-%m-%d %H:%M")
+                )
+                # traded_at_time_known=False means normalize_traded_at invented
+                # the fill time (broker CSV import re-anchored to 16:00 ET).
+                # Show "—" for the time portion rather than an invented "20:00".
+                _time_known = (
+                    display_df["traded_at_time_known"]
+                    if "traded_at_time_known" in display_df.columns
+                    else pd.Series(True, index=display_df.index)
+                )
+                display_df["traded_at"] = [
+                    ("" if pd.isna(t) else
+                     t.strftime("%Y-%m-%d") + " —" if (pd.notna(k) and not k) else
+                     t.strftime("%Y-%m-%d %H:%M"))
+                    for t, k in zip(_at_ts, _time_known)
+                ]
 
             # Add delete checkbox column
             display_df.insert(0, "Delete?", False)
@@ -36052,6 +36066,11 @@ elif page == "🎯 My Edge":
                     ):
                         continue
                     try:
+                        # Exclude rows whose fill time was invented (broker CSV
+                        # import re-anchored to 16:00 ET). Treating 16:00 as a
+                        # real fill time would silently pollute the "later" bucket.
+                        if r["acted_trade"].get("traded_at_time_known") is False:
+                            continue
                         _bf_et = pd.to_datetime(
                             r["acted_trade"]["traded_at"], utc=True, format="ISO8601"
                         ).tz_convert("America/New_York").time()
