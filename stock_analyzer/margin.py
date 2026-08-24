@@ -51,3 +51,21 @@ def call_distance(
         "call_distance_pct": call_distance_pct,
         "in_call": in_call,
     }
+
+
+def capital_basis_weight(market_value: float, net_capital: float) -> float | None:
+    """Weight of `market_value` as a percentage of the owner's actual capital.
+
+    Awareness-only dual-basis readout (2026-08-24): every concentration gate
+    (SINGLE_NAME_CEILING, SECTOR_CEILING) computes weight against gross
+    holdings value, which equals owner capital only when unlevered. At real
+    leverage, "15% of book" understates what a position is worth against the
+    capital the owner actually holds. This does not change any gate's input —
+    it exists purely to show the second number alongside the first.
+
+    Returns None when net_capital <= 0 (no capital to weigh against — e.g. a
+    margin-called or net-negative account, where a percentage is meaningless).
+    """
+    if net_capital <= 0:
+        return None
+    return market_value / net_capital * 100.0

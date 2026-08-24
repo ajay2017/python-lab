@@ -1,7 +1,7 @@
 """Tests for stock_analyzer.margin — margin call-distance computations."""
 import importlib
 import pytest
-from stock_analyzer.margin import call_distance
+from stock_analyzer.margin import call_distance, capital_basis_weight
 from stock_analyzer.constants import FRAGILITY_PULLBACK_PCT, MARGIN_MAINTENANCE_RATE
 
 
@@ -142,3 +142,57 @@ def test_high_leverage_produces_closer_call():
     assert low_lev is not None and high_lev is not None
     # high leverage call distance is less negative (triggers sooner)
     assert high_lev["call_distance_pct"] > low_lev["call_distance_pct"]
+
+
+# ── capital_basis_weight ───────────────────────────────────────────────────────
+
+def test_capital_basis_weight_matches_real_book():
+    """Founding measurement: a $3,546 position (OXY-sized buy) against the
+    real book's $7,802 owner capital is ~45.4% of capital, vs ~14.5% of the
+    ~$24,503 gross book — the exact gap this function exists to surface."""
+    equity_pct = 3546.0 / 24503.0 * 100
+    capital_pct = capital_basis_weight(3546.0, 7802.0)
+    assert capital_pct is not None
+    assert abs(capital_pct - 45.45) < 0.1
+    assert capital_pct > equity_pct * 3  # the ~3x understatement this closes
+
+
+def test_capital_basis_weight_unlevered_matches_equity_weight():
+    """When net_capital == gross market value (no leverage), the two bases
+    coincide exactly — the gap only exists once leverage is introduced."""
+    assert capital_basis_weight(1500.0, 10000.0) == pytest.approx(15.0)
+
+
+def test_capital_basis_weight_zero_capital_returns_none():
+    assert capital_basis_weight(1000.0, 0.0) is None
+
+
+def test_capital_basis_weight_negative_capital_returns_none():
+    """A margin-called or net-negative account has no meaningful capital
+    percentage to display."""
+    assert capital_basis_weight(1000.0, -500.0) is None
+
+
+def test_capital_basis_weight_not_imported_by_gate_modules():
+    """Same awareness-only invariant as MARGIN_MAINTENANCE_RATE: this is a
+    display-only dual-basis readout and must never feed a gate, score, or
+    recommendation — only the Account page and the leverage banner read it."""
+    gate_modules = [
+        "stock_analyzer.risk_advisor",
+        "stock_analyzer.exit_advisor",
+        "stock_analyzer.daily_briefing",
+        "stock_analyzer.scoring",
+        "stock_analyzer.ranking",
+        "stock_analyzer.targets",
+        "stock_analyzer.watchlist_advisor",
+        "stock_analyzer.portfolio",
+    ]
+    for mod_name in gate_modules:
+        try:
+            mod = importlib.import_module(mod_name)
+            assert not hasattr(mod, "capital_basis_weight"), (
+                f"{mod_name} imported capital_basis_weight — "
+                "this must remain awareness-only and never feed a gate"
+            )
+        except ImportError:
+            pass  # module doesn't exist — nothing to check

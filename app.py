@@ -12646,6 +12646,17 @@ elif page == "🔗 Risk Analysis":
                             + (f" (−{_lv_eq_pct:.0f}% of your equity)" if _lv_eq_pct is not None else "")
                             + "."
                         )
+                        # Dual-basis weight — the SECTOR_CEILING gate reads the first
+                        # number below; the second is what that sector is actually
+                        # worth against the capital you own. Awareness only.
+                        _lv_sec_wt_eq = (float(_lv_sec.iloc[0]) / _lv_eq * 100) if _lv_eq > 0 else None
+                        _lv_sec_wt_cap = _margin_mod.capital_basis_weight(float(_lv_sec.iloc[0]), _lv_nc)
+                        if _lv_sec_wt_eq is not None and _lv_sec_wt_cap is not None:
+                            _lv_line += (
+                                f" Your largest sector is **{_lv_sec_wt_eq:.0f}% of book** "
+                                f"but **{_lv_sec_wt_cap:.0f}% of your actual capital** "
+                                f"(the sector-concentration gate reads the first number)."
+                            )
             except Exception:
                 _lv_line = ""
             st.warning(
@@ -29322,14 +29333,32 @@ elif page == "💰 Account":
                 st.caption(
                     "True concentration — each position as % of your **whole account** "
                     "(equity + net cash) vs % of invested equity. The concentration **gates "
-                    "use equity-basis** (% of invested equity), so they stay stable across a "
-                    "transient margin balance; leverage/margin risk is surfaced separately as "
-                    "an **awareness** signal (🔗 Risk Analysis), never a gate."
+                    "use equity-basis** (% of invested equity) — that basis is deliberate "
+                    "policy, not a hedge against day-to-day cash noise, so a **structural** "
+                    "margin debit (like yours) means the gate number and the account number "
+                    "diverge persistently, not just transiently. Leverage/margin risk is "
+                    "surfaced separately as an **awareness** signal (🔗 Risk Analysis), never a gate."
                 )
                 st.dataframe(
                     _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
                     hide_index=True, width='stretch',
                 )
+                if "Sector" in _acc_pdf.columns:
+                    _sec_conc = (
+                        _acc_pdf.groupby("Sector")["Market Value"].sum()
+                        .sort_values(ascending=False).reset_index()
+                    )
+                    _sec_conc["Equity Wt (%)"] = (
+                        _sec_conc["Market Value"] / _equity * 100
+                    ).round(1) if _equity > 0 else None
+                    _sec_conc["Account Wt (%)"] = (
+                        _sec_conc["Market Value"] / _total_acct * 100
+                    ).round(1)
+                    st.caption("Sector-level, same two bases — this is what `SECTOR_CEILING` reads (Equity Wt):")
+                    st.dataframe(
+                        _sec_conc[["Sector", "Equity Wt (%)", "Account Wt (%)"]],
+                        hide_index=True, width='stretch',
+                    )
     elif _cash is not None and not _have_pf:
         st.metric("Net Cash" if _cash < 0 else "Cash", _m(f"${_cash:,.0f}"),
                   help="Negative = a margin debit (borrowed).")
