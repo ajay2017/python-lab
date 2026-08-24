@@ -162,7 +162,7 @@ class _Lane:
 #   eod           | (19,)         | —
 #   thesis        | (20,)         | 6 (Sunday)
 #   maintenance   | (10,)         | 5 (Saturday)
-#   broker        | (14, 19)      | —
+#   broker        | (12, 18)      | —
 _LANES: tuple[_Lane, ...] = (
     _Lane("premarket",   "Pre-market protective scan", "daily",  fire_hours_et=(10,)),
     _Lane("scan",        "Morning market scan",        "daily",  fire_hours_et=(12,)),
@@ -183,9 +183,26 @@ _LANES: tuple[_Lane, ...] = (
     # returns 0 and the dispatcher still writes a fresh status="ok" heartbeat
     # every fire (the dormant no-op is a genuine successful run), so the lane
     # reads green — never "down" either way (2026-08-17 review finding: the
-    # original comment here conflated these two states). Two fires/day
-    # (14, 19) → the expected-fire check grades against max() = 19.
-    _Lane("broker",      "SnapTrade broker sync",       "daily", fire_hours_et=(14, 19)),
+    # original comment here conflated these two states).
+    #
+    # fire_hours_et corrected 2026-08-24 (measured, not guessed): the
+    # cron-broker Railway service's real Cron Schedule is "0 16,21 * * *"
+    # (16:00 and 21:00 UTC) -- confirmed from the dashboard, not inferred.
+    # In EDT that's 12:00/17:00 ET; in EST it's 11:00/16:00 ET. The previous
+    # (14, 19) was never verified against the dashboard and didn't match
+    # either -- two real captures (2026-08-23 17:02 ET, 2026-08-24 12:02 ET)
+    # each landed ~2min after the true 17:00/12:00 ET slots. This did NOT
+    # cause a wrong health signal: the deadline check below only uses
+    # max(fire_hours_et), and 19 already safely exceeded the true max in
+    # both DST states (17 EDT / 16 EST), so it was inaccurate documentation,
+    # not a live bug. Using (12, 18) rather than the literal (12, 17): this
+    # file's own header design principle (see the lane-table comment above)
+    # is that the deadline should sit PAST each lane's fire+write time, not
+    # exactly at it -- 17 would land exactly at the true EDT fire instant
+    # (write lands ~17:02), leaving zero margin the way eod=(19,) has margin
+    # past its own fire time. 18 restores that margin while still safely
+    # exceeding the EST-equivalent max of 16 (Opus review finding, 2026-08-24).
+    _Lane("broker",      "SnapTrade broker sync",       "daily", fire_hours_et=(12, 18)),
 )
 
 
