@@ -42,6 +42,7 @@ def _provider_label(name: str) -> str:
         "supabase": "Supabase",
     }.get(name, str(name).replace("_", " ").title())
 
+import hmac
 import html as _html
 import time
 from stock_analyzer.data import (
@@ -2426,8 +2427,11 @@ def _check_password():
     # password gate works without mounting a Secret File.
     expected    = expected    or os.environ.get("APP_PASSWORD", "")
     ro_expected = ro_expected or os.environ.get("APP_READONLY_PASSWORD", "")
-    if not expected or st.session_state.get("auth_ok"):
+    if st.session_state.get("auth_ok"):
         return
+    if not expected:
+        st.error("APP_PASSWORD is not configured — access denied. Set it in Railway → Variables.")
+        st.stop()
     _render_brand(large=True)
     st.subheader("Sign In")
 
@@ -2440,14 +2444,14 @@ def _check_password():
 
     pwd = st.text_input("Password", type="password")
     if st.button("Login", type="primary"):
-        if pwd == expected:
+        if hmac.compare_digest(pwd, expected):
             # Owner password — full access; check FIRST so if both passwords are
             # ever set equal, the owner always lands on the owner role.
             st.session_state.auth_ok   = True
             st.session_state["auth_role"] = "owner"
             st.session_state["_login_fails"] = 0
             st.rerun()
-        elif ro_expected and pwd == ro_expected:
+        elif ro_expected and hmac.compare_digest(pwd, ro_expected):
             # Read-only password — viewer access.
             st.session_state.auth_ok   = True
             st.session_state["auth_role"] = "viewer"
