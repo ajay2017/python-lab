@@ -29277,17 +29277,18 @@ elif page == "💰 Account":
                 _conc.rename(columns={"Weight (%)": "Equity Wt (%)"})
                 .sort_values("Account Wt (%)", ascending=False)
             )
-            st.caption(
-                "True concentration — each position as % of your **whole account** "
-                "(equity + net cash) vs % of invested equity. The concentration **gates "
-                "use equity-basis** (% of invested equity), so they stay stable across a "
-                "transient margin balance; leverage/margin risk is surfaced separately as "
-                "an **awareness** signal (🔗 Risk Analysis), never a gate."
-            )
-            st.dataframe(
-                _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
-                hide_index=True, width='stretch',
-            )
+            with st.expander("Per-position concentration breakdown", expanded=False):
+                st.caption(
+                    "True concentration — each position as % of your **whole account** "
+                    "(equity + net cash) vs % of invested equity. The concentration **gates "
+                    "use equity-basis** (% of invested equity), so they stay stable across a "
+                    "transient margin balance; leverage/margin risk is surfaced separately as "
+                    "an **awareness** signal (🔗 Risk Analysis), never a gate."
+                )
+                st.dataframe(
+                    _conc[["Ticker", "Equity Wt (%)", "Account Wt (%)"]],
+                    hide_index=True, width='stretch',
+                )
     elif _cash is not None and not _have_pf:
         st.metric("Net Cash" if _cash < 0 else "Cash", _m(f"${_cash:,.0f}"),
                   help="Negative = a margin debit (borrowed).")
