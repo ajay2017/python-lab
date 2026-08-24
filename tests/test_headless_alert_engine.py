@@ -273,6 +273,21 @@ def test_build_context_happy_path():
     assert result["vix"] == 16.0
 
 
+def test_build_context_returns_raw_holdings_and_trades_frames():
+    """F-252 follow-up (2026-08-24): compute_morning_picks needs the RAW
+    holdings_df (fractional shares intact) and trades_df to compute a
+    broker-drift verdict headlessly -- both were already loaded here but not
+    returned. Regression guard against silently dropping them again."""
+    cfg = _patch_context_deps(
+        load_holdings=pd.DataFrame({"Ticker": ["AAPL"], "Shares": [10.5]}),
+        load_trades=pd.DataFrame({"ticker": ["AAPL"], "traded_at": ["2026-07-01T00:00:00+00:00"]}),
+    )
+    result = _run_build_context(cfg)
+    assert result["ok"] is True
+    assert list(result["holdings_df"]["Shares"]) == [10.5]   # raw, not int()-truncated
+    assert list(result["trades_df"]["ticker"]) == ["AAPL"]
+
+
 def test_build_context_fragility_none_when_beta_is_nan():
     # Regression test for the 2026-07-27 Opus-review follow-up (fixed
     # 2026-07-28): `beta = port_risk.get("beta")` didn't route through the
@@ -629,6 +644,79 @@ def test_morning_picks_build_daily_briefing_exception_returns_empty():
         result = hae.compute_morning_picks(TODAY, scanner_results=_scanner_df(["NVDA"]))
     assert result["picks"] == []
     assert any("build_daily_briefing failed" in e for e in result["errors"])
+
+
+# ── compute_morning_picks — book_drift (F-252 follow-up, 2026-08-24) ────────
+# The emailed picks' suggested sizes are computed from `portfolio_value`,
+# which can silently disagree with the broker. Unlike the interactive app,
+# the email carries no drift banner today -- these tests cover the new
+# headless call site that computes one via broker_sync.decide_drift_banner.
+
+def _run_morning_picks_with_drift(holdings_df=None, trades_df=None,
+                                   snapshot=None, snapshot_side_effect=None,
+                                   decide_drift_return=None):
+    ctx = {
+        "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
+        "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+        "holdings_df": holdings_df, "trades_df": trades_df,
+    }
+    brief = {"grow_today": {"tone": "bull", "new_picks": [{"ticker": "NVDA"}], "sp500_pct": 1.0,
+                            "sector_blocked_picks": [], "macro_blocked_picks": [],
+                            "composite_skipped": [], "composite_unavailable": []}}
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.data.fetch_market_indices", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.load_bundle", return_value={}), \
+         patch("stock_analyzer.data.curate_news_items", return_value=[]), \
+         patch("stock_analyzer.macro_calendar.build_macro_calendar", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.build_daily_briefing", return_value=brief), \
+         patch("stock_analyzer.headless_alert_engine.db.load_broker_position_snapshot",
+               return_value=snapshot, side_effect=snapshot_side_effect) as _mock_snap, \
+         patch("stock_analyzer.headless_alert_engine.broker_sync.decide_drift_banner",
+               return_value=decide_drift_return) as _mock_decide:
+        result = hae.compute_morning_picks(TODAY, scanner_results=_scanner_df(["NVDA"]))
+    return result, _mock_snap, _mock_decide
+
+
+def test_morning_picks_book_drift_none_when_no_broker_snapshot():
+    """No SnapTrade capture yet (or not configured) -> book_drift stays None,
+    the fail-safe direction for a push surface, not 'no drift'."""
+    result, _, mock_decide = _run_morning_picks_with_drift(snapshot=None)
+    assert result["book_drift"] is None
+    mock_decide.assert_not_called()   # no snapshot -> nothing to diff
+
+
+def test_morning_picks_book_drift_computed_when_snapshot_present():
+    result, _, mock_decide = _run_morning_picks_with_drift(
+        snapshot={"positions": {"AAPL": 10}, "captured_at": "2026-07-27T12:00:00+00:00"},
+        decide_drift_return={"state": "drift", "impact": {"overstated": 500.0}},
+    )
+    assert result["book_drift"]["state"] == "drift"
+    mock_decide.assert_called_once()
+
+
+def test_morning_picks_book_drift_uses_raw_holdings_df_not_port_df():
+    """The exact trap this feature exists to avoid: diffing the int()-truncated
+    port_df instead of the raw holdings_df fabricates a permanent phantom
+    drift on any fractional broker lot. Assert the call site passes ctx's raw
+    holdings_df object, not ctx's port_df."""
+    _raw_holdings = pd.DataFrame({"Ticker": ["AAPL"], "Shares": [10.5]})
+    result, _, mock_decide = _run_morning_picks_with_drift(
+        holdings_df=_raw_holdings,
+        snapshot={"positions": {"AAPL": 10.5}, "captured_at": "2026-07-27T12:00:00+00:00"},
+        decide_drift_return={"state": "none"},
+    )
+    _, called_holdings_df = mock_decide.call_args[0][:2]
+    assert called_holdings_df is _raw_holdings
+
+
+def test_morning_picks_book_drift_failure_isolated_from_picks():
+    """A SnapTrade/DB fault computing book_drift must never abort pick
+    computation or the email -- picks still flow through, book_drift is None."""
+    result, _, _ = _run_morning_picks_with_drift(
+        snapshot_side_effect=RuntimeError("SnapTrade unreachable"),
+    )
+    assert result["book_drift"] is None
+    assert result["picks"] == [{"ticker": "NVDA"}]
 
 
 # ── compute_eod ────────────────────────────────────────────────────────────

@@ -52,6 +52,51 @@ def _sizing_cap_note(sz: dict) -> str:
         )
     return ""
 
+
+def _book_drift_banner(verdict: dict | None) -> str:
+    """Book-vs-broker drift disclosure for an email, or "" when silent.
+
+    F-252 follow-up (2026-08-24): the suggested share sizes in this email are
+    computed from the app's own `portfolio_value` — a book-wide sum — which
+    can silently disagree with what the broker actually shows. Since
+    `portfolio_value` is a single denominator shared by every pick, a drift
+    on ANY held ticker corrupts the sizing for every new pick in this email,
+    including names that have nothing to do with the drifted ticker — so this
+    renders ONE book-wide banner, not a per-pick note.
+
+    Renders ONLY on `verdict["state"] == "drift"` — a real, actionable
+    mismatch. Silent on "unknown"/"stale_clean"/"awaiting_sync"/"none" and on
+    `None` (SnapTrade not configured, no capture yet, or the drift check
+    itself failed). This deliberately diverges from the in-app Home banner,
+    which also renders on "unknown" (a QUERIED surface, where silence + a
+    green tick would fail open into looking clean). This is a PUSH surface:
+    it never implies broker verification happened, so silence here does not
+    assert cleanliness — rendering "unknown" on every push email a user with
+    no broker linked ever receives is exactly the amber-fatigue this
+    module's own docstring principle warns against. Fire only on a positive,
+    actionable finding.
+
+    Never changes a suggested share count — annotation only.
+    """
+    if not isinstance(verdict, dict) or verdict.get("state") != "drift":
+        return ""
+    impact = verdict.get("impact")
+    if not isinstance(impact, dict):
+        impact = {}
+    overstated = impact.get("overstated") or 0.0
+    _amt = f" (~${abs(float(overstated)):,.0f} of book value in question)" if overstated else ""
+    return (
+        f'<div style="border-left:4px solid #f59e0b;background:#1c1710;border-radius:0 6px 6px 0;'
+        f'padding:10px 16px;margin:0 0 12px 0;font-family:Arial,Helvetica,sans-serif">'
+        f'<div style="color:#f59e0b;font-weight:700;font-size:12px">'
+        f'⚠️ Your recorded book disagrees with your broker{_amt}</div>'
+        f'<div style="color:#cbd5e1;font-size:12px;margin-top:3px">'
+        f'The suggested share sizes below are computed from the app\'s portfolio value — '
+        f'verify the size against your actual account before acting.</div>'
+        f'</div>'
+    )
+
+
 # Per-kind accent + headline label for the email cards.
 _KIND_STYLE = {
     "stop_breach":        ("#ef4444", "🛑 STOP BREACH"),
@@ -411,17 +456,21 @@ def render_daily_action_email(
     exit_alerts: list[dict],
     other_picks: list[dict],
     built_at: str,
+    book_drift: dict | None = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the single-action morning email.
 
     Replaces the flat buy-list format with a priority-first layout:
       Section 1 (if any EXIT/TRIM signals from premarket run) — handle exits first
+      Section 1b (if book_drift shows real drift) — book-vs-broker disclosure
       Section 2 — #1 entry action today (top composite pick, full detail)
       Section 3 — other setups as a compact reference list
 
     `exit_alerts` are rows from exit_signals (EXIT or TRIM tier only).
     `top_pick` is the highest-composite go-verdict pick (caller guarantees non-empty).
     `other_picks` are the remaining go-verdict picks (may be empty).
+    `book_drift` is the verdict dict from broker_sync.decide_drift_banner, or
+    None — see `_book_drift_banner` for when it renders (F-252 follow-up).
     """
     from stock_analyzer.constants import SCAN_TOP_PICK_MIN_COMPOSITE
 
@@ -477,6 +526,9 @@ def render_daily_action_email(
           </div>
           {''.join(rows)}
         </div>"""
+
+    # ── Section 1b: book-vs-broker drift disclosure (if any) ─────────────────
+    drift_html = _book_drift_banner(book_drift)
 
     # ── Section 2: #1 action card ─────────────────────────────────────────────
     score_bits = []
@@ -556,6 +608,7 @@ def render_daily_action_email(
           {_html.escape(str(built_at))[:19]} ET · one decisive call
         </div>
         {exit_html}
+        {drift_html}
         {top_card}
         {other_html}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
@@ -574,12 +627,15 @@ def render_intraday_entry_email(
     entries: list[dict],
     spy_drop: float | None,
     built_at: str,
+    book_drift: dict | None = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the intraday pullback entry-window email.
 
     `entries` are qualifying picks enriched with intraday_drop_pct, current_price,
     open_price from intraday_entry.compute_intraday_entries().  Non-empty guaranteed
     by caller. `spy_drop` is SPY's intraday drop (negative float) or None.
+    `book_drift` is the verdict dict from broker_sync.decide_drift_banner, or
+    None — see `_book_drift_banner` for when it renders (F-252 follow-up).
     """
     n = len(entries)
     top = entries[0]
@@ -633,6 +689,8 @@ def render_intraday_entry_email(
     if spy_drop is not None:
         spy_line = f"SPY {float(spy_drop):+.1f}% intraday — broad market not in freefall."
 
+    drift_html = _book_drift_banner(book_drift)
+
     body = f"""<!DOCTYPE html><html><body style="background:#0c0a09;padding:20px;margin:0">
       <div style="max-width:640px;margin:0 auto">
         <div style="font-family:Arial,Helvetica,sans-serif;color:#f9fafb;font-size:18px;
@@ -642,6 +700,7 @@ def render_intraday_entry_email(
           {_html.escape(str(built_at))[:19]} ET
           {f'&nbsp;·&nbsp;{_html.escape(spy_line)}' if spy_line else ''}
         </div>
+        {drift_html}
         {''.join(cards)}
         <div style="font-family:Arial,Helvetica,sans-serif;color:#6b7280;font-size:11px;
                     margin-top:18px;border-top:1px solid #292524;padding-top:10px">

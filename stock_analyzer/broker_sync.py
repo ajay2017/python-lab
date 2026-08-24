@@ -499,6 +499,41 @@ def split_awaiting_sync(diff: dict | None, recent_trade_tickers) -> tuple[dict, 
     return real, sorted(set(awaiting))
 
 
+def tickers_traded_since(trades_df, captured_at) -> list:
+    """Tickers with a trade logged AFTER `captured_at`.
+
+    The broker snapshot refreshes once daily while the book is diffed live, so
+    any ticker traded since the capture will differ for a perfectly good reason.
+    Without this, logging a correct trade at 10:00 makes the drift check
+    announce "Portfolio Value overstated — fix a missing trade" the same
+    morning the user did everything right, which is how a real warning gets
+    ignored.
+
+    Relocated here from app.py 2026-08-24 so the headless cron path (which has
+    no Streamlit, no st.session_state) can compute the same drift verdict
+    app.py does for the interactive Home render, without importing the
+    Streamlit-laden app.py module. app.py now calls this via
+    `broker_sync.tickers_traded_since`.
+
+    Returns [] (not None) on any failure — an empty set means "explain nothing
+    away", i.e. the conservative direction that keeps drift visible.
+    """
+    if trades_df is None or captured_at is None:
+        return []
+    try:
+        if getattr(trades_df, "empty", True) or "traded_at" not in trades_df.columns:
+            return []
+        _cap = pd.to_datetime(captured_at, utc=True, errors="coerce", format="ISO8601")
+        if _cap is None or pd.isna(_cap):
+            return []
+        _ts = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
+                             format="ISO8601")
+        _hit = trades_df.loc[_ts.notna() & (_ts > _cap), "ticker"]
+        return sorted({str(t).strip().upper() for t in _hit if str(t).strip()})
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
 def decide_drift_banner(snapshot, holdings_df, now_et, stale_hours,
                         price_map=None, recent_trade_tickers=None) -> dict:
     """What 🏠 Home should say about app-vs-broker drift. Pure, no Streamlit.

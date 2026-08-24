@@ -148,6 +148,85 @@ def test_render_daily_action_email_other_picks_rendered():
     assert "OTHER SETUPS" in body
 
 
+# ─── _book_drift_banner (F-252 follow-up, 2026-08-24) ────────────────────────
+
+def test_book_drift_banner_silent_for_none():
+    assert notify._book_drift_banner(None) == ""
+
+
+@pytest.mark.parametrize("state", ["unknown", "stale_clean", "awaiting_sync", "none"])
+def test_book_drift_banner_silent_for_non_drift_states(state):
+    """Deliberately diverges from the in-app Home banner, which also renders
+    on 'unknown' -- this is a PUSH surface, so silence never asserts
+    cleanliness, and rendering 'unknown' on every push email a user with no
+    broker linked receives would be exactly the amber-fatigue this module's
+    docstrings warn against. Fire only on state == 'drift'."""
+    assert notify._book_drift_banner({"state": state}) == ""
+
+
+def test_book_drift_banner_renders_for_drift_with_impact():
+    banner = notify._book_drift_banner({"state": "drift", "impact": {"overstated": 500.0}})
+    assert "disagrees with your broker" in banner
+    assert "$500" in banner
+
+
+def test_book_drift_banner_renders_without_fabricating_a_number_when_impact_absent():
+    banner = notify._book_drift_banner({"state": "drift"})
+    assert "disagrees with your broker" in banner
+    assert "$" not in banner
+
+
+def test_book_drift_banner_ignores_non_dict_input():
+    """Defensive: a non-dict verdict (e.g. a stray string or list from a
+    caller bug) must render silent, not raise."""
+    assert notify._book_drift_banner("drift") == ""
+    assert notify._book_drift_banner([]) == ""
+
+
+# ─── render_daily_action_email / render_intraday_entry_email — book_drift wiring ──
+
+def test_daily_action_email_omits_drift_banner_by_default():
+    top_pick = _pick(ticker="AAA")
+    _, body = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00")
+    assert "disagrees with your broker" not in body
+
+
+def test_daily_action_email_shows_drift_banner_when_state_is_drift():
+    top_pick = _pick(ticker="AAA")
+    _, body = notify.render_daily_action_email(
+        top_pick, [], [], "2026-01-15 08:00:00",
+        book_drift={"state": "drift", "impact": {"overstated": 500.0}},
+    )
+    assert "disagrees with your broker" in body
+
+
+def test_daily_action_email_sizing_text_unchanged_regardless_of_drift_state():
+    """The core invariant: this annotation must never alter the suggested
+    share size, whichever drift state is passed in."""
+    top_pick = _pick(ticker="AAA")
+    _, body_none    = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00", book_drift=None)
+    _, body_unknown = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00", book_drift={"state": "unknown"})
+    _, body_drift   = notify.render_daily_action_email(top_pick, [], [], "2026-01-15 08:00:00", book_drift={"state": "drift", "impact": {}})
+    for body in (body_none, body_unknown, body_drift):
+        assert "~10 shares" in body
+        assert "2.0% of book" in body
+
+
+def test_intraday_entry_email_omits_drift_banner_by_default():
+    entries = [_entry()]
+    _, body = notify.render_intraday_entry_email(entries, -1.0, "2026-01-15 08:00:00")
+    assert "disagrees with your broker" not in body
+
+
+def test_intraday_entry_email_shows_drift_banner_when_state_is_drift():
+    entries = [_entry()]
+    _, body = notify.render_intraday_entry_email(
+        entries, -1.0, "2026-01-15 08:00:00",
+        book_drift={"state": "drift", "impact": {"overstated": 200.0}},
+    )
+    assert "disagrees with your broker" in body
+
+
 # ─── render_intraday_entry_email ─────────────────────────────────────────────
 
 def _entry(ticker="AAA", intraday_drop_pct=-4.0, current_price=96.0, open_price=100.0, composite_score=70.0):

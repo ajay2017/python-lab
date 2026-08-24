@@ -22,6 +22,7 @@ from datetime import date, datetime
 import pytz
 
 from stock_analyzer import db
+from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
 from stock_analyzer.bundle_loader import load_bundle
 from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate
@@ -40,6 +41,7 @@ from stock_analyzer.constants import (
     COMPOSITE_BUY_FLAT_DAY,
     MARKET_TONE_BULL_PCT,
     MARKET_TONE_BEAR_PCT,
+    SNAPTRADE_BALANCE_STALE_HOURS,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -78,7 +80,7 @@ def _vix_level() -> float | None:
 def _build_context(today: date) -> dict:
     """Shared headless data-prep: db inputs → market data → per-ticker bundles →
     port_df → fragility. Returns {ok, errors, port_df, held_data, fragility,
-    spy_6mo, spy_1y, vix}. `ok=False` (reason in `errors`) when there's no DB / no
+    spy_6mo, spy_1y, vix, holdings_df, trades_df}. `ok=False` (reason in `errors`) when there's no DB / no
     holdings / the frame is empty — callers short-circuit to an empty result.
     Never raises. One prep path feeds BOTH the pre-market protective run and the
     EOD snapshot/pullback run, so they can never disagree about the book."""
@@ -179,7 +181,15 @@ def _build_context(today: date) -> dict:
         fragility = None
 
     return {"ok": True, "errors": errors, "port_df": port_df, "held_data": held_data,
-            "fragility": fragility, "spy_6mo": spy_6mo, "spy_1y": spy_1y, "vix": vix}
+            "fragility": fragility, "spy_6mo": spy_6mo, "spy_1y": spy_1y, "vix": vix,
+            # Raw (not int()-truncated) frames, already loaded above at zero extra
+            # cost — added 2026-08-24 so compute_morning_picks can compute a
+            # broker-drift verdict via broker_sync.decide_drift_banner, which
+            # must diff the RAW holdings_df (fractional shares intact), not
+            # port_df (build_portfolio_df truncates to int(shares), and diffing
+            # a truncated frame fabricates a permanent phantom drift on any
+            # fractional broker lot).
+            "holdings_df": holdings_df, "trades_df": trades_df}
 
 
 def compute_protective_alerts(today: date | None = None) -> dict:
@@ -432,6 +442,37 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
     # (app.py always reads it that way) -- NOT at the top level of `brief`.
     grow = brief.get("grow_today") or {}
 
+    # Book-vs-broker drift verdict — F-252 follow-up (2026-08-24). The suggested
+    # share sizes above are computed from `portfolio_value` (this book's own
+    # sum), which can silently disagree with what the broker actually shows —
+    # and unlike the interactive app, the emailed picks below carry no drift
+    # banner at all today. Isolated in its own try/except AFTER
+    # build_daily_briefing has already succeeded, so a SnapTrade/DB fault here
+    # can never abort pick computation or block the email. `None` flows
+    # through as "unknown" — the fail-safe direction for a PUSH surface (see
+    # notify._book_drift_banner: only state=="drift" ever renders anything).
+    book_drift = None
+    try:
+        _bsnap = db.load_broker_position_snapshot()
+        if _bsnap is not None:
+            _price_map = (
+                dict(zip(port_df["Ticker"], port_df["Price"]))
+                if not port_df.empty and "Ticker" in port_df.columns and "Price" in port_df.columns
+                else {}
+            )
+            book_drift = broker_sync.decide_drift_banner(
+                _bsnap,
+                ctx.get("holdings_df"),   # RAW frame — see _build_context's comment on why
+                datetime.now(_ET),
+                SNAPTRADE_BALANCE_STALE_HOURS,
+                price_map=_price_map,
+                recent_trade_tickers=broker_sync.tickers_traded_since(
+                    ctx.get("trades_df"), _bsnap.get("captured_at")
+                ),
+            )
+    except Exception:
+        book_drift = None
+
     # Diagnostic so a 0-pick run is self-explaining in the cron log (a flat tape
     # raises the new-pick bar to 78 and caps at 1, a bull tape lets 65+ through —
     # so "0 picks" next to a Home page showing morning picks is usually the tone
@@ -451,7 +492,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
         "composite_unavail": len(grow.get("composite_unavailable", []) or []),
     }
     return {"picks": grow.get("new_picks", []) or [], "built_at": built_at,
-            "errors": errors, "diag": diag}
+            "errors": errors, "diag": diag, "book_drift": book_drift}
 
 
 def _assess_pullback(spy_6mo, fragility, threshold: float) -> dict | None:

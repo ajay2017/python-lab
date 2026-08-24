@@ -944,32 +944,10 @@ def _m(val_str: str) -> str:
     return "••••••" if st.session_state.get("_privacy", True) else val_str
 
 
-def _tickers_traded_since(trades_df, captured_at) -> list:
-    """Tickers with a trade logged AFTER `captured_at`.
-
-    The broker snapshot refreshes once daily while the book is diffed live, so
-    any ticker traded since the capture will differ for a perfectly good reason.
-    Without this, logging a correct trade at 10:00 makes Home announce
-    "Portfolio Value overstated by ~$5,400 — fix a missing trade" the same
-    morning you did everything right, which is how a real warning gets ignored.
-
-    Returns [] (not None) on any failure — an empty set means "explain nothing
-    away", i.e. the conservative direction that keeps drift visible.
-    """
-    if trades_df is None or captured_at is None:
-        return []
-    try:
-        if getattr(trades_df, "empty", True) or "traded_at" not in trades_df.columns:
-            return []
-        _cap = pd.to_datetime(captured_at, utc=True, errors="coerce", format="ISO8601")
-        if _cap is None or pd.isna(_cap):
-            return []
-        _ts = pd.to_datetime(trades_df["traded_at"], utc=True, errors="coerce",
-                             format="ISO8601")
-        _hit = trades_df.loc[_ts.notna() & (_ts > _cap), "ticker"]
-        return sorted({str(t).strip().upper() for t in _hit if str(t).strip()})
-    except (KeyError, TypeError, ValueError):
-        return []
+# _tickers_traded_since relocated to stock_analyzer/broker_sync.py 2026-08-24
+# (as `tickers_traded_since`, no leading underscore) so the headless cron path
+# can compute the same broker-drift verdict without importing this
+# Streamlit-laden module. Call sites here now use `broker_sync.tickers_traded_since`.
 
 
 def _fmt_asof_et(captured_at) -> str:
@@ -4755,7 +4733,7 @@ if page == "🏠 Home":
             SNAPTRADE_BALANCE_STALE_HOURS,
             price_map={t: (v or {}).get("price") for t, v in _lp_map.items()},
             # A ticker traded since the capture differs for a good reason.
-            recent_trade_tickers=_tickers_traded_since(
+            recent_trade_tickers=broker_sync.tickers_traded_since(
                 st.session_state.get("trades_df"),
                 _bsnap.get("captured_at") if isinstance(_bsnap, dict) else None,
             ),
