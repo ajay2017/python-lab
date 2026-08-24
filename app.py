@@ -23672,6 +23672,18 @@ elif page == "📒 Trade Journal":
                 ),
             )
 
+        # Warn when the user is logging a trade on a non-trading day. The form
+        # has no date field — traded_at defaults to now() — so anything logged
+        # today will carry today's (wrong) date in Trade Review, breaking the
+        # panic-window and vs-SPY benchmark for that row.
+        if not is_trading_day(_today_et()):
+            st.warning(
+                f"Today ({_today_et().strftime('%A %b %d')}) is not a trading day. "
+                "Any trade logged now will be dated today — Trade Review's "
+                "panic-window and vs-SPY benchmark will be wrong for that row. "
+                "If you're recording a past trade, note the actual date in Notes."
+            )
+
         # st.form prevents double-submission on rerun (shares / price / notes only)
         with st.form("log_trade_form", clear_on_submit=True):
             f_col3, f_col4, f_col5 = st.columns(3)
@@ -24168,6 +24180,18 @@ elif page == "📒 Trade Journal":
                     # every ET reader. See market_time.et_anchor_iso.
                     _bp_date = _broker_prefill.get("trade_date")
                     if _bp_date:
+                        try:
+                            from datetime import date as _date
+                            _bp_date_obj = _date.fromisoformat(str(_bp_date)[:10])
+                            if not is_trading_day(_bp_date_obj):
+                                st.warning(
+                                    f"Broker trade date {_bp_date_obj.strftime('%A %b %d')} "
+                                    "is not a trading day — Trade Review's panic-window "
+                                    "and vs-SPY benchmark will be wrong for this row. "
+                                    "Verify the date in your broker statement before confirming."
+                                )
+                        except (ValueError, TypeError):
+                            pass  # unparseable date — let the anchor step fail loudly
                         record["traded_at"] = _et_anchor_iso(_bp_date)
                 # ── SELL/BUY: hold for confirmation — don't write to DB yet ──
                 if action == "SELL":
