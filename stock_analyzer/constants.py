@@ -1551,6 +1551,32 @@ IMPORTED_TRADE_ANCHOR_ET_HOUR = 16
 # Retuning this for the broker feed also moves the day-P&L integrity guard.
 BROKER_DRIFT_SHARE_TOL = 0.001
 
+# Truncation-ambiguity bound for daily_pnl.reconcile_baseline()'s qty_drift
+# unit guard. A DIFFERENT question from BROKER_DRIFT_SHARE_TOL above: that one
+# absorbs float rounding noise (~0.001 shares); this one absorbs int()
+# truncation ambiguity, which is up to two orders of magnitude larger.
+#
+# held/baseline shares are stored as int()-truncated whole numbers
+# (portfolio.build_portfolio_df), while today's trade deltas are raw to 4dp.
+# On a day with a fractional fill, comparing a truncated share count against
+# "truncated baseline + fractional delta" can misreport a drift that is really
+# just truncation — provably bounded: true_cur - cur_shares ∈ [0, 1) and
+# true_base - base_shares ∈ [0, 1), so the true drift can differ from the
+# observed one by AT MOST just under 1.0 share. Any observed drift >= 1.0
+# share is mathematically guaranteed to be real, regardless of same-day
+# fractional fills — it cannot be truncation noise.
+#
+# 2026-08-24: replaced an earlier all-or-nothing guard that skipped the WHOLE
+# check on a fractional-fill day, regardless of the drift's size — pinned by a
+# test showing a 9.5-share drift silently reported as zero. This constant lets
+# the guard suppress only the genuinely-ambiguous sub-1.0-share residual,
+# closing that blind spot without touching the truncation itself (see
+# project_today_pnl_scope memory for why stopping the truncation at its source
+# was rejected as the fix: portfolio.build_portfolio_df's Shares column feeds
+# every concentration/sizing gate, a much larger blast radius for the same
+# outcome this bound already achieves).
+QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES = 1.0
+
 # Max age of the last successful SnapTrade balance sync before the Account
 # page shows a stale-data banner rather than silently trusting an old
 # account_cash row. 25h (not 24h) mirrors the existing daily-cron-lane

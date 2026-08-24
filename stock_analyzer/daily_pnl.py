@@ -25,7 +25,7 @@ UI-free / no I/O.
 
 from __future__ import annotations
 
-from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL
+from stock_analyzer.constants import BROKER_DRIFT_SHARE_TOL, QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES
 
 
 def _num(v, default: float = 0.0) -> float:
@@ -215,15 +215,26 @@ def reconcile_baseline(
         # day, which is how a banner gets trained into noise and costs you the
         # next real one. Since floor(x + n) == floor(x) + n for integer n, an
         # INTEGRAL net delta compares exactly; only a fractional one is unsafe.
-        # Cost of this choice: a genuine whole-share drift is MISSED on a day
-        # the ticker also had a fractional fill. Judged the better error — the
-        # alternative is a false alarm on a correctly-journalled book.
         # Note the `or` rather than `and`: a fractional value on EITHER side is
         # enough to make the comparison unsafe, and today only the delta can be
         # fractional. If a future change stops truncating either side, this
         # still fails closed instead of newly crying wolf.
+        #
+        # 2026-08-24: this used to `continue` unconditionally once the shape
+        # above was detected, regardless of the residual's size — an EARLIER
+        # version of this comment documented that as a deliberate false
+        # negative (a genuine whole-share drift missed on a fractional-fill
+        # day), pinned by a test showing a 9.5-share drift silently reported as
+        # zero. That was an unbounded blind spot absorbing a bounded error:
+        # truncation ambiguity is provably capped at just under 1.0 share (see
+        # QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES's definition), so any residual
+        # AT OR ABOVE that bound cannot be truncation noise and must be
+        # reported regardless of what fill happened today. Only a
+        # genuinely-ambiguous sub-bound residual stays suppressed now — that
+        # narrower blind spot is the mathematical floor, not a policy choice.
         if ((float(cur_shares).is_integer() or float(base_shares).is_integer())
-                and not float(expected).is_integer()):
+                and not float(expected).is_integer()
+                and abs(unexplained) < QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES):
             continue
 
         if abs(unexplained) <= BROKER_DRIFT_SHARE_TOL:

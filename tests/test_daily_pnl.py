@@ -403,13 +403,49 @@ def test_qty_drift_compares_normally_when_both_sides_are_genuinely_fractional():
     assert row["drift_shares"] == 2.25
 
 
-def test_qty_drift_guard_documented_false_negative_is_deliberate():
-    """A genuine drift IS missed when the same ticker also had a fractional fill
-    that day. Pinned so the trade-off is a decision, not a surprise."""
+def test_qty_drift_guard_catches_a_large_drift_despite_a_same_day_fractional_fill():
+    """2026-08-24 regression test: this exact shape used to be silently
+    swallowed (an all-or-nothing guard skipped the whole check once a
+    fractional fill appeared, regardless of the drift's size — a 9.5-share
+    drift reported as zero). QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES bounds the
+    guard to genuinely-ambiguous sub-1.0-share residuals, so a drift this
+    large (far above the 1.0-share truncation-ambiguity ceiling) is now
+    reported regardless of the same-day fractional fill."""
     held = [{"ticker": "AAA", "shares": 20.0, "price": 100.0}]     # truncated
     baseline = {"AAA": {"shares": 10.0, "close": 99.0}}
     trades = [{"ticker": "AAA", "action": "BUY", "shares": 0.5, "price": 100.0}]
+    row = dp.reconcile_baseline(held, baseline, trades)["qty_drift"][0]
+    assert row["drift_shares"] == 9.5
+
+
+def test_qty_drift_guard_still_suppresses_a_genuinely_ambiguous_sub_bound_residual():
+    """The narrowed guard's remaining blind spot, by design: a residual BELOW
+    QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES on a fractional-fill day cannot be
+    distinguished from truncation noise, so it is still suppressed. This is
+    the mathematical floor (truncation ambiguity is provably < 1.0 share),
+    not a policy choice to revisit."""
+    held = [{"ticker": "AAA", "shares": 10.0, "price": 100.0}]     # truncated
+    baseline = {"AAA": {"shares": 10.0, "close": 99.0}}
+    trades = [{"ticker": "AAA", "action": "BUY", "shares": 0.5, "price": 100.0}]
+    # expected = 10 + 0.5 = 10.5 (fractional); unexplained = 10 - 10.5 = -0.5,
+    # under the 1.0-share bound → still suppressed.
     assert dp.reconcile_baseline(held, baseline, trades)["qty_drift"] == []
+
+
+def test_qty_drift_guard_boundary_just_under_vs_just_over_the_bound():
+    """Sanity-check the boundary itself: a residual just under
+    QTY_DRIFT_TRUNCATION_AMBIGUITY_SHARES (1.0) stays suppressed, and a
+    residual just over it is reported -- confirming the fix changed the
+    guard's SIZE threshold, not just the two extreme cases above."""
+    held = [{"ticker": "AAA", "shares": 10.0, "price": 100.0}]
+    baseline = {"AAA": {"shares": 10.0, "close": 99.0}}
+
+    just_under = [{"ticker": "AAA", "action": "SELL", "shares": 0.99, "price": 100.0}]
+    assert dp.reconcile_baseline(held, baseline, just_under)["qty_drift"] == []
+
+    just_over = [{"ticker": "AAA", "action": "SELL", "shares": 1.01, "price": 100.0}]
+    row = dp.reconcile_baseline(held, baseline, just_over)["qty_drift"][0]
+    assert row["drift_shares"] == 1.01
 
 
 # ─── reconcile_baseline — PARTIALLY explained discrepancies ─────────────────
