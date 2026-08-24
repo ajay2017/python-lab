@@ -96,35 +96,53 @@ def reconcile_baseline(
     without a trade explaining it. Each one silently distorts the day-P&L
     identity, so each is surfaced rather than absorbed.
 
-    Three shapes, all the same defect class — "the baseline describes a book
+    Four shapes, all the same defect class — "the baseline describes a book
     that is not the one being marked":
 
-      • `orphans`     — in the baseline, not held, no trade today. Its baseline
-                        value is subtracted with nothing offsetting, so the
-                        figure is UNDERSTATED by that position's FULL prior-close
-                        value — not by a day's move, which is one to two orders
-                        of magnitude smaller and in the reassuring direction.
-      • `qty_drift`   — held, but at a share count that today's trades do not
-                        explain. Only the drifted portion is wrong, so the error
-                        is `drift × price` — the case that produced a silent
-                        $1,091.62 error on 2026-08-23 while the orphan check
-                        (which fires only on a fully-vanished ticker) stayed
-                        quiet.
-      • `unbaselined` — held, absent from the baseline, no trade today. The
-                        WORST of the three: the full position value is added
-                        with nothing subtracting it, so the figure is
-                        OVERSTATED by roughly `shares × price`, not by a day's
-                        move. Reachable via a partial `daily_snapshots` write,
-                        and routinely via a stale baseline (anything opened
-                        between the baseline date and today lands here).
+      • `orphans`          — in the baseline, not held, no trade today. Its
+                        baseline value is subtracted with nothing offsetting,
+                        so the figure is UNDERSTATED by that position's FULL
+                        prior-close value — not by a day's move, which is one
+                        to two orders of magnitude smaller and in the
+                        reassuring direction.
+      • `qty_drift`        — held, but at a share count that today's trades do
+                        not explain. Only the drifted portion is wrong, so the
+                        error is `drift × price` — the case that produced a
+                        silent $1,091.62 error on 2026-08-23 while the orphan
+                        check (which fires only on a fully-vanished ticker)
+                        stayed quiet.
+      • `unbaselined`      — held, absent from the baseline, no trade today.
+                        The full position value is added with nothing
+                        subtracting it, so the figure is OVERSTATED by roughly
+                        `shares × price`, not by a day's move. Reachable via a
+                        partial `daily_snapshots` write, and routinely via a
+                        stale baseline (anything opened between the baseline
+                        date and today lands here).
+      • `unbaselined_sells` — traded today (a SELL), absent from BOTH baseline
+                        AND held. The sell-side twin of `unbaselined`: bought
+                        on some day after the last baseline snapshot (the same
+                        stale-baseline gap), held without ever being captured,
+                        then sold today. Only the sell appears in
+                        `today_trades`; the earlier buy doesn't. Its proceeds
+                        enter `cash_delta` with nothing subtracting the
+                        acquisition cost, OVERSTATING the figure by roughly the
+                        position's value. A same-day round trip (bought >=
+                        sold) is NOT flagged — both legs enter `cash_delta` and
+                        the identity is exact, since `current_val` and
+                        `baseline_val` both contribute zero for a ticker never
+                        held at prior close and not held now. Only the
+                        EXCESS sold beyond what was bought today came from a
+                        source this function cannot see.
 
-    NOT EXHAUSTIVE — a known FOURTH shape is structurally invisible here: a
-    ticker traded today that is in NEITHER `baseline` NOR `held` (stale
-    baseline, bought after it, sold today). Its proceeds enter `cash_delta`
-    with nothing subtracting the cost, overstating the figure by roughly the
-    position's value — the sell-side twin of `unbaselined`. Detecting it needs
-    the trade price, which this signature does not carry, so it is queued
-    rather than half-done. Do not read "three shapes" as complete.
+    NOT COVERED, and a different defect class (found in review 2026-08-24):
+    a ticker with a net BUY today (bought > sold) that ends up neither held
+    nor baselined is a data inconsistency this function cannot arise from in
+    a correctly-journalled book (a real net-buy should show up in `held`) —
+    so it is deliberately NOT flagged here. If it ever occurs, it is the
+    OPPOSITE sign of `unbaselined_sells`: the buy cost enters `cash_delta`
+    with nothing offsetting it, UNDERSTATING the figure, not overstating it.
+    A future symptom of this shape is a data-integrity bug in the holdings
+    computation upstream, not a gap in this reconciliation.
 
     Share comparisons use `BROKER_DRIFT_SHARE_TOL` — the same tolerance the
     broker-vs-app reconciliation uses, because it is the same question ("is this
@@ -260,7 +278,53 @@ def reconcile_baseline(
                 "value_impact":    round(unexplained * price, 2),
             })
 
-    return {"orphans": orphans, "qty_drift": qty_drift, "unbaselined": unbaselined}
+    # `unbaselined_sells` — the fourth shape. Distinct from the loop above: it
+    # iterates tickers keyed off TODAY'S TRADES, not `_base_by_ticker |
+    # _held_by_ticker`, because this shape is precisely the case where a
+    # ticker is absent from both. today_trades already carries `price` per
+    # row (verified 2026-08-24 against app.py's caller) — no signature change
+    # needed despite an earlier note here claiming otherwise.
+    _bought_today: dict[str, float] = {}
+    _sold_today: dict[str, float] = {}
+    _sell_fills: dict[str, list[tuple[float, float]]] = {}  # tk -> [(shares, price), ...]
+    for t in today_trades:
+        action = str(t.get("action", "")).strip().upper()
+        tk = str(t.get("ticker", "")).strip().upper()
+        if not tk or _is_split(action):
+            continue
+        shares = _num(t.get("shares"))
+        if action == "BUY":
+            _bought_today[tk] = _bought_today.get(tk, 0.0) + shares
+        elif action == "SELL":
+            _sold_today[tk] = _sold_today.get(tk, 0.0) + shares
+            _sell_fills.setdefault(tk, []).append((shares, _num(t.get("price"))))
+
+    unbaselined_sells = []
+    for tk in sorted(_sell_fills):
+        if tk in _base_by_ticker or tk in _held_by_ticker or tk in _split:
+            continue    # already handled above, or a split with no error to report
+        excess = _sold_today.get(tk, 0.0) - _bought_today.get(tk, 0.0)
+        if excess <= BROKER_DRIFT_SHARE_TOL:
+            continue    # a same-day round trip (bought >= sold) is self-correcting
+        _fills = _sell_fills[tk]
+        _sh_sum = sum(sh for sh, _ in _fills)
+        # Volume-weighted average of today's sell fills — neither a live price
+        # (not held) nor a baseline close (no baseline row) is available for
+        # this shape, so the sell fills are the only price signal there is.
+        _vwap = (sum(sh * px for sh, px in _fills) / _sh_sum) if _sh_sum else 0.0
+        unbaselined_sells.append({
+            "ticker":          tk,
+            "unbacked_shares": round(excess, 6),
+            # Positive = day-P&L overstated. Approximate, like `unbaselined`'s:
+            # the true error is the missing prior-close value, which this
+            # function does not have for a ticker with no baseline row.
+            "value_impact":    round(excess * _vwap, 2),
+        })
+
+    return {
+        "orphans": orphans, "qty_drift": qty_drift, "unbaselined": unbaselined,
+        "unbaselined_sells": unbaselined_sells,
+    }
 
 
 def compute_positions_day_pnl(
@@ -302,7 +366,8 @@ def compute_positions_day_pnl(
         "current_value":    round(current_val, 2),
         "baseline_value":   round(baseline_val, 2),
         "n_baseline":       len(baseline),
-        "orphans":          _recon["orphans"],      # baseline names with no current holding and no recorded exit today
-        "qty_drift":        _recon["qty_drift"],    # held, but at a share count today's trades don't explain
-        "unbaselined":      _recon["unbaselined"],  # held, absent from the baseline, no trade today
+        "orphans":            _recon["orphans"],            # baseline names with no current holding and no recorded exit today
+        "qty_drift":          _recon["qty_drift"],          # held, but at a share count today's trades don't explain
+        "unbaselined":        _recon["unbaselined"],        # held, absent from the baseline, no trade today
+        "unbaselined_sells":  _recon["unbaselined_sells"],  # sold today, absent from BOTH baseline and held (the sell-side twin of unbaselined)
     }

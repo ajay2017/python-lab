@@ -309,7 +309,7 @@ def test_unbaselined_silent_for_a_zero_share_row():
 
 # ─── reconcile_baseline — the three shapes are independent ──────────────────
 
-def test_all_three_disagreement_shapes_reported_together():
+def test_all_four_disagreement_shapes_reported_together():
     held = [
         {"ticker": "AAA", "shares": 12.0, "price": 100.0},   # drift (+2)
         {"ticker": "CCC", "shares": 3.0,  "price": 200.0},   # unbaselined
@@ -318,10 +318,14 @@ def test_all_three_disagreement_shapes_reported_together():
         "AAA": {"shares": 10.0, "close": 99.0},
         "BBB": {"shares": 5.0,  "close": 50.0},              # orphan
     }
-    out = dp.reconcile_baseline(held, baseline, [])
+    trades = [                                               # unbaselined_sells
+        {"ticker": "DDD", "action": "SELL", "shares": 4.0, "price": 40.0},
+    ]
+    out = dp.reconcile_baseline(held, baseline, trades)
     assert [o["ticker"] for o in out["orphans"]] == ["BBB"]
     assert [r["ticker"] for r in out["qty_drift"]] == ["AAA"]
     assert [r["ticker"] for r in out["unbaselined"]] == ["CCC"]
+    assert [r["ticker"] for r in out["unbaselined_sells"]] == ["DDD"]
 
 
 def test_reconcile_baseline_returns_empty_lists_never_none_when_clean():
@@ -330,7 +334,7 @@ def test_reconcile_baseline_returns_empty_lists_never_none_when_clean():
     held = [{"ticker": "AAA", "shares": 10.0, "price": 100.0}]
     baseline = {"AAA": {"shares": 10.0, "close": 99.0}}
     out = dp.reconcile_baseline(held, baseline, [])
-    assert out == {"orphans": [], "qty_drift": [], "unbaselined": []}
+    assert out == {"orphans": [], "qty_drift": [], "unbaselined": [], "unbaselined_sells": []}
 
 
 def test_reconcile_results_are_sorted_by_ticker():
@@ -486,7 +490,7 @@ def test_fully_sold_baseline_ticker_stays_silent():
     baseline = {"AAA": {"shares": 10.0, "close": 50.0}}
     trades = [{"ticker": "AAA", "action": "SELL", "shares": 10, "price": 52.0}]
     out = dp.reconcile_baseline([], baseline, trades)
-    assert out == {"orphans": [], "qty_drift": [], "unbaselined": []}
+    assert out == {"orphans": [], "qty_drift": [], "unbaselined": [], "unbaselined_sells": []}
 
 
 def test_orphan_is_not_also_reported_as_qty_drift():
@@ -523,3 +527,119 @@ def test_unit_guard_allows_fractional_trades_that_net_to_a_whole_number():
     held_drifted = [{"ticker": "AAA", "shares": 14.0, "price": 100.0}]
     row = dp.reconcile_baseline(held_drifted, baseline, trades)["qty_drift"][0]
     assert row["drift_shares"] == 3.0
+
+
+# ─── reconcile_baseline — unbaselined_sells (the fourth shape) ──────────────
+# A ticker sold today that is in NEITHER baseline NOR held: bought on some day
+# after the last baseline snapshot (stale-baseline gap), held uncaptured, then
+# sold today. Only the sell appears in today_trades. The sell-side twin of
+# unbaselined.
+
+def test_unbaselined_sell_flags_a_sale_with_no_baseline_or_holding():
+    """The core case: sold today, never baselined, not held now. The full
+    sale is unbacked -- nothing in the function's inputs explains where the
+    shares came from."""
+    trades = [{"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0}]
+    out = dp.reconcile_baseline([], {}, trades)
+    assert len(out["unbaselined_sells"]) == 1
+    row = out["unbaselined_sells"][0]
+    assert row["unbacked_shares"] == 5.0
+    assert row["value_impact"] == 200.0   # positive = day-P&L overstated
+
+
+def test_unbaselined_sell_not_flagged_when_same_day_round_trip_is_flat():
+    """Bought and sold the same quantity today, never held/baselined: both
+    legs enter cash_delta and the identity is exact (current_val and
+    baseline_val both contribute zero for a name never held at prior close
+    and not held now) -- this must NOT be flagged."""
+    trades = [
+        {"ticker": "DDD", "action": "BUY",  "shares": 5.0, "price": 38.0},
+        {"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0},
+    ]
+    assert dp.reconcile_baseline([], {}, trades)["unbaselined_sells"] == []
+
+
+def test_unbaselined_sell_not_flagged_when_bought_more_than_sold():
+    """Net BUY today (even though not currently held is impossible in a
+    consistent book) must not be flagged -- only an EXCESS of sold-over-bought
+    is unexplained. Guards the '>' direction, not just the '==' case above."""
+    trades = [
+        {"ticker": "DDD", "action": "BUY",  "shares": 6.0, "price": 38.0},
+        {"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0},
+    ]
+    assert dp.reconcile_baseline([], {}, trades)["unbaselined_sells"] == []
+
+
+def test_unbaselined_sell_flags_only_the_excess_over_a_partial_same_day_buy():
+    """Bought 2, sold 5, same day, never baselined/held: only the 3-share
+    excess is unbacked -- the other 2 are a legitimate same-day round trip
+    already accounted for in cash_delta."""
+    trades = [
+        {"ticker": "DDD", "action": "BUY",  "shares": 2.0, "price": 38.0},
+        {"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0},
+    ]
+    row = dp.reconcile_baseline([], {}, trades)["unbaselined_sells"][0]
+    assert row["unbacked_shares"] == 3.0
+
+
+def test_unbaselined_sell_values_the_excess_at_the_sell_vwap():
+    """Multiple sell fills at different prices: the excess is valued at the
+    volume-weighted average sell price, not the first/last/highest fill."""
+    trades = [
+        {"ticker": "DDD", "action": "SELL", "shares": 3.0, "price": 30.0},
+        {"ticker": "DDD", "action": "SELL", "shares": 2.0, "price": 40.0},
+    ]
+    # VWAP = (3*30 + 2*40) / 5 = 170/5 = 34.0; excess = 5.0 (no buys)
+    row = dp.reconcile_baseline([], {}, trades)["unbaselined_sells"][0]
+    assert row["unbacked_shares"] == 5.0
+    assert row["value_impact"] == 170.0   # 5.0 * 34.0
+
+
+def test_unbaselined_sell_skipped_when_ticker_is_held():
+    """A ticker still held is handled by the qty_drift/unbaselined branch
+    above, not this one -- must not double-report."""
+    held = [{"ticker": "DDD", "shares": 2.0, "price": 40.0}]
+    trades = [{"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0}]
+    out = dp.reconcile_baseline(held, {}, trades)
+    assert out["unbaselined_sells"] == []
+
+
+def test_unbaselined_sell_skipped_when_ticker_has_a_baseline_row():
+    """A ticker with a baseline row is judged by the main loop above (even if
+    not currently held), not this branch -- must not double-report. Sold only
+    PART of the baselined lot, so the main loop's own qty_drift fires; the
+    point here is that unbaselined_sells stays empty regardless."""
+    baseline = {"DDD": {"shares": 5.0, "close": 39.0}}
+    trades = [{"ticker": "DDD", "action": "SELL", "shares": 3.0, "price": 40.0}]
+    out = dp.reconcile_baseline([], baseline, trades)
+    assert out["unbaselined_sells"] == []
+    assert len(out["qty_drift"]) == 1
+
+
+def test_unbaselined_sell_skipped_on_a_split_day():
+    """Same treatment as the main loop: a split rewrites the share count by a
+    ratio this function cannot recover from the row, and there is no error to
+    report on a split day."""
+    trades = [{"ticker": "DDD", "action": "SPLIT", "shares": 10.0, "price": 0.0}]
+    assert dp.reconcile_baseline([], {}, trades)["unbaselined_sells"] == []
+
+
+def test_unbaselined_sell_ignores_sub_tolerance_excess():
+    """A sub-tolerance excess (float noise, not a real unbacked sale) stays
+    silent -- same BROKER_DRIFT_SHARE_TOL used everywhere else in this
+    function, not a second policy number."""
+    trades = [
+        {"ticker": "DDD", "action": "BUY",  "shares": 5.0,     "price": 38.0},
+        {"ticker": "DDD", "action": "SELL", "shares": 5.0005, "price": 40.0},
+    ]
+    assert dp.reconcile_baseline([], {}, trades)["unbaselined_sells"] == []
+
+
+def test_compute_positions_day_pnl_surfaces_unbaselined_sells():
+    """compute_positions_day_pnl must not silently drop the fourth shape --
+    the same regression class as F-250's Summary-coordination review finding."""
+    baseline = {"AAA": {"shares": 10.0, "close": 99.0}}   # need a baseline for compute_ to run at all
+    held = [{"ticker": "AAA", "shares": 10.0, "price": 100.0}]
+    trades = [{"ticker": "DDD", "action": "SELL", "shares": 5.0, "price": 40.0}]
+    result = dp.compute_positions_day_pnl(held, baseline, trades, 1000.0)
+    assert [r["ticker"] for r in result["unbaselined_sells"]] == ["DDD"]

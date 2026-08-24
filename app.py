@@ -6213,9 +6213,9 @@ if page == "🏠 Home":
         # Broker drift is EXTERNAL ground truth; this check is internal and
         # inferential, so the authoritative one keeps the full explanation and
         # this becomes a cross-reference. Never suppressed wholesale: this
-        # detector sees two shapes the broker check structurally cannot
-        # (orphans, unbaselined) and is the only one that still works when
-        # SnapTrade is offline.
+        # detector sees three shapes the broker check structurally cannot
+        # (orphans, unbaselined, unbaselined_sells) and is the only one that
+        # still works when SnapTrade is offline.
         _bd = st.session_state.get("_broker_drift_cache")
         _bd_tickers = set()
         if isinstance(_bd, dict) and _bd.get("state") == "drift":
@@ -6256,6 +6256,27 @@ if page == "🏠 Home":
             f"much (the exact error is the cost basis, so treat these as approximate). Expected "
             f"if the position opened after the baseline date; otherwise the daily snapshot is "
             f"incomplete or the trade was imported with a date-only timestamp."
+        )
+    # The sell-side twin of unbaselined: sold today, but the position appears in
+    # NEITHER the baseline NOR current holdings — bought on some day after the
+    # last baseline snapshot (the same stale-baseline gap above), held without
+    # ever being captured, then sold today. Only the sell shows up in today's
+    # trades, so its proceeds enter the P&L with nothing subtracting the
+    # acquisition cost. Valued at today's sell VWAP since neither a live price
+    # nor a baseline close is available for a name with no baseline row.
+    if _dpnl is not None and _dpnl.get("unbaselined_sells"):
+        _ubs_bits = []
+        for _d in _dpnl["unbaselined_sells"]:
+            _ubs_amt = _m(f"${_d['value_impact']:,.0f}")
+            _ubs_bits.append(f"**{_d['ticker']}** (~{_ubs_amt})")
+        _ubs_parts = ", ".join(_ubs_bits)
+        st.caption(
+            f"⚠️ Sold today with no prior-close baseline row and no current holding: "
+            f"{_ubs_parts}. The sale proceeds are counted with nothing subtracting the "
+            f"acquisition cost, so Today's P&L is overstated by roughly that much "
+            f"(valued at today's sell price — the true error is the missing prior-close "
+            f"value, so treat this as approximate). Expected if the position was bought "
+            f"after the baseline date and held uncaptured until today's sale."
         )
 
     st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
@@ -10744,13 +10765,13 @@ elif page == "🧾 Summary":
         )
         # Home publishes the number AND its integrity findings; this tile used to
         # consume only the number, so a figure Home banners as off rendered here
-        # under the word "TRUE". Read the same three lists Home does — the
+        # under the word "TRUE". Read the same four lists Home does — the
         # coordination contract is the whole payload, not the headline.
         # Explicit isinstance rather than `or []` — a dict cached by a session
         # older than this feature simply lacks the keys, and `or []` is the
         # offline-sentinel collapse the repo's own antipattern gate rejects.
         _sm_dp_bad = 0
-        for _k in ("orphans", "qty_drift", "unbaselined"):
+        for _k in ("orphans", "qty_drift", "unbaselined", "unbaselined_sells"):
             _v = _sm_dpnl.get(_k)
             if isinstance(_v, list):
                 _sm_dp_bad += len(_v)
@@ -31424,7 +31445,7 @@ The app's intelligence is computed live in your browser — so it can only reach
 
 **Two more runs, Sunday only — no email, so they're easy to miss:** a thesis-stability review re-reads every open position's saved thesis for drift (feeds 🧠 AI Insights), and a maintenance sweep refreshes reference data (scan universe, sector rosters, ticker liveness) that would otherwise quietly go stale. Both write to the database only.
 
-**When "Today's P&L" doesn't trust itself.** That figure compares your holdings *now* against the prior-close snapshot above, plus today's trades. If those three don't reconcile, the number is wrong — so the tile says so instead of quietly showing it, in a caption naming the position **and the dollar amount it's off by**. Three cases — **the three it can detect**, not every way the two can disagree: a name in the baseline you no longer hold with no exit logged (the figure is *understated* by that whole position, since nothing offsets it); a name held at a **share count today's trades don't explain** (a missing trade, or an import whose date landed a day earlier — this one is the reason a $1,092 error once went unnoticed, because the position was still held and looked fine); and a name held with **no baseline row at all**, whose *whole value* — not a day's move — is counted as gain. That last one is expected if you opened the position after the baseline date, and 🧾 Summary shows a matching pointer so the same number never reads as verified on one page and questionable on another. The dollar figures are close estimates, not exact — the app can't always know what price an unlogged fill happened at. If you see one of these, reconcile against your broker on 💰 Account → Broker Sync before acting on the figure.
+**When "Today's P&L" doesn't trust itself.** That figure compares your holdings *now* against the prior-close snapshot above, plus today's trades. If those three don't reconcile, the number is wrong — so the tile says so instead of quietly showing it, in a caption naming the position **and the dollar amount it's off by**. Four cases: a name in the baseline you no longer hold with no exit logged (the figure is *understated* by that whole position, since nothing offsets it); a name held at a **share count today's trades don't explain** (a missing trade, or an import whose date landed a day earlier — this one is the reason a $1,092 error once went unnoticed, because the position was still held and looked fine); a name held with **no baseline row at all**, whose *whole value* — not a day's move — is counted as gain (expected if you opened the position after the baseline date); and its sell-side twin — a name **sold today with no baseline row and no current holding**, whose sale proceeds are counted with nothing subtracting what you paid for it (expected if you bought it after the baseline date and it went uncaptured until today's sale). 🧾 Summary shows a matching pointer so the same number never reads as verified on one page and questionable on another. The dollar figures are close estimates, not exact — the app can't always know what price an unlogged fill happened at. If you see one of these, reconcile against your broker on 💰 Account → Broker Sync before acting on the figure.
 
 **Exception-based by design.** Every email is *conditional* — you only hear from the app when there's something real. The **protective email and the end-of-day market-pullback awareness email are rare safety nets** (a ~3% market day happens only a few times a year); the **morning buy email and the mid-day entry-window email are opportunity alerts** — they arrive only on days a setup actually clears the bar, and stay silent otherwise. (Note: "pullback" means two different things above — an *entry-window pullback* is a good thing, a dip into a buy zone; a *market pullback* is the risk-side awareness email.) None of it is a notification feed — it matches the app's whole posture: surface what matters *now*, stay quiet otherwise.
 
