@@ -2430,7 +2430,22 @@ def _check_password():
     if st.session_state.get("auth_ok"):
         return
     if not expected:
-        st.error("APP_PASSWORD is not configured — access denied. Set it in Railway → Variables.")
+        import logging as _logging
+        _logging.getLogger(__name__).error("APP_PASSWORD env var not set — app is inaccessible until configured.")
+        st.markdown(
+            """
+            <div style="display:flex;flex-direction:column;align-items:center;
+                        justify-content:center;height:70vh;text-align:center;
+                        color:#888;font-family:sans-serif;">
+              <div style="font-size:5rem;margin-bottom:1rem;">🔌</div>
+              <h2 style="color:#ccc;margin:0 0 .5rem;">Down for maintenance</h2>
+              <p style="max-width:320px;line-height:1.6;margin:0;">
+                We'll be back shortly.<br>Nothing to see here for now.
+              </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.stop()
     _render_brand(large=True)
     st.subheader("Sign In")
