@@ -29245,10 +29245,11 @@ elif page == "💰 Account":
                         # Fragility scenario marker
                         _fig_mg.add_vline(
                             x=_frag,
-                            line_dash="dash", line_color="#f39c12", line_width=2,
+                            line_dash="dash", line_color="#ffffff", line_width=2,
                             annotation_text=f"−{_frag:.0f}% fragility scenario",
                             annotation_position="top right",
-                            annotation_font_color="#f39c12",
+                            annotation_font_color="#ffffff",
+                            annotation_bgcolor="rgba(0,0,0,0.45)",
                         )
                         _fig_mg.update_layout(
                             barmode="stack",
