@@ -37227,8 +37227,22 @@ elif page == "🎯 My Edge":
                         if _sts_n_graded else "n/a",
                         help="vs SPY, open-ended window · negative = good exit",
                     )
-                    _sts_k3.metric("Engine-called", f"{_sts_summary['n_engine_aligned']}")
-                    _sts_k4.metric("Self-initiated", f"{_sts_summary['n_self_initiated']}")
+                    # Graded-only n's (_sts_engine_stats/_sts_self_stats), NOT the raw
+                    # bucket totals (_sts_summary['n_engine_aligned']/['n_self_initiated'],
+                    # which also count immature/unpriced sells) -- the raw totals would
+                    # describe a LARGER population than "Exits graded" above and the
+                    # per-bucket averages below, the same population-mismatch class the
+                    # buy-side already hit and fixed on 2026-08-22 (see project_self_track_record).
+                    _sts_k3.metric(
+                        "Engine-called", f"{_sts_engine_stats['n']}",
+                        help="Graded (matured, priced) sells only — "
+                             f"{_sts_summary['n_engine_aligned']} total classified as engine-called.",
+                    )
+                    _sts_k4.metric(
+                        "Self-initiated", f"{_sts_self_stats['n']}",
+                        help="Graded (matured, priced) sells only — "
+                             f"{_sts_summary['n_self_initiated']} total classified as self-initiated.",
+                    )
 
                     if _sts_n_graded < BEHAVIORAL_MIN_SAMPLE_N:
                         st.caption(
