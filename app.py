@@ -22904,11 +22904,17 @@ elif page == "📒 Trade Journal":
             if _ws:
                 _ws_days = int(_ws["days_ago"])
                 _ws_win  = int(_ws["window_days"])
+                # _ps_ticker is free user text (the Trade Journal's ticker
+                # input, see ticker_input at its definition below) — escape
+                # before interpolating into raw HTML (2026-08-24 review
+                # finding; same class fixed 7x elsewhere in this file, e.g.
+                # _tr_evidence_row's _action_esc/_ticker_esc).
+                _ps_ticker_esc = _html.escape(str(_ps_ticker))
                 st.markdown(
                     f"<div style='background:#1a1200;border-left:3px solid #f59e0b;"
                     f"border-radius:6px;padding:8px 12px;margin-bottom:6px;"
                     f"color:#fcd34d;font-size:0.82em'>"
-                    f"🧾 <b>Wash-sale watch:</b> you bought {_ps_ticker} "
+                    f"🧾 <b>Wash-sale watch:</b> you bought {_ps_ticker_esc} "
                     f"{_ws_days} day{'s' if _ws_days != 1 else ''} ago "
                     f"({_ws['recent_buy_date']}). Selling at a loss within "
                     f"{_ws_win} days of a purchase — or buying again "
@@ -29224,14 +29230,28 @@ elif page == "💰 Account":
                 "leverage amplifies exposure relative to your own capital."
             )
             # ── Margin call-distance awareness panel ──────────────────────────
-            _lev_c = st.session_state.get("_leverage_cache")
-            if _lev_c is None:
-                _lev_c = {}
-            if _lev_c.get("levered"):
+            # Computed inline from this page's own fresh _cash/_equity/_total_acct
+            # (NOT from _leverage_cache, which is populated only by 🏠 Home's
+            # render path) — a session opening 💰 Account before Home would
+            # otherwise see this panel silently vanish with no explanation,
+            # directly under a caption that just said "you're levered"
+            # (2026-08-24 review finding).
+            _cash_stale = False
+            if _acct.get("updated_at"):
+                _cash_age_days = (pd.Timestamp.now(tz="UTC")
+                                  - pd.to_datetime(_acct["updated_at"], utc=True)).days
+                _cash_stale = _cash_age_days > ACCOUNT_CASH_STALE_DAYS
+            if _cash_stale:
+                st.caption(
+                    "📐 Margin Call Distance withheld — the cash balance above "
+                    f"is stale (> {ACCOUNT_CASH_STALE_DAYS}d old)."
+                )
+            else:
+                _lev_ratio = (_equity / _total_acct) if _total_acct > 0 else None
                 _md = _margin_mod.call_distance(
-                    stock_value=_lev_c["equity"],       # total market value of holdings
-                    owner_equity=_lev_c["net_capital"], # capital the owner actually holds
-                    margin_debit=_lev_c["margin_debit"],
+                    stock_value=_equity,       # total market value of holdings
+                    owner_equity=_total_acct,  # capital the owner actually holds
+                    margin_debit=abs(_cash),
                     rate=MARGIN_MAINTENANCE_RATE,
                 )
                 if _md is not None:
@@ -29249,7 +29269,7 @@ elif page == "💰 Account":
                     )
                     _mg3.metric(
                         "Leverage",
-                        f"{_lev_c['ratio']:.2f}×",
+                        f"{_lev_ratio:.2f}×" if _lev_ratio is not None else "—",
                         help="Total holdings ÷ owner equity.",
                     )
                     if _md["in_call"]:
