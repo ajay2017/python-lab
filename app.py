@@ -4713,7 +4713,7 @@ if page == "🏠 Home":
         _drift_verdict = broker_sync.decide_drift_banner(
             _bsnap,
             st.session_state.get("holdings_df"),
-            _now_et(),
+            _now_et,
             SNAPTRADE_BALANCE_STALE_HOURS,
             price_map={t: (v or {}).get("price") for t, v in _lp_map.items()},
             # A ticker traded since the capture differs for a good reason.
@@ -4780,7 +4780,7 @@ if page == "🏠 Home":
     # full-rebuild one (alternate branches of the same synthesis block) reuse it.
     _f255_acct = db.load_account_cash()
     _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
-        total_val, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+        total_val, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et
     )
 
     # Best / worst position tiles stay live (cheap, price-driven) — kept
