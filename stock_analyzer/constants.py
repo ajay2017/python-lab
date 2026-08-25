@@ -146,6 +146,19 @@ CONCENTRATION_HIGHBETA_SHARE_WARN = 60.0
 # window), NOT an investment-decision threshold — tune from observation.
 ACCOUNT_CASH_STALE_DAYS = 7
 
+# Intraday-pullback cron gate (cron_runner.py._run_intraday) — the ET hour
+# before which the lane refuses to run ("opening volatility hasn't settled
+# yet"). The lane fires via a fixed-UTC dual-slot schedule (15:30/16:30 UTC,
+# a DST workaround with no native ET awareness), so this floor is also what
+# decides WHICH of the two daily firings counts as the real run. At the
+# previous value (10) both the winter slot (10:30 ET) and the summer slot
+# (11:30 ET) cleared it, so winter's EARLIER firing won and the lane silently
+# ran an hour before the intended ~11:30 ET target every winter. Raised to 11
+# (decided with the user 2026-08-25, before the 2026-11-01 DST flip) so only
+# the 11:30 ET firing ever clears it, in both EST and EDT — the schedule
+# itself is unchanged, only which of its two firings does the real work.
+CRON_INTRADAY_START_HOUR_ET = 11
+
 # The catch-all bucket a holding lands in when it has no curated sector mapping
 # AND no provider .info sector. It is NOT a real correlated sector — it's a
 # grab-bag of unclassified names — so concentration caps must NOT treat it as a

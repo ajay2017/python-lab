@@ -336,6 +336,7 @@ All decision thresholds live in `stock_analyzer/constants.py`. Changes to any va
 | `NYSE_EARLY_CLOSES` | dict (ISO date → hour ET) | Half-day early closures 2026–2028 (ISO date keys map to 13.0 = 1:00 PM ET). Calendar facts. Consulted by `_early_close_hour()`. |
 | `MARKET_CALENDAR_LAST_YEAR` | 2028 | Last hardcoded year in NYSE_HOLIDAYS/NYSE_EARLY_CLOSES. When system year exceeds this, `market_status()` sets `calendar_stale=True` so the UI warns to extend the calendar before 2029. Calendar-maintenance constant; must be extended with fresh holidays/early-closes before each year-end. |
 | `ACCOUNT_CASH_STALE_DAYS` | 7 | Max age (calendar days) of a cached cash balance on the 💰 Account page before it is shown as stale. Display-only staleness indicator; never gates a recommendation. |
+| `CRON_INTRADAY_START_HOUR_ET` | 11 | `cron_runner.py::_run_intraday`'s ET-hour floor before the lane will run. The lane fires via a fixed-UTC dual-slot schedule (15:30/16:30 UTC) with no native ET/DST awareness, so this floor also decides which of the two daily firings is the real one. Raised from 10 to 11 (decided with the user 2026-08-25, before the 2026-11-01 DST flip) so only the 11:30 ET firing clears it in both EST and EDT — previously winter's earlier 10:30 ET firing also cleared it, so the lane silently ran an hour early every winter. |
 | `REDEPLOY_CORR_CORRELATED_MIN` | 0.70 | Already documented inline with `REDEPLOY_CORR_DIVERSIFIER_MAX` above (row 282). Repeated here for checker coverage. |
 | `CROSS_ASSET_COPPER_TREND_DAYS` / `CROSS_ASSET_DXY_TREND_DAYS` | 20 / 20 | Already documented inline with `CROSS_ASSET_HYG_TREND_DAYS` above (all three share the same value and purpose). Repeated here for checker coverage. |
 | `CROSS_ASSET_DXY_ROC_THRESHOLD` | 1.5 | Already documented inline with `CROSS_ASSET_DXY_ROC_DAYS` above. Repeated here for checker coverage. |
@@ -2557,7 +2558,7 @@ reports failure by returning non-zero (rather than raising) still records
 |------|---------|----------------|---------------|-----------------|
 | `premarket` | `cron-premarket` | `0 12,13 * * *` | trading day + ET hour ≥ `ALERT_EMAIL_HOUR_ET` | Protective exit alerts (F-143) |
 | `scan` | `cron-scan` | `45 13,14 * * *` | trading day | Morning buy-list scan |
-| `intraday` | `cron-intraday` | `30 15,16 * * 1-5` | trading day | Intraday pullback entry check |
+| `intraday` | `cron-intraday` | `30 15,16 * * 1-5` | trading day + ET hour ≥ `CRON_INTRADAY_START_HOUR_ET` | Intraday pullback entry check |
 | `eod` | `cron-eod` | `30 21 * * 1-5` | trading day + ET hour ≥ `ALERT_EOD_HOUR_ET` | EOD snapshot, pullback alert, vol-prediction write + maturation |
 | `thesis` | `cron-thesis` | `0 23 * * 0` | Sunday | F-1 thesis review → F-3 weekly debrief → F-4 monthly report (first Sunday) |
 | `broker` | `cron-broker` | *not recorded here* | **none** — see below | SnapTrade balance sync, transaction import, broker position snapshot (F-252) |

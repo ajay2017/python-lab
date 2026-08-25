@@ -75,6 +75,7 @@ from stock_analyzer import db
 from stock_analyzer import snaptrade_client
 from stock_analyzer.constants import (
     ALERT_EMAIL_HOUR_ET, ALERT_EOD_HOUR_ET, SNAPTRADE_SYNC_MAX_TXN_LOOKBACK_DAYS,
+    CRON_INTRADAY_START_HOUR_ET,
 )
 from stock_analyzer.data import is_trading_day
 from stock_analyzer.headless_alert_engine import (
@@ -938,9 +939,13 @@ def _run_intraday(now_et, force: bool) -> int:
         if not is_trading_day(now_et.date()):
             _log("intraday: not an ET trading day — skip.")
             return 0
-        # Only run after opening volatility has settled (≥ 10:00 ET).
-        if now_et.hour < 10:
-            _log(f"intraday: too early (ET hour {now_et.hour} < 10) — skip.")
+        # Only run after opening volatility has settled (≥ CRON_INTRADAY_START_HOUR_ET).
+        # This lane fires via a fixed-UTC dual-slot schedule with no native ET/DST
+        # awareness (15:30/16:30 UTC), so this floor also decides WHICH of the two
+        # daily firings is the real one — decided with the user 2026-08-25 to lock
+        # the real run at ~11:30 ET in both EST and EDT (see constants.py).
+        if now_et.hour < CRON_INTRADAY_START_HOUR_ET:
+            _log(f"intraday: too early (ET hour {now_et.hour} < {CRON_INTRADAY_START_HOUR_ET}) — skip.")
             return 0
 
     # Load the scanner_cache written by this morning's _run_scan step.
