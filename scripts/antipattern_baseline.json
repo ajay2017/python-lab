@@ -14,6 +14,7 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001f_ac_row.get(\"thesis\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_an_live.get(_t) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_b.get(\"rec\") or {}": 1,
+      "OFFLINE_SENTINEL_COLLAPSE\u001f_bd_diff.get(\"qty_mismatch\", []) if isinstance(_bd_diff, dict) else []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_beh.get(\"insights\") or []": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_beh.get(\"overtrading_stats\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001f_c.get(\"_bundle\") or {}": 1,
@@ -547,7 +548,8 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001fdata.get(\"buzz\") or {}": 1
     },
     "stock_analyzer/providers/fmp_provider.py": {
-      "NAIVE_DATE_TODAY\u001fdate.today()": 4
+      "NAIVE_DATE_TODAY\u001fdate.today()": 4,
+      "OFFLINE_SENTINEL_COLLAPSE\u001fpayload.get(\"content\") if isinstance(payload, dict) else []": 1
     },
     "stock_analyzer/providers/selftest.py": {
       "OFFLINE_SENTINEL_COLLAPSE\u001fb.get('news') or []": 1
@@ -595,6 +597,7 @@
       "OFFLINE_SENTINEL_COLLAPSE\u001flive_prices.get(ticker) or {}": 1
     },
     "stock_analyzer/stress_test.py": {
+      "OFFLINE_SENTINEL_COLLAPSE\u001f_SECTOR_SHOCKS.get(sector_key, {}) if sector_key else {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fdata.get(\"risk_metrics\") or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fheld_data.get(ticker) or {}": 1,
       "OFFLINE_SENTINEL_COLLAPSE\u001fscenario_result.get(\"most_exposed\") or []": 1

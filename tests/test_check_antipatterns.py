@@ -43,6 +43,27 @@ class TestOfflineSentinel:
     def test_ignores_safe_reads(self, code):
         assert "OFFLINE_SENTINEL_COLLAPSE" not in _rules(code)
 
+    # ── 2026-08-24 audit: the ternary (IfExp) form is the same collapse as
+    # `or []`, just spelled differently — a live instance (app.py's F-252
+    # broker-drift cross-reference) went undetected until this was added. ──
+
+    @pytest.mark.parametrize("code", [
+        'x = d.get("k", []) if isinstance(d, dict) else []',   # get-then-empty
+        'x = [] if not isinstance(d, dict) else d.get("k", [])',  # empty-then-get
+        'x = d.get("k") if cond else {}',                       # bare .get(), dict default
+        'x = () if cond else obj.get(key)',                     # tuple default, reversed
+    ])
+    def test_flags_ternary_get_or_empty(self, code):
+        assert "OFFLINE_SENTINEL_COLLAPSE" in _rules(code)
+
+    @pytest.mark.parametrize("code", [
+        'x = d.get("k") if cond else compute()',   # non-empty fallback — not it
+        'x = other if cond else d.get("k")',        # neither side is empty
+        'x = a if cond else b',                     # no .get() at all
+    ])
+    def test_ignores_safe_ternaries(self, code):
+        assert "OFFLINE_SENTINEL_COLLAPSE" not in _rules(code)
+
 
 class TestUnsafeHtml:
     @pytest.mark.parametrize("code", [

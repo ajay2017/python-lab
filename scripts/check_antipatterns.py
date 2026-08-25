@@ -11,7 +11,12 @@ that are mechanically detectable (see CLAUDE.md "Definition of Done" and the
 audit memories project_audit_2026_07_29 / project_audit_2026_08_04).
 
 Rules (each an AST signature, low false-positive by design):
-  OFFLINE_SENTINEL_COLLAPSE  — `<something>.get(...) or []` / `or {}` / `or ()`.
+  OFFLINE_SENTINEL_COLLAPSE  — `<something>.get(...) or []` / `or {}` / `or ()`,
+      OR the semantically identical ternary form `<something>.get(...) if <cond>
+      else []` / `[] if <cond> else <something>.get(...)` (2026-08-24 audit: an
+      `IfExp` collapses "couldn't compute" into "checked, empty" exactly like the
+      `BoolOp/Or` form — a live instance survived undetected in app.py's F-252
+      broker-drift cross-reference until this rule was widened).
       The offline-vs-checked-empty contract (producer returns None on failure)
       is silently defeated at the *consumer* read site by `or []`, turning
       "couldn't compute" into "checked, no risk." The single most-repeated
@@ -147,6 +152,17 @@ class _Visitor(ast.NodeVisitor):
             empty_default = any(_is_empty_container(v) for v in node.values[1:])
             if has_get and empty_default:
                 self.hits.append(("OFFLINE_SENTINEL_COLLAPSE", self._seg(node)))
+        self.generic_visit(node)
+
+    def visit_IfExp(self, node: ast.IfExp) -> None:
+        # `X.get(...) if <cond> else []` / `[] if <cond> else X.get(...)` —
+        # the ternary form of the same OFFLINE_SENTINEL_COLLAPSE the `or []`
+        # BoolOp form above catches. Checked in both orderings since either
+        # side of the ternary may be the `.get()` call (2026-08-24 audit).
+        for get_side, empty_side in ((node.body, node.orelse), (node.orelse, node.body)):
+            if _has_get_call(get_side) and _is_empty_container(empty_side):
+                self.hits.append(("OFFLINE_SENTINEL_COLLAPSE", self._seg(node)))
+                break
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
