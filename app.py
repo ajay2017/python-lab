@@ -5179,9 +5179,20 @@ if page == "🏠 Home":
                 _sect_sorted = _sect_df_ctx.sort_values("1W", ascending=False)
                 for _, _sr in _sect_sorted.head(3).iterrows():
                     _etf = str(_sr["ETF"])
+                    # "sector" stays first-key-wins for narrative display (unchanged
+                    # text in the "Leading: X, Y" captions below) -- but "aliases"
+                    # carries EVERY SECTOR_UNIVERSE bucket sharing this ETF (e.g. IGV
+                    # -> AI & Cloud/AI & Data/Enterprise Tech), so _sector_bonus can
+                    # give the ranking bonus to all of them when this ETF leads,
+                    # not just whichever one happens to be first in SECTOR_ETF's
+                    # insertion order. Fixes a real under-ranking gap: AI & Data
+                    # Platforms / Enterprise Tech tickers could never get the bonus
+                    # even when IGV was genuinely the week's leading sector.
+                    _etf_aliases = [k for k, v in SECTOR_ETF.items() if v == _etf]
                     _lead_sectors.append({
                         "etf":       _etf,
-                        "sector":    next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf),
+                        "sector":    _etf_aliases[0] if _etf_aliases else _etf,
+                        "aliases":   _etf_aliases,
                         "return_1w": float(_sr["1W"]),
                     })
 
@@ -5383,9 +5394,19 @@ if page == "🏠 Home":
             })
             # Stash leading sector names so the standalone Catalyst Watch page can
             # show the 🔥 leading-sector flag without recomputing the brief.
-            st.session_state["_leading_sectors_cache"] = [
-                ls.get("sector", "") for ls in (_gt_today.get("leading_sectors") or [])
-            ]
+            # Flattens EVERY alias a leading ETF represents (not just the
+            # first-key-wins display name) so catalyst_watch.py's exact-match
+            # sector_hot check can reach a bucket like "Enterprise Tech" that
+            # shares its ETF with "AI & Cloud" -- same fix as _sector_bonus.
+            # NOTE: "AI & Data" (the SECTOR_ETF alias key) still won't exactly
+            # match the fuller SECTOR_UNIVERSE bucket name "AI & Data
+            # Platforms", since sector_hot is exact-match, not substring like
+            # _sector_bonus -- a known, separate, NOT-yet-fixed naming gap.
+            st.session_state["_leading_sectors_cache"] = sorted({
+                alias
+                for ls in (_gt_today.get("leading_sectors") or [])
+                for alias in (ls.get("aliases") or [ls.get("sector", "")])
+            })
 
             # Publish held positions under an active Reduce/Exit call so OTHER
             # pages reconcile against the Brief (CLAUDE.md coordination: read,

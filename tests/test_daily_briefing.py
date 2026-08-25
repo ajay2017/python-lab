@@ -322,6 +322,64 @@ def test_grow_today_new_pick_no_warning_below_elevated_band():
     assert pick["sector_elevated_warning"] is None
 
 
+# ── _grow_today: leading-sector alias reach (2026-08-25 fix) ─────────────────
+# IGV backs three SECTOR_ETF keys ("AI & Cloud", "AI & Data", "Enterprise
+# Tech"). Before this fix, the leading-sectors list only ever carried the
+# first key ("AI & Cloud") when IGV led, so a candidate/holding in the other
+# two SECTOR_UNIVERSE buckets could never get _sector_bonus's +5 or the
+# "is_leader" flag even when IGV was genuinely the week's top mover. Pins
+# both call sites that were fixed (new-pick's is_leader, add-to-winner's
+# is_lead) individually, per this file's own stated philosophy that a
+# regression in one of two near-identical guards is invisible without a
+# test targeting that exact site.
+
+_IGV_LEADING = {
+    "tone": "bull",
+    "leading_sectors": [
+        {"etf": "IGV", "sector": "AI & Cloud",
+         "aliases": ["AI & Cloud", "AI & Data", "Enterprise Tech"], "return_1w": 5.0},
+    ],
+}
+
+
+def test_grow_today_new_pick_is_leader_reaches_aliased_sector():
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "AI & Data Platforms"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, _IGV_LEADING, composites=composites)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["is_leader"] is True
+
+
+def test_grow_today_new_pick_is_leader_false_for_unrelated_sector():
+    # Negative control -- the alias mechanism must not over-match: a sector
+    # sharing no ETF with IGV must not get the bonus just because IGV leads.
+    port_df = make_port_df([{"ticker": "HELD", "weight": 10.0}])
+    scanner = _scanner_df([{"ticker": "NEW", "score": COMPOSITE_BUY + 10, "sector": "Healthcare"}])
+    composites = {"NEW": {"total": COMPOSITE_BUY + 10, "rec": {"label": "Buy"}, "fundamentals_available": True}}
+    grow = _grow_today(port_df, scanner, [], {}, _TODAY, 100_000.0, _IGV_LEADING, composites=composites)
+    pick = find_item(grow["new_picks"], "NEW")
+    assert pick is not None
+    assert pick["is_leader"] is False
+
+
+def test_grow_today_add_position_is_leader_reaches_aliased_sector():
+    port_df = make_port_df([_winner_row(sector="Enterprise Tech")])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, _IGV_LEADING)
+    pick = find_item(grow["add_positions"], "AAA")
+    assert pick is not None
+    assert pick["is_leader"] is True
+
+
+def test_grow_today_add_position_is_leader_false_for_unrelated_sector():
+    port_df = make_port_df([_winner_row(sector="Healthcare")])
+    grow = _grow_today(port_df, None, [], {}, _TODAY, 100_000.0, _IGV_LEADING)
+    pick = find_item(grow["add_positions"], "AAA")
+    assert pick is not None
+    assert pick["is_leader"] is False
+
+
 # ── build_daily_briefing: top-level contract ──────────────────────────────────
 # Regression guard for the 2026-08-04 headless_alert_engine bug: compute_
 # morning_picks() read tone/new_picks/sp500_pct off the top-level brief dict

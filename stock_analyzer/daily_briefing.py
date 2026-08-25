@@ -832,7 +832,18 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
     # the main section said "no new entries" while a separate Movers section
     # listed four. Movers are a SOURCE of candidates, not a parallel pipeline.
     def _sector_bonus(sector: str) -> int:
-        return 5 if any(ls.get("sector", "") in str(sector) for ls in lead_secs) else 0
+        # Checks EVERY alias a leading ETF represents, not just its single
+        # display "sector" name -- SECTOR_ETF has 3 keys sharing one ETF
+        # (IGV: AI & Cloud / AI & Data / Enterprise Tech), so a candidate in
+        # any of those SECTOR_UNIVERSE buckets must be reachable when that
+        # ETF leads, not just the first-key-wins display name. "aliases"
+        # falls back to ["sector"] for a market_context dict cached before
+        # this field existed (e.g. across a redeploy boundary).
+        return 5 if any(
+            alias in str(sector)
+            for ls in lead_secs
+            for alias in (ls.get("aliases") or [ls.get("sector", "")])
+        ) else 0
 
     # Curated pool — momentum-gated, ranked by momentum + sector bonus, then
     # truncated to a working set for sector-diversity selection.
@@ -886,7 +897,13 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
             price    = _f(row.get("Price", 0))
             sector   = resolve_sector(ticker, row.get("Sector", ""))
             trend    = str(row.get("Trend", ""))
-            is_leader = any(ls.get("sector","") in sector for ls in lead_secs)
+            # Reuses _sector_bonus's own alias-aware match rather than
+            # re-implementing the same first-key-wins-only check here --
+            # this exact duplicated check (pre-fix) would otherwise have
+            # kept disagreeing with the ranking bonus after the alias fix
+            # above: a pick could get the +5 rank bonus but still render
+            # without its "leading sector" badge, or vice versa.
+            is_leader = bool(_sector_bonus(sector))
             is_mover  = bool(row.get("_is_mover"))
             day_change = row.get("_day_change")
 
@@ -1323,7 +1340,11 @@ def _grow_today(port_df, scanner_results, news_items, held_data, today,
                     })
                     continue
                 price   = _f(row.get("Price", 0))
-                is_lead = any(ls.get("sector", "") in sector for ls in lead_secs)
+                # Same alias-aware match as _sector_bonus/is_leader above --
+                # this is the add-to-winner lane's own copy of the identical
+                # first-key-wins-only bug (pre-fix), reused rather than
+                # re-duplicated so the two lanes can't silently diverge again.
+                is_lead = bool(_sector_bonus(sector))
                 # Sizing — source the ATR stop from held_data (same bundle shape as
                 # composites). If no stop is available, degrade to {} — never invent
                 # or estimate a stop (spec item 2).

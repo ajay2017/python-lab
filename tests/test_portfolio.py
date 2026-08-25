@@ -674,50 +674,51 @@ def test_industrials_and_communications_have_a_sector_etf():
 
 def test_every_scanner_sector_universe_bucket_has_a_sector_etf():
     """`_sector_bonus` (daily_briefing.py) matches a candidate's sector against
-    a leading sector name via SUBSTRING containment
-    (`any(ls.get("sector", "") in str(sector) for ls in lead_secs)`), not exact
-    equality — so a SECTOR_UNIVERSE bucket like "AI & Data Platforms" would be
-    correctly covered by SECTOR_ETF's shorter "AI & Data" key IF that key could
-    ever actually be emitted as a leading-sector name. It can't: the
-    leading-sectors list reverse-resolves an ETF back to a sector name via
-    `next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf)` (app.py:4950)
-    — FIRST KEY WINS per duplicate ETF value. `IGV` has three keys ("AI &
-    Cloud", "AI & Data", "Enterprise Tech"), so only "AI & Cloud" is EVER
-    emitted when IGV leads — "AI & Data" and "Enterprise Tech" never are. A
-    naive substring check against all of SECTOR_ETF's keys would silently
-    green-light "AI & Data Platforms"/"Enterprise Tech" as covered when
-    they're actually not — the same class of gap this test exists to catch
-    (caught in review, 2026-08-21). This test instead builds the REAL
-    emittable set (first key per unique ETF value) and checks against that.
+    EVERY alias a leading ETF represents (not just a first-key-wins display
+    name) via SUBSTRING containment. Before 2026-08-25, the leading-sectors
+    list reverse-resolved an ETF back to a SINGLE sector name via
+    `next((k for k, v in SECTOR_ETF.items() if v == _etf), _etf)` — first key
+    wins per duplicate ETF value. `IGV` has three keys ("AI & Cloud", "AI &
+    Data", "Enterprise Tech"), so only "AI & Cloud" was EVER emitted when IGV
+    led — "AI & Data Platforms"/"Enterprise Tech" tickers could never get the
+    +5 ranking bonus. Fixed by carrying an "aliases" list (every key sharing
+    that ETF) alongside the single display name, and having `_sector_bonus`
+    check all aliases, not just one. A new `"Consumer Staples & Retail": "XRT"`
+    SECTOR_ETF entry closed the third gap (no key at all was a substring
+    before). All three previously-allowlisted gaps are now closed — this test
+    asserts every SECTOR_UNIVERSE bucket has SOME SECTOR_ETF key (checking
+    the FULL key set, not deduped per unique ETF value, since every key is
+    now individually reachable via the aliases mechanism) as a substring.
 
-    `Industrials`/`Communications` had NOTHING in the emittable set as a
-    substring before 2026-08-21 (the gap this session's approved fix closed).
-    Three buckets remain genuinely uncovered and are ALLOWLISTED here as
-    known, pre-existing, NOT-yet-fixed gaps — all out of scope for the
-    2026-08-21 change, which only covered Industrials/Communications; don't
-    silently expand scope by fixing them here:
-      - "Consumer Staples & Retail" — no SECTOR_ETF key at all is a substring.
-      - "AI & Data Platforms" / "Enterprise Tech" — the IGV duplicate-key
-        collision above (pre-existing, predates F-240 entirely).
-    If this allowlist ever needs a FOURTH entry, that's a signal the
-    underlying gap is recurring, not a reason to just grow the allowlist
-    further without asking."""
+    If this test ever fails again, that's a genuinely new, real gap needing
+    its own SECTOR_ETF entry — not a reason to bring the allowlist back."""
     from stock_analyzer.scanner import SECTOR_UNIVERSE
 
-    _emittable_names: set[str] = set()
-    _seen_etf_values: set[str] = set()
-    for _k, _v in SECTOR_ETF.items():
-        if _v not in _seen_etf_values:
-            _seen_etf_values.add(_v)
-            _emittable_names.add(_k)
-
-    _allowlist = {"Consumer Staples & Retail", "AI & Data Platforms", "Enterprise Tech"}
     missing = [
         sec for sec in SECTOR_UNIVERSE
-        if sec not in _allowlist and not any(name in sec for name in _emittable_names)
+        if not any(name in sec for name in SECTOR_ETF)
     ]
     assert not missing, (
-        f"SECTOR_UNIVERSE bucket(s) with no EMITTABLE SECTOR_ETF name as a "
-        f"substring — these can never register as a 'leading sector' or get "
-        f"the +5 ranking bonus: {missing}"
+        f"SECTOR_UNIVERSE bucket(s) with no SECTOR_ETF key as a substring — "
+        f"these can never register as a 'leading sector' or get the +5 "
+        f"ranking bonus: {missing}"
     )
+
+
+def test_sector_etf_igv_aliases_all_reachable_via_substring():
+    """Regression guard for the 2026-08-25 fix itself: pins that all three
+    SECTOR_ETF keys sharing IGV ("AI & Cloud", "AI & Data", "Enterprise
+    Tech") are each individually present in SECTOR_ETF (the precondition
+    _sector_bonus's alias mechanism depends on) — catches a future edit that
+    accidentally removes one of the three without noticing the collision it
+    was resolving."""
+    igv_keys = {k for k, v in SECTOR_ETF.items() if v == "IGV"}
+    assert igv_keys == {"AI & Cloud", "AI & Data", "Enterprise Tech"}
+
+
+def test_sector_etf_consumer_staples_retail_does_not_collide():
+    """Consumer Staples & Retail's XRT must not collide with an existing
+    ETF (XLY/XLP), which would recreate the exact bug this session fixed."""
+    assert SECTOR_ETF["Consumer Staples & Retail"] == "XRT"
+    _other_users = [k for k, v in SECTOR_ETF.items() if v == "XRT" and k != "Consumer Staples & Retail"]
+    assert not _other_users, f"XRT unexpectedly shared with: {_other_users}"

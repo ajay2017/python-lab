@@ -712,6 +712,14 @@ SECTOR_ETF = {
     # and the Relative Strength / Sector Rotation tabs for the same two sectors.
     "Industrials":     "XLI",
     "Communications":  "XLC",
+    # Added 2026-08-25 (user-confirmed) — "Consumer Staples & Retail" (COST/NKE/
+    # TJX/WMT/TGT/HD) had no ETF benchmark at all, the same under-ranking gap
+    # Industrials/Communications had above, plus it could never be diagnosed
+    # via a substring match against any existing key (no collision, just a
+    # flat-out missing mapping). XLY ("Consumer Tech") and XLP would each
+    # recreate a same-ETF collision with an existing bucket, so XRT (SPDR S&P
+    # Retail ETF) was chosen as a distinct proxy that doesn't overlap either.
+    "Consumer Staples & Retail": "XRT",
     "Other":           "SPY",
 }
 
