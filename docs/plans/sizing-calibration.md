@@ -336,6 +336,8 @@ ones from persisting with no error surfaced (`saved=N, error=None`).
 A section at the bottom of 🧭 Self vs Engine, over `app_aligned` BUYs whose `rec_date
 >= <Phase 2 DDL date>` and whose rec row carries `rec_shares`:
 
+**Version boundary caveat:** `SIZING_FORMULA_VERSION` bumped 2→3 on 2026-08-25 (F-255 net-capital cap). Phase 3 must not straddle this boundary without disambiguating — any take-rate comparison across it compares apples to oranges (the formula changed). Filter on version, or exclude Phase 1 rows from Phase 3's dataset entirely.
+
 - **Headline: median take rate** = `actual_shares / rec_shares`, plus n. A ratio, not a
   dollar figure — sign-free and symmetric by construction.
 - **Revealed risk-per-trade**, computed from actual shares and the stored `rec_stop` /
