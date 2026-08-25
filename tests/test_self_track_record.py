@@ -19,6 +19,8 @@ from stock_analyzer import self_track_record as stv
 from stock_analyzer.constants import (
     SELF_TRACK_MATCH_LOOKBACK_DAYS,
     SELF_TRACK_RELIABLE_LOG_START,
+    SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    SELF_TRACK_SELL_RELIABLE_LOG_START,
     BEHAVIORAL_MIN_SAMPLE_N,
     REC_SCORE_MIN_DAYS,
 )
@@ -457,3 +459,258 @@ def test_build_new_pick_rows_deterministic_across_calls():
     rows1 = _build_new_pick_rows(picks, rec_date)
     rows2 = _build_new_pick_rows(picks, rec_date)
     assert rows1 == rows2
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SELL-side sibling — classify_sells / self_vs_engine_sell_summary /
+# detect_missed_exits (F-233's SELL extension)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sell_row(ticker="AAA", traded_at="2026-08-10", shares=10.0, price=100.0,
+              id_=1, user_thesis=""):
+    return _trade_row(ticker=ticker, traded_at=traded_at, action="SELL",
+                       shares=shares, price=price, id_=id_, user_thesis=user_thesis)
+
+
+def _signal_row(ticker="AAA", signal_date="2026-08-10", signal_type="EXIT"):
+    return {"ticker": ticker, "signal_date": signal_date, "signal_type": signal_type}
+
+
+def _signals_df(rows):
+    return pd.DataFrame(rows)
+
+
+# ─── Offline-sentinel guards ────────────────────────────────────────────────
+
+def test_classify_sells_returns_none_when_exit_signals_none():
+    trades = _trades_df([_sell_row()])
+    result = stv.classify_sells(
+        trades, None, SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result is None
+
+
+def test_sell_summary_available_false_when_classified_none():
+    summary = stv.self_vs_engine_sell_summary(
+        None, {}, {}, date(2026, 9, 1), BEHAVIORAL_MIN_SAMPLE_N,
+    )
+    assert summary == {"available": False}
+
+
+def test_detect_missed_exits_returns_none_when_exit_signals_none():
+    trades = _trades_df([_sell_row()])
+    result = stv.detect_missed_exits(
+        None, trades, {"AAA"}, date(2026, 9, 1), SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result is None
+
+
+def test_classify_sells_empty_signals_df_not_none_classifies_normally():
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at="2026-08-10")])
+    result = stv.classify_sells(
+        trades, _signals_df([]),
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["bucket"] == "self_initiated"
+
+
+# ─── Alpha sign invariant ───────────────────────────────────────────────────
+
+def test_alpha_negative_when_stock_underperforms_after_sale():
+    """A good exit: the stock lags SPY after the sale -> negative avg alpha."""
+    today = date(2026, 9, 1)
+    sell_date = today - timedelta(days=30)
+    trades = _trades_df([
+        _sell_row(ticker="AAA", traded_at=sell_date.isoformat(), price=100.0, id_=1),
+    ])
+    classified = stv.classify_sells(
+        trades, _signals_df([]),
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    # Stock DROPPED after the sale (good exit) while SPY held flat.
+    current_prices = {"AAA": 90.0}
+    spy = _flat_spy(sell_date - timedelta(days=5), today, price=400.0)
+    summary = stv.self_vs_engine_sell_summary(
+        classified, current_prices, spy, today, min_sample_n=1,
+    )
+    assert summary["self_graded"]["avg_alpha_pct"] is not None
+    assert summary["self_graded"]["avg_alpha_pct"] < 0
+
+
+def test_alpha_positive_when_stock_outperforms_after_sale():
+    """A bad (early) exit: the stock beats SPY after the sale -> positive avg alpha."""
+    today = date(2026, 9, 1)
+    sell_date = today - timedelta(days=30)
+    trades = _trades_df([
+        _sell_row(ticker="AAA", traded_at=sell_date.isoformat(), price=100.0, id_=1),
+    ])
+    classified = stv.classify_sells(
+        trades, _signals_df([]),
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    # Stock RALLIED after the sale (sold too early) while SPY held flat.
+    current_prices = {"AAA": 130.0}
+    spy = _flat_spy(sell_date - timedelta(days=5), today, price=400.0)
+    summary = stv.self_vs_engine_sell_summary(
+        classified, current_prices, spy, today, min_sample_n=1,
+    )
+    assert summary["self_graded"]["avg_alpha_pct"] is not None
+    assert summary["self_graded"]["avg_alpha_pct"] > 0
+
+
+# ─── Never-zeroed invariant (regression guard against the acted-SELL mistake) ─
+
+def test_classify_sells_never_frames_as_acted_trade():
+    trades = _trades_df([
+        _sell_row(ticker="AAA", traded_at="2026-08-10", id_=1),
+        _sell_row(ticker="BBB", traded_at="2026-08-11", id_=2),
+    ])
+    result = stv.classify_sells(
+        trades, _signals_df([]),
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    for r in result:
+        assert r["acted_on"] is False
+        assert r["acted_trade"] is None
+        assert r["price_at_surface"] == r["price"]
+        assert r["rec_date"] == r["sell_date"]
+
+
+# ─── coverage_limited boundary ──────────────────────────────────────────────
+
+def test_sell_before_reliable_start_no_match_is_coverage_limited():
+    day_before = SELF_TRACK_SELL_RELIABLE_LOG_START - timedelta(days=1)
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at=day_before.isoformat())])
+    result = stv.classify_sells(
+        trades, _signals_df([]),
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result[0]["bucket"] == "coverage_limited"
+
+
+def test_sell_on_reliable_start_no_match_is_self_initiated():
+    trades = _trades_df([
+        _sell_row(ticker="AAA", traded_at=SELF_TRACK_SELL_RELIABLE_LOG_START.isoformat()),
+    ])
+    result = stv.classify_sells(
+        trades, _signals_df([]),
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result[0]["bucket"] == "self_initiated"
+
+
+def test_sell_before_reliable_start_with_matching_signal_is_engine_aligned():
+    """A matched signal overrides the coverage boundary — date-independent."""
+    sell_date = SELF_TRACK_SELL_RELIABLE_LOG_START - timedelta(days=30)
+    signal_date = sell_date - timedelta(days=1)
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at=sell_date.isoformat())])
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=signal_date.isoformat(),
+                                        signal_type="EXIT")])
+    result = stv.classify_sells(
+        trades, signals,
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result[0]["bucket"] == "engine_aligned"
+
+
+def test_watch_signal_never_counts_as_a_match():
+    sell_date = date(2026, 8, 20)
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at=sell_date.isoformat())])
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=sell_date.isoformat(),
+                                        signal_type="WATCH")])
+    result = stv.classify_sells(
+        trades, signals,
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result[0]["bucket"] != "engine_aligned"
+
+
+# ─── Signal-window boundary ─────────────────────────────────────────────────
+
+def test_signal_exactly_window_days_before_sell_matches():
+    sell_date = date(2026, 8, 20)
+    signal_date = sell_date - timedelta(days=SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS)
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at=sell_date.isoformat())])
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=signal_date.isoformat(),
+                                        signal_type="TRIM")])
+    result = stv.classify_sells(
+        trades, signals,
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result[0]["bucket"] == "engine_aligned"
+
+
+def test_signal_one_day_beyond_window_does_not_match():
+    sell_date = date(2026, 8, 20)
+    signal_date = sell_date - timedelta(days=SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS + 1)
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at=sell_date.isoformat())])
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=signal_date.isoformat(),
+                                        signal_type="EXIT")])
+    result = stv.classify_sells(
+        trades, signals,
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result[0]["bucket"] != "engine_aligned"
+
+
+# ─── detect_missed_exits — calm-boundary behaviour ──────────────────────────
+
+def test_missed_exits_recent_signal_not_yet_flagged():
+    today = date(2026, 9, 1)
+    signal_date = today - timedelta(days=SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS - 1)
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=signal_date.isoformat(),
+                                        signal_type="EXIT")])
+    result = stv.detect_missed_exits(
+        signals, _trades_df([]), {"AAA"}, today, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result == []
+
+
+def test_missed_exits_older_signal_no_sell_since_is_flagged():
+    today = date(2026, 9, 1)
+    signal_date = today - timedelta(days=SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS + 5)
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=signal_date.isoformat(),
+                                        signal_type="EXIT")])
+    result = stv.detect_missed_exits(
+        signals, _trades_df([]), {"AAA"}, today, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert len(result) == 1
+    assert result[0]["ticker"] == "AAA"
+    assert result[0]["signal_type"] == "EXIT"
+
+
+def test_missed_exits_ticker_sold_after_signal_not_flagged():
+    today = date(2026, 9, 1)
+    signal_date = today - timedelta(days=SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS + 5)
+    sell_date = signal_date + timedelta(days=1)
+    signals = _signals_df([_signal_row(ticker="AAA", signal_date=signal_date.isoformat(),
+                                        signal_type="EXIT")])
+    trades = _trades_df([_sell_row(ticker="AAA", traded_at=sell_date.isoformat())])
+    result = stv.detect_missed_exits(
+        signals, trades, {"AAA"}, today, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    assert result == []
+
+
+# ─── No-cross-contamination with BUY-side bucket names ─────────────────────
+
+def test_classify_sells_never_emits_buy_side_bucket_names():
+    today = date(2026, 9, 1)
+    rows = [
+        _sell_row(ticker="AAA", traded_at=(today - timedelta(days=1)).isoformat(), id_=1),
+        _sell_row(ticker="BBB",
+                   traded_at=(SELF_TRACK_SELL_RELIABLE_LOG_START - timedelta(days=1)).isoformat(),
+                   id_=2),
+    ]
+    signals = _signals_df([_signal_row(ticker="AAA",
+                                        signal_date=(today - timedelta(days=1)).isoformat(),
+                                        signal_type="EXIT")])
+    result = stv.classify_sells(
+        _trades_df(rows), signals,
+        SELF_TRACK_SELL_RELIABLE_LOG_START, SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS,
+    )
+    buckets = {r["bucket"] for r in result}
+    assert buckets <= {"engine_aligned", "self_initiated", "coverage_limited"}
+    assert not buckets & {"app_aligned", "self_out_of_scope", "self_in_scope"}

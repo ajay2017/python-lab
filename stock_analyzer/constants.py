@@ -1190,6 +1190,12 @@ SELF_TRACK_MATCH_LOOKBACK_DAYS = 3
 # bucketed `self_in_scope` and graded. Boundary is inclusive (`>=`).
 SELF_TRACK_RELIABLE_LOG_START = date(2026, 8, 6)
 
+# SELL-side sibling of the two constants above (F-233's SELL extension). A SELL
+# counts as `engine_aligned` only if an EXIT/TRIM exit_signals row for the same
+# ticker falls within this many days before (inclusive) the sell date.
+SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS = 5   # days between an EXIT/TRIM signal and a sell to count as "engine-called" (vs self-initiated)
+SELF_TRACK_SELL_RELIABLE_LOG_START = date(2026, 7, 21)  # exit_signals cron capture went live this date; sells before it are disclosed but never graded (coverage_limited)
+
 # ── Predictive Analytics — Signal Calibration ─────────────────────────────────
 # Minimum number of mature outcomes in a composite-score band before the band
 # is shown in the Signal Calibration chart. Below this, the band is labelled

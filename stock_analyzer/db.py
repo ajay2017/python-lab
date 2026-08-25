@@ -2750,6 +2750,39 @@ def load_exit_signals(days_back: int = 365) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def load_exit_signals_or_none(days_back: int = 365) -> pd.DataFrame | None:
+    """
+    Same query as load_exit_signals(), but distinguishes a genuine zero-row
+    result (returns an empty DataFrame) from a failed load -- missing
+    credentials or a raised exception during the query (returns None).
+    load_exit_signals() itself cannot make this distinction (its except
+    branch returns the same empty DataFrame either way), which is fine for
+    its existing consumers (app.py, cron_runner.py, debrief_advisor.py) but
+    unsafe for a consumer where "load failed" must never be treated as "zero
+    exit signals exist" (Self Track Record's classify_sells, which would
+    otherwise silently misclassify every engine-called SELL as self-initiated
+    on a transient Supabase hiccup -- the offline-sentinel-collapse bug
+    class). Does NOT touch load_exit_signals() or any of its callers.
+    """
+    if not has_db():
+        return None
+    try:
+        from datetime import timedelta
+        from stock_analyzer.market_time import today_et
+        cutoff = (today_et() - timedelta(days=days_back)).isoformat()
+        rows = (
+            _client()
+            .table("exit_signals")
+            .select("*")
+            .gte("signal_date", cutoff)
+            .execute()
+            .data
+        )
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception:
+        return None
+
+
 def save_analyst_target_snapshots_batch(snapshots: list[dict]) -> None:
     """Persist a daily analyst-consensus-target snapshot per held ticker.
 
