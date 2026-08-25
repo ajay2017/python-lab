@@ -1,5 +1,9 @@
 """Tests for stock_analyzer.margin — margin call-distance computations."""
+import ast
 import importlib
+import importlib.util
+from pathlib import Path
+
 import pytest
 from stock_analyzer.margin import call_distance, capital_basis_weight
 from stock_analyzer.constants import FRAGILITY_PULLBACK_PCT, MARGIN_MAINTENANCE_RATE
@@ -173,26 +177,63 @@ def test_capital_basis_weight_negative_capital_returns_none():
     assert capital_basis_weight(1000.0, -500.0) is None
 
 
-def test_capital_basis_weight_not_imported_by_gate_modules():
-    """Same awareness-only invariant as MARGIN_MAINTENANCE_RATE: this is a
-    display-only dual-basis readout and must never feed a gate, score, or
-    recommendation — only the Account page and the leverage banner read it."""
-    gate_modules = [
-        "stock_analyzer.risk_advisor",
-        "stock_analyzer.exit_advisor",
-        "stock_analyzer.daily_briefing",
-        "stock_analyzer.scoring",
-        "stock_analyzer.ranking",
-        "stock_analyzer.targets",
-        "stock_analyzer.watchlist_advisor",
-        "stock_analyzer.portfolio",
-    ]
-    for mod_name in gate_modules:
-        try:
-            mod = importlib.import_module(mod_name)
-            assert not hasattr(mod, "capital_basis_weight"), (
-                f"{mod_name} imported capital_basis_weight — "
-                "this must remain awareness-only and never feed a gate"
-            )
-        except ImportError:
-            pass  # module doesn't exist — nothing to check
+def _module_imports_margin(mod_name: str) -> bool:
+    """True if `mod_name`'s SOURCE contains an import of stock_analyzer.margin,
+    in ANY form — `from stock_analyzer.margin import X`, a bare `import
+    stock_analyzer.margin`, or the alias style app.py itself actually uses
+    (`import stock_analyzer.margin as m`). Checked at the import-graph level
+    (parsing the source) rather than `hasattr(mod, "capital_basis_weight")`
+    on the already-imported module object: a hasattr check only sees names
+    bound directly into the importing module's namespace, so it cannot catch
+    an alias import — the module would still be imported and its functions
+    still callable via the alias, just under a different name (2026-08-24
+    review finding: the old hasattr version would have stayed green even if
+    a gate module adopted app.py's own import style)."""
+    spec = importlib.util.find_spec(mod_name)
+    if spec is None or spec.origin is None:
+        return False
+    src = Path(spec.origin).read_text(encoding="utf-8-sig")
+    tree = ast.parse(src, filename=spec.origin)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "stock_analyzer.margin":
+            return True
+        if isinstance(node, ast.Import) and any(
+            alias.name == "stock_analyzer.margin" for alias in node.names
+        ):
+            return True
+    return False
+
+
+# The full decision-engine-core list (CLAUDE.md's _GATE_FILES minus
+# constants.py/db.py/cron_runner.py/system_health.py, which are data/
+# infrastructure files rather than gate/advisor logic) — the prior version
+# of this test covered only 8 of these 13 (2026-08-24 review finding).
+_GATE_MODULES = [
+    "stock_analyzer.risk_advisor",
+    "stock_analyzer.exit_advisor",
+    "stock_analyzer.daily_briefing",
+    "stock_analyzer.portfolio",
+    "stock_analyzer.scoring",
+    "stock_analyzer.valuation",
+    "stock_analyzer.technicals",
+    "stock_analyzer.fundamentals",
+    "stock_analyzer.ranking",
+    "stock_analyzer.targets",
+    "stock_analyzer.risk",
+    "stock_analyzer.bundle_loader",
+    "stock_analyzer.watchlist_advisor",
+]
+
+
+@pytest.mark.parametrize("mod_name", _GATE_MODULES)
+def test_margin_module_not_imported_by_any_gate_module(mod_name):
+    """Same awareness-only invariant as MARGIN_MAINTENANCE_RATE, but for the
+    whole stock_analyzer.margin module (covers BOTH capital_basis_weight AND
+    call_distance in one check, since neither can be imported without
+    importing the module itself) across the complete gate-module list."""
+    assert not _module_imports_margin(mod_name), (
+        f"{mod_name} imports stock_analyzer.margin — margin.py's awareness-"
+        "only invariant (never a gate, never a score, never a suppression) "
+        "would be broken by this import existing at all, regardless of "
+        "which name or alias it's bound to"
+    )
