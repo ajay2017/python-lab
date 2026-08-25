@@ -1153,6 +1153,38 @@ def should_attempt_db_reload(last_failed_at: "float | None", now_ts: float) -> b
     return (now_ts - float(last_failed_at)) >= DB_RELOAD_RETRY_SEC
 
 
+def classify_load_result(h, w, t, now: float) -> "dict | None":
+    """Classify app.py's initial `_or_none` load results into a
+    `_db_load_failure` record, or None on full success. Extracted 2026-08-25
+    from app.py (queued as a F-243 reviewer non-blocking finding, 2026-08-17)
+    so the scope decision is unit-testable — a test asserting "trades
+    unreadable => scope == 'partial'" would have caught F-243's own
+    shipped-then-fixed defect (trades-alone failing was being classified the
+    same as holdings failing, forcing a full-page block for a partial-only
+    outage where the book on screen is still correct).
+
+    Pure — `now` is the caller's `time.time()` read, not computed here, so a
+    test can assert the exact "at" value. `h`/`w`/`t` are the already-called
+    `load_holdings_or_none()`/`load_watchlist_or_none()`/`load_trades_or_none()`
+    results; this function does no I/O of its own.
+
+    - `h is None` (holdings unreadable): the book itself may be misrepresented
+      — HARD scope. `w`/`t` are irrelevant here (the caller never attempts
+      them when holdings fails, same as before this extraction).
+    - `w is None or t is None` with `h` present: the book is correct, only
+      history/watchlist surfaces would look emptier than they are — SOFT
+      ("partial") scope.
+    - All three present: no failure, return None.
+    """
+    if h is None:
+        return {"at": now, "detail": unavailable_detail() or "Supabase could not be read",
+                "scope": "holdings"}
+    missing = [name for name, v in (("watchlist", w), ("trade history", t)) if v is None]
+    if missing:
+        return {"at": now, "detail": f"could not read: {', '.join(missing)}", "scope": "partial"}
+    return None
+
+
 def load_holdings() -> pd.DataFrame:
     """Holdings, with an empty frame on ANY failure.
 

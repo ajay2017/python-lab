@@ -1,19 +1,23 @@
-"""Tests for the DB-outage honesty fixes (2026-08-17).
+"""Tests for the DB-outage honesty fixes (2026-08-17), plus the classify/decide
+extraction (2026-08-25) that closed the gap this file used to have to disclaim.
 
 Two defects, one theme: the app must never look healthy — or worse, assert
 something — while it cannot read the database.
 
-SCOPE HONESTY: `tests/` cannot import or render `app.py`, so the banner, the
-`st.stop()`, the retry button and the sidebar severity are REVIEW-ONLY and
-verified live. Everything testable was deliberately pushed into `db.py` and
-`constants.py` so the untestable residual is pure wiring.
+SCOPE HONESTY (UPDATED 2026-08-25): the banner TEXT, the `st.stop()` call, the
+retry button, and the sidebar severity are still REVIEW-ONLY (`tests/` cannot
+import or render `app.py`). But the two decisions that USED to live inline in
+app.py — "what scope does this load failure have" and "what verdict does this
+page get given that scope" — are now `db.classify_load_result()` and
+`stock_analyzer.outage_gate.decide()`, both pure and tested below. app.py is
+now pure wiring around their outputs.
 """
 import time
 
 import pandas as pd
 import pytest
 
-from stock_analyzer import db, system_health
+from stock_analyzer import db, outage_gate, system_health
 from stock_analyzer.constants import DB_OUTAGE_SAFE_PAGES, DB_RELOAD_RETRY_SEC
 
 
@@ -174,6 +178,109 @@ def test_store_checks_stay_unknown_while_provider_row_goes_down(monkeypatch):
     assert stores and all(r["severity"] == "unknown" for r in stores)
     providers = {r["source"]: r for r in system_health.check_providers()}
     assert providers["supabase"]["severity"] == "down"
+
+
+# ─── classify_load_result — the load-scope decision, extracted from app.py ──
+
+def test_classify_holdings_unreadable_is_hard_scope_regardless_of_w_t():
+    now = 1_000_000.0
+    rec = db.classify_load_result(None, None, None, now)
+    assert rec == {"at": now, "detail": db.unavailable_detail() or "Supabase could not be read",
+                    "scope": "holdings"}
+
+
+def test_classify_trades_unreadable_alone_is_partial_not_holdings():
+    """The exact regression this extraction exists to guard: F-243 shipped a
+    version where a trades-only failure was misclassified with the book's own
+    scope, forcing a full-page block for a fault that leaves holdings correct.
+    A pre-fix version of this logic fails this assertion."""
+    now = 1_000_000.0
+    rec = db.classify_load_result(pd.DataFrame({"Ticker": ["AAPL"]}), [], None, now)
+    assert rec is not None
+    assert rec["scope"] == "partial"
+    assert "trade history" in rec["detail"]
+    assert "watchlist" not in rec["detail"]
+
+
+def test_classify_watchlist_unreadable_alone_is_also_partial():
+    now = 1_000_000.0
+    rec = db.classify_load_result(pd.DataFrame({"Ticker": ["AAPL"]}), None, pd.DataFrame(), now)
+    assert rec is not None
+    assert rec["scope"] == "partial"
+    assert "watchlist" in rec["detail"]
+    assert "trade history" not in rec["detail"]
+
+
+def test_classify_both_watchlist_and_trades_unreadable_names_both():
+    now = 1_000_000.0
+    rec = db.classify_load_result(pd.DataFrame({"Ticker": ["AAPL"]}), None, None, now)
+    assert rec is not None
+    assert rec["scope"] == "partial"
+    assert "watchlist" in rec["detail"] and "trade history" in rec["detail"]
+
+
+def test_classify_all_three_present_is_success_returns_none():
+    now = 1_000_000.0
+    rec = db.classify_load_result(pd.DataFrame({"Ticker": ["AAPL"]}), [], pd.DataFrame(), now)
+    assert rec is None
+
+
+def test_classify_stamps_the_caller_supplied_now_not_a_fresh_clock_read():
+    """Pure — the timestamp in the record must be exactly what was passed in,
+    proving this function reads no clock of its own."""
+    rec = db.classify_load_result(None, None, None, 42.0)
+    assert rec["at"] == 42.0
+
+
+# ─── outage_gate.decide — the render-verdict decision, extracted from app.py ─
+
+def test_decide_no_failure_renders_normally():
+    assert outage_gate.decide(None, "🏠 Home", DB_OUTAGE_SAFE_PAGES) == ("none", None)
+    assert outage_gate.decide({}, "🏠 Home", DB_OUTAGE_SAFE_PAGES) == ("none", None)
+
+
+def test_decide_holdings_scope_stops_an_unsafe_page():
+    verdict, msg = outage_gate.decide(
+        {"scope": "holdings", "detail": "kaboom"}, "🏠 Home", DB_OUTAGE_SAFE_PAGES
+    )
+    assert verdict == "stop"
+    assert "Cannot reach the database" in msg
+    assert "kaboom" in msg
+
+
+def test_decide_holdings_scope_still_renders_the_safe_pages():
+    for safe_page in DB_OUTAGE_SAFE_PAGES:
+        verdict, msg = outage_gate.decide(
+            {"scope": "holdings", "detail": "kaboom"}, safe_page, DB_OUTAGE_SAFE_PAGES
+        )
+        assert (verdict, msg) == ("none", None), f"{safe_page} must stay reachable during an outage"
+
+
+def test_decide_partial_scope_warns_but_never_stops_any_page():
+    for pg in ("🏠 Home", *DB_OUTAGE_SAFE_PAGES):
+        verdict, msg = outage_gate.decide(
+            {"scope": "partial", "detail": "watchlist"}, pg, DB_OUTAGE_SAFE_PAGES
+        )
+        assert verdict == "warn"
+        assert "Partial database outage" in msg
+
+
+def test_decide_unrecognized_scope_falls_through_to_none_not_either_extreme():
+    """Defensive: matches the original inline if/elif with no trailing else —
+    an unrecognized scope must not accidentally strand OR silently hide a
+    real outage; it should behave as if there were no record at all."""
+    verdict, msg = outage_gate.decide({"scope": "??"}, "🏠 Home", DB_OUTAGE_SAFE_PAGES)
+    assert (verdict, msg) == ("none", None)
+
+
+def test_decide_composes_end_to_end_with_classify_load_result():
+    """The two extracted functions are meant to compose exactly as app.py
+    wires them — prove the seam, not just each half in isolation."""
+    now = 1_000_000.0
+    rec = db.classify_load_result(pd.DataFrame({"Ticker": ["AAPL"]}), None, [], now)
+    verdict, msg = outage_gate.decide(rec, "🎯 My Edge", DB_OUTAGE_SAFE_PAGES)
+    assert verdict == "warn"
+    assert "watchlist" in msg
 
 
 # ─── Don't strand the user ──────────────────────────────────────────────────

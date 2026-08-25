@@ -198,6 +198,7 @@ from stock_analyzer.constants import (
     NET_CAPITAL_POSITION_CAP_PCT,
 )
 from stock_analyzer import margin as _margin_mod
+from stock_analyzer import outage_gate as _outage_gate
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
 from stock_analyzer.tax_advisor import (
     build_tax_analysis, _build_open_lots, holding_period_status, wash_sale_risk,
@@ -2542,6 +2543,11 @@ if not st.session_state.get("db_loaded"):
                   or db.should_attempt_db_reload(_prev_fail, time.time()))
     if _may_retry:
         _h = db.load_holdings_or_none()
+        # w/t are only attempted when holdings succeeded — same as before this
+        # extraction: no point reading them if the book itself is unreadable,
+        # and classify_load_result's "holdings" branch doesn't consult them.
+        _w = db.load_watchlist_or_none() if _h is not None else None
+        _t = db.load_trades_or_none() if _h is not None else None
         if _h is None:
             # Keep the containers a valid TYPE (many call sites do .iterrows());
             # the protection is the hard stop below, not a sentinel smuggled
@@ -2549,31 +2555,19 @@ if not st.session_state.get("db_loaded"):
             st.session_state.holdings_df = pd.DataFrame(columns=db._HOLDINGS_COLS)
             st.session_state.watchlist   = []
             st.session_state.trades_df   = pd.DataFrame(columns=db._TRADE_COLS)
-            st.session_state["_db_load_failure"] = {
-                "at": time.time(),
-                "detail": db.unavailable_detail() or "Supabase could not be read",
-                "scope": "holdings",
-            }
         else:
             st.session_state.holdings_df = _h
-            _w = db.load_watchlist_or_none()
-            _t = db.load_trades_or_none()
             # NEVER fall back to _DEFAULT_WATCHLIST here: showing a watchlist the
             # user never created, as theirs, is a wrong ASSERTION — worse than a
             # wrong absence.
             st.session_state.watchlist = _w if _w is not None else []
             st.session_state.trades_df = _t if _t is not None else pd.DataFrame(columns=db._TRADE_COLS)
-            if _w is None or _t is None:
-                _partial = [n for n, v in (("watchlist", _w), ("trade history", _t))
-                            if v is None]
-                st.session_state["_db_load_failure"] = {
-                    "at": time.time(),
-                    "detail": f"could not read: {', '.join(_partial)}",
-                    "scope": "partial",
-                }
-            else:
-                st.session_state.pop("_db_load_failure", None)
-                st.session_state.db_loaded = True
+        _fail = db.classify_load_result(_h, _w, _t, time.time())
+        if _fail is not None:
+            st.session_state["_db_load_failure"] = _fail
+        else:
+            st.session_state.pop("_db_load_failure", None)
+            st.session_state.db_loaded = True
 
 # ── Read-only viewer mode ────────────────────────────────────────────────────
 # PRIMARY: login password role (auth_role="owner" → full access,
@@ -2963,35 +2957,24 @@ with st.sidebar:
 # Refuses to render any page that would MISREPRESENT the book. An empty
 # portfolio under a banner is still a wrong state, and banners get scrolled
 # past — CLAUDE.md's posture is hard suppression with a visible banner, not a
-# soft warning above misleading content. Same shape as the existing
-# no-holdings-vs-outage gate further down this file.
+# soft warning above misleading content. Decision logic lives in
+# stock_analyzer.outage_gate.decide() (extracted 2026-08-25, F-243 reviewer
+# non-blocking finding) so the allowlist/scope branching is unit-testable;
+# this block is render-only.
 _db_fail = st.session_state.get("_db_load_failure")
-if _db_fail and _db_fail.get("scope") == "holdings":
-    if page not in DB_OUTAGE_SAFE_PAGES:
-        st.error(
-            "⛔ **Cannot reach the database — your portfolio is NOT shown below.**\n\n"
-            f"Reason: {_db_fail.get('detail', 'unknown')}\n\n"
-            "This page is deliberately blocked rather than rendering an empty "
-            "portfolio, which would look like you hold nothing. "
-            f"Still available: {', '.join(DB_OUTAGE_SAFE_PAGES)}."
-        )
-        if st.button("🔄 Retry connection", type="primary"):
-            st.session_state["_db_retry_requested"] = True
-            st.rerun()
-        st.caption(
-            f"Retries automatically at most every {DB_RELOAD_RETRY_SEC}s; the "
-            "button retries now. Recovers on its own once Supabase is reachable."
-        )
-        st.stop()
-elif _db_fail and _db_fail.get("scope") == "partial":
-    # Holdings read fine, so the book on screen is CORRECT — a hard stop would
-    # be disproportionate. But My Edge / Prior Trades / Behavioral Fingerprint
-    # read trades, and an empty-looking history there would be a wrong absence.
-    st.warning(
-        f"⚠️ Partial database outage — {_db_fail.get('detail', '')}. "
-        "Your holdings are correct; history- and watchlist-driven surfaces may "
-        "look empty when they are not."
+_outage_verdict, _outage_msg = _outage_gate.decide(_db_fail, page, DB_OUTAGE_SAFE_PAGES)
+if _outage_verdict == "stop":
+    st.error(_outage_msg)
+    if st.button("🔄 Retry connection", type="primary"):
+        st.session_state["_db_retry_requested"] = True
+        st.rerun()
+    st.caption(
+        f"Retries automatically at most every {DB_RELOAD_RETRY_SEC}s; the "
+        "button retries now. Recovers on its own once Supabase is reachable."
     )
+    st.stop()
+elif _outage_verdict == "warn":
+    st.warning(_outage_msg)
 
 # ── Risk-free rate (13-week T-bill, refreshed daily) ─────────────────────────
 @st.cache_data(ttl=86400)
