@@ -37332,8 +37332,19 @@ elif page == "🎯 My Edge":
                                     "Sold":    r["sell_date"],
                                     "Price":   f"${r['price']:,.2f}",
                                     "Bucket":  "Engine-called" if r["bucket"] == "engine_aligned" else "Self-initiated",
-                                    "Alpha vs SPY": (f"{r['alpha_pct']:+.1f}pp" if r.get("alpha_pct") is not None
-                                                      else ("maturing" if r.get("outcome_maturing") else "n/a")),
+                                    # outcome_maturing is independent of alpha_pct -- a sell
+                                    # younger than REC_SCORE_MIN_DAYS still gets a real
+                                    # provisional reading, it just doesn't count toward the
+                                    # graded average above. Tag it "(maturing)" so it doesn't
+                                    # look like a settled result. Checked first, since a
+                                    # provisional-but-present alpha_pct must not fall into the
+                                    # plain-number branch.
+                                    "Alpha vs SPY": (
+                                        f"{r['alpha_pct']:+.1f}pp (maturing)" if r.get("outcome_maturing") and r.get("alpha_pct") is not None
+                                        else "maturing" if r.get("outcome_maturing")
+                                        else f"{r['alpha_pct']:+.1f}pp" if r.get("alpha_pct") is not None
+                                        else "n/a"
+                                    ),
                                 }
                                 for r in _sts_rows
                             ])
