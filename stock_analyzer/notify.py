@@ -14,7 +14,7 @@ import re
 
 import requests
 
-from stock_analyzer.constants import SINGLE_NAME_CEILING
+from stock_analyzer.constants import SINGLE_NAME_CEILING, NET_CAPITAL_POSITION_CAP_PCT
 
 _RESEND_ENDPOINT = "https://api.resend.com/emails"
 
@@ -22,27 +22,58 @@ _RESEND_ENDPOINT = "https://api.resend.com/emails"
 def _sizing_cap_note(sz: dict) -> str:
     """Concentration-cap disclosure row for an email card, or "" when silent.
 
-    Three distinct cases, none of which may pass unexplained (an email that
+    Five distinct cases, none of which may pass unexplained (an email that
     silently drops the size line reads as "no opinion" rather than "the cap
     bound"):
-      * ceiling_capped     — a size was suggested, but trimmed to the cap.
-      * ceiling_infeasible — one share alone breaches the cap, so no size was
-                             suggested at all.
+      * ceiling_capped     — a size was suggested, but trimmed to the single-
+                             name book cap.
+      * capital_capped     — (F-255) a size was suggested, but trimmed to the
+                             SEPARATE net-capital cap. NOT mutually exclusive
+                             with ceiling_capped: risk.position_sizing applies
+                             the capital cap AFTER the ceiling cap, so a size
+                             already capped by the book ceiling can be capped
+                             FURTHER by capital — both notes render together
+                             when both are true, so neither fact is dropped.
+      * ceiling_infeasible — one share alone breaches the book cap, so no size
+                             was suggested at all.
+      * capital_infeasible — (F-255) one share alone breaches the SEPARATE
+                             net-capital cap (or net_capital <= 0 / margin-
+                             called), so no size was suggested at all.
       * stop_infeasible    — price is at/below the name's ATR stop, so there is
                              no room between entry and stop to size against.
-    All interpolated values are numbers this module computed, not free text.
+    The four "infeasible"/"capped-only" terminal states are mutually exclusive
+    per `_position_size_for_render`'s own branching (only one of stop/ceiling/
+    capital "no size" reasons is ever set, and a terminal reason never carries
+    ceiling_capped/capital_capped) — so checking them in sequence after the
+    capped-notes block never double-renders. All interpolated values are
+    numbers this module computed, not free text.
     """
+    parts = []
     if sz.get("ceiling_capped") and sz.get("uncapped_shares") is not None:
-        return (
+        parts.append(
             f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
             f'📐 Size capped at {int(SINGLE_NAME_CEILING)}% single-name limit — '
             f'risk-budget size would be {int(sz["uncapped_shares"])} shares.</div>'
         )
+    if sz.get("capital_capped") and sz.get("capital_pct") is not None:
+        parts.append(
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 Size also capped at {int(NET_CAPITAL_POSITION_CAP_PCT)}% of net capital (margin-aware) — '
+            f'now ~{float(sz["capital_pct"]):.0f}% of your actual capital.</div>'
+        )
+    if parts:
+        return "".join(parts)
     if sz.get("ceiling_infeasible") and sz.get("one_share_pct") is not None:
         return (
             f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
             f'📐 No size suggested — one share is ~{float(sz["one_share_pct"]):.0f}% of the book, '
             f'above the {int(SINGLE_NAME_CEILING)}% single-name ceiling.</div>'
+        )
+    if sz.get("capital_infeasible") and sz.get("one_share_capital_pct") is not None:
+        return (
+            f'<div style="color:#94a3b8;font-size:11px;margin-top:3px">'
+            f'📐 No size suggested — one share is ~{float(sz["one_share_capital_pct"]):.0f}% of your net capital, '
+            f'above the {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap (margin-aware).</div>'
         )
     if sz.get("stop_infeasible") and sz.get("stop_at") is not None:
         return (

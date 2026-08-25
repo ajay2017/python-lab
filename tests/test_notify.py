@@ -13,6 +13,69 @@ import pytest
 from stock_analyzer import notify
 
 
+# ─── _sizing_cap_note (F-255 net-capital cap wiring, 2026-08-25) ────────────
+
+def test_sizing_cap_note_silent_when_nothing_set():
+    assert notify._sizing_cap_note({}) == ""
+
+
+def test_sizing_cap_note_ceiling_capped_only():
+    note = notify._sizing_cap_note({"ceiling_capped": True, "uncapped_shares": 50})
+    assert "single-name limit" in note
+    assert "net capital" not in note
+
+
+def test_sizing_cap_note_capital_capped_only():
+    note = notify._sizing_cap_note({"capital_capped": True, "capital_pct": 24.5})
+    assert "net capital" in note
+    assert "24%" in note
+    assert "single-name limit" not in note
+
+
+def test_sizing_cap_note_both_ceiling_and_capital_capped_render_both():
+    """A size can be trimmed by the book ceiling AND further by the SEPARATE
+    net-capital cap (risk.position_sizing applies capital AFTER ceiling) — both
+    true facts must render, not just the first-matched one."""
+    note = notify._sizing_cap_note({
+        "ceiling_capped": True, "uncapped_shares": 80,
+        "capital_capped": True, "capital_pct": 24.0,
+    })
+    assert "single-name limit" in note
+    assert "net capital" in note
+
+
+def test_sizing_cap_note_capital_infeasible():
+    note = notify._sizing_cap_note({"capital_infeasible": True, "one_share_capital_pct": 30.0})
+    assert "No size suggested" in note
+    assert "30%" in note
+    assert "net capital" in note
+
+
+def test_sizing_cap_note_ceiling_infeasible_unchanged():
+    note = notify._sizing_cap_note({"ceiling_infeasible": True, "one_share_pct": 20.0})
+    assert "No size suggested" in note
+    assert "20%" in note
+    assert "book" in note
+
+
+def test_sizing_cap_note_stop_infeasible_unchanged():
+    note = notify._sizing_cap_note({"stop_infeasible": True, "stop_at": 95.0})
+    assert "No size suggested" in note
+    assert "95.00" in note
+
+
+def test_sizing_cap_note_capital_infeasible_takes_priority_over_stop_when_both_present():
+    """Defensive — real callers never set two terminal reasons at once (see
+    daily_briefing._position_size_for_render's own branching), but the check
+    ORDER must not silently swallow capital_infeasible if it ever did."""
+    note = notify._sizing_cap_note({
+        "capital_infeasible": True, "one_share_capital_pct": 40.0,
+        "stop_infeasible": True, "stop_at": 10.0,
+    })
+    assert "net capital" in note
+    assert "40%" in note
+
+
 # ─── render_alert_email ──────────────────────────────────────────────────────
 
 def test_render_alert_email_subject_with_hard_alerts():

@@ -719,6 +719,76 @@ def test_morning_picks_book_drift_failure_isolated_from_picks():
     assert result["picks"] == [{"ticker": "NVDA"}]
 
 
+# ── compute_morning_picks — net_capital threading (F-255, 2026-08-25) ──────
+# This module resolves the SAME margin.resolve_net_capital the interactive app
+# uses (from db.load_account_cash + the ctx's gross portfolio_value) and must
+# pass the result straight through to build_daily_briefing so the emailed
+# buy-list respects the SEPARATE net-capital cap too. Only the passthrough is
+# tested here -- resolve_net_capital's own logic is already fully covered in
+# tests/test_margin.py.
+
+def _run_morning_picks_capturing_bdb(account_cash_rec=None, load_account_cash_side_effect=None):
+    ctx = {
+        "ok": True, "errors": [], "port_df": pd.DataFrame({"Ticker": ["AAPL"], "Market Value": [1000.0]}),
+        "held_data": {"AAPL": {}}, "fragility": None, "spy_6mo": None, "spy_1y": None, "vix": None,
+    }
+    brief = {"grow_today": {"tone": "bull", "new_picks": [], "sp500_pct": 1.0,
+                            "sector_blocked_picks": [], "macro_blocked_picks": [],
+                            "composite_skipped": [], "composite_unavailable": []}}
+    mock_bdb = MagicMock(return_value=brief)
+    with patch("stock_analyzer.headless_alert_engine._build_context", return_value=ctx), \
+         patch("stock_analyzer.data.fetch_market_indices", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.load_bundle", return_value={}), \
+         patch("stock_analyzer.data.curate_news_items", return_value=[]), \
+         patch("stock_analyzer.macro_calendar.build_macro_calendar", return_value=[]), \
+         patch("stock_analyzer.headless_alert_engine.db.load_account_cash",
+               return_value=account_cash_rec, side_effect=load_account_cash_side_effect), \
+         patch("stock_analyzer.headless_alert_engine.build_daily_briefing", mock_bdb):
+        hae.compute_morning_picks(TODAY, scanner_results=_scanner_df(["NVDA"]))
+    return mock_bdb
+
+
+def test_morning_picks_net_capital_none_when_no_account_cash_record():
+    """No manually-entered cash record -> resolve_net_capital returns
+    (None, 'unlevered'); build_daily_briefing must receive net_capital=None,
+    the byte-identical-to-pre-F-255 default."""
+    mock_bdb = _run_morning_picks_capturing_bdb(account_cash_rec=None)
+    assert mock_bdb.call_args.kwargs["net_capital"] is None
+
+
+def test_morning_picks_net_capital_threaded_when_levered_and_fresh():
+    """A fresh, levered cash record resolves to gross_book + cash_balance and
+    that exact value must reach build_daily_briefing's net_capital kwarg."""
+    from datetime import datetime, timezone
+    _acct = {
+        "cash_balance": -400.0,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    mock_bdb = _run_morning_picks_capturing_bdb(account_cash_rec=_acct)
+    # ctx's port_df Market Value sums to 1000.0 (the gross book); a fresh -400
+    # debit resolves to net_capital = 1000.0 - 400.0 = 600.0.
+    assert mock_bdb.call_args.kwargs["net_capital"] == 600.0
+
+
+def test_morning_picks_net_capital_none_when_unlevered():
+    """A cash record with a non-negative balance is not a margin debit --
+    resolve_net_capital returns (None, 'unlevered') and the cap stays inert."""
+    from datetime import datetime, timezone
+    _acct = {"cash_balance": 500.0, "updated_at": datetime.now(timezone.utc).isoformat()}
+    mock_bdb = _run_morning_picks_capturing_bdb(account_cash_rec=_acct)
+    assert mock_bdb.call_args.kwargs["net_capital"] is None
+
+
+def test_morning_picks_net_capital_none_on_load_account_cash_failure():
+    """A DB fault resolving account cash must never abort pick computation --
+    net_capital degrades to None (cap inert), matching the fail-safe posture
+    of every other optional input in this function."""
+    mock_bdb = _run_morning_picks_capturing_bdb(
+        load_account_cash_side_effect=RuntimeError("db down"),
+    )
+    assert mock_bdb.call_args.kwargs["net_capital"] is None
+
+
 # ── compute_eod ────────────────────────────────────────────────────────────
 
 def test_compute_eod_ctx_not_ok_short_circuits():

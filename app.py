@@ -195,6 +195,7 @@ from stock_analyzer.constants import (
     PREDICTION_MIN_MATURED_N,
     COMPOSITE_FIRMNESS_MARGIN,
     MARGIN_MAINTENANCE_RATE,
+    NET_CAPITAL_POSITION_CAP_PCT,
 )
 from stock_analyzer import margin as _margin_mod
 from stock_analyzer.sentiment_velocity import build_sentiment_dashboard
@@ -4791,6 +4792,14 @@ if page == "🏠 Home":
     portfolio_value = total_val                        # drive risk calc from live holdings
     st.session_state["_portfolio_value"] = total_val  # update sidebar display
 
+    # F-255: resolve the net-capital sizing cap ONCE for this Home render — both
+    # the composite-freshness-refresh build_daily_briefing call below and the
+    # full-rebuild one (alternate branches of the same synthesis block) reuse it.
+    _f255_acct = db.load_account_cash()
+    _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
+        total_val, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+    )
+
     # Best / worst position tiles stay live (cheap, price-driven) — kept
     # OUT of the memoized synthesis block below.
     best_row  = port_df.loc[port_df["P&L (%)"].idxmax()]
@@ -4966,6 +4975,7 @@ if page == "🏠 Home":
                         vix_level       = _cached_vix(),
                         winner_profile  = _compute_winner_profile(),
                         trades_df       = st.session_state.get("trades_df"),
+                        net_capital     = _f255_net_cap,
                     )
                     # Update snapshot so next HIT reads fresh fetched_at values
                     st.session_state["_home_synth_cache"]["bundle"]["_grow_composites"] = _grow_composites
@@ -5357,6 +5367,7 @@ if page == "🏠 Home":
                     vix_level       = _cached_vix(),
                     winner_profile  = _compute_winner_profile(),
                     trades_df       = st.session_state.get("trades_df"),
+                    net_capital     = _f255_net_cap,
                 )
                 # Stamp the build time in ET — surfaced as "Built at HH:MM ET" on
                 # the Brief header so the user can see how fresh the data is.
@@ -19714,6 +19725,14 @@ elif page == "📈 Analysis":
                 unsafe_allow_html=True,
             )
 
+    # F-255: resolve the net-capital sizing cap ONCE for this whole page render
+    # (Summary Scorecard + Detailed Analysis tabs below both consume it) rather
+    # than re-reading account cash per ticker in either loop.
+    _f255_acct = db.load_account_cash()
+    _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
+        portfolio_value, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+    )
+
     # ── Summary scorecard ──────────────────────────────────────────────────
     st.subheader("Summary Scorecard")
     _sc_port = st.session_state.get("_port_df_enriched", pd.DataFrame())
@@ -19722,7 +19741,10 @@ elif page == "📈 Analysis":
         price = r["current_price"]
         targets = r["targets"]
         ps = (
-            position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING)
+            position_sizing(
+                portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
+                net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+            )
             if price and r["stop"] and price > r["stop"] else None
         )
         rr_val = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
@@ -19870,7 +19892,10 @@ elif page == "📈 Analysis":
             price = r["current_price"]
             targets = r["targets"]
             ps = (
-                position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING)
+                position_sizing(
+                    portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
+                    net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                )
                 if price and r["stop"] and price > r["stop"] else None
             )
             sr = r["sr"]
@@ -20706,6 +20731,13 @@ elif page == "📈 Analysis":
                                 "stop is tight, so the risk-budget math inflates the dollar size. The figures "
                                 f"above are capped to **{ps['shares']:,} shares (~{ps['portfolio_pct']:.0f}%)**."
                             )
+                        if ps.get("capital_capped"):
+                            st.warning(
+                                f"⚠️ **Also capped to your {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap "
+                                "(F-255).** This is separate from the single-name book cap above — it gates on "
+                                "equity after margin debit, not gross book value. The figures above are sized to "
+                                f"**{ps['shares']:,} shares (~{ps['capital_pct']:.0f}% of your net capital)**."
+                            )
 
                         # Beta envelope check — warn when adding this position would push
                         # an already-elevated portfolio beta materially higher
@@ -20742,14 +20774,23 @@ elif page == "📈 Analysis":
                         # account-size constraint no stop change will ever fix.
                         # Before F-249 this said "stop too close" for both, blaming
                         # the stop while a healthy 2xATR stop rendered right above.
-                        if sizing_unavailable_reason(
-                            portfolio_value, price, r["stop"], SINGLE_NAME_CEILING
-                        ) == "ceiling":
+                        _sa_no_size_reason = sizing_unavailable_reason(
+                            portfolio_value, price, r["stop"], SINGLE_NAME_CEILING,
+                            net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                        )
+                        if _sa_no_size_reason == "ceiling":
                             st.caption(
                                 f"Position sizing unavailable — one share is "
                                 f"~{price / portfolio_value * 100:.0f}% of your portfolio, above the "
                                 f"{int(SINGLE_NAME_CEILING)}% single-name ceiling. The stop is fine; "
                                 f"this name is too large for this account at the current cap."
+                            )
+                        elif _sa_no_size_reason == "capital" and _f255_net_cap and _f255_net_cap > 0:
+                            st.caption(
+                                f"Position sizing unavailable — one share is "
+                                f"~{price / _f255_net_cap * 100:.0f}% of your net capital, above the "
+                                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap. This is separate from "
+                                "the single-name book cap."
                             )
                         else:
                             st.caption("Position sizing unavailable — stop price too close to entry or not set.")
@@ -21921,7 +21962,10 @@ elif page == "📈 Analysis":
         for ticker, r in results.items():
             price = r["current_price"]
             targets = r["targets"]
-            ps = (position_sizing(portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING)
+            ps = (position_sizing(
+                      portfolio_value, MODERATE_RISK_PCT, price, r["stop"], SINGLE_NAME_CEILING,
+                      net_capital=_f255_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                  )
                   if price and r["stop"] and price > r["stop"] else None)
             rr_v = risk_reward(price, r["stop"], targets["base"]) if price and r["stop"] and targets else None
             rm = r["risk_metrics"]
@@ -22235,6 +22279,14 @@ elif page == "📋 Watchlist":
 
     st.markdown("")
 
+    # F-255: resolve the net-capital sizing cap ONCE for the whole watchlist
+    # render, not per row — every row below reads the same portfolio value.
+    _f255_wl_pv = st.session_state.get("_portfolio_value") or DEFAULT_PORTFOLIO_VALUE
+    _f255_wl_acct = db.load_account_cash()
+    _f255_wl_net_cap, _f255_wl_basis = _margin_mod.resolve_net_capital(
+        _f255_wl_pv, _f255_wl_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+    )
+
     # ── Per-ticker rows ────────────────────────────────────────────────────────
     for _wr in _wl_view:
         _action   = _wr["action"]
@@ -22304,7 +22356,10 @@ elif page == "📋 Watchlist":
         _wl_ps = None
         if _price and _stop and _price > _stop and _pv_now > 0:
             try:
-                _wl_ps = position_sizing(_pv_now, MODERATE_RISK_PCT, _price, _stop, SINGLE_NAME_CEILING)
+                _wl_ps = position_sizing(
+                    _pv_now, MODERATE_RISK_PCT, _price, _stop, SINGLE_NAME_CEILING,
+                    net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                )
             except Exception:
                 pass
 
@@ -22472,16 +22527,30 @@ elif page == "📋 Watchlist":
                             f"(risk-based would be {_wl_ps['uncapped_shares']:,} sh / "
                             f"~{_wl_ps['uncapped_pct']:.0f}%)"
                         )
+                    if _wl_ps and _wl_ps.get("capital_capped"):
+                        st.caption(
+                            f"↳ also capped to {int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap "
+                            f"(F-255) — ~{_wl_ps['capital_pct']:.0f}% of your net capital"
+                        )
                 elif _price:
-                    # Same two-cause split as Analysis — see the note there.
-                    if sizing_unavailable_reason(
-                        _pv_now, _price, _stop, SINGLE_NAME_CEILING
-                    ) == "ceiling" and _pv_now:
+                    # Same two/three-cause split as Analysis — see the note there.
+                    _wl_no_size_reason = sizing_unavailable_reason(
+                        _pv_now, _price, _stop, SINGLE_NAME_CEILING,
+                        net_capital=_f255_wl_net_cap, max_capital_pct=NET_CAPITAL_POSITION_CAP_PCT,
+                    )
+                    if _wl_no_size_reason == "ceiling" and _pv_now:
                         st.caption(
                             f"Position sizing unavailable — one share is "
                             f"~{_price / _pv_now * 100:.0f}% of your portfolio, above the "
                             f"{int(SINGLE_NAME_CEILING)}% single-name ceiling. The stop is fine; "
                             f"this name is too large for this account at the current cap."
+                        )
+                    elif _wl_no_size_reason == "capital" and _f255_wl_net_cap and _f255_wl_net_cap > 0:
+                        st.caption(
+                            f"Position sizing unavailable — one share is "
+                            f"~{_price / _f255_wl_net_cap * 100:.0f}% of your net capital, above the "
+                            f"{int(NET_CAPITAL_POSITION_CAP_PCT)}% net-capital cap. This is separate from "
+                            "the single-name book cap."
                         )
                     else:
                         st.caption("Position sizing unavailable — stop price too close to entry or not set.")
@@ -23095,12 +23164,21 @@ elif page == "📒 Trade Journal":
                             float(_pb_cc_pdf[_pb_cc_pdf["Sector"] == _pb_cc_sector]["Market Value"].sum())
                             if "Sector" in _pb_cc_pdf.columns else 0.0
                         )
+                        # F-255: resolve the separate net-capital cap for this add — uses
+                        # the plain gross book value (_pb_cc_pv), not the already-gated
+                        # _pb_cc_denom, since resolve_net_capital re-derives its own
+                        # margin/equity split from account cash.
+                        _f255_acct = db.load_account_cash()
+                        _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
+                            _pb_cc_pv, _f255_acct, ACCOUNT_CASH_STALE_DAYS, _now_et()
+                        )
                         _pb_cc = assess_add_concentration(
                             ticker=_pb_ticker, add_shares=_pb_shares, price=_pb_price,
                             existing_name_mv=_pb_cc_existing_mv, sector_mv=_pb_cc_sector_mv,
                             portfolio_value=_pb_cc_denom,
                             single_ceiling=SINGLE_NAME_CEILING,
                             sector_ceiling=SECTOR_CEILING, sector_elevated=SECTOR_ELEVATED,
+                            net_capital=_f255_net_cap, capital_ceiling=NET_CAPITAL_POSITION_CAP_PCT,
                         )
                         if _pb_cc:
                             _pb_cc_msgs = []
@@ -23111,6 +23189,13 @@ elif page == "📒 Trade Journal":
                                     f"book (single-name ceiling {SINGLE_NAME_CEILING:.0f}%)."
                                     + (f" To get back under, trim ~**{_pb_cc_trim} share(s)**."
                                        if _pb_cc_trim > 0 else "")
+                                )
+                            if _pb_cc["capital_breach"]:
+                                _pb_cc_msgs.append(
+                                    f"**{_pb_ticker}** is now ~**{_pb_cc['post_name_capital_pct']:.0f}%** "
+                                    f"of your net capital (F-255 net-capital cap "
+                                    f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%) — separate from the single-name "
+                                    "book cap above."
                                 )
                             if _pb_cc["sector_hard"]:
                                 _pb_cc_msgs.append(
@@ -29341,6 +29426,32 @@ elif page == "💰 Account":
                         "Robinhood raises this on volatile or concentrated names, so your actual "
                         "call threshold may be closer than shown. Awareness only — never blocks a trade."
                     )
+
+        # F-255: held positions already over the SEPARATE net-capital cap —
+        # awareness only, never feeds risk_advisor/exit_advisor or any
+        # session_state publish. Existing holdings predate the cap and are not
+        # flagged for any forced trim/exit; short-circuits to None (banner
+        # hidden) whenever unlevered or cash is stale, since `_cash_stale` is
+        # only ever assigned inside the `if _levered:` block above.
+        _f255_net_cap_for_holdings = _total_acct if (_levered and not _cash_stale) else None
+        _f255_over_cap = _margin_mod.held_over_capital_cap(
+            _acc_pdf, _f255_net_cap_for_holdings, NET_CAPITAL_POSITION_CAP_PCT
+        )
+        if _f255_over_cap:
+            st.markdown("#### 📐 Positions Over Your Net-Capital Cap")
+            st.caption(
+                f"Awareness only — these positions were sized before this "
+                f"{int(NET_CAPITAL_POSITION_CAP_PCT)}%-of-capital cap existed (F-255) and are not "
+                "flagged for any forced action. New/added sizing now respects the cap; existing "
+                "holdings are left to your own judgment and the Exit Advisor's own signals."
+            )
+            for _f255_row in _f255_over_cap:
+                _f255_mv_str = _m(f"${_f255_row['market_value']:,.0f}")
+                st.caption(
+                    f"• **{_f255_row['ticker']}** — {_f255_mv_str} ≈ "
+                    f"{_f255_row['capital_pct']:.0f}% of your net capital"
+                )
+
         if _total_acct > 0:
             _conc = _acc_pdf[["Ticker", "Market Value", "Weight (%)"]].copy()
             _conc["Account Wt (%)"] = (_conc["Market Value"] / _total_acct * 100).round(1)

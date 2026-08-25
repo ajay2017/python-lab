@@ -24,6 +24,7 @@ import pytz
 from stock_analyzer import db
 from stock_analyzer import broker_sync
 from stock_analyzer import exit_advisor
+from stock_analyzer import margin as _margin_mod
 from stock_analyzer.bundle_loader import load_bundle
 from stock_analyzer.data import fetch_spy, fetch_vix, fetch_risk_free_rate
 from stock_analyzer.portfolio import build_portfolio_df
@@ -42,6 +43,7 @@ from stock_analyzer.constants import (
     MARKET_TONE_BULL_PCT,
     MARKET_TONE_BEAR_PCT,
     SNAPTRADE_BALANCE_STALE_HOURS,
+    ACCOUNT_CASH_STALE_DAYS,
 )
 
 _ET = pytz.timezone("America/New_York")
@@ -426,6 +428,19 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
     except Exception as e:
         errors.append(f"macro calendar failed: {e}")
 
+    # F-255: resolve the SEPARATE net-capital sizing cap the same way the app
+    # does, so the emailed buy-list respects it too, not just the interactive
+    # surfaces. `db.load_account_cash()` is a pure DB read that works headlessly
+    # (no Streamlit dependency). None/inert when unlevered, no cash record, or
+    # the record is stale — identical no-op posture to every other caller.
+    try:
+        _f255_acct = db.load_account_cash()
+        _f255_net_cap, _f255_basis = _margin_mod.resolve_net_capital(
+            portfolio_value, _f255_acct, ACCOUNT_CASH_STALE_DAYS, datetime.now(_ET)
+        )
+    except Exception:
+        _f255_net_cap = None
+
     try:
         brief = build_daily_briefing(
             port_df=port_df, alert_list=[], risk_recs=[], news_items=news_items,
@@ -433,6 +448,7 @@ def compute_morning_picks(today: date | None = None, scanner_results=None) -> di
             portfolio_value=portfolio_value, today=today, market_context=market_context,
             grow_composites=grow_composites, movers=[], spy_df=spy_6mo,
             fragility=fragility, spy_trend_df=spy_1y, vix_level=vix,
+            net_capital=_f255_net_cap,
         )
     except Exception as e:
         return {"picks": [], "built_at": built_at,
