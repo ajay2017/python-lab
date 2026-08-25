@@ -88,7 +88,8 @@ def classify_buys(
     simply finds no rec match.
 
     Each returned dict carries the public classification fields (id, ticker,
-    trade_date, shares, price, bucket, user_thesis) PLUS the fields
+    trade_date, shares, price, bucket, user_thesis, situational_category) PLUS
+    the fields
     recommendations_history.compute_outcomes needs to grade this trade's
     alpha-vs-SPY (rec_date, acted_on, acted_trade) — one record per BUY row,
     never collapsed across multiple buys of the same ticker.
@@ -145,6 +146,7 @@ def classify_buys(
             "price":       price,
             "bucket":      bucket,
             "user_thesis": t.get("user_thesis"),
+            "situational_category": t.get("situational_category"),
             # ── fields compute_outcomes() reads (same shape as
             # recommendations_history.match_recs_to_trades' acted rows) ──
             "rec_date":    D,       # alpha is benchmarked from the trade's
@@ -273,6 +275,99 @@ def self_vs_engine_summary(
         "self_graded":          _graded(self_graded_items),
         "min_sample_n":         min_sample_n,
     }
+
+
+def situational_category_breakdown(
+    classified: list[dict] | None,
+    current_prices: dict | None,
+    spy_close_by_date: dict | None,
+    today: date,
+    min_sample_n: int,
+) -> list[dict] | None:
+    """
+    Slices the self-initiated BUY population (self_out_of_scope +
+    self_in_scope only -- never app_aligned or coverage_limited) by the
+    situational_category tag captured at Log Trade time, showing each
+    category's graded alpha-vs-SPY average.
+
+    Returns None when `classified is None` (propagates the same
+    offline-sentinel signal classify_buys returns).
+
+    Reuses recommendations_history.compute_outcomes for the alpha math
+    (never reimplemented) -- the SAME call self_vs_engine_summary() makes,
+    so this breakdown's population is identical to what the head-to-head
+    caption above it describes. This is the reconciliation invariant: the
+    sum of every category's graded n here MUST equal
+    self_vs_engine_summary(...)["self_graded"]["n"] on the same inputs --
+    this is the exact class of bug F-246 found elsewhere (captioning an
+    average against a population different from the number stated beside
+    it). Do not filter differently than self_vs_engine_summary does.
+
+    Rows with no situational_category (None/empty/missing -- logged before
+    this shipped, or the dropdown was skipped) are grouped under the fixed
+    key "Uncategorized" rather than a None key, so the UI never has to
+    special-case a missing tag.
+
+    Returns a list of dicts, one per category in SITUATIONAL_CATEGORIES
+    order, then "Uncategorized" last -- always all 6 rows, even at n=0, so
+    the table is stable across renders:
+        [{"category": str, "n": int, "avg_alpha_pct": float | None,
+          "sufficient": bool}, ...]
+    `n` = graded (matured, priced) count in that category. `avg_alpha_pct`
+    is None when n < min_sample_n (not yet "sufficient"). Uses the SAME
+    _is_graded predicate and averaging/rounding shape as the existing
+    _graded() helper in this module -- don't reinvent the math.
+    """
+    if classified is None:
+        return None
+
+    from stock_analyzer.constants import REC_SCORE_MIN_DAYS
+    from stock_analyzer.decision_journal import SITUATIONAL_CATEGORIES
+    from stock_analyzer.recommendations_history import compute_outcomes
+
+    enriched = compute_outcomes(
+        classified, current_prices, today,
+        spy_close_by_date=spy_close_by_date, min_days=REC_SCORE_MIN_DAYS,
+    )
+
+    self_rows = [r for r in enriched
+                 if r.get("bucket") in ("self_out_of_scope", "self_in_scope")]
+
+    # Same predicate/averaging shape as self_vs_engine_summary's _graded()
+    # (duplicated rather than shared — same precedent as the SELL-side
+    # sibling below, which duplicates its own copy rather than importing).
+    def _is_graded(r: dict) -> bool:
+        return r.get("alpha_pct") is not None and not r.get("outcome_maturing")
+
+    grouped: dict[str, list[dict]] = {}
+    for r in self_rows:
+        cat_raw = str(r.get("situational_category") or "").strip()
+        # Any value outside the locked vocabulary (missing, empty, or a
+        # stray/legacy string) falls into "Uncategorized" rather than being
+        # silently dropped -- required so sum(n) across this breakdown
+        # always equals self_vs_engine_summary's self_graded["n"] exactly.
+        cat = cat_raw if cat_raw in SITUATIONAL_CATEGORIES else "Uncategorized"
+        grouped.setdefault(cat, []).append(r)
+
+    out: list[dict] = []
+    for cat in list(SITUATIONAL_CATEGORIES) + ["Uncategorized"]:
+        items = grouped.get(cat, [])
+        vals = [r["alpha_pct"] for r in items if _is_graded(r)]
+        n = len(vals)
+        # Gated on min_sample_n (unlike self_vs_engine_summary's _graded(),
+        # which returns an average at any n>0 and leaves the sufficient-gate
+        # decision to the caller) -- deliberate for this breakdown, since a
+        # 5-way split shrinks each cell's N far below the two-bucket summary
+        # above it, and per-category "not yet sufficient" must read as
+        # "building", never a real average, wherever it's read from.
+        avg = round(sum(vals) / n, 2) if n >= min_sample_n else None
+        out.append({
+            "category":      cat,
+            "n":              n,
+            "avg_alpha_pct":  avg,
+            "sufficient":     n >= min_sample_n,
+        })
+    return out
 
 
 # ── SELL-side ("is my own EXIT instinct good?") ─────────────────────────────

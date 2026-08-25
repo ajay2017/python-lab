@@ -749,6 +749,14 @@ the user acted on it):
     CREATE UNIQUE INDEX IF NOT EXISTS trades_broker_txn_id_unique
         ON trades (broker_txn_id) NULLS DISTINCT;
 
+    -- situational_category (F-233 V2 — Self Track Record): buy-time "what kind
+    -- of read was this?" tag, one of decision_journal.SITUATIONAL_CATEGORIES.
+    -- BUY-only, optional free-form journal input — never gates/sizes/suppresses
+    -- a recommendation. Optional: until this column exists, save_trade drops
+    -- it and retries, same graceful-degradation pattern as every other
+    -- optional trades column.
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS situational_category text;
+
     -- snaptrade_income_events.snaptrade_txn_id: added post-ship to dedup
     -- re-fetches of the same 90-day window (the original table lacked this
     -- column; ALTER + partial index are idempotent on subsequent runs).
@@ -1074,7 +1082,7 @@ def load_trades_or_none() -> "pd.DataFrame | None":
                     "lesson", "lesson_category", "user_thesis", "thesis_source",
                     "decision_context", "premortem_case_against",
                     "premortem_commitment", "premortem_trigger_price",
-                    "premortem_trigger_direction"):
+                    "premortem_trigger_direction", "situational_category"):
             if col not in df.columns:
                 df[col] = None
         # Re-anchor imported trades that carry a date but no time. They land as
@@ -1633,7 +1641,7 @@ _TRADE_COLS = ["id", "ticker", "action", "shares", "price",
                "lesson_category", "traded_at", "user_thesis", "thesis_source",
                "decision_context", "premortem_case_against", "premortem_commitment",
                "premortem_trigger_price", "premortem_trigger_direction",
-               "broker_txn_id"]
+               "broker_txn_id", "situational_category"]
 
 
 def load_trades() -> pd.DataFrame:
@@ -1695,7 +1703,8 @@ def save_trade(record: dict) -> bool:
         _optional = ("thesis_source", "decision_context",
                      "premortem_case_against", "premortem_commitment",
                      "premortem_trigger_price", "premortem_trigger_direction",
-                     "lesson_category", "idempotency_key", "broker_txn_id")
+                     "lesson_category", "idempotency_key", "broker_txn_id",
+                     "situational_category")
         _any_optional = any(c in _err_str for c in _optional)
         if _any_optional:
             _to_drop = {c for c in _optional if c in record}

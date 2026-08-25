@@ -23,18 +23,27 @@ from stock_analyzer.constants import (
     SELF_TRACK_SELL_RELIABLE_LOG_START,
     BEHAVIORAL_MIN_SAMPLE_N,
     REC_SCORE_MIN_DAYS,
+    SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
 )
+from stock_analyzer.decision_journal import SITUATIONAL_CATEGORIES
 
 
 # ─── builders ───────────────────────────────────────────────────────────────
 
 def _trade_row(ticker="AAA", traded_at="2026-08-10", action="BUY", shares=10.0,
-                price=100.0, id_=1, user_thesis="", trigger_type="MANUAL"):
-    return {
+                price=100.0, id_=1, user_thesis="", trigger_type="MANUAL",
+                situational_category=None):
+    row = {
         "id": id_, "ticker": ticker, "traded_at": traded_at, "action": action,
         "shares": shares, "price": price, "user_thesis": user_thesis,
         "trigger_type": trigger_type,
     }
+    # Deliberately omitted unless explicitly passed, matching the pre-F-233-V2
+    # row shape exactly — so every existing test above (built before this
+    # column existed) keeps exercising the "column missing entirely" path.
+    if situational_category is not None:
+        row["situational_category"] = situational_category
+    return row
 
 
 def _trades_df(rows):
@@ -714,3 +723,223 @@ def test_classify_sells_never_emits_buy_side_bucket_names():
     buckets = {r["bucket"] for r in result}
     assert buckets <= {"engine_aligned", "self_initiated", "coverage_limited"}
     assert not buckets & {"app_aligned", "self_out_of_scope", "self_in_scope"}
+
+
+# ─── situational_category_breakdown (F-233 V2) ─────────────────────────────
+
+def test_situational_breakdown_reconciles_with_self_vs_engine_summary():
+    """The most important test: the breakdown must never describe a
+    different population than the head-to-head caption it sits beneath —
+    the exact class of bug F-246 found elsewhere."""
+    today = date(2026, 9, 1)
+    universe = {"SSS"}          # ZZZ deliberately out of scope
+    rows = []
+
+    # self_in_scope, SSS: 3 Institutional Flow, 2 Earnings Catalyst, 2 no tag
+    for i in range(3):
+        d = today - timedelta(days=10 + i)
+        rows.append(_trade_row(ticker="SSS", traded_at=d.isoformat(), id_=100 + i,
+                                price=100.0, situational_category="Institutional Flow"))
+    for i in range(2):
+        d = today - timedelta(days=20 + i)
+        rows.append(_trade_row(ticker="SSS", traded_at=d.isoformat(), id_=200 + i,
+                                price=100.0, situational_category="Earnings Catalyst"))
+    for i in range(2):
+        d = today - timedelta(days=15 + i)
+        rows.append(_trade_row(ticker="SSS", traded_at=d.isoformat(), id_=300 + i, price=100.0))
+
+    # self_out_of_scope, ZZZ: 2 Technical Read
+    for i in range(2):
+        d = today - timedelta(days=40 + i)
+        rows.append(_trade_row(ticker="ZZZ", traded_at=d.isoformat(), id_=400 + i,
+                                price=100.0, situational_category="Technical Read"))
+
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df([]), universe, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    current_prices = {"SSS": 110.0, "ZZZ": 110.0}
+    spy = _flat_spy(today - timedelta(days=60), today)
+
+    summary = stv.self_vs_engine_summary(classified, current_prices, spy, today, BEHAVIORAL_MIN_SAMPLE_N)
+    breakdown = stv.situational_category_breakdown(
+        classified, current_prices, spy, today, SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+
+    assert summary["self_graded"]["n"] == 9
+    assert sum(row["n"] for row in breakdown) == summary["self_graded"]["n"]
+
+
+def test_situational_breakdown_explicit_passthrough_via_classify_buys():
+    trades = _trades_df([
+        _trade_row(ticker="AAA", traded_at="2026-08-10", id_=1,
+                   situational_category="Macro-News"),
+    ])
+    result = stv.classify_buys(
+        trades, _recs_df([]), {"AAA"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    assert result[0]["situational_category"] == "Macro-News"
+
+
+def test_situational_breakdown_uncategorized_bucketing_never_crashes():
+    today = date(2026, 9, 1)
+    rows = [
+        # explicit None
+        _trade_row(ticker="SSS", traded_at=(today - timedelta(days=10)).isoformat(),
+                   id_=1, price=100.0, situational_category=None),
+        # explicit empty string
+        _trade_row(ticker="SSS", traded_at=(today - timedelta(days=11)).isoformat(),
+                   id_=2, price=100.0, situational_category=""),
+        # key omitted entirely (pre-F-233-V2 legacy row shape)
+        _trade_row(ticker="SSS", traded_at=(today - timedelta(days=12)).isoformat(), id_=3, price=100.0),
+    ]
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df([]), {"SSS"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    breakdown = stv.situational_category_breakdown(
+        classified, {"SSS": 110.0}, _flat_spy(today - timedelta(days=30), today),
+        today, SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+    by_cat = {row["category"]: row["n"] for row in breakdown}
+    assert by_cat["Uncategorized"] == 3
+    for cat in SITUATIONAL_CATEGORIES:
+        assert by_cat[cat] == 0
+    # exactly one Uncategorized row — never a separate None-keyed row
+    assert [row["category"] for row in breakdown].count("Uncategorized") == 1
+
+
+def test_situational_breakdown_min_sample_n_boundary_exact():
+    today = date(2026, 9, 1)
+
+    def _rows(n, offset=0):
+        return [
+            _trade_row(ticker="SSS", traded_at=(today - timedelta(days=10 + offset + i)).isoformat(),
+                       id_=1000 + offset + i, price=100.0,
+                       situational_category="Institutional Flow")
+            for i in range(n)
+        ]
+
+    # At the floor: sufficient, avg present.
+    classified_at = stv.classify_buys(
+        _trades_df(_rows(SITUATIONAL_CATEGORY_MIN_SAMPLE_N)), _recs_df([]), {"SSS"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    breakdown_at = stv.situational_category_breakdown(
+        classified_at, {"SSS": 110.0}, _flat_spy(today - timedelta(days=30), today),
+        today, SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+    row_at = next(r for r in breakdown_at if r["category"] == "Institutional Flow")
+    assert row_at["n"] == SITUATIONAL_CATEGORY_MIN_SAMPLE_N
+    assert row_at["sufficient"] is True
+    assert row_at["avg_alpha_pct"] is not None
+
+    # One fewer: not sufficient, avg withheld. Offset kept small enough that
+    # the trade dates stay ON/AFTER SELF_TRACK_RELIABLE_LOG_START (2026-08-06)
+    # — otherwise they'd reclassify as coverage_limited and never be graded
+    # at all, which would test the wrong boundary entirely.
+    classified_below = stv.classify_buys(
+        _trades_df(_rows(SITUATIONAL_CATEGORY_MIN_SAMPLE_N - 1, offset=13)), _recs_df([]),
+        {"SSS"}, set(), SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    breakdown_below = stv.situational_category_breakdown(
+        classified_below, {"SSS": 110.0}, _flat_spy(today - timedelta(days=40), today),
+        today, SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+    row_below = next(r for r in breakdown_below if r["category"] == "Institutional Flow")
+    assert row_below["n"] == SITUATIONAL_CATEGORY_MIN_SAMPLE_N - 1
+    assert row_below["sufficient"] is False
+    assert row_below["avg_alpha_pct"] is None
+
+
+def test_situational_breakdown_none_when_classified_none():
+    breakdown = stv.situational_category_breakdown(
+        None, {}, {}, date(2026, 9, 1), SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+    assert breakdown is None
+
+
+def test_situational_breakdown_empty_prices_never_fabricates_an_average():
+    today = date(2026, 9, 1)
+    rows = [
+        _trade_row(ticker="SSS", traded_at=(today - timedelta(days=10 + i)).isoformat(),
+                   id_=100 + i, price=100.0, situational_category="Institutional Flow")
+        for i in range(SITUATIONAL_CATEGORY_MIN_SAMPLE_N)
+    ]
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df([]), {"SSS"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    breakdown = stv.situational_category_breakdown(
+        classified, {}, _flat_spy(today - timedelta(days=30), today),
+        today, SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+    for row in breakdown:
+        assert row["n"] == 0
+        assert row["avg_alpha_pct"] is None
+
+
+def test_situational_breakdown_excludes_app_aligned_and_coverage_limited():
+    today = date(2026, 9, 1)
+    rows, recs_rows = [], []
+
+    # app_aligned: matched rec, tagged with a category — must NOT count.
+    for i in range(SITUATIONAL_CATEGORY_MIN_SAMPLE_N):
+        d = today - timedelta(days=10 + i)
+        rows.append(_trade_row(ticker="AAA", traded_at=d.isoformat(), id_=100 + i,
+                                price=100.0, situational_category="Institutional Flow"))
+        recs_rows.append(_rec_row(ticker="AAA", rec_date=d.isoformat(), rec_type="new_pick"))
+
+    # coverage_limited: in scope, no rec, predates reliable log start.
+    old_d = SELF_TRACK_RELIABLE_LOG_START - timedelta(days=5)
+    rows.append(_trade_row(ticker="AAA", traded_at=old_d.isoformat(), id_=300, price=100.0,
+                            situational_category="Earnings Catalyst"))
+
+    classified = stv.classify_buys(
+        _trades_df(rows), _recs_df(recs_rows), {"AAA"}, set(),
+        SELF_TRACK_RELIABLE_LOG_START, SELF_TRACK_MATCH_LOOKBACK_DAYS,
+    )
+    breakdown = stv.situational_category_breakdown(
+        classified, {"AAA": 100.0}, _flat_spy(today - timedelta(days=30), today),
+        today, SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+    )
+    assert sum(row["n"] for row in breakdown) == 0
+
+
+# ─── BUY-only action guard on the app.py save-record construction ──────────
+#
+# The record-building expression app.py stages for db.save_trade() is:
+#
+#     "situational_category": (
+#         (st.session_state.get("_tj_situational_category") or "").strip()
+#         if action == "BUY"
+#            and (st.session_state.get("_tj_situational_category") or "") not in ("", "— (skip)")
+#         else None
+#     ),
+#
+# This is deeply embedded in app.py's interactive save flow (reads
+# st.session_state, runs inside the trade-journal form's submit branch) and
+# is not extracted into a standalone importable helper, so it cannot be
+# exercised via a normal unit-test call — this test instead pins the exact
+# expression shape by re-evaluating it in isolation with a stand-in for
+# st.session_state, proving the SELL branch always yields None regardless of
+# what the selectbox's session-state key holds (the mandatory guard: absent
+# it, Streamlit's key-backed widget would let a BUY's category value leak
+# onto a SELL logged later in the same session).
+
+def test_save_record_situational_category_guard_sell_always_none():
+    def _stage(action: str, session_state: dict) -> "str | None":
+        return (
+            (session_state.get("_tj_situational_category") or "").strip()
+            if action == "BUY"
+               and (session_state.get("_tj_situational_category") or "") not in ("", "— (skip)")
+            else None
+        )
+
+    # A prior BUY populated the selectbox's session-state key; a SELL logged
+    # afterward in the same session must NOT inherit it.
+    session_state = {"_tj_situational_category": "Institutional Flow"}
+    assert _stage("SELL", session_state) is None
+    # The BUY branch, same session state, DOES carry it through.
+    assert _stage("BUY", session_state) == "Institutional Flow"

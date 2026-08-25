@@ -1196,6 +1196,12 @@ SELF_TRACK_RELIABLE_LOG_START = date(2026, 8, 6)
 SELF_TRACK_SELL_SIGNAL_WINDOW_DAYS = 5   # days between an EXIT/TRIM signal and a sell to count as "engine-called" (vs self-initiated)
 SELF_TRACK_SELL_RELIABLE_LOG_START = date(2026, 7, 21)  # exit_signals cron capture went live this date; sells before it are disclosed but never graded (coverage_limited)
 
+SITUATIONAL_CATEGORY_MIN_SAMPLE_N = 3  # min matured, graded self-initiated BUYs
+# in a single situational category before its avg alpha renders (below -> "building").
+# Deliberately NOT BEHAVIORAL_MIN_SAMPLE_N (=8): the self-initiated pool is ~16
+# graded today and splits 5 ways, so an 8-floor would leave every category
+# permanently "building". MEASUREMENT-ONLY -- never gates/sizes/suppresses a rec.
+
 # ── Predictive Analytics — Signal Calibration ─────────────────────────────────
 # Minimum number of mature outcomes in a composite-score band before the band
 # is shown in the Signal Calibration chart. Below this, the band is labelled

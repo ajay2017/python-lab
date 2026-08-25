@@ -26,6 +26,17 @@ LESSON_CATEGORIES = [
     "Pre-mortem call was right",
 ]
 
+# Buy-time "what kind of read was this?" vocabulary (F-233 V2, situational
+# category). Order matches the UI dropdown. Do not reorder or rename --
+# existing DB values are matched by string equality, so a rename orphans old rows.
+SITUATIONAL_CATEGORIES = [
+    "Institutional Flow",
+    "Earnings Catalyst",
+    "Technical Read",
+    "Macro-News",
+    "Other",
+]
+
 import pandas as pd
 
 

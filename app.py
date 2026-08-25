@@ -167,6 +167,7 @@ from stock_analyzer.constants import (
     FACTOR_ETF_TICKERS,
     FACTOR_TILT_WINDOW_DAYS,
     BEHAVIORAL_MIN_SAMPLE_N,
+    SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
     BEHAVIORAL_OPENING_WINDOW_MIN,
     BEHAVIORAL_MEANINGFUL_ACTION_RATE_DELTA_PP,
     BEHAVIORAL_MEANINGFUL_ALPHA_DELTA_PP,
@@ -23906,6 +23907,20 @@ elif page == "📒 Trade Journal":
                     height=110,
                     help="Use ✨ Draft thesis above for an editable starting point. Saved and reviewed weekly by AI Insights.",
                 )
+
+                from stock_analyzer.decision_journal import SITUATIONAL_CATEGORIES as _SITUATIONAL_CATS
+                st.selectbox(
+                    "What kind of read was this? (optional)",
+                    ["— (skip)"] + _SITUATIONAL_CATS,
+                    key="_tj_situational_category",
+                    help="Institutional Flow (13F filings, insider buys, fund activity) · "
+                         "Earnings Catalyst (a print, guidance, or event drove this) · "
+                         "Technical Read (chart pattern, support/resistance, momentum) · "
+                         "Macro-News (a broader theme or headline, not company-specific) · "
+                         "Other (anything not covered above). "
+                         "Powers the situational breakdown on My Edge -> Self vs Engine once "
+                         "enough buys accumulate.",
+                )
             else:
                 user_thesis_val = None
 
@@ -24273,6 +24288,12 @@ elif page == "📒 Trade Journal":
                         else None
                     ),
                     "user_thesis":      (_final_thesis or None) if action == "BUY" else None,
+                    "situational_category": (
+                        (st.session_state.get("_tj_situational_category") or "").strip()
+                        if action == "BUY"
+                           and (st.session_state.get("_tj_situational_category") or "") not in ("", "— (skip)")
+                        else None
+                    ),
                     "thesis_source":    _thesis_source,
                     "decision_context": _dc_snapshot,
                     "premortem_case_against": (
@@ -32039,6 +32060,8 @@ Each card suppresses to "insufficient data" until enough closed trades accumulat
 A different question than 🎯 Engine Track Record on 🧾 Summary — that card grades the app's own picks; the **📈 Buy-Side** sub-tab grades **your** self-initiated BUYs. Every BUY is independently classified from the actual recommendation history (never from the self-reported "Reason" dropdown on Log Trade, which turned out not to be a reliable signal for this): **app-aligned** (a matching app recommendation existed shortly before you bought), **self-initiated** (no matching recommendation), and a separate **not-graded** count for older trades from before recommendation-log coverage was reliable — those are disclosed but never averaged into either side, since a missing record from that period doesn't prove anything either way. The headline compares each side's average alpha vs SPY, gated at the same 8-decision floor as Behavioral Fingerprint, with the logged thesis text shown next to your biggest self-initiated winners and losers. **Read the head-to-head count under the self-initiated figure.** The self-initiated side pools two situations that mean different things: names the app *had a view on and stayed silent about* (a genuine head-to-head — you overrode its silence and one of you was right) and names entirely *outside* its scanned universe (where it never looked, so there was no call of its own to beat). The caption states how many of the graded buys are which, and if **none** are head-to-head you get an amber note — because then the side-by-side is comparing your own sourcing against the engine's picks, not your judgment against its silence. **Awareness only — read-only, no gates, no buy/sell prompts, and a self-initiated buy outperforming doesn't contradict the engine's own track record; they're answering different questions.**
 
 The **📉 Sell-Side** sub-tab asks the mirror question for exits: is your own instinct to sell good, separate from whether the engine's EXIT/TRIM signal was? Every SELL is classified as **engine-called** (an EXIT/TRIM signal fired within a few days before you sold) or **self-initiated** (no matching signal), with a separate **not-graded** count for sells before exit-signal logging had full cron coverage. Post-exit alpha vs SPY is graded open-ended from your sell date to today — **negative is the good outcome here** (the stock lagged the market after you left; positive means you sold too early), the opposite sign-read from the Buy-Side tab, so read the caption before the number. A **missed exits** notice, visible by default, flags any currently-held ticker where an EXIT/TRIM signal fired a while ago with no sell since — awareness only, it never triggers a recommendation on its own. Sold tickers with no current live price (delisted or acquired) are disclosed as ungraded rather than silently dropped, since those are disproportionately good exits and omitting them would bias the shown average to look worse than it is.
+
+At Log Trade time, a BUY can optionally be tagged with **"What kind of read was this?"** — Institutional Flow, Earnings Catalyst, Technical Read, Macro-News, or Other. Once enough self-initiated buys accumulate, a **Situational breakdown** table appears on the Buy-Side sub-tab slicing the self-initiated alpha figure by that tag, so you can see whether one *kind* of instinct call tends to work better than another. Each category needs at least a few graded, matured buys before it shows a real number — until then it reads "building," never a guess. Untagged buys (logged before this existed, or the dropdown was skipped) show up honestly as "Uncategorized" rather than disappearing from the count.
 """
             )
 
@@ -37103,6 +37126,39 @@ elif page == "🎯 My Edge":
                             f"{_stv_summary['n_coverage_limited']} additional trade(s) from before "
                             f"{_stv_reliable_start} are excluded — recommendation coverage from "
                             "that period is unreliable, not graded either way."
+                        )
+
+                    # ── Situational-category breakdown (F-233 V2) ───────────────────
+                    # Slices the self-initiated population by the buy-time "what kind
+                    # of read was this?" tag. n/avg per row is exactly the same graded
+                    # population self_vs_engine_summary already captioned above — the
+                    # reconciliation invariant is enforced in self_track_record.py, not
+                    # re-derived here. Skipped entirely at all-zero (calm posture — no
+                    # empty table clutter), never a silent filter otherwise.
+                    _stv_breakdown = _stv.situational_category_breakdown(
+                        _stv_classified, _stv_prices, _stv_spy, _me_today,
+                        SITUATIONAL_CATEGORY_MIN_SAMPLE_N,
+                    )
+                    if _stv_breakdown and any(row["n"] for row in _stv_breakdown):
+                        st.markdown("---")
+                        st.markdown("**Situational breakdown — self-initiated buys**")
+                        _stv_bd_rows = [
+                            {
+                                "Category": row["category"],
+                                "N": row["n"],
+                                "Avg alpha vs SPY": (
+                                    f"{row['avg_alpha_pct']:+.1f}pp"
+                                    if row["avg_alpha_pct"] is not None else "—"
+                                ),
+                                "Status": "ready" if row["sufficient"] else "building",
+                            }
+                            for row in _stv_breakdown
+                        ]
+                        st.dataframe(
+                            pd.DataFrame(_stv_bd_rows), hide_index=True, use_container_width=True,
+                        )
+                        st.caption(
+                            "An observed pattern in your own decisions, not a verdict on it."
                         )
 
                     # ── Biggest self-initiated winners/losers, with the logged thesis ──
