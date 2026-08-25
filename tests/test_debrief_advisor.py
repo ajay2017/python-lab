@@ -253,6 +253,95 @@ def test_build_debrief_package_rec_type_filtered_to_new_pick_and_add_winner():
     assert "DDD" not in tickers
 
 
+# ─── build_debrief_package: protective_signals (WATCH/TRIM/EXIT) ─────────────
+# 2026-08-24 review finding: this block (added for the symmetric
+# WATCH/TRIM/EXIT debrief narration) had zero test coverage. Its tier-
+# escalation merge logic is exactly the kind of stateful accumulation that
+# regresses silently, so these tests target that logic directly rather than
+# the block's existence.
+
+def _exit_sig(ticker, signal_date, signal_type, pnl_pct=-5.0, dd_from_peak_pct=-8.0):
+    return {"ticker": ticker, "signal_date": signal_date, "signal_type": signal_type,
+            "pnl_pct": pnl_pct, "dd_from_peak_pct": dd_from_peak_pct}
+
+
+def test_build_debrief_package_protective_signals_escalates_to_most_severe_tier_seen():
+    """Rows arrive WATCH-then-EXIT (ascending severity) for the same ticker
+    across two different days — the final tier must be the most severe seen
+    all week (EXIT), not just whichever row happened to be seen last if the
+    rows had instead arrived in descending order."""
+    sig_df = pd.DataFrame([
+        _exit_sig("AAA", "2026-07-20", "WATCH"),
+        _exit_sig("AAA", "2026-07-22", "EXIT"),
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, _trades_df(),
+                                        exit_signals_df=sig_df)
+    entry = next(s for s in package["protective_signals"] if s["ticker"] == "AAA")
+    assert entry["tier"] == "EXIT"
+    assert entry["times_surfaced"] == 2
+
+
+def test_build_debrief_package_protective_signals_does_not_downgrade_from_a_later_lower_tier():
+    """Rows arrive EXIT-then-WATCH (descending severity) — the lower-severity
+    later row must NOT downgrade the tier back down. Proves the merge compares
+    against the running max, not against whichever row is seen last."""
+    sig_df = pd.DataFrame([
+        _exit_sig("AAA", "2026-07-20", "EXIT"),
+        _exit_sig("AAA", "2026-07-22", "WATCH"),
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, _trades_df(),
+                                        exit_signals_df=sig_df)
+    entry = next(s for s in package["protective_signals"] if s["ticker"] == "AAA")
+    assert entry["tier"] == "EXIT"
+
+
+def test_build_debrief_package_protective_signals_excludes_a_closed_position():
+    """CCC is sold and fully closed this week per _snap_rows()/_trades_df()
+    (present at start, absent at end, with a matching SELL trade) — it must
+    be excluded from protective_signals even though it carries a real EXIT
+    signal, because closed_positions already narrates it and a second bullet
+    from this block would conflict with that wording."""
+    sig_df = pd.DataFrame([_exit_sig("CCC", "2026-07-21", "EXIT")])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, _trades_df(),
+                                        exit_signals_df=sig_df)
+    assert "CCC" in package["closed_positions"]  # the fixture's own precondition
+    assert "CCC" not in [s["ticker"] for s in package["protective_signals"]]
+
+
+def test_build_debrief_package_protective_signals_sold_flag_true_when_sell_trade_coincides():
+    sig_df = pd.DataFrame([
+        _exit_sig("AAA", "2026-07-21", "TRIM"),
+        _exit_sig("DDD", "2026-07-21", "TRIM"),
+    ])
+    trades = _trades_df(extra_rows=[
+        {"ticker": "AAA", "action": "SELL", "traded_at": "2026-07-21T10:00:00"},
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, trades,
+                                        exit_signals_df=sig_df)
+    aaa = next(s for s in package["protective_signals"] if s["ticker"] == "AAA")
+    ddd = next(s for s in package["protective_signals"] if s["ticker"] == "DDD")
+    assert aaa["sold"] is True
+    assert ddd["sold"] is False
+
+
+def test_build_debrief_package_protective_signals_none_when_exit_signals_df_is_none():
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, _trades_df(),
+                                        exit_signals_df=None)
+    assert package["protective_signals"] == []
+
+
+def test_build_debrief_package_protective_signals_empty_when_no_watch_trim_exit_in_window():
+    """A signal_type outside {WATCH, TRIM, EXIT} (or outside the week window)
+    must not surface."""
+    sig_df = pd.DataFrame([
+        _exit_sig("AAA", "2026-07-21", "HOLD"),          # not a protective tier
+        _exit_sig("DDD", "2026-06-01", "EXIT"),           # outside the week window
+    ])
+    package = da.build_debrief_package(WEEK_ENDING, _snap_rows(), None, _trades_df(),
+                                        exit_signals_df=sig_df)
+    assert package["protective_signals"] == []
+
+
 # ─── build_debrief_package: behavioral / decision-quality enrichment ─────────
 
 def test_build_debrief_package_behavioral_enrichment_populates_package(monkeypatch):
